@@ -118,7 +118,7 @@ export const commandFactories = {
     );
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
-    return makeCommand('import.mesh', 'Import STL mesh', payload, (document) =>
+    return makeCommand('import.mesh', 'Import external reference', payload, (document) =>
       importMeshBody(document, payload).document
     );
   }
