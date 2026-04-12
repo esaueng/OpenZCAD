@@ -1,0 +1,14 @@
+{
+  "name": "@openzcad/cloudflare-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@openzcad/jobs": "workspace:*",
+    "@openzcad/persistence": "workspace:*",
+    "@openzcad/shared": "workspace:*",
+    "aws4fetch": "^1.0.20"
+  }
+}
+

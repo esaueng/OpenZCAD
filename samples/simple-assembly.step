@@ -1,0 +1,14 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('OpenZCAD sample'),'2;1');
+FILE_NAME('simple-assembly.step','2026-04-12T00:00:00',('OpenZCAD'),('OpenZCAD'),'','','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN_CC2'));
+ENDSEC;
+DATA;
+#10=PRODUCT('Simple Block','Simple Block','',(#20));
+#20=PRODUCT_CONTEXT('',#30,'mechanical');
+#30=APPLICATION_CONTEXT('configuration controlled 3d designs of mechanical parts and assemblies');
+#40=COLOUR_RGB('SampleColor',0.9,0.6,0.2);
+ENDSEC;
+END-ISO-10303-21;
+
