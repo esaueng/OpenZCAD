@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "useDefineForClassFields": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@openzcad/shared": ["packages/shared/src/index.ts"],
+      "@openzcad/document-core": ["packages/document-core/src/index.ts"],
+      "@openzcad/command-system": ["packages/command-system/src/index.ts"],
+      "@openzcad/kernel-adapter": ["packages/kernel-adapter/src/index.ts"],
+      "@openzcad/viewport": ["packages/viewport/src/index.ts"],
+      "@openzcad/io-step": ["packages/io-step/src/index.ts"],
+      "@openzcad/io-stl": ["packages/io-stl/src/index.ts"],
+      "@openzcad/plugin-api": ["packages/plugin-api/src/index.ts"],
+      "@openzcad/jobs": ["packages/jobs/src/index.ts"],
+      "@openzcad/persistence": ["packages/persistence/src/index.ts"],
+      "@openzcad/cloudflare-adapters": ["packages/cloudflare-adapters/src/index.ts"]
+    }
+  }
+}
