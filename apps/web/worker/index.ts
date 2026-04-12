@@ -7,8 +7,8 @@ import {
 import { toUserId, type CreateProjectRequest, type CreateUploadSessionRequest, type FinalizeImportRequest, type RequestExportRequest, type SaveRevisionRequest } from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
-  PROJECT_ROOM: DurableObjectNamespace<ProjectCollaborationRoom>;
-  EXPORT_WORKFLOW: Workflow<{
+  PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
+  EXPORT_WORKFLOW?: Workflow<{
     artifactId: string;
   }>;
 };
@@ -77,7 +77,11 @@ export default {
     if (request.method === 'POST' && url.pathname === '/api/exports') {
       const payload = (await request.json()) as RequestExportRequest;
       const response = await persistence.requestExport(devUserId, payload);
-      await env.EXPORT_WORKFLOW.create({ params: { artifactId: response.artifact.artifactId } });
+      if (env.EXPORT_WORKFLOW) {
+        await env.EXPORT_WORKFLOW.create({
+          params: { artifactId: response.artifact.artifactId }
+        });
+      }
       return json(response, 202);
     }
 
