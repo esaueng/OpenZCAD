@@ -1,0 +1,62 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "openzcad-beta",
+  "main": "./apps/web/worker/index.ts",
+  "compatibility_date": "2026-04-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "assets": {
+    "directory": "./apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    "ENVIRONMENT": "beta"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openzcad-beta",
+      "database_id": "beta-openzcad-d1-placeholder"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "openzcad-beta-artifacts"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOB_QUEUE",
+        "queue": "openzcad-beta-jobs"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_ROOM",
+        "class_name": "ProjectCollaborationRoom"
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "name": "openzcad-export-beta",
+      "binding": "EXPORT_WORKFLOW",
+      "class_name": "OpenZCADExportWorkflow"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectCollaborationRoom"]
+    }
+  ]
+}
