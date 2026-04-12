@@ -8,6 +8,18 @@ interface ModelTreeProps {
 }
 
 export function ModelTree({ document, selectedId, onSelect }: ModelTreeProps) {
+  const kindLabel: Record<DocumentNode['kind'], string> = {
+    project: 'PRJ',
+    assembly: 'ASM',
+    part: 'PRT',
+    parameter: 'PAR',
+    sketch: 'SKT',
+    'sketch-object': 'OBJ',
+    constraint: 'CNS',
+    feature: 'FTR',
+    body: 'BDY'
+  };
+
   const nodesByParent = useMemo(() => {
     const map = new Map<string | null, DocumentNode[]>();
     if (!document) {
@@ -33,7 +45,10 @@ export function ModelTree({ document, selectedId, onSelect }: ModelTreeProps) {
           style={{ paddingLeft: `${12 + depth * 14}px` }}
           onClick={() => onSelect(node.id)}
         >
-          <span>{node.name}</span>
+          <span className="tree-node__title">
+            <span className="tree-node__kind">{kindLabel[node.kind]}</span>
+            <span>{node.name}</span>
+          </span>
           <small>{node.kind}</small>
         </button>
         {renderBranch(node.id, depth + 1)}
