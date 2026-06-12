@@ -77,6 +77,9 @@ importers:
       '@openzcad/kernel-adapter':
         specifier: workspace:*
         version: link:../../packages/kernel-adapter
+      '@openzcad/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../../packages/shared
