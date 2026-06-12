@@ -1,0 +1,174 @@
+/* ─────────────────────────────────────────────────────────────
+   OpenZCAD Design Tokens
+   Adapted from the OpenCAE design system so both apps read as
+   one product family. Import once in main.tsx before app.css.
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surfaces & text ──────────────────────────────────── */
+  --color-bg: #0b0f14;
+  --color-surface: #111821;
+  --color-surface-2: #17202b;
+  --color-surface-hover: #1b2430;
+  --color-border: #2a3441;
+  --color-border-strong: #3a4554;
+  --color-text: #e6edf3;
+  --color-text-muted: #8b949e;
+  --color-text-subtle: #5c6672;
+
+  /* ── Semantic ─────────────────────────────────────────── */
+  --color-accent: #4da3ff;
+  --color-accent-dim: rgba(77, 163, 255, 0.12);
+  --color-accent-border: rgba(77, 163, 255, 0.45);
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-success: #22c55e;
+  --color-viewport-bg: #070b10;
+
+  /* ── Workflow role colors (viewport + badges) ─────────── */
+  --color-role-preserve: #22c55e;
+  --color-role-fixed: #4da3ff;
+  --color-role-obstacle: #ef4444;
+  --color-role-load: #f59e0b;
+
+  /* ── Typography ───────────────────────────────────────── */
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --fs-mini: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 22px;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+
+  --lh-tight: 1.35;
+  --lh-normal: 1.5;
+  --lh-loose: 1.7;
+
+  --ls-eyebrow: 0.14em;
+
+  /* ── Spacing scale (4-based) ──────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* ── Radii ────────────────────────────────────────────── */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+
+  /* ── Borders (composed) ───────────────────────────────── */
+  --border-thin: 1px solid var(--color-border);
+  --border-strong: 1px solid var(--color-border-strong);
+
+  /* ── Layout dimensions ────────────────────────────────── */
+  --topbar-h: 44px;
+  --statusbar-h: 30px;
+  --stepbar-w: 132px;
+  --context-w: 344px;
+  --outcome-panel-h: 178px;
+
+  /* ── Motion ───────────────────────────────────────────── */
+  --dur-fast: 100ms;
+  --dur-base: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Z-index scale ────────────────────────────────────── */
+  --z-viewer-overlay: 2;
+  --z-start-screen: 100;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Base reset
+   ───────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  height: 30px;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero" 1;
+}

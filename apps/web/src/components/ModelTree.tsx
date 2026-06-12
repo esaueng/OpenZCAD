@@ -22,15 +22,16 @@ export function ModelTree({ document, selectedId, onSelect }: ModelTreeProps) {
   }, [document]);
 
   if (!document) {
-    return <div className="panel-empty">Create or load a project to view the model tree.</div>;
+    return <p className="panel-copy">Create or load a project to view the model tree.</p>;
   }
 
   const renderBranch = (parentId: string | null, depth = 0): ReactNode[] =>
     (nodesByParent.get(parentId) ?? []).map((node) => (
       <div key={node.id}>
         <button
-          className={`tree-node ${selectedId === node.id ? 'is-selected' : ''}`}
-          style={{ paddingLeft: `${12 + depth * 14}px` }}
+          type="button"
+          className={`tree-row ${selectedId === node.id ? 'selected' : ''}`}
+          style={{ paddingLeft: `${8 + depth * 12}px` }}
           onClick={() => onSelect(node.id)}
         >
           <span>{node.name}</span>

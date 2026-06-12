@@ -24,6 +24,7 @@
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@vitejs/plugin-react": "^4.3.4",
+    "lucide-react": "^1.18.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.176.0"

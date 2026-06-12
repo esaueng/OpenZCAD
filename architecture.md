@@ -11,6 +11,9 @@ OpenZCAD is a browser-based parametric CAD application. The system is designed s
 - `persistence`: save/load semantics, artifact manifests, upload-session lifecycle (15-minute TTL, single use).
 - `cloudflare-adapters`: D1/R2/Queues/DO/Workflow implementations.
 
+## Workspace UI
+The browser app (apps/web) follows the OpenCAE design system (see `src/theme/tokens.css`): AppShell = TopBar / [StepBar | ViewerShell | ContextPanel] / OutcomePanel / StatusBar. The StepBar drives a seven-step generative workflow (Model, Preserve, Constraints, Loads, Study, Generate, Results) with per-step completion indicators; the right ContextPanel renders only the active step's controls. Workflow annotations are document data: body roles (`gdRole`), loads (`gdLoadFx/Fy/Fz`), and study settings (project-node `gd*` keys) are written through the `node.metadata.set` command, so they undo, replay, and persist with the model. Generate runs `runMockGenerativeStudy` (apps/web/src/lib/generative.ts), a deterministic estimator that stands in for the native topology kernel; outcomes are session state, summarized in the OutcomePanel and previewed by scaling design-space bodies.
+
 ## Geometry sync pipeline
 The app posts the document to a browser worker whenever `document.version` changes. The worker derives body representations and replies with a result tagged by `projectId`/`version`; the app discards stale replies and commits matching ones via `commitDerivedState`, which intentionally does not bump `version` (this breaks the re-derive feedback loop and distinguishes model edits from re-derivation).
 
