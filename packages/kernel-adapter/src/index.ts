@@ -1,476 +1,353 @@
-import { listNodesByKind } from '@openzcad/document-core';
+import {
+  findSketch,
+  getParameterScope,
+  listFeaturesInOrder,
+  listNodesByKind,
+  resolveParamValue
+} from '@openzcad/document-core';
+import {
+  GeometryError,
+  PLANE_BASES,
+  booleanSolids,
+  circleProfile,
+  extrudeProfile,
+  makeBox,
+  makeCone,
+  makeCylinder,
+  makeSphere,
+  makeTorus,
+  polygonProfile,
+  rectangleProfile,
+  revolveProfile,
+  solidBounds,
+  solidFromTriangles,
+  solidVolume,
+  transformSolid,
+  triangulateSolid,
+  validateSolid,
+  type Solid,
+  type Vec2
+} from '@openzcad/geometry';
+import { writeStepFile, type StepExportResult } from '@openzcad/io-step';
+import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
   featureColor,
-  identityTransform,
   nowIso,
   type BodyId,
-  type BodyNode,
   type BodyRepresentation,
-  type FeatureId,
+  type DerivedState,
   type FeatureNode,
-  type MeshGeometry,
-  type PrimitiveGeometry,
   type ProjectDocument,
-  type SketchObjectNode
+  type SketchObjectData
 } from '@openzcad/shared';
 
-export interface KernelAdapter {
-  syncDocument(document: ProjectDocument): ProjectDocument['derived'];
-  buildFeature(document: ProjectDocument, featureId: string): BodyRepresentation | null;
-  booleanOp(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null;
-  transformBody(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null;
-  importStep(input: { fileName: string; text: string }): Promise<{
-    name: string;
-    products: string[];
-    colors: string[];
-  }>;
-  exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
-  exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
-  tessellate(body: BodyRepresentation): MeshGeometry;
-}
-
-function dimensionsToPrimitive(feature: FeatureNode): PrimitiveGeometry | null {
-  if (feature.featureKind === 'primitive' && feature.data.featureKind === 'primitive') {
-    return {
-      kind: feature.data.primitiveKind,
-      dimensions: feature.data.dimensions
-    };
-  }
-
-  return null;
-}
-
-type BodyResolver = (bodyId: BodyId) => BodyRepresentation | undefined;
-
 /**
- * Yields features in `featureOrder` (the authoritative build order), followed
- * by any feature nodes missing from it, so a partially corrupted order list
- * still renders every feature.
+ * The OpenZCAD browser kernel. It rebuilds every body from its parametric
+ * feature definition on each sync: parameters are evaluated, profiles are
+ * swept, booleans run real CSG, and transforms are baked into world-space
+ * vertices. The same build path also feeds STEP/STL export, so what you see
+ * is exactly what you export.
  */
-function orderedFeatures(
+export interface KernelAdapter {
+  syncDocument(document: ProjectDocument): DerivedState;
+  buildSolids(document: ProjectDocument): BuildResult;
+  exportStep(document: ProjectDocument, bodyIds: BodyId[]): StepExportResult;
+  exportStl(document: ProjectDocument, bodyIds: BodyId[]): string;
+}
+
+export interface BuildResult {
+  solids: Map<BodyId, Solid>;
+  consumed: Set<BodyId>;
+  warnings: string[];
+}
+
+function profileFromSketchObject(
+  data: SketchObjectData,
+  scope: Record<string, number>
+): Vec2[] {
+  switch (data.objectKind) {
+    case 'rectangle':
+      return rectangleProfile(
+        resolveParamValue(data.width, scope, 'width'),
+        resolveParamValue(data.height, scope, 'height'),
+        resolveParamValue(data.centerX, scope, 'center X'),
+        resolveParamValue(data.centerY, scope, 'center Y')
+      );
+    case 'circle':
+      return circleProfile(
+        resolveParamValue(data.radius, scope, 'radius'),
+        resolveParamValue(data.centerX, scope, 'center X'),
+        resolveParamValue(data.centerY, scope, 'center Y')
+      );
+    case 'polygon':
+      return polygonProfile(
+        resolveParamValue(data.sides, scope, 'sides'),
+        resolveParamValue(data.radius, scope, 'radius'),
+        resolveParamValue(data.centerX, scope, 'center X'),
+        resolveParamValue(data.centerY, scope, 'center Y')
+      );
+  }
+}
+
+function buildPrimitive(
+  feature: Extract<FeatureNode['data'], { featureKind: 'primitive' }>,
+  scope: Record<string, number>
+): Solid {
+  const dim = (key: string): number =>
+    resolveParamValue(feature.dimensions[key] ?? 0, scope, key);
+  switch (feature.primitiveKind) {
+    case 'box':
+      return makeBox(dim('width'), dim('height'), dim('depth'));
+    case 'cylinder':
+      return makeCylinder(dim('radius'), dim('height'));
+    case 'sphere':
+      return makeSphere(dim('radius'));
+    case 'cone':
+      return makeCone(dim('bottomRadius'), dim('topRadius'), dim('height'));
+    case 'torus':
+      return makeTorus(dim('majorRadius'), dim('minorRadius'));
+  }
+}
+
+function buildSketchSolid(
   document: ProjectDocument,
-  features: FeatureNode[],
-  featuresById: Map<FeatureId, FeatureNode>
-): FeatureNode[] {
-  const ordered: FeatureNode[] = [];
-  const seen = new Set<FeatureId>();
-  for (const featureId of document.featureOrder) {
-    const feature = featuresById.get(featureId);
-    if (feature && !seen.has(featureId)) {
-      ordered.push(feature);
-      seen.add(featureId);
-    }
+  feature: FeatureNode,
+  scope: Record<string, number>
+): Solid {
+  if (feature.data.featureKind !== 'extrude' && feature.data.featureKind !== 'revolve') {
+    throw new GeometryError('Not a sweep feature.');
   }
-  for (const feature of features) {
-    if (!seen.has(feature.featureId)) {
-      ordered.push(feature);
-    }
+  const sketch = findSketch(document, feature.data.sketchId);
+  if (!sketch) {
+    throw new GeometryError('references a sketch that no longer exists.');
   }
-  return ordered;
+  const objectId = sketch.objectIds[0];
+  const objectNode = objectId ? document.nodes[objectId] : undefined;
+  if (!objectNode || objectNode.kind !== 'sketch-object') {
+    throw new GeometryError(`sketch "${sketch.name}" has no profile.`);
+  }
+  const profile = profileFromSketchObject(objectNode.data, scope);
+  const basis = PLANE_BASES[sketch.plane];
+  const offset = resolveParamValue(sketch.offset, scope, 'sketch offset');
+
+  if (feature.data.featureKind === 'extrude') {
+    const distance = resolveParamValue(feature.data.distance, scope, 'distance');
+    return extrudeProfile(profile, basis, distance, offset);
+  }
+  return revolveProfile(profile, basis, feature.data.axis, offset);
 }
 
-function triangleMeshFromPrimitive(geometry: PrimitiveGeometry): MeshGeometry {
-  if (geometry.kind === 'box') {
-    const width = geometry.dimensions.width ?? 1;
-    const height = geometry.dimensions.height ?? 1;
-    const depth = geometry.dimensions.depth ?? 1;
-    const x = width / 2;
-    const y = height / 2;
-    const z = depth / 2;
-    const vertices = [
-      -x, -y, -z, x, -y, -z, x, y, -z, -x, y, -z, -x, -y, z, x, -y, z, x, y, z,
-      -x, y, z
-    ];
-    const indices = [
-      0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2,
-      6, 7, 2, 7, 3, 3, 7, 4, 3, 4, 0
-    ];
-    return { kind: 'mesh', vertices, indices };
-  }
+export class OpenZCADKernel implements KernelAdapter {
+  buildSolids(document: ProjectDocument): BuildResult {
+    const { scope, errors } = getParameterScope(document);
+    const warnings: string[] = [...errors];
+    const solids = new Map<BodyId, Solid>();
+    const consumed = new Set<BodyId>();
 
-  if (geometry.kind === 'sphere') {
-    const radius = geometry.dimensions.radius ?? 1;
-    const vertices = [
-      0,
-      radius,
-      0,
-      radius,
-      0,
-      0,
-      0,
-      0,
-      radius,
-      -radius,
-      0,
-      0,
-      0,
-      0,
-      -radius,
-      0,
-      -radius,
-      0
-    ];
-    const indices = [
-      0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1, 5, 2, 1, 5, 3, 2, 5, 4, 3, 5, 1, 4
-    ];
-    return { kind: 'mesh', vertices, indices };
-  }
-
-  const radius = geometry.dimensions.radius ?? 1;
-  const height = geometry.dimensions.height ?? 1;
-  const half = height / 2;
-  const vertices = [
-    -radius,
-    -half,
-    -radius,
-    radius,
-    -half,
-    -radius,
-    radius,
-    half,
-    -radius,
-    -radius,
-    half,
-    -radius,
-    -radius,
-    -half,
-    radius,
-    radius,
-    -half,
-    radius,
-    radius,
-    half,
-    radius,
-    -radius,
-    half,
-    radius
-  ];
-  const indices = [
-    0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2,
-    6, 7, 2, 7, 3, 3, 7, 4, 3, 4, 0
-  ];
-  return { kind: 'mesh', vertices, indices };
-}
-
-function asciiStlFacet(vertices: number[], a: number, b: number, c: number): string {
-  const ax = vertices[a * 3];
-  const ay = vertices[a * 3 + 1];
-  const az = vertices[a * 3 + 2];
-  const bx = vertices[b * 3];
-  const by = vertices[b * 3 + 1];
-  const bz = vertices[b * 3 + 2];
-  const cx = vertices[c * 3];
-  const cy = vertices[c * 3 + 1];
-  const cz = vertices[c * 3 + 2];
-
-  return [
-    '  facet normal 0 0 0',
-    '    outer loop',
-    `      vertex ${ax} ${ay} ${az}`,
-    `      vertex ${bx} ${by} ${bz}`,
-    `      vertex ${cx} ${cy} ${cz}`,
-    '    endloop',
-    '  endfacet'
-  ].join('\n');
-}
-
-export class MockKernelAdapter implements KernelAdapter {
-  syncDocument(document: ProjectDocument): ProjectDocument['derived'] {
-    const features = listNodesByKind(document, 'feature');
-    const bodies = listNodesByKind(document, 'body');
-    const featuresById = new Map<FeatureId, FeatureNode>(
-      features.map((feature) => [feature.featureId, feature])
-    );
-    const bodiesByBodyId = new Map<BodyId, BodyNode>(
-      bodies.map((body) => [body.bodyId, body])
-    );
-    const representations = new Map<BodyId, BodyRepresentation>();
-    const warnings: string[] = [];
-
-    // Boolean/transform targets resolve against bodies already produced in
-    // this pass, falling back to the previous derived state, so a fresh sync
-    // (e.g. after load or replay) is self-sufficient.
-    const resolveBody: BodyResolver = (bodyId) =>
-      representations.get(bodyId) ?? document.derived.bodyRepresentations[bodyId];
-
-    for (const feature of orderedFeatures(document, features, featuresById)) {
-      if (feature.data.featureKind === 'sketch') {
-        continue;
-      }
-
-      if (feature.data.featureKind === 'transform') {
-        const targetBodyId = feature.data.targetBodyId;
-        const target = resolveBody(targetBodyId);
-        if (!target) {
-          warnings.push(`Transform "${feature.name}" targets a missing body.`);
-          continue;
+    for (const feature of listFeaturesInOrder(document)) {
+      try {
+        switch (feature.data.featureKind) {
+          case 'sketch':
+            break;
+          case 'primitive': {
+            if (feature.bodyId) {
+              solids.set(feature.bodyId, buildPrimitive(feature.data, scope));
+            }
+            break;
+          }
+          case 'extrude':
+          case 'revolve': {
+            if (feature.bodyId) {
+              solids.set(feature.bodyId, buildSketchSolid(document, feature, scope));
+            }
+            break;
+          }
+          case 'imported-mesh': {
+            if (feature.bodyId) {
+              const solid = solidFromTriangles(
+                feature.data.vertices,
+                feature.data.indices
+              );
+              if (solid.faces.length === 0) {
+                throw new GeometryError('imported mesh has no triangles.');
+              }
+              solids.set(feature.bodyId, solid);
+            }
+            break;
+          }
+          case 'transform': {
+            const targetBodyId = feature.data.targetBodyId;
+            if (consumed.has(targetBodyId)) {
+              warnings.push(
+                `Transform "${feature.name}" targets a body already consumed by a boolean; skipped.`
+              );
+              break;
+            }
+            const target = solids.get(targetBodyId);
+            if (!target) {
+              warnings.push(`Transform "${feature.name}" targets a missing body.`);
+              break;
+            }
+            const transform = {
+              translation: {
+                x: resolveParamValue(feature.data.transform.translation.x, scope, 'X'),
+                y: resolveParamValue(feature.data.transform.translation.y, scope, 'Y'),
+                z: resolveParamValue(feature.data.transform.translation.z, scope, 'Z')
+              },
+              rotationDeg: {
+                x: resolveParamValue(feature.data.transform.rotationDeg.x, scope, 'rotate X'),
+                y: resolveParamValue(feature.data.transform.rotationDeg.y, scope, 'rotate Y'),
+                z: resolveParamValue(feature.data.transform.rotationDeg.z, scope, 'rotate Z')
+              }
+            };
+            solids.set(targetBodyId, transformSolid(target, transform));
+            break;
+          }
+          case 'boolean': {
+            if (!feature.bodyId) {
+              break;
+            }
+            const operands: Solid[] = [];
+            for (const targetBodyId of feature.data.targetBodyIds) {
+              const operand = solids.get(targetBodyId);
+              if (!operand) {
+                throw new GeometryError(
+                  `target body is missing (was it deleted or reordered?).`
+                );
+              }
+              if (consumed.has(targetBodyId)) {
+                warnings.push(
+                  `Boolean "${feature.name}" reuses a body already consumed by an earlier boolean.`
+                );
+              }
+              operands.push(operand);
+            }
+            if (operands.length < 2) {
+              throw new GeometryError('needs at least two target bodies.');
+            }
+            let result = operands[0]!;
+            for (let i = 1; i < operands.length; i++) {
+              result = booleanSolids(feature.data.operation, result, operands[i]!);
+            }
+            if (result.faces.length === 0) {
+              warnings.push(
+                `Boolean "${feature.name}" produced an empty solid (no overlap?).`
+              );
+            }
+            for (const targetBodyId of feature.data.targetBodyIds) {
+              consumed.add(targetBodyId);
+            }
+            solids.set(feature.bodyId, result);
+            break;
+          }
         }
-        // Transforms replace the target body's placement; the last transform
-        // in feature order wins.
-        representations.set(targetBodyId, {
-          ...target,
-          transform: feature.data.transform,
-          source: 'transform'
-        });
-        continue;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'geometry build failed.';
+        warnings.push(`Feature "${feature.name}": ${message}`);
       }
-
-      if (!feature.bodyId) {
-        continue;
-      }
-
-      const representation = this.representationForFeature(document, feature, resolveBody);
-      if (!representation) {
-        continue;
-      }
-
-      const body = bodiesByBodyId.get(feature.bodyId);
-      representations.set(feature.bodyId, {
-        ...representation,
-        bodyId: feature.bodyId,
-        name: body?.name ?? representation.name,
-        color:
-          String(body?.metadata?.color ?? featureColor(feature.featureKind)) ||
-          DEFAULT_BODY_COLOR,
-        exportableStep: body?.exportableStep ?? false
-      });
     }
 
-    for (const body of bodies) {
-      if (representations.has(body.bodyId)) {
+    return { solids, consumed, warnings };
+  }
+
+  syncDocument(document: ProjectDocument): DerivedState {
+    const { solids, consumed, warnings } = this.buildSolids(document);
+    const bodies = listNodesByKind(document, 'body');
+    const representations: Record<BodyId, BodyRepresentation> = {};
+    const exportableBodyIds: BodyId[] = [];
+
+    const featuresById = new Map(
+      listNodesByKind(document, 'feature').map((feature) => [feature.featureId, feature])
+    );
+
+    for (const bodyId of document.bodyOrder) {
+      const body = bodies.find((candidate) => candidate.bodyId === bodyId);
+      if (!body) {
+        continue;
+      }
+      const solid = solids.get(bodyId);
+      if (!solid) {
+        const feature = featuresById.get(body.featureId);
+        if (feature) {
+          // Build failures already produced a specific warning.
+          if (!warnings.some((warning) => warning.includes(`"${feature.name}"`))) {
+            warnings.push(`No geometry produced for feature "${feature.name}".`);
+          }
+        }
         continue;
       }
       const feature = featuresById.get(body.featureId);
-      warnings.push(
-        feature
-          ? `No renderable geometry for feature ${feature.name}.`
-          : `Body ${body.bodyId} has no feature.`
-      );
+      const isConsumed = consumed.has(bodyId);
+      const validation = validateSolid(solid);
+      if (!validation.closed && body.representationSource !== 'mesh-import') {
+        warnings.push(
+          `Body "${body.name}" is not perfectly closed (${validation.openEdgeCount} open edges).`
+        );
+      }
+      const mesh = triangulateSolid(solid);
+      representations[bodyId] = {
+        bodyId,
+        name: body.name,
+        source: feature?.featureKind ?? 'primitive',
+        mesh: { kind: 'mesh', vertices: mesh.vertices, indices: mesh.indices },
+        faceCount: solid.faces.length,
+        color:
+          String(
+            body.metadata?.color ?? featureColor(feature?.featureKind ?? 'primitive')
+          ) || DEFAULT_BODY_COLOR,
+        exportableStep: body.exportableStep,
+        consumed: isConsumed,
+        volume: solidVolume(solid),
+        bbox: solidBounds(solid)
+      };
+      if (body.exportableStep && !isConsumed) {
+        exportableBodyIds.push(bodyId);
+      }
     }
 
-    const bodyRepresentations = Object.fromEntries(
-      representations
-    ) as ProjectDocument['derived']['bodyRepresentations'];
-
     return {
-      bodyRepresentations,
-      exportableBodyIds: Array.from(representations.values())
-        .filter((body) => body.exportableStep)
-        .map((body) => body.bodyId),
+      bodyRepresentations: representations,
+      exportableBodyIds,
       warnings,
       updatedAt: nowIso()
     };
   }
 
-  buildFeature(document: ProjectDocument, featureId: string): BodyRepresentation | null {
-    const feature = listNodesByKind(document, 'feature').find(
-      (candidate) => candidate.featureId === featureId
-    );
-    return feature
-      ? this.representationForFeature(
-          document,
-          feature,
-          (bodyId) => document.derived.bodyRepresentations[bodyId]
-        )
-      : null;
-  }
-
-  booleanOp(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null {
-    return document.derived.bodyRepresentations[bodyId] ?? null;
-  }
-
-  transformBody(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null {
-    return document.derived.bodyRepresentations[bodyId] ?? null;
-  }
-
-  async importStep(input: { fileName: string; text: string }) {
-    const products = Array.from(
-      input.text.matchAll(/PRODUCT\('([^']+)'/g),
-      (match) => match[1]
-    ).filter((value): value is string => Boolean(value));
-    const colors = Array.from(input.text.matchAll(/COLOUR_RGB\('([^']*)'/g), (match) =>
-      match[1] || 'unnamed'
-    );
-
-    return {
-      name: input.fileName,
-      products,
-      colors
-    };
-  }
-
-  async exportStep(_document: ProjectDocument, _bodyIds: BodyId[]): Promise<string> {
-    throw new Error(
-      'STEP export is not available until a native OpenCascade.js-backed kernel is connected.'
-    );
-  }
-
-  async exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string> {
-    const facets: string[] = ['solid openzcad'];
-
-    for (const bodyId of bodyIds) {
-      const representation = document.derived.bodyRepresentations[bodyId];
-      if (!representation) {
-        continue;
+  exportStep(document: ProjectDocument, bodyIds: BodyId[]): StepExportResult {
+    const { solids, warnings } = this.buildSolids(document);
+    const bodies = listNodesByKind(document, 'body');
+    const exportSolids = bodyIds.map((bodyId) => {
+      const solid = solids.get(bodyId);
+      if (!solid) {
+        throw new Error(`Body ${bodyId} has no geometry to export.`);
       }
-      const mesh = this.tessellate(representation);
-      for (let index = 0; index < mesh.indices.length; index += 3) {
-        facets.push(
-          asciiStlFacet(
-            mesh.vertices,
-            mesh.indices[index] ?? 0,
-            mesh.indices[index + 1] ?? 0,
-            mesh.indices[index + 2] ?? 0
-          )
-        );
-      }
-    }
-
-    facets.push('endsolid openzcad');
-    return facets.join('\n');
+      const body = bodies.find((candidate) => candidate.bodyId === bodyId);
+      return { name: body?.name ?? 'Body', solid };
+    });
+    const result = writeStepFile(exportSolids, {
+      name: document.name,
+      units: document.units
+    });
+    return { text: result.text, warnings: [...warnings, ...result.warnings] };
   }
 
-  tessellate(body: BodyRepresentation): MeshGeometry {
-    if (body.geometry.kind === 'mesh') {
-      return body.geometry;
-    }
-
-    if (body.geometry.kind === 'composite') {
-      const childMeshes = body.geometry.children.map((child) => this.tessellate(child));
-      const vertices: number[] = [];
-      const indices: number[] = [];
-      let vertexOffset = 0;
-      for (const child of childMeshes) {
-        vertices.push(...child.vertices);
-        indices.push(...child.indices.map((index) => index + vertexOffset));
-        vertexOffset += child.vertices.length / 3;
+  exportStl(document: ProjectDocument, bodyIds: BodyId[]): string {
+    const { solids } = this.buildSolids(document);
+    const bodies = listNodesByKind(document, 'body');
+    const meshes = bodyIds.map((bodyId) => {
+      const solid = solids.get(bodyId);
+      if (!solid) {
+        throw new Error(`Body ${bodyId} has no geometry to export.`);
       }
-      return { kind: 'mesh', vertices, indices };
-    }
-
-    return triangleMeshFromPrimitive(body.geometry);
-  }
-
-  private representationForFeature(
-    document: ProjectDocument,
-    feature: FeatureNode,
-    resolveBody: BodyResolver
-  ): BodyRepresentation | null {
-    if (feature.data.featureKind === 'transform') {
-      const target = resolveBody(feature.data.targetBodyId);
-      if (!target) {
-        return null;
-      }
-      return {
-        ...target,
-        transform: feature.data.transform,
-        source: 'transform'
-      };
-    }
-
-    if (!feature.bodyId) {
-      return null;
-    }
-
-    const base = {
-      bodyId: feature.bodyId,
-      name: feature.name,
-      source: feature.featureKind,
-      transform: identityTransform(),
-      color: featureColor(feature.featureKind),
-      exportableStep: false
-    } satisfies Omit<BodyRepresentation, 'geometry'>;
-
-    if (feature.featureKind === 'primitive') {
-      const primitive = dimensionsToPrimitive(feature);
-      return primitive ? { ...base, geometry: primitive } : null;
-    }
-
-    if (feature.data.featureKind === 'extrude') {
-      const extrudeData = feature.data;
-      const sketch = listNodesByKind(document, 'sketch').find(
-        (candidate) => candidate.sketchId === extrudeData.sketchId
-      );
-      const sketchObjectId = sketch?.objectIds[0];
-      const sketchObject = sketchObjectId
-        ? (document.nodes[sketchObjectId] as SketchObjectNode | undefined)
-        : undefined;
-      if (sketchObject?.kind === 'sketch-object') {
-        const sketchData = sketchObject.data;
-        if (sketchData.objectKind === 'rectangle') {
-          return {
-            ...base,
-            geometry: {
-              kind: 'box',
-              dimensions: {
-                width: sketchData.width,
-                height: sketchData.height,
-                depth: extrudeData.distance
-              }
-            }
-          };
-        }
-
-        if (sketchData.objectKind === 'circle') {
-          return {
-            ...base,
-            geometry: {
-              kind: 'cylinder',
-              dimensions: {
-                radius: sketchData.radius,
-                height: extrudeData.distance
-              }
-            }
-          };
-        }
-
-        return {
-          ...base,
-          geometry: {
-            kind: 'box',
-            dimensions: {
-              width: Math.abs(sketchData.end.x - sketchData.start.x) || 20,
-              height: 2,
-              depth: extrudeData.distance
-            }
-          }
-        };
-      }
-
-      return null;
-    }
-
-    if (feature.data.featureKind === 'boolean') {
-      const children = feature.data.targetBodyIds
-        .map((bodyId) => resolveBody(bodyId))
-        .filter((candidate): candidate is BodyRepresentation => Boolean(candidate));
-
-      return {
-        ...base,
-        geometry: {
-          kind: 'composite',
-          operation: feature.data.operation,
-          children
-        }
-      };
-    }
-
-    if (feature.data.featureKind === 'imported-mesh') {
-      return {
-        ...base,
-        geometry: {
-          kind: 'mesh',
-          vertices: [-10, 0, -10, 10, 0, -10, 0, 20, 0, -10, 0, 10, 10, 0, 10],
-          indices: [0, 1, 2, 0, 2, 3, 1, 4, 2]
-        }
-      };
-    }
-
-    return null;
+      const body = bodies.find((candidate) => candidate.bodyId === bodyId);
+      const mesh = triangulateSolid(solid);
+      return { name: body?.name ?? 'Body', vertices: mesh.vertices, indices: mesh.indices };
+    });
+    return writeAsciiStl(document.name, meshes);
   }
 }
 
-export function createMockKernelAdapter(): KernelAdapter {
-  return new MockKernelAdapter();
+export function createKernelAdapter(): KernelAdapter {
+  return new OpenZCADKernel();
 }

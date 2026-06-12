@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 
 const WORKSPACE_PACKAGES = [
   'shared',
+  'geometry',
   'document-core',
   'command-system',
   'kernel-adapter',

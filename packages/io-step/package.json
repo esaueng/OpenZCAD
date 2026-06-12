@@ -5,8 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "@openzcad/kernel-adapter": "workspace:*",
+    "@openzcad/geometry": "workspace:*",
     "@openzcad/shared": "workspace:*"
   }
 }
-
