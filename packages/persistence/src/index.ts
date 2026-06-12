@@ -1,5 +1,6 @@
 import {
   nowIso,
+  sanitizeFileName,
   toArtifactId,
   toUploadSessionId,
   type ArtifactMetadataResponse,
@@ -21,10 +22,21 @@ import {
 import { createProjectDocument } from '@openzcad/document-core';
 import { InMemoryJobRunner } from '@openzcad/jobs';
 
+export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
+
+/** Thrown by saveRevision when the target project does not exist. */
+export class ProjectNotFoundError extends Error {
+  constructor(projectId: string) {
+    super(`Project ${projectId} not found.`);
+    this.name = 'ProjectNotFoundError';
+  }
+}
+
 export interface PersistenceService {
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
   createProject(userId: UserId, request: CreateProjectRequest): Promise<CreateProjectResponse>;
   loadProject(projectId: string): Promise<ProjectDocument | null>;
+  /** @throws ProjectNotFoundError when the project does not exist. */
   saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument>;
   createUploadSession(
     userId: UserId,
@@ -72,6 +84,9 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   async saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument> {
+    if (!this.projects.has(request.projectId)) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
     this.projects.set(request.projectId, request.document);
     return request.document;
   }
@@ -80,11 +95,12 @@ export class InMemoryPersistenceService implements PersistenceService {
     _userId: UserId,
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse> {
+    this.pruneExpiredUploads();
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
-      objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${request.fileName}`,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${sanitizeFileName(request.fileName)}`,
+      expiresAt: new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString(),
       fileName: request.fileName,
       contentType: request.contentType
     };
@@ -97,9 +113,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     request: FinalizeImportRequest
   ): Promise<ArtifactRecord | null> {
     const upload = this.uploads.get(request.uploadSessionId);
-    if (!upload) {
+    if (!upload || Date.parse(upload.expiresAt) < Date.now()) {
       return null;
     }
+    this.uploads.delete(request.uploadSessionId);
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
@@ -148,6 +165,15 @@ export class InMemoryPersistenceService implements PersistenceService {
     return {
       artifact: this.artifacts.get(artifactId) ?? null
     };
+  }
+
+  private pruneExpiredUploads(): void {
+    const now = Date.now();
+    for (const [sessionId, session] of this.uploads) {
+      if (Date.parse(session.expiresAt) < now) {
+        this.uploads.delete(sessionId);
+      }
+    }
   }
 }
 
