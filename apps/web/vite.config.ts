@@ -19,6 +19,7 @@ if (typeof globalThis.File === 'undefined') {
 
 const WORKSPACE_PACKAGES = [
   'shared',
+  'geometry',
   'document-core',
   'command-system',
   'kernel-adapter',

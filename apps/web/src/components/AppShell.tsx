@@ -2,32 +2,22 @@ import type { ReactNode } from 'react';
 
 interface AppShellProps {
   topBar: ReactNode;
-  stepBar: ReactNode;
+  sidebar: ReactNode;
   viewer: ReactNode;
-  contextPanel: ReactNode;
-  /** Optional drawer between the workspace and the status bar. */
-  bottomPanel?: ReactNode;
+  inspector: ReactNode;
   statusBar: ReactNode;
 }
 
-/** Workspace layout frame: TopBar / [StepBar | Viewer | ContextPanel] / StatusBar. */
-export function AppShell({
-  topBar,
-  stepBar,
-  viewer,
-  contextPanel,
-  bottomPanel,
-  statusBar
-}: AppShellProps) {
+/** Workspace layout frame: TopBar / [Sidebar | Viewer | Inspector] / StatusBar. */
+export function AppShell({ topBar, sidebar, viewer, inspector, statusBar }: AppShellProps) {
   return (
     <div className="app-shell">
       {topBar}
       <main className="workspace">
-        {stepBar}
+        {sidebar}
         {viewer}
-        {contextPanel}
+        {inspector}
       </main>
-      {bottomPanel ?? <div />}
       {statusBar}
     </div>
   );
