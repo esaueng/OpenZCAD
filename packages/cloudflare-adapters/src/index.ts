@@ -1,9 +1,15 @@
 import { AwsClient } from 'aws4fetch';
 import { DurableObject, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { getInMemoryPersistence, type PersistenceService } from '@openzcad/persistence';
+import {
+  getInMemoryPersistence,
+  ProjectNotFoundError,
+  UPLOAD_SESSION_TTL_MS,
+  type PersistenceService
+} from '@openzcad/persistence';
 import { InMemoryJobRunner } from '@openzcad/jobs';
 import {
   nowIso,
+  sanitizeFileName,
   toArtifactId,
   toUploadSessionId,
   type ArtifactMetadataResponse,
@@ -38,14 +44,29 @@ export interface CloudflareEnv {
 
 export class D1R2PersistenceService implements PersistenceService {
   private readonly jobRunner = new InMemoryJobRunner();
+  private schemaReady: Promise<void> | undefined;
 
   constructor(private readonly env: CloudflareEnv) {}
 
-  async ensureSchema(): Promise<void> {
+  /**
+   * Creates tables on first use. Memoized per service instance so the DDL
+   * batch runs once per isolate instead of once per request; a failed attempt
+   * clears the memo so the next request retries.
+   */
+  ensureSchema(): Promise<void> {
     if (!this.env.DB) {
-      return;
+      return Promise.resolve();
     }
+    if (!this.schemaReady) {
+      this.schemaReady = this.createSchema().catch((error: unknown) => {
+        this.schemaReady = undefined;
+        throw error;
+      });
+    }
+    return this.schemaReady;
+  }
 
+  private async createSchema(): Promise<void> {
     const statements = [
       `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT, created_at TEXT);`,
       `CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, document_json TEXT NOT NULL, updated_at TEXT NOT NULL);`,
@@ -53,7 +74,7 @@ export class D1R2PersistenceService implements PersistenceService {
       `CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, object_key TEXT NOT NULL, content_type TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);`,
       `CREATE TABLE IF NOT EXISTS upload_sessions (id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, project_id TEXT NOT NULL, object_key TEXT NOT NULL, file_name TEXT NOT NULL, content_type TEXT NOT NULL, expires_at TEXT NOT NULL);`
     ];
-    await this.env.DB.batch(statements.map((sql) => this.env.DB!.prepare(sql)));
+    await this.env.DB!.batch(statements.map((sql) => this.env.DB!.prepare(sql)));
   }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
@@ -140,6 +161,16 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().saveRevision(request);
     }
     await this.ensureSchema();
+    const documentJson = JSON.stringify(request.document);
+    const result = await this.env.DB.prepare(
+      `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ?`
+    )
+      .bind(documentJson, nowIso(), request.document.name, request.projectId)
+      .run();
+    if (result.meta?.changes === 0) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+
     const latestRevision = request.document.revisions.at(-1);
     if (latestRevision) {
       await this.env.DB.prepare(
@@ -149,22 +180,11 @@ export class D1R2PersistenceService implements PersistenceService {
           latestRevision.revisionId,
           request.projectId,
           request.reason,
-          JSON.stringify(request.document),
+          documentJson,
           latestRevision.createdAt
         )
         .run();
     }
-
-    await this.env.DB.prepare(
-      `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ?`
-    )
-      .bind(
-        JSON.stringify(request.document),
-        nowIso(),
-        request.document.name,
-        request.projectId
-      )
-      .run();
     return request.document;
   }
 
@@ -202,13 +222,20 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     await this.ensureSchema();
     const upload = await this.env.DB.prepare(
-      `SELECT object_key FROM upload_sessions WHERE id = ?`
+      `SELECT object_key, project_id, expires_at FROM upload_sessions WHERE id = ?`
     )
       .bind(request.uploadSessionId)
-      .first<{ object_key: string }>();
-    if (!upload) {
+      .first<{ object_key: string; project_id: string; expires_at: string }>();
+    if (
+      !upload ||
+      upload.project_id !== request.projectId ||
+      Date.parse(upload.expires_at) < Date.now()
+    ) {
       return null;
     }
+    await this.env.DB.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
+      .bind(request.uploadSessionId)
+      .run();
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
@@ -316,7 +343,7 @@ export class D1R2PersistenceService implements PersistenceService {
             objectKey: row.object_key,
             contentType: row.content_type,
             createdAt: row.created_at,
-            metadata: JSON.parse(row.metadata_json)
+            metadata: JSON.parse(row.metadata_json) as ArtifactRecord['metadata']
           }
         : null
     };
@@ -330,10 +357,10 @@ async function createSignedUploadSession(
   const session: UploadSessionRecord = {
     uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
     artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
-    objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${request.fileName}`,
+    objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${sanitizeFileName(request.fileName)}`,
     fileName: request.fileName,
     contentType: request.contentType,
-    expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString()
+    expiresAt: new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString()
   };
 
   if (
@@ -371,18 +398,21 @@ async function createSignedUploadSession(
   return session;
 }
 
-let persistenceSingleton: PersistenceService | undefined;
+// Cache one service per env object (envs are stable per isolate) so schema
+// setup memoization survives across requests without pinning a stale env.
+const servicesByEnv = new WeakMap<CloudflareEnv, PersistenceService>();
 
 export function createPersistenceService(env: CloudflareEnv): PersistenceService {
   if (!env.DB) {
     return getInMemoryPersistence();
   }
 
-  if (!persistenceSingleton) {
-    persistenceSingleton = new D1R2PersistenceService(env);
+  let service = servicesByEnv.get(env);
+  if (!service) {
+    service = new D1R2PersistenceService(env);
+    servicesByEnv.set(env, service);
   }
-
-  return persistenceSingleton;
+  return service;
 }
 
 export class ProjectCollaborationRoom extends DurableObject {

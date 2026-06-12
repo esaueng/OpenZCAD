@@ -1,10 +1,13 @@
 import { listNodesByKind } from '@openzcad/document-core';
 import {
   DEFAULT_BODY_COLOR,
+  featureColor,
   identityTransform,
   nowIso,
   type BodyId,
+  type BodyNode,
   type BodyRepresentation,
+  type FeatureId,
   type FeatureNode,
   type MeshGeometry,
   type PrimitiveGeometry,
@@ -38,21 +41,33 @@ function dimensionsToPrimitive(feature: FeatureNode): PrimitiveGeometry | null {
   return null;
 }
 
-function colorForFeature(featureKind: FeatureNode['featureKind']): string {
-  switch (featureKind) {
-    case 'primitive':
-      return '#e1a948';
-    case 'extrude':
-      return '#4bb7a7';
-    case 'boolean':
-      return '#ff7452';
-    case 'transform':
-      return '#8b80f9';
-    case 'imported-mesh':
-      return '#7aa3ff';
-    default:
-      return DEFAULT_BODY_COLOR;
+type BodyResolver = (bodyId: BodyId) => BodyRepresentation | undefined;
+
+/**
+ * Yields features in `featureOrder` (the authoritative build order), followed
+ * by any feature nodes missing from it, so a partially corrupted order list
+ * still renders every feature.
+ */
+function orderedFeatures(
+  document: ProjectDocument,
+  features: FeatureNode[],
+  featuresById: Map<FeatureId, FeatureNode>
+): FeatureNode[] {
+  const ordered: FeatureNode[] = [];
+  const seen = new Set<FeatureId>();
+  for (const featureId of document.featureOrder) {
+    const feature = featuresById.get(featureId);
+    if (feature && !seen.has(featureId)) {
+      ordered.push(feature);
+      seen.add(featureId);
+    }
   }
+  for (const feature of features) {
+    if (!seen.has(feature.featureId)) {
+      ordered.push(feature);
+    }
+  }
+  return ordered;
 }
 
 function triangleMeshFromPrimitive(geometry: PrimitiveGeometry): MeshGeometry {
@@ -164,36 +179,83 @@ export class MockKernelAdapter implements KernelAdapter {
   syncDocument(document: ProjectDocument): ProjectDocument['derived'] {
     const features = listNodesByKind(document, 'feature');
     const bodies = listNodesByKind(document, 'body');
-    const bodyRepresentations: Record<string, BodyRepresentation> = {};
+    const featuresById = new Map<FeatureId, FeatureNode>(
+      features.map((feature) => [feature.featureId, feature])
+    );
+    const bodiesByBodyId = new Map<BodyId, BodyNode>(
+      bodies.map((body) => [body.bodyId, body])
+    );
+    const representations = new Map<BodyId, BodyRepresentation>();
     const warnings: string[] = [];
 
-    for (const body of bodies) {
-      const feature = features.find((candidate) => candidate.featureId === body.featureId);
-      if (!feature) {
-        warnings.push(`Body ${body.bodyId} has no feature.`);
+    // Boolean/transform targets resolve against bodies already produced in
+    // this pass, falling back to the previous derived state, so a fresh sync
+    // (e.g. after load or replay) is self-sufficient.
+    const resolveBody: BodyResolver = (bodyId) =>
+      representations.get(bodyId) ?? document.derived.bodyRepresentations[bodyId];
+
+    for (const feature of orderedFeatures(document, features, featuresById)) {
+      if (feature.data.featureKind === 'sketch') {
         continue;
       }
 
-      const representation = this.representationForFeature(document, feature);
+      if (feature.data.featureKind === 'transform') {
+        const targetBodyId = feature.data.targetBodyId;
+        const target = resolveBody(targetBodyId);
+        if (!target) {
+          warnings.push(`Transform "${feature.name}" targets a missing body.`);
+          continue;
+        }
+        // Transforms replace the target body's placement; the last transform
+        // in feature order wins.
+        representations.set(targetBodyId, {
+          ...target,
+          transform: feature.data.transform,
+          source: 'transform'
+        });
+        continue;
+      }
+
+      if (!feature.bodyId) {
+        continue;
+      }
+
+      const representation = this.representationForFeature(document, feature, resolveBody);
       if (!representation) {
-        warnings.push(`No renderable geometry for feature ${feature.name}.`);
         continue;
       }
 
-      bodyRepresentations[body.bodyId] = {
+      const body = bodiesByBodyId.get(feature.bodyId);
+      representations.set(feature.bodyId, {
         ...representation,
-        bodyId: body.bodyId,
-        name: body.name,
+        bodyId: feature.bodyId,
+        name: body?.name ?? representation.name,
         color:
-          String(body.metadata?.color ?? colorForFeature(feature.featureKind)) ||
+          String(body?.metadata?.color ?? featureColor(feature.featureKind)) ||
           DEFAULT_BODY_COLOR,
-        exportableStep: body.exportableStep
-      };
+        exportableStep: body?.exportableStep ?? false
+      });
     }
 
+    for (const body of bodies) {
+      if (representations.has(body.bodyId)) {
+        continue;
+      }
+      const feature = featuresById.get(body.featureId);
+      warnings.push(
+        feature
+          ? `No renderable geometry for feature ${feature.name}.`
+          : `Body ${body.bodyId} has no feature.`
+      );
+    }
+
+    const bodyRepresentations = Object.fromEntries(
+      representations
+    ) as ProjectDocument['derived']['bodyRepresentations'];
+
     return {
-      bodyRepresentations: bodyRepresentations as ProjectDocument['derived']['bodyRepresentations'],
-      exportableBodyIds: Object.values(bodyRepresentations)
+      bodyRepresentations,
+      exportableBodyIds: Array.from(representations.values())
         .filter((body) => body.exportableStep)
         .map((body) => body.bodyId),
       warnings,
@@ -205,7 +267,13 @@ export class MockKernelAdapter implements KernelAdapter {
     const feature = listNodesByKind(document, 'feature').find(
       (candidate) => candidate.featureId === featureId
     );
-    return feature ? this.representationForFeature(document, feature) : null;
+    return feature
+      ? this.representationForFeature(
+          document,
+          feature,
+          (bodyId) => document.derived.bodyRepresentations[bodyId]
+        )
+      : null;
   }
 
   booleanOp(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null {
@@ -286,14 +354,31 @@ export class MockKernelAdapter implements KernelAdapter {
 
   private representationForFeature(
     document: ProjectDocument,
-    feature: FeatureNode
+    feature: FeatureNode,
+    resolveBody: BodyResolver
   ): BodyRepresentation | null {
+    if (feature.data.featureKind === 'transform') {
+      const target = resolveBody(feature.data.targetBodyId);
+      if (!target) {
+        return null;
+      }
+      return {
+        ...target,
+        transform: feature.data.transform,
+        source: 'transform'
+      };
+    }
+
+    if (!feature.bodyId) {
+      return null;
+    }
+
     const base = {
-      bodyId: feature.bodyId ?? ('missing' as BodyId),
+      bodyId: feature.bodyId,
       name: feature.name,
       source: feature.featureKind,
       transform: identityTransform(),
-      color: colorForFeature(feature.featureKind),
+      color: featureColor(feature.featureKind),
       exportableStep: false
     } satisfies Omit<BodyRepresentation, 'geometry'>;
 
@@ -358,7 +443,7 @@ export class MockKernelAdapter implements KernelAdapter {
 
     if (feature.data.featureKind === 'boolean') {
       const children = feature.data.targetBodyIds
-        .map((bodyId) => document.derived.bodyRepresentations[bodyId])
+        .map((bodyId) => resolveBody(bodyId))
         .filter((candidate): candidate is BodyRepresentation => Boolean(candidate));
 
       return {
@@ -368,18 +453,6 @@ export class MockKernelAdapter implements KernelAdapter {
           operation: feature.data.operation,
           children
         }
-      };
-    }
-
-    if (feature.data.featureKind === 'transform') {
-      const target = document.derived.bodyRepresentations[feature.data.targetBodyId];
-      if (!target) {
-        return null;
-      }
-      return {
-        ...target,
-        transform: feature.data.transform,
-        source: 'transform'
       };
     }
 

@@ -364,3 +364,33 @@ export const toUserId = (value: string): UserId => value as UserId;
 export const toJobId = (value: string): JobId => value as JobId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
+
+export const FEATURE_COLORS: Record<FeatureKind, string> = {
+  primitive: '#e1a948',
+  sketch: DEFAULT_BODY_COLOR,
+  extrude: '#4bb7a7',
+  boolean: '#ff7452',
+  transform: '#8b80f9',
+  'imported-mesh': '#7aa3ff'
+};
+
+export const featureColor = (kind: FeatureKind): string =>
+  FEATURE_COLORS[kind] ?? DEFAULT_BODY_COLOR;
+
+const FILE_NAME_MAX_LENGTH = 128;
+
+/**
+ * Normalizes a user-supplied file name so it is safe to embed in storage
+ * object keys and artifact names: strips path segments, control characters,
+ * and key-hostile punctuation, and caps the length.
+ */
+export function sanitizeFileName(fileName: string): string {
+  const baseName = fileName.split(/[/\\]/).pop() ?? '';
+  const cleaned = baseName
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^[.-]+/, '')
+    .slice(0, FILE_NAME_MAX_LENGTH);
+  return cleaned.length > 0 ? cleaned : 'upload';
+}

@@ -95,6 +95,8 @@ export function CommandConsole({
             accept=".stl,.step,.stp"
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
               const file = event.target.files?.[0];
+              // Reset so selecting the same file again re-triggers onChange.
+              event.target.value = '';
               if (file) {
                 void onImportFile(file);
               }
