@@ -20,17 +20,16 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/kernel-adapter": "workspace:*",
+    "@openzcad/persistence": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@vitejs/plugin-react": "^4.3.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "three": "^0.176.0",
-    "zod": "^3.24.2"
+    "three": "^0.176.0"
   },
   "devDependencies": {
     "vite": "^6.3.2",
     "wrangler": "^4.11.1"
   }
 }
-

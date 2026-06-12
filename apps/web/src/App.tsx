@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { CommandManager, commandFactories, type AnyCommand } from '@openzcad/command-system';
 import { getLatestBodyId, getLatestSketchId } from '@openzcad/document-core';
 import { parseStepMetadata } from '@openzcad/io-step';
 import { exportBodiesToStl, parseStl } from '@openzcad/io-stl';
@@ -15,31 +15,54 @@ import { CadViewport } from './components/CadViewport';
 import { CommandConsole } from './components/CommandConsole';
 import { ModelTree } from './components/ModelTree';
 import { PropertiesPanel } from './components/PropertiesPanel';
+import type { GeometrySyncResult } from './worker/geometryWorker';
 
 const kernel = createMockKernelAdapter();
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export function App() {
   const [projects, setProjects] = useState<string[]>([]);
-  const [document, setDocument] = useState<ProjectDocument | null>(null);
+  // Named `doc` (not `document`) so the global DOM document is never shadowed.
+  const [doc, setDoc] = useState<ProjectDocument | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
+  const lastSyncedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    geometryWorkerRef.current = new Worker(
-      new URL('./worker/geometryWorker.ts', import.meta.url),
-      { type: 'module' }
-    );
-    geometryWorkerRef.current.onmessage = (event: MessageEvent<ProjectDocument['derived']>) => {
-      if (!managerRef.current) {
+    const worker = new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
+      type: 'module'
+    });
+    geometryWorkerRef.current = worker;
+    worker.onmessage = (event: MessageEvent<GeometrySyncResult>) => {
+      const manager = managerRef.current;
+      if (!manager) {
         return;
       }
-      const nextDocument = managerRef.current.commitDerivedState(event.data);
-      setDocument({ ...nextDocument });
+      const result = event.data;
+      // Ignore results for documents we are no longer showing.
+      if (
+        result.projectId !== manager.document.projectId ||
+        result.version !== manager.document.version
+      ) {
+        return;
+      }
+      if (!result.ok) {
+        setStatus(`Geometry sync failed: ${result.error}`);
+        return;
+      }
+      const nextDocument = manager.commitDerivedState(result.derived);
+      setDoc(nextDocument);
     };
 
-    return () => geometryWorkerRef.current?.terminate();
+    return () => {
+      worker.terminate();
+      geometryWorkerRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -48,63 +71,82 @@ export function App() {
         const health = await api.health();
         const listed = await api.listProjects();
         setProjects(listed.projects.map((project) => project.projectId));
-        setStatus(`API ${health.status} on ${health.environment}. ${listed.projects.length} project(s) available.`);
+        setStatus(
+          `API ${health.status} on ${health.environment}. ${listed.projects.length} project(s) available.`
+        );
         if (listed.projects[0]) {
           const loaded = await api.loadProject(listed.projects[0].projectId);
           hydrateDocument(loaded);
         }
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : 'Failed to reach API.');
+        setStatus(errorMessage(error, 'Failed to reach API.'));
       }
     })();
   }, []);
 
   useEffect(() => {
-    if (document && geometryWorkerRef.current) {
-      geometryWorkerRef.current.postMessage(document);
+    if (!doc || !geometryWorkerRef.current) {
+      return;
     }
-  }, [document]);
+    // Re-derive geometry only when the model itself changed. Derived-state
+    // commits keep the same version, which is what breaks the otherwise
+    // infinite post -> derive -> commit -> post cycle.
+    const syncKey = `${doc.projectId}:${doc.version}`;
+    if (lastSyncedKeyRef.current === syncKey) {
+      return;
+    }
+    lastSyncedKeyRef.current = syncKey;
+    geometryWorkerRef.current.postMessage(doc);
+  }, [doc]);
 
   const bodies = useMemo<BodyRepresentation[]>(
-    () => (document ? Object.values(document.derived.bodyRepresentations) : []),
-    [document]
+    () => (doc ? Object.values(doc.derived.bodyRepresentations) : []),
+    [doc]
   );
 
   const selectedBodyId = useMemo(() => {
-    if (!document || !selectedId) {
+    if (!doc || !selectedId) {
       return null;
     }
 
-    const node = document.nodes[selectedId];
+    const node = doc.nodes[selectedId];
     return node?.kind === 'body' ? node.bodyId : null;
-  }, [document, selectedId]);
+  }, [doc, selectedId]);
 
   function hydrateDocument(nextDocument: ProjectDocument) {
     managerRef.current = new CommandManager(nextDocument);
-    setDocument(nextDocument);
+    setDoc(nextDocument);
     setSelectedId(nextDocument.activePartId);
   }
 
-  function executeCommand(factory: Parameters<CommandManager['execute']>[0]) {
+  function executeCommand(command: AnyCommand) {
     if (!managerRef.current) {
       return;
     }
-    const nextDocument = managerRef.current.execute(factory);
-    setDocument({ ...nextDocument });
-    setStatus(factory.label);
+    try {
+      const nextDocument = managerRef.current.execute(command);
+      setDoc(nextDocument);
+      setStatus(command.label);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Command failed.'));
+    }
   }
 
   async function handleCreateProject(name: string) {
-    const response = await api.createProject({ name });
-    hydrateDocument(response.document);
-    setProjects((current: string[]) => [response.project.projectId, ...current]);
-    setStatus(`Created ${response.project.name}.`);
+    try {
+      const response = await api.createProject({ name });
+      hydrateDocument(response.document);
+      setProjects((current: string[]) => [response.project.projectId, ...current]);
+      setStatus(`Created ${response.project.name}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Failed to create project.'));
+    }
   }
 
   function handlePrimitive(kind: PrimitiveKind) {
     executeCommand(
       commandFactories.addPrimitive({
-        name: `${kind} ${(document?.bodyOrder.length ?? 0) + 1}`,
+        name: `${kind} ${(doc?.bodyOrder.length ?? 0) + 1}`,
         // Keep primitive creation deterministic for the vertical slice.
         primitiveKind: kind,
         dimensions:
@@ -118,69 +160,61 @@ export function App() {
   }
 
   function handleSketch(kind: SketchObjectKind) {
-    if (!managerRef.current) {
-      return;
-    }
-    const command = commandFactories.addSketch({
-      name: `${kind} sketch`,
-      plane: 'XY',
-      objectKind: kind,
-      rectangle: { width: 32, height: 18 },
-      circle: { radius: 14 },
-      line: { start: { x: -12, y: 0 }, end: { x: 12, y: 0 } }
-    });
-    const nextDocument = managerRef.current.execute(command);
-    setDocument({ ...nextDocument });
-    setStatus(`Added ${kind} sketch.`);
+    executeCommand(
+      commandFactories.addSketch({
+        name: `${kind} sketch`,
+        plane: 'XY',
+        objectKind: kind,
+        rectangle: { width: 32, height: 18 },
+        circle: { radius: 14 },
+        line: { start: { x: -12, y: 0 }, end: { x: 12, y: 0 } }
+      })
+    );
   }
 
   function handleExtrude() {
-    if (!managerRef.current || !document) {
+    if (!doc) {
       return;
     }
-    const sketchId = getLatestSketchId(document);
+    const sketchId = getLatestSketchId(doc);
     if (!sketchId) {
       setStatus('Create a sketch before extruding.');
       return;
     }
-    const nextDocument = managerRef.current.execute(
+    executeCommand(
       commandFactories.extrudeSketch({
         name: 'Extrude 1',
         sketchId,
         distance: 24
       })
     );
-    setDocument({ ...nextDocument });
-    setStatus('Extrude feature added.');
   }
 
   function handleBoolean(operation: 'union' | 'subtract' | 'intersect') {
-    if (!managerRef.current || !document || document.bodyOrder.length < 2) {
+    if (!doc || doc.bodyOrder.length < 2) {
       setStatus('At least two bodies are required for a boolean operation.');
       return;
     }
-    const targets = document.bodyOrder.slice(-2);
-    const nextDocument = managerRef.current.execute(
+    const targets = doc.bodyOrder.slice(-2);
+    executeCommand(
       commandFactories.booleanBodies({
         name: `${operation} result`,
         operation,
         targetBodyIds: targets
       })
     );
-    setDocument({ ...nextDocument });
-    setStatus(`Boolean ${operation} created from the last two bodies.`);
   }
 
   function handleTransform() {
-    if (!managerRef.current || !document) {
+    if (!doc) {
       return;
     }
-    const bodyId = getLatestBodyId(document);
+    const bodyId = getLatestBodyId(doc);
     if (!bodyId) {
       setStatus('Create a body before transforming.');
       return;
     }
-    const nextDocument = managerRef.current.execute(
+    executeCommand(
       commandFactories.transformBody({
         name: 'Move body',
         targetBodyId: bodyId,
@@ -188,15 +222,13 @@ export function App() {
         rotationDeg: { x: 0, y: 25, z: 0 }
       })
     );
-    setDocument({ ...nextDocument });
-    setStatus('Applied transform feature to the latest body.');
   }
 
   function handleUndo() {
     if (!managerRef.current) {
       return;
     }
-    setDocument({ ...managerRef.current.undo() });
+    setDoc(managerRef.current.undo());
     setStatus('Undo');
   }
 
@@ -204,95 +236,107 @@ export function App() {
     if (!managerRef.current) {
       return;
     }
-    setDocument({ ...managerRef.current.redo() });
+    setDoc(managerRef.current.redo());
     setStatus('Redo');
   }
 
   async function handleSave() {
-    if (!document) {
+    if (!doc) {
       return;
     }
-    const saved = await api.saveRevision({
-      projectId: document.projectId,
-      reason: 'Manual save',
-      document
-    });
-    hydrateDocument(saved);
-    setStatus('Saved revision to persistence.');
+    try {
+      await api.saveRevision({
+        projectId: doc.projectId,
+        reason: 'Manual save',
+        document: doc
+      });
+      // Keep the live CommandManager (and with it the undo history) instead
+      // of re-hydrating from the echoed document.
+      setStatus('Saved revision to persistence.');
+    } catch (error) {
+      setStatus(errorMessage(error, 'Failed to save revision.'));
+    }
   }
 
   async function handleImportFile(file: File) {
-    if (!managerRef.current || !document) {
-      return;
-    }
-
-    const uploadSession = await api.createUploadSession({
-      projectId: document.projectId,
-      fileName: file.name,
-      contentType: file.type || inferContentType(file.name)
-    });
-
-    if (uploadSession.session.uploadUrl) {
-      await fetch(uploadSession.session.uploadUrl, {
-        method: 'PUT',
-        body: file,
-        headers: {
-          'content-type': file.type || inferContentType(file.name)
-        }
-      });
-    }
-
-    const lowerName = file.name.toLowerCase();
-    if (lowerName.endsWith('.stl')) {
-      const parsed = parseStl(await file.arrayBuffer(), file.name);
-      const nextDocument = managerRef.current.execute(
-        commandFactories.importMesh({
-          name: parsed.name,
-          artifactId: uploadSession.session.artifactId,
-          sourceName: parsed.name,
-          triangleCount: parsed.triangleCount
-        })
-      );
-      setDocument({ ...nextDocument });
-      await api.finalizeImport({
-        projectId: document.projectId,
-        uploadSessionId: uploadSession.session.uploadSessionId,
-        artifactId: uploadSession.session.artifactId,
-        fileName: file.name,
-        contentType: file.type || 'model/stl'
-      });
-      setStatus(`Imported STL mesh reference (${parsed.triangleCount} triangles).`);
-      return;
-    }
-
-    const metadata = await parseStepMetadata(kernel, file.name, await file.text());
-    setStatus(
-      `STEP metadata parsed for ${metadata.name}. Native B-Rep import remains staged for the OpenCascade.js adapter.`
-    );
-  }
-
-  async function handleExport(format: 'step' | 'stl') {
-    if (!document || document.bodyOrder.length === 0) {
-      setStatus('Create a body before exporting.');
-      return;
-    }
-    const bodyIds = document.bodyOrder.slice(-1);
-    if (format === 'stl') {
-      const stl = await exportBodiesToStl(kernel, document, bodyIds);
-      downloadText(`openzcad-export.stl`, stl);
-      await api.requestExport({
-        projectId: document.projectId,
-        bodyIds,
-        format: 'stl'
-      });
-      setStatus('Exported STL from derived solid geometry.');
+    if (!managerRef.current || !doc) {
       return;
     }
 
     try {
-      await kernel.exportStep(document, bodyIds);
+      const contentType = file.type || inferContentType(file.name);
+      const uploadSession = await api.createUploadSession({
+        projectId: doc.projectId,
+        fileName: file.name,
+        contentType
+      });
+
+      if (uploadSession.session.uploadUrl) {
+        const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
+          method: 'PUT',
+          body: file,
+          headers: {
+            'content-type': contentType
+          }
+        });
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload failed with status ${uploadResponse.status}.`);
+        }
+      }
+
+      const lowerName = file.name.toLowerCase();
+      if (lowerName.endsWith('.stl')) {
+        const parsed = parseStl(await file.arrayBuffer(), file.name);
+        executeCommand(
+          commandFactories.importMesh({
+            name: parsed.name,
+            artifactId: uploadSession.session.artifactId,
+            sourceName: parsed.name,
+            triangleCount: parsed.triangleCount
+          })
+        );
+        await api.finalizeImport({
+          projectId: doc.projectId,
+          uploadSessionId: uploadSession.session.uploadSessionId,
+          artifactId: uploadSession.session.artifactId,
+          fileName: file.name,
+          contentType
+        });
+        setStatus(`Imported STL mesh reference (${parsed.triangleCount} triangles).`);
+        return;
+      }
+
+      const metadata = await parseStepMetadata(kernel, file.name, await file.text());
+      setStatus(
+        `STEP metadata parsed for ${metadata.name}. Native B-Rep import remains staged for the OpenCascade.js adapter.`
+      );
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'STEP export failed.');
+      setStatus(errorMessage(error, 'Import failed.'));
+    }
+  }
+
+  async function handleExport(format: 'step' | 'stl') {
+    if (!doc || doc.bodyOrder.length === 0) {
+      setStatus('Create a body before exporting.');
+      return;
+    }
+    const bodyIds = doc.bodyOrder.slice(-1);
+    try {
+      if (format === 'stl') {
+        const stl = await exportBodiesToStl(kernel, doc, bodyIds);
+        downloadText('openzcad-export.stl', stl);
+        await api.requestExport({
+          projectId: doc.projectId,
+          bodyIds,
+          format: 'stl'
+        });
+        setStatus('Exported STL from derived solid geometry.');
+        return;
+      }
+
+      await kernel.exportStep(doc, bodyIds);
+    } catch (error) {
+      setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
     }
   }
 
@@ -308,12 +352,12 @@ export function App() {
       <main className="workspace">
         <aside className="left-pane">
           <h2>Model Tree</h2>
-          <ModelTree document={document} selectedId={selectedId} onSelect={setSelectedId} />
+          <ModelTree document={doc} selectedId={selectedId} onSelect={setSelectedId} />
         </aside>
         <section className="center-pane">
           <CadViewport bodies={bodies} selectedBodyId={selectedBodyId} />
           <CommandConsole
-            document={document}
+            document={doc}
             onCreateProject={handleCreateProject}
             onPrimitive={handlePrimitive}
             onSketch={handleSketch}
@@ -330,7 +374,7 @@ export function App() {
         </section>
         <aside className="right-pane">
           <h2>Properties</h2>
-          <PropertiesPanel document={document} selectedId={selectedId} />
+          <PropertiesPanel document={doc} selectedId={selectedId} />
         </aside>
       </main>
     </div>

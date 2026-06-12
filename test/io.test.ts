@@ -29,6 +29,37 @@ describe('io adapters', () => {
     expect(stl).toContain('solid openzcad');
   });
 
+  it('counts ASCII facets beyond the first kilobyte', () => {
+    const facet = [
+      '  facet normal 0 0 0',
+      '    outer loop',
+      '      vertex 0 0 0',
+      '      vertex 1 0 0',
+      '      vertex 0 1 0',
+      '    endloop',
+      '  endfacet'
+    ].join('\n');
+    const text = `solid big\n${Array.from({ length: 50 }, () => facet).join('\n')}\nendsolid big\n`;
+    expect(text.length).toBeGreaterThan(1024);
+
+    const buffer = new TextEncoder().encode(text).buffer;
+    const parsed = parseStl(buffer, 'big.stl');
+    expect(parsed.format).toBe('ascii');
+    expect(parsed.triangleCount).toBe(50);
+  });
+
+  it('detects binary STL by exact size even when it starts with "solid"', () => {
+    const triangleCount = 3;
+    const buffer = new ArrayBuffer(84 + triangleCount * 50);
+    const bytes = new Uint8Array(buffer);
+    bytes.set(new TextEncoder().encode('solid binary-exporter'), 0);
+    new DataView(buffer).setUint32(80, triangleCount, true);
+
+    const parsed = parseStl(buffer, 'tricky.stl');
+    expect(parsed.format).toBe('binary');
+    expect(parsed.triangleCount).toBe(triangleCount);
+  });
+
   it('parses STEP metadata without inventing B-Rep geometry', async () => {
     const stepPath = resolve('samples/simple-assembly.step');
     const text = readFileSync(stepPath, 'utf8');
