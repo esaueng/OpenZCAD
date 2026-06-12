@@ -1,8 +1,9 @@
 import {
-  DEFAULT_BODY_COLOR,
   createId,
   deepClone,
+  featureColor,
   nowIso,
+  toArtifactId,
   toBodyId,
   toEntityId,
   toFeatureId,
@@ -14,6 +15,8 @@ import {
   type BooleanOperation,
   type ConstraintKind,
   type DocumentNode,
+  type EntityId,
+  type FeatureId,
   type FeatureNode,
   type PlaneId,
   type PrimitiveKind,
@@ -26,10 +29,78 @@ import {
   type UserId
 } from '@openzcad/shared';
 
+// Documents are treated as immutable values: every mutating operation in this
+// module deep-clones the incoming document before touching it and returns the
+// clone. Callers (CommandManager, UI state) may therefore hold references to
+// previous documents — including sharing untouched sub-objects produced by the
+// shallow-copy helpers below — without risk of aliasing bugs.
+
+/**
+ * Pre-generated identifiers for operations that create a feature plus a body.
+ * Command factories assign these when the command is created so that the
+ * serialized payload replays to the exact same entity graph.
+ */
+export interface BodyFeatureIds {
+  featureId: FeatureId;
+  featureNodeId: EntityId;
+  bodyId: BodyId;
+  bodyNodeId: EntityId;
+}
+
+export interface SketchFeatureIds {
+  featureId: FeatureId;
+  featureNodeId: EntityId;
+  sketchId: SketchId;
+  sketchNodeId: EntityId;
+  objectNodeId: EntityId;
+}
+
+export interface FeatureOnlyIds {
+  featureId: FeatureId;
+  featureNodeId: EntityId;
+}
+
+export interface ConstraintIds {
+  constraintNodeId: EntityId;
+}
+
+export function createBodyFeatureIds(): BodyFeatureIds {
+  return {
+    featureId: toFeatureId(createId('feat')),
+    featureNodeId: toEntityId(createId('ent')),
+    bodyId: toBodyId(createId('body')),
+    bodyNodeId: toEntityId(createId('ent'))
+  };
+}
+
+export function createSketchFeatureIds(): SketchFeatureIds {
+  return {
+    featureId: toFeatureId(createId('feat')),
+    featureNodeId: toEntityId(createId('ent')),
+    sketchId: toSketchId(createId('sketch')),
+    sketchNodeId: toEntityId(createId('ent')),
+    objectNodeId: toEntityId(createId('ent'))
+  };
+}
+
+export function createFeatureOnlyIds(): FeatureOnlyIds {
+  return {
+    featureId: toFeatureId(createId('feat')),
+    featureNodeId: toEntityId(createId('ent'))
+  };
+}
+
+export function createConstraintIds(): ConstraintIds {
+  return {
+    constraintNodeId: toEntityId(createId('ent'))
+  };
+}
+
 export interface PrimitiveInput {
   name: string;
   primitiveKind: PrimitiveKind;
   dimensions: Record<string, number>;
+  ids?: BodyFeatureIds;
 }
 
 export interface SketchInput {
@@ -39,6 +110,7 @@ export interface SketchInput {
   rectangle?: { width: number; height: number };
   circle?: { radius: number };
   line?: { start: { x: number; y: number }; end: { x: number; y: number } };
+  ids?: SketchFeatureIds;
 }
 
 export interface ConstraintInput {
@@ -47,18 +119,21 @@ export interface ConstraintInput {
   constraintKind: ConstraintKind;
   targetIds: string[];
   value?: number;
+  ids?: ConstraintIds;
 }
 
 export interface ExtrudeInput {
   name: string;
   sketchId: SketchId;
   distance: number;
+  ids?: BodyFeatureIds;
 }
 
 export interface BooleanInput {
   name: string;
   operation: BooleanOperation;
   targetBodyIds: BodyId[];
+  ids?: BodyFeatureIds;
 }
 
 export interface TransformInput {
@@ -66,6 +141,7 @@ export interface TransformInput {
   targetBodyId: BodyId;
   translation: { x: number; y: number; z: number };
   rotationDeg?: { x: number; y: number; z: number };
+  ids?: FeatureOnlyIds;
 }
 
 export interface ImportedMeshInput {
@@ -73,6 +149,7 @@ export interface ImportedMeshInput {
   artifactId: string;
   sourceName: string;
   triangleCount: number;
+  ids?: BodyFeatureIds;
 }
 
 export function createProjectDocument(
@@ -131,10 +208,7 @@ export function createProjectDocument(
     name,
     units,
     version: 1,
-    nodes: nodes as Record<keyof typeof nodes, DocumentNode> as Record<
-      string,
-      DocumentNode
-    >,
+    nodes,
     featureOrder: [],
     bodyOrder: [],
     sketchOrder: [],
@@ -146,7 +220,7 @@ export function createProjectDocument(
       warnings: [],
       updatedAt: createdAt
     }
-  } as ProjectDocument;
+  };
 }
 
 export function cloneDocument(document: ProjectDocument): ProjectDocument {
@@ -174,10 +248,8 @@ export function addPrimitiveFeature(
   input: PrimitiveInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const featureId = toFeatureId(createId('feat'));
-  const featureNodeId = toEntityId(createId('ent'));
-  const bodyId = toBodyId(createId('body'));
-  const bodyNodeId = toEntityId(createId('ent'));
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
   const part = getNode(next, next.activePartId);
 
   const feature: FeatureNode = {
@@ -207,7 +279,7 @@ export function addPrimitiveFeature(
     bodyType: 'solid',
     representationSource: 'mock',
     exportableStep: false,
-    metadata: { color: DEFAULT_BODY_COLOR }
+    metadata: { color: featureColor('primitive') }
   };
 
   next.nodes[feature.id] = feature;
@@ -228,11 +300,8 @@ export function addSketchFeature(
   input: SketchInput
 ): { document: ProjectDocument; sketchId: SketchId } {
   const next = cloneDocument(document);
-  const featureId = toFeatureId(createId('feat'));
-  const featureNodeId = toEntityId(createId('ent'));
-  const sketchId = toSketchId(createId('sketch'));
-  const sketchNodeId = toEntityId(createId('ent'));
-  const objectNodeId = toEntityId(createId('ent'));
+  const { featureId, featureNodeId, sketchId, sketchNodeId, objectNodeId } =
+    input.ids ?? createSketchFeatureIds();
   const part = getNode(next, next.activePartId);
 
   const sketchNode: SketchNode = {
@@ -312,7 +381,7 @@ export function addConstraint(
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
 
-  const constraintId = toEntityId(createId('ent'));
+  const { constraintNodeId: constraintId } = input.ids ?? createConstraintIds();
   next.nodes[constraintId] = {
     id: constraintId,
     kind: 'constraint',
@@ -333,10 +402,8 @@ export function extrudeSketch(
   input: ExtrudeInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
-  const featureId = toFeatureId(createId('feat'));
-  const featureNodeId = toEntityId(createId('ent'));
-  const bodyId = toBodyId(createId('body'));
-  const bodyNodeId = toEntityId(createId('ent'));
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
   const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
@@ -366,7 +433,7 @@ export function extrudeSketch(
     bodyType: 'solid',
     representationSource: 'mock',
     exportableStep: false,
-    metadata: { color: '#4bb7a7' }
+    metadata: { color: featureColor('extrude') }
   };
 
   next.featureOrder.push(featureId);
@@ -383,10 +450,8 @@ export function booleanBodies(
   input: BooleanInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
-  const featureId = toFeatureId(createId('feat'));
-  const featureNodeId = toEntityId(createId('ent'));
-  const bodyId = toBodyId(createId('body'));
-  const bodyNodeId = toEntityId(createId('ent'));
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
   const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
@@ -416,7 +481,7 @@ export function booleanBodies(
     bodyType: 'solid',
     representationSource: 'composite',
     exportableStep: false,
-    metadata: { color: '#ff7452' }
+    metadata: { color: featureColor('boolean') }
   };
 
   next.featureOrder.push(featureId);
@@ -433,8 +498,7 @@ export function transformBody(
   input: TransformInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
-  const featureId = toFeatureId(createId('feat'));
-  const featureNodeId = toEntityId(createId('ent'));
+  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
   const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
@@ -468,10 +532,8 @@ export function importMeshBody(
   input: ImportedMeshInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
-  const featureId = toFeatureId(createId('feat'));
-  const featureNodeId = toEntityId(createId('ent'));
-  const bodyId = toBodyId(createId('body'));
-  const bodyNodeId = toEntityId(createId('ent'));
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
   const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
@@ -485,7 +547,7 @@ export function importMeshBody(
     featureKind: 'imported-mesh',
     data: {
       featureKind: 'imported-mesh',
-      artifactId: input.artifactId as never,
+      artifactId: toArtifactId(input.artifactId),
       sourceName: input.sourceName,
       triangleCount: input.triangleCount
     }
@@ -502,7 +564,7 @@ export function importMeshBody(
     bodyType: 'mesh-reference',
     representationSource: 'mesh-reference',
     exportableStep: false,
-    metadata: { color: '#7aa3ff' }
+    metadata: { color: featureColor('imported-mesh') }
   };
 
   next.featureOrder.push(featureId);
@@ -518,24 +580,30 @@ export function appendRevision(
   document: ProjectDocument,
   reason: string
 ): ProjectDocument {
-  const next = cloneDocument(document);
-  next.revisions.push({
-    revisionId: toRevisionId(createId('rev')),
-    createdAt: nowIso(),
-    reason,
-    commandCount: next.commandLog.length
-  });
-  next.version += 1;
-  return next;
+  // Shallow copy is sufficient: only `revisions` and `version` change, and the
+  // shared sub-objects are never mutated in place (see module invariant).
+  return {
+    ...document,
+    revisions: [
+      ...document.revisions,
+      {
+        revisionId: toRevisionId(createId('rev')),
+        createdAt: nowIso(),
+        reason,
+        commandCount: document.commandLog.length
+      }
+    ],
+    version: document.version + 1
+  };
 }
 
 export function attachDerivedState(
   document: ProjectDocument,
   derived: ProjectDocument['derived']
 ): ProjectDocument {
-  const next = cloneDocument(document);
-  next.derived = derived;
-  return next;
+  // Derived state is a disposable projection; attaching it intentionally does
+  // not bump `version`, so consumers can tell model edits from re-derivation.
+  return { ...document, derived };
 }
 
 export function getLatestSketchId(document: ProjectDocument): SketchId | undefined {
@@ -546,12 +614,138 @@ export function getLatestBodyId(document: ProjectDocument): BodyId | undefined {
   return document.bodyOrder.at(-1);
 }
 
+type ExpressionToken =
+  | { type: 'number'; value: number }
+  | { type: 'identifier'; name: string }
+  | { type: 'operator'; value: '+' | '-' | '*' | '/' }
+  | { type: 'paren'; value: '(' | ')' };
+
+function tokenizeExpression(expression: string): ExpressionToken[] {
+  const tokens: ExpressionToken[] = [];
+  let index = 0;
+
+  while (index < expression.length) {
+    const char = expression[index]!;
+
+    if (/\s/.test(char)) {
+      index += 1;
+      continue;
+    }
+
+    if (char === '+' || char === '-' || char === '*' || char === '/') {
+      tokens.push({ type: 'operator', value: char });
+      index += 1;
+      continue;
+    }
+
+    if (char === '(' || char === ')') {
+      tokens.push({ type: 'paren', value: char });
+      index += 1;
+      continue;
+    }
+
+    const numberMatch = /^(?:\d+\.?\d*|\.\d+)/.exec(expression.slice(index));
+    if (numberMatch) {
+      tokens.push({ type: 'number', value: Number(numberMatch[0]) });
+      index += numberMatch[0].length;
+      continue;
+    }
+
+    const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(expression.slice(index));
+    if (identifierMatch) {
+      tokens.push({ type: 'identifier', name: identifierMatch[0] });
+      index += identifierMatch[0].length;
+      continue;
+    }
+
+    throw new Error(`Unexpected character "${char}" in expression.`);
+  }
+
+  return tokens;
+}
+
+/**
+ * Evaluates a parameter expression supporting numbers, scope variables,
+ * `+ - * /`, unary minus, and parentheses. Implemented as a small
+ * recursive-descent parser so untrusted expressions are never executed as
+ * JavaScript. Throws on syntax errors and unknown identifiers.
+ */
 export function evaluateExpression(
   expression: string,
   scope: Record<string, number>
 ): number {
-  const normalized = expression.replace(/[^0-9+\-*/()._ a-zA-Z]/g, '');
-  const argNames = Object.keys(scope);
-  const argValues = Object.values(scope);
-  return Function(...argNames, `return (${normalized});`)(...argValues) as number;
+  const tokens = tokenizeExpression(expression);
+  let position = 0;
+
+  const peek = (): ExpressionToken | undefined => tokens[position];
+  const next = (): ExpressionToken => {
+    const token = tokens[position];
+    if (!token) {
+      throw new Error('Unexpected end of expression.');
+    }
+    position += 1;
+    return token;
+  };
+
+  function parsePrimary(): number {
+    const token = next();
+    if (token.type === 'number') {
+      return token.value;
+    }
+    if (token.type === 'identifier') {
+      const value = scope[token.name];
+      if (value === undefined) {
+        throw new Error(`Unknown identifier "${token.name}" in expression.`);
+      }
+      return value;
+    }
+    if (token.type === 'operator' && (token.value === '-' || token.value === '+')) {
+      const operand = parsePrimary();
+      return token.value === '-' ? -operand : operand;
+    }
+    if (token.type === 'paren' && token.value === '(') {
+      const value = parseAdditive();
+      const closing = next();
+      if (closing.type !== 'paren' || closing.value !== ')') {
+        throw new Error('Expected closing parenthesis in expression.');
+      }
+      return value;
+    }
+    throw new Error('Unexpected token in expression.');
+  }
+
+  function parseMultiplicative(): number {
+    let value = parsePrimary();
+    for (;;) {
+      const token = peek();
+      if (token?.type !== 'operator' || (token.value !== '*' && token.value !== '/')) {
+        return value;
+      }
+      position += 1;
+      const right = parsePrimary();
+      value = token.value === '*' ? value * right : value / right;
+    }
+  }
+
+  function parseAdditive(): number {
+    let value = parseMultiplicative();
+    for (;;) {
+      const token = peek();
+      if (token?.type !== 'operator' || (token.value !== '+' && token.value !== '-')) {
+        return value;
+      }
+      position += 1;
+      const right = parseMultiplicative();
+      value = token.value === '+' ? value + right : value - right;
+    }
+  }
+
+  const result = parseAdditive();
+  if (position < tokens.length) {
+    throw new Error('Unexpected trailing tokens in expression.');
+  }
+  if (!Number.isFinite(result)) {
+    throw new Error('Expression did not evaluate to a finite number.');
+  }
+  return result;
 }
