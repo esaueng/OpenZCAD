@@ -7,24 +7,30 @@ import {
   toBodyId,
   toEntityId,
   toFeatureId,
+  toParameterId,
   toProjectId,
   toRevisionId,
   toSketchId,
   type BodyId,
   type BodyNode,
   type BooleanOperation,
-  type ConstraintKind,
   type DocumentNode,
   type EntityId,
+  type FeatureData,
   type FeatureId,
   type FeatureNode,
+  type ParameterId,
+  type ParameterNode,
+  type ParametricVector3,
+  type ParamValue,
   type PlaneId,
   type PrimitiveKind,
   type ProjectDocument,
   type RevisionRecord,
+  type RevolveAxis,
   type SketchId,
   type SketchNode,
-  type SketchObjectKind,
+  type SketchObjectData,
   type UnitSystem,
   type UserId
 } from '@openzcad/shared';
@@ -60,8 +66,9 @@ export interface FeatureOnlyIds {
   featureNodeId: EntityId;
 }
 
-export interface ConstraintIds {
-  constraintNodeId: EntityId;
+export interface ParameterIds {
+  parameterId: ParameterId;
+  parameterNodeId: EntityId;
 }
 
 export function createBodyFeatureIds(): BodyFeatureIds {
@@ -90,42 +97,46 @@ export function createFeatureOnlyIds(): FeatureOnlyIds {
   };
 }
 
-export function createConstraintIds(): ConstraintIds {
+export function createParameterIds(): ParameterIds {
   return {
-    constraintNodeId: toEntityId(createId('ent'))
+    parameterId: toParameterId(createId('param')),
+    parameterNodeId: toEntityId(createId('ent'))
   };
 }
 
 export interface PrimitiveInput {
   name: string;
   primitiveKind: PrimitiveKind;
-  dimensions: Record<string, number>;
+  dimensions: Record<string, ParamValue>;
   ids?: BodyFeatureIds;
 }
 
 export interface SketchInput {
   name: string;
   plane: PlaneId;
-  objectKind: SketchObjectKind;
-  rectangle?: { width: number; height: number };
-  circle?: { radius: number };
-  line?: { start: { x: number; y: number }; end: { x: number; y: number } };
+  offset: ParamValue;
+  object: SketchObjectData;
   ids?: SketchFeatureIds;
 }
 
-export interface ConstraintInput {
-  name: string;
+export interface SketchUpdateInput {
   sketchId: SketchId;
-  constraintKind: ConstraintKind;
-  targetIds: string[];
-  value?: number;
-  ids?: ConstraintIds;
+  plane?: PlaneId;
+  offset?: ParamValue;
+  object?: SketchObjectData;
 }
 
 export interface ExtrudeInput {
   name: string;
   sketchId: SketchId;
-  distance: number;
+  distance: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface RevolveInput {
+  name: string;
+  sketchId: SketchId;
+  axis: RevolveAxis;
   ids?: BodyFeatureIds;
 }
 
@@ -139,8 +150,8 @@ export interface BooleanInput {
 export interface TransformInput {
   name: string;
   targetBodyId: BodyId;
-  translation: { x: number; y: number; z: number };
-  rotationDeg?: { x: number; y: number; z: number };
+  translation: ParametricVector3;
+  rotationDeg?: ParametricVector3;
   ids?: FeatureOnlyIds;
 }
 
@@ -149,7 +160,38 @@ export interface ImportedMeshInput {
   artifactId: string;
   sourceName: string;
   triangleCount: number;
+  vertices: number[];
+  indices: number[];
   ids?: BodyFeatureIds;
+}
+
+export interface ParameterSetInput {
+  name: string;
+  expression: string;
+  ids?: ParameterIds;
+}
+
+export interface ParameterDeleteInput {
+  name: string;
+}
+
+export interface FeatureUpdateInput {
+  featureId: FeatureId;
+  name?: string;
+  /**
+   * Partial patch of the feature's data variant. `featureKind` cannot change;
+   * `dimensions` patches merge key-by-key, every other field replaces.
+   */
+  data?: Partial<FeatureData> & { dimensions?: Record<string, ParamValue> };
+}
+
+export interface FeatureDeleteInput {
+  featureId: FeatureId;
+}
+
+export interface NodeRenameInput {
+  nodeId: string;
+  name: string;
 }
 
 export function createProjectDocument(
@@ -212,6 +254,7 @@ export function createProjectDocument(
     featureOrder: [],
     bodyOrder: [],
     sketchOrder: [],
+    parameterOrder: [],
     revisions: [initialRevision],
     commandLog: [],
     derived: {
@@ -220,6 +263,20 @@ export function createProjectDocument(
       warnings: [],
       updatedAt: createdAt
     }
+  };
+}
+
+/**
+ * Fills in collections that older saved documents may lack, so loading a
+ * pre-parametric document does not crash newer code paths.
+ */
+export function normalizeDocument(document: ProjectDocument): ProjectDocument {
+  return {
+    ...document,
+    parameterOrder: document.parameterOrder ?? [],
+    featureOrder: document.featureOrder ?? [],
+    bodyOrder: document.bodyOrder ?? [],
+    sketchOrder: document.sketchOrder ?? []
   };
 }
 
@@ -243,6 +300,56 @@ export function listNodesByKind<TNode extends DocumentNode['kind']>(
   );
 }
 
+export function findFeature(
+  document: ProjectDocument,
+  featureId: FeatureId
+): FeatureNode | undefined {
+  return listNodesByKind(document, 'feature').find(
+    (feature) => feature.featureId === featureId
+  );
+}
+
+export function findSketch(
+  document: ProjectDocument,
+  sketchId: SketchId
+): SketchNode | undefined {
+  return listNodesByKind(document, 'sketch').find((sketch) => sketch.sketchId === sketchId);
+}
+
+export function findBodyNode(
+  document: ProjectDocument,
+  bodyId: BodyId
+): BodyNode | undefined {
+  return listNodesByKind(document, 'body').find((body) => body.bodyId === bodyId);
+}
+
+export function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
+  const features = listNodesByKind(document, 'feature');
+  const byId = new Map(features.map((feature) => [feature.featureId, feature]));
+  const ordered: FeatureNode[] = [];
+  const seen = new Set<FeatureId>();
+  for (const featureId of document.featureOrder) {
+    const feature = byId.get(featureId);
+    if (feature && !seen.has(featureId)) {
+      ordered.push(feature);
+      seen.add(featureId);
+    }
+  }
+  for (const feature of features) {
+    if (!seen.has(feature.featureId)) {
+      ordered.push(feature);
+    }
+  }
+  return ordered;
+}
+
+function attachToPart(document: ProjectDocument, ...nodeIds: EntityId[]): void {
+  const part = getNode(document, document.activePartId);
+  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
+    part.childIds.push(...nodeIds);
+  }
+}
+
 export function addPrimitiveFeature(
   document: ProjectDocument,
   input: PrimitiveInput
@@ -250,7 +357,6 @@ export function addPrimitiveFeature(
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
-  const part = getNode(next, next.activePartId);
 
   const feature: FeatureNode = {
     id: featureNodeId,
@@ -277,8 +383,8 @@ export function addPrimitiveFeature(
     bodyId,
     featureId,
     bodyType: 'solid',
-    representationSource: 'mock',
-    exportableStep: false,
+    representationSource: 'brep',
+    exportableStep: true,
     metadata: { color: featureColor('primitive') }
   };
 
@@ -286,11 +392,7 @@ export function addPrimitiveFeature(
   next.nodes[body.id] = body;
   next.featureOrder.push(featureId);
   next.bodyOrder.push(bodyId);
-
-  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
-    part.childIds.push(feature.id, body.id);
-  }
-
+  attachToPart(next, feature.id, body.id);
   next.version += 1;
   return next;
 }
@@ -302,7 +404,6 @@ export function addSketchFeature(
   const next = cloneDocument(document);
   const { featureId, featureNodeId, sketchId, sketchNodeId, objectNodeId } =
     input.ids ?? createSketchFeatureIds();
-  const part = getNode(next, next.activePartId);
 
   const sketchNode: SketchNode = {
     id: sketchNodeId,
@@ -312,41 +413,25 @@ export function addSketchFeature(
     revisionId: null,
     sketchId,
     plane: input.plane,
-    objectIds: [objectNodeId],
-    constraintIds: []
+    offset: input.offset,
+    objectIds: [objectNodeId]
   };
 
   next.nodes[objectNodeId] = {
     id: objectNodeId,
     kind: 'sketch-object',
-    name: `${input.objectKind} profile`,
+    name: `${input.object.objectKind} profile`,
     parentId: sketchNodeId,
     revisionId: null,
-    objectKind: input.objectKind,
-    data:
-      input.objectKind === 'rectangle'
-        ? {
-            objectKind: 'rectangle',
-            width: input.rectangle?.width ?? 20,
-            height: input.rectangle?.height ?? 20
-          }
-        : input.objectKind === 'circle'
-          ? {
-              objectKind: 'circle',
-              radius: input.circle?.radius ?? 10
-            }
-          : {
-              objectKind: 'line',
-              start: input.line?.start ?? { x: 0, y: 0 },
-              end: input.line?.end ?? { x: 30, y: 0 }
-            }
+    objectKind: input.object.objectKind,
+    data: input.object
   };
 
   next.nodes[sketchNode.id] = sketchNode;
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
-    name: `${input.name} Feature`,
+    name: input.name,
     parentId: next.activePartId,
     revisionId: null,
     featureId,
@@ -359,40 +444,36 @@ export function addSketchFeature(
 
   next.featureOrder.push(featureId);
   next.sketchOrder.push(sketchId);
-
-  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
-    part.childIds.push(featureNodeId, sketchNodeId);
-  }
-
+  attachToPart(next, featureNodeId, sketchNodeId);
   next.version += 1;
   return { document: next, sketchId };
 }
 
-export function addConstraint(
+export function updateSketch(
   document: ProjectDocument,
-  input: ConstraintInput
+  input: SketchUpdateInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const sketch = listNodesByKind(next, 'sketch').find(
-    (candidate) => candidate.sketchId === input.sketchId
-  );
-
+  const sketch = findSketch(next, input.sketchId);
   if (!sketch) {
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
-
-  const { constraintNodeId: constraintId } = input.ids ?? createConstraintIds();
-  next.nodes[constraintId] = {
-    id: constraintId,
-    kind: 'constraint',
-    name: input.name,
-    parentId: sketch.id,
-    revisionId: null,
-    constraintKind: input.constraintKind,
-    targetIds: input.targetIds.map((id) => toEntityId(id)),
-    value: input.value
-  };
-  sketch.constraintIds.push(constraintId);
+  if (input.plane !== undefined) {
+    sketch.plane = input.plane;
+  }
+  if (input.offset !== undefined) {
+    sketch.offset = input.offset;
+  }
+  if (input.object !== undefined) {
+    const objectId = sketch.objectIds[0];
+    const objectNode = objectId ? next.nodes[objectId] : undefined;
+    if (!objectNode || objectNode.kind !== 'sketch-object') {
+      throw new Error(`Sketch ${input.sketchId} has no profile object.`);
+    }
+    objectNode.objectKind = input.object.objectKind;
+    objectNode.data = input.object;
+    objectNode.name = `${input.object.objectKind} profile`;
+  }
   next.version += 1;
   return next;
 }
@@ -404,7 +485,6 @@ export function extrudeSketch(
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
-  const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -431,16 +511,59 @@ export function extrudeSketch(
     bodyId,
     featureId,
     bodyType: 'solid',
-    representationSource: 'mock',
-    exportableStep: false,
+    representationSource: 'brep',
+    exportableStep: true,
     metadata: { color: featureColor('extrude') }
   };
 
   next.featureOrder.push(featureId);
   next.bodyOrder.push(bodyId);
-  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
-    part.childIds.push(featureNodeId, bodyNodeId);
-  }
+  attachToPart(next, featureNodeId, bodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId };
+}
+
+export function revolveSketch(
+  document: ProjectDocument,
+  input: RevolveInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
+
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind: 'revolve',
+    data: {
+      featureKind: 'revolve',
+      sketchId: input.sketchId,
+      axis: input.axis
+    }
+  };
+
+  next.nodes[bodyNodeId] = {
+    id: bodyNodeId,
+    kind: 'body',
+    name: `${input.name} Body`,
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'brep',
+    exportableStep: true,
+    metadata: { color: featureColor('revolve') }
+  };
+
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId);
+  attachToPart(next, featureNodeId, bodyNodeId);
   next.version += 1;
   return { document: next, bodyId };
 }
@@ -449,10 +572,12 @@ export function booleanBodies(
   document: ProjectDocument,
   input: BooleanInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  if (input.targetBodyIds.length < 2) {
+    throw new Error('Boolean operations need at least two target bodies.');
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
-  const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -473,22 +598,20 @@ export function booleanBodies(
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    name: `${input.name} Result`,
+    name: `${input.name} Body`,
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
     featureId,
     bodyType: 'solid',
-    representationSource: 'composite',
-    exportableStep: false,
+    representationSource: 'brep',
+    exportableStep: true,
     metadata: { color: featureColor('boolean') }
   };
 
   next.featureOrder.push(featureId);
   next.bodyOrder.push(bodyId);
-  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
-    part.childIds.push(featureNodeId, bodyNodeId);
-  }
+  attachToPart(next, featureNodeId, bodyNodeId);
   next.version += 1;
   return { document: next, bodyId };
 }
@@ -499,7 +622,6 @@ export function transformBody(
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
   const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
-  const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -520,9 +642,7 @@ export function transformBody(
   };
 
   next.featureOrder.push(featureId);
-  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
-    part.childIds.push(featureNodeId);
-  }
+  attachToPart(next, featureNodeId);
   next.version += 1;
   return { document: next, bodyId: input.targetBodyId };
 }
@@ -534,7 +654,6 @@ export function importMeshBody(
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
-  const part = getNode(next, next.activePartId);
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -549,7 +668,9 @@ export function importMeshBody(
       featureKind: 'imported-mesh',
       artifactId: toArtifactId(input.artifactId),
       sourceName: input.sourceName,
-      triangleCount: input.triangleCount
+      triangleCount: input.triangleCount,
+      vertices: input.vertices,
+      indices: input.indices
     }
   };
 
@@ -562,18 +683,292 @@ export function importMeshBody(
     bodyId,
     featureId,
     bodyType: 'mesh-reference',
-    representationSource: 'mesh-reference',
-    exportableStep: false,
+    representationSource: 'mesh-import',
+    exportableStep: true,
     metadata: { color: featureColor('imported-mesh') }
   };
 
   next.featureOrder.push(featureId);
   next.bodyOrder.push(bodyId);
-  if (part && (part.kind === 'part' || part.kind === 'assembly')) {
-    part.childIds.push(featureNodeId, bodyNodeId);
-  }
+  attachToPart(next, featureNodeId, bodyNodeId);
   next.version += 1;
   return { document: next, bodyId };
+}
+
+// ---------------------------------------------------------------------------
+// Parameters.
+// ---------------------------------------------------------------------------
+
+export const PARAMETER_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+export function isValidParameterName(name: string): boolean {
+  return PARAMETER_NAME_PATTERN.test(name) && !RESERVED_IDENTIFIERS.has(name);
+}
+
+export function listParameters(document: ProjectDocument): ParameterNode[] {
+  const parameters = listNodesByKind(document, 'parameter');
+  const byId = new Map(parameters.map((parameter) => [parameter.parameterId, parameter]));
+  const ordered: ParameterNode[] = [];
+  const seen = new Set<ParameterId>();
+  for (const parameterId of document.parameterOrder) {
+    const parameter = byId.get(parameterId);
+    if (parameter && !seen.has(parameterId)) {
+      ordered.push(parameter);
+      seen.add(parameterId);
+    }
+  }
+  for (const parameter of parameters) {
+    if (!seen.has(parameter.parameterId)) {
+      ordered.push(parameter);
+    }
+  }
+  return ordered;
+}
+
+export function setParameter(
+  document: ProjectDocument,
+  input: ParameterSetInput
+): ProjectDocument {
+  const name = input.name.trim();
+  if (!isValidParameterName(name)) {
+    throw new Error(
+      `"${name}" is not a valid parameter name (letters, digits, underscore; must not be a built-in).`
+    );
+  }
+  if (input.expression.trim().length === 0) {
+    throw new Error('Parameter expression must not be empty.');
+  }
+  const next = cloneDocument(document);
+  const existing = listParameters(next).find((parameter) => parameter.name === name);
+  if (existing) {
+    existing.expression = input.expression;
+  } else {
+    const { parameterId, parameterNodeId } = input.ids ?? createParameterIds();
+    next.nodes[parameterNodeId] = {
+      id: parameterNodeId,
+      kind: 'parameter',
+      name,
+      parentId: next.rootNodeId,
+      revisionId: null,
+      parameterId,
+      expression: input.expression,
+      value: 0
+    };
+    next.parameterOrder.push(parameterId);
+  }
+  refreshParameterValues(next);
+  next.version += 1;
+  return next;
+}
+
+export function deleteParameter(
+  document: ProjectDocument,
+  input: ParameterDeleteInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const parameter = listParameters(next).find((entry) => entry.name === input.name);
+  if (!parameter) {
+    throw new Error(`Parameter "${input.name}" not found.`);
+  }
+  delete next.nodes[parameter.id];
+  next.parameterOrder = next.parameterOrder.filter((id) => id !== parameter.parameterId);
+  refreshParameterValues(next);
+  next.version += 1;
+  return next;
+}
+
+export interface ParameterScopeResult {
+  /** Successfully evaluated parameter values by name. */
+  scope: Record<string, number>;
+  /** Human-readable evaluation failures, one per broken parameter. */
+  errors: string[];
+}
+
+/**
+ * Evaluates the whole parameter table. Parameters may reference each other in
+ * any declaration order; evaluation iterates until a fixed point, so cycles
+ * and unknown identifiers surface as per-parameter errors instead of crashes.
+ */
+export function getParameterScope(document: ProjectDocument): ParameterScopeResult {
+  const parameters = listParameters(document);
+  const scope: Record<string, number> = {};
+  const pending = new Map(parameters.map((parameter) => [parameter.name, parameter]));
+  const errors: string[] = [];
+
+  let progressed = true;
+  while (progressed && pending.size > 0) {
+    progressed = false;
+    for (const [name, parameter] of [...pending]) {
+      try {
+        scope[name] = evaluateExpression(parameter.expression, scope);
+        pending.delete(name);
+        progressed = true;
+      } catch {
+        // Possibly depends on a parameter not yet evaluated; retry next pass.
+      }
+    }
+  }
+
+  for (const [name, parameter] of pending) {
+    try {
+      evaluateExpression(parameter.expression, scope);
+    } catch (error) {
+      errors.push(
+        `Parameter "${name}": ${error instanceof Error ? error.message : 'evaluation failed.'}`
+      );
+    }
+  }
+  return { scope, errors };
+}
+
+/** Recomputes the cached `value` field of every parameter node. */
+function refreshParameterValues(document: ProjectDocument): void {
+  const { scope } = getParameterScope(document);
+  for (const parameter of listParameters(document)) {
+    const value = scope[parameter.name];
+    if (value !== undefined) {
+      parameter.value = value;
+    }
+  }
+}
+
+/**
+ * Resolves a parametric scalar to a number: literals pass through, strings
+ * are evaluated against the parameter scope. Throws with a labelled message
+ * on failure so the kernel can attribute errors to a feature input.
+ */
+export function resolveParamValue(
+  value: ParamValue,
+  scope: Record<string, number>,
+  label?: string
+): number {
+  try {
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        throw new Error('value is not finite.');
+      }
+      return value;
+    }
+    return evaluateExpression(value, scope);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'evaluation failed.';
+    throw new Error(label ? `${label}: ${reason}` : reason);
+  }
+}
+
+/** Normalizes raw form input: plain numerics become numbers, otherwise the expression string is kept. */
+export function coerceParamValue(raw: string): ParamValue {
+  const trimmed = raw.trim();
+  const numeric = Number(trimmed);
+  return trimmed.length > 0 && Number.isFinite(numeric) ? numeric : trimmed;
+}
+
+// ---------------------------------------------------------------------------
+// Feature editing.
+// ---------------------------------------------------------------------------
+
+export function updateFeature(
+  document: ProjectDocument,
+  input: FeatureUpdateInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const feature = findFeature(next, input.featureId);
+  if (!feature) {
+    throw new Error(`Feature ${input.featureId} not found.`);
+  }
+  if (input.name !== undefined && input.name.trim().length > 0) {
+    feature.name = input.name.trim();
+  }
+  if (input.data) {
+    const patch = { ...input.data } as Record<string, unknown>;
+    if (
+      'featureKind' in patch &&
+      patch.featureKind !== undefined &&
+      patch.featureKind !== feature.featureKind
+    ) {
+      throw new Error('A feature cannot change kind; delete and recreate it instead.');
+    }
+    delete patch.featureKind;
+
+    const data = feature.data as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) {
+        continue;
+      }
+      if (key === 'dimensions' && feature.data.featureKind === 'primitive') {
+        feature.data.dimensions = {
+          ...feature.data.dimensions,
+          ...(value as Record<string, ParamValue>)
+        };
+      } else {
+        data[key] = value;
+      }
+    }
+  }
+  next.version += 1;
+  return next;
+}
+
+export function deleteFeature(
+  document: ProjectDocument,
+  input: FeatureDeleteInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const feature = findFeature(next, input.featureId);
+  if (!feature) {
+    throw new Error(`Feature ${input.featureId} not found.`);
+  }
+
+  const removedNodeIds = new Set<string>([feature.id]);
+
+  for (const body of listNodesByKind(next, 'body')) {
+    if (body.featureId === feature.featureId) {
+      removedNodeIds.add(body.id);
+      next.bodyOrder = next.bodyOrder.filter((bodyId) => bodyId !== body.bodyId);
+    }
+  }
+
+  if (feature.data.featureKind === 'sketch') {
+    const sketchId = feature.data.sketchId;
+    const sketch = findSketch(next, sketchId);
+    if (sketch) {
+      removedNodeIds.add(sketch.id);
+      for (const objectId of sketch.objectIds) {
+        removedNodeIds.add(objectId);
+      }
+    }
+    next.sketchOrder = next.sketchOrder.filter((id) => id !== sketchId);
+  }
+
+  next.featureOrder = next.featureOrder.filter((id) => id !== feature.featureId);
+  for (const nodeId of removedNodeIds) {
+    delete next.nodes[nodeId];
+  }
+  for (const node of Object.values(next.nodes)) {
+    if (node.kind === 'part' || node.kind === 'assembly') {
+      node.childIds = node.childIds.filter((childId) => !removedNodeIds.has(childId));
+    }
+  }
+  next.version += 1;
+  return next;
+}
+
+export function renameNode(
+  document: ProjectDocument,
+  input: NodeRenameInput
+): ProjectDocument {
+  const name = input.name.trim();
+  if (name.length === 0) {
+    throw new Error('Name must not be empty.');
+  }
+  const next = cloneDocument(document);
+  const node = next.nodes[input.nodeId];
+  if (!node) {
+    throw new Error(`Node ${input.nodeId} not found.`);
+  }
+  node.name = name;
+  next.version += 1;
+  return next;
 }
 
 export interface NodeMetadataInput {
@@ -582,12 +977,7 @@ export interface NodeMetadataInput {
   metadata: Record<string, string | number | boolean | null>;
 }
 
-/**
- * Merges metadata keys into an existing node. This is the storage mechanism
- * for workflow annotations (preserve/fixed/obstacle roles, loads, study
- * settings) — they live in the document so they persist, replay, and undo
- * like every other edit, without any schema change.
- */
+/** Merges metadata keys into an existing node (e.g. display color). */
 export function setNodeMetadata(
   document: ProjectDocument,
   input: NodeMetadataInput
@@ -650,10 +1040,41 @@ export function getLatestBodyId(document: ProjectDocument): BodyId | undefined {
   return document.bodyOrder.at(-1);
 }
 
+// ---------------------------------------------------------------------------
+// Expression evaluation.
+// ---------------------------------------------------------------------------
+
+const DEG_TO_RAD = Math.PI / 180;
+
+/** Trigonometry takes degrees — the conventional unit in CAD parameter tables. */
+const EXPRESSION_FUNCTIONS: Record<string, { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }> = {
+  abs: { arity: 'unary', apply: ([a]) => Math.abs(a!) },
+  sqrt: { arity: 'unary', apply: ([a]) => Math.sqrt(a!) },
+  floor: { arity: 'unary', apply: ([a]) => Math.floor(a!) },
+  ceil: { arity: 'unary', apply: ([a]) => Math.ceil(a!) },
+  round: { arity: 'unary', apply: ([a]) => Math.round(a!) },
+  sin: { arity: 'unary', apply: ([a]) => Math.sin(a! * DEG_TO_RAD) },
+  cos: { arity: 'unary', apply: ([a]) => Math.cos(a! * DEG_TO_RAD) },
+  tan: { arity: 'unary', apply: ([a]) => Math.tan(a! * DEG_TO_RAD) },
+  min: { arity: 'variadic', apply: (args) => Math.min(...args) },
+  max: { arity: 'variadic', apply: (args) => Math.max(...args) }
+};
+
+const EXPRESSION_CONSTANTS: Record<string, number> = {
+  pi: Math.PI,
+  PI: Math.PI
+};
+
+export const RESERVED_IDENTIFIERS: ReadonlySet<string> = new Set([
+  ...Object.keys(EXPRESSION_FUNCTIONS),
+  ...Object.keys(EXPRESSION_CONSTANTS)
+]);
+
 type ExpressionToken =
   | { type: 'number'; value: number }
   | { type: 'identifier'; name: string }
-  | { type: 'operator'; value: '+' | '-' | '*' | '/' }
+  | { type: 'operator'; value: '+' | '-' | '*' | '/' | '^' }
+  | { type: 'comma' }
   | { type: 'paren'; value: '(' | ')' };
 
 function tokenizeExpression(expression: string): ExpressionToken[] {
@@ -668,8 +1089,14 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    if (char === '+' || char === '-' || char === '*' || char === '/') {
+    if (char === '+' || char === '-' || char === '*' || char === '/' || char === '^') {
       tokens.push({ type: 'operator', value: char });
+      index += 1;
+      continue;
+    }
+
+    if (char === ',') {
+      tokens.push({ type: 'comma' });
       index += 1;
       continue;
     }
@@ -701,10 +1128,12 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
 }
 
 /**
- * Evaluates a parameter expression supporting numbers, scope variables,
- * `+ - * /`, unary minus, and parentheses. Implemented as a small
- * recursive-descent parser so untrusted expressions are never executed as
- * JavaScript. Throws on syntax errors and unknown identifiers.
+ * Evaluates a parameter expression supporting numbers, scope variables, the
+ * `pi` constant, function calls (abs, sqrt, floor, ceil, round, min, max,
+ * and degree-based sin/cos/tan), `+ - * / ^`, unary minus, and parentheses.
+ * Implemented as a small recursive-descent parser so untrusted expressions
+ * are never executed as JavaScript. Throws on syntax errors and unknown
+ * identifiers.
  */
 export function evaluateExpression(
   expression: string,
@@ -723,12 +1152,46 @@ export function evaluateExpression(
     return token;
   };
 
+  function parseCall(name: string): number {
+    const fn = EXPRESSION_FUNCTIONS[name];
+    if (!fn) {
+      throw new Error(`Unknown function "${name}" in expression.`);
+    }
+    const args: number[] = [parseAdditive()];
+    for (;;) {
+      const token = peek();
+      if (token?.type === 'comma') {
+        position += 1;
+        args.push(parseAdditive());
+        continue;
+      }
+      break;
+    }
+    const closing = next();
+    if (closing.type !== 'paren' || closing.value !== ')') {
+      throw new Error(`Expected ")" after arguments to ${name}().`);
+    }
+    if (fn.arity === 'unary' && args.length !== 1) {
+      throw new Error(`${name}() expects exactly one argument.`);
+    }
+    return fn.apply(args);
+  }
+
   function parsePrimary(): number {
     const token = next();
     if (token.type === 'number') {
       return token.value;
     }
     if (token.type === 'identifier') {
+      const following = peek();
+      if (following?.type === 'paren' && following.value === '(') {
+        position += 1;
+        return parseCall(token.name);
+      }
+      const constant = EXPRESSION_CONSTANTS[token.name];
+      if (constant !== undefined) {
+        return constant;
+      }
       const value = scope[token.name];
       if (value === undefined) {
         throw new Error(`Unknown identifier "${token.name}" in expression.`);
@@ -750,15 +1213,26 @@ export function evaluateExpression(
     throw new Error('Unexpected token in expression.');
   }
 
+  function parsePower(): number {
+    const base = parsePrimary();
+    const token = peek();
+    if (token?.type === 'operator' && token.value === '^') {
+      position += 1;
+      // Right-associative: 2^3^2 = 2^(3^2).
+      return Math.pow(base, parsePower());
+    }
+    return base;
+  }
+
   function parseMultiplicative(): number {
-    let value = parsePrimary();
+    let value = parsePower();
     for (;;) {
       const token = peek();
       if (token?.type !== 'operator' || (token.value !== '*' && token.value !== '/')) {
         return value;
       }
       position += 1;
-      const right = parsePrimary();
+      const right = parsePower();
       value = token.value === '*' ? value * right : value / right;
     }
   }

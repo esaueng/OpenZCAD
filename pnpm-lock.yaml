@@ -142,23 +142,18 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/geometry: {}
+
   packages/io-step:
     dependencies:
-      '@openzcad/kernel-adapter':
+      '@openzcad/geometry':
         specifier: workspace:*
-        version: link:../kernel-adapter
+        version: link:../geometry
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
 
-  packages/io-stl:
-    dependencies:
-      '@openzcad/kernel-adapter':
-        specifier: workspace:*
-        version: link:../kernel-adapter
-      '@openzcad/shared':
-        specifier: workspace:*
-        version: link:../shared
+  packages/io-stl: {}
 
   packages/jobs:
     dependencies:
@@ -171,6 +166,15 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
+      '@openzcad/geometry':
+        specifier: workspace:*
+        version: link:../geometry
+      '@openzcad/io-step':
+        specifier: workspace:*
+        version: link:../io-step
+      '@openzcad/io-stl':
+        specifier: workspace:*
+        version: link:../io-stl
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared

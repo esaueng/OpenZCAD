@@ -1,123 +1,53 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CommandManager, commandFactories, type AnyCommand } from '@openzcad/command-system';
-import { getLatestBodyId, getLatestSketchId } from '@openzcad/document-core';
+import {
+  findSketch,
+  getParameterScope,
+  listFeaturesInOrder,
+  listNodesByKind,
+  listParameters,
+  normalizeDocument
+} from '@openzcad/document-core';
 import { parseStepMetadata } from '@openzcad/io-step';
-import { exportBodiesToStl, parseStl } from '@openzcad/io-stl';
-import { createMockKernelAdapter } from '@openzcad/kernel-adapter';
+import { parseStl } from '@openzcad/io-stl';
+import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
-  BodyNode,
+  BodyId,
   BodyRepresentation,
-  BooleanOperation,
-  PrimitiveKind,
+  FeatureId,
+  FeatureNode,
   ProjectDocument,
   ProjectSummary,
-  SketchObjectKind,
+  SketchNode,
+  SketchObjectData,
   UnitSystem
 } from '@openzcad/shared';
 import { api } from './lib/api';
-import {
-  canNavigateToStep,
-  getBodyLoad,
-  getBodyRole,
-  getGenerateReadiness,
-  getStepStates,
-  getStudySettings,
-  getWorkflowCounts,
-  isReadyToGenerate,
-  listBodies,
-  loadMetadataPatch,
-  roleMetadataPatch,
-  studyMetadataPatch,
-  WORKFLOW_STEP_IDS,
-  type BodyLoad,
-  type BodyRole,
-  type StudySettings,
-  type WorkflowStepId
-} from './lib/workflow';
-import { runMockGenerativeStudy, type GenerativeRunSummary } from './lib/generative';
+import { downloadText, exportFileStem, inferContentType } from './lib/model';
 import { AppShell } from './components/AppShell';
 import { TopBar } from './components/TopBar';
-import { StepBar } from './components/StepBar';
+import { Sidebar } from './components/Sidebar';
 import { ViewerShell } from './components/ViewerShell';
-import { ContextPanel } from './components/ContextPanel';
-import { OutcomePanel } from './components/OutcomePanel';
+import { Inspector, type ToolId } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
-import { ModelPanel } from './components/panels/ModelPanel';
-import { PreservePanel } from './components/panels/PreservePanel';
-import { ConstraintsPanel } from './components/panels/ConstraintsPanel';
-import { LoadsPanel } from './components/panels/LoadsPanel';
-import { StudyPanel } from './components/panels/StudyPanel';
-import { GeneratePanel, type GenerateProgress } from './components/panels/GeneratePanel';
-import { ResultsPanel } from './components/panels/ResultsPanel';
 import type { GeometrySyncResult } from './worker/geometryWorker';
 
-const kernel = createMockKernelAdapter();
-
-const STEP_META: Record<WorkflowStepId, { title: string; helper: string }> = {
-  model: {
-    title: 'Model',
-    helper:
-      'Build the design space: add primitives, sketch and extrude profiles, combine bodies, or import an STL mesh.'
-  },
-  preserve: {
-    title: 'Preserve',
-    helper:
-      'Mark geometry the optimizer must keep — mounting bosses, bearing seats, and functional interfaces.'
-  },
-  constraints: {
-    title: 'Constraints',
-    helper:
-      'Anchor the part with fixed supports and reserve keep-out volumes as obstacles.'
-  },
-  loads: {
-    title: 'Loads',
-    helper: 'Apply the forces the part must carry. Loads render as amber arrows in the viewport.'
-  },
-  study: {
-    title: 'Study',
-    helper: 'Tune the optimization target, objective, and how many candidates to explore.'
-  },
-  generate: {
-    title: 'Generate',
-    helper: 'Check workflow readiness and run the generative study.'
-  },
-  results: {
-    title: 'Results',
-    helper: 'Compare candidate outcomes and preview them in the viewport.'
-  }
-};
-
-const GENERATE_PHASES = [
-  'Voxelizing design space',
-  'Applying loads and constraints',
-  'Optimizing topology',
-  'Extracting outcomes'
-];
-
-const IDLE_PROGRESS: GenerateProgress = { running: false, phase: '', percent: 0 };
+const kernel = createKernelAdapter();
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<string | null>(null);
+  const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [activeStep, setActiveStep] = useState<WorkflowStepId>('model');
-  const [run, setRun] = useState<GenerativeRunSummary | null>(null);
-  const [runDocVersion, setRunDocVersion] = useState<number | null>(null);
-  const [selectedOutcomeId, setSelectedOutcomeId] = useState<string | null>(null);
-  const [progress, setProgress] = useState<GenerateProgress>(IDLE_PROGRESS);
-  const [viewerSettings, setViewerSettings] = useState({ showGrid: true, showLoads: true });
+  const [viewerSettings, setViewerSettings] = useState({ showGrid: true });
   const [fitSignal, setFitSignal] = useState(0);
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
@@ -142,7 +72,7 @@ export function App() {
         return;
       }
       if (!result.ok) {
-        setStatus(`Geometry sync failed: ${result.error}`);
+        setStatus(`Geometry rebuild failed: ${result.error}`);
         return;
       }
       setDoc(manager.commitDerivedState(result.derived));
@@ -184,79 +114,133 @@ export function App() {
     geometryWorkerRef.current.postMessage(doc);
   }, [doc]);
 
-  const bodies = useMemo<BodyRepresentation[]>(
-    () => (doc ? Object.values(doc.derived.bodyRepresentations) : []),
+  const features = useMemo<FeatureNode[]>(() => (doc ? listFeaturesInOrder(doc) : []), [doc]);
+  const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  const parameterScope = useMemo(
+    () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
   );
 
-  const bodyNodes = useMemo<BodyNode[]>(() => (doc ? listBodies(doc) : []), [doc]);
+  const representations = doc?.derived.bodyRepresentations ?? {};
+  const warnings = doc?.derived.warnings ?? [];
 
-  const bodyRoles = useMemo<Record<string, BodyRole | null>>(
-    () => Object.fromEntries(bodyNodes.map((body) => [body.bodyId, getBodyRole(body)])),
-    [bodyNodes]
+  const viewerBodies = useMemo<BodyRepresentation[]>(
+    () => (doc ? Object.values(doc.derived.bodyRepresentations).filter((body) => !body.consumed) : []),
+    [doc]
   );
 
-  const bodyLoads = useMemo<Record<string, BodyLoad>>(() => {
-    const loads: Record<string, BodyLoad> = {};
-    for (const body of bodyNodes) {
-      const load = getBodyLoad(body);
-      if (load) {
-        loads[body.bodyId] = load;
-      }
+  const bodyOptions = useMemo(() => {
+    if (!doc) {
+      return [];
     }
-    return loads;
-  }, [bodyNodes]);
+    const byBodyId = new Map(
+      listNodesByKind(doc, 'body').map((body) => [body.bodyId, body] as const)
+    );
+    return doc.bodyOrder.flatMap((bodyId) => {
+      const node = byBodyId.get(bodyId);
+      if (!node) {
+        return [];
+      }
+      const representation = doc.derived.bodyRepresentations[bodyId];
+      return [{ bodyId, name: node.name, consumed: representation?.consumed ?? false }];
+    });
+  }, [doc]);
 
-  const counts = useMemo(
-    () =>
-      doc
-        ? getWorkflowCounts(doc)
-        : { bodies: 0, designBodies: 0, preserved: 0, fixed: 0, obstacles: 0, loaded: 0 },
-    [doc]
-  );
+  const sketchOptions = useMemo(() => {
+    if (!doc) {
+      return [];
+    }
+    const sketches = listNodesByKind(doc, 'sketch');
+    return doc.sketchOrder.flatMap((sketchId) => {
+      const sketch = sketches.find((candidate) => candidate.sketchId === sketchId);
+      return sketch ? [{ sketchId, name: sketch.name }] : [];
+    });
+  }, [doc]);
 
-  const stepStates = useMemo(() => getStepStates(doc, run !== null), [doc, run]);
-  const readiness = useMemo(() => (doc ? getGenerateReadiness(doc) : []), [doc]);
-  const studySettings = useMemo<StudySettings>(
-    () =>
-      doc
-        ? getStudySettings(doc)
-        : { volumeFraction: 0.4, resolution: 'standard', objective: 'stiffness', confirmed: false },
-    [doc]
-  );
-
-  const selectedBodyId = useMemo(() => {
-    if (!doc || !selectedId) {
+  const selectedFeature = useMemo<FeatureNode | null>(() => {
+    if (!doc || !selectedFeatureNodeId) {
       return null;
     }
-    const node = doc.nodes[selectedId];
-    return node?.kind === 'body' ? node.bodyId : null;
-  }, [doc, selectedId]);
+    const node = doc.nodes[selectedFeatureNodeId];
+    return node?.kind === 'feature' ? node : null;
+  }, [doc, selectedFeatureNodeId]);
 
-  const runIsStale = run !== null && doc !== null && runDocVersion !== doc.version;
-  const selectedOutcome =
-    run?.outcomes.find((outcome) => outcome.id === selectedOutcomeId) ?? run?.outcomes[0] ?? null;
-  const previewActive = activeStep === 'results' && run !== null && selectedOutcome !== null;
+  const selectedSketch = useMemo<SketchNode | null>(() => {
+    if (!doc || !selectedFeature || selectedFeature.data.featureKind !== 'sketch') {
+      return null;
+    }
+    return findSketch(doc, selectedFeature.data.sketchId) ?? null;
+  }, [doc, selectedFeature]);
+
+  const selectedSketchObject = useMemo<SketchObjectData | null>(() => {
+    if (!doc || !selectedSketch) {
+      return null;
+    }
+    const objectNode = selectedSketch.objectIds[0]
+      ? doc.nodes[selectedSketch.objectIds[0]]
+      : undefined;
+    return objectNode?.kind === 'sketch-object' ? objectNode.data : null;
+  }, [doc, selectedSketch]);
+
+  const selectedBody = selectedFeature?.bodyId
+    ? (representations[selectedFeature.bodyId] ?? null)
+    : null;
+  const selectedBodyId =
+    selectedBody && !selectedBody.consumed ? selectedBody.bodyId : null;
+
+  const exportBodyIds = useMemo<BodyId[]>(() => {
+    if (!doc) {
+      return [];
+    }
+    if (selectedBody && !selectedBody.consumed && selectedBody.exportableStep) {
+      return [selectedBody.bodyId];
+    }
+    return doc.derived.exportableBodyIds;
+  }, [doc, selectedBody]);
 
   function hydrateDocument(nextDocument: ProjectDocument) {
-    managerRef.current = new CommandManager(nextDocument);
-    setDoc(nextDocument);
-    setSelectedId(null);
-    setRun(null);
-    setRunDocVersion(null);
-    setSelectedOutcomeId(null);
-    setActiveStep('model');
+    const normalized = normalizeDocument(nextDocument);
+    managerRef.current = new CommandManager(normalized);
+    lastSyncedKeyRef.current = null;
+    setDoc(normalized);
+    setSelectedFeatureNodeId(null);
+    setTool(null);
   }
 
-  function executeCommand(command: AnyCommand) {
+  function executeCommand(command: AnyCommand): boolean {
     if (!managerRef.current) {
-      return;
+      return false;
     }
     try {
       setDoc(managerRef.current.execute(command));
       setStatus(command.label);
+      return true;
     } catch (error) {
       setStatus(errorMessage(error, 'Command failed.'));
+      return false;
+    }
+  }
+
+  function executeTransaction(label: string, commands: AnyCommand[]): boolean {
+    if (!managerRef.current || commands.length === 0) {
+      return false;
+    }
+    try {
+      setDoc(managerRef.current.runTransaction(label, commands));
+      setStatus(label);
+      return true;
+    } catch (error) {
+      setStatus(errorMessage(error, 'Edit failed.'));
+      return false;
+    }
+  }
+
+  function createFeature(command: AnyCommand): void {
+    if (executeCommand(command)) {
+      // Back to the tool launcher so sequential adds stay one click away;
+      // the new feature is selectable from the history or the viewport.
+      setTool(null);
+      setSelectedFeatureNodeId(null);
     }
   }
 
@@ -290,11 +274,8 @@ export function App() {
   async function handleGoHome() {
     managerRef.current = null;
     setDoc(null);
-    setSelectedId(null);
-    setRun(null);
-    setRunDocVersion(null);
-    setSelectedOutcomeId(null);
-    setActiveStep('model');
+    setSelectedFeatureNodeId(null);
+    setTool(null);
     try {
       const listed = await api.listProjects();
       setProjects(listed.projects);
@@ -304,115 +285,12 @@ export function App() {
     }
   }
 
-  function handlePrimitive(kind: PrimitiveKind) {
-    executeCommand(
-      commandFactories.addPrimitive({
-        name: `${kind} ${(doc?.bodyOrder.length ?? 0) + 1}`,
-        // Keep primitive creation deterministic for the vertical slice.
-        primitiveKind: kind,
-        dimensions:
-          kind === 'box'
-            ? { width: 30, height: 18, depth: 24 }
-            : kind === 'cylinder'
-              ? { radius: 14, height: 28 }
-              : { radius: 16 }
-      })
-    );
-  }
-
-  function handleSketch(kind: SketchObjectKind) {
-    executeCommand(
-      commandFactories.addSketch({
-        name: `${kind} sketch`,
-        plane: 'XY',
-        objectKind: kind,
-        rectangle: { width: 32, height: 18 },
-        circle: { radius: 14 },
-        line: { start: { x: -12, y: 0 }, end: { x: 12, y: 0 } }
-      })
-    );
-  }
-
-  function handleExtrude() {
-    if (!doc) {
-      return;
-    }
-    const sketchId = getLatestSketchId(doc);
-    if (!sketchId) {
-      setStatus('Create a sketch before extruding.');
-      return;
-    }
-    executeCommand(commandFactories.extrudeSketch({ name: 'Extrude 1', sketchId, distance: 24 }));
-  }
-
-  function handleBoolean(operation: BooleanOperation) {
-    if (!doc || doc.bodyOrder.length < 2) {
-      setStatus('At least two bodies are required for a boolean operation.');
-      return;
-    }
-    executeCommand(
-      commandFactories.booleanBodies({
-        name: `${operation} result`,
-        operation,
-        targetBodyIds: doc.bodyOrder.slice(-2)
-      })
-    );
-  }
-
-  function handleTransform() {
-    if (!doc) {
-      return;
-    }
-    const bodyId = getLatestBodyId(doc);
-    if (!bodyId) {
-      setStatus('Create a body before transforming.');
-      return;
-    }
-    executeCommand(
-      commandFactories.transformBody({
-        name: 'Move body',
-        targetBodyId: bodyId,
-        translation: { x: 12, y: 10, z: 6 },
-        rotationDeg: { x: 0, y: 25, z: 0 }
-      })
-    );
-  }
-
-  function handleSetRole(body: BodyNode, role: BodyRole | null) {
-    executeCommand(
-      commandFactories.setNodeMetadata(
-        { nodeId: body.id, metadata: roleMetadataPatch(role) },
-        role ? `Mark ${body.name} as ${role}` : `Clear role on ${body.name}`
-      )
-    );
-  }
-
-  function handleSetLoad(body: BodyNode, load: BodyLoad | null) {
-    executeCommand(
-      commandFactories.setNodeMetadata(
-        { nodeId: body.id, metadata: loadMetadataPatch(load) },
-        load ? `Apply load to ${body.name}` : `Remove load from ${body.name}`
-      )
-    );
-  }
-
-  function handleApplyStudy(settings: StudySettings) {
-    if (!doc) {
-      return;
-    }
-    executeCommand(
-      commandFactories.setNodeMetadata(
-        { nodeId: doc.rootNodeId, metadata: studyMetadataPatch(settings) },
-        'Apply study settings'
-      )
-    );
-  }
-
   function handleUndo() {
     if (!managerRef.current) {
       return;
     }
     setDoc(managerRef.current.undo());
+    setSelectedFeatureNodeId(null);
     setStatus('Undo');
   }
 
@@ -421,6 +299,7 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.redo());
+    setSelectedFeatureNodeId(null);
     setStatus('Redo');
   }
 
@@ -430,7 +309,7 @@ export function App() {
     }
     try {
       await api.saveRevision({ projectId: doc.projectId, reason: 'Manual save', document: doc });
-      setStatus('Saved revision to persistence.');
+      setStatus('Saved revision.');
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to save revision.'));
     }
@@ -440,36 +319,38 @@ export function App() {
     if (!managerRef.current || !doc) {
       return;
     }
-    try {
-      const contentType = file.type || inferContentType(file.name);
-      const uploadSession = await api.createUploadSession({
-        projectId: doc.projectId,
-        fileName: file.name,
-        contentType
-      });
+    const contentType = file.type || inferContentType(file.name);
+    const lowerName = file.name.toLowerCase();
 
-      if (uploadSession.session.uploadUrl) {
-        const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
-          method: 'PUT',
-          body: file,
-          headers: { 'content-type': contentType }
-        });
-        if (!uploadResponse.ok) {
-          throw new Error(`Upload failed with status ${uploadResponse.status}.`);
-        }
+    if (lowerName.endsWith('.stl')) {
+      let parsed;
+      try {
+        parsed = parseStl(await file.arrayBuffer(), file.name);
+      } catch (error) {
+        setStatus(errorMessage(error, 'STL import failed.'));
+        return;
       }
 
-      const lowerName = file.name.toLowerCase();
-      if (lowerName.endsWith('.stl')) {
-        const parsed = parseStl(await file.arrayBuffer(), file.name);
-        executeCommand(
-          commandFactories.importMesh({
-            name: parsed.name,
-            artifactId: uploadSession.session.artifactId,
-            sourceName: parsed.name,
-            triangleCount: parsed.triangleCount
-          })
-        );
+      // Best-effort archive of the original upload; the mesh itself lives in
+      // the document, so a storage failure must not block the import.
+      let artifactId = `artifact_local_${crypto.randomUUID()}`;
+      let archived = false;
+      try {
+        const uploadSession = await api.createUploadSession({
+          projectId: doc.projectId,
+          fileName: file.name,
+          contentType
+        });
+        if (uploadSession.session.uploadUrl) {
+          const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: { 'content-type': contentType }
+          });
+          if (!uploadResponse.ok) {
+            throw new Error(`Upload failed with status ${uploadResponse.status}.`);
+          }
+        }
         await api.finalizeImport({
           projectId: doc.projectId,
           uploadSessionId: uploadSession.session.uploadSessionId,
@@ -477,84 +358,125 @@ export function App() {
           fileName: file.name,
           contentType
         });
-        setStatus(`Imported STL mesh reference (${parsed.triangleCount} triangles).`);
-        return;
+        artifactId = uploadSession.session.artifactId;
+        archived = true;
+      } catch {
+        // Continue with the local import.
       }
 
-      const metadata = await parseStepMetadata(kernel, file.name, await file.text());
+      const created = executeCommand(
+        commandFactories.importMesh({
+          name: parsed.name,
+          artifactId,
+          sourceName: parsed.name,
+          triangleCount: parsed.triangleCount,
+          vertices: parsed.vertices,
+          indices: parsed.indices
+        })
+      );
+      if (created) {
+        setStatus(
+          `Imported ${parsed.triangleCount} triangles from ${file.name}` +
+            (archived ? '.' : ' (original file not archived: upload unavailable).')
+        );
+      }
+      return;
+    }
+
+    try {
+      const metadata = parseStepMetadata(file.name, await file.text());
+      const products = metadata.products.slice(0, 3).join(', ') || 'no products found';
       setStatus(
-        `STEP metadata parsed for ${metadata.name}. Native B-Rep import remains staged for the OpenCascade.js adapter.`
+        `STEP metadata read (${products}). Full B-Rep STEP import needs the native kernel and is not available yet.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Import failed.'));
     }
   }
 
-  async function handleExport(format: 'step' | 'stl') {
-    if (!doc || doc.bodyOrder.length === 0) {
+  function handleExport(format: 'step' | 'stl') {
+    if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
     }
-    const bodyIds = doc.bodyOrder.slice(-1);
+    const stem = exportFileStem(doc.name);
     try {
-      if (format === 'stl') {
-        const stl = await exportBodiesToStl(kernel, doc, bodyIds);
-        downloadText('openzcad-export.stl', stl);
-        await api.requestExport({ projectId: doc.projectId, bodyIds, format: 'stl' });
-        setStatus('Exported STL from derived solid geometry.');
-        return;
+      if (format === 'step') {
+        const result = kernel.exportStep(doc, exportBodyIds);
+        downloadText(`${stem}.step`, result.text);
+        setStatus(
+          result.warnings.length > 0
+            ? `Exported STEP with ${result.warnings.length} warning(s).`
+            : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step (AP214).`
+        );
+      } else {
+        const stl = kernel.exportStl(doc, exportBodyIds);
+        downloadText(`${stem}.stl`, stl);
+        setStatus(`Exported ${exportBodyIds.length} body(ies) to ${stem}.stl.`);
       }
-      await kernel.exportStep(doc, bodyIds);
+      // Record the export with the worker API; the download already happened.
+      api
+        .requestExport({ projectId: doc.projectId, bodyIds: exportBodyIds, format })
+        .catch(() => undefined);
     } catch (error) {
       setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
     }
   }
 
-  async function handleGenerate() {
-    const manager = managerRef.current;
-    if (!manager || progress.running || !isReadyToGenerate(manager.document)) {
-      return;
-    }
-    setActiveStep('generate');
-    try {
-      for (let index = 0; index < GENERATE_PHASES.length; index += 1) {
-        setProgress({
-          running: true,
-          phase: GENERATE_PHASES[index]!,
-          percent: Math.round(((index + 1) / (GENERATE_PHASES.length + 1)) * 100)
-        });
-        await delay(420);
-      }
-      const summary = runMockGenerativeStudy(manager.document);
-      setRun(summary);
-      setRunDocVersion(manager.document.version);
-      setSelectedOutcomeId(summary.outcomes[0]?.id ?? null);
-      setActiveStep('results');
-      setStatus(`Generated ${summary.outcomes.length} outcomes (mock solver).`);
-    } catch (error) {
-      setStatus(errorMessage(error, 'Generative run failed.'));
-    } finally {
-      setProgress(IDLE_PROGRESS);
-    }
-  }
-
   function handleSelectBodyFromViewer(bodyId: string | null) {
-    if (!bodyId) {
-      setSelectedId(null);
+    if (!doc || !bodyId) {
+      setSelectedFeatureNodeId(null);
       return;
     }
-    const node = bodyNodes.find((body) => body.bodyId === bodyId);
-    setSelectedId(node ? node.id : null);
+    const bodyNode = listNodesByKind(doc, 'body').find((body) => body.bodyId === bodyId);
+    const feature = bodyNode
+      ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
+      : undefined;
+    setTool(null);
+    setSelectedFeatureNodeId(feature?.id ?? null);
   }
 
-  function navigateStep(offset: -1 | 1): (() => void) | undefined {
-    const index = WORKFLOW_STEP_IDS.indexOf(activeStep);
-    const next = WORKFLOW_STEP_IDS[index + offset];
-    if (!next || !canNavigateToStep(next, doc, run !== null)) {
-      return undefined;
+  function handleDeleteFeature(featureId: FeatureId, name: string) {
+    if (executeCommand(commandFactories.deleteFeature({ featureId }, `Delete ${name}`))) {
+      setSelectedFeatureNodeId(null);
     }
-    return () => setActiveStep(next);
   }
+
+  // Keyboard shortcuts: undo/redo/save/delete (ignored while typing).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')
+      ) {
+        return;
+      }
+      const meta = event.ctrlKey || event.metaKey;
+      if (meta && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if (meta && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        handleRedo();
+      } else if (meta && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void handleSave();
+      } else if (event.key === 'Delete' && selectedFeature) {
+        event.preventDefault();
+        handleDeleteFeature(selectedFeature.featureId, selectedFeature.name);
+      } else if (event.key === 'Escape') {
+        setTool(null);
+        setSelectedFeatureNodeId(null);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   if (!doc) {
     return (
@@ -568,85 +490,9 @@ export function App() {
     );
   }
 
-  const stepIndex = WORKFLOW_STEP_IDS.indexOf(activeStep) + 1;
-  const meta = STEP_META[activeStep];
-  const tone = progress.running
-    ? 'running'
-    : /fail|error|unable|denied/i.test(status)
-      ? 'warning'
-      : 'ready';
-
-  const panelContent = (() => {
-    switch (activeStep) {
-      case 'model':
-        return (
-          <ModelPanel
-            document={doc}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onPrimitive={handlePrimitive}
-            onSketch={handleSketch}
-            onExtrude={handleExtrude}
-            onBoolean={handleBoolean}
-            onTransform={handleTransform}
-            onImportFile={(file) => void handleImportFile(file)}
-            onExport={(format) => void handleExport(format)}
-          />
-        );
-      case 'preserve':
-        return (
-          <PreservePanel
-            bodies={bodyNodes}
-            selectedNodeId={selectedId}
-            preservedCount={counts.preserved}
-            onSelect={setSelectedId}
-            onSetRole={handleSetRole}
-          />
-        );
-      case 'constraints':
-        return (
-          <ConstraintsPanel
-            bodies={bodyNodes}
-            selectedNodeId={selectedId}
-            fixedCount={counts.fixed}
-            obstacleCount={counts.obstacles}
-            onSelect={setSelectedId}
-            onSetRole={handleSetRole}
-          />
-        );
-      case 'loads':
-        return (
-          <LoadsPanel
-            bodies={bodyNodes}
-            selectedNodeId={selectedId}
-            loadedCount={counts.loaded}
-            onSelect={setSelectedId}
-            onSetLoad={handleSetLoad}
-          />
-        );
-      case 'study':
-        return <StudyPanel settings={studySettings} onApply={handleApplyStudy} />;
-      case 'generate':
-        return (
-          <GeneratePanel
-            readiness={readiness}
-            progress={progress}
-            lastRun={run}
-            onGenerate={() => void handleGenerate()}
-          />
-        );
-      case 'results':
-        return (
-          <ResultsPanel
-            run={run}
-            selectedOutcomeId={selectedOutcomeId}
-            stale={runIsStale}
-            onSelectOutcome={setSelectedOutcomeId}
-            onExportStl={() => void handleExport('stl')}
-          />
-        );
-    }
-  })();
+  const tone: 'ready' | 'warning' | 'running' = /fail|error|invalid|unable|denied/i.test(status)
+    ? 'warning'
+    : 'ready';
 
   return (
     <AppShell
@@ -654,104 +500,200 @@ export function App() {
         <TopBar
           projectName={doc.name}
           units={doc.units}
-          activeStepTitle={meta.title}
           canUndo={managerRef.current?.canUndo ?? false}
           canRedo={managerRef.current?.canRedo ?? false}
-          generating={progress.running}
-          canGenerate={isReadyToGenerate(doc)}
+          canExport={exportBodyIds.length > 0}
+          exportScope={
+            selectedBody && !selectedBody.consumed && selectedBody.exportableStep
+              ? selectedBody.name
+              : null
+          }
           onUndo={handleUndo}
           onRedo={handleRedo}
           onSave={() => void handleSave()}
-          onGenerate={() => void handleGenerate()}
+          onImportFile={(file) => void handleImportFile(file)}
+          onExport={handleExport}
           onGoHome={() => void handleGoHome()}
         />
       }
-      stepBar={
-        <StepBar
-          activeStep={activeStep}
-          stepStates={stepStates}
-          canNavigate={(step) => canNavigateToStep(step, doc, run !== null)}
-          units={doc.units}
-          solver="mock"
-          onSelect={setActiveStep}
+      sidebar={
+        <Sidebar
+          parameters={parameters}
+          parameterValues={parameterScope.scope}
+          features={features}
+          representations={representations}
+          selectedFeatureNodeId={selectedFeatureNodeId}
+          warnings={warnings}
+          onSelectFeature={(nodeId) => {
+            setTool(null);
+            setSelectedFeatureNodeId((current) => (current === nodeId ? null : nodeId));
+          }}
+          onSetParameter={(name, expression) =>
+            executeCommand(commandFactories.setParameter({ name, expression }))
+          }
+          onDeleteParameter={(name) =>
+            executeCommand(commandFactories.deleteParameter({ name }))
+          }
+          onDeleteFeature={handleDeleteFeature}
         />
       }
       viewer={
         <ViewerShell
-          bodies={bodies}
-          bodyRoles={bodyRoles}
-          bodyLoads={bodyLoads}
-          counts={counts}
+          bodies={viewerBodies}
           selectedBodyId={selectedBodyId}
           settings={viewerSettings}
           fitSignal={fitSignal}
-          outcomePreviewScale={previewActive ? selectedOutcome.previewScale : null}
-          previewOutcomeName={previewActive ? selectedOutcome.name : null}
           onSelectBody={handleSelectBodyFromViewer}
           onToggleGrid={() =>
             setViewerSettings((current) => ({ ...current, showGrid: !current.showGrid }))
           }
-          onToggleLoads={() =>
-            setViewerSettings((current) => ({ ...current, showLoads: !current.showLoads }))
-          }
           onFit={() => setFitSignal((value) => value + 1)}
         />
       }
-      contextPanel={
-        <ContextPanel
-          stepIndex={stepIndex}
-          stepCount={WORKFLOW_STEP_IDS.length}
-          title={meta.title}
-          helper={meta.helper}
-          onBack={navigateStep(-1)}
-          onNext={navigateStep(1)}
-        >
-          {panelContent}
-        </ContextPanel>
-      }
-      bottomPanel={
-        run && (activeStep === 'generate' || activeStep === 'results') ? (
-          <OutcomePanel
-            run={run}
-            selectedOutcomeId={selectedOutcome?.id ?? null}
-            onSelectOutcome={(outcomeId) => {
-              setSelectedOutcomeId(outcomeId);
-              setActiveStep('results');
-            }}
-          />
-        ) : undefined
+      inspector={
+        <Inspector
+          tool={tool}
+          selectedFeature={selectedFeature}
+          selectedSketch={selectedSketch}
+          selectedSketchObject={selectedSketchObject}
+          selectedBody={selectedBody}
+          scope={parameterScope.scope}
+          sketches={sketchOptions}
+          bodies={bodyOptions}
+          units={doc.units}
+          onLaunchTool={(nextTool) => {
+            setSelectedFeatureNodeId(null);
+            setTool(nextTool);
+          }}
+          onCancel={() => {
+            setTool(null);
+            setSelectedFeatureNodeId(null);
+          }}
+          onCreatePrimitive={(kind, name, dimensions) =>
+            createFeature(commandFactories.addPrimitive({ name, primitiveKind: kind, dimensions }))
+          }
+          onCreateSketch={(value) => createFeature(commandFactories.addSketch(value))}
+          onCreateExtrude={(value) => createFeature(commandFactories.extrudeSketch(value))}
+          onCreateRevolve={(value) => createFeature(commandFactories.revolveSketch(value))}
+          onCreateBoolean={(value) => createFeature(commandFactories.booleanBodies(value))}
+          onCreateTransform={(value) =>
+            createFeature(
+              commandFactories.transformBody({
+                name: value.name,
+                targetBodyId: value.targetBodyId,
+                translation: value.translation,
+                rotationDeg: value.rotationDeg
+              })
+            )
+          }
+          onApplyPrimitive={(feature, name, dimensions) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                { featureId: feature.featureId, name, data: { dimensions } },
+                `Edit ${name}`
+              )
+            )
+          }
+          onApplySketch={(feature, value) => {
+            if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
+              return;
+            }
+            const commands: AnyCommand[] = [
+              commandFactories.updateSketch(
+                {
+                  sketchId: feature.data.sketchId,
+                  plane: value.plane,
+                  offset: value.offset,
+                  object: value.object
+                },
+                `Edit ${value.name}`
+              )
+            ];
+            if (value.name !== feature.name) {
+              commands.push(
+                commandFactories.renameNode({ nodeId: feature.id, name: value.name }),
+                commandFactories.renameNode({ nodeId: selectedSketch.id, name: value.name })
+              );
+            }
+            executeTransaction(`Edit ${value.name}`, commands);
+          }}
+          onApplyExtrude={(feature, value) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                {
+                  featureId: feature.featureId,
+                  name: value.name,
+                  data: {
+                    featureKind: 'extrude',
+                    sketchId: value.sketchId,
+                    distance: value.distance
+                  }
+                },
+                `Edit ${value.name}`
+              )
+            )
+          }
+          onApplyRevolve={(feature, value) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                {
+                  featureId: feature.featureId,
+                  name: value.name,
+                  data: { featureKind: 'revolve', sketchId: value.sketchId, axis: value.axis }
+                },
+                `Edit ${value.name}`
+              )
+            )
+          }
+          onApplyBoolean={(feature, value) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                {
+                  featureId: feature.featureId,
+                  name: value.name,
+                  data: {
+                    featureKind: 'boolean',
+                    operation: value.operation,
+                    targetBodyIds: value.targetBodyIds
+                  }
+                },
+                `Edit ${value.name}`
+              )
+            )
+          }
+          onApplyTransform={(feature, value) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                {
+                  featureId: feature.featureId,
+                  name: value.name,
+                  data: {
+                    featureKind: 'transform',
+                    targetBodyId: value.targetBodyId,
+                    transform: {
+                      translation: value.translation,
+                      rotationDeg: value.rotationDeg
+                    }
+                  }
+                },
+                `Edit ${value.name}`
+              )
+            )
+          }
+          onDeleteFeature={(feature) => handleDeleteFeature(feature.featureId, feature.name)}
+        />
       }
       statusBar={
         <StatusBar
           status={status}
           tone={tone}
           projectName={doc.name}
-          bodyCount={counts.bodies}
-          outcomeCount={run?.outcomes.length ?? 0}
+          bodyCount={viewerBodies.length}
+          featureCount={features.length}
+          warningCount={warnings.length}
           documentVersion={doc.version}
         />
       }
     />
   );
-}
-
-function inferContentType(fileName: string): string {
-  const lower = fileName.toLowerCase();
-  if (lower.endsWith('.stl')) {
-    return 'model/stl';
-  }
-  if (lower.endsWith('.step') || lower.endsWith('.stp')) {
-    return 'model/step';
-  }
-  return 'application/octet-stream';
-}
-
-function downloadText(name: string, value: string) {
-  const blob = new Blob([value], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(url);
 }

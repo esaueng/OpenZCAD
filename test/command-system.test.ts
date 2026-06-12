@@ -3,10 +3,11 @@ import { CommandManager, commandFactories, replayCommands } from '@openzcad/comm
 import {
   createProjectDocument,
   getLatestBodyId,
-  getLatestSketchId
+  getLatestSketchId,
+  getParameterScope
 } from '@openzcad/document-core';
-import { createMockKernelAdapter } from '@openzcad/kernel-adapter';
-import { toUserId } from '@openzcad/shared';
+import { createKernelAdapter } from '@openzcad/kernel-adapter';
+import { toUserId, type FeatureNode } from '@openzcad/shared';
 
 describe('command-system', () => {
   it('supports execute and undo/redo around replayable commands', () => {
@@ -30,26 +31,27 @@ describe('command-system', () => {
     manager.redo();
     expect(manager.document.bodyOrder).toHaveLength(1);
 
-    const kernel = createMockKernelAdapter();
+    const kernel = createKernelAdapter();
     const derived = kernel.syncDocument(manager.document);
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
   });
 
-  it('replays a command log into an identical entity graph', () => {
+  it('replays a full parametric command log into an identical entity graph', () => {
     const base = createProjectDocument('Replay Test', toUserId('user_test'));
     const manager = new CommandManager(base);
 
+    manager.execute(commandFactories.setParameter({ name: 'depth', expression: '24' }));
     manager.execute(
       commandFactories.addSketch({
         name: 'Profile',
         plane: 'XY',
-        objectKind: 'rectangle',
-        rectangle: { width: 32, height: 18 }
+        offset: 0,
+        object: { objectKind: 'rectangle', width: 32, height: 18, centerX: 0, centerY: 0 }
       })
     );
     const sketchId = getLatestSketchId(manager.document)!;
     manager.execute(
-      commandFactories.extrudeSketch({ name: 'Extrude', sketchId, distance: 24 })
+      commandFactories.extrudeSketch({ name: 'Extrude', sketchId, distance: 'depth' })
     );
     const bodyId = getLatestBodyId(manager.document)!;
     manager.execute(
@@ -59,6 +61,18 @@ describe('command-system', () => {
         translation: { x: 5, y: 0, z: 0 }
       })
     );
+    const extrudeFeature = Object.values(manager.document.nodes).find(
+      (node): node is FeatureNode => node.kind === 'feature' && node.featureKind === 'extrude'
+    )!;
+    manager.execute(
+      commandFactories.updateFeature(
+        {
+          featureId: extrudeFeature.featureId,
+          data: { featureKind: 'extrude', sketchId, distance: 'depth / 2' }
+        },
+        'Halve depth'
+      )
+    );
 
     // Commands never mutate their input, so `base` is still the pristine
     // initial document and can serve as the replay starting point.
@@ -67,22 +81,59 @@ describe('command-system', () => {
     expect(replayed.featureOrder).toEqual(manager.document.featureOrder);
     expect(replayed.bodyOrder).toEqual(manager.document.bodyOrder);
     expect(replayed.sketchOrder).toEqual(manager.document.sketchOrder);
+    expect(replayed.parameterOrder).toEqual(manager.document.parameterOrder);
     expect(Object.keys(replayed.nodes).sort()).toEqual(
       Object.keys(manager.document.nodes).sort()
     );
+    expect(getParameterScope(replayed).scope).toEqual({ depth: 24 });
 
-    const kernel = createMockKernelAdapter();
+    const kernel = createKernelAdapter();
     const fromLive = kernel.syncDocument(manager.document);
     const fromReplay = kernel.syncDocument(replayed);
     expect(fromReplay.warnings).toEqual([]);
-    expect(fromReplay.bodyRepresentations[bodyId]?.transform.translation).toEqual({
-      x: 5,
-      y: 0,
-      z: 0
-    });
-    expect(Object.keys(fromReplay.bodyRepresentations)).toEqual(
-      Object.keys(fromLive.bodyRepresentations)
+    const live = fromLive.bodyRepresentations[bodyId]!;
+    const replay = fromReplay.bodyRepresentations[bodyId]!;
+    expect(replay.volume).toBeCloseTo(live.volume, 6);
+    expect(replay.volume).toBeCloseTo(32 * 18 * 12, 4);
+    expect(replay.bbox).toEqual(live.bbox);
+    // The transform is baked into geometry on both paths.
+    expect(replay.bbox.min.x).toBeCloseTo(5 - 16, 6);
+  });
+
+  it('replays deletions', () => {
+    const base = createProjectDocument('Delete Replay', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
     );
+    const feature = Object.values(manager.document.nodes).find(
+      (node): node is FeatureNode => node.kind === 'feature'
+    )!;
+    manager.execute(commandFactories.deleteFeature({ featureId: feature.featureId }));
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    expect(replayed.bodyOrder).toHaveLength(0);
+    expect(replayed.featureOrder).toHaveLength(0);
+  });
+
+  it('validates command preconditions before applying', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Validate Test', toUserId('user_test'))
+    );
+    expect(() =>
+      manager.execute(
+        commandFactories.booleanBodies({
+          name: 'Bad union',
+          operation: 'union',
+          targetBodyIds: manager.document.bodyOrder
+        })
+      )
+    ).toThrow();
+    expect(manager.document.commandLog).toHaveLength(0);
   });
 
   it('clears the redo stack when a new command is executed after undo', () => {
@@ -130,4 +181,3 @@ describe('command-system', () => {
     expect(manager.document.bodyOrder).toHaveLength(0);
   });
 });
-

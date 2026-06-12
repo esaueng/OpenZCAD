@@ -1,14 +1,13 @@
-import { Grid3x3, Maximize2, MoveDiagonal } from 'lucide-react';
-import type { ViewerSettings } from './GenerativeDesignViewer';
+import { Grid3x3, Maximize2 } from 'lucide-react';
+import type { ViewerSettings } from './ModelViewer';
 
 interface ViewerToolbarProps {
   settings: ViewerSettings;
   onToggleGrid(): void;
-  onToggleLoads(): void;
   onFit(): void;
 }
 
-export function ViewerToolbar({ settings, onToggleGrid, onToggleLoads, onFit }: ViewerToolbarProps) {
+export function ViewerToolbar({ settings, onToggleGrid, onFit }: ViewerToolbarProps) {
   return (
     <div className="viewer-toolbar" role="toolbar" aria-label="Viewer controls">
       <button type="button" onClick={onFit} title="Fit view">
@@ -24,16 +23,6 @@ export function ViewerToolbar({ settings, onToggleGrid, onToggleLoads, onFit }: 
       >
         <Grid3x3 size={13} aria-hidden="true" />
         Grid
-      </button>
-      <button
-        type="button"
-        className={settings.showLoads ? 'active' : ''}
-        onClick={onToggleLoads}
-        title="Toggle load overlays"
-        aria-pressed={settings.showLoads}
-      >
-        <MoveDiagonal size={13} aria-hidden="true" />
-        Loads
       </button>
     </div>
   );

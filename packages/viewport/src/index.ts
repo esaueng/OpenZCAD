@@ -1,26 +1,5 @@
 import * as THREE from 'three';
-import type { BodyRepresentation, MeshGeometry, PrimitiveGeometry } from '@openzcad/shared';
-
-function geometryFromPrimitive(geometry: PrimitiveGeometry): THREE.BufferGeometry {
-  if (geometry.kind === 'box') {
-    return new THREE.BoxGeometry(
-      geometry.dimensions.width ?? 1,
-      geometry.dimensions.height ?? 1,
-      geometry.dimensions.depth ?? 1
-    );
-  }
-
-  if (geometry.kind === 'cylinder') {
-    return new THREE.CylinderGeometry(
-      geometry.dimensions.radius ?? 1,
-      geometry.dimensions.radius ?? 1,
-      geometry.dimensions.height ?? 1,
-      24
-    );
-  }
-
-  return new THREE.SphereGeometry(geometry.dimensions.radius ?? 1, 24, 18);
-}
+import type { BodyRepresentation, MeshGeometry } from '@openzcad/shared';
 
 function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
@@ -30,21 +9,13 @@ function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
   return geometry;
 }
 
+/**
+ * Builds the render object for one body: a flat-shaded mesh plus a subtle
+ * feature-edge overlay for the classic CAD look. Body vertices are already
+ * in world space (the kernel bakes transforms), so no placement is applied.
+ */
 export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
-  if (body.geometry.kind === 'composite') {
-    const group = new THREE.Group();
-    group.name = body.name;
-    for (const child of body.geometry.children) {
-      group.add(createObjectForBody(child));
-    }
-    applyTransform(group, body);
-    return group;
-  }
-
-  const geometry =
-    body.geometry.kind === 'mesh'
-      ? geometryFromMesh(body.geometry)
-      : geometryFromPrimitive(body.geometry);
+  const geometry = geometryFromMesh(body.mesh);
   const material = new THREE.MeshStandardMaterial({
     color: body.color,
     metalness: 0.15,
@@ -52,21 +23,14 @@ export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = body.name;
-  applyTransform(mesh, body);
-  return mesh;
-}
 
-function applyTransform(object: THREE.Object3D, body: BodyRepresentation) {
-  object.position.set(
-    body.transform.translation.x,
-    body.transform.translation.y,
-    body.transform.translation.z
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry, 24),
+    new THREE.LineBasicMaterial({ color: '#0c1118', transparent: true, opacity: 0.55 })
   );
-  object.rotation.set(
-    THREE.MathUtils.degToRad(body.transform.rotationDeg.x),
-    THREE.MathUtils.degToRad(body.transform.rotationDeg.y),
-    THREE.MathUtils.degToRad(body.transform.rotationDeg.z)
-  );
+  edges.raycast = () => undefined; // selection picks faces, not edge lines
+  mesh.add(edges);
+  return mesh;
 }
 
 export function fitCameraToObjects(
@@ -96,4 +60,3 @@ export function fitCameraToObjects(
   camera.far = distance * 10;
   camera.updateProjectionMatrix();
 }
-

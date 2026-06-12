@@ -5,40 +5,62 @@ import {
   type SerializedCommand
 } from '@openzcad/shared';
 import {
-  addConstraint,
   addPrimitiveFeature,
   addSketchFeature,
   appendRevision,
   attachDerivedState,
   booleanBodies,
   createBodyFeatureIds,
-  createConstraintIds,
   createFeatureOnlyIds,
+  createParameterIds,
   createSketchFeatureIds,
+  deleteFeature,
+  deleteParameter,
   extrudeSketch,
+  findFeature,
+  findSketch,
   importMeshBody,
+  renameNode,
+  revolveSketch,
   setNodeMetadata,
+  setParameter,
   transformBody,
+  updateFeature,
+  updateSketch,
   type BooleanInput,
-  type ConstraintInput,
   type ExtrudeInput,
+  type FeatureDeleteInput,
+  type FeatureUpdateInput,
   type ImportedMeshInput,
   type NodeMetadataInput,
+  type NodeRenameInput,
+  type ParameterDeleteInput,
+  type ParameterSetInput,
   type PrimitiveInput,
+  type RevolveInput,
   type SketchInput,
+  type SketchUpdateInput,
   type TransformInput
 } from '@openzcad/document-core';
 
+export type CommandKind =
+  | 'primitive.add'
+  | 'sketch.add'
+  | 'sketch.update'
+  | 'feature.extrude'
+  | 'feature.revolve'
+  | 'feature.boolean'
+  | 'feature.transform'
+  | 'feature.update'
+  | 'feature.delete'
+  | 'parameter.set'
+  | 'parameter.delete'
+  | 'import.mesh'
+  | 'node.rename'
+  | 'node.metadata.set';
+
 export interface CommandDefinition<TPayload> {
-  kind:
-    | 'primitive.add'
-    | 'sketch.add'
-    | 'constraint.add'
-    | 'feature.extrude'
-    | 'feature.boolean'
-    | 'feature.transform'
-    | 'import.mesh'
-    | 'node.metadata.set';
+  kind: CommandKind;
   label: string;
   replayVersion: number;
   payload: TPayload;
@@ -56,15 +78,21 @@ interface HistoryEntry {
 export type AnyCommand =
   | CommandDefinition<PrimitiveInput>
   | CommandDefinition<SketchInput>
-  | CommandDefinition<ConstraintInput>
+  | CommandDefinition<SketchUpdateInput>
   | CommandDefinition<ExtrudeInput>
+  | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
+  | CommandDefinition<FeatureUpdateInput>
+  | CommandDefinition<FeatureDeleteInput>
+  | CommandDefinition<ParameterSetInput>
+  | CommandDefinition<ParameterDeleteInput>
   | CommandDefinition<ImportedMeshInput>
+  | CommandDefinition<NodeRenameInput>
   | CommandDefinition<NodeMetadataInput>;
 
 function makeCommand<TPayload>(
-  kind: AnyCommand['kind'],
+  kind: CommandKind,
   label: string,
   payload: TPayload,
   apply: (document: ProjectDocument) => ProjectDocument,
@@ -105,41 +133,146 @@ export const commandFactories = {
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
     const withIds = { ...payload, ids: payload.ids ?? createSketchFeatureIds() };
-    return makeCommand('sketch.add', `Add ${payload.objectKind} sketch`, withIds, (document) =>
-      addSketchFeature(document, withIds).document
+    return makeCommand(
+      'sketch.add',
+      `Add ${payload.object.objectKind} sketch`,
+      withIds,
+      (document) => addSketchFeature(document, withIds).document
     );
   },
-  addConstraint(payload: ConstraintInput): CommandDefinition<ConstraintInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createConstraintIds() };
+  updateSketch(
+    payload: SketchUpdateInput,
+    label = 'Edit sketch'
+  ): CommandDefinition<SketchUpdateInput> {
     return makeCommand(
-      'constraint.add',
-      `Add ${payload.constraintKind} constraint`,
-      withIds,
-      (document) => addConstraint(document, withIds)
+      'sketch.update',
+      label,
+      payload,
+      (document) => updateSketch(document, payload),
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
     );
   },
   extrudeSketch(payload: ExtrudeInput): CommandDefinition<ExtrudeInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand('feature.extrude', 'Extrude sketch', withIds, (document) =>
-      extrudeSketch(document, withIds).document
+    return makeCommand(
+      'feature.extrude',
+      'Extrude sketch',
+      withIds,
+      (document) => extrudeSketch(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error('Extrude requires an existing sketch.');
+        }
+      }
+    );
+  },
+  revolveSketch(payload: RevolveInput): CommandDefinition<RevolveInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.revolve',
+      'Revolve sketch',
+      withIds,
+      (document) => revolveSketch(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error('Revolve requires an existing sketch.');
+        }
+      }
     );
   },
   booleanBodies(payload: BooleanInput): CommandDefinition<BooleanInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand('feature.boolean', `Boolean ${payload.operation}`, withIds, (document) =>
-      booleanBodies(document, withIds).document
+    return makeCommand(
+      'feature.boolean',
+      `Boolean ${payload.operation}`,
+      withIds,
+      (document) => booleanBodies(document, withIds).document,
+      (document) => {
+        const known = new Set(document.bodyOrder);
+        for (const bodyId of payload.targetBodyIds) {
+          if (!known.has(bodyId)) {
+            throw new Error(`Boolean target body ${bodyId} not found.`);
+          }
+        }
+      }
     );
   },
   transformBody(payload: TransformInput): CommandDefinition<TransformInput> {
     const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
-    return makeCommand('feature.transform', 'Transform body', withIds, (document) =>
-      transformBody(document, withIds).document
+    return makeCommand(
+      'feature.transform',
+      'Transform body',
+      withIds,
+      (document) => transformBody(document, withIds).document,
+      (document) => {
+        if (!document.bodyOrder.includes(payload.targetBodyId)) {
+          throw new Error(`Transform target body ${payload.targetBodyId} not found.`);
+        }
+      }
+    );
+  },
+  updateFeature(
+    payload: FeatureUpdateInput,
+    label = 'Edit feature'
+  ): CommandDefinition<FeatureUpdateInput> {
+    return makeCommand(
+      'feature.update',
+      label,
+      payload,
+      (document) => updateFeature(document, payload),
+      (document) => {
+        if (!findFeature(document, payload.featureId)) {
+          throw new Error(`Feature ${payload.featureId} not found.`);
+        }
+      }
+    );
+  },
+  deleteFeature(
+    payload: FeatureDeleteInput,
+    label = 'Delete feature'
+  ): CommandDefinition<FeatureDeleteInput> {
+    return makeCommand(
+      'feature.delete',
+      label,
+      payload,
+      (document) => deleteFeature(document, payload),
+      (document) => {
+        if (!findFeature(document, payload.featureId)) {
+          throw new Error(`Feature ${payload.featureId} not found.`);
+        }
+      }
+    );
+  },
+  setParameter(payload: ParameterSetInput): CommandDefinition<ParameterSetInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createParameterIds() };
+    return makeCommand(
+      'parameter.set',
+      `Set parameter ${payload.name}`,
+      withIds,
+      (document) => setParameter(document, withIds)
+    );
+  },
+  deleteParameter(payload: ParameterDeleteInput): CommandDefinition<ParameterDeleteInput> {
+    return makeCommand(
+      'parameter.delete',
+      `Delete parameter ${payload.name}`,
+      payload,
+      (document) => deleteParameter(document, payload)
     );
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand('import.mesh', 'Import STL mesh', withIds, (document) =>
       importMeshBody(document, withIds).document
+    );
+  },
+  renameNode(payload: NodeRenameInput): CommandDefinition<NodeRenameInput> {
+    return makeCommand('node.rename', `Rename to ${payload.name}`, payload, (document) =>
+      renameNode(document, payload)
     );
   },
   setNodeMetadata(
@@ -265,11 +398,14 @@ export function replayCommands(
       case 'sketch.add':
         next = addSketchFeature(next, command.payload as SketchInput).document;
         break;
-      case 'constraint.add':
-        next = addConstraint(next, command.payload as ConstraintInput);
+      case 'sketch.update':
+        next = updateSketch(next, command.payload as SketchUpdateInput);
         break;
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;
+        break;
+      case 'feature.revolve':
+        next = revolveSketch(next, command.payload as RevolveInput).document;
         break;
       case 'feature.boolean':
         next = booleanBodies(next, command.payload as BooleanInput).document;
@@ -277,8 +413,23 @@ export function replayCommands(
       case 'feature.transform':
         next = transformBody(next, command.payload as TransformInput).document;
         break;
+      case 'feature.update':
+        next = updateFeature(next, command.payload as FeatureUpdateInput);
+        break;
+      case 'feature.delete':
+        next = deleteFeature(next, command.payload as FeatureDeleteInput);
+        break;
+      case 'parameter.set':
+        next = setParameter(next, command.payload as ParameterSetInput);
+        break;
+      case 'parameter.delete':
+        next = deleteParameter(next, command.payload as ParameterDeleteInput);
+        break;
       case 'import.mesh':
         next = importMeshBody(next, command.payload as ImportedMeshInput).document;
+        break;
+      case 'node.rename':
+        next = renameNode(next, command.payload as NodeRenameInput);
         break;
       case 'node.metadata.set':
         next = setNodeMetadata(next, command.payload as NodeMetadataInput);
