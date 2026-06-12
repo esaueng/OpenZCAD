@@ -1,4 +1,4 @@
-import { createMockKernelAdapter } from '@openzcad/kernel-adapter';
+import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type { ProjectDocument, ProjectId } from '@openzcad/shared';
 
 /**
@@ -20,7 +20,7 @@ export type GeometrySyncResult =
       error: string;
     };
 
-const kernel = createMockKernelAdapter();
+const kernel = createKernelAdapter();
 
 self.onmessage = (event: MessageEvent<ProjectDocument>) => {
   const document = event.data;

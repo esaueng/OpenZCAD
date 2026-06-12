@@ -12,7 +12,7 @@ interface StartScreenProps {
 }
 
 export function StartScreen({ projects, status, busy, onCreate, onOpen }: StartScreenProps) {
-  const [name, setName] = useState('Bracket Study');
+  const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>('mm');
 
   return (
@@ -21,11 +21,11 @@ export function StartScreen({ projects, status, busy, onCreate, onOpen }: StartS
         <div className="start-brand">
           <BrandMark />
           <h1>OpenZCAD</h1>
-          <span className="start-tagline">generative design workspace</span>
+          <span className="start-tagline">parametric cad in the browser</span>
         </div>
 
         <div className="start-section">
-          <h2>New study</h2>
+          <h2>New project</h2>
           <div className="field">
             <span>Project name</span>
             <input

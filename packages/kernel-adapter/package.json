@@ -6,7 +6,9 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@openzcad/document-core": "workspace:*",
+    "@openzcad/geometry": "workspace:*",
+    "@openzcad/io-step": "workspace:*",
+    "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*"
   }
 }
-

@@ -1,51 +1,167 @@
-import type { BodyId } from '@openzcad/shared';
-import type { KernelAdapter } from '@openzcad/kernel-adapter';
-import type { ProjectDocument } from '@openzcad/shared';
-
 export interface ParsedStl {
   name: string;
   triangleCount: number;
   format: 'ascii' | 'binary';
+  /** Flat xyz triples, three vertices per triangle. */
+  vertices: number[];
+  /** Sequential triangle indices into `vertices`. */
+  indices: number[];
 }
 
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
 
+/** Guard against imports that would stall the browser tab. */
+export const MAX_IMPORT_TRIANGLES = 200_000;
+
+export class StlParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StlParseError';
+  }
+}
+
+function assertTriangleBudget(triangleCount: number): void {
+  if (triangleCount > MAX_IMPORT_TRIANGLES) {
+    throw new StlParseError(
+      `STL has ${triangleCount} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+    );
+  }
+}
+
+function parseBinaryStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
+  const view = new DataView(buffer);
+  const triangleCount = view.getUint32(80, true);
+  assertTriangleBudget(triangleCount);
+  const vertices: number[] = [];
+  const indices: number[] = [];
+  let offset = BINARY_STL_HEADER_BYTES;
+  for (let i = 0; i < triangleCount; i++) {
+    offset += 12; // skip the stored facet normal; recomputed on export
+    for (let v = 0; v < 3; v++) {
+      vertices.push(
+        view.getFloat32(offset, true),
+        view.getFloat32(offset + 4, true),
+        view.getFloat32(offset + 8, true)
+      );
+      offset += 12;
+    }
+    offset += 2; // attribute byte count
+    const base = i * 3;
+    indices.push(base, base + 1, base + 2);
+  }
+  return { name: fileName, triangleCount, format: 'binary', vertices, indices };
+}
+
+function parseAsciiStl(text: string, fileName: string): ParsedStl {
+  const vertexPattern =
+    /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g;
+  const vertices: number[] = [];
+  for (const match of text.matchAll(vertexPattern)) {
+    const x = Number(match[1]);
+    const y = Number(match[2]);
+    const z = Number(match[3]);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      throw new StlParseError('ASCII STL contains a malformed vertex.');
+    }
+    vertices.push(x, y, z);
+  }
+  if (vertices.length % 9 !== 0) {
+    throw new StlParseError('ASCII STL vertex count is not a multiple of three.');
+  }
+  const triangleCount = vertices.length / 9;
+  assertTriangleBudget(triangleCount);
+  const indices: number[] = [];
+  for (let i = 0; i < triangleCount; i++) {
+    const base = i * 3;
+    indices.push(base, base + 1, base + 2);
+  }
+  return { name: fileName, triangleCount, format: 'ascii', vertices, indices };
+}
+
+/**
+ * Parses an STL file (binary or ASCII) into raw triangle geometry. A binary
+ * STL is an 80-byte header, a uint32 triangle count, then 50 bytes per
+ * triangle; the "solid" prefix alone is unreliable (binary exporters may
+ * emit it too), so an exact size match takes precedence.
+ */
 export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
-  // A binary STL is an 80-byte header, a uint32 triangle count, then 50 bytes
-  // per triangle. The "solid" prefix alone is unreliable (binary exporters may
-  // emit it too), so an exact size match takes precedence.
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
     const declared = new DataView(buffer).getUint32(80, true);
     if (
       BINARY_STL_HEADER_BYTES + declared * BINARY_STL_TRIANGLE_BYTES ===
       buffer.byteLength
     ) {
-      return { name: fileName, triangleCount: declared, format: 'binary' };
+      return parseBinaryStl(buffer, fileName);
     }
   }
 
   const bytes = new Uint8Array(buffer);
   const head = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 512)));
   if (head.trimStart().toLowerCase().startsWith('solid')) {
-    // Count facets across the whole file, not just the first kilobyte.
-    const text = new TextDecoder().decode(bytes);
-    const triangleCount = (text.match(/facet normal/g) ?? []).length;
-    return { name: fileName, triangleCount, format: 'ascii' };
+    return parseAsciiStl(new TextDecoder().decode(bytes), fileName);
   }
 
-  const triangleCount =
-    buffer.byteLength >= BINARY_STL_HEADER_BYTES
-      ? new DataView(buffer).getUint32(80, true)
-      : 0;
-  return { name: fileName, triangleCount, format: 'binary' };
+  if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
+    return parseBinaryStl(buffer, fileName);
+  }
+  throw new StlParseError('File is too small to be a valid STL.');
 }
 
-export async function exportBodiesToStl(
-  kernel: KernelAdapter,
-  document: ProjectDocument,
-  bodyIds: BodyId[]
-): Promise<string> {
-  return kernel.exportStl(document, bodyIds);
+export interface StlExportMesh {
+  name: string;
+  vertices: number[];
+  indices: number[];
 }
 
+function facetNormal(
+  vertices: number[],
+  a: number,
+  b: number,
+  c: number
+): [number, number, number] {
+  const ax = vertices[a * 3]!;
+  const ay = vertices[a * 3 + 1]!;
+  const az = vertices[a * 3 + 2]!;
+  const ux = vertices[b * 3]! - ax;
+  const uy = vertices[b * 3 + 1]! - ay;
+  const uz = vertices[b * 3 + 2]! - az;
+  const vx = vertices[c * 3]! - ax;
+  const vy = vertices[c * 3 + 1]! - ay;
+  const vz = vertices[c * 3 + 2]! - az;
+  let nx = uy * vz - uz * vy;
+  let ny = uz * vx - ux * vz;
+  let nz = ux * vy - uy * vx;
+  const length = Math.hypot(nx, ny, nz);
+  if (length > 0) {
+    nx /= length;
+    ny /= length;
+    nz /= length;
+  }
+  return [nx, ny, nz];
+}
+
+/** Writes an ASCII STL with per-facet normals computed from the geometry. */
+export function writeAsciiStl(solidName: string, meshes: StlExportMesh[]): string {
+  const safeName = solidName.replace(/\s+/g, '_').replace(/[^\w.-]/g, '') || 'openzcad';
+  const lines: string[] = [`solid ${safeName}`];
+  for (const mesh of meshes) {
+    for (let i = 0; i + 2 < mesh.indices.length; i += 3) {
+      const a = mesh.indices[i]!;
+      const b = mesh.indices[i + 1]!;
+      const c = mesh.indices[i + 2]!;
+      const [nx, ny, nz] = facetNormal(mesh.vertices, a, b, c);
+      lines.push(
+        `  facet normal ${nx} ${ny} ${nz}`,
+        '    outer loop',
+        `      vertex ${mesh.vertices[a * 3]} ${mesh.vertices[a * 3 + 1]} ${mesh.vertices[a * 3 + 2]}`,
+        `      vertex ${mesh.vertices[b * 3]} ${mesh.vertices[b * 3 + 1]} ${mesh.vertices[b * 3 + 2]}`,
+        `      vertex ${mesh.vertices[c * 3]} ${mesh.vertices[c * 3 + 1]} ${mesh.vertices[c * 3 + 2]}`,
+        '    endloop',
+        '  endfacet'
+      );
+    }
+  }
+  lines.push(`endsolid ${safeName}`, '');
+  return lines.join('\n');
+}

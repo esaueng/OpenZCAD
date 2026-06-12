@@ -1,7 +1,6 @@
 /* ─────────────────────────────────────────────────────────────
    OpenZCAD Design Tokens
-   Adapted from the OpenCAE design system so both apps read as
-   one product family. Import once in main.tsx before app.css.
+   Import once in main.tsx before app.css.
    ───────────────────────────────────────────────────────────── */
 
 :root {
@@ -24,12 +23,6 @@
   --color-error: #ef4444;
   --color-success: #22c55e;
   --color-viewport-bg: #070b10;
-
-  /* ── Workflow role colors (viewport + badges) ─────────── */
-  --color-role-preserve: #22c55e;
-  --color-role-fixed: #4da3ff;
-  --color-role-obstacle: #ef4444;
-  --color-role-load: #f59e0b;
 
   /* ── Typography ───────────────────────────────────────── */
   --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
@@ -71,9 +64,8 @@
   /* ── Layout dimensions ────────────────────────────────── */
   --topbar-h: 44px;
   --statusbar-h: 30px;
-  --stepbar-w: 132px;
+  --sidebar-w: 248px;
   --context-w: 344px;
-  --outcome-panel-h: 178px;
 
   /* ── Motion ───────────────────────────────────────────── */
   --dur-fast: 100ms;

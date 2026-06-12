@@ -17,6 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@openzcad/shared": ["packages/shared/src/index.ts"],
+      "@openzcad/geometry": ["packages/geometry/src/index.ts"],
       "@openzcad/document-core": ["packages/document-core/src/index.ts"],
       "@openzcad/command-system": ["packages/command-system/src/index.ts"],
       "@openzcad/kernel-adapter": ["packages/kernel-adapter/src/index.ts"],

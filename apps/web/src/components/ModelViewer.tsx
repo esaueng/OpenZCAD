@@ -7,25 +7,17 @@ import {
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { createObjectForBody, fitCameraToObjects } from '@openzcad/viewport';
 import type { BodyRepresentation } from '@openzcad/shared';
-import type { BodyLoad, BodyRole } from '../lib/workflow';
-import { loadMagnitude } from '../lib/workflow';
-import { formatN } from '../lib/format';
 
 export interface ViewerSettings {
   showGrid: boolean;
-  showLoads: boolean;
 }
 
-interface GenerativeDesignViewerProps {
+interface ModelViewerProps {
   bodies: BodyRepresentation[];
-  bodyRoles: Record<string, BodyRole | null>;
-  bodyLoads: Record<string, BodyLoad>;
   selectedBodyId: string | null;
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
-  /** When set, design-space bodies are scaled and obstacles ghosted. */
-  outcomePreviewScale: number | null;
   onSelectBody(bodyId: string | null): void;
 }
 
@@ -45,14 +37,8 @@ interface SceneContext {
 
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 
-const ROLE_COLORS: Record<BodyRole, number> = {
-  preserve: 0x22c55e,
-  fixed: 0x4da3ff,
-  obstacle: 0xef4444
-};
 const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
-const LOAD_COLOR = 0xf59e0b;
 
 function forEachMesh(object: THREE.Object3D, visit: (mesh: ViewerMesh) => void) {
   object.traverse((child: THREE.Object3D) => {
@@ -63,9 +49,19 @@ function forEachMesh(object: THREE.Object3D, visit: (mesh: ViewerMesh) => void) 
 }
 
 function disposeObject(object: THREE.Object3D) {
-  forEachMesh(object, (mesh) => {
-    mesh.geometry.dispose();
-    mesh.material.dispose();
+  object.traverse((child: THREE.Object3D) => {
+    const disposable = child as unknown as {
+      geometry?: { dispose(): void };
+      material?: { dispose(): void } | { dispose(): void }[];
+    };
+    disposable.geometry?.dispose();
+    if (Array.isArray(disposable.material)) {
+      for (const material of disposable.material) {
+        material.dispose();
+      }
+    } else {
+      disposable.material?.dispose();
+    }
   });
 }
 
@@ -101,16 +97,13 @@ function findBodyId(object: THREE.Object3D): string | null {
   return null;
 }
 
-export function GenerativeDesignViewer({
+export function ModelViewer({
   bodies,
-  bodyRoles,
-  bodyLoads,
   selectedBodyId,
   settings,
   fitSignal,
-  outcomePreviewScale,
   onSelectBody
-}: GenerativeDesignViewerProps) {
+}: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
   const onSelectBodyRef = useRef(onSelectBody);
@@ -157,6 +150,11 @@ export function GenerativeDesignViewer({
 
     const grid = new THREE.GridHelper(240, 24, '#243140', '#141d28');
     scene.add(grid);
+
+    const axes = new THREE.AxesHelper(18);
+    (axes.material as THREE.Material).transparent = true;
+    (axes.material as THREE.Material).opacity = 0.7;
+    scene.add(axes);
 
     const bodyGroup = new THREE.Group();
     bodyGroup.name = 'bodies';
@@ -262,6 +260,7 @@ export function GenerativeDesignViewer({
       clearGroup(bodyGroup);
       clearGroup(overlayGroup);
       grid.dispose();
+      axes.dispose();
       controls.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
@@ -270,7 +269,7 @@ export function GenerativeDesignViewer({
     };
   }, []);
 
-  // Rebuild bodies + overlays when the derived geometry or annotations change.
+  // Rebuild bodies + selection callout when derived geometry changes.
   useEffect(() => {
     const context = contextRef.current;
     if (!context) {
@@ -286,24 +285,9 @@ export function GenerativeDesignViewer({
     for (const body of bodies) {
       const object = createObjectForBody(body);
       object.userData.bodyId = body.bodyId;
-      const role = bodyRoles[body.bodyId] ?? null;
       const isSelected = body.bodyId === selectedBodyId;
 
-      if (outcomePreviewScale !== null && role === 'obstacle') {
-        object.visible = false;
-      }
-      if (outcomePreviewScale !== null && role === null) {
-        object.scale.multiplyScalar(outcomePreviewScale);
-      }
-
       forEachMesh(object, (mesh) => {
-        if (role) {
-          mesh.material.color.setHex(ROLE_COLORS[role]);
-          if (role === 'obstacle') {
-            mesh.material.transparent = true;
-            mesh.material.opacity = 0.4;
-          }
-        }
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
@@ -313,47 +297,10 @@ export function GenerativeDesignViewer({
       objectsByBodyId.set(body.bodyId, object);
     }
 
-    // Load arrows + magnitude labels.
-    if (settings.showLoads) {
-      for (const [bodyId, load] of Object.entries(bodyLoads)) {
-        const target = objectsByBodyId.get(bodyId);
-        if (!target || !target.visible) {
-          continue;
-        }
-        const box = new THREE.Box3().setFromObject(target);
-        if (box.isEmpty()) {
-          continue;
-        }
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        const magnitude = loadMagnitude(load);
-        if (magnitude === 0) {
-          continue;
-        }
-        const direction = new THREE.Vector3(load.fx, load.fy, load.fz).normalize();
-        const length = Math.max(size.length() * 0.55, 14);
-        const origin = center.clone().sub(direction.clone().multiplyScalar(length));
-        const arrow = new THREE.ArrowHelper(
-          direction,
-          origin,
-          length,
-          LOAD_COLOR,
-          length * 0.28,
-          length * 0.14
-        );
-        context.overlayGroup.add(arrow);
-
-        const label = makeLabel('load-marker', `F = ${formatN(magnitude)}`);
-        label.position.copy(origin);
-        context.overlayGroup.add(label);
-      }
-    }
-
-    // Selection callout above the selected body.
     if (selectedBodyId) {
       const target = objectsByBodyId.get(selectedBodyId);
       const body = bodies.find((candidate) => candidate.bodyId === selectedBodyId);
-      if (target && body && target.visible) {
+      if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
           const top = box.getCenter(new THREE.Vector3());
@@ -370,7 +317,7 @@ export function GenerativeDesignViewer({
       context.controls.update();
       context.hasFitCamera = true;
     }
-  }, [bodies, bodyRoles, bodyLoads, selectedBodyId, settings.showLoads, outcomePreviewScale]);
+  }, [bodies, selectedBodyId]);
 
   useEffect(() => {
     const context = contextRef.current;
