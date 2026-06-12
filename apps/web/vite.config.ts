@@ -1,6 +1,8 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 if (typeof globalThis.File === 'undefined') {
+  // Node 18 lacks the global File constructor that some dependencies expect.
   class NodeFile extends Blob {
     name: string;
     lastModified: number;
@@ -14,6 +16,26 @@ if (typeof globalThis.File === 'undefined') {
 
   Object.assign(globalThis, { File: NodeFile });
 }
+
+const WORKSPACE_PACKAGES = [
+  'shared',
+  'document-core',
+  'command-system',
+  'kernel-adapter',
+  'viewport',
+  'io-step',
+  'io-stl',
+  'jobs',
+  'cloudflare-adapters',
+  'persistence'
+] as const;
+
+const workspaceAliases = Object.fromEntries(
+  WORKSPACE_PACKAGES.map((name) => [
+    `@openzcad/${name}`,
+    fileURLToPath(new URL(`../../packages/${name}/src/index.ts`, import.meta.url))
+  ])
+);
 
 export default defineConfig(async ({ command }) => {
   const plugins = [];
@@ -33,17 +55,16 @@ export default defineConfig(async ({ command }) => {
   return {
     plugins,
     resolve: {
-      alias: {
-        '@openzcad/shared': '/../../packages/shared/src/index.ts',
-        '@openzcad/document-core': '/../../packages/document-core/src/index.ts',
-        '@openzcad/command-system': '/../../packages/command-system/src/index.ts',
-        '@openzcad/kernel-adapter': '/../../packages/kernel-adapter/src/index.ts',
-        '@openzcad/viewport': '/../../packages/viewport/src/index.ts',
-        '@openzcad/io-step': '/../../packages/io-step/src/index.ts',
-        '@openzcad/io-stl': '/../../packages/io-stl/src/index.ts',
-        '@openzcad/jobs': '/../../packages/jobs/src/index.ts',
-        '@openzcad/cloudflare-adapters': '/../../packages/cloudflare-adapters/src/index.ts',
-        '@openzcad/persistence': '/../../packages/persistence/src/index.ts'
+      alias: workspaceAliases
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            // three.js dominates the bundle; isolate it for better caching.
+            three: ['three']
+          }
+        }
       }
     }
   };
