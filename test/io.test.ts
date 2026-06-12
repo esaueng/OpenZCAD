@@ -42,7 +42,7 @@ describe('io adapters', () => {
     const text = `solid big\n${Array.from({ length: 50 }, () => facet).join('\n')}\nendsolid big\n`;
     expect(text.length).toBeGreaterThan(1024);
 
-    const buffer = new TextEncoder().encode(text).buffer as ArrayBuffer;
+    const buffer = new TextEncoder().encode(text).buffer;
     const parsed = parseStl(buffer, 'big.stl');
     expect(parsed.format).toBe('ascii');
     expect(parsed.triangleCount).toBe(50);

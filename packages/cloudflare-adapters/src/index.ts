@@ -343,7 +343,7 @@ export class D1R2PersistenceService implements PersistenceService {
             objectKey: row.object_key,
             contentType: row.content_type,
             createdAt: row.created_at,
-            metadata: JSON.parse(row.metadata_json)
+            metadata: JSON.parse(row.metadata_json) as ArtifactRecord['metadata']
           }
         : null
     };
