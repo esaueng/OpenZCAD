@@ -108,6 +108,9 @@ importers:
 
   packages/cloudflare-adapters:
     dependencies:
+      '@openzcad/document-core':
+        specifier: workspace:*
+        version: link:../document-core
       '@openzcad/jobs':
         specifier: workspace:*
         version: link:../jobs
@@ -174,6 +177,9 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
+      '@openzcad/jobs':
+        specifier: workspace:*
+        version: link:../jobs
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
