@@ -37,16 +37,19 @@ const workspaceAliases = Object.fromEntries(
   ])
 );
 
-export default defineConfig(async ({ command }) => {
+export default defineConfig(async ({ command, isPreview }) => {
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
   plugins.push(react());
 
   const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
-  if (command === 'serve' && nodeMajor >= 20) {
+  // `vite preview` also reports command === 'serve', but the Cloudflare
+  // plugin expects build output it did not produce; load it for dev only.
+  const isDevServer = command === 'serve' && !isPreview;
+  if (isDevServer && nodeMajor >= 20) {
     const { cloudflare } = await import('@cloudflare/vite-plugin');
     plugins.push(cloudflare());
-  } else if (command === 'serve') {
+  } else if (isDevServer) {
     console.warn(
       `OpenZCAD beta: skipping @cloudflare/vite-plugin because Node ${process.versions.node} is below the plugin's expected runtime.`
     );
