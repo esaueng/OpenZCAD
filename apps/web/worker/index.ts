@@ -4,7 +4,16 @@ import {
   createPersistenceService,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
-import { toUserId, type CreateProjectRequest, type CreateUploadSessionRequest, type FinalizeImportRequest, type RequestExportRequest, type SaveRevisionRequest } from '@openzcad/shared';
+import { ProjectNotFoundError } from '@openzcad/persistence';
+import { toUserId } from '@openzcad/shared';
+import {
+  HttpError,
+  parseCreateProjectRequest,
+  parseCreateUploadSessionRequest,
+  parseFinalizeImportRequest,
+  parseRequestExportRequest,
+  parseSaveRevisionRequest
+} from './validation';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -13,7 +22,17 @@ type Env = CloudflareEnv & {
   }>;
 };
 
+// Beta scaffolding: there is no authentication yet, so every request acts as
+// this fixed development user. Real auth must replace this before any
+// non-beta exposure (see architecture.md, "Security posture").
 const devUserId = toUserId('user_beta_dev');
+
+/** Upper bound for JSON request bodies; protects against oversized payloads. */
+const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
+
+const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
+const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
+const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -24,73 +43,105 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const persistence = createPersistenceService(env);
+async function readJsonBody(request: Request): Promise<unknown> {
+  const contentLength = Number(request.headers.get('content-length') ?? '0');
+  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+    throw new HttpError(413, 'Request body is too large.');
+  }
+  try {
+    return await request.json();
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON.');
+  }
+}
 
-    if (request.method === 'GET' && url.pathname === '/api/health') {
-      return json({
-        status: 'ok',
-        environment: 'beta',
-        time: new Date().toISOString()
-      });
+async function handleApiRequest(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const { pathname } = url;
+  const persistence = createPersistenceService(env);
+
+  if (request.method === 'GET' && pathname === '/api/health') {
+    return json({
+      status: 'ok',
+      environment: env.ENVIRONMENT ?? 'beta',
+      time: new Date().toISOString()
+    });
+  }
+
+  if (request.method === 'GET' && pathname === '/api/projects') {
+    return json(await persistence.listProjects(devUserId));
+  }
+
+  if (request.method === 'POST' && pathname === '/api/projects') {
+    const payload = parseCreateProjectRequest(await readJsonBody(request));
+    return json(await persistence.createProject(devUserId, payload), 201);
+  }
+
+  const projectMatch = PROJECT_ROUTE.exec(pathname);
+  if (request.method === 'GET' && projectMatch) {
+    const project = await persistence.loadProject(projectMatch[1]!);
+    return project ? json(project) : json({ error: 'Project not found.' }, 404);
+  }
+
+  const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);
+  if (request.method === 'POST' && revisionsMatch) {
+    const payload = parseSaveRevisionRequest(await readJsonBody(request), revisionsMatch[1]!);
+    return json(await persistence.saveRevision(payload));
+  }
+
+  if (request.method === 'POST' && pathname === '/api/uploads') {
+    const payload = parseCreateUploadSessionRequest(await readJsonBody(request));
+    return json(await persistence.createUploadSession(devUserId, payload), 201);
+  }
+
+  if (request.method === 'POST' && pathname === '/api/imports/finalize') {
+    const payload = parseFinalizeImportRequest(await readJsonBody(request));
+    const artifact = await persistence.finalizeImport(devUserId, payload);
+    if (!artifact) {
+      return json({ error: 'Upload session not found, expired, or already used.' }, 404);
     }
+    return json({ artifactId: artifact.artifactId });
+  }
 
-    if (request.method === 'GET' && url.pathname === '/api/projects') {
-      return json(await persistence.listProjects(devUserId));
-    }
-
-    if (request.method === 'POST' && url.pathname === '/api/projects') {
-      const payload = (await request.json()) as CreateProjectRequest;
-      return json(await persistence.createProject(devUserId, payload), 201);
-    }
-
-    if (request.method === 'GET' && url.pathname.startsWith('/api/projects/')) {
-      const projectId = url.pathname.split('/')[3];
-      if (!projectId || url.pathname.endsWith('/revisions')) {
-        return json({ error: 'Not found' }, 404);
-      }
-      const project = await persistence.loadProject(projectId);
-      return project ? json(project) : json({ error: 'Not found' }, 404);
-    }
-
-    if (
-      request.method === 'POST' &&
-      /^\/api\/projects\/[^/]+\/revisions$/.test(url.pathname)
-    ) {
-      const payload = (await request.json()) as SaveRevisionRequest;
-      return json(await persistence.saveRevision(payload));
-    }
-
-    if (request.method === 'POST' && url.pathname === '/api/uploads') {
-      const payload = (await request.json()) as CreateUploadSessionRequest;
-      return json(await persistence.createUploadSession(devUserId, payload), 201);
-    }
-
-    if (request.method === 'POST' && url.pathname === '/api/imports/finalize') {
-      const payload = (await request.json()) as FinalizeImportRequest;
-      const artifact = await persistence.finalizeImport(devUserId, payload);
-      return json({ artifactId: artifact?.artifactId ?? null });
-    }
-
-    if (request.method === 'POST' && url.pathname === '/api/exports') {
-      const payload = (await request.json()) as RequestExportRequest;
-      const response = await persistence.requestExport(devUserId, payload);
-      if (env.EXPORT_WORKFLOW) {
+  if (request.method === 'POST' && pathname === '/api/exports') {
+    const payload = parseRequestExportRequest(await readJsonBody(request));
+    const response = await persistence.requestExport(devUserId, payload);
+    if (env.EXPORT_WORKFLOW) {
+      try {
         await env.EXPORT_WORKFLOW.create({
           params: { artifactId: response.artifact.artifactId }
         });
+      } catch (error) {
+        // The export artifact and job are already recorded; a workflow
+        // kick-off failure should not fail the request.
+        console.warn('Export workflow creation failed:', error);
       }
-      return json(response, 202);
     }
+    return json(response, 202);
+  }
 
-    if (request.method === 'GET' && url.pathname.startsWith('/api/artifacts/')) {
-      const artifactId = url.pathname.split('/').at(-1);
-      return json(await persistence.getArtifactMetadata(artifactId ?? ''));
+  const artifactMatch = ARTIFACT_ROUTE.exec(pathname);
+  if (request.method === 'GET' && artifactMatch) {
+    return json(await persistence.getArtifactMetadata(artifactMatch[1]!));
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    try {
+      return await handleApiRequest(request, env);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        return json({ error: error.message }, error.status);
+      }
+      if (error instanceof ProjectNotFoundError) {
+        return json({ error: error.message }, 404);
+      }
+      console.error('Unhandled API error:', error);
+      return json({ error: 'Internal error' }, 500);
     }
-
-    return json({ error: 'Not found' }, 404);
   }
 };
 

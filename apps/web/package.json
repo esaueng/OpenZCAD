@@ -20,6 +20,7 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/kernel-adapter": "workspace:*",
+    "@openzcad/persistence": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@vitejs/plugin-react": "^4.3.4",
@@ -33,4 +34,3 @@
     "wrangler": "^4.11.1"
   }
 }
-
