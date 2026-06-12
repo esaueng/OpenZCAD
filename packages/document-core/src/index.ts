@@ -231,7 +231,7 @@ export function getNode<TNode extends DocumentNode>(
   document: ProjectDocument,
   nodeId: string
 ): TNode | undefined {
-  return document.nodes[nodeId as keyof typeof document.nodes] as TNode | undefined;
+  return document.nodes[nodeId] as TNode | undefined;
 }
 
 export function listNodesByKind<TNode extends DocumentNode['kind']>(
