@@ -17,11 +17,13 @@ import {
   createSketchFeatureIds,
   extrudeSketch,
   importMeshBody,
+  setNodeMetadata,
   transformBody,
   type BooleanInput,
   type ConstraintInput,
   type ExtrudeInput,
   type ImportedMeshInput,
+  type NodeMetadataInput,
   type PrimitiveInput,
   type SketchInput,
   type TransformInput
@@ -35,7 +37,8 @@ export interface CommandDefinition<TPayload> {
     | 'feature.extrude'
     | 'feature.boolean'
     | 'feature.transform'
-    | 'import.mesh';
+    | 'import.mesh'
+    | 'node.metadata.set';
   label: string;
   replayVersion: number;
   payload: TPayload;
@@ -57,7 +60,8 @@ export type AnyCommand =
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
-  | CommandDefinition<ImportedMeshInput>;
+  | CommandDefinition<ImportedMeshInput>
+  | CommandDefinition<NodeMetadataInput>;
 
 function makeCommand<TPayload>(
   kind: AnyCommand['kind'],
@@ -137,6 +141,14 @@ export const commandFactories = {
     return makeCommand('import.mesh', 'Import STL mesh', withIds, (document) =>
       importMeshBody(document, withIds).document
     );
+  },
+  setNodeMetadata(
+    payload: NodeMetadataInput,
+    label = 'Edit properties'
+  ): CommandDefinition<NodeMetadataInput> {
+    return makeCommand('node.metadata.set', label, payload, (document) =>
+      setNodeMetadata(document, payload)
+    );
   }
 };
 
@@ -154,6 +166,14 @@ export class CommandManager {
   private redoStack: HistoryEntry[] = [];
 
   constructor(public document: ProjectDocument) {}
+
+  get canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  get canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
 
   execute(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
@@ -259,6 +279,9 @@ export function replayCommands(
         break;
       case 'import.mesh':
         next = importMeshBody(next, command.payload as ImportedMeshInput).document;
+        break;
+      case 'node.metadata.set':
+        next = setNodeMetadata(next, command.payload as NodeMetadataInput);
         break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer
