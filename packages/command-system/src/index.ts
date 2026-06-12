@@ -11,6 +11,10 @@ import {
   appendRevision,
   attachDerivedState,
   booleanBodies,
+  createBodyFeatureIds,
+  createConstraintIds,
+  createFeatureOnlyIds,
+  createSketchFeatureIds,
   extrudeSketch,
   importMeshBody,
   transformBody,
@@ -41,7 +45,8 @@ export interface CommandDefinition<TPayload> {
 }
 
 interface HistoryEntry {
-  before: ProjectDocument;
+  /** Document state to restore when this entry is popped. */
+  snapshot: ProjectDocument;
   command: SerializedCommand;
 }
 
@@ -80,50 +85,70 @@ function makeCommand<TPayload>(
   };
 }
 
+// Every factory resolves the IDs the operation will create *before* the
+// command is serialized, so replaying a command log rebuilds the exact same
+// entity graph. Without this, commands that reference earlier results
+// (extrude -> sketch, boolean/transform -> bodies) would dangle on replay.
 export const commandFactories = {
   addPrimitive(payload: PrimitiveInput): CommandDefinition<PrimitiveInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'primitive.add',
       `Add ${payload.primitiveKind}`,
-      payload,
-      (document) => addPrimitiveFeature(document, payload)
+      withIds,
+      (document) => addPrimitiveFeature(document, withIds)
     );
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
-    return makeCommand('sketch.add', `Add ${payload.objectKind} sketch`, payload, (document) =>
-      addSketchFeature(document, payload).document
+    const withIds = { ...payload, ids: payload.ids ?? createSketchFeatureIds() };
+    return makeCommand('sketch.add', `Add ${payload.objectKind} sketch`, withIds, (document) =>
+      addSketchFeature(document, withIds).document
     );
   },
   addConstraint(payload: ConstraintInput): CommandDefinition<ConstraintInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createConstraintIds() };
     return makeCommand(
       'constraint.add',
       `Add ${payload.constraintKind} constraint`,
-      payload,
-      (document) => addConstraint(document, payload)
+      withIds,
+      (document) => addConstraint(document, withIds)
     );
   },
   extrudeSketch(payload: ExtrudeInput): CommandDefinition<ExtrudeInput> {
-    return makeCommand('feature.extrude', 'Extrude sketch', payload, (document) =>
-      extrudeSketch(document, payload).document
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand('feature.extrude', 'Extrude sketch', withIds, (document) =>
+      extrudeSketch(document, withIds).document
     );
   },
   booleanBodies(payload: BooleanInput): CommandDefinition<BooleanInput> {
-    return makeCommand('feature.boolean', `Boolean ${payload.operation}`, payload, (document) =>
-      booleanBodies(document, payload).document
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand('feature.boolean', `Boolean ${payload.operation}`, withIds, (document) =>
+      booleanBodies(document, withIds).document
     );
   },
   transformBody(payload: TransformInput): CommandDefinition<TransformInput> {
-    return makeCommand('feature.transform', 'Transform body', payload, (document) =>
-      transformBody(document, payload).document
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand('feature.transform', 'Transform body', withIds, (document) =>
+      transformBody(document, withIds).document
     );
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
-    return makeCommand('import.mesh', 'Import STL mesh', payload, (document) =>
-      importMeshBody(document, payload).document
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand('import.mesh', 'Import STL mesh', withIds, (document) =>
+      importMeshBody(document, withIds).document
     );
   }
 };
 
+/** Bound on stored undo/redo entries so long sessions cannot exhaust memory. */
+const MAX_HISTORY_DEPTH = 100;
+
+/**
+ * Owns the current document and its undo/redo history.
+ *
+ * Documents are immutable values (every document-core operation clones before
+ * mutating), so history entries hold plain references instead of deep copies.
+ */
 export class CommandManager {
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
@@ -132,11 +157,11 @@ export class CommandManager {
 
   execute(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
-    const before = deepClone(this.document);
+    const previous = this.document;
     let next = command.apply(this.document);
     next.commandLog.push(command.serialize());
     next = appendRevision(next, command.label);
-    this.undoStack.push({ before, command: command.serialize() });
+    this.pushUndo({ snapshot: previous, command: command.serialize() });
     this.redoStack = [];
     this.document = next;
     return this.document;
@@ -152,8 +177,8 @@ export class CommandManager {
     if (!entry) {
       return this.document;
     }
-    this.redoStack.push({ before: deepClone(this.document), command: entry.command });
-    this.document = entry.before;
+    this.redoStack.push({ snapshot: this.document, command: entry.command });
+    this.document = entry.snapshot;
     return this.document;
   }
 
@@ -162,13 +187,13 @@ export class CommandManager {
     if (!entry) {
       return this.document;
     }
-    this.undoStack.push({ before: deepClone(this.document), command: entry.command });
-    this.document = entry.before;
+    this.undoStack.push({ snapshot: this.document, command: entry.command });
+    this.document = entry.snapshot;
     return this.document;
   }
 
   runTransaction(label: string, commands: AnyCommand[]): ProjectDocument {
-    const before = deepClone(this.document);
+    const previous = this.document;
     let next = this.document;
     const serialized: SerializedCommand[] = [];
     for (const command of commands) {
@@ -176,10 +201,13 @@ export class CommandManager {
       next = command.apply(next);
       serialized.push(command.serialize());
     }
+    if (next === this.document) {
+      return this.document;
+    }
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
-    this.undoStack.push({
-      before,
+    this.pushUndo({
+      snapshot: previous,
       command: {
         kind: 'transaction',
         label,
@@ -191,6 +219,13 @@ export class CommandManager {
     this.redoStack = [];
     this.document = next;
     return this.document;
+  }
+
+  private pushUndo(entry: HistoryEntry): void {
+    this.undoStack.push(entry);
+    if (this.undoStack.length > MAX_HISTORY_DEPTH) {
+      this.undoStack.shift();
+    }
   }
 }
 
@@ -226,6 +261,9 @@ export function replayCommands(
         next = importMeshBody(next, command.payload as ImportedMeshInput).document;
         break;
       default:
+        // Unknown kinds are skipped (not fatal) so documents written by newer
+        // clients still load; the skip is surfaced for debuggability.
+        console.warn(`replayCommands: skipping unknown command kind "${command.kind}".`);
         continue;
     }
 
