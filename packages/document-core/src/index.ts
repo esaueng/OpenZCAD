@@ -576,6 +576,42 @@ export function importMeshBody(
   return { document: next, bodyId };
 }
 
+export interface NodeMetadataInput {
+  nodeId: string;
+  /** Keys set to `null` are removed; other keys are merged into the node. */
+  metadata: Record<string, string | number | boolean | null>;
+}
+
+/**
+ * Merges metadata keys into an existing node. This is the storage mechanism
+ * for workflow annotations (preserve/fixed/obstacle roles, loads, study
+ * settings) — they live in the document so they persist, replay, and undo
+ * like every other edit, without any schema change.
+ */
+export function setNodeMetadata(
+  document: ProjectDocument,
+  input: NodeMetadataInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const node = next.nodes[input.nodeId];
+  if (!node) {
+    throw new Error(`Node ${input.nodeId} not found.`);
+  }
+  const metadata: Record<string, string | number | boolean> = {
+    ...node.metadata
+  };
+  for (const [key, value] of Object.entries(input.metadata)) {
+    if (value === null) {
+      delete metadata[key];
+    } else {
+      metadata[key] = value;
+    }
+  }
+  node.metadata = metadata;
+  next.version += 1;
+  return next;
+}
+
 export function appendRevision(
   document: ProjectDocument,
   reason: string
