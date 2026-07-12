@@ -139,6 +139,16 @@
   background: var(--color-surface-hover);
 }
 
+.session-user {
+  max-width: 150px;
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }

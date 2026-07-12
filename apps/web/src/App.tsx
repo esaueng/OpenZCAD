@@ -29,6 +29,7 @@ import type {
   SketchObjectData,
   UnitSystem
 } from '@openzcad/shared';
+import type { AuthSession } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
 import { downloadText, exportFileStem, inferContentType } from './lib/model';
@@ -90,6 +91,7 @@ export function App() {
     'saving'
   );
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [session, setSession] = useState<AuthSession | null>(null);
   const [fitSignal, setFitSignal] = useState(0);
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
@@ -159,12 +161,15 @@ export function App() {
     void (async () => {
       const [local, remote] = await Promise.all([
         listLocalProjects().catch(() => []),
-        Promise.all([api.health(), api.listProjects()]).catch(() => null)
+        Promise.all([api.health(), api.session(), api.listProjects()]).catch(
+          () => null
+        )
       ]);
-      const remoteProjects = remote?.[1].projects ?? [];
+      const remoteProjects = remote?.[2].projects ?? [];
       const merged = mergeProjectSummaries(local, remoteProjects);
       setProjects(merged);
       setCloudAvailable(Boolean(remote));
+      setSession(remote?.[1] ?? null);
       setSaveState(remote ? 'saved' : 'offline');
       setStatus(
         remote
@@ -367,7 +372,11 @@ export function App() {
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
-      const localDocument = createProjectDocument(name, localUserId, units);
+      const localDocument = createProjectDocument(
+        name,
+        session?.userId ?? localUserId,
+        units
+      );
       await saveLocalProject(localDocument);
       hydrateDocument(localDocument);
       setProjects((current) => [
@@ -740,6 +749,7 @@ export function App() {
               : null
           }
           saveState={saveState}
+          session={session}
           onUndo={handleUndo}
           onRedo={handleRedo}
           onSave={() => void handleSave()}

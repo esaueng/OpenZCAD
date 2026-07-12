@@ -16,6 +16,7 @@
   },
   "vars": {
     "ENVIRONMENT": "beta",
+    "AUTH_MODE": "development",
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
     "AI_REASONING_EFFORT": "high"
@@ -67,6 +68,7 @@
       "name": "openzcad-beta",
       "vars": {
         "ENVIRONMENT": "beta",
+        "AUTH_MODE": "cloudflare-access",
         "AI_PROVIDER": "openai",
         "AI_MODEL": "gpt-5.6-sol",
         "AI_REASONING_EFFORT": "high"

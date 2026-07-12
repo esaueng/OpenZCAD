@@ -54,6 +54,45 @@ describe('worker api routes', () => {
     expect(response.status).toBe(200);
   });
 
+  it('exposes the authenticated beta session', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/session'),
+      env as never
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      userId: 'user_beta_dev',
+      mode: 'development'
+    });
+  });
+
+  it('requires Cloudflare Access identity when configured', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/projects'),
+      { ...env, AUTH_MODE: 'cloudflare-access' } as never
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('isolates projects between authenticated development users', async () => {
+    const ownerRequest = new Request('https://example.com/api/projects', {
+      method: 'POST',
+      headers: { 'x-openzcad-development-user': 'user_owner' },
+      body: JSON.stringify({ name: 'Private worker project' })
+    });
+    const createdResponse = await worker.fetch(ownerRequest, env as never);
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+
+    const intruderResponse = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}`,
+        { headers: { 'x-openzcad-development-user': 'user_intruder' } }
+      ),
+      env as never
+    );
+    expect(intruderResponse.status).toBe(404);
+  });
+
   it('keeps assistant generation disabled until a secret is configured', async () => {
     const response = await worker.fetch(
       post('/api/assistant/proposals', {
@@ -224,9 +263,10 @@ describe('worker api routes', () => {
     );
     expect(emptyBodies.status).toBe(400);
 
+    const created = await createProject('Export Test');
     const accepted = await worker.fetch(
       post('/api/exports', {
-        projectId: 'proj_x',
+        projectId: created.project.projectId,
         bodyIds: ['body_1'],
         format: 'stl'
       }),

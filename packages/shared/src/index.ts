@@ -14,7 +14,8 @@ export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2 as const;
-export type ProjectDocumentSchemaVersion = typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+export type ProjectDocumentSchemaVersion =
+  typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
@@ -318,7 +319,13 @@ export interface UploadSessionRecord {
 export interface ArtifactRecord {
   artifactId: ArtifactId;
   projectId: ProjectId;
-  kind: 'step-import' | 'stl-import' | 'step-export' | 'stl-export' | 'snapshot' | 'thumbnail';
+  kind:
+    | 'step-import'
+    | 'stl-import'
+    | 'step-export'
+    | 'stl-export'
+    | 'snapshot'
+    | 'thumbnail';
   name: string;
   objectKey: string;
   contentType: string;
@@ -404,6 +411,13 @@ export interface HealthResponse {
   time: string;
 }
 
+export interface AuthSession {
+  userId: UserId;
+  displayName: string;
+  email?: string;
+  mode: 'development' | 'cloudflare-access';
+}
+
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 }
@@ -424,7 +438,8 @@ export const toProjectId = (value: string): ProjectId => value as ProjectId;
 export const toFeatureId = (value: string): FeatureId => value as FeatureId;
 export const toBodyId = (value: string): BodyId => value as BodyId;
 export const toSketchId = (value: string): SketchId => value as SketchId;
-export const toParameterId = (value: string): ParameterId => value as ParameterId;
+export const toParameterId = (value: string): ParameterId =>
+  value as ParameterId;
 export const toRevisionId = (value: string): RevisionId => value as RevisionId;
 export const toArtifactId = (value: string): ArtifactId => value as ArtifactId;
 export const toUploadSessionId = (value: string): UploadSessionId =>
