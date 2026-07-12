@@ -149,6 +149,25 @@
   white-space: nowrap;
 }
 
+.collaboration-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-transform: capitalize;
+}
+
+.collaboration-state.live {
+  color: var(--color-success);
+}
+
+.collaboration-state.conflict,
+.collaboration-state.oversize {
+  color: var(--color-warning);
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }

@@ -23,6 +23,9 @@ import {
   type CreateProjectResponse,
   type CreateUploadSessionRequest,
   type CreateUploadSessionResponse,
+  type CollaborationClientMessage,
+  type CollaborationMember,
+  type CollaborationServerMessage,
   type FinalizeImportRequest,
   type JobRecord,
   type ListProjectsResponse,
@@ -480,6 +483,169 @@ export function createPersistenceService(
 export class ProjectCollaborationRoom extends DurableObject {
   private presence = new Map<string, string>();
   private locks = new Map<string, string>();
+  private sockets = new Map<
+    WebSocket,
+    { clientId: string; userId: UserId; displayName: string }
+  >();
+  private latestDocument: ProjectDocument | null = null;
+  private projectId: string | null = null;
+
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+      return new Response('WebSocket upgrade required.', { status: 426 });
+    }
+    const userId = request.headers.get('x-openzcad-user-id');
+    const displayName = request.headers.get('x-openzcad-display-name');
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (!userId || !displayName || !projectId) {
+      return new Response('Missing collaboration identity.', { status: 400 });
+    }
+    if (this.projectId && this.projectId !== projectId) {
+      return new Response('Room project mismatch.', { status: 409 });
+    }
+    this.projectId = projectId;
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.accept();
+    server.addEventListener(
+      'message',
+      (event: MessageEvent<string | ArrayBuffer>) => {
+        this.handleSocketMessage(
+          server,
+          event.data,
+          userId as UserId,
+          displayName
+        );
+      }
+    );
+    const close = () => this.removeSocket(server);
+    server.addEventListener('close', close);
+    server.addEventListener('error', close);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private handleSocketMessage(
+    socket: WebSocket,
+    raw: string | ArrayBuffer,
+    userId: UserId,
+    displayName: string
+  ): void {
+    if (typeof raw !== 'string' || raw.length > 950_000) {
+      socket.close(1009, 'Collaboration message is too large.');
+      return;
+    }
+    let message: CollaborationClientMessage;
+    try {
+      message = JSON.parse(raw) as CollaborationClientMessage;
+    } catch {
+      socket.close(1003, 'Invalid collaboration message.');
+      return;
+    }
+    if (!message.clientId) {
+      return;
+    }
+
+    if (message.type === 'hello') {
+      this.sockets.set(socket, {
+        clientId: message.clientId,
+        userId,
+        displayName
+      });
+      this.presence.set(message.clientId, 'active');
+      this.acceptDocument(socket, message.clientId, message.document, false);
+      this.send(socket, {
+        type: 'state',
+        members: this.members(),
+        document: this.latestDocument
+      });
+      this.broadcastPresence();
+      return;
+    }
+    const connection = this.sockets.get(socket);
+    if (!connection || connection.clientId !== message.clientId) {
+      socket.close(1008, 'Collaboration client identity changed.');
+      return;
+    }
+    if (message.type === 'presence') {
+      this.presence.set(message.clientId, message.status);
+      this.broadcastPresence();
+      return;
+    }
+    if (message.type === 'document') {
+      this.acceptDocument(socket, message.clientId, message.document, true);
+    }
+  }
+
+  private acceptDocument(
+    socket: WebSocket,
+    clientId: string,
+    rawDocument: ProjectDocument,
+    broadcast: boolean
+  ): void {
+    const document = normalizeDocument(rawDocument);
+    if (document.projectId !== this.projectId) {
+      socket.close(1008, 'Document project does not match this room.');
+      return;
+    }
+    const latest = this.latestDocument;
+    const resolution = resolveCollaborationDocument(latest, document);
+    if (resolution.kind === 'accept') {
+      this.latestDocument = resolution.document;
+      if (broadcast) {
+        this.broadcast(
+          { type: 'document', clientId, document: resolution.document },
+          socket
+        );
+      }
+      return;
+    }
+    if (resolution.kind === 'conflict') {
+      this.send(socket, { type: 'conflict', document: resolution.document });
+    }
+  }
+
+  private members(): CollaborationMember[] {
+    return Array.from(this.sockets.values()).map((connection) => ({
+      clientId: connection.clientId,
+      userId: connection.userId,
+      displayName: connection.displayName,
+      status:
+        this.presence.get(connection.clientId) === 'idle' ? 'idle' : 'active'
+    }));
+  }
+
+  private send(socket: WebSocket, message: CollaborationServerMessage): void {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(message));
+    }
+  }
+
+  private broadcast(
+    message: CollaborationServerMessage,
+    except?: WebSocket
+  ): void {
+    for (const socket of this.sockets.keys()) {
+      if (socket !== except) {
+        this.send(socket, message);
+      }
+    }
+  }
+
+  private broadcastPresence(): void {
+    this.broadcast({ type: 'presence', members: this.members() });
+  }
+
+  private removeSocket(socket: WebSocket): void {
+    const connection = this.sockets.get(socket);
+    if (!connection) {
+      return;
+    }
+    this.sockets.delete(socket);
+    this.presence.delete(connection.clientId);
+    this.broadcastPresence();
+  }
 
   async joinSession(userId: string, status: string) {
     this.presence.set(userId, status);
@@ -501,6 +667,39 @@ export class ProjectCollaborationRoom extends DurableObject {
       locks: Array.from(this.locks.entries())
     };
   }
+}
+
+export function resolveCollaborationDocument(
+  latest: ProjectDocument | null,
+  incoming: ProjectDocument
+):
+  | { kind: 'accept'; document: ProjectDocument }
+  | { kind: 'same'; document: ProjectDocument }
+  | { kind: 'conflict'; document: ProjectDocument } {
+  if (!latest || incoming.version > latest.version) {
+    return { kind: 'accept', document: incoming };
+  }
+  const sameHistory =
+    incoming.version === latest.version &&
+    JSON.stringify({
+      nodes: incoming.nodes,
+      featureOrder: incoming.featureOrder,
+      bodyOrder: incoming.bodyOrder,
+      sketchOrder: incoming.sketchOrder,
+      parameterOrder: incoming.parameterOrder,
+      commandLog: incoming.commandLog
+    }) ===
+      JSON.stringify({
+        nodes: latest.nodes,
+        featureOrder: latest.featureOrder,
+        bodyOrder: latest.bodyOrder,
+        sketchOrder: latest.sketchOrder,
+        parameterOrder: latest.parameterOrder,
+        commandLog: latest.commandLog
+      });
+  return sameHistory
+    ? { kind: 'same', document: latest }
+    : { kind: 'conflict', document: latest };
 }
 
 export class OpenZCADExportWorkflow extends WorkflowEntrypoint<
