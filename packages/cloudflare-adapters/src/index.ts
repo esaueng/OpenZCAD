@@ -28,7 +28,11 @@ import {
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createCheckpoint,
+  createProjectDocument,
+  normalizeDocument
+} from '@openzcad/document-core';
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'beta';
@@ -100,7 +104,7 @@ export class D1R2PersistenceService implements PersistenceService {
         updated_at: string;
         document_json: string;
       }) => {
-        const document = JSON.parse(row.document_json) as ProjectDocument;
+        const document = normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
         return {
           projectId: document.projectId,
           name: row.name,
@@ -153,7 +157,9 @@ export class D1R2PersistenceService implements PersistenceService {
     const row = await this.env.DB.prepare(`SELECT document_json FROM projects WHERE id = ?`)
       .bind(projectId)
       .first<{ document_json: string }>();
-    return row ? (JSON.parse(row.document_json) as ProjectDocument) : null;
+    return row
+      ? normalizeDocument(JSON.parse(row.document_json) as ProjectDocument)
+      : null;
   }
 
   async saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument> {
@@ -161,17 +167,18 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().saveRevision(request);
     }
     await this.ensureSchema();
-    const documentJson = JSON.stringify(request.document);
+    const document = createCheckpoint(normalizeDocument(request.document), request.reason);
+    const documentJson = JSON.stringify(document);
     const result = await this.env.DB.prepare(
       `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ?`
     )
-      .bind(documentJson, nowIso(), request.document.name, request.projectId)
+      .bind(documentJson, nowIso(), document.name, request.projectId)
       .run();
     if (result.meta?.changes === 0) {
       throw new ProjectNotFoundError(request.projectId);
     }
 
-    const latestRevision = request.document.revisions.at(-1);
+    const latestRevision = document.revisions.at(-1);
     if (latestRevision) {
       await this.env.DB.prepare(
         `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at) VALUES (?, ?, ?, ?, ?)`
@@ -185,7 +192,7 @@ export class D1R2PersistenceService implements PersistenceService {
         )
         .run();
     }
-    return request.document;
+    return document;
   }
 
   async createUploadSession(

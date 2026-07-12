@@ -30,8 +30,10 @@ describe('in-memory persistence', () => {
       document: created.document
     });
     expect(saved.projectId).toBe(created.document.projectId);
+    expect(saved.checkpoints.at(-1)?.reason).toBe('Save');
     const loaded = await service.loadProject(created.document.projectId);
     expect(loaded?.name).toBe('Round Trip');
+    expect(loaded?.schemaVersion).toBe(2);
   });
 
   it('sanitizes file names in upload object keys', async () => {

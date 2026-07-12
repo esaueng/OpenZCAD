@@ -19,7 +19,11 @@ import {
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createCheckpoint,
+  createProjectDocument,
+  normalizeDocument
+} from '@openzcad/document-core';
 import { InMemoryJobRunner } from '@openzcad/jobs';
 
 export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
@@ -80,15 +84,17 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   async loadProject(projectId: string): Promise<ProjectDocument | null> {
-    return this.projects.get(projectId) ?? null;
+    const document = this.projects.get(projectId);
+    return document ? normalizeDocument(document) : null;
   }
 
   async saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument> {
     if (!this.projects.has(request.projectId)) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    this.projects.set(request.projectId, request.document);
-    return request.document;
+    const document = createCheckpoint(normalizeDocument(request.document), request.reason);
+    this.projects.set(request.projectId, document);
+    return document;
   }
 
   async createUploadSession(
@@ -197,4 +203,3 @@ export function getInMemoryPersistence(): InMemoryPersistenceService {
 
   return singleton;
 }
-

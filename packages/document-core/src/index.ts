@@ -3,6 +3,7 @@ import {
   deepClone,
   featureColor,
   nowIso,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toArtifactId,
   toBodyId,
   toEntityId,
@@ -26,6 +27,7 @@ import {
   type PlaneId,
   type PrimitiveKind,
   type ProjectDocument,
+  type ProjectCheckpoint,
   type RevisionRecord,
   type RevolveAxis,
   type SketchId,
@@ -240,8 +242,16 @@ export function createProjectDocument(
     reason: 'Initial document',
     commandCount: 0
   };
+  const initialCheckpoint: ProjectCheckpoint = {
+    checkpointId: createId('checkpoint'),
+    revisionId: initialRevision.revisionId,
+    documentVersion: 1,
+    createdAt,
+    reason: 'Initial document'
+  };
 
   return {
+    schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     projectId,
     ownerUserId,
     rootNodeId,
@@ -256,7 +266,9 @@ export function createProjectDocument(
     sketchOrder: [],
     parameterOrder: [],
     revisions: [initialRevision],
+    checkpoints: [initialCheckpoint],
     commandLog: [],
+    assets: {},
     derived: {
       bodyRepresentations: {},
       exportableBodyIds: [],
@@ -271,12 +283,30 @@ export function createProjectDocument(
  * pre-parametric document does not crash newer code paths.
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
+  const revisions = document.revisions ?? [];
+  const fallbackRevision = revisions.at(-1);
+  const checkpoints = document.checkpoints ??
+    (fallbackRevision
+      ? [
+          {
+            checkpointId: createId('checkpoint'),
+            revisionId: fallbackRevision.revisionId,
+            documentVersion: document.version ?? 1,
+            createdAt: fallbackRevision.createdAt,
+            reason: 'Migrated save point'
+          }
+        ]
+      : []);
   return {
     ...document,
+    schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     parameterOrder: document.parameterOrder ?? [],
     featureOrder: document.featureOrder ?? [],
     bodyOrder: document.bodyOrder ?? [],
-    sketchOrder: document.sketchOrder ?? []
+    sketchOrder: document.sketchOrder ?? [],
+    revisions,
+    checkpoints,
+    assets: document.assets ?? {}
   };
 }
 
@@ -1020,6 +1050,38 @@ export function appendRevision(
       }
     ],
     version: document.version + 1
+  };
+}
+
+/** Records a durable save point without changing model or undo semantics. */
+export function createCheckpoint(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  const latestRevision = document.revisions.at(-1);
+  if (!latestRevision) {
+    throw new Error('Cannot create a checkpoint without a revision.');
+  }
+  const normalizedReason = reason.trim() || 'Saved';
+  const previous = document.checkpoints.at(-1);
+  if (
+    previous?.documentVersion === document.version &&
+    previous.reason === normalizedReason
+  ) {
+    return document;
+  }
+  return {
+    ...document,
+    checkpoints: [
+      ...document.checkpoints,
+      {
+        checkpointId: createId('checkpoint'),
+        revisionId: latestRevision.revisionId,
+        documentVersion: document.version,
+        createdAt: nowIso(),
+        reason: normalizedReason
+      }
+    ]
   };
 }
 
