@@ -1,0 +1,65 @@
+# OpenZCAD Workspace Design Specification
+
+The accepted workspace concept is [`openzcad-workspace-concept.png`](./openzcad-workspace-concept.png).
+
+## Product hierarchy
+
+1. The exact B-rep viewport is the primary surface.
+2. The model tree and contextual inspector are compact rails, not dashboards.
+3. AI work is always presented as a reviewable patch with Preview, Apply patch, and Reject controls.
+4. Applying a patch is explicit and atomic. A proposal never appears already applied.
+
+## Layout
+
+- 52px top application bar.
+- 300px model rail on wide screens.
+- Flexible viewport with a 360px contextual inspector.
+- Bottom AI rail that opens to roughly one third of the available height.
+- 30px status bar.
+- Small-laptop layouts may collapse either side rail into a drawer, but the viewport and AI approval boundary remain visible.
+
+## Visual system
+
+- Near-black engineering canvas and graphite rails.
+- Cool neutral text with deliberate high contrast.
+- Electric blue for selection, focus, and primary actions.
+- Warm amber-gold body color for the active solid.
+- One-pixel borders, minimal shadows, and 4-8px radii.
+- Modern sans-serif UI typography; monospace is limited to values and status.
+
+## Allowed primary-screen copy
+
+- OpenZCAD
+- Mounting Bracket
+- Saved
+- Undo
+- Redo
+- Import
+- STEP
+- STL
+- MODEL
+- Parameters
+- Feature history
+- Hole
+- Measurements
+- Apply
+- Cancel
+- AI command
+- Proposed patch
+- Preview
+- Apply patch
+- Reject
+- Exact B-rep
+- 0 warnings
+- Synced
+
+## Component families
+
+- Application bar actions and icon buttons.
+- Model-tree section, parameter row, and feature row.
+- Viewport overlays: view cube, axis triad, Fit, and Grid.
+- Contextual inspector fields, toggles, actions, and measurements.
+- AI command editor, ordered patch operations, assumption line, and approval actions.
+- Status items for kernel, units, diagnostics, and synchronization.
+
+All visible controls and text are code-native. The concept image is a visual specification, not an application asset.
