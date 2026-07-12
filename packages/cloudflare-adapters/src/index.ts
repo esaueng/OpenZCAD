@@ -46,11 +46,17 @@ export interface CloudflareEnv {
   ENVIRONMENT?: 'beta';
   AUTH_MODE?: 'development' | 'cloudflare-access';
   AUTH_LEGACY_OWNER_EMAIL?: string;
-  AI_PROVIDER?: 'openai' | 'responses-compatible';
+  AI_PROVIDER?: 'openai' | 'openrouter' | 'responses-compatible';
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
   /** Backward-compatible OpenAI-specific secret name. */
   OPENAI_API_KEY?: string;
+  /** OpenRouter-specific secret used when AI_PROVIDER=openrouter. */
+  OPENROUTER_API_KEY?: string;
+  /** Optional public app URL sent to OpenRouter for attribution. */
+  AI_SITE_URL?: string;
+  /** Optional app name sent to OpenRouter; defaults to OpenZCAD. */
+  AI_APP_NAME?: string;
   AI_MODEL?: string;
   AI_REASONING_EFFORT?: 'low' | 'medium' | 'high' | 'xhigh';
   DB?: D1Database;
