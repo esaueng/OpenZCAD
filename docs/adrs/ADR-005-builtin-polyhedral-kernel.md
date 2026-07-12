@@ -25,4 +25,4 @@ STEP export is implemented natively in `io-step` as an ISO 10303-21 AP214 writer
 
 - Curved faces are tessellated at fixed segment counts; file sizes grow with tessellation density.
 - Boolean results with coplanar overlapping faces can produce imperfect shells; the export path surfaces a warning instead of hiding it.
-- STEP _import_ remains metadata-only until the native kernel lands.
+- Historical limitation: STEP import was metadata-only on this compatibility path. ADR-006 and ADR-008 replace that behavior with editable OpenCascade imports.

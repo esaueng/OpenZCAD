@@ -14,7 +14,7 @@ OpenZCAD's core promise requires analytic primitives and exact boolean/export to
 
 ## Consequences
 
-- STEP files come from exact OpenCascade shapes and are re-imported in tests as valid solids.
+- STEP files import into replayable exact features; exports come from exact OpenCascade shapes and are re-imported in tests as valid solids.
 - Viewport meshes remain disposable tessellations of exact B-reps.
 - The initial exact-kernel download is materially larger than the previous compatibility kernel.
 - Imported STL bodies keep the compatibility path because triangle meshes are not parametric B-reps.

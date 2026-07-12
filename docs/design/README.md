@@ -70,4 +70,7 @@ All visible controls and text are code-native. The concept image is a visual spe
 - Density adaptation: the implemented rails use 46px/252px/330px/28px dimensions so more viewport remains available on common laptop displays.
 - Functional adaptation: the live viewport displays the user's actual model rather than a hard-coded mounting bracket.
 - Functional adaptation: the compact rail shows the proposal summary; Preview makes the proposed geometry inspectable before Apply. Without an AI API key, the rail reports the configuration state.
+- Functional adaptation: authenticated identity and live-room presence sit in the top bar without displacing the core modeling actions.
+- Functional adaptation: finishing and pattern tools extend the contextual inspector while preserving the concept's compact tool density; exact face/edge IDs appear only when selected.
+- QA result: the implemented layout, rail hierarchy, control density, typography, graphite/blue visual system, and core viewport-first workflow remain faithful to the concept. The live QA capture uses actual exact fillet and pattern geometry rather than concept-only sample content.
 - Compact breakpoints preserve the model and viewport first; the inspector hides only below 820 px, where full CAD editing is not the primary target.
