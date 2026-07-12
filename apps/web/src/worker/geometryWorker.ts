@@ -1,4 +1,5 @@
 import { createKernelAdapter } from '@openzcad/kernel-adapter';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import type { ProjectDocument, ProjectId } from '@openzcad/shared';
 
 /**
@@ -21,11 +22,18 @@ export type GeometrySyncResult =
     };
 
 const kernel = createKernelAdapter();
+const exactKernel = createExactKernelAdapter().catch((error: unknown) => {
+  console.warn('Exact OpenCascade kernel unavailable; using compatibility kernel.', error);
+  return null;
+});
 
-self.onmessage = (event: MessageEvent<ProjectDocument>) => {
+self.onmessage = async (event: MessageEvent<ProjectDocument>) => {
   const document = event.data;
   try {
-    const derived = kernel.syncDocument(document);
+    const exact = await exactKernel;
+    const derived = exact
+      ? await exact.syncDocument(document)
+      : kernel.syncDocument(document);
     const result: GeometrySyncResult = {
       ok: true,
       projectId: document.projectId,

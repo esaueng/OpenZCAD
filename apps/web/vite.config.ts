@@ -58,10 +58,23 @@ export default defineConfig(async ({ command, isPreview }) => {
 
   return {
     plugins,
+    optimizeDeps: {
+      // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
+      exclude: ['occt-wasm']
+    },
+    worker: {
+      format: 'es' as const
+    },
     resolve: {
-      alias: workspaceAliases
+      alias: {
+        '@openzcad/kernel-adapter/exact': fileURLToPath(
+          new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
+        ),
+        ...workspaceAliases
+      }
     },
     build: {
+      target: 'esnext',
       rollupOptions: {
         output: {
           manualChunks: {

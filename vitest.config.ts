@@ -31,6 +31,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      '@openzcad/kernel-adapter/exact': fileURLToPath(
+        new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
+      ),
       ...workspaceAliases,
       'cloudflare:workers': fileURLToPath(
         new URL('./test/cloudflare-workers.mock.ts', import.meta.url)
