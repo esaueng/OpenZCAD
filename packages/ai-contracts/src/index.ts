@@ -217,7 +217,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'set_parameter' },
+              kind: { type: 'string', const: 'set_parameter' },
               name: { type: 'string' },
               expression: { type: 'string' }
             },
@@ -227,7 +227,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'set_feature_dimension' },
+              kind: { type: 'string', const: 'set_feature_dimension' },
               featureId: { type: 'string' },
               field: { type: 'string' },
               value: scalarSchema
@@ -238,7 +238,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_primitive' },
+              kind: { type: 'string', const: 'add_primitive' },
               name: { type: 'string' },
               primitiveKind: {
                 type: 'string',
@@ -275,7 +275,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'delete_feature' },
+              kind: { type: 'string', const: 'delete_feature' },
               featureId: { type: 'string' }
             },
             required: ['kind', 'featureId']
@@ -284,7 +284,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'rename_feature' },
+              kind: { type: 'string', const: 'rename_feature' },
               featureId: { type: 'string' },
               name: { type: 'string' }
             },
@@ -294,7 +294,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_extrude' },
+              kind: { type: 'string', const: 'add_extrude' },
               name: { type: 'string' },
               sketchId: { type: 'string' },
               distance: scalarSchema
@@ -305,7 +305,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_revolve' },
+              kind: { type: 'string', const: 'add_revolve' },
               name: { type: 'string' },
               sketchId: { type: 'string' },
               axis: { type: 'string', enum: ['horizontal', 'vertical'] }
@@ -316,7 +316,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_boolean' },
+              kind: { type: 'string', const: 'add_boolean' },
               name: { type: 'string' },
               operation: {
                 type: 'string',
@@ -335,7 +335,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_transform' },
+              kind: { type: 'string', const: 'add_transform' },
               name: { type: 'string' },
               targetBodyId: { type: 'string' },
               translation: vectorSchema,
@@ -353,7 +353,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_edge_modifier' },
+              kind: { type: 'string', const: 'add_edge_modifier' },
               name: { type: 'string' },
               modifier: { type: 'string', enum: ['fillet', 'chamfer'] },
               targetBodyId: { type: 'string' },
@@ -378,7 +378,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              kind: { const: 'add_pattern' },
+              kind: { type: 'string', const: 'add_pattern' },
               name: { type: 'string' },
               targetBodyId: { type: 'string' },
               patternKind: { type: 'string', enum: ['linear', 'circular'] },

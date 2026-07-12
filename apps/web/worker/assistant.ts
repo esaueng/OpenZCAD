@@ -93,6 +93,65 @@ function jsonError(error: string, code: string, status: number): Response {
   });
 }
 
+interface ProviderErrorDetails {
+  code?: string;
+  errorType?: string;
+  message?: string;
+  providerName?: string;
+}
+
+function boundedProviderErrorValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim()
+    ? value.trim().slice(0, 500)
+    : undefined;
+}
+
+async function readProviderErrorDetails(
+  response: Response
+): Promise<ProviderErrorDetails> {
+  const payload = (await response.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
+  const error =
+    payload?.error && typeof payload.error === 'object'
+      ? (payload.error as Record<string, unknown>)
+      : null;
+  const metadata =
+    error?.metadata && typeof error.metadata === 'object'
+      ? (error.metadata as Record<string, unknown>)
+      : null;
+  const raw =
+    typeof metadata?.raw === 'string' && metadata.raw.length <= 20_000
+      ? metadata.raw
+      : undefined;
+  const rawPayload = raw
+    ? ((() => {
+        try {
+          return JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })())
+    : null;
+  const rawError =
+    rawPayload?.error && typeof rawPayload.error === 'object'
+      ? (rawPayload.error as Record<string, unknown>)
+      : rawPayload;
+  return {
+    code:
+      boundedProviderErrorValue(rawError?.code) ??
+      boundedProviderErrorValue(error?.code),
+    errorType:
+      boundedProviderErrorValue(rawError?.type) ??
+      boundedProviderErrorValue(payload?.error_type),
+    message:
+      boundedProviderErrorValue(rawError?.message) ??
+      boundedProviderErrorValue(error?.message),
+    providerName: boundedProviderErrorValue(metadata?.provider_name)
+  };
+}
+
 export async function streamAssistantProposal(
   input: ProposalInput,
   env: CloudflareEnv,
@@ -164,7 +223,12 @@ export async function streamAssistantProposal(
   });
 
   if (!upstream.ok || !upstream.body) {
-    console.error('AI Responses provider failed:', provider, upstream.status);
+    const details = await readProviderErrorDetails(upstream);
+    console.error('AI Responses provider failed:', {
+      provider,
+      status: upstream.status,
+      ...details
+    });
     return jsonError(
       'The modeling assistant could not generate a patch.',
       'AI_UPSTREAM_ERROR',

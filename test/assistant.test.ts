@@ -146,4 +146,59 @@ describe('assistant integration', () => {
       stream: true
     });
   });
+
+  it('logs bounded provider diagnostics without returning upstream details', async () => {
+    const longMessage = `Invalid response schema: ${'x'.repeat(600)}`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              code: 'invalid_prompt',
+              message: 'Provider returned error',
+              metadata: {
+                provider_name: 'OpenAI',
+                raw: JSON.stringify({
+                  error: {
+                    code: 'invalid_json_schema',
+                    type: 'invalid_request_error',
+                    message: longMessage
+                  }
+                })
+              }
+            },
+            error_type: 'invalid_request'
+          },
+          { status: 400 }
+        )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: 'The modeling assistant could not generate a patch.',
+      code: 'AI_UPSTREAM_ERROR'
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses provider failed:',
+      {
+        provider: 'openrouter',
+        status: 400,
+        code: 'invalid_json_schema',
+        errorType: 'invalid_request_error',
+        message: longMessage.slice(0, 500),
+        providerName: 'OpenAI'
+      }
+    );
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('secret-key');
+  });
 });

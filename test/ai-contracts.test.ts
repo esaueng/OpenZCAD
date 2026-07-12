@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CAD_PATCH_JSON_SCHEMA,
   createCadDocumentDigest,
   parseCadPatchProposal
 } from '@openzcad/ai-contracts';
@@ -10,6 +11,27 @@ import {
 import { toUserId } from '@openzcad/shared';
 
 describe('AI patch contracts', () => {
+  it('declares a type for every strict-schema constant', () => {
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+      const candidate = value as Record<string, unknown>;
+      if ('const' in candidate) {
+        expect(candidate.type).toBe(typeof candidate.const);
+      }
+      for (const child of Object.values(candidate)) {
+        if (Array.isArray(child)) {
+          child.forEach(visit);
+        } else {
+          visit(child);
+        }
+      }
+    };
+
+    visit(CAD_PATCH_JSON_SCHEMA);
+  });
+
   it('accepts a structured patch proposal', () => {
     expect(
       parseCadPatchProposal({
