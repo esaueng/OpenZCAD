@@ -59,6 +59,9 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   revolve: 'Revolve',
   boolean: 'Boolean',
   transform: 'Move / Rotate',
+  fillet: 'Fillet',
+  chamfer: 'Chamfer',
+  pattern: 'Pattern',
   'imported-step': 'Imported STEP',
   'imported-mesh': 'Imported mesh'
 };

@@ -792,6 +792,17 @@
   gap: var(--sp-2);
 }
 
+.selection-summary {
+  margin-bottom: 10px;
+  padding: 8px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
 .field-triple {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

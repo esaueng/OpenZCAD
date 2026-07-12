@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  chamferEdges,
+  createProjectDocument,
+  filletEdges,
+  patternBody,
+  transformBody
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -71,6 +75,91 @@ describe('exact OpenCascade kernel adapter', () => {
     expect(body?.source).toBe('imported-step');
     expect(body?.volume).toBeCloseTo(504, 4);
     expect(manager.document.commandLog[0]?.kind).toBe('import.step');
+  });
+
+  it('builds selected-edge fillet and chamfer features', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Edge modifiers', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const edgeHash = Object.values(baseDerived.bodyRepresentations)[0]?.topology
+      ?.edges[0]?.hash;
+    expect(edgeHash).toBeTypeOf('number');
+
+    const filleted = filletEdges(base, {
+      name: 'Fillet',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2
+    }).document;
+    const filletDerived = await adapter.syncDocument(filleted);
+    const filletBody =
+      filletDerived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+    expect(filletDerived.warnings).toEqual([]);
+    expect(filletBody?.volume).toBeLessThan(8000);
+    expect(filletBody?.faceCount).toBeGreaterThan(6);
+
+    const chamfered = chamferEdges(base, {
+      name: 'Chamfer',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [edgeHash!],
+      size: 2
+    }).document;
+    const chamferDerived = await adapter.syncDocument(chamfered);
+    const chamferBody =
+      chamferDerived.bodyRepresentations[chamfered.bodyOrder.at(-1)!];
+    expect(chamferDerived.warnings).toEqual([]);
+    expect(chamferBody?.volume).toBeLessThan(8000);
+    expect(chamferBody?.faceCount).toBeGreaterThan(6);
+  });
+
+  it('builds linear and circular exact body patterns', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Patterns', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 4, height: 5, depth: 6 }
+      }
+    );
+    const targetBodyId = base.bodyOrder[0]!;
+    const linear = patternBody(base, {
+      name: 'Linear pattern',
+      targetBodyId,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 10
+    }).document;
+    const linearDerived = await adapter.syncDocument(linear);
+    const linearBody =
+      linearDerived.bodyRepresentations[linear.bodyOrder.at(-1)!];
+    expect(linearDerived.warnings).toEqual([]);
+    expect(linearBody?.volume).toBeCloseTo(4 * 5 * 6 * 3, 4);
+
+    const moved = transformBody(base, {
+      name: 'Offset',
+      targetBodyId,
+      translation: { x: 12, y: 0, z: 0 }
+    }).document;
+    const circular = patternBody(moved, {
+      name: 'Circular pattern',
+      targetBodyId,
+      patternKind: 'circular',
+      count: 4,
+      axis: 'z',
+      angleDeg: 360
+    }).document;
+    const circularDerived = await adapter.syncDocument(circular);
+    const circularBody =
+      circularDerived.bodyRepresentations[circular.bodyOrder.at(-1)!];
+    expect(circularDerived.warnings).toEqual([]);
+    expect(circularBody?.volume).toBeCloseTo(4 * 5 * 6 * 4, 4);
   });
 
   it('exports STEP that reimports as a valid exact solid', async () => {
