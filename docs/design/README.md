@@ -69,5 +69,5 @@ All visible controls and text are code-native. The concept image is a visual spe
 - Preserved: graphite shell, blue selection/actions, warm gold active bodies, top project/actions bar, model tree, grid viewport, inspector, AI proposal rail, and exact/sync status.
 - Density adaptation: the implemented rails use 46px/252px/330px/28px dimensions so more viewport remains available on common laptop displays.
 - Functional adaptation: the live viewport displays the user's actual model rather than a hard-coded mounting bracket.
-- Functional adaptation: the compact rail shows the proposal summary; Preview makes the proposed geometry inspectable before Apply. Without `OPENAI_API_KEY`, the rail reports the configuration state.
+- Functional adaptation: the compact rail shows the proposal summary; Preview makes the proposed geometry inspectable before Apply. Without an AI API key, the rail reports the configuration state.
 - Compact breakpoints preserve the model and viewport first; the inspector hides only below 820 px, where full CAD editing is not the primary target.

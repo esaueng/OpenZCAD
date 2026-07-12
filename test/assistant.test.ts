@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_AI_MODEL,
+  DEFAULT_AI_PROVIDER,
   streamAssistantProposal
 } from '../apps/web/worker/assistant';
 import { readAssistantEvent } from '../apps/web/src/lib/assistantStream';
@@ -48,11 +49,16 @@ describe('assistant integration', () => {
     const response = await streamAssistantProposal(input, {
       ENVIRONMENT: 'beta',
       OPENAI_API_KEY: 'test-key',
+      AI_PROVIDER: 'responses-compatible',
+      AI_BASE_URL: 'https://models.example.test/v1/responses',
       AI_MODEL: 'configured-model',
       AI_REASONING_EFFORT: 'xhigh'
     });
 
     expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://models.example.test/v1/responses'
+    );
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     const [, init] = fetchMock.mock.calls[0]!;
     expect(typeof init?.body).toBe('string');
@@ -69,6 +75,7 @@ describe('assistant integration', () => {
   });
 
   it('uses one centralized frontier-model default', () => {
+    expect(DEFAULT_AI_PROVIDER).toBe('openai');
     expect(DEFAULT_AI_MODEL).toBe('gpt-5.6-sol');
   });
 });

@@ -6,6 +6,8 @@ import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
+export const DEFAULT_AI_PROVIDER = 'openai';
+const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
 const CAD_ASSISTANT_INSTRUCTIONS = `You are OpenZCAD's parametric modeling assistant.
 Turn the user's request into the smallest safe patch against the supplied document digest.
@@ -30,7 +32,8 @@ export async function streamAssistantProposal(
   input: ProposalInput,
   env: CloudflareEnv
 ): Promise<Response> {
-  if (!env.OPENAI_API_KEY) {
+  const apiKey = env.AI_API_KEY ?? env.OPENAI_API_KEY;
+  if (!apiKey) {
     return jsonError(
       'AI is not configured for this environment.',
       'AI_NOT_CONFIGURED',
@@ -38,10 +41,23 @@ export async function streamAssistantProposal(
     );
   }
 
-  const upstream = await fetch('https://api.openai.com/v1/responses', {
+  const provider = env.AI_PROVIDER ?? DEFAULT_AI_PROVIDER;
+  const upstreamUrl =
+    provider === 'openai'
+      ? (env.AI_BASE_URL ?? OPENAI_RESPONSES_URL)
+      : env.AI_BASE_URL;
+  if (!upstreamUrl) {
+    return jsonError(
+      'AI_BASE_URL is required for a Responses-compatible provider.',
+      'AI_PROVIDER_NOT_CONFIGURED',
+      503
+    );
+  }
+
+  const upstream = await fetch(upstreamUrl, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      authorization: `Bearer ${apiKey}`,
       'content-type': 'application/json'
     },
     body: JSON.stringify({
@@ -76,7 +92,7 @@ export async function streamAssistantProposal(
   });
 
   if (!upstream.ok || !upstream.body) {
-    console.error('OpenAI Responses API failed:', upstream.status);
+    console.error('AI Responses provider failed:', provider, upstream.status);
     return jsonError(
       'The modeling assistant could not generate a patch.',
       'AI_UPSTREAM_ERROR',
