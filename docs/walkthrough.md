@@ -8,5 +8,5 @@
 6. **Combine**: choose **Union**, pick the plate then the boss. Then choose **Subtract**, pick the union result first and the drill cylinder second. The inputs are consumed; the result is a single watertight body.
 7. **Make it parametric**: change `w` to `80` in the sidebar — the whole part rebuilds. Select any feature in the history to edit its inputs, rename it, or delete it; undo/redo covers everything.
 8. **Sketches**: choose **Sketch** for profiles (rectangle/circle/polygon on the XY/XZ/YZ planes, with center offsets and plane offsets), then **Extrude** (distance can be an expression) or **Revolve** (offset the profile so it clears the axis).
-9. **Export**: the STEP button writes a true ISO 10303-21 AP214 file of the selected body (or all live bodies); STL writes ASCII STL. Open the STEP file in FreeCAD/Fusion/SolidWorks — it imports as a closed solid.
-10. Save a revision from the top bar at any point; parameters, features, and edits persist and replay with the document.
+9. **Export**: the STEP button asks the same OpenCascade browser worker that built the viewport to write an exact ISO 10303-21 AP214 file of the selected body (or all live bodies); STL export follows the same path. Open the STEP file in FreeCAD, Fusion, or SolidWorks — it imports as a closed solid.
+10. Keep modeling while IndexedDB autosaves every document change. Use **Save** to create a durable beta-cloud checkpoint when the API is available; if it is not, the newer local version remains the source of truth.

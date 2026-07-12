@@ -1,26 +1,25 @@
 # OpenZCAD Roadmap
 
-OpenZCAD is purely a CAD design tool; the roadmap stays within that scope.
+## Working now
 
-## Done
-
-- Parametric document model: parameter table, expression engine, editable/deletable features, deterministic replay, undo/redo.
-- Built-in polyhedral kernel: primitives, extrude, revolve, real CSG booleans (consumed inputs), baked transforms, watertightness validation, volume/bounds.
-- True STEP (AP214 faceted B-Rep) and ASCII STL export; full-geometry STL import.
-- Classic three-pane workspace: parameters + feature history, viewport, tool/edit inspector.
+- Schema-v2 canonical documents with migrations, checkpoints, asset references, command replay, transactions, undo/redo, and local-first autosave.
+- OpenCascade browser-worker kernel with exact primitives, sweeps, transforms, booleans, validity checks, measurements, and exact STEP/STL export.
+- Three-pane CAD workspace, feature editing, diagnostics, selection, responsive compact layout, and AI command rail.
+- Configurable streamed AI proposals with strict structured output, dry-run preview, explicit approval, and undoable application.
+- Beta Cloudflare project, revision, upload, export, artifact, and AI routes.
 
 ## Next
 
-- Multi-object sketches (several profiles per sketch, holes/pockets in one profile).
-- Fillet/chamfer on polyhedral edges; shell/offset.
-- Linear/circular patterns and mirror features.
-- Partial-angle revolve and mid-plane/two-sided extrude.
-- Face/edge selection in the viewport (pick a face to sketch on).
-- Binary STL export; STEP export with colors.
+- Authentication and per-project authorization.
+- Editable exact STEP import represented in the canonical feature/document model.
+- Face/edge selection and face-attached sketches.
+- Fillet, chamfer, shell/offset, mirror, and linear/circular patterns.
+- Multi-profile sketches, holes/pockets, partial revolve, and symmetric/two-sided extrude.
+- Broader deterministic AI patch operations for those features.
+- Cache and loading UX improvements for the exact-kernel WASM module.
 
 ## Later
 
-- OpenCascade.js-backed kernel adapter: analytic STEP surfaces, STEP B-Rep import, exact curved booleans.
-- Drawings (2D projections with dimensions) and measurement tools.
-- Authentication, per-user projects, and collaboration (locks/presence already scaffolded).
-- Assemblies with mates between parts.
+- Assemblies and mates.
+- Drawings, dimensions, and inspection tools.
+- Collaboration presence, locks, and conflict resolution on the existing Durable Object scaffold.
