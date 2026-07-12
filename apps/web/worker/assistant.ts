@@ -9,16 +9,43 @@ export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_PROVIDER = 'openai';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
-const CAD_ASSISTANT_INSTRUCTIONS = `You are OpenZCAD's parametric modeling assistant.
-Turn the user's request into the smallest safe patch against the supplied document digest.
-Only reference feature and parameter identifiers that exist in the digest, except when adding a primitive.
-Preserve design intent and units. Prefer changing named parameters over hard-coded feature dimensions.
-Never claim a patch was applied. State uncertainty in assumptions.
-Return only the structured patch requested by the response schema.`;
+const CAD_ASSISTANT_INSTRUCTIONS = `You are the planning engine for OpenZCAD, a browser-first parametric solid modeler.
+
+Your only job is to translate the user's modeling intent into one small, deterministic CadPatchProposal against the supplied document digest. The application will validate, preview, and optionally apply the patch; you never apply it yourself.
+
+Planning rules:
+- Preserve the user's units and existing design intent. Prefer editing a named parameter when it already controls the requested dimension.
+- Reference only featureId, sketchId, bodyId, parameter names, and topology hashes present in the digest. New primitives are the only operation that does not require an existing target.
+- Treat feature order as history order. When several new operations are required, order them so later operations can reference only identifiers already present in the digest; newly generated result IDs are not available inside the same proposal.
+- Use set_feature_dimension for existing primitive dimensions; extrude distance; fillet radius; chamfer distance; pattern count, spacing, or angleDeg; and transform fields translation.x/y/z or rotationDeg.x/y/z.
+- Use add_edge_modifier only when the digest contains an explicitly selected edge with a numeric hash. Never guess an edge.
+- For subtract and intersect, preserve targetBodyIds order: the first body is the target and later bodies are tools.
+- Keep the patch minimal. Do not delete unrelated features, invent unsupported geometry, or silently substitute a different operation.
+- Put any ambiguity or necessary interpretation in assumptions. If the request cannot be represented safely, explain the limitation in assumptions and choose the smallest non-destructive supported patch.
+- Write a concise summary in future tense. Never claim the model or document has already changed.
+
+Return only the strict structured output required by the response schema.`;
 
 interface ProposalInput {
   prompt: string;
   digest: CadDocumentDigest;
+}
+
+export interface AssistantStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
+  reasoningEffort: string;
+}
+
+export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
+  return {
+    configured: Boolean(env.AI_API_KEY ?? env.OPENAI_API_KEY),
+    provider: env.AI_PROVIDER ?? DEFAULT_AI_PROVIDER,
+    model: env.AI_MODEL ?? DEFAULT_AI_MODEL,
+    reasoningEffort:
+      env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
+  };
 }
 
 function jsonError(error: string, code: string, status: number): Response {
@@ -30,7 +57,8 @@ function jsonError(error: string, code: string, status: number): Response {
 
 export async function streamAssistantProposal(
   input: ProposalInput,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  safetyIdentifier?: string
 ): Promise<Response> {
   const apiKey = env.AI_API_KEY ?? env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -87,7 +115,8 @@ export async function streamAssistantProposal(
       },
       max_output_tokens: 3_000,
       store: false,
-      stream: true
+      stream: true,
+      ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
     })
   });
 

@@ -42,9 +42,9 @@ After project ownership is authorized, the client upgrades `GET /api/projects/:i
 
 ## AI lifecycle
 
-`POST /api/assistant/proposals` accepts a user request and a compact document digest. The beta Worker calls the configurable OpenAI Responses API with streaming, `store: false`, configurable reasoning effort, a strict JSON Schema structured output, and system instructions that require the smallest safe document patch and prohibit claims that a patch was applied.
+`POST /api/assistant/proposals` accepts a user request and a compact document digest. Embedded STEP source and mesh arrays are omitted from model context; exact selected face/edge context is included. The beta Worker calls the configurable OpenAI Responses API with streaming, `store: false`, a stable authenticated-user safety identifier, configurable reasoning effort, a strict JSON Schema structured output, and system instructions that require the smallest safe document patch and prohibit claims that a patch was applied.
 
-The client assembles `response.output_text.delta` events, validates the final proposal again, and displays it. Preview runs the proposal against a temporary `CommandManager`; Apply converts it to normal commands and commits one undoable transaction.
+The patch vocabulary covers named parameters, existing feature dimensions, primitive creation, sweeps, booleans, transforms, edge modifiers, patterns, renaming, and deletion. The client assembles `response.output_text.delta` events, validates the final proposal again, and displays it. Preview runs the proposal against a temporary `CommandManager`; Apply converts it to normal commands and commits one undoable transaction. `GET /api/assistant/status` exposes configuration metadata but never the secret.
 
 ## Storage and Cloudflare mapping
 

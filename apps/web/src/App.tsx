@@ -1109,6 +1109,7 @@ export function App() {
       assistant={
         <AiCommandRail
           document={doc}
+          selectedTopology={selectedTopology}
           onApply={handleApplyPatch}
           onPreview={handlePreviewPatch}
         />

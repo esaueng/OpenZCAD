@@ -259,4 +259,47 @@ describe('command-system', () => {
     expect(manager.document.parameterOrder).toHaveLength(0);
     expect(manager.document.bodyOrder).toHaveLength(0);
   });
+
+  it('converts advanced AI operations into replayable feature commands', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Advanced AI Patch', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Seed',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const bodyId = manager.document.bodyOrder[0]!;
+    const commands = commandsForCadPatch(manager.document, {
+      proposalId: 'proposal_advanced',
+      summary: 'Move and repeat the seed.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_transform',
+          name: 'Move seed',
+          targetBodyId: bodyId,
+          translation: { x: 5, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        },
+        {
+          kind: 'add_pattern',
+          name: 'Seed pattern',
+          targetBodyId: bodyId,
+          patternKind: 'linear',
+          count: 3,
+          axis: 'x',
+          spacing: 20,
+          angleDeg: 360
+        }
+      ]
+    });
+
+    manager.runTransaction('Apply advanced AI patch', commands);
+    expect(manager.document.commandLog.at(-2)?.kind).toBe('feature.transform');
+    expect(manager.document.commandLog.at(-1)?.kind).toBe('feature.pattern');
+    expect(manager.document.featureOrder).toHaveLength(3);
+  });
 });

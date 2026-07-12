@@ -4,17 +4,23 @@ import {
   createCadDocumentDigest,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
-import type { ProjectDocument } from '@openzcad/shared';
-import { streamCadPatchProposal } from '../lib/assistantStream';
+import type { ProjectDocument, TopologySelection } from '@openzcad/shared';
+import {
+  loadAssistantStatus,
+  streamCadPatchProposal,
+  type AssistantStatus
+} from '../lib/assistantStream';
 
 interface AiCommandRailProps {
   document: ProjectDocument;
+  selectedTopology: TopologySelection | null;
   onApply(proposal: CadPatchProposal): void;
   onPreview(proposal: CadPatchProposal | null): void;
 }
 
 export function AiCommandRail({
   document,
+  selectedTopology,
   onApply,
   onPreview
 }: AiCommandRailProps) {
@@ -26,12 +32,43 @@ export function AiCommandRail({
   const [message, setMessage] = useState('Describe a precise modeling change.');
   const [previewing, setPreviewing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const [assistantStatus, setAssistantStatus] =
+    useState<AssistantStatus | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadAssistantStatus(controller.signal)
+      .then((status) => {
+        setAssistantStatus(status);
+        if (status.configured) {
+          setPhase('idle');
+          setMessage(
+            `Ready · ${status.model} · ${status.reasoningEffort} reasoning.`
+          );
+        } else {
+          setPhase('error');
+          setMessage(
+            'Add AI_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setPhase('error');
+          setMessage(
+            error instanceof Error
+              ? error.message
+              : 'Assistant status is unavailable.'
+          );
+        }
+      });
+    return () => controller.abort();
+  }, []);
 
   async function propose() {
     const request = prompt.trim();
-    if (!request || phase === 'thinking') {
+    if (!request || phase === 'thinking' || !assistantStatus?.configured) {
       return;
     }
     abortRef.current?.abort();
@@ -45,7 +82,7 @@ export function AiCommandRail({
     try {
       const next = await streamCadPatchProposal(
         request,
-        createCadDocumentDigest(document),
+        createCadDocumentDigest(document, selectedTopology),
         { signal: controller.signal }
       );
       setProposal(next);
@@ -90,7 +127,11 @@ export function AiCommandRail({
         <button
           type="button"
           className="ai-submit"
-          disabled={!prompt.trim() || phase === 'thinking'}
+          disabled={
+            !prompt.trim() ||
+            phase === 'thinking' ||
+            !assistantStatus?.configured
+          }
           onClick={() => void propose()}
           aria-label="Generate CAD patch"
           title="Generate proposal (Enter)"

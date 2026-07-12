@@ -8,6 +8,23 @@ interface AssistantStreamOptions {
   onDelta?(text: string): void;
 }
 
+export interface AssistantStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
+  reasoningEffort: string;
+}
+
+export async function loadAssistantStatus(
+  signal?: AbortSignal
+): Promise<AssistantStatus> {
+  const response = await fetch('/api/assistant/status', { signal });
+  if (!response.ok) {
+    throw new Error(`Assistant status check failed (${response.status}).`);
+  }
+  return (await response.json()) as AssistantStatus;
+}
+
 export function readAssistantEvent(
   event: unknown,
   currentText: string
@@ -28,8 +45,24 @@ export function readAssistantEvent(
   ) {
     return { text: value.text, done: true };
   }
-  if (value.type === 'response.failed' || value.type === 'error') {
-    throw new Error('The modeling assistant could not complete the proposal.');
+  if (
+    value.type === 'response.failed' ||
+    value.type === 'response.incomplete' ||
+    value.type === 'error'
+  ) {
+    const response =
+      value.response && typeof value.response === 'object'
+        ? (value.response as Record<string, unknown>)
+        : value;
+    const detail =
+      response.error && typeof response.error === 'object'
+        ? (response.error as Record<string, unknown>).message
+        : undefined;
+    throw new Error(
+      typeof detail === 'string'
+        ? detail
+        : 'The modeling assistant could not complete the proposal.'
+    );
   }
   return { text: currentText, done: value.type === 'response.completed' };
 }

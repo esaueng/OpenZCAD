@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_AI_MODEL,
   DEFAULT_AI_PROVIDER,
+  getAssistantStatus,
   streamAssistantProposal
 } from '../apps/web/worker/assistant';
 import { readAssistantEvent } from '../apps/web/src/lib/assistantStream';
@@ -46,14 +47,18 @@ describe('assistant integration', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    const response = await streamAssistantProposal(input, {
-      ENVIRONMENT: 'beta',
-      OPENAI_API_KEY: 'test-key',
-      AI_PROVIDER: 'responses-compatible',
-      AI_BASE_URL: 'https://models.example.test/v1/responses',
-      AI_MODEL: 'configured-model',
-      AI_REASONING_EFFORT: 'xhigh'
-    });
+    const response = await streamAssistantProposal(
+      input,
+      {
+        ENVIRONMENT: 'beta',
+        OPENAI_API_KEY: 'test-key',
+        AI_PROVIDER: 'responses-compatible',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_MODEL: 'configured-model',
+        AI_REASONING_EFFORT: 'xhigh'
+      },
+      'user_test'
+    );
 
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
@@ -68,6 +73,7 @@ describe('assistant integration', () => {
       stream: true,
       store: false,
       reasoning: { effort: 'xhigh' },
+      safety_identifier: 'user_test',
       text: {
         format: { type: 'json_schema', name: 'openzcad_patch', strict: true }
       }
@@ -77,5 +83,20 @@ describe('assistant integration', () => {
   it('uses one centralized frontier-model default', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openai');
     expect(DEFAULT_AI_MODEL).toBe('gpt-5.6-sol');
+  });
+
+  it('reports configuration state without returning the API key', () => {
+    const status = getAssistantStatus({
+      ENVIRONMENT: 'beta',
+      AI_API_KEY: 'never-return-this',
+      AI_MODEL: 'configured-model'
+    });
+    expect(status).toEqual({
+      configured: true,
+      provider: 'openai',
+      model: 'configured-model',
+      reasoningEffort: 'high'
+    });
+    expect(JSON.stringify(status)).not.toContain('never-return-this');
   });
 });

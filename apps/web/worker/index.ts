@@ -14,7 +14,7 @@ import {
   parseRequestExportRequest,
   parseSaveRevisionRequest
 } from './validation';
-import { streamAssistantProposal } from './assistant';
+import { getAssistantStatus, streamAssistantProposal } from './assistant';
 import { authenticateRequest, AuthenticationError } from './auth';
 
 type Env = CloudflareEnv & {
@@ -73,13 +73,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(session);
   }
 
+  if (request.method === 'GET' && pathname === '/api/assistant/status') {
+    return json(getAssistantStatus(env));
+  }
+
   if (request.method === 'GET' && pathname === '/api/projects') {
     return json(await persistence.listProjects(userId));
   }
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
-    return streamAssistantProposal(payload, env);
+    return streamAssistantProposal(payload, env, userId);
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
