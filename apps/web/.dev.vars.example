@@ -1,0 +1,2 @@
+# Copy to .dev.vars for local development. Never commit the populated file.
+OPENAI_API_KEY=

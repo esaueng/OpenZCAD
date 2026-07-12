@@ -3,6 +3,7 @@ import {
   DEFAULT_AI_MODEL,
   streamAssistantProposal
 } from '../apps/web/worker/assistant';
+import { readAssistantEvent } from '../apps/web/src/lib/assistantStream';
 
 const input = {
   prompt: 'Make the bracket wider',
@@ -23,9 +24,21 @@ afterEach(() => {
 });
 
 describe('assistant integration', () => {
+  it('assembles streamed output text deltas', () => {
+    const first = readAssistantEvent(
+      { type: 'response.output_text.delta', delta: '{"summary":' },
+      ''
+    );
+    const second = readAssistantEvent(
+      { type: 'response.output_text.delta', delta: '"Wider"}' },
+      first.text
+    );
+    expect(second.text).toBe('{"summary":"Wider"}');
+  });
+
   it('requests a strict streamed response from the configured model', async () => {
     const fetchMock = vi.fn(
-      async () =>
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response('data: {"type":"response.completed"}\n\n', {
           headers: { 'content-type': 'text/event-stream' }
         })
@@ -42,7 +55,8 @@ describe('assistant integration', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     const [, init] = fetchMock.mock.calls[0]!;
-    const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(typeof init?.body).toBe('string');
+    const request = JSON.parse(init?.body as string) as Record<string, unknown>;
     expect(request).toMatchObject({
       model: 'configured-model',
       stream: true,

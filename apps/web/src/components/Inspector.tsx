@@ -53,43 +53,87 @@ export type ToolId =
   | 'intersect'
   | 'transform';
 
-const PRIMITIVE_TOOLS: ToolId[] = ['box', 'cylinder', 'sphere', 'cone', 'torus'];
+const PRIMITIVE_TOOLS: ToolId[] = [
+  'box',
+  'cylinder',
+  'sphere',
+  'cone',
+  'torus'
+];
 
 const TOOL_META: Record<ToolId, { label: string; icon: ReactNode }> = {
   box: { label: 'Box', icon: <Box size={15} aria-hidden="true" /> },
-  cylinder: { label: 'Cylinder', icon: <Cylinder size={15} aria-hidden="true" /> },
+  cylinder: {
+    label: 'Cylinder',
+    icon: <Cylinder size={15} aria-hidden="true" />
+  },
   sphere: { label: 'Sphere', icon: <Globe size={15} aria-hidden="true" /> },
   cone: { label: 'Cone', icon: <Cone size={15} aria-hidden="true" /> },
   torus: { label: 'Torus', icon: <Torus size={15} aria-hidden="true" /> },
   sketch: { label: 'Sketch', icon: <PenLine size={15} aria-hidden="true" /> },
   extrude: { label: 'Extrude', icon: <Layers size={15} aria-hidden="true" /> },
-  revolve: { label: 'Revolve', icon: <RotateCw size={15} aria-hidden="true" /> },
+  revolve: {
+    label: 'Revolve',
+    icon: <RotateCw size={15} aria-hidden="true" />
+  },
   union: { label: 'Union', icon: <Combine size={15} aria-hidden="true" /> },
-  subtract: { label: 'Subtract', icon: <Scissors size={15} aria-hidden="true" /> },
-  intersect: { label: 'Intersect', icon: <Shapes size={15} aria-hidden="true" /> },
+  subtract: {
+    label: 'Subtract',
+    icon: <Scissors size={15} aria-hidden="true" />
+  },
+  intersect: {
+    label: 'Intersect',
+    icon: <Shapes size={15} aria-hidden="true" />
+  },
   transform: { label: 'Move', icon: <Move3d size={15} aria-hidden="true" /> }
 };
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
   onCancel(): void;
-  onCreatePrimitive(kind: PrimitiveKind, name: string, dimensions: Record<string, ParamValue>): void;
+  onCreatePrimitive(
+    kind: PrimitiveKind,
+    name: string,
+    dimensions: Record<string, ParamValue>
+  ): void;
   onCreateSketch(value: SketchFormValue): void;
-  onCreateExtrude(value: { name: string; sketchId: SketchId; distance: ParamValue }): void;
-  onCreateRevolve(value: { name: string; sketchId: SketchId; axis: RevolveAxis }): void;
+  onCreateExtrude(value: {
+    name: string;
+    sketchId: SketchId;
+    distance: ParamValue;
+  }): void;
+  onCreateRevolve(value: {
+    name: string;
+    sketchId: SketchId;
+    axis: RevolveAxis;
+  }): void;
   onCreateBoolean(value: {
     name: string;
     operation: BooleanOperation;
     targetBodyIds: BodyOption['bodyId'][];
   }): void;
   onCreateTransform(value: TransformFormValue): void;
-  onApplyPrimitive(feature: FeatureNode, name: string, dimensions: Record<string, ParamValue>): void;
+  onApplyPrimitive(
+    feature: FeatureNode,
+    name: string,
+    dimensions: Record<string, ParamValue>
+  ): void;
   onApplySketch(feature: FeatureNode, value: SketchFormValue): void;
-  onApplyExtrude(feature: FeatureNode, value: { name: string; sketchId: SketchId; distance: ParamValue }): void;
-  onApplyRevolve(feature: FeatureNode, value: { name: string; sketchId: SketchId; axis: RevolveAxis }): void;
+  onApplyExtrude(
+    feature: FeatureNode,
+    value: { name: string; sketchId: SketchId; distance: ParamValue }
+  ): void;
+  onApplyRevolve(
+    feature: FeatureNode,
+    value: { name: string; sketchId: SketchId; axis: RevolveAxis }
+  ): void;
   onApplyBoolean(
     feature: FeatureNode,
-    value: { name: string; operation: BooleanOperation; targetBodyIds: BodyOption['bodyId'][] }
+    value: {
+      name: string;
+      operation: BooleanOperation;
+      targetBodyIds: BodyOption['bodyId'][];
+    }
   ): void;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
   onDeleteFeature(feature: FeatureNode): void;
@@ -155,17 +199,28 @@ function ToolLauncher({
     <>
       {group('Primitives', PRIMITIVE_TOOLS)}
       {group('Sketch based', ['sketch', 'extrude', 'revolve'])}
-      {group('Combine & place', ['union', 'subtract', 'intersect', 'transform'])}
+      {group('Combine & place', [
+        'union',
+        'subtract',
+        'intersect',
+        'transform'
+      ])}
       <p className="muted">
         Every numeric field accepts an expression over your parameters, e.g.{' '}
-        <span className="mono">w / 2 + 5</span>. Select a feature in the tree or the viewport to
-        edit it.
+        <span className="mono">w / 2 + 5</span>. Select a feature in the tree or
+        the viewport to edit it.
       </p>
     </>
   );
 }
 
-function BodyStats({ body, units }: { body: BodyRepresentation; units: string }) {
+function BodyStats({
+  body,
+  units
+}: {
+  body: BodyRepresentation;
+  units: string;
+}) {
   const size = {
     x: body.bbox.max.x - body.bbox.min.x,
     y: body.bbox.max.y - body.bbox.min.y,
@@ -181,7 +236,8 @@ function BodyStats({ body, units }: { body: BodyRepresentation; units: string })
         </span>
         <b>size</b>
         <span>
-          {formatNumber(size.x)} × {formatNumber(size.y)} × {formatNumber(size.z)} {units}
+          {formatNumber(size.x)} × {formatNumber(size.y)} ×{' '}
+          {formatNumber(size.z)} {units}
         </span>
         <b>faces</b>
         <span>{body.faceCount}</span>
@@ -221,7 +277,9 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initialName={TOOL_META[tool].label}
           submitLabel="Create"
-          onSubmit={(name, dimensions) => props.onCreatePrimitive(kind, name, dimensions)}
+          onSubmit={(name, dimensions) =>
+            props.onCreatePrimitive(kind, name, dimensions)
+          }
           onCancel={props.onCancel}
         />
       );
@@ -257,7 +315,11 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
-    } else if (tool === 'union' || tool === 'subtract' || tool === 'intersect') {
+    } else if (
+      tool === 'union' ||
+      tool === 'subtract' ||
+      tool === 'intersect'
+    ) {
       body = (
         <BooleanForm
           key={`create-${tool}`}
@@ -302,7 +364,11 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
-    } else if (data.featureKind === 'sketch' && selectedSketch && selectedSketchObject) {
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketchObject
+    ) {
       form = (
         <SketchForm
           key={editKey}
@@ -340,7 +406,11 @@ export function Inspector(props: InspectorProps) {
           key={editKey}
           scope={scope}
           sketches={sketches}
-          initial={{ name: selectedFeature.name, sketchId: data.sketchId, axis: data.axis }}
+          initial={{
+            name: selectedFeature.name,
+            sketchId: data.sketchId,
+            axis: data.axis
+          }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyRevolve(selectedFeature, value)}
           onCancel={props.onCancel}
@@ -407,7 +477,11 @@ export function Inspector(props: InspectorProps) {
     );
   } else {
     body = (
-      <ToolLauncher bodies={bodies} sketches={sketches} onLaunchTool={props.onLaunchTool} />
+      <ToolLauncher
+        bodies={bodies}
+        sketches={sketches}
+        onLaunchTool={props.onLaunchTool}
+      />
     );
   }
 
