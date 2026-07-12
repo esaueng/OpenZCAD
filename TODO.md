@@ -6,7 +6,7 @@
 - OpenCascade browser-worker kernel with exact primitives, sweeps, transforms, booleans, validity checks, measurements, and exact STEP/STL export.
 - Editable exact STEP import, deterministic face/edge selection, fillet/chamfer, and linear/circular patterns.
 - Three-pane CAD workspace, feature editing, diagnostics, contextual topology actions, responsive compact layout, and AI command rail.
-- Configurable streamed AI proposals with strict structured output, dry-run preview, explicit approval, and undoable application.
+- Configurable streamed AI proposals with compact topology-aware context, broad feature commands, strict structured output, dry-run preview, explicit approval, and undoable application.
 - Cloudflare Access identity, owner-scoped beta APIs, and legacy-owner mapping.
 - Live per-project Durable Object rooms with presence, version-aware synchronization, and conflict preservation.
 
@@ -15,7 +15,7 @@
 - Invitations, viewer/editor roles, edit locks, and durable collaboration history.
 - Face-attached sketches, shell/offset, mirror, and persistent topology naming.
 - Multi-profile sketches, holes/pockets, partial revolve, and symmetric/two-sided extrude.
-- Broader deterministic AI patch operations for those features.
+- AI-created sketches and symbolic references between newly generated operations in one proposal.
 - Cache and loading UX improvements for the exact-kernel WASM module.
 
 ## Later

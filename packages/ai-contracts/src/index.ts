@@ -1,9 +1,16 @@
 import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
 import type {
+  AxisId,
+  BodyId,
+  BooleanOperation,
   FeatureId,
+  PatternKind,
   ParamValue,
   PrimitiveKind,
-  ProjectDocument
+  ProjectDocument,
+  RevolveAxis,
+  SketchId,
+  TopologySelection
 } from '@openzcad/shared';
 
 export type CadPatchOperation =
@@ -36,6 +43,54 @@ export type CadPatchOperation =
   | {
       kind: 'delete_feature';
       featureId: FeatureId;
+    }
+  | {
+      kind: 'rename_feature';
+      featureId: FeatureId;
+      name: string;
+    }
+  | {
+      kind: 'add_extrude';
+      name: string;
+      sketchId: SketchId;
+      distance: ParamValue;
+    }
+  | {
+      kind: 'add_revolve';
+      name: string;
+      sketchId: SketchId;
+      axis: RevolveAxis;
+    }
+  | {
+      kind: 'add_boolean';
+      name: string;
+      operation: BooleanOperation;
+      targetBodyIds: BodyId[];
+    }
+  | {
+      kind: 'add_transform';
+      name: string;
+      targetBodyId: BodyId;
+      translation: { x: ParamValue; y: ParamValue; z: ParamValue };
+      rotationDeg: { x: ParamValue; y: ParamValue; z: ParamValue };
+    }
+  | {
+      kind: 'add_edge_modifier';
+      name: string;
+      modifier: 'fillet' | 'chamfer';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      size: ParamValue;
+    }
+  | {
+      kind: 'add_pattern';
+      name: string;
+      targetBodyId: BodyId;
+      patternKind: PatternKind;
+      count: ParamValue;
+      axis: AxisId;
+      spacing: ParamValue;
+      angleDeg: ParamValue;
     };
 
 export interface CadPatchProposal {
@@ -59,11 +114,45 @@ export interface CadDocumentDigest {
     bodyId: string | null;
     data: unknown;
   }>;
+  selection?: {
+    bodyId: string | null;
+    topology: {
+      kind: TopologySelection['kind'];
+      topologyId: string;
+      hash: number | null;
+    } | null;
+  };
   warnings: string[];
 }
 
+function compactFeatureData(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return data;
+  }
+  const feature = data as Record<string, unknown>;
+  if (feature.featureKind === 'imported-step') {
+    return {
+      featureKind: feature.featureKind,
+      artifactId: feature.artifactId,
+      sourceName: feature.sourceName,
+      sourceBytes:
+        typeof feature.stepText === 'string' ? feature.stepText.length : 0
+    };
+  }
+  if (feature.featureKind === 'imported-mesh') {
+    return {
+      featureKind: feature.featureKind,
+      artifactId: feature.artifactId,
+      sourceName: feature.sourceName,
+      triangleCount: feature.triangleCount
+    };
+  }
+  return feature;
+}
+
 export function createCadDocumentDigest(
-  document: ProjectDocument
+  document: ProjectDocument,
+  selection?: TopologySelection | null
 ): CadDocumentDigest {
   return {
     schemaVersion: document.schemaVersion,
@@ -81,8 +170,19 @@ export function createCadDocumentDigest(
       name: feature.name,
       featureKind: feature.featureKind,
       bodyId: feature.bodyId ?? null,
-      data: feature.data
+      data: compactFeatureData(feature.data)
     })),
+    selection: {
+      bodyId: selection?.bodyId ?? null,
+      topology: selection
+        ? {
+            kind: selection.kind,
+            topologyId:
+              selection.topologyId ?? `body:${String(selection.bodyId)}`,
+            hash: selection.hash ?? null
+          }
+        : null
+    },
     warnings: document.derived.warnings
   };
 }
@@ -92,6 +192,12 @@ const scalarSchema = {
 } as const;
 const nullableScalarSchema = {
   anyOf: [{ type: 'number' }, { type: 'string' }, { type: 'null' }]
+} as const;
+const vectorSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { x: scalarSchema, y: scalarSchema, z: scalarSchema },
+  required: ['x', 'y', 'z']
 } as const;
 
 export const CAD_PATCH_JSON_SCHEMA = {
@@ -173,6 +279,124 @@ export const CAD_PATCH_JSON_SCHEMA = {
               featureId: { type: 'string' }
             },
             required: ['kind', 'featureId']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'rename_feature' },
+              featureId: { type: 'string' },
+              name: { type: 'string' }
+            },
+            required: ['kind', 'featureId', 'name']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'add_extrude' },
+              name: { type: 'string' },
+              sketchId: { type: 'string' },
+              distance: scalarSchema
+            },
+            required: ['kind', 'name', 'sketchId', 'distance']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'add_revolve' },
+              name: { type: 'string' },
+              sketchId: { type: 'string' },
+              axis: { type: 'string', enum: ['horizontal', 'vertical'] }
+            },
+            required: ['kind', 'name', 'sketchId', 'axis']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'add_boolean' },
+              name: { type: 'string' },
+              operation: {
+                type: 'string',
+                enum: ['union', 'subtract', 'intersect']
+              },
+              targetBodyIds: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 12,
+                items: { type: 'string' }
+              }
+            },
+            required: ['kind', 'name', 'operation', 'targetBodyIds']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'add_transform' },
+              name: { type: 'string' },
+              targetBodyId: { type: 'string' },
+              translation: vectorSchema,
+              rotationDeg: vectorSchema
+            },
+            required: [
+              'kind',
+              'name',
+              'targetBodyId',
+              'translation',
+              'rotationDeg'
+            ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'add_edge_modifier' },
+              name: { type: 'string' },
+              modifier: { type: 'string', enum: ['fillet', 'chamfer'] },
+              targetBodyId: { type: 'string' },
+              edgeHashes: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 64,
+                items: { type: 'integer', minimum: 1 }
+              },
+              size: scalarSchema
+            },
+            required: [
+              'kind',
+              'name',
+              'modifier',
+              'targetBodyId',
+              'edgeHashes',
+              'size'
+            ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { const: 'add_pattern' },
+              name: { type: 'string' },
+              targetBodyId: { type: 'string' },
+              patternKind: { type: 'string', enum: ['linear', 'circular'] },
+              count: scalarSchema,
+              axis: { type: 'string', enum: ['x', 'y', 'z'] },
+              spacing: scalarSchema,
+              angleDeg: scalarSchema
+            },
+            required: [
+              'kind',
+              'name',
+              'targetBodyId',
+              'patternKind',
+              'count',
+              'axis',
+              'spacing',
+              'angleDeg'
+            ]
           }
         ]
       }
@@ -186,6 +410,15 @@ function record(value: unknown): Record<string, unknown> {
     throw new Error('CAD patch proposal must be an object.');
   }
   return value as Record<string, unknown>;
+}
+
+function isScalar(value: unknown): value is ParamValue {
+  return typeof value === 'string' || typeof value === 'number';
+}
+
+function isVector(value: unknown): boolean {
+  const vector = record(value);
+  return isScalar(vector.x) && isScalar(vector.y) && isScalar(vector.z);
 }
 
 export function parseCadPatchProposal(value: unknown): CadPatchProposal {
@@ -238,6 +471,83 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
       case 'delete_feature':
         if (typeof operation.featureId !== 'string') {
           throw new Error('Invalid delete_feature operation.');
+        }
+        break;
+      case 'rename_feature':
+        if (
+          typeof operation.featureId !== 'string' ||
+          typeof operation.name !== 'string'
+        ) {
+          throw new Error('Invalid rename_feature operation.');
+        }
+        break;
+      case 'add_extrude':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.sketchId !== 'string' ||
+          !isScalar(operation.distance)
+        ) {
+          throw new Error('Invalid add_extrude operation.');
+        }
+        break;
+      case 'add_revolve':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.sketchId !== 'string' ||
+          !['horizontal', 'vertical'].includes(String(operation.axis))
+        ) {
+          throw new Error('Invalid add_revolve operation.');
+        }
+        break;
+      case 'add_boolean':
+        if (
+          typeof operation.name !== 'string' ||
+          !['union', 'subtract', 'intersect'].includes(
+            String(operation.operation)
+          ) ||
+          !Array.isArray(operation.targetBodyIds) ||
+          operation.targetBodyIds.length < 2 ||
+          !operation.targetBodyIds.every((id) => typeof id === 'string')
+        ) {
+          throw new Error('Invalid add_boolean operation.');
+        }
+        break;
+      case 'add_transform':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !isVector(operation.translation) ||
+          !isVector(operation.rotationDeg)
+        ) {
+          throw new Error('Invalid add_transform operation.');
+        }
+        break;
+      case 'add_edge_modifier':
+        if (
+          typeof operation.name !== 'string' ||
+          !['fillet', 'chamfer'].includes(String(operation.modifier)) ||
+          typeof operation.targetBodyId !== 'string' ||
+          !Array.isArray(operation.edgeHashes) ||
+          operation.edgeHashes.length === 0 ||
+          !operation.edgeHashes.every(
+            (hash) => Number.isInteger(hash) && Number(hash) > 0
+          ) ||
+          !isScalar(operation.size)
+        ) {
+          throw new Error('Invalid add_edge_modifier operation.');
+        }
+        break;
+      case 'add_pattern':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !['linear', 'circular'].includes(String(operation.patternKind)) ||
+          !['x', 'y', 'z'].includes(String(operation.axis)) ||
+          !isScalar(operation.count) ||
+          !isScalar(operation.spacing) ||
+          !isScalar(operation.angleDeg)
+        ) {
+          throw new Error('Invalid add_pattern operation.');
         }
         break;
       default:

@@ -66,6 +66,27 @@ describe('worker api routes', () => {
     });
   });
 
+  it('reports assistant configuration without exposing secrets', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status'),
+      { ...env, AI_API_KEY: 'secret-test-value', AI_MODEL: 'model-test' } as never
+    );
+    expect(response.status).toBe(200);
+    const status = (await response.json()) as {
+      configured: boolean;
+      provider: string;
+      model: string;
+      reasoningEffort: string;
+    };
+    expect(status).toMatchObject({
+      configured: true,
+      provider: 'openai',
+      model: 'model-test',
+      reasoningEffort: 'high'
+    });
+    expect(JSON.stringify(status)).not.toContain('secret-test-value');
+  });
+
   it('requires Cloudflare Access identity when configured', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects'),

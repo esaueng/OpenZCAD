@@ -393,6 +393,62 @@ export function commandsForCadPatch(
         return commandFactories.deleteFeature({
           featureId: operation.featureId
         });
+      case 'rename_feature': {
+        const feature = findFeature(document, operation.featureId);
+        if (!feature) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        return commandFactories.renameNode({
+          nodeId: feature.id,
+          name: operation.name
+        });
+      }
+      case 'add_extrude':
+        return commandFactories.extrudeSketch({
+          name: operation.name,
+          sketchId: operation.sketchId,
+          distance: operation.distance
+        });
+      case 'add_revolve':
+        return commandFactories.revolveSketch({
+          name: operation.name,
+          sketchId: operation.sketchId,
+          axis: operation.axis
+        });
+      case 'add_boolean':
+        return commandFactories.booleanBodies({
+          name: operation.name,
+          operation: operation.operation,
+          targetBodyIds: operation.targetBodyIds
+        });
+      case 'add_transform':
+        return commandFactories.transformBody({
+          name: operation.name,
+          targetBodyId: operation.targetBodyId,
+          translation: operation.translation,
+          rotationDeg: operation.rotationDeg
+        });
+      case 'add_edge_modifier': {
+        const payload = {
+          name: operation.name,
+          targetBodyId: operation.targetBodyId,
+          edgeHashes: operation.edgeHashes,
+          size: operation.size
+        };
+        return operation.modifier === 'fillet'
+          ? commandFactories.filletEdges(payload)
+          : commandFactories.chamferEdges(payload);
+      }
+      case 'add_pattern':
+        return commandFactories.patternBody({
+          name: operation.name,
+          targetBodyId: operation.targetBodyId,
+          patternKind: operation.patternKind,
+          count: operation.count,
+          axis: operation.axis,
+          spacing: operation.spacing,
+          angleDeg: operation.angleDeg
+        });
       case 'set_feature_dimension': {
         const feature = findFeature(document, operation.featureId);
         if (!feature) {
@@ -412,6 +468,53 @@ export function commandsForCadPatch(
             featureId: feature.featureId,
             data: { distance: operation.value }
           });
+        }
+        if (
+          feature.data.featureKind === 'fillet' &&
+          operation.field === 'radius'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { radius: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'chamfer' &&
+          operation.field === 'distance'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { distance: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'pattern' &&
+          ['count', 'spacing', 'angleDeg'].includes(operation.field)
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { [operation.field]: operation.value }
+          });
+        }
+        if (feature.data.featureKind === 'transform') {
+          const [group, axis] = operation.field.split('.');
+          if (
+            (group === 'translation' || group === 'rotationDeg') &&
+            (axis === 'x' || axis === 'y' || axis === 'z')
+          ) {
+            return commandFactories.updateFeature({
+              featureId: feature.featureId,
+              data: {
+                transform: {
+                  ...feature.data.transform,
+                  [group]: {
+                    ...feature.data.transform[group],
+                    [axis]: operation.value
+                  }
+                }
+              }
+            });
+          }
         }
         throw new Error(
           `Feature ${feature.name} does not expose an editable ${operation.field} dimension.`

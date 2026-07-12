@@ -13,7 +13,7 @@ OpenZCAD is a browser-first parametric CAD workspace for people who want to turn
 - Local-first IndexedDB autosave. When local and beta-cloud copies differ, OpenZCAD opens the newer document version instead of discarding local work.
 - Cloudflare Access identity in beta, owner-scoped project/artifact routes, and a development-only local identity mode. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
 - Live per-project collaboration over a Durable Object WebSocket room, with presence, version-aware document sync, and conflict preservation.
-- Optional streamed AI proposals through the OpenAI Responses API. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
+- Streamed AI proposals through the OpenAI Responses API. The assistant receives compact feature history plus the active topology selection and can propose parameter/dimension edits, primitives, sweeps, booleans, transforms, fillets/chamfers, and patterns. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
 - Beta Worker endpoints for project persistence, revisions/checkpoints, upload coordination, artifact metadata, exports, and AI proposal streaming.
 
 ## Architecture
@@ -63,6 +63,20 @@ Configure secrets only in `apps/web/.dev.vars` or with `wrangler secret`:
 AI_API_KEY=your_key_here
 ```
 
+For local development, copy the example, set the key, and restart `pnpm dev:web`:
+
+```bash
+cp apps/web/.dev.vars.example apps/web/.dev.vars
+```
+
+For the beta Worker, store the key as a Cloudflare secret instead of a file:
+
+```bash
+pnpm --filter @openzcad/web exec wrangler secret put AI_API_KEY --env beta
+```
+
+The assistant checks `GET /api/assistant/status` on startup and reports the configured model/reasoning tier without exposing the secret. `.dev.vars` files are ignored by Git.
+
 `OPENAI_API_KEY` remains supported for existing beta environments. Non-secret model settings live in `wrangler.jsonc`:
 
 - `AI_PROVIDER` defaults to `openai`; `responses-compatible` selects another provider that implements the Responses streaming protocol.
@@ -89,6 +103,7 @@ The exact-kernel WASM bundle is about 22 MB uncompressed (about 7 MB gzip). It i
 
 - `GET /api/health`
 - `GET /api/session`
+- `GET /api/assistant/status`
 - `GET|POST /api/projects`
 - `GET /api/projects/:id`
 - `POST /api/projects/:id/revisions`
@@ -109,7 +124,7 @@ Existing project, revision, upload, import, export, and artifact route shapes we
 - Imported STL remains a mesh body and uses the compatibility path; native parametric reconstruction is not attempted.
 - Topology references use deterministic sub-shape ordinals. They survive an unchanged rebuild, but upstream geometry edits can reorder faces or edges and invalidate a downstream finishing feature with a visible diagnostic.
 - Live rooms synchronize canonical documents and presence, but do not yet provide invitations, roles, edit locks, or durable room history. Snapshots above 900 KB continue to save locally/cloud-side but are not broadcast live.
-- AI proposal operations intentionally remain narrower than the manual command surface: finishing features, patterns, and collaboration actions are not yet model-generated.
+- AI proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions. They also cannot reference the generated body ID of an earlier operation in the same proposal, so multi-stage requests may require previewing and applying more than one patch.
 - Exactness-first geometry adds a meaningful initial worker download. Service-worker caching and finer code splitting are future performance milestones.
 
 ## Next milestones
