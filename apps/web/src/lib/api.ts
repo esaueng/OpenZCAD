@@ -1,4 +1,5 @@
 import type {
+  AuthSession,
   ArtifactMetadataResponse,
   CreateProjectRequest,
   CreateProjectResponse,
@@ -35,6 +36,7 @@ async function requestJson<T>(
 
 export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
+  session: () => requestJson<AuthSession>('/api/session'),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {

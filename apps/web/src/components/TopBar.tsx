@@ -8,7 +8,7 @@ import {
   Undo2,
   Upload
 } from 'lucide-react';
-import type { UnitSystem } from '@openzcad/shared';
+import type { AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 
 interface TopBarProps {
@@ -20,6 +20,7 @@ interface TopBarProps {
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
   saveState: 'saved' | 'saving' | 'offline';
+  session: AuthSession | null;
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
@@ -36,6 +37,7 @@ export function TopBar({
   canExport,
   exportScope,
   saveState,
+  session,
   onUndo,
   onRedo,
   onSave,
@@ -145,6 +147,11 @@ export function TopBar({
             ? 'Local only'
             : 'Saved'}
       </button>
+      {session && (
+        <span className="session-user" title={session.email ?? session.userId}>
+          {session.displayName}
+        </span>
+      )}
     </header>
   );
 }

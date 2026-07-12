@@ -41,6 +41,8 @@ import {
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'beta';
+  AUTH_MODE?: 'development' | 'cloudflare-access';
+  AUTH_LEGACY_OWNER_EMAIL?: string;
   AI_PROVIDER?: 'openai' | 'responses-compatible';
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
@@ -167,35 +169,42 @@ export class D1R2PersistenceService implements PersistenceService {
     };
   }
 
-  async loadProject(projectId: string): Promise<ProjectDocument | null> {
+  async loadProject(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectDocument | null> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().loadProject(projectId);
+      return getInMemoryPersistence().loadProject(userId, projectId);
     }
     await this.ensureSchema();
     const row = await this.env.DB.prepare(
-      `SELECT document_json FROM projects WHERE id = ?`
+      `SELECT document_json FROM projects WHERE id = ? AND user_id = ?`
     )
-      .bind(projectId)
+      .bind(projectId, userId)
       .first<{ document_json: string }>();
     return row
       ? normalizeDocument(JSON.parse(row.document_json) as ProjectDocument)
       : null;
   }
 
-  async saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument> {
+  async saveRevision(
+    userId: UserId,
+    request: SaveRevisionRequest
+  ): Promise<ProjectDocument> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().saveRevision(request);
+      return getInMemoryPersistence().saveRevision(userId, request);
     }
     await this.ensureSchema();
-    const document = createCheckpoint(
-      normalizeDocument(request.document),
-      request.reason
-    );
+    const normalized = normalizeDocument(request.document);
+    if (normalized.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const document = createCheckpoint(normalized, request.reason);
     const documentJson = JSON.stringify(document);
     const result = await this.env.DB.prepare(
-      `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ?`
+      `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ?`
     )
-      .bind(documentJson, nowIso(), document.name, request.projectId)
+      .bind(documentJson, nowIso(), document.name, request.projectId, userId)
       .run();
     if (result.meta?.changes === 0) {
       throw new ProjectNotFoundError(request.projectId);
@@ -226,6 +235,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
     await this.ensureSchema();
+    await this.assertProjectOwner(userId, request.projectId);
     const session = await createSignedUploadSession(this.env, request);
     await this.env.DB.prepare(
       `INSERT INTO upload_sessions (id, artifact_id, project_id, object_key, file_name, content_type, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -251,6 +261,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().finalizeImport(userId, request);
     }
     await this.ensureSchema();
+    await this.assertProjectOwner(userId, request.projectId);
     const upload = await this.env.DB.prepare(
       `SELECT object_key, project_id, expires_at FROM upload_sessions WHERE id = ?`
     )
@@ -306,6 +317,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().requestExport(userId, request);
     }
     await this.ensureSchema();
+    await this.assertProjectOwner(userId, request.projectId);
     const artifact: ArtifactRecord = {
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
       projectId: request.projectId,
@@ -344,16 +356,17 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   async getArtifactMetadata(
+    userId: UserId,
     artifactId: string
   ): Promise<ArtifactMetadataResponse> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().getArtifactMetadata(artifactId);
+      return getInMemoryPersistence().getArtifactMetadata(userId, artifactId);
     }
     await this.ensureSchema();
     const row = await this.env.DB.prepare(
-      `SELECT id, project_id, kind, name, object_key, content_type, metadata_json, created_at FROM artifacts WHERE id = ?`
+      `SELECT a.id, a.project_id, a.kind, a.name, a.object_key, a.content_type, a.metadata_json, a.created_at FROM artifacts a INNER JOIN projects p ON p.id = a.project_id WHERE a.id = ? AND p.user_id = ?`
     )
-      .bind(artifactId)
+      .bind(artifactId, userId)
       .first<{
         id: string;
         project_id: string;
@@ -381,6 +394,19 @@ export class D1R2PersistenceService implements PersistenceService {
           }
         : null
     };
+  }
+
+  private async assertProjectOwner(
+    userId: UserId,
+    projectId: string
+  ): Promise<void> {
+    const row = await this.env
+      .DB!.prepare(`SELECT id FROM projects WHERE id = ? AND user_id = ?`)
+      .bind(projectId, userId)
+      .first<{ id: string }>();
+    if (!row) {
+      throw new ProjectNotFoundError(projectId);
+    }
   }
 }
 

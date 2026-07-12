@@ -5,7 +5,6 @@ import {
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import { ProjectNotFoundError } from '@openzcad/persistence';
-import { toUserId } from '@openzcad/shared';
 import {
   HttpError,
   parseCreateProjectRequest,
@@ -16,6 +15,7 @@ import {
   parseSaveRevisionRequest
 } from './validation';
 import { streamAssistantProposal } from './assistant';
+import { authenticateRequest, AuthenticationError } from './auth';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -23,11 +23,6 @@ type Env = CloudflareEnv & {
     artifactId: string;
   }>;
 };
-
-// Beta scaffolding: there is no authentication yet, so every request acts as
-// this fixed development user. Real auth must replace this before any
-// non-beta exposure (see architecture.md, "Security posture").
-const devUserId = toUserId('user_beta_dev');
 
 /** Upper bound for JSON request bodies; protects against oversized payloads. */
 const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
@@ -70,8 +65,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     });
   }
 
+  const session = await authenticateRequest(request, env);
+  const userId = session.userId;
+
+  if (request.method === 'GET' && pathname === '/api/session') {
+    return json(session);
+  }
+
   if (request.method === 'GET' && pathname === '/api/projects') {
-    return json(await persistence.listProjects(devUserId));
+    return json(await persistence.listProjects(userId));
   }
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
@@ -81,12 +83,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'POST' && pathname === '/api/projects') {
     const payload = parseCreateProjectRequest(await readJsonBody(request));
-    return json(await persistence.createProject(devUserId, payload), 201);
+    return json(await persistence.createProject(userId, payload), 201);
   }
 
   const projectMatch = PROJECT_ROUTE.exec(pathname);
   if (request.method === 'GET' && projectMatch) {
-    const project = await persistence.loadProject(projectMatch[1]!);
+    const project = await persistence.loadProject(userId, projectMatch[1]!);
     return project ? json(project) : json({ error: 'Project not found.' }, 404);
   }
 
@@ -96,19 +98,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await readJsonBody(request),
       revisionsMatch[1]!
     );
-    return json(await persistence.saveRevision(payload));
+    return json(await persistence.saveRevision(userId, payload));
   }
 
   if (request.method === 'POST' && pathname === '/api/uploads') {
     const payload = parseCreateUploadSessionRequest(
       await readJsonBody(request)
     );
-    return json(await persistence.createUploadSession(devUserId, payload), 201);
+    return json(await persistence.createUploadSession(userId, payload), 201);
   }
 
   if (request.method === 'POST' && pathname === '/api/imports/finalize') {
     const payload = parseFinalizeImportRequest(await readJsonBody(request));
-    const artifact = await persistence.finalizeImport(devUserId, payload);
+    const artifact = await persistence.finalizeImport(userId, payload);
     if (!artifact) {
       return json(
         { error: 'Upload session not found, expired, or already used.' },
@@ -120,7 +122,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'POST' && pathname === '/api/exports') {
     const payload = parseRequestExportRequest(await readJsonBody(request));
-    const response = await persistence.requestExport(devUserId, payload);
+    const response = await persistence.requestExport(userId, payload);
     if (env.EXPORT_WORKFLOW) {
       try {
         await env.EXPORT_WORKFLOW.create({
@@ -137,7 +139,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const artifactMatch = ARTIFACT_ROUTE.exec(pathname);
   if (request.method === 'GET' && artifactMatch) {
-    return json(await persistence.getArtifactMetadata(artifactMatch[1]!));
+    return json(
+      await persistence.getArtifactMetadata(userId, artifactMatch[1]!)
+    );
   }
 
   return json({ error: 'Not found' }, 404);
@@ -150,6 +154,9 @@ export default {
     } catch (error) {
       if (error instanceof HttpError) {
         return json({ error: error.message }, error.status);
+      }
+      if (error instanceof AuthenticationError) {
+        return json({ error: error.message }, 401);
       }
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);
