@@ -591,6 +591,24 @@ export function Inspector(props: InspectorProps) {
 
     body = (
       <>
+        {selectedTopology?.kind === 'edge' && (
+          <>
+            <h3 className="section-title">Selected edge</h3>
+            <div className="tool-grid">
+              {(['fillet', 'chamfer'] as const).map((edgeTool) => (
+                <button
+                  key={edgeTool}
+                  type="button"
+                  className="tool-button"
+                  onClick={() => props.onLaunchTool(edgeTool)}
+                >
+                  {TOOL_META[edgeTool].icon}
+                  {TOOL_META[edgeTool].label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
         {form}
         {selectedBody && <BodyStats body={selectedBody} units={units} />}
         {selectedTopology?.kind !== 'body' && selectedTopology && (
