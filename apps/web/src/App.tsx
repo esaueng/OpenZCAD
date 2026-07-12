@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CommandManager, commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
+  CommandManager,
+  commandFactories,
+  commandsForCadPatch,
+  type AnyCommand
+} from '@openzcad/command-system';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
+import {
+  createProjectDocument,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -22,6 +29,7 @@ import type {
   SketchObjectData,
   UnitSystem
 } from '@openzcad/shared';
+import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
 import { downloadText, exportFileStem, inferContentType } from './lib/model';
 import { AppShell } from './components/AppShell';
@@ -31,34 +39,93 @@ import { ViewerShell } from './components/ViewerShell';
 import { Inspector, type ToolId } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
-import type { GeometrySyncResult } from './worker/geometryWorker';
+import { AiCommandRail } from './components/AiCommandRail';
+import {
+  listLocalProjects,
+  loadLocalProject,
+  selectProjectDocument,
+  saveLocalProject
+} from './lib/localProjectStore';
+import type {
+  GeometryExportResult,
+  GeometryWorkerResult
+} from './worker/geometryWorker';
 
 const kernel = createKernelAdapter();
+const localUserId = toUserId('user_local_browser');
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+function mergeProjectSummaries(
+  local: ProjectSummary[],
+  remote: ProjectSummary[]
+): ProjectSummary[] {
+  const merged = new Map(local.map((project) => [project.projectId, project]));
+  for (const project of remote) {
+    const existing = merged.get(project.projectId);
+    if (!existing || project.updatedAt > existing.updatedAt) {
+      merged.set(project.projectId, project);
+    }
+  }
+  return [...merged.values()].sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt)
+  );
 }
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
-  const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<string | null>(null);
+  const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
+    string | null
+  >(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
   const [viewerSettings, setViewerSettings] = useState({ showGrid: true });
+  const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
+    'saving'
+  );
+  const [cloudAvailable, setCloudAvailable] = useState(false);
   const [fitSignal, setFitSignal] = useState(0);
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
+  const exportRequestsRef = useRef(
+    new Map<
+      string,
+      {
+        resolve(result: Extract<GeometryExportResult, { ok: true }>): void;
+        reject(error: Error): void;
+      }
+    >()
+  );
   const lastSyncedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const worker = new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
-      type: 'module'
-    });
+    const worker = new Worker(
+      new URL('./worker/geometryWorker.ts', import.meta.url),
+      {
+        type: 'module'
+      }
+    );
     geometryWorkerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<GeometrySyncResult>) => {
+    worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
+      if (event.data.type === 'export') {
+        const pending = exportRequestsRef.current.get(event.data.requestId);
+        if (!pending) {
+          return;
+        }
+        exportRequestsRef.current.delete(event.data.requestId);
+        if (event.data.ok) {
+          pending.resolve(event.data);
+        } else {
+          pending.reject(new Error(event.data.error));
+        }
+        return;
+      }
       const manager = managerRef.current;
       if (!manager) {
         return;
@@ -79,6 +146,10 @@ export function App() {
     };
 
     return () => {
+      for (const request of exportRequestsRef.current.values()) {
+        request.reject(new Error('Geometry worker closed.'));
+      }
+      exportRequestsRef.current.clear();
       worker.terminate();
       geometryWorkerRef.current = null;
     };
@@ -86,18 +157,38 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      try {
-        const health = await api.health();
-        const listed = await api.listProjects();
-        setProjects(listed.projects);
-        setStatus(
-          `API ${health.status} on ${health.environment} · ${listed.projects.length} project(s)`
-        );
-      } catch (error) {
-        setStatus(errorMessage(error, 'Failed to reach API.'));
-      }
+      const [local, remote] = await Promise.all([
+        listLocalProjects().catch(() => []),
+        Promise.all([api.health(), api.listProjects()]).catch(() => null)
+      ]);
+      const remoteProjects = remote?.[1].projects ?? [];
+      const merged = mergeProjectSummaries(local, remoteProjects);
+      setProjects(merged);
+      setCloudAvailable(Boolean(remote));
+      setSaveState(remote ? 'saved' : 'offline');
+      setStatus(
+        remote
+          ? `Beta API ready · ${merged.length} project(s)`
+          : `Offline workspace · ${merged.length} local project(s)`
+      );
     })();
   }, []);
+
+  useEffect(() => {
+    if (!doc) {
+      return;
+    }
+    setSaveState('saving');
+    const timeout = window.setTimeout(() => {
+      void saveLocalProject(doc)
+        .then(() => setSaveState(cloudAvailable ? 'saved' : 'offline'))
+        .catch(() => {
+          setSaveState('offline');
+          setStatus('Local autosave failed. Export your model before closing.');
+        });
+    }, 450);
+    return () => window.clearTimeout(timeout);
+  }, [doc, cloudAvailable]);
 
   useEffect(() => {
     if (!doc || !geometryWorkerRef.current) {
@@ -111,10 +202,13 @@ export function App() {
       return;
     }
     lastSyncedKeyRef.current = syncKey;
-    geometryWorkerRef.current.postMessage(doc);
+    geometryWorkerRef.current.postMessage({ type: 'sync', document: doc });
   }, [doc]);
 
-  const features = useMemo<FeatureNode[]>(() => (doc ? listFeaturesInOrder(doc) : []), [doc]);
+  const features = useMemo<FeatureNode[]>(
+    () => (doc ? listFeaturesInOrder(doc) : []),
+    [doc]
+  );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
@@ -125,8 +219,17 @@ export function App() {
   const warnings = doc?.derived.warnings ?? [];
 
   const viewerBodies = useMemo<BodyRepresentation[]>(
-    () => (doc ? Object.values(doc.derived.bodyRepresentations).filter((body) => !body.consumed) : []),
-    [doc]
+    () =>
+      previewDoc
+        ? Object.values(previewDoc.derived.bodyRepresentations).filter(
+            (body) => !body.consumed
+          )
+        : doc
+          ? Object.values(doc.derived.bodyRepresentations).filter(
+              (body) => !body.consumed
+            )
+          : [],
+    [doc, previewDoc]
   );
 
   const bodyOptions = useMemo(() => {
@@ -142,7 +245,9 @@ export function App() {
         return [];
       }
       const representation = doc.derived.bodyRepresentations[bodyId];
-      return [{ bodyId, name: node.name, consumed: representation?.consumed ?? false }];
+      return [
+        { bodyId, name: node.name, consumed: representation?.consumed ?? false }
+      ];
     });
   }, [doc]);
 
@@ -152,7 +257,9 @@ export function App() {
     }
     const sketches = listNodesByKind(doc, 'sketch');
     return doc.sketchOrder.flatMap((sketchId) => {
-      const sketch = sketches.find((candidate) => candidate.sketchId === sketchId);
+      const sketch = sketches.find(
+        (candidate) => candidate.sketchId === sketchId
+      );
       return sketch ? [{ sketchId, name: sketch.name }] : [];
     });
   }, [doc]);
@@ -166,7 +273,11 @@ export function App() {
   }, [doc, selectedFeatureNodeId]);
 
   const selectedSketch = useMemo<SketchNode | null>(() => {
-    if (!doc || !selectedFeature || selectedFeature.data.featureKind !== 'sketch') {
+    if (
+      !doc ||
+      !selectedFeature ||
+      selectedFeature.data.featureKind !== 'sketch'
+    ) {
       return null;
     }
     return findSketch(doc, selectedFeature.data.sketchId) ?? null;
@@ -203,6 +314,7 @@ export function App() {
     managerRef.current = new CommandManager(normalized);
     lastSyncedKeyRef.current = null;
     setDoc(normalized);
+    setPreviewDoc(null);
     setSelectedFeatureNodeId(null);
     setTool(null);
   }
@@ -212,6 +324,7 @@ export function App() {
       return false;
     }
     try {
+      setPreviewDoc(null);
       setDoc(managerRef.current.execute(command));
       setStatus(command.label);
       return true;
@@ -226,6 +339,7 @@ export function App() {
       return false;
     }
     try {
+      setPreviewDoc(null);
       setDoc(managerRef.current.runTransaction(label, commands));
       setStatus(label);
       return true;
@@ -248,11 +362,26 @@ export function App() {
     setBusy(true);
     try {
       const response = await api.createProject({ name, units });
+      setCloudAvailable(true);
       hydrateDocument(response.document);
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to create project.'));
+      const localDocument = createProjectDocument(name, localUserId, units);
+      await saveLocalProject(localDocument);
+      hydrateDocument(localDocument);
+      setProjects((current) => [
+        {
+          projectId: localDocument.projectId,
+          name: localDocument.name,
+          updatedAt: localDocument.derived.updatedAt,
+          revisionCount: localDocument.checkpoints.length
+        },
+        ...current
+      ]);
+      setCloudAvailable(false);
+      setSaveState('offline');
+      setStatus(`${errorMessage(error, 'Cloud unavailable')} Working locally.`);
     } finally {
       setBusy(false);
     }
@@ -261,9 +390,21 @@ export function App() {
   async function handleOpenProject(projectId: string) {
     setBusy(true);
     try {
-      const loaded = await api.loadProject(projectId);
+      const [localDocument, remoteDocument] = await Promise.all([
+        loadLocalProject(projectId),
+        api.loadProject(projectId).catch(() => null)
+      ]);
+      const loaded = selectProjectDocument(localDocument, remoteDocument);
+      if (!loaded) {
+        throw new Error('Project not found locally or in the beta API.');
+      }
+      setCloudAvailable(Boolean(remoteDocument));
       hydrateDocument(loaded);
-      setStatus(`Opened ${loaded.name}.`);
+      setStatus(
+        loaded === localDocument && remoteDocument
+          ? `Opened newer local edits for ${loaded.name}.`
+          : `Opened ${loaded.name}.`
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
     } finally {
@@ -277,9 +418,14 @@ export function App() {
     setSelectedFeatureNodeId(null);
     setTool(null);
     try {
-      const listed = await api.listProjects();
-      setProjects(listed.projects);
-      setStatus(`${listed.projects.length} project(s) available. Unsaved changes are discarded.`);
+      const [local, remote] = await Promise.all([
+        listLocalProjects(),
+        api.listProjects().catch(() => null)
+      ]);
+      const merged = mergeProjectSummaries(local, remote?.projects ?? []);
+      setProjects(merged);
+      setCloudAvailable(Boolean(remote));
+      setStatus(`${merged.length} project(s) available.`);
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
@@ -308,10 +454,56 @@ export function App() {
       return;
     }
     try {
-      await api.saveRevision({ projectId: doc.projectId, reason: 'Manual save', document: doc });
+      setSaveState('saving');
+      await saveLocalProject(doc);
+      const saved = await api.saveRevision({
+        projectId: doc.projectId,
+        reason: 'Manual save',
+        document: doc
+      });
+      if (managerRef.current) {
+        managerRef.current.document = saved;
+      }
+      setDoc(saved);
+      setCloudAvailable(true);
+      setSaveState('saved');
       setStatus('Saved revision.');
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to save revision.'));
+      setCloudAvailable(false);
+      setSaveState('offline');
+      setStatus(`${errorMessage(error, 'Cloud save failed')} Saved locally.`);
+    }
+  }
+
+  function handlePreviewPatch(proposal: CadPatchProposal | null) {
+    if (!proposal || !doc) {
+      setPreviewDoc(null);
+      return;
+    }
+    try {
+      const previewManager = new CommandManager(doc);
+      const preview = previewManager.runTransaction(
+        'Preview AI patch',
+        commandsForCadPatch(doc, proposal)
+      );
+      setPreviewDoc({ ...preview, derived: kernel.syncDocument(preview) });
+      setStatus(
+        'Previewing proposed patch · exact rebuild occurs after apply.'
+      );
+    } catch (error) {
+      setPreviewDoc(null);
+      setStatus(errorMessage(error, 'Patch preview failed.'));
+    }
+  }
+
+  function handleApplyPatch(proposal: CadPatchProposal) {
+    if (!doc) {
+      return;
+    }
+    try {
+      executeTransaction('Apply AI patch', commandsForCadPatch(doc, proposal));
+    } catch (error) {
+      setStatus(errorMessage(error, 'Patch could not be applied.'));
     }
   }
 
@@ -348,7 +540,9 @@ export function App() {
             headers: { 'content-type': contentType }
           });
           if (!uploadResponse.ok) {
-            throw new Error(`Upload failed with status ${uploadResponse.status}.`);
+            throw new Error(
+              `Upload failed with status ${uploadResponse.status}.`
+            );
           }
         }
         await api.finalizeImport({
@@ -377,7 +571,9 @@ export function App() {
       if (created) {
         setStatus(
           `Imported ${parsed.triangleCount} triangles from ${file.name}` +
-            (archived ? '.' : ' (original file not archived: upload unavailable).')
+            (archived
+              ? '.'
+              : ' (original file not archived: upload unavailable).')
         );
       }
       return;
@@ -385,7 +581,8 @@ export function App() {
 
     try {
       const metadata = parseStepMetadata(file.name, await file.text());
-      const products = metadata.products.slice(0, 3).join(', ') || 'no products found';
+      const products =
+        metadata.products.slice(0, 3).join(', ') || 'no products found';
       setStatus(
         `STEP metadata read (${products}). Full B-Rep STEP import needs the native kernel and is not available yet.`
       );
@@ -394,29 +591,54 @@ export function App() {
     }
   }
 
-  function handleExport(format: 'step' | 'stl') {
+  function exportWithWorker(
+    format: 'step' | 'stl',
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<Extract<GeometryExportResult, { ok: true }>> {
+    const worker = geometryWorkerRef.current;
+    if (!worker) {
+      return Promise.reject(new Error('Geometry worker is unavailable.'));
+    }
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      exportRequestsRef.current.set(requestId, { resolve, reject });
+      worker.postMessage({
+        type: 'export',
+        requestId,
+        document,
+        bodyIds,
+        format
+      });
+    });
+  }
+
+  async function handleExport(format: 'step' | 'stl') {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
     }
     const stem = exportFileStem(doc.name);
     try {
+      setStatus(`Exporting exact ${format.toUpperCase()}…`);
+      const result = await exportWithWorker(format, doc, exportBodyIds);
+      downloadText(`${stem}.${format}`, result.text);
       if (format === 'step') {
-        const result = kernel.exportStep(doc, exportBodyIds);
-        downloadText(`${stem}.step`, result.text);
         setStatus(
           result.warnings.length > 0
             ? `Exported STEP with ${result.warnings.length} warning(s).`
             : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step (AP214).`
         );
       } else {
-        const stl = kernel.exportStl(doc, exportBodyIds);
-        downloadText(`${stem}.stl`, stl);
         setStatus(`Exported ${exportBodyIds.length} body(ies) to ${stem}.stl.`);
       }
       // Record the export with the worker API; the download already happened.
       api
-        .requestExport({ projectId: doc.projectId, bodyIds: exportBodyIds, format })
+        .requestExport({
+          projectId: doc.projectId,
+          bodyIds: exportBodyIds,
+          format
+        })
         .catch(() => undefined);
     } catch (error) {
       setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
@@ -428,7 +650,9 @@ export function App() {
       setSelectedFeatureNodeId(null);
       return;
     }
-    const bodyNode = listNodesByKind(doc, 'body').find((body) => body.bodyId === bodyId);
+    const bodyNode = listNodesByKind(doc, 'body').find(
+      (body) => body.bodyId === bodyId
+    );
     const feature = bodyNode
       ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
       : undefined;
@@ -437,7 +661,11 @@ export function App() {
   }
 
   function handleDeleteFeature(featureId: FeatureId, name: string) {
-    if (executeCommand(commandFactories.deleteFeature({ featureId }, `Delete ${name}`))) {
+    if (
+      executeCommand(
+        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
+      )
+    ) {
       setSelectedFeatureNodeId(null);
     }
   }
@@ -448,7 +676,9 @@ export function App() {
       const target = event.target as HTMLElement | null;
       if (
         target &&
-        (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA')
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'SELECT' ||
+          target.tagName === 'TEXTAREA')
       ) {
         return;
       }
@@ -490,9 +720,8 @@ export function App() {
     );
   }
 
-  const tone: 'ready' | 'warning' | 'running' = /fail|error|invalid|unable|denied/i.test(status)
-    ? 'warning'
-    : 'ready';
+  const tone: 'ready' | 'warning' | 'running' =
+    /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
 
   return (
     <AppShell
@@ -504,15 +733,18 @@ export function App() {
           canRedo={managerRef.current?.canRedo ?? false}
           canExport={exportBodyIds.length > 0}
           exportScope={
-            selectedBody && !selectedBody.consumed && selectedBody.exportableStep
+            selectedBody &&
+            !selectedBody.consumed &&
+            selectedBody.exportableStep
               ? selectedBody.name
               : null
           }
+          saveState={saveState}
           onUndo={handleUndo}
           onRedo={handleRedo}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
-          onExport={handleExport}
+          onExport={(format) => void handleExport(format)}
           onGoHome={() => void handleGoHome()}
         />
       }
@@ -526,7 +758,9 @@ export function App() {
           warnings={warnings}
           onSelectFeature={(nodeId) => {
             setTool(null);
-            setSelectedFeatureNodeId((current) => (current === nodeId ? null : nodeId));
+            setSelectedFeatureNodeId((current) =>
+              current === nodeId ? null : nodeId
+            );
           }}
           onSetParameter={(name, expression) =>
             executeCommand(commandFactories.setParameter({ name, expression }))
@@ -545,7 +779,10 @@ export function App() {
           fitSignal={fitSignal}
           onSelectBody={handleSelectBodyFromViewer}
           onToggleGrid={() =>
-            setViewerSettings((current) => ({ ...current, showGrid: !current.showGrid }))
+            setViewerSettings((current) => ({
+              ...current,
+              showGrid: !current.showGrid
+            }))
           }
           onFit={() => setFitSignal((value) => value + 1)}
         />
@@ -570,12 +807,26 @@ export function App() {
             setSelectedFeatureNodeId(null);
           }}
           onCreatePrimitive={(kind, name, dimensions) =>
-            createFeature(commandFactories.addPrimitive({ name, primitiveKind: kind, dimensions }))
+            createFeature(
+              commandFactories.addPrimitive({
+                name,
+                primitiveKind: kind,
+                dimensions
+              })
+            )
           }
-          onCreateSketch={(value) => createFeature(commandFactories.addSketch(value))}
-          onCreateExtrude={(value) => createFeature(commandFactories.extrudeSketch(value))}
-          onCreateRevolve={(value) => createFeature(commandFactories.revolveSketch(value))}
-          onCreateBoolean={(value) => createFeature(commandFactories.booleanBodies(value))}
+          onCreateSketch={(value) =>
+            createFeature(commandFactories.addSketch(value))
+          }
+          onCreateExtrude={(value) =>
+            createFeature(commandFactories.extrudeSketch(value))
+          }
+          onCreateRevolve={(value) =>
+            createFeature(commandFactories.revolveSketch(value))
+          }
+          onCreateBoolean={(value) =>
+            createFeature(commandFactories.booleanBodies(value))
+          }
           onCreateTransform={(value) =>
             createFeature(
               commandFactories.transformBody({
@@ -611,8 +862,14 @@ export function App() {
             ];
             if (value.name !== feature.name) {
               commands.push(
-                commandFactories.renameNode({ nodeId: feature.id, name: value.name }),
-                commandFactories.renameNode({ nodeId: selectedSketch.id, name: value.name })
+                commandFactories.renameNode({
+                  nodeId: feature.id,
+                  name: value.name
+                }),
+                commandFactories.renameNode({
+                  nodeId: selectedSketch.id,
+                  name: value.name
+                })
               );
             }
             executeTransaction(`Edit ${value.name}`, commands);
@@ -639,7 +896,11 @@ export function App() {
                 {
                   featureId: feature.featureId,
                   name: value.name,
-                  data: { featureKind: 'revolve', sketchId: value.sketchId, axis: value.axis }
+                  data: {
+                    featureKind: 'revolve',
+                    sketchId: value.sketchId,
+                    axis: value.axis
+                  }
                 },
                 `Edit ${value.name}`
               )
@@ -680,7 +941,16 @@ export function App() {
               )
             )
           }
-          onDeleteFeature={(feature) => handleDeleteFeature(feature.featureId, feature.name)}
+          onDeleteFeature={(feature) =>
+            handleDeleteFeature(feature.featureId, feature.name)
+          }
+        />
+      }
+      assistant={
+        <AiCommandRail
+          document={doc}
+          onApply={handleApplyPatch}
+          onPreview={handlePreviewPatch}
         />
       }
       statusBar={
@@ -692,6 +962,7 @@ export function App() {
           featureCount={features.length}
           warningCount={warnings.length}
           documentVersion={doc.version}
+          units={doc.units}
         />
       }
     />

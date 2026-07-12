@@ -7,7 +7,11 @@ interface ViewerToolbarProps {
   onFit(): void;
 }
 
-export function ViewerToolbar({ settings, onToggleGrid, onFit }: ViewerToolbarProps) {
+export function ViewerToolbar({
+  settings,
+  onToggleGrid,
+  onFit
+}: ViewerToolbarProps) {
   return (
     <div className="viewer-toolbar" role="toolbar" aria-label="Viewer controls">
       <button type="button" onClick={onFit} title="Fit view">

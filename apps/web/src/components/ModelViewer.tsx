@@ -40,7 +40,10 @@ type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
 
-function forEachMesh(object: THREE.Object3D, visit: (mesh: ViewerMesh) => void) {
+function forEachMesh(
+  object: THREE.Object3D,
+  visit: (mesh: ViewerMesh) => void
+) {
   object.traverse((child: THREE.Object3D) => {
     if (child instanceof THREE.Mesh) {
       visit(child as ViewerMesh);
@@ -216,7 +219,8 @@ export function ModelViewer({
       renderer.domElement.style.cursor = bodyId ? 'pointer' : '';
       forEachMesh(bodyGroup, (mesh) => {
         const meshBodyId = findBodyId(mesh);
-        const base = (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
+        const base =
+          (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
         mesh.material.emissive.setHex(
           bodyId && meshBodyId === bodyId && base === 0 ? HOVER_EMISSIVE : base
         );
@@ -233,7 +237,10 @@ export function ModelViewer({
       if (!downPosition) {
         return;
       }
-      const moved = Math.hypot(event.clientX - downPosition.x, event.clientY - downPosition.y);
+      const moved = Math.hypot(
+        event.clientX - downPosition.x,
+        event.clientY - downPosition.y
+      );
       downPosition = null;
       if (moved < 5) {
         onSelectBodyRef.current(pickBodyId(event));
@@ -299,12 +306,15 @@ export function ModelViewer({
 
     if (selectedBodyId) {
       const target = objectsByBodyId.get(selectedBodyId);
-      const body = bodies.find((candidate) => candidate.bodyId === selectedBodyId);
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === selectedBodyId
+      );
       if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
           const top = box.getCenter(new THREE.Vector3());
-          top.y = box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
+          top.y =
+            box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
           const label = makeLabel('selection-callout', body.name);
           label.position.copy(top);
           context.overlayGroup.add(label);
@@ -313,7 +323,11 @@ export function ModelViewer({
     }
 
     if (!context.hasFitCamera && context.bodyGroup.children.length > 0) {
-      fitCameraToObjects(context.camera, context.controls.target, context.bodyGroup.children);
+      fitCameraToObjects(
+        context.camera,
+        context.controls.target,
+        context.bodyGroup.children
+      );
       context.controls.update();
       context.hasFitCamera = true;
     }
@@ -328,10 +342,18 @@ export function ModelViewer({
 
   useEffect(() => {
     const context = contextRef.current;
-    if (!context || fitSignal === 0 || context.bodyGroup.children.length === 0) {
+    if (
+      !context ||
+      fitSignal === 0 ||
+      context.bodyGroup.children.length === 0
+    ) {
       return;
     }
-    fitCameraToObjects(context.camera, context.controls.target, context.bodyGroup.children);
+    fitCameraToObjects(
+      context.camera,
+      context.controls.target,
+      context.bodyGroup.children
+    );
     context.controls.update();
   }, [fitSignal]);
 

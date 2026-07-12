@@ -1,6 +1,6 @@
 /* ─────────────────────────────────────────────────────────────
    OpenZCAD workspace styles.
-   Layout: TopBar / [Sidebar | ViewerShell | Inspector] / StatusBar.
+   Layout: TopBar / [Sidebar | ViewerShell | Inspector] / AI rail / StatusBar.
    ───────────────────────────────────────────────────────────── */
 
 /* ── App shell ───────────────────────────────────────────── */
@@ -8,7 +8,7 @@
 .app-shell {
   height: 100vh;
   display: grid;
-  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) auto var(--statusbar-h);
   background: var(--color-bg);
 }
 
@@ -121,6 +121,34 @@
   cursor: pointer;
 }
 
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.save-state:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ── Buttons ─────────────────────────────────────────────── */
 
 .primary,
@@ -139,13 +167,13 @@
 }
 
 .primary {
-  color: #06111e;
+  color: #ffffff;
   background: var(--color-accent);
   border-color: var(--color-accent);
 }
 
 .primary:hover:not(:disabled) {
-  background: #69b3ff;
+  background: #60a5fa;
 }
 
 .secondary {
@@ -180,6 +208,19 @@
   background: var(--color-surface);
   border-right: var(--border-thin);
   overflow-y: auto;
+}
+
+.sidebar-label {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--color-text-subtle);
+  border-bottom: var(--border-thin);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
 }
 
 .sidebar-section {
@@ -475,6 +516,141 @@
   pointer-events: none;
 }
 
+/* ── AI command rail ────────────────────────────────────── */
+
+.ai-rail {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 0.8fr) minmax(420px, 1.2fr);
+  gap: 10px;
+  padding: 9px 12px;
+  background: #111316;
+  border-top: var(--border-thin);
+}
+
+.ai-prompt-wrap {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px 7px 10px;
+  color: var(--color-accent);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.ai-prompt-wrap:focus-within {
+  border-color: var(--color-accent-border);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.ai-prompt-wrap textarea {
+  width: 100%;
+  min-height: 22px;
+  height: 22px;
+  max-height: 64px;
+  padding: 1px 0;
+  resize: none;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  line-height: 20px;
+}
+
+.ai-prompt-wrap textarea:focus {
+  box-shadow: none;
+}
+
+.ai-submit {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.ai-proposal {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.ai-proposal.ready {
+  border-color: var(--color-accent-border);
+}
+.ai-proposal.error {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.ai-proposal-label {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ai-proposal.thinking .ai-proposal-label {
+  color: var(--color-accent);
+}
+
+.ai-proposal-copy {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+}
+
+.ai-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+.ai-actions button {
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.ai-actions button:hover,
+.ai-actions button.active {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.ai-actions .apply {
+  color: #ffffff;
+  background: var(--color-accent);
+}
+
+.ai-actions .apply:hover {
+  color: #ffffff;
+  background: #60a5fa;
+  border-color: var(--color-accent);
+}
+
 /* ── Inspector ───────────────────────────────────────────── */
 
 .inspector {
@@ -765,8 +941,12 @@
   background: var(--color-success);
 }
 
-.status-state.warning i { background: var(--color-warning); }
-.status-state.running i { background: var(--color-accent); }
+.status-state.warning i {
+  background: var(--color-warning);
+}
+.status-state.running i {
+  background: var(--color-accent);
+}
 
 .status-groups {
   margin-left: auto;
@@ -802,7 +982,11 @@
   display: grid;
   place-items: center;
   background:
-    radial-gradient(1100px 540px at 50% -10%, rgba(77, 163, 255, 0.07), transparent 60%),
+    radial-gradient(
+      1100px 540px at 50% -10%,
+      rgba(59, 130, 246, 0.07),
+      transparent 60%
+    ),
     var(--color-bg);
   overflow-y: auto;
 }
@@ -910,8 +1094,30 @@
 
 /* ── Narrow screens ──────────────────────────────────────── */
 
-@media (max-width: 1100px) {
+@media (max-width: 1120px) {
   .workspace {
-    grid-template-columns: 200px minmax(280px, 1fr) 300px;
+    grid-template-columns: 220px minmax(320px, 1fr) 300px;
+  }
+
+  .topbar .topbar-action:not(.save-state) {
+    font-size: 0;
+    gap: 0;
+    padding-inline: 8px;
+  }
+
+  .ai-rail {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .workspace {
+    grid-template-columns: 190px minmax(320px, 1fr);
+  }
+  .inspector {
+    display: none;
+  }
+  .ai-proposal {
+    display: none;
   }
 }

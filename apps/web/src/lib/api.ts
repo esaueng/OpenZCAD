@@ -13,7 +13,10 @@ import type {
   SaveRevisionRequest
 } from '@openzcad/shared';
 
-async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+async function requestJson<T>(
+  input: RequestInfo,
+  init?: RequestInit
+): Promise<T> {
   const response = await fetch(input, {
     ...init,
     headers: {
@@ -41,10 +44,13 @@ export const api = {
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
   saveRevision: (payload: SaveRevisionRequest) =>
-    requestJson<ProjectDocument>(`/api/projects/${payload.projectId}/revisions`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
+    requestJson<ProjectDocument>(
+      `/api/projects/${payload.projectId}/revisions`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    ),
   createUploadSession: (payload: CreateUploadSessionRequest) =>
     requestJson<CreateUploadSessionResponse>('/api/uploads', {
       method: 'POST',
@@ -63,4 +69,3 @@ export const api = {
   getArtifactMetadata: (artifactId: string) =>
     requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`)
 };
-

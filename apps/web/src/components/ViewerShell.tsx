@@ -30,19 +30,23 @@ export function ViewerShell({
         fitSignal={fitSignal}
         onSelectBody={onSelectBody}
       />
-      <ViewerToolbar settings={settings} onToggleGrid={onToggleGrid} onFit={onFit} />
+      <ViewerToolbar
+        settings={settings}
+        onToggleGrid={onToggleGrid}
+        onFit={onFit}
+      />
       {bodies.length === 0 && (
         <div className="viewer-notice">
           <div>
             <strong>No geometry yet</strong>
             <small>
-              Add a primitive, or sketch a profile and extrude or revolve it, from the panel on
-              the right.
+              Add a primitive, or sketch a profile and extrude or revolve it,
+              from the panel on the right.
             </small>
           </div>
         </div>
       )}
-      <div className="viewer-watermark">openzcad kernel · faceted b-rep</div>
+      <div className="viewer-watermark">openzcad kernel · exact b-rep</div>
     </section>
   );
 }

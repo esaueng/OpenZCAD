@@ -1,5 +1,13 @@
 import { type ChangeEvent } from 'react';
-import { Download, Redo2, Save, Undo2, Upload } from 'lucide-react';
+import {
+  Check,
+  CloudOff,
+  Download,
+  LoaderCircle,
+  Redo2,
+  Undo2,
+  Upload
+} from 'lucide-react';
 import type { UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 
@@ -11,6 +19,7 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  saveState: 'saved' | 'saving' | 'offline';
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
@@ -26,6 +35,7 @@ export function TopBar({
   canRedo,
   canExport,
   exportScope,
+  saveState,
   onUndo,
   onRedo,
   onSave,
@@ -40,7 +50,12 @@ export function TopBar({
 
   return (
     <header className="topbar">
-      <button className="brand" type="button" onClick={onGoHome} title="Back to projects">
+      <button
+        className="brand"
+        type="button"
+        onClick={onGoHome}
+        title="Back to projects"
+      >
         <BrandMark />
         OpenZCAD <span className="beta-tag">Beta</span>
       </button>
@@ -71,7 +86,10 @@ export function TopBar({
           <Redo2 size={15} aria-hidden="true" />
         </button>
       </div>
-      <label className="secondary topbar-action" title="Import an STL mesh or inspect STEP metadata">
+      <label
+        className="secondary topbar-action"
+        title="Import an STL mesh or inspect STEP metadata"
+      >
         <Upload size={14} aria-hidden="true" />
         Import
         <input
@@ -108,14 +126,24 @@ export function TopBar({
         STL
       </button>
       <button
-        className="primary topbar-action"
+        className="save-state topbar-action"
         type="button"
         disabled={!projectName}
         onClick={onSave}
         title="Save a revision (Ctrl+S)"
       >
-        <Save size={15} aria-hidden="true" />
-        Save
+        {saveState === 'saving' ? (
+          <LoaderCircle className="spin" size={14} aria-hidden="true" />
+        ) : saveState === 'offline' ? (
+          <CloudOff size={14} aria-hidden="true" />
+        ) : (
+          <Check size={14} aria-hidden="true" />
+        )}
+        {saveState === 'saving'
+          ? 'Saving'
+          : saveState === 'offline'
+            ? 'Local only'
+            : 'Saved'}
       </button>
     </header>
   );
