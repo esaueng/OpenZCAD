@@ -90,7 +90,7 @@ export function TopBar({
       </div>
       <label
         className="secondary topbar-action"
-        title="Import an STL mesh or inspect STEP metadata"
+        title="Import an editable STEP solid or STL mesh"
       >
         <Upload size={14} aria-hidden="true" />
         Import

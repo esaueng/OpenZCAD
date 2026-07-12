@@ -917,6 +917,24 @@
   white-space: nowrap;
 }
 
+.topology-selection {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px;
+  color: var(--color-text-muted);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.topology-selection span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── StatusBar ───────────────────────────────────────────── */
 
 .status-bar {

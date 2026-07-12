@@ -23,7 +23,8 @@ import type {
   RevolveAxis,
   SketchId,
   SketchNode,
-  SketchObjectData
+  SketchObjectData,
+  TopologySelection
 } from '@openzcad/shared';
 import {
   BooleanForm,
@@ -146,6 +147,7 @@ interface InspectorProps extends InspectorCallbacks {
   selectedSketch: SketchNode | null;
   selectedSketchObject: SketchObjectData | null;
   selectedBody: BodyRepresentation | null;
+  selectedTopology: TopologySelection | null;
   scope: Record<string, number>;
   sketches: SketchOption[];
   bodies: BodyOption[];
@@ -255,6 +257,7 @@ export function Inspector(props: InspectorProps) {
     selectedSketch,
     selectedSketchObject,
     selectedBody,
+    selectedTopology,
     scope,
     sketches,
     bodies,
@@ -457,12 +460,27 @@ export function Inspector(props: InspectorProps) {
           <span>{data.triangleCount}</span>
         </div>
       );
+    } else if (data.featureKind === 'imported-step') {
+      form = (
+        <div className="kv-grid">
+          <b>source</b>
+          <span>{data.sourceName}</span>
+          <b>mode</b>
+          <span>editable exact B-rep</span>
+        </div>
+      );
     }
 
     body = (
       <>
         {form}
         {selectedBody && <BodyStats body={selectedBody} units={units} />}
+        {selectedTopology?.kind !== 'body' && selectedTopology && (
+          <div className="topology-selection">
+            <b>{selectedTopology.kind}</b>
+            <span className="mono">{selectedTopology.topologyId}</span>
+          </div>
+        )}
         <div className="form-actions danger-zone">
           <button
             type="button"

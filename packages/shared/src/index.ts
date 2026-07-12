@@ -27,6 +27,7 @@ export type FeatureKind =
   | 'revolve'
   | 'boolean'
   | 'transform'
+  | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind = 'rectangle' | 'circle' | 'polygon';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
@@ -177,6 +178,13 @@ export type FeatureData =
       vertices: number[];
       /** Triangle vertex indices. */
       indices: number[];
+    }
+  | {
+      featureKind: 'imported-step';
+      artifactId: ArtifactId;
+      sourceName: string;
+      /** ISO 10303-21 source retained for deterministic offline rebuilds. */
+      stepText: string;
     };
 
 export interface FeatureNode extends BaseNode {
@@ -192,7 +200,7 @@ export interface BodyNode extends BaseNode {
   bodyId: BodyId;
   featureId: FeatureId;
   bodyType: 'solid' | 'mesh-reference';
-  representationSource: 'brep' | 'mesh-import';
+  representationSource: 'brep' | 'step-import' | 'mesh-import';
   exportableStep: boolean;
 }
 
@@ -217,6 +225,32 @@ export interface BoundingBox {
   max: Vector3;
 }
 
+export interface FaceTopology {
+  topologyId: string;
+  hash: number;
+  triangleStart: number;
+  triangleCount: number;
+}
+
+export interface EdgeTopology {
+  topologyId: string;
+  hash: number;
+  /** XYZ-interleaved sampled polyline points. */
+  points: number[];
+}
+
+export interface BodyTopology {
+  faces: FaceTopology[];
+  edges: EdgeTopology[];
+}
+
+export interface TopologySelection {
+  bodyId: BodyId;
+  kind: 'body' | 'face' | 'edge';
+  topologyId?: string;
+  hash?: number;
+}
+
 /**
  * Display/export projection of one body, derived by the kernel. Vertices are
  * already in world space (transform features are baked in), so the viewport
@@ -235,6 +269,7 @@ export interface BodyRepresentation {
   consumed: boolean;
   volume: number;
   bbox: BoundingBox;
+  topology?: BodyTopology;
 }
 
 export interface RevisionRecord {
@@ -457,6 +492,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   revolve: '#5fb3e8',
   boolean: '#ff7452',
   transform: '#8b80f9',
+  'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff'
 };
 

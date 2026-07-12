@@ -140,6 +140,29 @@ describe('command-system', () => {
     expect(replayed.featureOrder).toHaveLength(0);
   });
 
+  it('replays embedded editable STEP imports without losing source data', () => {
+    const base = createProjectDocument('STEP Replay', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Imported',
+        artifactId: 'artifact_step',
+        sourceName: 'part.step',
+        stepText: 'ISO-10303-21;END-ISO-10303-21;'
+      })
+    );
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    const feature = Object.values(replayed.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'imported-step'
+    );
+    expect(feature?.data.featureKind).toBe('imported-step');
+    if (feature?.data.featureKind === 'imported-step') {
+      expect(feature.data.stepText).toContain('ISO-10303-21');
+    }
+  });
+
   it('validates command preconditions before applying', () => {
     const manager = new CommandManager(
       createProjectDocument('Validate Test', toUserId('user_test'))

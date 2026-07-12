@@ -1,13 +1,14 @@
 import { ModelViewer, type ViewerSettings } from './ModelViewer';
 import { ViewerToolbar } from './ViewerToolbar';
-import type { BodyRepresentation } from '@openzcad/shared';
+import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 
 interface ViewerShellProps {
   bodies: BodyRepresentation[];
   selectedBodyId: string | null;
+  selectedTopology: TopologySelection | null;
   settings: ViewerSettings;
   fitSignal: number;
-  onSelectBody(bodyId: string | null): void;
+  onSelectTopology(selection: TopologySelection | null): void;
   onToggleGrid(): void;
   onFit(): void;
 }
@@ -15,9 +16,10 @@ interface ViewerShellProps {
 export function ViewerShell({
   bodies,
   selectedBodyId,
+  selectedTopology,
   settings,
   fitSignal,
-  onSelectBody,
+  onSelectTopology,
   onToggleGrid,
   onFit
 }: ViewerShellProps) {
@@ -26,9 +28,10 @@ export function ViewerShell({
       <ModelViewer
         bodies={bodies}
         selectedBodyId={selectedBodyId}
+        selectedTopology={selectedTopology}
         settings={settings}
         fitSignal={fitSignal}
-        onSelectBody={onSelectBody}
+        onSelectTopology={onSelectTopology}
       />
       <ViewerToolbar
         settings={settings}
