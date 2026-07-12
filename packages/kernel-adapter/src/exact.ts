@@ -34,8 +34,6 @@ interface ExactBuildResult {
   handles: Set<ShapeHandle>;
 }
 
-const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
-
 function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
   return {
     x: axis === 'x' ? 1 : 0,
@@ -389,10 +387,12 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             const requested = new Set(feature.data.edgeHashes);
             const edges = this.kernel.getSubShapes(target, 'edge');
             edges.forEach((edge) => result.handles.add(edge));
-            const selected = edges.filter((edge) =>
-              requested.has(
-                this.kernel.hashCode(edge, TOPOLOGY_HASH_UPPER_BOUND)
-              )
+            // OCCT HashCode values identify transient shape handles and change
+            // whenever this adapter rebuilds the document. The one-based
+            // sub-shape ordinal is deterministic for an unchanged upstream
+            // feature and therefore survives rebuilds and command replay.
+            const selected = edges.filter((_, index) =>
+              requested.has(index + 1)
             );
             if (selected.length !== requested.size) {
               throw new Error(
@@ -580,7 +580,7 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
               (_, index) => {
                 const triangleStart = mesh.faceGroups![index * 3]! / 3;
                 const triangleCount = mesh.faceGroups![index * 3 + 1]! / 3;
-                const hash = mesh.faceGroups![index * 3 + 2]!;
+                const hash = index + 1;
                 return {
                   topologyId: `face:${hash}`,
                   hash,
@@ -594,7 +594,7 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
               (_, index) => {
                 const pointStart = wireframe.edgeGroups[index * 3]!;
                 const pointCount = wireframe.edgeGroups[index * 3 + 1]!;
-                const hash = wireframe.edgeGroups[index * 3 + 2]!;
+                const hash = index + 1;
                 return {
                   topologyId: `edge:${hash}`,
                   hash,

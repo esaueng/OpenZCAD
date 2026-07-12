@@ -46,6 +46,12 @@ describe('exact OpenCascade kernel adapter', () => {
     expect(body?.topology?.edges.every((edge) => edge.points.length >= 6)).toBe(
       true
     );
+    expect(body?.topology?.faces.map((face) => face.hash)).toEqual([
+      1, 2, 3, 4, 5, 6
+    ]);
+    expect(body?.topology?.edges.map((edge) => edge.hash)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+    ]);
     expect(derived.warnings).toEqual([]);
   });
 
