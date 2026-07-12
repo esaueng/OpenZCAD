@@ -1,2 +1,5 @@
 # Copy to .dev.vars for local development. Never commit the populated file.
-OPENAI_API_KEY=
+AI_API_KEY=
+
+# Backward-compatible alternative: OPENAI_API_KEY=
+# For an OpenAI Responses-compatible provider, also set AI_PROVIDER and AI_BASE_URL.

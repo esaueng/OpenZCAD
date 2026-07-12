@@ -41,6 +41,10 @@ import {
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'beta';
+  AI_PROVIDER?: 'openai' | 'responses-compatible';
+  AI_BASE_URL?: string;
+  AI_API_KEY?: string;
+  /** Backward-compatible OpenAI-specific secret name. */
   OPENAI_API_KEY?: string;
   AI_MODEL?: string;
   AI_REASONING_EFFORT?: 'low' | 'medium' | 'high' | 'xhigh';

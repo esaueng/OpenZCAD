@@ -55,11 +55,13 @@ Open the local URL printed by Vite. The CAD workspace works without an AI key; t
 Configure secrets only in `apps/web/.dev.vars` or with `wrangler secret`:
 
 ```dotenv
-OPENAI_API_KEY=your_key_here
+AI_API_KEY=your_key_here
 ```
 
-Non-secret model settings live in `wrangler.jsonc`:
+`OPENAI_API_KEY` remains supported for existing beta environments. Non-secret model settings live in `wrangler.jsonc`:
 
+- `AI_PROVIDER` defaults to `openai`; `responses-compatible` selects another provider that implements the Responses streaming protocol.
+- `AI_BASE_URL` overrides the Responses endpoint and is required for `responses-compatible`.
 - `AI_MODEL` defaults to `gpt-5.6-sol`.
 - `AI_REASONING_EFFORT` defaults to `high` and accepts `low`, `medium`, `high`, or `xhigh`.
 

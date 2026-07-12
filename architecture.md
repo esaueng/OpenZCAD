@@ -43,7 +43,8 @@ The client assembles `response.output_text.delta` events, validates the final pr
 - R2: large source/export assets when configured.
 - Durable Objects: collaboration/presence scaffolding only.
 - Workflows/Queues: export/import orchestration scaffolding.
-- Worker secret: `OPENAI_API_KEY`; never shipped to the browser.
+- Worker secret: `AI_API_KEY` (with `OPENAI_API_KEY` backward compatibility); never shipped to the browser.
+- `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, and `AI_REASONING_EFFORT` select a Responses-compatible provider and model without code changes.
 
 ## API and errors
 
