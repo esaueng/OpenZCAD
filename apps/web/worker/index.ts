@@ -9,11 +9,13 @@ import { toUserId } from '@openzcad/shared';
 import {
   HttpError,
   parseCreateProjectRequest,
+  parseAssistantProposalRequest,
   parseCreateUploadSessionRequest,
   parseFinalizeImportRequest,
   parseRequestExportRequest,
   parseSaveRevisionRequest
 } from './validation';
+import { streamAssistantProposal } from './assistant';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -72,6 +74,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.listProjects(devUserId));
   }
 
+  if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
+    const payload = parseAssistantProposalRequest(await readJsonBody(request));
+    return streamAssistantProposal(payload, env);
+  }
+
   if (request.method === 'POST' && pathname === '/api/projects') {
     const payload = parseCreateProjectRequest(await readJsonBody(request));
     return json(await persistence.createProject(devUserId, payload), 201);
@@ -85,12 +92,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);
   if (request.method === 'POST' && revisionsMatch) {
-    const payload = parseSaveRevisionRequest(await readJsonBody(request), revisionsMatch[1]!);
+    const payload = parseSaveRevisionRequest(
+      await readJsonBody(request),
+      revisionsMatch[1]!
+    );
     return json(await persistence.saveRevision(payload));
   }
 
   if (request.method === 'POST' && pathname === '/api/uploads') {
-    const payload = parseCreateUploadSessionRequest(await readJsonBody(request));
+    const payload = parseCreateUploadSessionRequest(
+      await readJsonBody(request)
+    );
     return json(await persistence.createUploadSession(devUserId, payload), 201);
   }
 
@@ -98,7 +110,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const payload = parseFinalizeImportRequest(await readJsonBody(request));
     const artifact = await persistence.finalizeImport(devUserId, payload);
     if (!artifact) {
-      return json({ error: 'Upload session not found, expired, or already used.' }, 404);
+      return json(
+        { error: 'Upload session not found, expired, or already used.' },
+        404
+      );
     }
     return json({ artifactId: artifact.artifactId });
   }

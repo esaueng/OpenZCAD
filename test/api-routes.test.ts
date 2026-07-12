@@ -20,7 +20,10 @@ function post(path: string, body: unknown): Request {
 }
 
 async function createProject(name: string): Promise<CreateProjectResponse> {
-  const response = await worker.fetch(post('/api/projects', { name }), env as never);
+  const response = await worker.fetch(
+    post('/api/projects', { name }),
+    env as never
+  );
   expect(response.status).toBe(201);
   return (await response.json()) as CreateProjectResponse;
 }
@@ -33,9 +36,13 @@ describe('worker api routes', () => {
       new Request('https://example.com/api/projects'),
       env as never
     );
-    const listed = (await listResponse.json()) as { projects: Array<{ projectId: string }> };
+    const listed = (await listResponse.json()) as {
+      projects: Array<{ projectId: string }>;
+    };
     expect(
-      listed.projects.some((project) => project.projectId === created.project.projectId)
+      listed.projects.some(
+        (project) => project.projectId === created.project.projectId
+      )
     ).toBe(true);
   });
 
@@ -47,9 +54,33 @@ describe('worker api routes', () => {
     expect(response.status).toBe(200);
   });
 
+  it('keeps assistant generation disabled until a secret is configured', async () => {
+    const response = await worker.fetch(
+      post('/api/assistant/proposals', {
+        prompt: 'Make it wider',
+        digest: {
+          schemaVersion: 2,
+          projectId: 'proj_ai',
+          name: 'Bracket',
+          units: 'mm',
+          version: 1,
+          parameters: [],
+          features: [],
+          warnings: []
+        }
+      }),
+      env as never
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
+  });
+
   it('rejects malformed JSON bodies with 400', async () => {
     const response = await worker.fetch(
-      new Request('https://example.com/api/projects', { method: 'POST', body: '{nope' }),
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        body: '{nope'
+      }),
       env as never
     );
     expect(response.status).toBe(400);
@@ -58,7 +89,10 @@ describe('worker api routes', () => {
   });
 
   it('rejects project creation without a name', async () => {
-    const response = await worker.fetch(post('/api/projects', {}), env as never);
+    const response = await worker.fetch(
+      post('/api/projects', {}),
+      env as never
+    );
     expect(response.status).toBe(400);
 
     const blankResponse = await worker.fetch(
@@ -162,9 +196,9 @@ describe('worker api routes', () => {
       env as never
     );
     expect(finalized.status).toBe(200);
-    expect(((await finalized.json()) as { artifactId: string }).artifactId).toBe(
-      session.artifactId
-    );
+    expect(
+      ((await finalized.json()) as { artifactId: string }).artifactId
+    ).toBe(session.artifactId);
 
     const replayed = await worker.fetch(
       post('/api/imports/finalize', finalizeBody),
@@ -175,7 +209,11 @@ describe('worker api routes', () => {
 
   it('validates export requests', async () => {
     const badFormat = await worker.fetch(
-      post('/api/exports', { projectId: 'proj_x', bodyIds: ['body_1'], format: 'obj' }),
+      post('/api/exports', {
+        projectId: 'proj_x',
+        bodyIds: ['body_1'],
+        format: 'obj'
+      }),
       env as never
     );
     expect(badFormat.status).toBe(400);
@@ -187,7 +225,11 @@ describe('worker api routes', () => {
     expect(emptyBodies.status).toBe(400);
 
     const accepted = await worker.fetch(
-      post('/api/exports', { projectId: 'proj_x', bodyIds: ['body_1'], format: 'stl' }),
+      post('/api/exports', {
+        projectId: 'proj_x',
+        bodyIds: ['body_1'],
+        format: 'stl'
+      }),
       env as never
     );
     expect(accepted.status).toBe(202);

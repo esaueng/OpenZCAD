@@ -1,5 +1,10 @@
 import { AwsClient } from 'aws4fetch';
-import { DurableObject, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import {
+  DurableObject,
+  WorkflowEntrypoint,
+  type WorkflowEvent,
+  type WorkflowStep
+} from 'cloudflare:workers';
 import {
   getInMemoryPersistence,
   ProjectNotFoundError,
@@ -36,6 +41,9 @@ import {
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'beta';
+  OPENAI_API_KEY?: string;
+  AI_MODEL?: string;
+  AI_REASONING_EFFORT?: 'low' | 'medium' | 'high' | 'xhigh';
   DB?: D1Database;
   ARTIFACTS?: R2Bucket;
   JOB_QUEUE?: Queue<unknown>;
@@ -78,7 +86,9 @@ export class D1R2PersistenceService implements PersistenceService {
       `CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, object_key TEXT NOT NULL, content_type TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);`,
       `CREATE TABLE IF NOT EXISTS upload_sessions (id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, project_id TEXT NOT NULL, object_key TEXT NOT NULL, file_name TEXT NOT NULL, content_type TEXT NOT NULL, expires_at TEXT NOT NULL);`
     ];
-    await this.env.DB!.batch(statements.map((sql) => this.env.DB!.prepare(sql)));
+    await this.env.DB!.batch(
+      statements.map((sql) => this.env.DB!.prepare(sql))
+    );
   }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
@@ -98,21 +108,25 @@ export class D1R2PersistenceService implements PersistenceService {
       }>();
 
     return {
-      projects: (rows.results ?? []).map((row: {
-        id: string;
-        name: string;
-        updated_at: string;
-        document_json: string;
-      }) => {
-        const document = normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
-        return {
-          projectId: document.projectId,
-          name: row.name,
-          lastRevisionId: document.revisions.at(-1)?.revisionId,
-          revisionCount: document.revisions.length,
-          updatedAt: row.updated_at
-        };
-      })
+      projects: (rows.results ?? []).map(
+        (row: {
+          id: string;
+          name: string;
+          updated_at: string;
+          document_json: string;
+        }) => {
+          const document = normalizeDocument(
+            JSON.parse(row.document_json) as ProjectDocument
+          );
+          return {
+            projectId: document.projectId,
+            name: row.name,
+            lastRevisionId: document.revisions.at(-1)?.revisionId,
+            revisionCount: document.revisions.length,
+            updatedAt: row.updated_at
+          };
+        }
+      )
     };
   }
 
@@ -154,7 +168,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().loadProject(projectId);
     }
     await this.ensureSchema();
-    const row = await this.env.DB.prepare(`SELECT document_json FROM projects WHERE id = ?`)
+    const row = await this.env.DB.prepare(
+      `SELECT document_json FROM projects WHERE id = ?`
+    )
       .bind(projectId)
       .first<{ document_json: string }>();
     return row
@@ -167,7 +183,10 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().saveRevision(request);
     }
     await this.ensureSchema();
-    const document = createCheckpoint(normalizeDocument(request.document), request.reason);
+    const document = createCheckpoint(
+      normalizeDocument(request.document),
+      request.reason
+    );
     const documentJson = JSON.stringify(document);
     const result = await this.env.DB.prepare(
       `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ?`
@@ -320,7 +339,9 @@ export class D1R2PersistenceService implements PersistenceService {
     return { artifact, job };
   }
 
-  async getArtifactMetadata(artifactId: string): Promise<ArtifactMetadataResponse> {
+  async getArtifactMetadata(
+    artifactId: string
+  ): Promise<ArtifactMetadataResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().getArtifactMetadata(artifactId);
     }
@@ -350,7 +371,9 @@ export class D1R2PersistenceService implements PersistenceService {
             objectKey: row.object_key,
             contentType: row.content_type,
             createdAt: row.created_at,
-            metadata: JSON.parse(row.metadata_json) as ArtifactRecord['metadata']
+            metadata: JSON.parse(
+              row.metadata_json
+            ) as ArtifactRecord['metadata']
           }
         : null
     };
@@ -409,7 +432,9 @@ async function createSignedUploadSession(
 // setup memoization survives across requests without pinning a stale env.
 const servicesByEnv = new WeakMap<CloudflareEnv, PersistenceService>();
 
-export function createPersistenceService(env: CloudflareEnv): PersistenceService {
+export function createPersistenceService(
+  env: CloudflareEnv
+): PersistenceService {
   if (!env.DB) {
     return getInMemoryPersistence();
   }

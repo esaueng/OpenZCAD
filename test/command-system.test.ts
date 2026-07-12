@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories, replayCommands } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  commandsForCadPatch,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   createProjectDocument,
   getLatestBodyId,
@@ -40,18 +45,30 @@ describe('command-system', () => {
     const base = createProjectDocument('Replay Test', toUserId('user_test'));
     const manager = new CommandManager(base);
 
-    manager.execute(commandFactories.setParameter({ name: 'depth', expression: '24' }));
+    manager.execute(
+      commandFactories.setParameter({ name: 'depth', expression: '24' })
+    );
     manager.execute(
       commandFactories.addSketch({
         name: 'Profile',
         plane: 'XY',
         offset: 0,
-        object: { objectKind: 'rectangle', width: 32, height: 18, centerX: 0, centerY: 0 }
+        object: {
+          objectKind: 'rectangle',
+          width: 32,
+          height: 18,
+          centerX: 0,
+          centerY: 0
+        }
       })
     );
     const sketchId = getLatestSketchId(manager.document)!;
     manager.execute(
-      commandFactories.extrudeSketch({ name: 'Extrude', sketchId, distance: 'depth' })
+      commandFactories.extrudeSketch({
+        name: 'Extrude',
+        sketchId,
+        distance: 'depth'
+      })
     );
     const bodyId = getLatestBodyId(manager.document)!;
     manager.execute(
@@ -62,7 +79,8 @@ describe('command-system', () => {
       })
     );
     const extrudeFeature = Object.values(manager.document.nodes).find(
-      (node): node is FeatureNode => node.kind === 'feature' && node.featureKind === 'extrude'
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'extrude'
     )!;
     manager.execute(
       commandFactories.updateFeature(
@@ -113,7 +131,9 @@ describe('command-system', () => {
     const feature = Object.values(manager.document.nodes).find(
       (node): node is FeatureNode => node.kind === 'feature'
     )!;
-    manager.execute(commandFactories.deleteFeature({ featureId: feature.featureId }));
+    manager.execute(
+      commandFactories.deleteFeature({ featureId: feature.featureId })
+    );
 
     const replayed = replayCommands(base, manager.document.commandLog);
     expect(replayed.bodyOrder).toHaveLength(0);
@@ -178,6 +198,42 @@ describe('command-system', () => {
     expect(manager.document.commandLog).toHaveLength(2);
 
     manager.undo();
+    expect(manager.document.bodyOrder).toHaveLength(0);
+  });
+
+  it('turns a reviewed AI patch into normal undoable commands', () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI Patch', toUserId('user_test'))
+    );
+    const commands = commandsForCadPatch(manager.document, {
+      proposalId: 'proposal_1',
+      summary: 'Add a driven mounting block.',
+      assumptions: [],
+      operations: [
+        { kind: 'set_parameter', name: 'width', expression: '80' },
+        {
+          kind: 'add_primitive',
+          name: 'Mounting block',
+          primitiveKind: 'box',
+          dimensions: {
+            width: 'width',
+            height: 20,
+            depth: 8,
+            radius: null,
+            bottomRadius: null,
+            topRadius: null,
+            majorRadius: null,
+            minorRadius: null
+          }
+        }
+      ]
+    });
+
+    manager.runTransaction('Apply AI patch', commands);
+    expect(manager.document.parameterOrder).toHaveLength(1);
+    expect(manager.document.bodyOrder).toHaveLength(1);
+    manager.undo();
+    expect(manager.document.parameterOrder).toHaveLength(0);
     expect(manager.document.bodyOrder).toHaveLength(0);
   });
 });
