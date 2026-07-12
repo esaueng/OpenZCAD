@@ -49,7 +49,9 @@ export function AiCommandRail({
         } else {
           setPhase('error');
           setMessage(
-            'Add AI_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
+            status.provider === 'openrouter'
+              ? 'Add OPENROUTER_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
+              : 'Add AI_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
           );
         }
       })

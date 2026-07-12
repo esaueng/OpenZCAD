@@ -5,9 +5,11 @@ import {
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
+export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_PROVIDER = 'openai';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
 
 const CAD_ASSISTANT_INSTRUCTIONS = `You are the planning engine for OpenZCAD, a browser-first parametric solid modeler.
 
@@ -38,11 +40,47 @@ export interface AssistantStatus {
   reasoningEffort: string;
 }
 
+function providerFor(env: CloudflareEnv) {
+  return env.AI_PROVIDER ?? DEFAULT_AI_PROVIDER;
+}
+
+function apiKeyFor(env: CloudflareEnv, provider: string) {
+  const genericKey = env.AI_API_KEY?.trim();
+  const providerKey =
+    provider === 'openrouter'
+      ? env.OPENROUTER_API_KEY?.trim()
+      : env.OPENAI_API_KEY?.trim();
+  return provider === 'openrouter'
+    ? providerKey || genericKey || undefined
+    : genericKey || providerKey || undefined;
+}
+
+function modelFor(env: CloudflareEnv, provider: string) {
+  return (
+    env.AI_MODEL ??
+    (provider === 'openrouter' ? DEFAULT_OPENROUTER_MODEL : DEFAULT_AI_MODEL)
+  );
+}
+
+function upstreamUrlFor(env: CloudflareEnv, provider: string) {
+  if (env.AI_BASE_URL) {
+    return env.AI_BASE_URL;
+  }
+  if (provider === 'openai') {
+    return OPENAI_RESPONSES_URL;
+  }
+  if (provider === 'openrouter') {
+    return OPENROUTER_RESPONSES_URL;
+  }
+  return undefined;
+}
+
 export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
+  const provider = providerFor(env);
   return {
-    configured: Boolean(env.AI_API_KEY ?? env.OPENAI_API_KEY),
-    provider: env.AI_PROVIDER ?? DEFAULT_AI_PROVIDER,
-    model: env.AI_MODEL ?? DEFAULT_AI_MODEL,
+    configured: Boolean(apiKeyFor(env, provider)),
+    provider,
+    model: modelFor(env, provider),
     reasoningEffort:
       env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
   };
@@ -60,7 +98,8 @@ export async function streamAssistantProposal(
   env: CloudflareEnv,
   safetyIdentifier?: string
 ): Promise<Response> {
-  const apiKey = env.AI_API_KEY ?? env.OPENAI_API_KEY;
+  const provider = providerFor(env);
+  const apiKey = apiKeyFor(env, provider);
   if (!apiKey) {
     return jsonError(
       'AI is not configured for this environment.',
@@ -69,11 +108,7 @@ export async function streamAssistantProposal(
     );
   }
 
-  const provider = env.AI_PROVIDER ?? DEFAULT_AI_PROVIDER;
-  const upstreamUrl =
-    provider === 'openai'
-      ? (env.AI_BASE_URL ?? OPENAI_RESPONSES_URL)
-      : env.AI_BASE_URL;
+  const upstreamUrl = upstreamUrlFor(env, provider);
   if (!upstreamUrl) {
     return jsonError(
       'AI_BASE_URL is required for a Responses-compatible provider.',
@@ -82,14 +117,22 @@ export async function streamAssistantProposal(
     );
   }
 
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${apiKey}`,
+    'content-type': 'application/json'
+  };
+  if (provider === 'openrouter') {
+    headers['X-Title'] = env.AI_APP_NAME ?? 'OpenZCAD';
+    if (env.AI_SITE_URL) {
+      headers['HTTP-Referer'] = env.AI_SITE_URL;
+    }
+  }
+
   const upstream = await fetch(upstreamUrl, {
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json'
-    },
+    headers,
     body: JSON.stringify({
-      model: env.AI_MODEL ?? DEFAULT_AI_MODEL,
+      model: modelFor(env, provider),
       instructions: CAD_ASSISTANT_INSTRUCTIONS,
       input: [
         {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_AI_MODEL,
   DEFAULT_AI_PROVIDER,
+  DEFAULT_OPENROUTER_MODEL,
   getAssistantStatus,
   streamAssistantProposal
 } from '../apps/web/worker/assistant';
@@ -98,5 +99,51 @@ describe('assistant integration', () => {
       reasoningEffort: 'high'
     });
     expect(JSON.stringify(status)).not.toContain('never-return-this');
+  });
+
+  it('uses an OpenRouter key, endpoint, headers, and balanced model default', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      AI_PROVIDER: 'openrouter' as const,
+      AI_API_KEY: 'wrong-generic-key',
+      OPENROUTER_API_KEY: 'openrouter-test-key',
+      AI_SITE_URL: 'https://beta.openzcad.example',
+      AI_APP_NAME: 'OpenZCAD Beta'
+    };
+    const status = getAssistantStatus(env);
+    expect(status).toMatchObject({
+      configured: true,
+      provider: 'openrouter',
+      model: DEFAULT_OPENROUTER_MODEL
+    });
+
+    const response = await streamAssistantProposal(input, env, 'user_test');
+    expect(response.status).toBe(200);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://openrouter.ai/api/v1/responses');
+    const headers = new Headers(init?.headers);
+    expect(headers.get('authorization')).toBe('Bearer openrouter-test-key');
+    expect(headers.get('x-title')).toBe('OpenZCAD Beta');
+    expect(headers.get('http-referer')).toBe(
+      'https://beta.openzcad.example'
+    );
+    const request = JSON.parse(init?.body as string) as {
+      model: string;
+      reasoning: { effort: string };
+      stream: boolean;
+    };
+    expect(request).toMatchObject({
+      model: 'openai/gpt-5.6-terra',
+      reasoning: { effort: 'high' },
+      stream: true
+    });
   });
 });

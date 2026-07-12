@@ -17,8 +17,8 @@
   "vars": {
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "development",
-    "AI_PROVIDER": "openai",
-    "AI_MODEL": "gpt-5.6-sol",
+    "AI_PROVIDER": "openrouter",
+    "AI_MODEL": "openai/gpt-5.6-terra",
     "AI_REASONING_EFFORT": "high"
   },
   "d1_databases": [
@@ -69,8 +69,8 @@
       "vars": {
         "ENVIRONMENT": "beta",
         "AUTH_MODE": "cloudflare-access",
-        "AI_PROVIDER": "openai",
-        "AI_MODEL": "gpt-5.6-sol",
+        "AI_PROVIDER": "openrouter",
+        "AI_MODEL": "openai/gpt-5.6-terra",
         "AI_REASONING_EFFORT": "high"
       },
       "d1_databases": [

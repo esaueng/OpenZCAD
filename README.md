@@ -57,10 +57,12 @@ Open the local URL printed by Vite. The CAD workspace works without an AI key; t
 
 Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity. Beta deployment uses `AUTH_MODE=cloudflare-access` and must sit behind a Cloudflare Access policy. Set `AUTH_LEGACY_OWNER_EMAIL` as a Worker secret or variable to the Access email that should inherit historical `user_beta_dev` projects.
 
-Configure secrets only in `apps/web/.dev.vars` or with `wrangler secret`:
+OpenRouter is the default AI provider. Configure secrets only in `apps/web/.dev.vars` or with `wrangler secret`:
 
 ```dotenv
-AI_API_KEY=your_key_here
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_key_here
+AI_MODEL=openai/gpt-5.6-terra
 ```
 
 For local development, copy the example, set the key, and restart `pnpm dev:web`:
@@ -72,19 +74,23 @@ cp apps/web/.dev.vars.example apps/web/.dev.vars
 For the beta Worker, store the key as a Cloudflare secret instead of a file:
 
 ```bash
-pnpm --filter @openzcad/web exec wrangler secret put AI_API_KEY --env beta
+pnpm --filter @openzcad/web exec wrangler secret put OPENROUTER_API_KEY --env beta
 ```
 
 The assistant checks `GET /api/assistant/status` on startup and reports the configured model/reasoning tier without exposing the secret. `.dev.vars` files are ignored by Git.
 
-`OPENAI_API_KEY` remains supported for existing beta environments. Non-secret model settings live in `wrangler.jsonc`:
+The recommended default is `openai/gpt-5.6-terra`: it is the balanced GPT-5.6 tier for reliable structured CAD planning. Use `openai/gpt-5.6-sol` when maximum quality matters more than cost/latency, or `openai/gpt-5.6-luna` for inexpensive, latency-sensitive edits.
 
-- `AI_PROVIDER` defaults to `openai`; `responses-compatible` selects another provider that implements the Responses streaming protocol.
-- `AI_BASE_URL` overrides the Responses endpoint and is required for `responses-compatible`.
-- `AI_MODEL` defaults to `gpt-5.6-sol`.
+Direct OpenAI and other Responses-compatible providers remain supported. Non-secret settings live in `wrangler.jsonc`:
+
+- `AI_PROVIDER` accepts `openrouter`, `openai`, or `responses-compatible` and defaults to OpenRouter in the checked-in app config.
+- `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or provider-neutral `AI_API_KEY` supplies the server-side secret.
+- `AI_BASE_URL` optionally overrides the provider endpoint and is required for `responses-compatible`.
+- `AI_MODEL` defaults to `openai/gpt-5.6-terra` for OpenRouter and `gpt-5.6-sol` for direct OpenAI when no app config overrides it.
 - `AI_REASONING_EFFORT` defaults to `high` and accepts `low`, `medium`, `high`, or `xhigh`.
+- `AI_SITE_URL` and `AI_APP_NAME` optionally send OpenRouter attribution headers.
 
-Both are environment-configurable and centralized; no model string is spread through application code.
+All provider/model choices are centralized; no API key is shipped to the browser or committed.
 
 ## Commands
 

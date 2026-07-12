@@ -1,8 +1,15 @@
 # Copy to .dev.vars for local development. Never commit the populated file.
-AI_API_KEY=
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=
+AI_MODEL=openai/gpt-5.6-terra
 
-# Backward-compatible alternative: OPENAI_API_KEY=
-# For an OpenAI Responses-compatible provider, also set AI_PROVIDER and AI_BASE_URL.
+# Generic secret alternative: AI_API_KEY=
+# Optional attribution: AI_SITE_URL=http://localhost:5173
+# Optional attribution: AI_APP_NAME=OpenZCAD
+
+# Direct OpenAI alternative: AI_PROVIDER=openai and OPENAI_API_KEY=
+# For another Responses-compatible provider, set AI_PROVIDER=responses-compatible
+# plus AI_BASE_URL and either AI_API_KEY or OPENAI_API_KEY.
 # Local Wrangler uses AUTH_MODE=development from wrangler.jsonc.
 # Beta uses Cloudflare Access; optionally set AUTH_LEGACY_OWNER_EMAIL there to
 # the Access email that should inherit historical user_beta_dev projects.

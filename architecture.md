@@ -42,7 +42,7 @@ After project ownership is authorized, the client upgrades `GET /api/projects/:i
 
 ## AI lifecycle
 
-`POST /api/assistant/proposals` accepts a user request and a compact document digest. Embedded STEP source and mesh arrays are omitted from model context; exact selected face/edge context is included. The beta Worker calls the configurable OpenAI Responses API with streaming, `store: false`, a stable authenticated-user safety identifier, configurable reasoning effort, a strict JSON Schema structured output, and system instructions that require the smallest safe document patch and prohibit claims that a patch was applied.
+`POST /api/assistant/proposals` accepts a user request and a compact document digest. Embedded STEP source and mesh arrays are omitted from model context; exact selected face/edge context is included. The beta Worker calls OpenRouter's OpenAI-compatible Responses endpoint by default (or direct OpenAI/another compatible endpoint) with streaming, `store: false`, a stable authenticated-user safety identifier, configurable reasoning effort, a strict JSON Schema structured output, and system instructions that require the smallest safe document patch and prohibit claims that a patch was applied.
 
 The patch vocabulary covers named parameters, existing feature dimensions, primitive creation, sweeps, booleans, transforms, edge modifiers, patterns, renaming, and deletion. The client assembles `response.output_text.delta` events, validates the final proposal again, and displays it. Preview runs the proposal against a temporary `CommandManager`; Apply converts it to normal commands and commits one undoable transaction. `GET /api/assistant/status` exposes configuration metadata but never the secret.
 
@@ -53,8 +53,8 @@ The patch vocabulary covers named parameters, existing feature dimensions, primi
 - R2: large source/export assets when configured.
 - Durable Objects: authenticated per-project presence and live document synchronization.
 - Workflows/Queues: export/import orchestration scaffolding.
-- Worker secret: `AI_API_KEY` (with `OPENAI_API_KEY` backward compatibility); never shipped to the browser.
-- `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, and `AI_REASONING_EFFORT` select a Responses-compatible provider and model without code changes.
+- Worker secret: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or provider-neutral `AI_API_KEY`; never shipped to the browser.
+- `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_REASONING_EFFORT`, `AI_SITE_URL`, and `AI_APP_NAME` select and attribute a Responses-compatible provider/model without code changes.
 
 ## API and errors
 
