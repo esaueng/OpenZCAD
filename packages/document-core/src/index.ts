@@ -167,6 +167,14 @@ export interface ImportedMeshInput {
   ids?: BodyFeatureIds;
 }
 
+export interface ImportedStepInput {
+  name: string;
+  artifactId: string;
+  sourceName: string;
+  stepText: string;
+  ids?: BodyFeatureIds;
+}
+
 export interface ParameterSetInput {
   name: string;
   expression: string;
@@ -285,7 +293,8 @@ export function createProjectDocument(
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   const revisions = document.revisions ?? [];
   const fallbackRevision = revisions.at(-1);
-  const checkpoints = document.checkpoints ??
+  const checkpoints =
+    document.checkpoints ??
     (fallbackRevision
       ? [
           {
@@ -343,14 +352,18 @@ export function findSketch(
   document: ProjectDocument,
   sketchId: SketchId
 ): SketchNode | undefined {
-  return listNodesByKind(document, 'sketch').find((sketch) => sketch.sketchId === sketchId);
+  return listNodesByKind(document, 'sketch').find(
+    (sketch) => sketch.sketchId === sketchId
+  );
 }
 
 export function findBodyNode(
   document: ProjectDocument,
   bodyId: BodyId
 ): BodyNode | undefined {
-  return listNodesByKind(document, 'body').find((body) => body.bodyId === bodyId);
+  return listNodesByKind(document, 'body').find(
+    (body) => body.bodyId === bodyId
+  );
 }
 
 export function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
@@ -725,6 +738,52 @@ export function importMeshBody(
   return { document: next, bodyId };
 }
 
+export function importStepBody(
+  document: ProjectDocument,
+  input: ImportedStepInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
+
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind: 'imported-step',
+    data: {
+      featureKind: 'imported-step',
+      artifactId: toArtifactId(input.artifactId),
+      sourceName: input.sourceName,
+      stepText: input.stepText
+    }
+  };
+
+  next.nodes[bodyNodeId] = {
+    id: bodyNodeId,
+    kind: 'body',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'step-import',
+    exportableStep: true,
+    metadata: { color: featureColor('imported-step') }
+  };
+
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId);
+  attachToPart(next, featureNodeId, bodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId };
+}
+
 // ---------------------------------------------------------------------------
 // Parameters.
 // ---------------------------------------------------------------------------
@@ -737,7 +796,9 @@ export function isValidParameterName(name: string): boolean {
 
 export function listParameters(document: ProjectDocument): ParameterNode[] {
   const parameters = listNodesByKind(document, 'parameter');
-  const byId = new Map(parameters.map((parameter) => [parameter.parameterId, parameter]));
+  const byId = new Map(
+    parameters.map((parameter) => [parameter.parameterId, parameter])
+  );
   const ordered: ParameterNode[] = [];
   const seen = new Set<ParameterId>();
   for (const parameterId of document.parameterOrder) {
@@ -769,7 +830,9 @@ export function setParameter(
     throw new Error('Parameter expression must not be empty.');
   }
   const next = cloneDocument(document);
-  const existing = listParameters(next).find((parameter) => parameter.name === name);
+  const existing = listParameters(next).find(
+    (parameter) => parameter.name === name
+  );
   if (existing) {
     existing.expression = input.expression;
   } else {
@@ -796,12 +859,16 @@ export function deleteParameter(
   input: ParameterDeleteInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const parameter = listParameters(next).find((entry) => entry.name === input.name);
+  const parameter = listParameters(next).find(
+    (entry) => entry.name === input.name
+  );
   if (!parameter) {
     throw new Error(`Parameter "${input.name}" not found.`);
   }
   delete next.nodes[parameter.id];
-  next.parameterOrder = next.parameterOrder.filter((id) => id !== parameter.parameterId);
+  next.parameterOrder = next.parameterOrder.filter(
+    (id) => id !== parameter.parameterId
+  );
   refreshParameterValues(next);
   next.version += 1;
   return next;
@@ -819,10 +886,14 @@ export interface ParameterScopeResult {
  * any declaration order; evaluation iterates until a fixed point, so cycles
  * and unknown identifiers surface as per-parameter errors instead of crashes.
  */
-export function getParameterScope(document: ProjectDocument): ParameterScopeResult {
+export function getParameterScope(
+  document: ProjectDocument
+): ParameterScopeResult {
   const parameters = listParameters(document);
   const scope: Record<string, number> = {};
-  const pending = new Map(parameters.map((parameter) => [parameter.name, parameter]));
+  const pending = new Map(
+    parameters.map((parameter) => [parameter.name, parameter])
+  );
   const errors: string[] = [];
 
   let progressed = true;
@@ -881,7 +952,8 @@ export function resolveParamValue(
     }
     return evaluateExpression(value, scope);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'evaluation failed.';
+    const reason =
+      error instanceof Error ? error.message : 'evaluation failed.';
     throw new Error(label ? `${label}: ${reason}` : reason);
   }
 }
@@ -916,7 +988,9 @@ export function updateFeature(
       patch.featureKind !== undefined &&
       patch.featureKind !== feature.featureKind
     ) {
-      throw new Error('A feature cannot change kind; delete and recreate it instead.');
+      throw new Error(
+        'A feature cannot change kind; delete and recreate it instead.'
+      );
     }
     delete patch.featureKind;
 
@@ -954,7 +1028,9 @@ export function deleteFeature(
   for (const body of listNodesByKind(next, 'body')) {
     if (body.featureId === feature.featureId) {
       removedNodeIds.add(body.id);
-      next.bodyOrder = next.bodyOrder.filter((bodyId) => bodyId !== body.bodyId);
+      next.bodyOrder = next.bodyOrder.filter(
+        (bodyId) => bodyId !== body.bodyId
+      );
     }
   }
 
@@ -970,13 +1046,17 @@ export function deleteFeature(
     next.sketchOrder = next.sketchOrder.filter((id) => id !== sketchId);
   }
 
-  next.featureOrder = next.featureOrder.filter((id) => id !== feature.featureId);
+  next.featureOrder = next.featureOrder.filter(
+    (id) => id !== feature.featureId
+  );
   for (const nodeId of removedNodeIds) {
     delete next.nodes[nodeId];
   }
   for (const node of Object.values(next.nodes)) {
     if (node.kind === 'part' || node.kind === 'assembly') {
-      node.childIds = node.childIds.filter((childId) => !removedNodeIds.has(childId));
+      node.childIds = node.childIds.filter(
+        (childId) => !removedNodeIds.has(childId)
+      );
     }
   }
   next.version += 1;
@@ -1094,7 +1174,9 @@ export function attachDerivedState(
   return { ...document, derived };
 }
 
-export function getLatestSketchId(document: ProjectDocument): SketchId | undefined {
+export function getLatestSketchId(
+  document: ProjectDocument
+): SketchId | undefined {
   return document.sketchOrder.at(-1);
 }
 
@@ -1109,7 +1191,10 @@ export function getLatestBodyId(document: ProjectDocument): BodyId | undefined {
 const DEG_TO_RAD = Math.PI / 180;
 
 /** Trigonometry takes degrees — the conventional unit in CAD parameter tables. */
-const EXPRESSION_FUNCTIONS: Record<string, { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }> = {
+const EXPRESSION_FUNCTIONS: Record<
+  string,
+  { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }
+> = {
   abs: { arity: 'unary', apply: ([a]) => Math.abs(a!) },
   sqrt: { arity: 'unary', apply: ([a]) => Math.sqrt(a!) },
   floor: { arity: 'unary', apply: ([a]) => Math.floor(a!) },
@@ -1151,7 +1236,13 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    if (char === '+' || char === '-' || char === '*' || char === '/' || char === '^') {
+    if (
+      char === '+' ||
+      char === '-' ||
+      char === '*' ||
+      char === '/' ||
+      char === '^'
+    ) {
       tokens.push({ type: 'operator', value: char });
       index += 1;
       continue;
@@ -1176,7 +1267,9 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(expression.slice(index));
+    const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(
+      expression.slice(index)
+    );
     if (identifierMatch) {
       tokens.push({ type: 'identifier', name: identifierMatch[0] });
       index += identifierMatch[0].length;
@@ -1260,7 +1353,10 @@ export function evaluateExpression(
       }
       return value;
     }
-    if (token.type === 'operator' && (token.value === '-' || token.value === '+')) {
+    if (
+      token.type === 'operator' &&
+      (token.value === '-' || token.value === '+')
+    ) {
       const operand = parsePrimary();
       return token.value === '-' ? -operand : operand;
     }
@@ -1290,7 +1386,10 @@ export function evaluateExpression(
     let value = parsePower();
     for (;;) {
       const token = peek();
-      if (token?.type !== 'operator' || (token.value !== '*' && token.value !== '/')) {
+      if (
+        token?.type !== 'operator' ||
+        (token.value !== '*' && token.value !== '/')
+      ) {
         return value;
       }
       position += 1;
@@ -1303,7 +1402,10 @@ export function evaluateExpression(
     let value = parseMultiplicative();
     for (;;) {
       const token = peek();
-      if (token?.type !== 'operator' || (token.value !== '+' && token.value !== '-')) {
+      if (
+        token?.type !== 'operator' ||
+        (token.value !== '+' && token.value !== '-')
+      ) {
         return value;
       }
       position += 1;

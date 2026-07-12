@@ -27,6 +27,7 @@ import type {
   ProjectSummary,
   SketchNode,
   SketchObjectData,
+  TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
 import type { AuthSession } from '@openzcad/shared';
@@ -54,6 +55,7 @@ import type {
 
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
+const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -82,6 +84,8 @@ export function App() {
   const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
     string | null
   >(null);
+  const [selectedTopology, setSelectedTopology] =
+    useState<TopologySelection | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
@@ -302,7 +306,8 @@ export function App() {
     ? (representations[selectedFeature.bodyId] ?? null)
     : null;
   const selectedBodyId =
-    selectedBody && !selectedBody.consumed ? selectedBody.bodyId : null;
+    selectedTopology?.bodyId ??
+    (selectedBody && !selectedBody.consumed ? selectedBody.bodyId : null);
 
   const exportBodyIds = useMemo<BodyId[]>(() => {
     if (!doc) {
@@ -321,6 +326,7 @@ export function App() {
     setDoc(normalized);
     setPreviewDoc(null);
     setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
     setTool(null);
   }
 
@@ -360,6 +366,7 @@ export function App() {
       // the new feature is selectable from the history or the viewport.
       setTool(null);
       setSelectedFeatureNodeId(null);
+      setSelectedTopology(null);
     }
   }
 
@@ -425,6 +432,7 @@ export function App() {
     managerRef.current = null;
     setDoc(null);
     setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
     setTool(null);
     try {
       const [local, remote] = await Promise.all([
@@ -446,6 +454,7 @@ export function App() {
     }
     setDoc(managerRef.current.undo());
     setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
     setStatus('Undo');
   }
 
@@ -455,6 +464,7 @@ export function App() {
     }
     setDoc(managerRef.current.redo());
     setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
     setStatus('Redo');
   }
 
@@ -588,15 +598,66 @@ export function App() {
       return;
     }
 
-    try {
-      const metadata = parseStepMetadata(file.name, await file.text());
-      const products =
-        metadata.products.slice(0, 3).join(', ') || 'no products found';
+    if (file.size > MAX_EMBEDDED_STEP_BYTES) {
       setStatus(
-        `STEP metadata read (${products}). Full B-Rep STEP import needs the native kernel and is not available yet.`
+        'STEP import is limited to 12 MB while source B-reps are stored in the offline document.'
       );
+      return;
+    }
+
+    try {
+      const stepText = await file.text();
+      const metadata = parseStepMetadata(file.name, stepText);
+      const productName = metadata.products[0]?.trim();
+      let artifactId = `artifact_local_${crypto.randomUUID()}`;
+      let archived = false;
+      try {
+        const uploadSession = await api.createUploadSession({
+          projectId: doc.projectId,
+          fileName: file.name,
+          contentType
+        });
+        if (uploadSession.session.uploadUrl) {
+          const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: { 'content-type': contentType }
+          });
+          if (!uploadResponse.ok) {
+            throw new Error(`Upload failed (${uploadResponse.status}).`);
+          }
+        }
+        await api.finalizeImport({
+          projectId: doc.projectId,
+          uploadSessionId: uploadSession.session.uploadSessionId,
+          artifactId: uploadSession.session.artifactId,
+          fileName: file.name,
+          contentType
+        });
+        artifactId = uploadSession.session.artifactId;
+        archived = true;
+      } catch {
+        // The STEP source remains embedded for deterministic offline rebuilds.
+      }
+
+      const imported = executeCommand(
+        commandFactories.importStep({
+          name: productName || file.name.replace(/\.(step|stp)$/i, ''),
+          artifactId,
+          sourceName: file.name,
+          stepText
+        })
+      );
+      if (imported) {
+        setStatus(
+          `Imported editable STEP solid from ${file.name}` +
+            (archived
+              ? '.'
+              : ' (cloud archive unavailable; source saved locally).')
+        );
+      }
     } catch (error) {
-      setStatus(errorMessage(error, 'Import failed.'));
+      setStatus(errorMessage(error, 'STEP import failed.'));
     }
   }
 
@@ -654,18 +715,20 @@ export function App() {
     }
   }
 
-  function handleSelectBodyFromViewer(bodyId: string | null) {
-    if (!doc || !bodyId) {
+  function handleSelectTopologyFromViewer(selection: TopologySelection | null) {
+    if (!doc || !selection) {
       setSelectedFeatureNodeId(null);
+      setSelectedTopology(null);
       return;
     }
     const bodyNode = listNodesByKind(doc, 'body').find(
-      (body) => body.bodyId === bodyId
+      (body) => body.bodyId === selection.bodyId
     );
     const feature = bodyNode
       ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
       : undefined;
     setTool(null);
+    setSelectedTopology(selection);
     setSelectedFeatureNodeId(feature?.id ?? null);
   }
 
@@ -676,6 +739,7 @@ export function App() {
       )
     ) {
       setSelectedFeatureNodeId(null);
+      setSelectedTopology(null);
     }
   }
 
@@ -711,6 +775,7 @@ export function App() {
       } else if (event.key === 'Escape') {
         setTool(null);
         setSelectedFeatureNodeId(null);
+        setSelectedTopology(null);
       }
     }
     window.addEventListener('keydown', onKeyDown);
@@ -768,6 +833,7 @@ export function App() {
           warnings={warnings}
           onSelectFeature={(nodeId) => {
             setTool(null);
+            setSelectedTopology(null);
             setSelectedFeatureNodeId((current) =>
               current === nodeId ? null : nodeId
             );
@@ -785,9 +851,10 @@ export function App() {
         <ViewerShell
           bodies={viewerBodies}
           selectedBodyId={selectedBodyId}
+          selectedTopology={selectedTopology}
           settings={viewerSettings}
           fitSignal={fitSignal}
-          onSelectBody={handleSelectBodyFromViewer}
+          onSelectTopology={handleSelectTopologyFromViewer}
           onToggleGrid={() =>
             setViewerSettings((current) => ({
               ...current,
@@ -804,17 +871,20 @@ export function App() {
           selectedSketch={selectedSketch}
           selectedSketchObject={selectedSketchObject}
           selectedBody={selectedBody}
+          selectedTopology={selectedTopology}
           scope={parameterScope.scope}
           sketches={sketchOptions}
           bodies={bodyOptions}
           units={doc.units}
           onLaunchTool={(nextTool) => {
             setSelectedFeatureNodeId(null);
+            setSelectedTopology(null);
             setTool(nextTool);
           }}
           onCancel={() => {
             setTool(null);
             setSelectedFeatureNodeId(null);
+            setSelectedTopology(null);
           }}
           onCreatePrimitive={(kind, name, dimensions) =>
             createFeature(

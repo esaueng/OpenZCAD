@@ -20,6 +20,7 @@ import {
   findFeature,
   findSketch,
   importMeshBody,
+  importStepBody,
   renameNode,
   revolveSketch,
   setNodeMetadata,
@@ -32,6 +33,7 @@ import {
   type FeatureDeleteInput,
   type FeatureUpdateInput,
   type ImportedMeshInput,
+  type ImportedStepInput,
   type NodeMetadataInput,
   type NodeRenameInput,
   type ParameterDeleteInput,
@@ -57,6 +59,7 @@ export type CommandKind =
   | 'parameter.set'
   | 'parameter.delete'
   | 'import.mesh'
+  | 'import.step'
   | 'node.rename'
   | 'node.metadata.set';
 
@@ -89,6 +92,7 @@ export type AnyCommand =
   | CommandDefinition<ParameterSetInput>
   | CommandDefinition<ParameterDeleteInput>
   | CommandDefinition<ImportedMeshInput>
+  | CommandDefinition<ImportedStepInput>
   | CommandDefinition<NodeRenameInput>
   | CommandDefinition<NodeMetadataInput>;
 
@@ -281,6 +285,15 @@ export const commandFactories = {
       'Import STL mesh',
       withIds,
       (document) => importMeshBody(document, withIds).document
+    );
+  },
+  importStep(payload: ImportedStepInput): CommandDefinition<ImportedStepInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'import.step',
+      'Import editable STEP solid',
+      withIds,
+      (document) => importStepBody(document, withIds).document
     );
   },
   renameNode(payload: NodeRenameInput): CommandDefinition<NodeRenameInput> {
@@ -501,6 +514,12 @@ export function replayCommands(
         next = importMeshBody(
           next,
           command.payload as ImportedMeshInput
+        ).document;
+        break;
+      case 'import.step':
+        next = importStepBody(
+          next,
+          command.payload as ImportedStepInput
         ).document;
         break;
       case 'node.rename':

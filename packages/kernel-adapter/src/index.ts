@@ -115,7 +115,10 @@ function buildSketchSolid(
   feature: FeatureNode,
   scope: Record<string, number>
 ): Solid {
-  if (feature.data.featureKind !== 'extrude' && feature.data.featureKind !== 'revolve') {
+  if (
+    feature.data.featureKind !== 'extrude' &&
+    feature.data.featureKind !== 'revolve'
+  ) {
     throw new GeometryError('Not a sweep feature.');
   }
   const sketch = findSketch(document, feature.data.sketchId);
@@ -132,7 +135,11 @@ function buildSketchSolid(
   const offset = resolveParamValue(sketch.offset, scope, 'sketch offset');
 
   if (feature.data.featureKind === 'extrude') {
-    const distance = resolveParamValue(feature.data.distance, scope, 'distance');
+    const distance = resolveParamValue(
+      feature.data.distance,
+      scope,
+      'distance'
+    );
     return extrudeProfile(profile, basis, distance, offset);
   }
   return revolveProfile(profile, basis, feature.data.axis, offset);
@@ -159,7 +166,10 @@ export class OpenZCADKernel implements KernelAdapter {
           case 'extrude':
           case 'revolve': {
             if (feature.bodyId) {
-              solids.set(feature.bodyId, buildSketchSolid(document, feature, scope));
+              solids.set(
+                feature.bodyId,
+                buildSketchSolid(document, feature, scope)
+              );
             }
             break;
           }
@@ -176,6 +186,10 @@ export class OpenZCADKernel implements KernelAdapter {
             }
             break;
           }
+          case 'imported-step':
+            throw new GeometryError(
+              'editable STEP solids require the exact OpenCascade kernel.'
+            );
           case 'transform': {
             const targetBodyId = feature.data.targetBodyId;
             if (consumed.has(targetBodyId)) {
@@ -186,19 +200,45 @@ export class OpenZCADKernel implements KernelAdapter {
             }
             const target = solids.get(targetBodyId);
             if (!target) {
-              warnings.push(`Transform "${feature.name}" targets a missing body.`);
+              warnings.push(
+                `Transform "${feature.name}" targets a missing body.`
+              );
               break;
             }
             const transform = {
               translation: {
-                x: resolveParamValue(feature.data.transform.translation.x, scope, 'X'),
-                y: resolveParamValue(feature.data.transform.translation.y, scope, 'Y'),
-                z: resolveParamValue(feature.data.transform.translation.z, scope, 'Z')
+                x: resolveParamValue(
+                  feature.data.transform.translation.x,
+                  scope,
+                  'X'
+                ),
+                y: resolveParamValue(
+                  feature.data.transform.translation.y,
+                  scope,
+                  'Y'
+                ),
+                z: resolveParamValue(
+                  feature.data.transform.translation.z,
+                  scope,
+                  'Z'
+                )
               },
               rotationDeg: {
-                x: resolveParamValue(feature.data.transform.rotationDeg.x, scope, 'rotate X'),
-                y: resolveParamValue(feature.data.transform.rotationDeg.y, scope, 'rotate Y'),
-                z: resolveParamValue(feature.data.transform.rotationDeg.z, scope, 'rotate Z')
+                x: resolveParamValue(
+                  feature.data.transform.rotationDeg.x,
+                  scope,
+                  'rotate X'
+                ),
+                y: resolveParamValue(
+                  feature.data.transform.rotationDeg.y,
+                  scope,
+                  'rotate Y'
+                ),
+                z: resolveParamValue(
+                  feature.data.transform.rotationDeg.z,
+                  scope,
+                  'rotate Z'
+                )
               }
             };
             solids.set(targetBodyId, transformSolid(target, transform));
@@ -228,7 +268,11 @@ export class OpenZCADKernel implements KernelAdapter {
             }
             let result = operands[0]!;
             for (let i = 1; i < operands.length; i++) {
-              result = booleanSolids(feature.data.operation, result, operands[i]!);
+              result = booleanSolids(
+                feature.data.operation,
+                result,
+                operands[i]!
+              );
             }
             if (result.faces.length === 0) {
               warnings.push(
@@ -243,7 +287,8 @@ export class OpenZCADKernel implements KernelAdapter {
           }
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'geometry build failed.';
+        const message =
+          error instanceof Error ? error.message : 'geometry build failed.';
         warnings.push(`Feature "${feature.name}": ${message}`);
       }
     }
@@ -258,7 +303,10 @@ export class OpenZCADKernel implements KernelAdapter {
     const exportableBodyIds: BodyId[] = [];
 
     const featuresById = new Map(
-      listNodesByKind(document, 'feature').map((feature) => [feature.featureId, feature])
+      listNodesByKind(document, 'feature').map((feature) => [
+        feature.featureId,
+        feature
+      ])
     );
 
     for (const bodyId of document.bodyOrder) {
@@ -271,8 +319,12 @@ export class OpenZCADKernel implements KernelAdapter {
         const feature = featuresById.get(body.featureId);
         if (feature) {
           // Build failures already produced a specific warning.
-          if (!warnings.some((warning) => warning.includes(`"${feature.name}"`))) {
-            warnings.push(`No geometry produced for feature "${feature.name}".`);
+          if (
+            !warnings.some((warning) => warning.includes(`"${feature.name}"`))
+          ) {
+            warnings.push(
+              `No geometry produced for feature "${feature.name}".`
+            );
           }
         }
         continue;
@@ -294,7 +346,8 @@ export class OpenZCADKernel implements KernelAdapter {
         faceCount: solid.faces.length,
         color:
           String(
-            body.metadata?.color ?? featureColor(feature?.featureKind ?? 'primitive')
+            body.metadata?.color ??
+              featureColor(feature?.featureKind ?? 'primitive')
           ) || DEFAULT_BODY_COLOR,
         exportableStep: body.exportableStep,
         consumed: isConsumed,
@@ -342,7 +395,11 @@ export class OpenZCADKernel implements KernelAdapter {
       }
       const body = bodies.find((candidate) => candidate.bodyId === bodyId);
       const mesh = triangulateSolid(solid);
-      return { name: body?.name ?? 'Body', vertices: mesh.vertices, indices: mesh.indices };
+      return {
+        name: body?.name ?? 'Body',
+        vertices: mesh.vertices,
+        indices: mesh.indices
+      };
     });
     return writeAsciiStl(document.name, meshes);
   }

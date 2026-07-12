@@ -6,7 +6,11 @@ import {
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { createObjectForBody, fitCameraToObjects } from '@openzcad/viewport';
-import type { BodyRepresentation } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  BodyTopology,
+  TopologySelection
+} from '@openzcad/shared';
 
 export interface ViewerSettings {
   showGrid: boolean;
@@ -15,10 +19,11 @@ export interface ViewerSettings {
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   selectedBodyId: string | null;
+  selectedTopology: TopologySelection | null;
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
-  onSelectBody(bodyId: string | null): void;
+  onSelectTopology(selection: TopologySelection | null): void;
 }
 
 interface SceneContext {
@@ -103,14 +108,15 @@ function findBodyId(object: THREE.Object3D): string | null {
 export function ModelViewer({
   bodies,
   selectedBodyId,
+  selectedTopology,
   settings,
   fitSignal,
-  onSelectBody
+  onSelectTopology
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
-  const onSelectBodyRef = useRef(onSelectBody);
-  onSelectBodyRef.current = onSelectBody;
+  const onSelectTopologyRef = useRef(onSelectTopology);
+  onSelectTopologyRef.current = onSelectTopology;
 
   // Scene, renderers, controls, and the render loop live for the component's
   // lifetime; only the body/overlay groups rebuild on data changes.
@@ -193,7 +199,9 @@ export function ModelViewer({
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
 
-    function pickBodyId(event: PointerEvent): string | null {
+    context.raycaster.params.Line = { threshold: 1.8 };
+
+    function pickSelection(event: PointerEvent): TopologySelection | null {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -203,10 +211,43 @@ export function ModelViewer({
         if (!hit.object.visible) {
           continue;
         }
-        const bodyId = findBodyId(hit.object);
-        if (bodyId) {
-          return bodyId;
+        const data = hit.object.userData as {
+          bodyId?: string;
+          topologyKind?: 'edge';
+          topologyId?: string;
+          topologyHash?: number;
+          topology?: BodyTopology;
+        };
+        const bodyId = data.bodyId ?? findBodyId(hit.object);
+        if (!bodyId) {
+          continue;
         }
+        if (data.topologyKind === 'edge' && data.topologyId) {
+          return {
+            bodyId: bodyId as TopologySelection['bodyId'],
+            kind: 'edge',
+            topologyId: data.topologyId,
+            hash: data.topologyHash
+          };
+        }
+        const faceIndex = hit.faceIndex;
+        const face =
+          typeof faceIndex === 'number'
+            ? data.topology?.faces.find(
+                (candidate) =>
+                  faceIndex >= candidate.triangleStart &&
+                  faceIndex < candidate.triangleStart + candidate.triangleCount
+              )
+            : undefined;
+        if (face) {
+          return {
+            bodyId: bodyId as TopologySelection['bodyId'],
+            kind: 'face',
+            topologyId: face.topologyId,
+            hash: face.hash
+          };
+        }
+        return { bodyId: bodyId as TopologySelection['bodyId'], kind: 'body' };
       }
       return null;
     }
@@ -228,7 +269,7 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      applyHover(pickBodyId(event));
+      applyHover(pickSelection(event)?.bodyId ?? null);
     };
     const handlePointerDown = (event: PointerEvent) => {
       downPosition = { x: event.clientX, y: event.clientY };
@@ -243,7 +284,7 @@ export function ModelViewer({
       );
       downPosition = null;
       if (moved < 5) {
-        onSelectBodyRef.current(pickBodyId(event));
+        onSelectTopologyRef.current(pickSelection(event));
       }
     };
 
@@ -298,7 +339,74 @@ export function ModelViewer({
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
+        mesh.userData.bodyId = body.bodyId;
+        mesh.userData.topology = body.topology;
       });
+
+      for (const edge of body.topology?.edges ?? []) {
+        if (edge.points.length < 6) {
+          continue;
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(edge.points, 3)
+        );
+        const active =
+          selectedTopology?.kind === 'edge' &&
+          selectedTopology.bodyId === body.bodyId &&
+          selectedTopology.topologyId === edge.topologyId;
+        const line = new THREE.Line(
+          geometry,
+          new THREE.LineBasicMaterial({
+            color: active ? 0x60a5fa : 0x202a36,
+            transparent: true,
+            opacity: active ? 1 : 0.52,
+            depthTest: true
+          })
+        );
+        line.userData.bodyId = body.bodyId;
+        line.userData.topologyKind = 'edge';
+        line.userData.topologyId = edge.topologyId;
+        line.userData.topologyHash = edge.hash;
+        object.add(line);
+      }
+
+      const selectedFace =
+        selectedTopology?.kind === 'face' &&
+        selectedTopology.bodyId === body.bodyId
+          ? body.topology?.faces.find(
+              (face) => face.topologyId === selectedTopology.topologyId
+            )
+          : undefined;
+      if (selectedFace) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
+        );
+        geometry.setIndex(
+          body.mesh.indices.slice(
+            selectedFace.triangleStart * 3,
+            (selectedFace.triangleStart + selectedFace.triangleCount) * 3
+          )
+        );
+        geometry.computeVertexNormals();
+        const highlight = new THREE.Mesh(
+          geometry,
+          new THREE.MeshBasicMaterial({
+            color: 0x3b82f6,
+            transparent: true,
+            opacity: 0.42,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -2
+          })
+        );
+        highlight.raycast = () => undefined;
+        object.add(highlight);
+      }
 
       context.bodyGroup.add(object);
       objectsByBodyId.set(body.bodyId, object);
@@ -315,7 +423,10 @@ export function ModelViewer({
           const top = box.getCenter(new THREE.Vector3());
           top.y =
             box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
-          const label = makeLabel('selection-callout', body.name);
+          const suffix = selectedTopology?.topologyId
+            ? ` · ${selectedTopology.topologyId}`
+            : '';
+          const label = makeLabel('selection-callout', `${body.name}${suffix}`);
           label.position.copy(top);
           context.overlayGroup.add(label);
         }
@@ -331,7 +442,7 @@ export function ModelViewer({
       context.controls.update();
       context.hasFitCamera = true;
     }
-  }, [bodies, selectedBodyId]);
+  }, [bodies, selectedBodyId, selectedTopology]);
 
   useEffect(() => {
     const context = contextRef.current;

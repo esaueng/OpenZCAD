@@ -49,13 +49,28 @@ export interface ExactKernelAdapter {
 
 function pointOnPlane(basis: PlaneBasis, point: Vec2, offset: number): Vec3 {
   return {
-    x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y + basis.normal.x * offset,
-    y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y + basis.normal.y * offset,
-    z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y + basis.normal.z * offset
+    x:
+      basis.origin.x +
+      basis.u.x * point.x +
+      basis.v.x * point.y +
+      basis.normal.x * offset,
+    y:
+      basis.origin.y +
+      basis.u.y * point.x +
+      basis.v.y * point.y +
+      basis.normal.y * offset,
+    z:
+      basis.origin.z +
+      basis.u.z * point.x +
+      basis.v.z * point.y +
+      basis.normal.z * offset
   };
 }
 
-function profilePoints(data: SketchObjectData, scope: Record<string, number>): Vec2[] {
+function profilePoints(
+  data: SketchObjectData,
+  scope: Record<string, number>
+): Vec2[] {
   switch (data.objectKind) {
     case 'rectangle':
       return rectangleProfile(
@@ -131,7 +146,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
       edges.push(
         addHandle(
           build,
-          this.kernel.makeLineEdge(points[index]!, points[(index + 1) % points.length]!)
+          this.kernel.makeLineEdge(
+            points[index]!,
+            points[(index + 1) % points.length]!
+          )
         )
       );
     }
@@ -150,7 +168,11 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
       case 'box':
         return addHandle(
           build,
-          this.kernel.makeBox(dimension('width'), dimension('height'), dimension('depth'))
+          this.kernel.makeBox(
+            dimension('width'),
+            dimension('height'),
+            dimension('depth')
+          )
         );
       case 'cylinder':
         return addHandle(
@@ -171,7 +193,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
       case 'torus':
         return addHandle(
           build,
-          this.kernel.makeTorus(dimension('majorRadius'), dimension('minorRadius'))
+          this.kernel.makeTorus(
+            dimension('majorRadius'),
+            dimension('minorRadius')
+          )
         );
     }
   }
@@ -182,7 +207,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     scope: Record<string, number>,
     build: ExactBuildResult
   ): ShapeHandle {
-    if (feature.data.featureKind !== 'extrude' && feature.data.featureKind !== 'revolve') {
+    if (
+      feature.data.featureKind !== 'extrude' &&
+      feature.data.featureKind !== 'revolve'
+    ) {
       throw new Error('Expected a sweep feature.');
     }
     const sketch = findSketch(document, feature.data.sketchId);
@@ -196,7 +224,11 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     const face = this.makeProfileFace(object.data, basis, offset, scope, build);
 
     if (feature.data.featureKind === 'extrude') {
-      const distance = resolveParamValue(feature.data.distance, scope, 'distance');
+      const distance = resolveParamValue(
+        feature.data.distance,
+        scope,
+        'distance'
+      );
       return addHandle(
         build,
         this.kernel.extrude(
@@ -212,7 +244,11 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     const axisPoint = pointOnPlane(basis, { x: 0, y: 0 }, offset);
     return addHandle(
       build,
-      this.kernel.revolve(face, { point: axisPoint, direction: axisDirection }, Math.PI * 2)
+      this.kernel.revolve(
+        face,
+        { point: axisPoint, direction: axisDirection },
+        Math.PI * 2
+      )
     );
   }
 
@@ -232,15 +268,29 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             break;
           case 'imported-mesh':
             throw new Error('Legacy mesh bodies use the compatibility kernel.');
+          case 'imported-step':
+            if (feature.bodyId) {
+              result.shapes.set(
+                feature.bodyId,
+                addHandle(result, this.kernel.importStep(feature.data.stepText))
+              );
+            }
+            break;
           case 'primitive':
             if (feature.bodyId) {
-              result.shapes.set(feature.bodyId, this.buildPrimitive(feature.data, scope, result));
+              result.shapes.set(
+                feature.bodyId,
+                this.buildPrimitive(feature.data, scope, result)
+              );
             }
             break;
           case 'extrude':
           case 'revolve':
             if (feature.bodyId) {
-              result.shapes.set(feature.bodyId, this.buildSweep(document, feature, scope, result));
+              result.shapes.set(
+                feature.bodyId,
+                this.buildSweep(document, feature, scope, result)
+              );
             }
             break;
           case 'transform': {
@@ -252,9 +302,18 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             const rotation = feature.data.transform.rotationDeg;
             let transformed = target;
             const rotations: Array<[Vec3, number]> = [
-              [{ x: 1, y: 0, z: 0 }, resolveParamValue(rotation.x, scope, 'rotate X')],
-              [{ x: 0, y: 1, z: 0 }, resolveParamValue(rotation.y, scope, 'rotate Y')],
-              [{ x: 0, y: 0, z: 1 }, resolveParamValue(rotation.z, scope, 'rotate Z')]
+              [
+                { x: 1, y: 0, z: 0 },
+                resolveParamValue(rotation.x, scope, 'rotate X')
+              ],
+              [
+                { x: 0, y: 1, z: 0 },
+                resolveParamValue(rotation.y, scope, 'rotate Y')
+              ],
+              [
+                { x: 0, y: 0, z: 1 },
+                resolveParamValue(rotation.z, scope, 'rotate Z')
+              ]
             ];
             for (const [direction, degrees] of rotations) {
               if (degrees !== 0) {
@@ -302,15 +361,18 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
                     : this.kernel.common(shape, operand)
               );
             }
-            feature.data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
+            feature.data.targetBodyIds.forEach((bodyId) =>
+              result.consumed.add(bodyId)
+            );
             result.shapes.set(feature.bodyId, shape);
             break;
           }
         }
       } catch (error) {
-        const reason = error instanceof OcctError || error instanceof Error
-          ? error.message
-          : 'exact geometry failed';
+        const reason =
+          error instanceof OcctError || error instanceof Error
+            ? error.message
+            : 'exact geometry failed';
         result.warnings.push(`Feature "${feature.name}": ${reason}`);
       }
     }
@@ -328,14 +390,21 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    if (listFeaturesInOrder(document).some((feature) => feature.data.featureKind === 'imported-mesh')) {
+    if (
+      listFeaturesInOrder(document).some(
+        (feature) => feature.data.featureKind === 'imported-mesh'
+      )
+    ) {
       return this.legacy.syncDocument(document);
     }
     const build = this.build(document);
     try {
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
-        listNodesByKind(document, 'feature').map((feature) => [feature.featureId, feature])
+        listNodesByKind(document, 'feature').map((feature) => [
+          feature.featureId,
+          feature
+        ])
       );
       const bodyRepresentations: Record<BodyId, BodyRepresentation> = {};
       const exportableBodyIds: BodyId[] = [];
@@ -347,17 +416,20 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
           continue;
         }
         const feature = features.get(body.featureId);
-        const mesh = this.kernel.tessellate(shape, {
+        const mesh = this.kernel.meshShape(shape, {
           linearDeflection: 0.08,
           angularDeflection: 0.35
         });
+        const wireframe = this.kernel.wireframe(shape, 0.08);
         const bounds = this.kernel.getBoundingBox(shape, true);
         const subFaces = this.kernel.getSubShapes(shape, 'face');
         const faceCount = subFaces.length;
         subFaces.forEach((face) => this.kernel.release(face));
         const consumed = build.consumed.has(bodyId);
         if (!this.kernel.isValid(shape)) {
-          build.warnings.push(`Body "${body.name}" failed exact B-rep validation.`);
+          build.warnings.push(
+            `Body "${body.name}" failed exact B-rep validation.`
+          );
         }
         bodyRepresentations[bodyId] = {
           bodyId,
@@ -369,13 +441,51 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             indices: Array.from(mesh.indices)
           },
           faceCount,
-          color: String(body.metadata?.color ?? featureColor(feature?.featureKind ?? 'primitive')) || DEFAULT_BODY_COLOR,
+          color:
+            String(
+              body.metadata?.color ??
+                featureColor(feature?.featureKind ?? 'primitive')
+            ) || DEFAULT_BODY_COLOR,
           exportableStep: body.exportableStep,
           consumed,
           volume: this.kernel.getVolume(shape),
           bbox: {
             min: { x: bounds.xmin, y: bounds.ymin, z: bounds.zmin },
             max: { x: bounds.xmax, y: bounds.ymax, z: bounds.zmax }
+          },
+          topology: {
+            faces: Array.from(
+              { length: (mesh.faceGroups?.length ?? 0) / 3 },
+              (_, index) => {
+                const triangleStart = mesh.faceGroups![index * 3]! / 3;
+                const triangleCount = mesh.faceGroups![index * 3 + 1]! / 3;
+                const hash = mesh.faceGroups![index * 3 + 2]!;
+                return {
+                  topologyId: `face:${hash}`,
+                  hash,
+                  triangleStart,
+                  triangleCount
+                };
+              }
+            ),
+            edges: Array.from(
+              { length: wireframe.edgeGroups.length / 3 },
+              (_, index) => {
+                const pointStart = wireframe.edgeGroups[index * 3]!;
+                const pointCount = wireframe.edgeGroups[index * 3 + 1]!;
+                const hash = wireframe.edgeGroups[index * 3 + 2]!;
+                return {
+                  topologyId: `edge:${hash}`,
+                  hash,
+                  points: Array.from(
+                    wireframe.points.slice(
+                      pointStart,
+                      pointStart + pointCount
+                    )
+                  )
+                };
+              }
+            )
           }
         };
         if (body.exportableStep && !consumed) {
@@ -394,7 +504,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     }
   }
 
-  async exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string> {
+  async exportStep(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<string> {
     const build = this.build(document);
     try {
       const shapes = bodyIds.map((bodyId) => {
@@ -404,16 +517,20 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
         }
         return shape;
       });
-      const exportShape = shapes.length === 1
-        ? shapes[0]!
-        : addHandle(build, this.kernel.makeCompound(shapes));
+      const exportShape =
+        shapes.length === 1
+          ? shapes[0]!
+          : addHandle(build, this.kernel.makeCompound(shapes));
       return this.kernel.exportStep(exportShape);
     } finally {
       this.release(build);
     }
   }
 
-  async exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string> {
+  async exportStl(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<string> {
     const build = this.build(document);
     try {
       const shapes = bodyIds.map((bodyId) => {
@@ -423,9 +540,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
         }
         return shape;
       });
-      const exportShape = shapes.length === 1
-        ? shapes[0]!
-        : addHandle(build, this.kernel.makeCompound(shapes));
+      const exportShape =
+        shapes.length === 1
+          ? shapes[0]!
+          : addHandle(build, this.kernel.makeCompound(shapes));
       return this.kernel.exportStl(exportShape, 0.08, true);
     } finally {
       this.release(build);
