@@ -42,6 +42,7 @@ import {
   type SketchUpdateInput,
   type TransformInput
 } from '@openzcad/document-core';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 
 export type CommandKind =
   | 'primitive.add'
@@ -132,7 +133,10 @@ export const commandFactories = {
     );
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createSketchFeatureIds() };
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? createSketchFeatureIds()
+    };
     return makeCommand(
       'sketch.add',
       `Add ${payload.object.objectKind} sketch`,
@@ -210,7 +214,9 @@ export const commandFactories = {
       (document) => transformBody(document, withIds).document,
       (document) => {
         if (!document.bodyOrder.includes(payload.targetBodyId)) {
-          throw new Error(`Transform target body ${payload.targetBodyId} not found.`);
+          throw new Error(
+            `Transform target body ${payload.targetBodyId} not found.`
+          );
         }
       }
     );
@@ -247,7 +253,9 @@ export const commandFactories = {
       }
     );
   },
-  setParameter(payload: ParameterSetInput): CommandDefinition<ParameterSetInput> {
+  setParameter(
+    payload: ParameterSetInput
+  ): CommandDefinition<ParameterSetInput> {
     const withIds = { ...payload, ids: payload.ids ?? createParameterIds() };
     return makeCommand(
       'parameter.set',
@@ -256,7 +264,9 @@ export const commandFactories = {
       (document) => setParameter(document, withIds)
     );
   },
-  deleteParameter(payload: ParameterDeleteInput): CommandDefinition<ParameterDeleteInput> {
+  deleteParameter(
+    payload: ParameterDeleteInput
+  ): CommandDefinition<ParameterDeleteInput> {
     return makeCommand(
       'parameter.delete',
       `Delete parameter ${payload.name}`,
@@ -266,13 +276,19 @@ export const commandFactories = {
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand('import.mesh', 'Import STL mesh', withIds, (document) =>
-      importMeshBody(document, withIds).document
+    return makeCommand(
+      'import.mesh',
+      'Import STL mesh',
+      withIds,
+      (document) => importMeshBody(document, withIds).document
     );
   },
   renameNode(payload: NodeRenameInput): CommandDefinition<NodeRenameInput> {
-    return makeCommand('node.rename', `Rename to ${payload.name}`, payload, (document) =>
-      renameNode(document, payload)
+    return makeCommand(
+      'node.rename',
+      `Rename to ${payload.name}`,
+      payload,
+      (document) => renameNode(document, payload)
     );
   },
   setNodeMetadata(
@@ -284,6 +300,62 @@ export const commandFactories = {
     );
   }
 };
+
+/** Converts a reviewed AI proposal into normal undoable document commands. */
+export function commandsForCadPatch(
+  document: ProjectDocument,
+  proposal: CadPatchProposal
+): AnyCommand[] {
+  return proposal.operations.map((operation) => {
+    switch (operation.kind) {
+      case 'set_parameter':
+        return commandFactories.setParameter({
+          name: operation.name,
+          expression: operation.expression
+        });
+      case 'add_primitive': {
+        const dimensions = Object.fromEntries(
+          Object.entries(operation.dimensions).filter(
+            (entry) => entry[1] !== null
+          )
+        ) as Record<string, string | number>;
+        return commandFactories.addPrimitive({
+          name: operation.name,
+          primitiveKind: operation.primitiveKind,
+          dimensions
+        });
+      }
+      case 'delete_feature':
+        return commandFactories.deleteFeature({
+          featureId: operation.featureId
+        });
+      case 'set_feature_dimension': {
+        const feature = findFeature(document, operation.featureId);
+        if (!feature) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        if (feature.data.featureKind === 'primitive') {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { dimensions: { [operation.field]: operation.value } }
+          });
+        }
+        if (
+          feature.data.featureKind === 'extrude' &&
+          operation.field === 'distance'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { distance: operation.value }
+          });
+        }
+        throw new Error(
+          `Feature ${feature.name} does not expose an editable ${operation.field} dimension.`
+        );
+      }
+    }
+  });
+}
 
 /** Bound on stored undo/redo entries so long sessions cannot exhaust memory. */
 const MAX_HISTORY_DEPTH = 100;
@@ -426,7 +498,10 @@ export function replayCommands(
         next = deleteParameter(next, command.payload as ParameterDeleteInput);
         break;
       case 'import.mesh':
-        next = importMeshBody(next, command.payload as ImportedMeshInput).document;
+        next = importMeshBody(
+          next,
+          command.payload as ImportedMeshInput
+        ).document;
         break;
       case 'node.rename':
         next = renameNode(next, command.payload as NodeRenameInput);
@@ -437,7 +512,9 @@ export function replayCommands(
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer
         // clients still load; the skip is surfaced for debuggability.
-        console.warn(`replayCommands: skipping unknown command kind "${command.kind}".`);
+        console.warn(
+          `replayCommands: skipping unknown command kind "${command.kind}".`
+        );
         continue;
     }
 

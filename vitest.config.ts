@@ -7,6 +7,7 @@ const WORKSPACE_PACKAGES = [
   'document-core',
   'command-system',
   'kernel-adapter',
+  'ai-contracts',
   'viewport',
   'io-step',
   'io-stl',

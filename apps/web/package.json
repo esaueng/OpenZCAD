@@ -15,6 +15,7 @@
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.13.4",
     "@openzcad/cloudflare-adapters": "workspace:*",
+    "@openzcad/ai-contracts": "workspace:*",
     "@openzcad/command-system": "workspace:*",
     "@openzcad/document-core": "workspace:*",
     "@openzcad/io-step": "workspace:*",

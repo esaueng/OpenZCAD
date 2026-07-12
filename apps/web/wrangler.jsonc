@@ -15,7 +15,9 @@
     "run_worker_first": ["/api/*"]
   },
   "vars": {
-    "ENVIRONMENT": "beta"
+    "ENVIRONMENT": "beta",
+    "AI_MODEL": "gpt-5.6-sol",
+    "AI_REASONING_EFFORT": "high"
   },
   "d1_databases": [
     {
@@ -63,7 +65,9 @@
     "beta": {
       "name": "openzcad-beta",
       "vars": {
-        "ENVIRONMENT": "beta"
+        "ENVIRONMENT": "beta",
+        "AI_MODEL": "gpt-5.6-sol",
+        "AI_REASONING_EFFORT": "high"
       },
       "d1_databases": [
         {
