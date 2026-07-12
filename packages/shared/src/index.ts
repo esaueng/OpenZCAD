@@ -11,6 +11,10 @@ export type ArtifactId = Brand<string, 'ArtifactId'>;
 export type RevisionId = Brand<string, 'RevisionId'>;
 export type JobId = Brand<string, 'JobId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
+export type AssetId = Brand<string, 'AssetId'>;
+
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2 as const;
+export type ProjectDocumentSchemaVersion = typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
@@ -239,6 +243,31 @@ export interface RevisionRecord {
   commandCount: number;
 }
 
+/** Durable user-visible save point. Command history and undo state remain separate. */
+export interface ProjectCheckpoint {
+  checkpointId: string;
+  revisionId: RevisionId;
+  documentVersion: number;
+  createdAt: string;
+  reason: string;
+}
+
+/**
+ * Metadata-only reference to a large source or generated asset. Binary data is
+ * stored outside the canonical document (IndexedDB locally, R2 when synced).
+ */
+export interface ProjectAssetRef {
+  assetId: AssetId;
+  artifactId?: ArtifactId;
+  kind: 'step-source' | 'stl-source' | 'mesh-cache' | 'thumbnail' | 'export';
+  name: string;
+  contentType: string;
+  bytes?: number;
+  checksum?: string;
+  storage: 'local' | 'remote' | 'local-and-remote';
+  createdAt: string;
+}
+
 export interface DerivedState {
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
@@ -247,6 +276,7 @@ export interface DerivedState {
 }
 
 export interface ProjectDocument {
+  schemaVersion: ProjectDocumentSchemaVersion;
   projectId: ProjectId;
   ownerUserId: UserId;
   rootNodeId: EntityId;
@@ -261,7 +291,9 @@ export interface ProjectDocument {
   sketchOrder: SketchId[];
   parameterOrder: ParameterId[];
   revisions: RevisionRecord[];
+  checkpoints: ProjectCheckpoint[];
   commandLog: SerializedCommand[];
+  assets: Record<AssetId, ProjectAssetRef>;
   derived: DerivedState;
 }
 
@@ -399,6 +431,7 @@ export const toUploadSessionId = (value: string): UploadSessionId =>
   value as UploadSessionId;
 export const toUserId = (value: string): UserId => value as UserId;
 export const toJobId = (value: string): JobId => value as JobId;
+export const toAssetId = (value: string): AssetId => value as AssetId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
 
