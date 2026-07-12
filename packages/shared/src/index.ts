@@ -479,6 +479,37 @@ export interface AuthSession {
   mode: 'development' | 'cloudflare-access';
 }
 
+export interface CollaborationMember {
+  clientId: string;
+  userId: UserId;
+  displayName: string;
+  status: 'active' | 'idle';
+}
+
+export type CollaborationClientMessage =
+  | {
+      type: 'hello';
+      clientId: string;
+      displayName: string;
+      document: ProjectDocument;
+    }
+  | {
+      type: 'document';
+      clientId: string;
+      document: ProjectDocument;
+    }
+  | { type: 'presence'; clientId: string; status: 'active' | 'idle' };
+
+export type CollaborationServerMessage =
+  | {
+      type: 'state';
+      members: CollaborationMember[];
+      document: ProjectDocument | null;
+    }
+  | { type: 'presence'; members: CollaborationMember[] }
+  | { type: 'document'; clientId: string; document: ProjectDocument }
+  | { type: 'conflict'; document: ProjectDocument };
+
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 }

@@ -29,6 +29,7 @@ const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
+const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 
 function json(data: unknown, status = 200): Response {
@@ -84,6 +85,26 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'POST' && pathname === '/api/projects') {
     const payload = parseCreateProjectRequest(await readJsonBody(request));
     return json(await persistence.createProject(userId, payload), 201);
+  }
+
+  const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
+  if (request.method === 'GET' && collaborationMatch) {
+    const projectId = collaborationMatch[1]!;
+    const project = await persistence.loadProject(userId, projectId);
+    if (!project) {
+      return json({ error: 'Project not found.' }, 404);
+    }
+    if (!env.PROJECT_ROOM) {
+      return json({ error: 'Collaboration is unavailable.' }, 503);
+    }
+    const headers = new Headers(request.headers);
+    headers.set('x-openzcad-user-id', userId);
+    headers.set('x-openzcad-display-name', session.displayName);
+    const roomUrl = new URL(request.url);
+    roomUrl.searchParams.set('projectId', projectId);
+    return env.PROJECT_ROOM.getByName(projectId).fetch(
+      new Request(roomUrl, { method: 'GET', headers })
+    );
   }
 
   const projectMatch = PROJECT_ROUTE.exec(pathname);

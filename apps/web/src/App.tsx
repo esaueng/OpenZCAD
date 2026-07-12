@@ -52,6 +52,7 @@ import type {
   GeometryExportResult,
   GeometryWorkerResult
 } from './worker/geometryWorker';
+import { useCollaboration } from './lib/useCollaboration';
 
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
@@ -109,6 +110,30 @@ export function App() {
     >()
   );
   const lastSyncedKeyRef = useRef<string | null>(null);
+
+  const collaboration = useCollaboration({
+    document: doc,
+    session,
+    onRemoteDocument(remoteDocument) {
+      const current = managerRef.current?.document;
+      if (
+        !current ||
+        current.projectId !== remoteDocument.projectId ||
+        remoteDocument.version <= current.version
+      ) {
+        return;
+      }
+      hydrateDocument(remoteDocument);
+      setStatus(
+        `Applied live revision ${remoteDocument.version} from a collaborator.`
+      );
+    },
+    onConflict(remoteDocument) {
+      setStatus(
+        `Collaboration conflict at revision ${remoteDocument.version}; local edits were preserved.`
+      );
+    }
+  });
 
   useEffect(() => {
     const worker = new Worker(
@@ -815,6 +840,8 @@ export function App() {
           }
           saveState={saveState}
           session={session}
+          collaborationStatus={collaboration.status}
+          collaboratorCount={collaboration.members.length}
           onUndo={handleUndo}
           onRedo={handleRedo}
           onSave={() => void handleSave()}

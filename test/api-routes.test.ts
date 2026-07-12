@@ -93,6 +93,31 @@ describe('worker api routes', () => {
     expect(intruderResponse.status).toBe(404);
   });
 
+  it('authorizes and forwards collaboration WebSocket upgrades', async () => {
+    const created = await createProject('Live project');
+    const roomFetch = vi.fn(async (request: Request) =>
+      Response.json({
+        userId: request.headers.get('x-openzcad-user-id'),
+        displayName: request.headers.get('x-openzcad-display-name')
+      })
+    );
+    env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
+
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/collaboration`,
+        { headers: { upgrade: 'websocket' } }
+      ),
+      env as never
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      userId: 'user_beta_dev',
+      displayName: 'Beta developer'
+    });
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
   it('keeps assistant generation disabled until a secret is configured', async () => {
     const response = await worker.fetch(
       post('/api/assistant/proposals', {

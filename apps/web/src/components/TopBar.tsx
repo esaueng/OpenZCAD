@@ -6,10 +6,12 @@ import {
   LoaderCircle,
   Redo2,
   Undo2,
-  Upload
+  Upload,
+  Users
 } from 'lucide-react';
 import type { AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import type { CollaborationStatus } from '../lib/useCollaboration';
 
 interface TopBarProps {
   projectName: string | null;
@@ -21,6 +23,8 @@ interface TopBarProps {
   exportScope: string | null;
   saveState: 'saved' | 'saving' | 'offline';
   session: AuthSession | null;
+  collaborationStatus: CollaborationStatus;
+  collaboratorCount: number;
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
@@ -38,6 +42,8 @@ export function TopBar({
   exportScope,
   saveState,
   session,
+  collaborationStatus,
+  collaboratorCount,
   onUndo,
   onRedo,
   onSave,
@@ -152,6 +158,19 @@ export function TopBar({
           {session.displayName}
         </span>
       )}
+      <span
+        className={`collaboration-state ${collaborationStatus}`}
+        title={`Collaboration: ${collaborationStatus}`}
+      >
+        <Users size={13} aria-hidden="true" />
+        {collaborationStatus === 'live'
+          ? `${collaboratorCount} live`
+          : collaborationStatus === 'conflict'
+            ? 'Conflict'
+            : collaborationStatus === 'oversize'
+              ? 'Local only'
+              : collaborationStatus}
+      </span>
     </header>
   );
 }
