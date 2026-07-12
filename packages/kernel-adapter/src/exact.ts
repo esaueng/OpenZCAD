@@ -34,6 +34,16 @@ interface ExactBuildResult {
   handles: Set<ShapeHandle>;
 }
 
+const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
+
+function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
+  return {
+    x: axis === 'x' ? 1 : 0,
+    y: axis === 'y' ? 1 : 0,
+    z: axis === 'z' ? 1 : 0
+  };
+}
+
 export interface ExactKernelAdapter {
   readonly kind: 'open-cascade';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
@@ -367,6 +377,117 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             result.shapes.set(feature.bodyId, shape);
             break;
           }
+          case 'fillet':
+          case 'chamfer': {
+            if (!feature.bodyId) {
+              throw new Error('Edge modifier has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Edge modifier target is unavailable.');
+            }
+            const requested = new Set(feature.data.edgeHashes);
+            const edges = this.kernel.getSubShapes(target, 'edge');
+            edges.forEach((edge) => result.handles.add(edge));
+            const selected = edges.filter((edge) =>
+              requested.has(
+                this.kernel.hashCode(edge, TOPOLOGY_HASH_UPPER_BOUND)
+              )
+            );
+            if (selected.length !== requested.size) {
+              throw new Error(
+                `${requested.size - selected.length} selected edge(s) no longer exist.`
+              );
+            }
+            const size = resolveParamValue(
+              feature.data.featureKind === 'fillet'
+                ? feature.data.radius
+                : feature.data.distance,
+              scope,
+              feature.data.featureKind === 'fillet' ? 'radius' : 'distance'
+            );
+            if (size <= 0) {
+              throw new Error('Edge modifier size must be greater than zero.');
+            }
+            const modified = addHandle(
+              result,
+              feature.data.featureKind === 'fillet'
+                ? this.kernel.fillet(target, selected, size)
+                : this.kernel.chamfer(target, selected, size)
+            );
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, modified);
+            break;
+          }
+          case 'pattern': {
+            if (!feature.bodyId) {
+              throw new Error('Pattern has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Pattern target is unavailable.');
+            }
+            const count = Math.round(
+              resolveParamValue(feature.data.count, scope, 'count')
+            );
+            if (count < 2 || count > 100) {
+              throw new Error('Pattern count must be between 2 and 100.');
+            }
+            const direction = axisDirection(feature.data.axis);
+            const instances: ShapeHandle[] = [target];
+            if (feature.data.patternKind === 'linear') {
+              const spacing = resolveParamValue(
+                feature.data.spacing,
+                scope,
+                'spacing'
+              );
+              if (spacing === 0) {
+                throw new Error('Pattern spacing cannot be zero.');
+              }
+              for (let index = 1; index < count; index += 1) {
+                instances.push(
+                  addHandle(
+                    result,
+                    this.kernel.translate(
+                      target,
+                      direction.x * spacing * index,
+                      direction.y * spacing * index,
+                      direction.z * spacing * index
+                    )
+                  )
+                );
+              }
+            } else {
+              const angle = resolveParamValue(
+                feature.data.angleDeg,
+                scope,
+                'pattern angle'
+              );
+              if (angle === 0) {
+                throw new Error('Pattern angle cannot be zero.');
+              }
+              const angleStep =
+                Math.abs(angle) === 360 ? angle / count : angle / (count - 1);
+              for (let index = 1; index < count; index += 1) {
+                instances.push(
+                  addHandle(
+                    result,
+                    this.kernel.rotate(
+                      target,
+                      { point: { x: 0, y: 0, z: 0 }, direction },
+                      (angleStep * index * Math.PI) / 180
+                    )
+                  )
+                );
+              }
+            }
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(
+              feature.bodyId,
+              addHandle(result, this.kernel.makeCompound(instances))
+            );
+            break;
+          }
         }
       } catch (error) {
         const reason =
@@ -478,10 +599,7 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
                   topologyId: `edge:${hash}`,
                   hash,
                   points: Array.from(
-                    wireframe.points.slice(
-                      pointStart,
-                      pointStart + pointCount
-                    )
+                    wireframe.points.slice(pointStart, pointStart + pointCount)
                   )
                 };
               }

@@ -1,6 +1,7 @@
 import {
   deepClone,
   nowIso,
+  type BodyId,
   type ProjectDocument,
   type SerializedCommand
 } from '@openzcad/shared';
@@ -10,6 +11,7 @@ import {
   appendRevision,
   attachDerivedState,
   booleanBodies,
+  chamferEdges,
   createBodyFeatureIds,
   createFeatureOnlyIds,
   createParameterIds,
@@ -17,10 +19,12 @@ import {
   deleteFeature,
   deleteParameter,
   extrudeSketch,
+  filletEdges,
   findFeature,
   findSketch,
   importMeshBody,
   importStepBody,
+  patternBody,
   renameNode,
   revolveSketch,
   setNodeMetadata,
@@ -30,6 +34,7 @@ import {
   updateSketch,
   type BooleanInput,
   type ExtrudeInput,
+  type EdgeModifierInput,
   type FeatureDeleteInput,
   type FeatureUpdateInput,
   type ImportedMeshInput,
@@ -38,6 +43,7 @@ import {
   type NodeRenameInput,
   type ParameterDeleteInput,
   type ParameterSetInput,
+  type PatternInput,
   type PrimitiveInput,
   type RevolveInput,
   type SketchInput,
@@ -54,6 +60,9 @@ export type CommandKind =
   | 'feature.revolve'
   | 'feature.boolean'
   | 'feature.transform'
+  | 'feature.fillet'
+  | 'feature.chamfer'
+  | 'feature.pattern'
   | 'feature.update'
   | 'feature.delete'
   | 'parameter.set'
@@ -87,6 +96,8 @@ export type AnyCommand =
   | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
+  | CommandDefinition<EdgeModifierInput>
+  | CommandDefinition<PatternInput>
   | CommandDefinition<FeatureUpdateInput>
   | CommandDefinition<FeatureDeleteInput>
   | CommandDefinition<ParameterSetInput>
@@ -120,6 +131,12 @@ function makeCommand<TPayload>(
       };
     }
   };
+}
+
+function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
+  if (!document.bodyOrder.includes(bodyId)) {
+    throw new Error(`Target body ${bodyId} not found.`);
+  }
 }
 
 // Every factory resolves the IDs the operation will create *before* the
@@ -223,6 +240,40 @@ export const commandFactories = {
           );
         }
       }
+    );
+  },
+  filletEdges(
+    payload: EdgeModifierInput
+  ): CommandDefinition<EdgeModifierInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.fillet',
+      'Fillet edges',
+      withIds,
+      (document) => filletEdges(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
+    );
+  },
+  chamferEdges(
+    payload: EdgeModifierInput
+  ): CommandDefinition<EdgeModifierInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.chamfer',
+      'Chamfer edges',
+      withIds,
+      (document) => chamferEdges(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
+    );
+  },
+  patternBody(payload: PatternInput): CommandDefinition<PatternInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.pattern',
+      `${payload.patternKind === 'linear' ? 'Linear' : 'Circular'} pattern`,
+      withIds,
+      (document) => patternBody(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
     );
   },
   updateFeature(
@@ -497,6 +548,18 @@ export function replayCommands(
         break;
       case 'feature.transform':
         next = transformBody(next, command.payload as TransformInput).document;
+        break;
+      case 'feature.fillet':
+        next = filletEdges(next, command.payload as EdgeModifierInput).document;
+        break;
+      case 'feature.chamfer':
+        next = chamferEdges(
+          next,
+          command.payload as EdgeModifierInput
+        ).document;
+        break;
+      case 'feature.pattern':
+        next = patternBody(next, command.payload as PatternInput).document;
         break;
       case 'feature.update':
         next = updateFeature(next, command.payload as FeatureUpdateInput);

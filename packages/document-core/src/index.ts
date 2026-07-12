@@ -14,6 +14,7 @@ import {
   toSketchId,
   type BodyId,
   type BodyNode,
+  type AxisId,
   type BooleanOperation,
   type DocumentNode,
   type EntityId,
@@ -24,6 +25,7 @@ import {
   type ParameterNode,
   type ParametricVector3,
   type ParamValue,
+  type PatternKind,
   type PlaneId,
   type PrimitiveKind,
   type ProjectDocument,
@@ -155,6 +157,25 @@ export interface TransformInput {
   translation: ParametricVector3;
   rotationDeg?: ParametricVector3;
   ids?: FeatureOnlyIds;
+}
+
+export interface EdgeModifierInput {
+  name: string;
+  targetBodyId: BodyId;
+  edgeHashes: number[];
+  size: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface PatternInput {
+  name: string;
+  targetBodyId: BodyId;
+  patternKind: PatternKind;
+  count: ParamValue;
+  axis: AxisId;
+  spacing?: ParamValue;
+  angleDeg?: ParamValue;
+  ids?: BodyFeatureIds;
 }
 
 export interface ImportedMeshInput {
@@ -688,6 +709,104 @@ export function transformBody(
   attachToPart(next, featureNodeId);
   next.version += 1;
   return { document: next, bodyId: input.targetBodyId };
+}
+
+function addBodyResultFeature(
+  document: ProjectDocument,
+  name: string,
+  featureKind: 'fillet' | 'chamfer' | 'pattern',
+  data: Extract<FeatureData, { featureKind: 'fillet' | 'chamfer' | 'pattern' }>,
+  ids?: BodyFeatureIds
+): { document: ProjectDocument; bodyId: BodyId } {
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    ids ?? createBodyFeatureIds();
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind,
+    data
+  };
+  next.nodes[bodyNodeId] = {
+    id: bodyNodeId,
+    kind: 'body',
+    name,
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'brep',
+    exportableStep: true,
+    metadata: { color: featureColor(featureKind) }
+  };
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId);
+  attachToPart(next, featureNodeId, bodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId };
+}
+
+export function filletEdges(
+  document: ProjectDocument,
+  input: EdgeModifierInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'fillet',
+    {
+      featureKind: 'fillet',
+      targetBodyId: input.targetBodyId,
+      edgeHashes: [...new Set(input.edgeHashes)],
+      radius: input.size
+    },
+    input.ids
+  );
+}
+
+export function chamferEdges(
+  document: ProjectDocument,
+  input: EdgeModifierInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'chamfer',
+    {
+      featureKind: 'chamfer',
+      targetBodyId: input.targetBodyId,
+      edgeHashes: [...new Set(input.edgeHashes)],
+      distance: input.size
+    },
+    input.ids
+  );
+}
+
+export function patternBody(
+  document: ProjectDocument,
+  input: PatternInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'pattern',
+    {
+      featureKind: 'pattern',
+      targetBodyId: input.targetBodyId,
+      patternKind: input.patternKind,
+      count: input.count,
+      axis: input.axis,
+      spacing: input.spacing ?? 10,
+      angleDeg: input.angleDeg ?? 360
+    },
+    input.ids
+  );
 }
 
 export function importMeshBody(

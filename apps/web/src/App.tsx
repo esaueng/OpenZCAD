@@ -877,8 +877,6 @@ export function App() {
           bodies={bodyOptions}
           units={doc.units}
           onLaunchTool={(nextTool) => {
-            setSelectedFeatureNodeId(null);
-            setSelectedTopology(null);
             setTool(nextTool);
           }}
           onCancel={() => {
@@ -916,6 +914,16 @@ export function App() {
                 rotationDeg: value.rotationDeg
               })
             )
+          }
+          onCreateEdgeModifier={(kind, value) =>
+            createFeature(
+              kind === 'fillet'
+                ? commandFactories.filletEdges(value)
+                : commandFactories.chamferEdges(value)
+            )
+          }
+          onCreatePattern={(value) =>
+            createFeature(commandFactories.patternBody(value))
           }
           onApplyPrimitive={(feature, name, dimensions) =>
             executeCommand(
@@ -1015,6 +1023,51 @@ export function App() {
                       translation: value.translation,
                       rotationDeg: value.rotationDeg
                     }
+                  }
+                },
+                `Edit ${value.name}`
+              )
+            )
+          }
+          onApplyEdgeModifier={(feature, kind, value) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                {
+                  featureId: feature.featureId,
+                  name: value.name,
+                  data:
+                    kind === 'fillet'
+                      ? {
+                          featureKind: 'fillet',
+                          targetBodyId: value.targetBodyId,
+                          edgeHashes: value.edgeHashes,
+                          radius: value.size
+                        }
+                      : {
+                          featureKind: 'chamfer',
+                          targetBodyId: value.targetBodyId,
+                          edgeHashes: value.edgeHashes,
+                          distance: value.size
+                        }
+                },
+                `Edit ${value.name}`
+              )
+            )
+          }
+          onApplyPattern={(feature, value) =>
+            executeCommand(
+              commandFactories.updateFeature(
+                {
+                  featureId: feature.featureId,
+                  name: value.name,
+                  data: {
+                    featureKind: 'pattern',
+                    targetBodyId: value.targetBodyId,
+                    patternKind: value.patternKind,
+                    count: value.count,
+                    axis: value.axis,
+                    spacing: value.spacing,
+                    angleDeg: value.angleDeg
                   }
                 },
                 `Edit ${value.name}`

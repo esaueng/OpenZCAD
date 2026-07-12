@@ -28,12 +28,16 @@ import type {
 } from '@openzcad/shared';
 import {
   BooleanForm,
+  EdgeModifierForm,
   ExtrudeForm,
+  PatternForm,
   PrimitiveForm,
   RevolveForm,
   SketchForm,
   TransformForm,
   type BodyOption,
+  type EdgeModifierFormValue,
+  type PatternFormValue,
   type SketchFormValue,
   type SketchOption,
   type TransformFormValue
@@ -52,7 +56,11 @@ export type ToolId =
   | 'union'
   | 'subtract'
   | 'intersect'
-  | 'transform';
+  | 'transform'
+  | 'fillet'
+  | 'chamfer'
+  | 'linear-pattern'
+  | 'circular-pattern';
 
 const PRIMITIVE_TOOLS: ToolId[] = [
   'box',
@@ -86,7 +94,17 @@ const TOOL_META: Record<ToolId, { label: string; icon: ReactNode }> = {
     label: 'Intersect',
     icon: <Shapes size={15} aria-hidden="true" />
   },
-  transform: { label: 'Move', icon: <Move3d size={15} aria-hidden="true" /> }
+  transform: { label: 'Move', icon: <Move3d size={15} aria-hidden="true" /> },
+  fillet: { label: 'Fillet', icon: <Globe size={15} aria-hidden="true" /> },
+  chamfer: { label: 'Chamfer', icon: <Cone size={15} aria-hidden="true" /> },
+  'linear-pattern': {
+    label: 'Linear pattern',
+    icon: <Layers size={15} aria-hidden="true" />
+  },
+  'circular-pattern': {
+    label: 'Circular pattern',
+    icon: <RotateCw size={15} aria-hidden="true" />
+  }
 };
 
 export interface InspectorCallbacks {
@@ -114,6 +132,11 @@ export interface InspectorCallbacks {
     targetBodyIds: BodyOption['bodyId'][];
   }): void;
   onCreateTransform(value: TransformFormValue): void;
+  onCreateEdgeModifier(
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue
+  ): void;
+  onCreatePattern(value: PatternFormValue): void;
   onApplyPrimitive(
     feature: FeatureNode,
     name: string,
@@ -137,6 +160,12 @@ export interface InspectorCallbacks {
     }
   ): void;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
+  onApplyEdgeModifier(
+    feature: FeatureNode,
+    kind: 'fillet' | 'chamfer',
+    value: EdgeModifierFormValue
+  ): void;
+  onApplyPattern(feature: FeatureNode, value: PatternFormValue): void;
   onDeleteFeature(feature: FeatureNode): void;
 }
 
@@ -157,10 +186,12 @@ interface InspectorProps extends InspectorCallbacks {
 function ToolLauncher({
   bodies,
   sketches,
+  selectedTopology,
   onLaunchTool
 }: {
   bodies: BodyOption[];
   sketches: SketchOption[];
+  selectedTopology: TopologySelection | null;
   onLaunchTool(tool: ToolId): void;
 }) {
   const liveBodies = bodies.filter((body) => !body.consumed).length;
@@ -172,6 +203,12 @@ function ToolLauncher({
       return liveBodies < 2;
     }
     if (tool === 'transform') {
+      return liveBodies < 1;
+    }
+    if (tool === 'fillet' || tool === 'chamfer') {
+      return selectedTopology?.kind !== 'edge';
+    }
+    if (tool === 'linear-pattern' || tool === 'circular-pattern') {
       return liveBodies < 1;
     }
     return false;
@@ -206,6 +243,12 @@ function ToolLauncher({
         'subtract',
         'intersect',
         'transform'
+      ])}
+      {group('Finish & repeat', [
+        'fillet',
+        'chamfer',
+        'linear-pattern',
+        'circular-pattern'
       ])}
       <p className="muted">
         Every numeric field accepts an expression over your parameters, e.g.{' '}
@@ -333,7 +376,7 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
-    } else {
+    } else if (tool === 'transform') {
       body = (
         <TransformForm
           key="create-transform"
@@ -341,6 +384,38 @@ export function Inspector(props: InspectorProps) {
           bodies={bodies}
           submitLabel="Create"
           onSubmit={props.onCreateTransform}
+          onCancel={props.onCancel}
+        />
+      );
+    } else if (tool === 'fillet' || tool === 'chamfer') {
+      body = (
+        <EdgeModifierForm
+          key={`create-${tool}-${selectedTopology?.topologyId ?? 'none'}`}
+          kind={tool}
+          scope={scope}
+          targetBodyId={selectedTopology?.bodyId ?? null}
+          edgeHashes={
+            selectedTopology?.kind === 'edge' &&
+            selectedTopology.hash !== undefined
+              ? [selectedTopology.hash]
+              : []
+          }
+          submitLabel="Create"
+          onSubmit={(value) => props.onCreateEdgeModifier(tool, value)}
+          onCancel={props.onCancel}
+        />
+      );
+    } else {
+      const patternKind = tool === 'linear-pattern' ? 'linear' : 'circular';
+      body = (
+        <PatternForm
+          key={`create-${patternKind}`}
+          kind={patternKind}
+          scope={scope}
+          bodies={bodies}
+          selectedBodyId={selectedTopology?.bodyId ?? selectedBody?.bodyId}
+          submitLabel="Create"
+          onSubmit={props.onCreatePattern}
           onCancel={props.onCancel}
         />
       );
@@ -451,6 +526,49 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
+    } else if (
+      data.featureKind === 'fillet' ||
+      data.featureKind === 'chamfer'
+    ) {
+      form = (
+        <EdgeModifierForm
+          key={editKey}
+          kind={data.featureKind}
+          scope={scope}
+          targetBodyId={data.targetBodyId}
+          edgeHashes={data.edgeHashes}
+          initial={{
+            name: selectedFeature.name,
+            size: data.featureKind === 'fillet' ? data.radius : data.distance
+          }}
+          submitLabel="Apply"
+          onSubmit={(value) =>
+            props.onApplyEdgeModifier(selectedFeature, data.featureKind, value)
+          }
+          onCancel={props.onCancel}
+        />
+      );
+    } else if (data.featureKind === 'pattern') {
+      form = (
+        <PatternForm
+          key={editKey}
+          kind={data.patternKind}
+          scope={scope}
+          bodies={bodies}
+          initial={{
+            name: selectedFeature.name,
+            targetBodyId: data.targetBodyId,
+            patternKind: data.patternKind,
+            count: data.count,
+            axis: data.axis,
+            spacing: data.spacing,
+            angleDeg: data.angleDeg
+          }}
+          submitLabel="Apply"
+          onSubmit={(value) => props.onApplyPattern(selectedFeature, value)}
+          onCancel={props.onCancel}
+        />
+      );
     } else if (data.featureKind === 'imported-mesh') {
       form = (
         <div className="kv-grid">
@@ -498,6 +616,7 @@ export function Inspector(props: InspectorProps) {
       <ToolLauncher
         bodies={bodies}
         sketches={sketches}
+        selectedTopology={selectedTopology}
         onLaunchTool={props.onLaunchTool}
       />
     );

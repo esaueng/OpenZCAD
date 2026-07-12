@@ -27,10 +27,15 @@ export type FeatureKind =
   | 'revolve'
   | 'boolean'
   | 'transform'
+  | 'fillet'
+  | 'chamfer'
+  | 'pattern'
   | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind = 'rectangle' | 'circle' | 'polygon';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
+export type PatternKind = 'linear' | 'circular';
+export type AxisId = 'x' | 'y' | 'z';
 
 /**
  * A parametric scalar: either a literal number or an expression string that is
@@ -168,6 +173,27 @@ export type FeatureData =
       featureKind: 'transform';
       targetBodyId: BodyId;
       transform: ParametricTransform3D;
+    }
+  | {
+      featureKind: 'fillet';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      radius: ParamValue;
+    }
+  | {
+      featureKind: 'chamfer';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      distance: ParamValue;
+    }
+  | {
+      featureKind: 'pattern';
+      targetBodyId: BodyId;
+      patternKind: PatternKind;
+      count: ParamValue;
+      axis: AxisId;
+      spacing: ParamValue;
+      angleDeg: ParamValue;
     }
   | {
       featureKind: 'imported-mesh';
@@ -492,6 +518,9 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   revolve: '#5fb3e8',
   boolean: '#ff7452',
   transform: '#8b80f9',
+  fillet: '#f59e0b',
+  chamfer: '#fb7185',
+  pattern: '#38bdf8',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff'
 };

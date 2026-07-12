@@ -1,9 +1,11 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
 import type {
+  AxisId,
   BodyId,
   BooleanOperation,
   ParamValue,
+  PatternKind,
   PlaneId,
   PrimitiveKind,
   RevolveAxis,
@@ -794,6 +796,203 @@ export function TransformForm({
           onChange={setValue('rz')}
         />
       </div>
+    </FormShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Exact edge modifiers and patterns
+// ---------------------------------------------------------------------------
+
+export interface EdgeModifierFormValue {
+  name: string;
+  targetBodyId: BodyId;
+  edgeHashes: number[];
+  size: ParamValue;
+}
+
+interface EdgeModifierFormProps {
+  kind: 'fillet' | 'chamfer';
+  scope: Record<string, number>;
+  targetBodyId: BodyId | null;
+  edgeHashes: number[];
+  initial?: { name: string; size: ParamValue };
+  submitLabel: string;
+  onSubmit(value: EdgeModifierFormValue): void;
+  onCancel?: () => void;
+}
+
+export function EdgeModifierForm({
+  kind,
+  scope,
+  targetBodyId,
+  edgeHashes,
+  initial,
+  submitLabel,
+  onSubmit,
+  onCancel
+}: EdgeModifierFormProps) {
+  const [name, setName] = useState(
+    initial?.name ?? (kind === 'fillet' ? 'Fillet' : 'Chamfer')
+  );
+  const [size, setSize] = useState(paramValueText(initial?.size ?? 2));
+  const canSubmit =
+    name.trim().length > 0 &&
+    Boolean(targetBodyId) &&
+    edgeHashes.length > 0 &&
+    fieldsValid(scope, [size]);
+
+  return (
+    <FormShell
+      name={name}
+      onName={setName}
+      submitLabel={submitLabel}
+      canSubmit={canSubmit}
+      onSubmit={() =>
+        onSubmit({
+          name: name.trim(),
+          targetBodyId: targetBodyId!,
+          edgeHashes,
+          size: coerceParamValue(size)
+        })
+      }
+      onCancel={onCancel}
+    >
+      <div className="selection-summary">
+        {edgeHashes.length > 0
+          ? `${edgeHashes.length} exact edge${edgeHashes.length === 1 ? '' : 's'} selected`
+          : 'Select an edge in the viewport first.'}
+      </div>
+      <ExprInput
+        label={kind === 'fillet' ? 'Radius' : 'Distance'}
+        value={size}
+        scope={scope}
+        onChange={setSize}
+      />
+    </FormShell>
+  );
+}
+
+export interface PatternFormValue {
+  name: string;
+  targetBodyId: BodyId;
+  patternKind: PatternKind;
+  count: ParamValue;
+  axis: AxisId;
+  spacing: ParamValue;
+  angleDeg: ParamValue;
+}
+
+interface PatternFormProps {
+  kind: PatternKind;
+  scope: Record<string, number>;
+  bodies: BodyOption[];
+  selectedBodyId?: BodyId | null;
+  initial?: PatternFormValue;
+  submitLabel: string;
+  onSubmit(value: PatternFormValue): void;
+  onCancel?: () => void;
+}
+
+export function PatternForm({
+  kind,
+  scope,
+  bodies,
+  selectedBodyId,
+  initial,
+  submitLabel,
+  onSubmit,
+  onCancel
+}: PatternFormProps) {
+  const available = bodies.filter(
+    (body) => !body.consumed || body.bodyId === initial?.targetBodyId
+  );
+  const [name, setName] = useState(
+    initial?.name ?? (kind === 'linear' ? 'Linear pattern' : 'Circular pattern')
+  );
+  const [targetBodyId, setTargetBodyId] = useState<BodyId | ''>(
+    initial?.targetBodyId ?? selectedBodyId ?? available[0]?.bodyId ?? ''
+  );
+  const [count, setCount] = useState(paramValueText(initial?.count ?? 3));
+  const [axis, setAxis] = useState<AxisId>(initial?.axis ?? 'x');
+  const [spacing, setSpacing] = useState(
+    paramValueText(initial?.spacing ?? 20)
+  );
+  const [angleDeg, setAngleDeg] = useState(
+    paramValueText(initial?.angleDeg ?? 360)
+  );
+  const canSubmit =
+    name.trim().length > 0 &&
+    targetBodyId !== '' &&
+    fieldsValid(scope, [count, kind === 'linear' ? spacing : angleDeg]);
+
+  return (
+    <FormShell
+      name={name}
+      onName={setName}
+      submitLabel={submitLabel}
+      canSubmit={canSubmit}
+      onSubmit={() =>
+        onSubmit({
+          name: name.trim(),
+          targetBodyId: targetBodyId as BodyId,
+          patternKind: kind,
+          count: coerceParamValue(count),
+          axis,
+          spacing: coerceParamValue(spacing),
+          angleDeg: coerceParamValue(angleDeg)
+        })
+      }
+      onCancel={onCancel}
+    >
+      <label className="field">
+        <span>Body</span>
+        <select
+          value={targetBodyId}
+          onChange={(event) => setTargetBodyId(event.target.value as BodyId)}
+        >
+          {available.length === 0 && <option value="">No bodies yet</option>}
+          {available.map((body) => (
+            <option key={body.bodyId} value={body.bodyId}>
+              {body.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="field-pair">
+        <ExprInput
+          label="Count"
+          value={count}
+          scope={scope}
+          onChange={setCount}
+        />
+        <label className="field">
+          <span>Axis</span>
+          <select
+            value={axis}
+            onChange={(event) => setAxis(event.target.value as AxisId)}
+          >
+            <option value="x">X</option>
+            <option value="y">Y</option>
+            <option value="z">Z</option>
+          </select>
+        </label>
+      </div>
+      {kind === 'linear' ? (
+        <ExprInput
+          label="Spacing"
+          value={spacing}
+          scope={scope}
+          onChange={setSpacing}
+        />
+      ) : (
+        <ExprInput
+          label="Total angle°"
+          value={angleDeg}
+          scope={scope}
+          onChange={setAngleDeg}
+        />
+      )}
     </FormShell>
   );
 }

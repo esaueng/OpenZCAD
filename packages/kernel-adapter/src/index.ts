@@ -190,6 +190,12 @@ export class OpenZCADKernel implements KernelAdapter {
             throw new GeometryError(
               'editable STEP solids require the exact OpenCascade kernel.'
             );
+          case 'fillet':
+          case 'chamfer':
+          case 'pattern':
+            throw new GeometryError(
+              `${feature.data.featureKind} requires the exact OpenCascade kernel.`
+            );
           case 'transform': {
             const targetBodyId = feature.data.targetBodyId;
             if (consumed.has(targetBodyId)) {
