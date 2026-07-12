@@ -4,11 +4,11 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 
 ## Layers
 
-- `shared`: branded IDs and schema-v2 contracts for nodes, revisions, checkpoints, assets, derived bodies, and API payloads.
-- `document-core`: immutable document operations, feature ordering, parameter expression evaluation, v1-to-v2 normalization, and checkpoint creation.
+- `shared`: branded IDs and schema-v2 contracts for nodes, revisions, checkpoints, assets, derived topology, collaboration messages, and API payloads.
+- `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern features, v1-to-v2 normalization, and checkpoint creation.
 - `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
-- `kernel-adapter/exact`: the `occt-wasm` OpenCascade adapter. It owns exact primitives, sweeps, transforms, booleans, tessellation, validity checks, measurements, and STEP/STL export.
+- `kernel-adapter/exact`: the `occt-wasm` OpenCascade adapter. It owns exact primitives, STEP import, sweeps, transforms, booleans, edge finishing, patterns, tessellation/topology projection, validity checks, measurements, and STEP/STL export.
 - `kernel-adapter` and `geometry`: compatibility support for imported mesh bodies and deterministic legacy tests. They are not the primary exact modeling path.
 - `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state.
 - `persistence` and `cloudflare-adapters`: local/in-memory and D1/R2 implementations, schema normalization, revisions/checkpoints, upload sessions, and artifact coordination.
@@ -24,11 +24,21 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 6. The app rejects stale results and attaches only matching derived state without advancing model history.
 7. Manual save creates a durable checkpoint in the beta persistence service.
 
+Exact faces and edges are projected with deterministic one-based sub-shape ordinals. Selection remains viewport state until a command captures an ordinal; feature commands never depend on Three.js objects or transient OCCT handles.
+
 When opening a project, local and remote copies are loaded together. The higher document version wins; derived timestamps break ties. This prevents an older cloud response from shadowing newer local edits.
 
 ## Exact export lifecycle
 
 STEP/STL buttons send an export request to the existing geometry worker with the current document and selected live body IDs. The worker rebuilds the exact shapes and exports them through OpenCascade. The main thread only creates the download and records best-effort export metadata with the Worker API. The viewport and export therefore share the same exact build path.
+
+## Editable STEP lifecycle
+
+The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. OpenCascade imports the exact shape on every replay, so later transforms, booleans, fillets, chamfers, patterns, selection, and export use the same exact B-rep path. The Worker archives the source best-effort; replay does not depend on that network artifact.
+
+## Collaboration lifecycle
+
+After project ownership is authorized, the client upgrades `GET /api/projects/:id/collaboration` to a WebSocket. A per-project Durable Object broadcasts presence and canonical document snapshots, accepts only newer versions, and reports same-version divergent documents as conflicts. Clients preserve local state on conflict, strip derived meshes before transmission, debounce edits, and pause live broadcasting above 900 KB. IndexedDB and manual D1 checkpoints remain the durable recovery path.
 
 ## AI lifecycle
 
@@ -41,15 +51,15 @@ The client assembles `response.output_text.delta` events, validates the final pr
 - IndexedDB: immediate local autosave and offline reopen.
 - D1: project documents, project metadata, revision/checkpoint snapshots, upload sessions, and artifact metadata.
 - R2: large source/export assets when configured.
-- Durable Objects: collaboration/presence scaffolding only.
+- Durable Objects: authenticated per-project presence and live document synchronization.
 - Workflows/Queues: export/import orchestration scaffolding.
 - Worker secret: `AI_API_KEY` (with `OPENAI_API_KEY` backward compatibility); never shipped to the browser.
 - `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, and `AI_REASONING_EFFORT` select a Responses-compatible provider and model without code changes.
 
 ## API and errors
 
-All JSON POST bodies are validated. Oversized bodies return `413`, malformed data `400`, missing resources `404`, unconfigured AI `503`, upstream AI failure `502`, and unexpected errors a generic `500`. Provider error bodies and secrets are never returned to the client.
+All JSON POST bodies are validated. Oversized bodies return `413`, malformed data `400`, unauthenticated requests `401`, unauthorized resources `404`, unconfigured services `503`, upstream AI failure `502`, and unexpected errors a generic `500`. Provider error bodies and secrets are never returned to the client.
 
 ## Security posture
 
-This remains beta-only. There is no authentication; requests act as `user_beta_dev`. Do not add a production target or domain until authentication and per-project authorization exist. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.
+This remains beta-only. Beta requests require Cloudflare Access identity and all project, revision, artifact, import/export, and collaboration operations are owner-scoped. Development mode supplies an isolated local identity and must not be used on a public route. Cloudflare Access must be configured at the route boundary; the Worker intentionally trusts Access's injected assertion and email headers. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.

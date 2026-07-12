@@ -3,3 +3,6 @@ AI_API_KEY=
 
 # Backward-compatible alternative: OPENAI_API_KEY=
 # For an OpenAI Responses-compatible provider, also set AI_PROVIDER and AI_BASE_URL.
+# Local Wrangler uses AUTH_MODE=development from wrangler.jsonc.
+# Beta uses Cloudflare Access; optionally set AUTH_LEGACY_OWNER_EMAIL there to
+# the Access email that should inherit historical user_beta_dev projects.
