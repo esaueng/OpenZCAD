@@ -522,6 +522,7 @@ export function App() {
   function handlePreviewPatch(proposal: CadPatchProposal | null) {
     if (!proposal || !doc) {
       setPreviewDoc(null);
+      setStatus('Preview cleared.');
       return;
     }
     try {
