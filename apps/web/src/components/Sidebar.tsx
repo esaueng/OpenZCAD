@@ -5,6 +5,8 @@ import {
   Combine,
   Cone,
   Cylinder,
+  Eye,
+  EyeOff,
   FileBox,
   Globe,
   Layers,
@@ -177,8 +179,11 @@ interface SidebarProps {
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
   selectedFeatureNodeId: string | null;
+  hiddenBodyIds: ReadonlySet<string>;
   warnings: string[];
   onSelectFeature(nodeId: string): void;
+  onToggleBodyVisibility(bodyId: string): void;
+  onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onDeleteFeature(featureId: FeatureId, name: string): void;
@@ -190,8 +195,11 @@ export function Sidebar({
   features,
   representations,
   selectedFeatureNodeId,
+  hiddenBodyIds,
   warnings,
   onSelectFeature,
+  onToggleBodyVisibility,
+  onFeatureContextMenu,
   onSetParameter,
   onDeleteParameter,
   onDeleteFeature
@@ -234,6 +242,9 @@ export function Sidebar({
               ? representations[feature.bodyId]
               : undefined;
             const consumed = body?.consumed ?? false;
+            const hidden = feature.bodyId
+              ? hiddenBodyIds.has(feature.bodyId)
+              : false;
             const failed =
               feature.bodyId !== undefined &&
               feature.featureKind !== 'sketch' &&
@@ -241,7 +252,11 @@ export function Sidebar({
             return (
               <div
                 key={feature.id}
-                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''}`}
+                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  onFeatureContextMenu(event, feature);
+                }}
               >
                 <button
                   type="button"
@@ -261,6 +276,24 @@ export function Sidebar({
                   )}
                   {consumed && <small className="feature-flag">consumed</small>}
                 </button>
+                {feature.bodyId && body && !consumed && (
+                  <button
+                    type="button"
+                    className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
+                    title={hidden ? `Show ${feature.name}` : `Hide ${feature.name}`}
+                    aria-label={
+                      hidden ? `Show ${feature.name}` : `Hide ${feature.name}`
+                    }
+                    aria-pressed={hidden}
+                    onClick={() => onToggleBodyVisibility(feature.bodyId!)}
+                  >
+                    {hidden ? (
+                      <EyeOff size={12} aria-hidden="true" />
+                    ) : (
+                      <Eye size={12} aria-hidden="true" />
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="row-delete"

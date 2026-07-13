@@ -24,6 +24,14 @@
   --color-success: #22c55e;
   --color-viewport-bg: #090a0c;
 
+  /* ── Viewport selection & manipulation ────────────────── */
+  --color-select: #4da3ff;      /* selected geometry */
+  --color-preselect: #7cc0ff;   /* hover preselection */
+  --color-preview: #58d6c2;     /* ghost geometry during a command */
+  --color-handle-x: #ef6a6a;
+  --color-handle-y: #6fd66f;
+  --color-handle-z: #5f8fef;
+
   /* ── Typography ───────────────────────────────────────── */
   --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
@@ -78,6 +86,7 @@
   --z-viewer-overlay: 2;
   --z-inspector-float: 5;
   --z-modal: 50;
+  --z-context-menu: 60;
   --z-start-screen: 100;
 }
 
