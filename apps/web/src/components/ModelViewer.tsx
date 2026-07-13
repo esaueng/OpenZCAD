@@ -12,18 +12,35 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 
+export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
+
+export type StandardView = 'iso' | 'front' | 'top' | 'right';
+
 export interface ViewerSettings {
   showGrid: boolean;
+  displayMode: DisplayMode;
+}
+
+/** Sketch profile polyline, already lifted onto its 3D plane. */
+export interface SketchOverlay {
+  sketchId: string;
+  name: string;
+  selected: boolean;
+  points: { x: number; y: number; z: number }[];
 }
 
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
-  selectedBodyId: string | null;
+  sketches: SketchOverlay[];
+  /** Bodies highlighted in the viewport, in pick order. */
+  selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
-  onSelectTopology(selection: TopologySelection | null): void;
+  /** Set to move the camera to a standard view; nonce forces re-runs. */
+  viewRequest: { view: StandardView; nonce: number } | null;
+  onSelectTopology(selection: TopologySelection | null, additive: boolean): void;
 }
 
 interface SceneContext {
@@ -33,6 +50,7 @@ interface SceneContext {
   labelRenderer: CSS2DRenderer;
   controls: OrbitControls;
   bodyGroup: THREE.Group;
+  sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
   grid: THREE.GridHelper;
   raycaster: THREE.Raycaster;
@@ -44,6 +62,17 @@ type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 
 const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
+const SKETCH_COLOR = 0x4da3ff;
+const SKETCH_SELECTED_COLOR = 0x9ecbff;
+
+const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
+  // Direction from the target toward the camera. Top keeps a hair of X/Z so
+  // OrbitControls never sees the camera axis parallel to its up vector.
+  iso: new THREE.Vector3(1, 0.9, 1).normalize(),
+  front: new THREE.Vector3(0, 0, 1),
+  top: new THREE.Vector3(0.0001, 1, 0.0001).normalize(),
+  right: new THREE.Vector3(1, 0, 0)
+};
 
 export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
   return (
@@ -112,21 +141,40 @@ function findBodyId(object: THREE.Object3D): string | null {
   return null;
 }
 
+/**
+ * Meshes render solid or wireframe; the baked feature-edge overlay
+ * (LineSegments) toggles with the mode. Exact topology edge curves are
+ * `THREE.Line` pick targets and stay visible in every mode.
+ */
+function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
+  bodyGroup.traverse((child: THREE.Object3D) => {
+    if (isViewerMesh(child)) {
+      child.material.wireframe = mode === 'wireframe';
+    } else if (child instanceof THREE.LineSegments) {
+      child.visible = mode === 'shaded-edges';
+    }
+  });
+}
+
 export function ModelViewer({
   bodies,
-  selectedBodyId,
+  sketches,
+  selectedBodyIds,
   selectedTopology,
   settings,
   fitSignal,
+  viewRequest,
   onSelectTopology
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const displayModeRef = useRef(settings.displayMode);
+  displayModeRef.current = settings.displayMode;
 
   // Scene, renderers, controls, and the render loop live for the component's
-  // lifetime; only the body/overlay groups rebuild on data changes.
+  // lifetime; only the body/sketch/overlay groups rebuild on data changes.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) {
@@ -176,6 +224,10 @@ export function ModelViewer({
     bodyGroup.name = 'bodies';
     scene.add(bodyGroup);
 
+    const sketchGroup = new THREE.Group();
+    sketchGroup.name = 'sketches';
+    scene.add(sketchGroup);
+
     const overlayGroup = new THREE.Group();
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
@@ -187,6 +239,7 @@ export function ModelViewer({
       labelRenderer,
       controls,
       bodyGroup,
+      sketchGroup,
       overlayGroup,
       grid,
       raycaster: new THREE.Raycaster(),
@@ -291,13 +344,21 @@ export function ModelViewer({
       );
       downPosition = null;
       if (moved < 5) {
-        onSelectTopologyRef.current(pickSelection(event));
+        onSelectTopologyRef.current(pickSelection(event), event.shiftKey);
       }
+    };
+    const handleDoubleClick = () => {
+      if (bodyGroup.children.length === 0) {
+        return;
+      }
+      fitCameraToObjects(camera, controls.target, bodyGroup.children);
+      controls.update();
     };
 
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointerup', handlePointerUp);
+    renderer.domElement.addEventListener('dblclick', handleDoubleClick);
 
     let animationFrame = window.requestAnimationFrame(function animate() {
       controls.update();
@@ -312,7 +373,9 @@ export function ModelViewer({
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('pointerup', handlePointerUp);
+      renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       clearGroup(bodyGroup);
+      clearGroup(sketchGroup);
       clearGroup(overlayGroup);
       grid.dispose();
       axes.dispose();
@@ -340,7 +403,7 @@ export function ModelViewer({
     for (const body of bodies) {
       const object = createObjectForBody(body);
       object.userData.bodyId = body.bodyId;
-      const isSelected = body.bodyId === selectedBodyId;
+      const isSelected = selectedBodyIds.includes(body.bodyId);
 
       forEachMesh(object, (mesh) => {
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
@@ -419,21 +482,32 @@ export function ModelViewer({
       objectsByBodyId.set(body.bodyId, object);
     }
 
-    if (selectedBodyId) {
-      const target = objectsByBodyId.get(selectedBodyId);
-      const body = bodies.find(
-        (candidate) => candidate.bodyId === selectedBodyId
-      );
+    applyDisplayMode(context.bodyGroup, displayModeRef.current);
+
+    // Name callout on the primary (last picked) selected body.
+    const primaryId = selectedBodyIds.at(-1);
+    if (primaryId) {
+      const target = objectsByBodyId.get(primaryId);
+      const body = bodies.find((candidate) => candidate.bodyId === primaryId);
       if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
           const top = box.getCenter(new THREE.Vector3());
           top.y =
             box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
-          const suffix = selectedTopology?.topologyId
-            ? ` · ${selectedTopology.topologyId}`
-            : '';
-          const label = makeLabel('selection-callout', `${body.name}${suffix}`);
+          const suffix =
+            selectedTopology?.bodyId === primaryId &&
+            selectedTopology.topologyId
+              ? ` · ${selectedTopology.topologyId}`
+              : '';
+          const count =
+            selectedBodyIds.length > 1
+              ? ` +${selectedBodyIds.length - 1}`
+              : '';
+          const label = makeLabel(
+            'selection-callout',
+            `${body.name}${suffix}${count}`
+          );
           label.position.copy(top);
           context.overlayGroup.add(label);
         }
@@ -449,14 +523,54 @@ export function ModelViewer({
       context.controls.update();
       context.hasFitCamera = true;
     }
-  }, [bodies, selectedBodyId, selectedTopology]);
+  }, [bodies, selectedBodyIds, selectedTopology]);
+
+  // Sketch profiles render as line loops on their planes so upcoming
+  // extrudes/revolves are visible before they exist.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) {
+      return;
+    }
+    clearGroup(context.sketchGroup);
+    for (const sketch of sketches) {
+      if (sketch.points.length < 2) {
+        continue;
+      }
+      const geometry = new THREE.BufferGeometry().setFromPoints(
+        sketch.points.map((point) => new THREE.Vector3(point.x, point.y, point.z))
+      );
+      const line = new THREE.LineLoop(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color: sketch.selected ? SKETCH_SELECTED_COLOR : SKETCH_COLOR,
+          transparent: true,
+          opacity: sketch.selected ? 1 : 0.5
+        })
+      );
+      line.raycast = () => undefined;
+      context.sketchGroup.add(line);
+
+      if (sketch.selected) {
+        const centroid = new THREE.Vector3();
+        for (const point of sketch.points) {
+          centroid.add(new THREE.Vector3(point.x, point.y, point.z));
+        }
+        centroid.divideScalar(sketch.points.length);
+        const label = makeLabel('selection-callout sketch-callout', sketch.name);
+        label.position.copy(centroid);
+        context.sketchGroup.add(label);
+      }
+    }
+  }, [sketches]);
 
   useEffect(() => {
     const context = contextRef.current;
     if (context) {
       context.grid.visible = settings.showGrid;
+      applyDisplayMode(context.bodyGroup, settings.displayMode);
     }
-  }, [settings.showGrid]);
+  }, [settings.showGrid, settings.displayMode]);
 
   useEffect(() => {
     const context = contextRef.current;
@@ -474,6 +588,20 @@ export function ModelViewer({
     );
     context.controls.update();
   }, [fitSignal]);
+
+  // Standard views keep the current zoom and orbit the camera to the axis.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !viewRequest) {
+      return;
+    }
+    const { camera, controls } = context;
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+    const direction = VIEW_DIRECTIONS[viewRequest.view];
+    camera.position.copy(controls.target).addScaledVector(direction, distance);
+    camera.updateProjectionMatrix();
+    controls.update();
+  }, [viewRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
 }

@@ -71,6 +71,9 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../../packages/document-core
+      '@openzcad/geometry':
+        specifier: workspace:*
+        version: link:../../packages/geometry
       '@openzcad/io-step':
         specifier: workspace:*
         version: link:../../packages/io-step
