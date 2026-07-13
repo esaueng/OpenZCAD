@@ -1,140 +1,106 @@
-import type { MutableRefObject, ReactNode } from 'react';
-import { Box, PenLine, Upload, X } from 'lucide-react';
-import type { BodyRepresentation } from '@openzcad/shared';
+import type { MutableRefObject } from 'react';
 import {
   ModelViewer,
   type AxisProjection,
+  type FaceResizeCommit,
   type ProjectionMode,
-  type SketchOverlayView,
+  type SketchOverlay,
   type StandardView,
-  type ViewerApi,
   type ViewerSettings
 } from './ModelViewer';
-import { ViewportNav } from './ViewportNav';
-import type { ManipulatorSpec, PreviewSpec } from '../lib/session';
+import { ViewerToolbar } from './ViewerToolbar';
+import { OrientationWidget } from './OrientationWidget';
+import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 
 interface ViewerShellProps {
   bodies: BodyRepresentation[];
-  sketches: SketchOverlayView[];
-  totalFeatureCount: number;
+  sketches: SketchOverlay[];
   selectedBodyIds: string[];
+  selectedTopology: TopologySelection | null;
   settings: ViewerSettings;
-  preview: PreviewSpec | null;
-  manipulator: ManipulatorSpec | null;
+  fitSignal: number;
+  viewRequest: { view: StandardView; nonce: number } | null;
+  units: string;
+  editableBodyIds: string[];
   projection: ProjectionMode;
-  apiRef: MutableRefObject<ViewerApi | null>;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
-  /** Floating command HUD rendered over the viewport during a session. */
-  hud: ReactNode;
-  showOrbitHint: boolean;
-  onDismissOrbitHint(): void;
-  onSelectBody(bodyId: string | null, additive: boolean): void;
-  onSelectSketch(sketchId: string, additive: boolean): void;
-  onContextMenu(x: number, y: number, bodyId: string | null): void;
-  onManipulatorDrag(valueKey: string, value: number): void;
-  onView(view: StandardView): void;
-  onToggleProjection(): void;
+  onSelectTopology(
+    selection: TopologySelection | null,
+    additive: boolean
+  ): void;
+  onResizePrimitiveFace(commit: FaceResizeCommit): void;
+  onContextMenu(x: number, y: number, selection: TopologySelection | null): void;
   onToggleGrid(): void;
-  onFit(target: 'all' | 'selection'): void;
-  onStartSketch(): void;
-  onStartBox(): void;
-  onImportClick(): void;
+  onFit(): void;
+  onView(view: StandardView): void;
+  onCycleDisplayMode(): void;
+  onToggleProjection(): void;
 }
 
-/** Viewport region: 3D canvas, HUD, camera cluster, and empty-state actions. */
 export function ViewerShell({
   bodies,
   sketches,
-  totalFeatureCount,
   selectedBodyIds,
+  selectedTopology,
   settings,
-  preview,
-  manipulator,
+  fitSignal,
+  viewRequest,
+  units,
+  editableBodyIds,
   projection,
-  apiRef,
   orientationRef,
-  hud,
-  showOrbitHint,
-  onDismissOrbitHint,
-  onSelectBody,
-  onSelectSketch,
+  onSelectTopology,
+  onResizePrimitiveFace,
   onContextMenu,
-  onManipulatorDrag,
-  onView,
-  onToggleProjection,
   onToggleGrid,
   onFit,
-  onStartSketch,
-  onStartBox,
-  onImportClick
+  onView,
+  onCycleDisplayMode,
+  onToggleProjection
 }: ViewerShellProps) {
-  const empty = totalFeatureCount === 0 && !preview;
-
   return (
     <section className="viewer-shell" aria-label="3D viewport">
       <ModelViewer
         bodies={bodies}
         sketches={sketches}
         selectedBodyIds={selectedBodyIds}
+        selectedTopology={selectedTopology}
         settings={settings}
-        preview={preview}
-        manipulator={manipulator}
-        apiRef={apiRef}
-        orientationRef={orientationRef}
-        onSelectBody={onSelectBody}
-        onSelectSketch={onSelectSketch}
-        onContextMenu={onContextMenu}
-        onManipulatorDrag={onManipulatorDrag}
-      />
-      {hud}
-      <ViewportNav
-        orientationRef={orientationRef}
+        fitSignal={fitSignal}
+        viewRequest={viewRequest}
+        units={units}
+        editableBodyIds={editableBodyIds}
         projection={projection}
-        showGrid={settings.showGrid}
-        hasSelection={selectedBodyIds.length > 0}
-        onView={onView}
-        onToggleProjection={onToggleProjection}
+        orientationRef={orientationRef}
+        onSelectTopology={onSelectTopology}
+        onResizePrimitiveFace={onResizePrimitiveFace}
+        onContextMenu={onContextMenu}
+      />
+      <ViewerToolbar
+        settings={settings}
+        projection={projection}
         onToggleGrid={onToggleGrid}
         onFit={onFit}
+        onView={onView}
+        onCycleDisplayMode={onCycleDisplayMode}
+        onToggleProjection={onToggleProjection}
       />
-      {empty && (
-        <div className="viewer-empty-state">
-          <h2>Start modeling</h2>
-          <p>Sketch a profile and pull it into a solid, or drop in a primitive.</p>
-          <div className="empty-actions">
-            <button type="button" className="primary" onClick={onStartSketch}>
-              <PenLine size={14} aria-hidden="true" />
-              Create Sketch
-              <kbd>K</kbd>
-            </button>
-            <button type="button" className="secondary" onClick={onStartBox}>
-              <Box size={14} aria-hidden="true" />
-              Add Box
-              <kbd>B</kbd>
-            </button>
-            <button type="button" className="secondary" onClick={onImportClick}>
-              <Upload size={14} aria-hidden="true" />
-              Import STL
-            </button>
+      <OrientationWidget orientationRef={orientationRef} />
+      {bodies.length === 0 && sketches.length === 0 && (
+        <div className="viewer-notice">
+          <div>
+            <strong>No geometry yet</strong>
+            <small>
+              Pick a tool from the toolbar above — try <b>Box</b> (B) — or
+              sketch a profile and extrude it.
+            </small>
+            <small className="viewer-notice-keys">
+              <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands · <kbd>?</kbd> shortcuts
+            </small>
           </div>
         </div>
       )}
-      {showOrbitHint && !empty && (
-        <div className="viewer-hint" role="note">
-          <span>
-            <b>Orbit</b> drag · <b>Pan</b> right-drag · <b>Zoom</b> scroll · <b>Select</b> click ·{' '}
-            <b>Multi-select</b> shift-click
-          </span>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Dismiss navigation hint"
-            onClick={onDismissOrbitHint}
-          >
-            <X size={12} aria-hidden="true" />
-          </button>
-        </div>
-      )}
+      <div className="viewer-watermark">openzcad kernel · exact b-rep</div>
     </section>
   );
 }

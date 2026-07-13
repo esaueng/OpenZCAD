@@ -1,10 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { CommandIcon } from './icons';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 
 export interface ContextMenuItem {
   id: string;
   label: string;
-  icon?: string;
+  icon?: ReactNode;
   shortcut?: string;
   disabled?: boolean;
   danger?: boolean;
@@ -81,11 +86,7 @@ export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
               onClose();
             }}
           >
-            {item.icon && (
-              <span className="context-menu-icon">
-                <CommandIcon name={item.icon} size={13} />
-              </span>
-            )}
+            {item.icon && <span className="context-menu-icon">{item.icon}</span>}
             <span className="context-menu-label">{item.label}</span>
             {item.shortcut && <kbd>{item.shortcut}</kbd>}
           </button>

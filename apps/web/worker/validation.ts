@@ -11,6 +11,7 @@ import {
   type SaveRevisionRequest,
   type UnitSystem
 } from '@openzcad/shared';
+import type { CadDocumentDigest } from '@openzcad/ai-contracts';
 
 export class HttpError extends Error {
   constructor(
@@ -29,6 +30,12 @@ const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_REASON_LENGTH = 500;
 const MAX_EXPORT_BODIES = 100;
+const MAX_AI_PROMPT_LENGTH = 4_000;
+
+export interface AssistantProposalRequest {
+  prompt: string;
+  digest: CadDocumentDigest;
+}
 
 function badRequest(message: string): HttpError {
   return new HttpError(400, message);
@@ -76,10 +83,15 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
  * validation: the document blob is round-tripped as-is, so this guards the
  * fields the server itself reads plus path/payload consistency.
  */
-function parseProjectDocument(value: unknown, projectIdFromPath: string): ProjectDocument {
+function parseProjectDocument(
+  value: unknown,
+  projectIdFromPath: string
+): ProjectDocument {
   const record = asRecord(value, '"document"');
   if (record.projectId !== projectIdFromPath) {
-    throw badRequest('"document.projectId" must match the project id in the URL.');
+    throw badRequest(
+      '"document.projectId" must match the project id in the URL.'
+    );
   }
   if (typeof record.name !== 'string' || typeof record.version !== 'number') {
     throw badRequest('"document" is missing required fields.');
@@ -112,7 +124,9 @@ export function parseSaveRevisionRequest(
   };
 }
 
-export function parseCreateUploadSessionRequest(body: unknown): CreateUploadSessionRequest {
+export function parseCreateUploadSessionRequest(
+  body: unknown
+): CreateUploadSessionRequest {
   const record = asRecord(body, 'Request body');
   return {
     projectId: toProjectId(requireString(record, 'projectId', MAX_NAME_LENGTH)),
@@ -121,14 +135,18 @@ export function parseCreateUploadSessionRequest(body: unknown): CreateUploadSess
   };
 }
 
-export function parseFinalizeImportRequest(body: unknown): FinalizeImportRequest {
+export function parseFinalizeImportRequest(
+  body: unknown
+): FinalizeImportRequest {
   const record = asRecord(body, 'Request body');
   return {
     projectId: toProjectId(requireString(record, 'projectId', MAX_NAME_LENGTH)),
     uploadSessionId: toUploadSessionId(
       requireString(record, 'uploadSessionId', MAX_NAME_LENGTH)
     ),
-    artifactId: toArtifactId(requireString(record, 'artifactId', MAX_NAME_LENGTH)),
+    artifactId: toArtifactId(
+      requireString(record, 'artifactId', MAX_NAME_LENGTH)
+    ),
     fileName: requireString(record, 'fileName', MAX_FILE_NAME_LENGTH),
     contentType: requireString(record, 'contentType', MAX_CONTENT_TYPE_LENGTH)
   };
@@ -140,7 +158,9 @@ export function parseRequestExportRequest(body: unknown): RequestExportRequest {
   if (format !== 'step' && format !== 'stl') {
     throw badRequest(`"format" must be one of: ${EXPORT_FORMATS.join(', ')}.`);
   }
-  const rawBodyIds: unknown[] = Array.isArray(record.bodyIds) ? record.bodyIds : [];
+  const rawBodyIds: unknown[] = Array.isArray(record.bodyIds)
+    ? record.bodyIds
+    : [];
   const bodyIds = rawBodyIds.filter(
     (id): id is string => typeof id === 'string' && id.length > 0
   );
@@ -158,4 +178,25 @@ export function parseRequestExportRequest(body: unknown): RequestExportRequest {
     bodyIds: bodyIds.map((id) => toBodyId(id)),
     format
   };
+}
+
+export function parseAssistantProposalRequest(
+  body: unknown
+): AssistantProposalRequest {
+  const record = asRecord(body, 'Request body');
+  const prompt = requireString(record, 'prompt', MAX_AI_PROMPT_LENGTH);
+  const digest = asRecord(record.digest, '"digest"');
+  if (
+    typeof digest.schemaVersion !== 'number' ||
+    typeof digest.projectId !== 'string' ||
+    typeof digest.name !== 'string' ||
+    typeof digest.units !== 'string' ||
+    typeof digest.version !== 'number' ||
+    !Array.isArray(digest.parameters) ||
+    !Array.isArray(digest.features) ||
+    !Array.isArray(digest.warnings)
+  ) {
+    throw badRequest('"digest" is missing required fields.');
+  }
+  return { prompt, digest: digest as unknown as CadDocumentDigest };
 }

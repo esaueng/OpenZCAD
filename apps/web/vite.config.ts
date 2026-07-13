@@ -23,6 +23,7 @@ const WORKSPACE_PACKAGES = [
   'document-core',
   'command-system',
   'kernel-adapter',
+  'ai-contracts',
   'viewport',
   'io-step',
   'io-stl',
@@ -34,7 +35,9 @@ const WORKSPACE_PACKAGES = [
 const workspaceAliases = Object.fromEntries(
   WORKSPACE_PACKAGES.map((name) => [
     `@openzcad/${name}`,
-    fileURLToPath(new URL(`../../packages/${name}/src/index.ts`, import.meta.url))
+    fileURLToPath(
+      new URL(`../../packages/${name}/src/index.ts`, import.meta.url)
+    )
   ])
 );
 
@@ -43,7 +46,10 @@ export default defineConfig(async ({ command, isPreview }) => {
   const react = (await import('@vitejs/plugin-react')).default;
   plugins.push(react());
 
-  const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
+  const nodeMajor = Number.parseInt(
+    process.versions.node.split('.')[0] ?? '0',
+    10
+  );
   // `vite preview` also reports command === 'serve', but the Cloudflare
   // plugin expects build output it did not produce; load it for dev only.
   const isDevServer = command === 'serve' && !isPreview;
@@ -58,10 +64,23 @@ export default defineConfig(async ({ command, isPreview }) => {
 
   return {
     plugins,
+    optimizeDeps: {
+      // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
+      exclude: ['occt-wasm']
+    },
+    worker: {
+      format: 'es' as const
+    },
     resolve: {
-      alias: workspaceAliases
+      alias: {
+        '@openzcad/kernel-adapter/exact': fileURLToPath(
+          new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
+        ),
+        ...workspaceAliases
+      }
     },
     build: {
+      target: 'esnext',
       rollupOptions: {
         output: {
           manualChunks: {

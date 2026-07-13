@@ -3,6 +3,7 @@ import {
   deepClone,
   featureColor,
   nowIso,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toArtifactId,
   toBodyId,
   toEntityId,
@@ -13,6 +14,7 @@ import {
   toSketchId,
   type BodyId,
   type BodyNode,
+  type AxisId,
   type BooleanOperation,
   type DocumentNode,
   type EntityId,
@@ -23,9 +25,11 @@ import {
   type ParameterNode,
   type ParametricVector3,
   type ParamValue,
+  type PatternKind,
   type PlaneId,
   type PrimitiveKind,
   type ProjectDocument,
+  type ProjectCheckpoint,
   type RevisionRecord,
   type RevolveAxis,
   type SketchId,
@@ -155,6 +159,25 @@ export interface TransformInput {
   ids?: FeatureOnlyIds;
 }
 
+export interface EdgeModifierInput {
+  name: string;
+  targetBodyId: BodyId;
+  edgeHashes: number[];
+  size: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface PatternInput {
+  name: string;
+  targetBodyId: BodyId;
+  patternKind: PatternKind;
+  count: ParamValue;
+  axis: AxisId;
+  spacing?: ParamValue;
+  angleDeg?: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
 export interface ImportedMeshInput {
   name: string;
   artifactId: string;
@@ -162,6 +185,14 @@ export interface ImportedMeshInput {
   triangleCount: number;
   vertices: number[];
   indices: number[];
+  ids?: BodyFeatureIds;
+}
+
+export interface ImportedStepInput {
+  name: string;
+  artifactId: string;
+  sourceName: string;
+  stepText: string;
   ids?: BodyFeatureIds;
 }
 
@@ -240,8 +271,16 @@ export function createProjectDocument(
     reason: 'Initial document',
     commandCount: 0
   };
+  const initialCheckpoint: ProjectCheckpoint = {
+    checkpointId: createId('checkpoint'),
+    revisionId: initialRevision.revisionId,
+    documentVersion: 1,
+    createdAt,
+    reason: 'Initial document'
+  };
 
   return {
+    schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     projectId,
     ownerUserId,
     rootNodeId,
@@ -256,7 +295,9 @@ export function createProjectDocument(
     sketchOrder: [],
     parameterOrder: [],
     revisions: [initialRevision],
+    checkpoints: [initialCheckpoint],
     commandLog: [],
+    assets: {},
     derived: {
       bodyRepresentations: {},
       exportableBodyIds: [],
@@ -271,12 +312,31 @@ export function createProjectDocument(
  * pre-parametric document does not crash newer code paths.
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
+  const revisions = document.revisions ?? [];
+  const fallbackRevision = revisions.at(-1);
+  const checkpoints =
+    document.checkpoints ??
+    (fallbackRevision
+      ? [
+          {
+            checkpointId: createId('checkpoint'),
+            revisionId: fallbackRevision.revisionId,
+            documentVersion: document.version ?? 1,
+            createdAt: fallbackRevision.createdAt,
+            reason: 'Migrated save point'
+          }
+        ]
+      : []);
   return {
     ...document,
+    schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     parameterOrder: document.parameterOrder ?? [],
     featureOrder: document.featureOrder ?? [],
     bodyOrder: document.bodyOrder ?? [],
-    sketchOrder: document.sketchOrder ?? []
+    sketchOrder: document.sketchOrder ?? [],
+    revisions,
+    checkpoints,
+    assets: document.assets ?? {}
   };
 }
 
@@ -313,14 +373,18 @@ export function findSketch(
   document: ProjectDocument,
   sketchId: SketchId
 ): SketchNode | undefined {
-  return listNodesByKind(document, 'sketch').find((sketch) => sketch.sketchId === sketchId);
+  return listNodesByKind(document, 'sketch').find(
+    (sketch) => sketch.sketchId === sketchId
+  );
 }
 
 export function findBodyNode(
   document: ProjectDocument,
   bodyId: BodyId
 ): BodyNode | undefined {
-  return listNodesByKind(document, 'body').find((body) => body.bodyId === bodyId);
+  return listNodesByKind(document, 'body').find(
+    (body) => body.bodyId === bodyId
+  );
 }
 
 export function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
@@ -647,6 +711,104 @@ export function transformBody(
   return { document: next, bodyId: input.targetBodyId };
 }
 
+function addBodyResultFeature(
+  document: ProjectDocument,
+  name: string,
+  featureKind: 'fillet' | 'chamfer' | 'pattern',
+  data: Extract<FeatureData, { featureKind: 'fillet' | 'chamfer' | 'pattern' }>,
+  ids?: BodyFeatureIds
+): { document: ProjectDocument; bodyId: BodyId } {
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    ids ?? createBodyFeatureIds();
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind,
+    data
+  };
+  next.nodes[bodyNodeId] = {
+    id: bodyNodeId,
+    kind: 'body',
+    name,
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'brep',
+    exportableStep: true,
+    metadata: { color: featureColor(featureKind) }
+  };
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId);
+  attachToPart(next, featureNodeId, bodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId };
+}
+
+export function filletEdges(
+  document: ProjectDocument,
+  input: EdgeModifierInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'fillet',
+    {
+      featureKind: 'fillet',
+      targetBodyId: input.targetBodyId,
+      edgeHashes: [...new Set(input.edgeHashes)],
+      radius: input.size
+    },
+    input.ids
+  );
+}
+
+export function chamferEdges(
+  document: ProjectDocument,
+  input: EdgeModifierInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'chamfer',
+    {
+      featureKind: 'chamfer',
+      targetBodyId: input.targetBodyId,
+      edgeHashes: [...new Set(input.edgeHashes)],
+      distance: input.size
+    },
+    input.ids
+  );
+}
+
+export function patternBody(
+  document: ProjectDocument,
+  input: PatternInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'pattern',
+    {
+      featureKind: 'pattern',
+      targetBodyId: input.targetBodyId,
+      patternKind: input.patternKind,
+      count: input.count,
+      axis: input.axis,
+      spacing: input.spacing ?? 10,
+      angleDeg: input.angleDeg ?? 360
+    },
+    input.ids
+  );
+}
+
 export function importMeshBody(
   document: ProjectDocument,
   input: ImportedMeshInput
@@ -695,6 +857,52 @@ export function importMeshBody(
   return { document: next, bodyId };
 }
 
+export function importStepBody(
+  document: ProjectDocument,
+  input: ImportedStepInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId, bodyId, bodyNodeId } =
+    input.ids ?? createBodyFeatureIds();
+
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind: 'imported-step',
+    data: {
+      featureKind: 'imported-step',
+      artifactId: toArtifactId(input.artifactId),
+      sourceName: input.sourceName,
+      stepText: input.stepText
+    }
+  };
+
+  next.nodes[bodyNodeId] = {
+    id: bodyNodeId,
+    kind: 'body',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'step-import',
+    exportableStep: true,
+    metadata: { color: featureColor('imported-step') }
+  };
+
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId);
+  attachToPart(next, featureNodeId, bodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId };
+}
+
 // ---------------------------------------------------------------------------
 // Parameters.
 // ---------------------------------------------------------------------------
@@ -707,7 +915,9 @@ export function isValidParameterName(name: string): boolean {
 
 export function listParameters(document: ProjectDocument): ParameterNode[] {
   const parameters = listNodesByKind(document, 'parameter');
-  const byId = new Map(parameters.map((parameter) => [parameter.parameterId, parameter]));
+  const byId = new Map(
+    parameters.map((parameter) => [parameter.parameterId, parameter])
+  );
   const ordered: ParameterNode[] = [];
   const seen = new Set<ParameterId>();
   for (const parameterId of document.parameterOrder) {
@@ -739,7 +949,9 @@ export function setParameter(
     throw new Error('Parameter expression must not be empty.');
   }
   const next = cloneDocument(document);
-  const existing = listParameters(next).find((parameter) => parameter.name === name);
+  const existing = listParameters(next).find(
+    (parameter) => parameter.name === name
+  );
   if (existing) {
     existing.expression = input.expression;
   } else {
@@ -766,12 +978,16 @@ export function deleteParameter(
   input: ParameterDeleteInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const parameter = listParameters(next).find((entry) => entry.name === input.name);
+  const parameter = listParameters(next).find(
+    (entry) => entry.name === input.name
+  );
   if (!parameter) {
     throw new Error(`Parameter "${input.name}" not found.`);
   }
   delete next.nodes[parameter.id];
-  next.parameterOrder = next.parameterOrder.filter((id) => id !== parameter.parameterId);
+  next.parameterOrder = next.parameterOrder.filter(
+    (id) => id !== parameter.parameterId
+  );
   refreshParameterValues(next);
   next.version += 1;
   return next;
@@ -789,10 +1005,14 @@ export interface ParameterScopeResult {
  * any declaration order; evaluation iterates until a fixed point, so cycles
  * and unknown identifiers surface as per-parameter errors instead of crashes.
  */
-export function getParameterScope(document: ProjectDocument): ParameterScopeResult {
+export function getParameterScope(
+  document: ProjectDocument
+): ParameterScopeResult {
   const parameters = listParameters(document);
   const scope: Record<string, number> = {};
-  const pending = new Map(parameters.map((parameter) => [parameter.name, parameter]));
+  const pending = new Map(
+    parameters.map((parameter) => [parameter.name, parameter])
+  );
   const errors: string[] = [];
 
   let progressed = true;
@@ -851,7 +1071,8 @@ export function resolveParamValue(
     }
     return evaluateExpression(value, scope);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : 'evaluation failed.';
+    const reason =
+      error instanceof Error ? error.message : 'evaluation failed.';
     throw new Error(label ? `${label}: ${reason}` : reason);
   }
 }
@@ -886,7 +1107,9 @@ export function updateFeature(
       patch.featureKind !== undefined &&
       patch.featureKind !== feature.featureKind
     ) {
-      throw new Error('A feature cannot change kind; delete and recreate it instead.');
+      throw new Error(
+        'A feature cannot change kind; delete and recreate it instead.'
+      );
     }
     delete patch.featureKind;
 
@@ -924,7 +1147,9 @@ export function deleteFeature(
   for (const body of listNodesByKind(next, 'body')) {
     if (body.featureId === feature.featureId) {
       removedNodeIds.add(body.id);
-      next.bodyOrder = next.bodyOrder.filter((bodyId) => bodyId !== body.bodyId);
+      next.bodyOrder = next.bodyOrder.filter(
+        (bodyId) => bodyId !== body.bodyId
+      );
     }
   }
 
@@ -940,13 +1165,17 @@ export function deleteFeature(
     next.sketchOrder = next.sketchOrder.filter((id) => id !== sketchId);
   }
 
-  next.featureOrder = next.featureOrder.filter((id) => id !== feature.featureId);
+  next.featureOrder = next.featureOrder.filter(
+    (id) => id !== feature.featureId
+  );
   for (const nodeId of removedNodeIds) {
     delete next.nodes[nodeId];
   }
   for (const node of Object.values(next.nodes)) {
     if (node.kind === 'part' || node.kind === 'assembly') {
-      node.childIds = node.childIds.filter((childId) => !removedNodeIds.has(childId));
+      node.childIds = node.childIds.filter(
+        (childId) => !removedNodeIds.has(childId)
+      );
     }
   }
   next.version += 1;
@@ -967,6 +1196,9 @@ export function renameNode(
     throw new Error(`Node ${input.nodeId} not found.`);
   }
   node.name = name;
+  if (node.kind === 'project') {
+    next.name = name;
+  }
   next.version += 1;
   return next;
 }
@@ -1023,6 +1255,38 @@ export function appendRevision(
   };
 }
 
+/** Records a durable save point without changing model or undo semantics. */
+export function createCheckpoint(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  const latestRevision = document.revisions.at(-1);
+  if (!latestRevision) {
+    throw new Error('Cannot create a checkpoint without a revision.');
+  }
+  const normalizedReason = reason.trim() || 'Saved';
+  const previous = document.checkpoints.at(-1);
+  if (
+    previous?.documentVersion === document.version &&
+    previous.reason === normalizedReason
+  ) {
+    return document;
+  }
+  return {
+    ...document,
+    checkpoints: [
+      ...document.checkpoints,
+      {
+        checkpointId: createId('checkpoint'),
+        revisionId: latestRevision.revisionId,
+        documentVersion: document.version,
+        createdAt: nowIso(),
+        reason: normalizedReason
+      }
+    ]
+  };
+}
+
 export function attachDerivedState(
   document: ProjectDocument,
   derived: ProjectDocument['derived']
@@ -1032,7 +1296,9 @@ export function attachDerivedState(
   return { ...document, derived };
 }
 
-export function getLatestSketchId(document: ProjectDocument): SketchId | undefined {
+export function getLatestSketchId(
+  document: ProjectDocument
+): SketchId | undefined {
   return document.sketchOrder.at(-1);
 }
 
@@ -1047,7 +1313,10 @@ export function getLatestBodyId(document: ProjectDocument): BodyId | undefined {
 const DEG_TO_RAD = Math.PI / 180;
 
 /** Trigonometry takes degrees — the conventional unit in CAD parameter tables. */
-const EXPRESSION_FUNCTIONS: Record<string, { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }> = {
+const EXPRESSION_FUNCTIONS: Record<
+  string,
+  { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }
+> = {
   abs: { arity: 'unary', apply: ([a]) => Math.abs(a!) },
   sqrt: { arity: 'unary', apply: ([a]) => Math.sqrt(a!) },
   floor: { arity: 'unary', apply: ([a]) => Math.floor(a!) },
@@ -1089,7 +1358,13 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    if (char === '+' || char === '-' || char === '*' || char === '/' || char === '^') {
+    if (
+      char === '+' ||
+      char === '-' ||
+      char === '*' ||
+      char === '/' ||
+      char === '^'
+    ) {
       tokens.push({ type: 'operator', value: char });
       index += 1;
       continue;
@@ -1114,7 +1389,9 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(expression.slice(index));
+    const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(
+      expression.slice(index)
+    );
     if (identifierMatch) {
       tokens.push({ type: 'identifier', name: identifierMatch[0] });
       index += identifierMatch[0].length;
@@ -1198,7 +1475,10 @@ export function evaluateExpression(
       }
       return value;
     }
-    if (token.type === 'operator' && (token.value === '-' || token.value === '+')) {
+    if (
+      token.type === 'operator' &&
+      (token.value === '-' || token.value === '+')
+    ) {
       const operand = parsePrimary();
       return token.value === '-' ? -operand : operand;
     }
@@ -1228,7 +1508,10 @@ export function evaluateExpression(
     let value = parsePower();
     for (;;) {
       const token = peek();
-      if (token?.type !== 'operator' || (token.value !== '*' && token.value !== '/')) {
+      if (
+        token?.type !== 'operator' ||
+        (token.value !== '*' && token.value !== '/')
+      ) {
         return value;
       }
       position += 1;
@@ -1241,7 +1524,10 @@ export function evaluateExpression(
     let value = parseMultiplicative();
     for (;;) {
       const token = peek();
-      if (token?.type !== 'operator' || (token.value !== '+' && token.value !== '-')) {
+      if (
+        token?.type !== 'operator' ||
+        (token.value !== '+' && token.value !== '-')
+      ) {
         return value;
       }
       position += 1;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  createCheckpoint,
   createProjectDocument,
   deleteFeature,
   deleteParameter,
@@ -11,12 +12,17 @@ import {
   getParameterScope,
   listFeaturesInOrder,
   listParameters,
+  normalizeDocument,
   resolveParamValue,
   setParameter,
   updateFeature,
   updateSketch
 } from '@openzcad/document-core';
-import { sanitizeFileName, toUserId } from '@openzcad/shared';
+import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  sanitizeFileName,
+  toUserId
+} from '@openzcad/shared';
 
 const user = () => toUserId('user_test');
 
@@ -26,7 +32,36 @@ describe('document-core', () => {
     expect(document.name).toBe('Test');
     expect(Object.values(document.nodes).some((node) => node.kind === 'project')).toBe(true);
     expect(document.revisions).toHaveLength(1);
+    expect(document.checkpoints).toHaveLength(1);
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    expect(document.assets).toEqual({});
     expect(document.parameterOrder).toEqual([]);
+  });
+
+  it('migrates legacy documents without losing their canonical data', () => {
+    const current = createProjectDocument('Legacy', user());
+    const legacy = structuredClone(current) as Partial<typeof current>;
+    delete legacy.schemaVersion;
+    delete legacy.assets;
+    delete legacy.checkpoints;
+
+    const migrated = normalizeDocument(legacy as typeof current);
+
+    expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    expect(migrated.projectId).toBe(current.projectId);
+    expect(migrated.nodes).toEqual(current.nodes);
+    expect(migrated.assets).toEqual({});
+    expect(migrated.checkpoints).toHaveLength(1);
+    expect(migrated.checkpoints[0]?.reason).toBe('Migrated save point');
+  });
+
+  it('records save checkpoints without changing model version', () => {
+    const document = createProjectDocument('Checkpoint', user());
+    const saved = createCheckpoint(document, 'Manual save');
+
+    expect(saved.version).toBe(document.version);
+    expect(saved.checkpoints).toHaveLength(2);
+    expect(saved.checkpoints.at(-1)?.reason).toBe('Manual save');
   });
 
   it('adds primitives and extrudes sketches into bodies', () => {

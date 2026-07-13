@@ -20,7 +20,10 @@ function post(path: string, body: unknown): Request {
 }
 
 async function createProject(name: string): Promise<CreateProjectResponse> {
-  const response = await worker.fetch(post('/api/projects', { name }), env as never);
+  const response = await worker.fetch(
+    post('/api/projects', { name }),
+    env as never
+  );
   expect(response.status).toBe(201);
   return (await response.json()) as CreateProjectResponse;
 }
@@ -33,9 +36,13 @@ describe('worker api routes', () => {
       new Request('https://example.com/api/projects'),
       env as never
     );
-    const listed = (await listResponse.json()) as { projects: Array<{ projectId: string }> };
+    const listed = (await listResponse.json()) as {
+      projects: Array<{ projectId: string }>;
+    };
     expect(
-      listed.projects.some((project) => project.projectId === created.project.projectId)
+      listed.projects.some(
+        (project) => project.projectId === created.project.projectId
+      )
     ).toBe(true);
   });
 
@@ -47,9 +54,118 @@ describe('worker api routes', () => {
     expect(response.status).toBe(200);
   });
 
+  it('exposes the authenticated beta session', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/session'),
+      env as never
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      userId: 'user_beta_dev',
+      mode: 'development'
+    });
+  });
+
+  it('reports assistant configuration without exposing secrets', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status'),
+      { ...env, AI_API_KEY: 'secret-test-value', AI_MODEL: 'model-test' } as never
+    );
+    expect(response.status).toBe(200);
+    const status = (await response.json()) as {
+      configured: boolean;
+      provider: string;
+      model: string;
+      reasoningEffort: string;
+    };
+    expect(status).toMatchObject({
+      configured: true,
+      provider: 'openrouter',
+      model: 'model-test',
+      reasoningEffort: 'high'
+    });
+    expect(JSON.stringify(status)).not.toContain('secret-test-value');
+  });
+
+  it('requires Cloudflare Access identity when configured', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/projects'),
+      { ...env, AUTH_MODE: 'cloudflare-access' } as never
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it('isolates projects between authenticated development users', async () => {
+    const ownerRequest = new Request('https://example.com/api/projects', {
+      method: 'POST',
+      headers: { 'x-openzcad-development-user': 'user_owner' },
+      body: JSON.stringify({ name: 'Private worker project' })
+    });
+    const createdResponse = await worker.fetch(ownerRequest, env as never);
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+
+    const intruderResponse = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}`,
+        { headers: { 'x-openzcad-development-user': 'user_intruder' } }
+      ),
+      env as never
+    );
+    expect(intruderResponse.status).toBe(404);
+  });
+
+  it('authorizes and forwards collaboration WebSocket upgrades', async () => {
+    const created = await createProject('Live project');
+    const roomFetch = vi.fn(async (request: Request) =>
+      Response.json({
+        userId: request.headers.get('x-openzcad-user-id'),
+        displayName: request.headers.get('x-openzcad-display-name')
+      })
+    );
+    env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
+
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/collaboration`,
+        { headers: { upgrade: 'websocket' } }
+      ),
+      env as never
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      userId: 'user_beta_dev',
+      displayName: 'Beta developer'
+    });
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps assistant generation disabled until a secret is configured', async () => {
+    const response = await worker.fetch(
+      post('/api/assistant/proposals', {
+        prompt: 'Make it wider',
+        digest: {
+          schemaVersion: 2,
+          projectId: 'proj_ai',
+          name: 'Bracket',
+          units: 'mm',
+          version: 1,
+          parameters: [],
+          features: [],
+          warnings: []
+        }
+      }),
+      env as never
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
+  });
+
   it('rejects malformed JSON bodies with 400', async () => {
     const response = await worker.fetch(
-      new Request('https://example.com/api/projects', { method: 'POST', body: '{nope' }),
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        body: '{nope'
+      }),
       env as never
     );
     expect(response.status).toBe(400);
@@ -58,7 +174,10 @@ describe('worker api routes', () => {
   });
 
   it('rejects project creation without a name', async () => {
-    const response = await worker.fetch(post('/api/projects', {}), env as never);
+    const response = await worker.fetch(
+      post('/api/projects', {}),
+      env as never
+    );
     expect(response.status).toBe(400);
 
     const blankResponse = await worker.fetch(
@@ -162,9 +281,9 @@ describe('worker api routes', () => {
       env as never
     );
     expect(finalized.status).toBe(200);
-    expect(((await finalized.json()) as { artifactId: string }).artifactId).toBe(
-      session.artifactId
-    );
+    expect(
+      ((await finalized.json()) as { artifactId: string }).artifactId
+    ).toBe(session.artifactId);
 
     const replayed = await worker.fetch(
       post('/api/imports/finalize', finalizeBody),
@@ -175,7 +294,11 @@ describe('worker api routes', () => {
 
   it('validates export requests', async () => {
     const badFormat = await worker.fetch(
-      post('/api/exports', { projectId: 'proj_x', bodyIds: ['body_1'], format: 'obj' }),
+      post('/api/exports', {
+        projectId: 'proj_x',
+        bodyIds: ['body_1'],
+        format: 'obj'
+      }),
       env as never
     );
     expect(badFormat.status).toBe(400);
@@ -186,8 +309,13 @@ describe('worker api routes', () => {
     );
     expect(emptyBodies.status).toBe(400);
 
+    const created = await createProject('Export Test');
     const accepted = await worker.fetch(
-      post('/api/exports', { projectId: 'proj_x', bodyIds: ['body_1'], format: 'stl' }),
+      post('/api/exports', {
+        projectId: created.project.projectId,
+        bodyIds: ['body_1'],
+        format: 'stl'
+      }),
       env as never
     );
     expect(accepted.status).toBe(202);
