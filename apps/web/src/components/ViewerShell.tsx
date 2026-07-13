@@ -1,43 +1,67 @@
-import { ModelViewer, type ViewerSettings } from './ModelViewer';
+import {
+  ModelViewer,
+  type SketchOverlay,
+  type StandardView,
+  type ViewerSettings
+} from './ModelViewer';
 import { ViewerToolbar } from './ViewerToolbar';
 import type { BodyRepresentation } from '@openzcad/shared';
 
 interface ViewerShellProps {
   bodies: BodyRepresentation[];
-  selectedBodyId: string | null;
+  sketches: SketchOverlay[];
+  selectedBodyIds: string[];
   settings: ViewerSettings;
   fitSignal: number;
-  onSelectBody(bodyId: string | null): void;
+  viewRequest: { view: StandardView; nonce: number } | null;
+  onSelectBody(bodyId: string | null, additive: boolean): void;
   onToggleGrid(): void;
   onFit(): void;
+  onView(view: StandardView): void;
+  onCycleDisplayMode(): void;
 }
 
 export function ViewerShell({
   bodies,
-  selectedBodyId,
+  sketches,
+  selectedBodyIds,
   settings,
   fitSignal,
+  viewRequest,
   onSelectBody,
   onToggleGrid,
-  onFit
+  onFit,
+  onView,
+  onCycleDisplayMode
 }: ViewerShellProps) {
   return (
     <section className="viewer-shell" aria-label="3D viewport">
       <ModelViewer
         bodies={bodies}
-        selectedBodyId={selectedBodyId}
+        sketches={sketches}
+        selectedBodyIds={selectedBodyIds}
         settings={settings}
         fitSignal={fitSignal}
+        viewRequest={viewRequest}
         onSelectBody={onSelectBody}
       />
-      <ViewerToolbar settings={settings} onToggleGrid={onToggleGrid} onFit={onFit} />
-      {bodies.length === 0 && (
+      <ViewerToolbar
+        settings={settings}
+        onToggleGrid={onToggleGrid}
+        onFit={onFit}
+        onView={onView}
+        onCycleDisplayMode={onCycleDisplayMode}
+      />
+      {bodies.length === 0 && sketches.length === 0 && (
         <div className="viewer-notice">
           <div>
             <strong>No geometry yet</strong>
             <small>
-              Add a primitive, or sketch a profile and extrude or revolve it, from the panel on
-              the right.
+              Pick a tool from the toolbar above — try <b>Box</b> (B) — or sketch a profile and
+              extrude it.
+            </small>
+            <small className="viewer-notice-keys">
+              <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands · <kbd>?</kbd> shortcuts
             </small>
           </div>
         </div>

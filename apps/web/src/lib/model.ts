@@ -30,6 +30,22 @@ export function previewExpression(
   }
 }
 
+/** Resolve a stored parametric value to a number, or null if it can't evaluate. */
+export function evalParamValue(
+  value: ParamValue,
+  scope: Record<string, number>
+): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  try {
+    const result = evaluateExpression(value, scope);
+    return Number.isFinite(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 export function formatNumber(value: number): string {
   if (!Number.isFinite(value)) {
     return '—';

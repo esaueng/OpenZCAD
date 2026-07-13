@@ -45,6 +45,20 @@ function FormShell({ name, onName, submitLabel, canSubmit, onSubmit, onCancel, c
           onSubmit();
         }
       }}
+      onKeyDown={(event) => {
+        // Escape anywhere in the form dismisses it, even from a focused input.
+        if (event.key === 'Escape' && onCancel) {
+          event.stopPropagation();
+          onCancel();
+        }
+        // Enter submits from any field, including selects.
+        if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+          event.preventDefault();
+          if (canSubmit) {
+            onSubmit();
+          }
+        }
+      }}
     >
       <label className="field">
         <span>Name</span>
@@ -52,8 +66,9 @@ function FormShell({ name, onName, submitLabel, canSubmit, onSubmit, onCancel, c
       </label>
       {children}
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={!canSubmit}>
+        <button type="submit" className="primary" disabled={!canSubmit} title="Enter">
           {submitLabel}
+          <kbd className="kbd-inline">↵</kbd>
         </button>
         {onCancel && (
           <button type="button" className="secondary" onClick={onCancel}>
@@ -144,12 +159,13 @@ export function PrimitiveForm({
       }
       onCancel={onCancel}
     >
-      {fields.map((field) => (
+      {fields.map((field, index) => (
         <ExprInput
           key={field.key}
           label={field.label}
           value={values[field.key] ?? ''}
           scope={scope}
+          autoFocus={index === 0}
           onChange={(value) => setValues((current) => ({ ...current, [field.key]: value }))}
         />
       ))}
@@ -288,12 +304,12 @@ export function SketchForm({ scope, initial, submitLabel, onSubmit, onCancel }: 
       </div>
       {shape === 'rectangle' && (
         <>
-          <ExprInput label="Width" value={values.width ?? ''} scope={scope} onChange={setValue('width')} />
+          <ExprInput label="Width" value={values.width ?? ''} scope={scope} autoFocus onChange={setValue('width')} />
           <ExprInput label="Height" value={values.height ?? ''} scope={scope} onChange={setValue('height')} />
         </>
       )}
       {shape !== 'rectangle' && (
-        <ExprInput label="Radius" value={values.radius ?? ''} scope={scope} onChange={setValue('radius')} />
+        <ExprInput label="Radius" value={values.radius ?? ''} scope={scope} autoFocus onChange={setValue('radius')} />
       )}
       {shape === 'polygon' && (
         <ExprInput label="Sides" value={values.sides ?? ''} scope={scope} onChange={setValue('sides')} />
@@ -315,13 +331,19 @@ interface SketchPickerProps {
   sketches: SketchOption[];
   value: SketchId | '';
   onChange(value: SketchId): void;
+  /** Focus on mount so Enter can confirm immediately. */
+  autoFocus?: boolean;
 }
 
-function SketchPicker({ sketches, value, onChange }: SketchPickerProps) {
+function SketchPicker({ sketches, value, onChange, autoFocus }: SketchPickerProps) {
   return (
     <label className="field">
       <span>Sketch</span>
-      <select value={value} onChange={(event) => onChange(event.target.value as SketchId)}>
+      <select
+        value={value}
+        autoFocus={autoFocus}
+        onChange={(event) => onChange(event.target.value as SketchId)}
+      >
         {sketches.length === 0 && <option value="">No sketches yet</option>}
         {sketches.map((sketch) => (
           <option key={sketch.sketchId} value={sketch.sketchId}>
@@ -337,15 +359,17 @@ interface ExtrudeFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
   initial?: { name: string; sketchId: SketchId; distance: ParamValue };
+  /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
+  initialSketchId?: SketchId;
   submitLabel: string;
   onSubmit(value: { name: string; sketchId: SketchId; distance: ParamValue }): void;
   onCancel?: () => void;
 }
 
-export function ExtrudeForm({ scope, sketches, initial, submitLabel, onSubmit, onCancel }: ExtrudeFormProps) {
+export function ExtrudeForm({ scope, sketches, initial, initialSketchId, submitLabel, onSubmit, onCancel }: ExtrudeFormProps) {
   const [name, setName] = useState(initial?.name ?? 'Extrude');
   const [sketchId, setSketchId] = useState<SketchId | ''>(
-    initial?.sketchId ?? sketches.at(-1)?.sketchId ?? ''
+    initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
   );
   const [distance, setDistance] = useState(paramValueText(initial?.distance ?? 24));
   const canSubmit =
@@ -367,7 +391,7 @@ export function ExtrudeForm({ scope, sketches, initial, submitLabel, onSubmit, o
       onCancel={onCancel}
     >
       <SketchPicker sketches={sketches} value={sketchId} onChange={setSketchId} />
-      <ExprInput label="Distance" value={distance} scope={scope} onChange={setDistance} />
+      <ExprInput label="Distance" value={distance} scope={scope} autoFocus onChange={setDistance} />
       <p className="muted">Negative distances extrude below the sketch plane.</p>
     </FormShell>
   );
@@ -377,16 +401,18 @@ interface RevolveFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
   initial?: { name: string; sketchId: SketchId; axis: RevolveAxis };
+  /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
+  initialSketchId?: SketchId;
   submitLabel: string;
   onSubmit(value: { name: string; sketchId: SketchId; axis: RevolveAxis }): void;
   onCancel?: () => void;
 }
 
-export function RevolveForm({ scope, sketches, initial, submitLabel, onSubmit, onCancel }: RevolveFormProps) {
+export function RevolveForm({ scope, sketches, initial, initialSketchId, submitLabel, onSubmit, onCancel }: RevolveFormProps) {
   void scope;
   const [name, setName] = useState(initial?.name ?? 'Revolve');
   const [sketchId, setSketchId] = useState<SketchId | ''>(
-    initial?.sketchId ?? sketches.at(-1)?.sketchId ?? ''
+    initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
   );
   const [axis, setAxis] = useState<RevolveAxis>(initial?.axis ?? 'vertical');
   const canSubmit = name.trim().length > 0 && sketchId !== '';
@@ -400,7 +426,7 @@ export function RevolveForm({ scope, sketches, initial, submitLabel, onSubmit, o
       onSubmit={() => onSubmit({ name: name.trim(), sketchId: sketchId as SketchId, axis })}
       onCancel={onCancel}
     >
-      <SketchPicker sketches={sketches} value={sketchId} onChange={setSketchId} />
+      <SketchPicker sketches={sketches} value={sketchId} onChange={setSketchId} autoFocus />
       <label className="field">
         <span>Revolve around</span>
         <select value={axis} onChange={(event) => setAxis(event.target.value as RevolveAxis)}>
@@ -432,6 +458,8 @@ interface BooleanFormProps {
   bodies: BodyOption[];
   initial?: { name: string; operation: BooleanOperation; targetBodyIds: BodyId[] };
   presetOperation?: BooleanOperation;
+  /** Bodies already picked in the viewport, in click order. */
+  initialSelection?: BodyId[];
   submitLabel: string;
   onSubmit(value: { name: string; operation: BooleanOperation; targetBodyIds: BodyId[] }): void;
   onCancel?: () => void;
@@ -441,6 +469,7 @@ export function BooleanForm({
   bodies,
   initial,
   presetOperation,
+  initialSelection,
   submitLabel,
   onSubmit,
   onCancel
@@ -450,7 +479,9 @@ export function BooleanForm({
   );
   const [name, setName] = useState(initial?.name ?? OPERATION_LABELS[operation]);
   // Selection order matters: the first body is the base a subtract cuts from.
-  const [selected, setSelected] = useState<BodyId[]>(initial?.targetBodyIds ?? []);
+  const [selected, setSelected] = useState<BodyId[]>(
+    initial?.targetBodyIds ?? initialSelection ?? []
+  );
 
   const selectable = useMemo(
     () => bodies.filter((body) => !body.consumed || selected.includes(body.bodyId)),
@@ -480,6 +511,7 @@ export function BooleanForm({
         <span>Operation</span>
         <select
           value={operation}
+          autoFocus
           onChange={(event) => setOperation(event.target.value as BooleanOperation)}
         >
           {(Object.keys(OPERATION_LABELS) as BooleanOperation[]).map((id) => (
@@ -533,16 +565,18 @@ interface TransformFormProps {
   scope: Record<string, number>;
   bodies: BodyOption[];
   initial?: TransformFormValue;
+  /** Body already picked in the viewport. */
+  initialTarget?: BodyId;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
 }
 
-export function TransformForm({ scope, bodies, initial, submitLabel, onSubmit, onCancel }: TransformFormProps) {
+export function TransformForm({ scope, bodies, initial, initialTarget, submitLabel, onSubmit, onCancel }: TransformFormProps) {
   const live = bodies.filter((body) => !body.consumed);
   const [name, setName] = useState(initial?.name ?? 'Move');
   const [target, setTarget] = useState<BodyId | ''>(
-    initial?.targetBodyId ?? live.at(-1)?.bodyId ?? ''
+    initial?.targetBodyId ?? initialTarget ?? live.at(-1)?.bodyId ?? ''
   );
   const [values, setValues] = useState<Record<string, string>>(() => ({
     tx: paramValueText(initial?.translation.x ?? 0),
@@ -594,7 +628,7 @@ export function TransformForm({ scope, bodies, initial, submitLabel, onSubmit, o
         </select>
       </label>
       <div className="field-triple">
-        <ExprInput label="Move X" value={values.tx ?? ''} scope={scope} onChange={setValue('tx')} />
+        <ExprInput label="Move X" value={values.tx ?? ''} scope={scope} autoFocus onChange={setValue('tx')} />
         <ExprInput label="Move Y" value={values.ty ?? ''} scope={scope} onChange={setValue('ty')} />
         <ExprInput label="Move Z" value={values.tz ?? ''} scope={scope} onChange={setValue('tz')} />
       </div>
