@@ -853,6 +853,9 @@ interface EdgeModifierFormProps {
   scope: Record<string, number>;
   targetBodyId: BodyId | null;
   edgeHashes: number[];
+  availableEdgeCount?: number;
+  onSelectAllEdges?: () => void;
+  onClearEdges?: () => void;
   initial?: { name: string; size: ParamValue };
   submitLabel: string;
   onSubmit(value: EdgeModifierFormValue): void;
@@ -864,6 +867,9 @@ export function EdgeModifierForm({
   scope,
   targetBodyId,
   edgeHashes,
+  availableEdgeCount,
+  onSelectAllEdges,
+  onClearEdges,
   initial,
   submitLabel,
   onSubmit,
@@ -898,8 +904,31 @@ export function EdgeModifierForm({
       <div className="selection-summary">
         {edgeHashes.length > 0
           ? `${edgeHashes.length} exact edge${edgeHashes.length === 1 ? '' : 's'} selected`
-          : 'Select an edge in the viewport first.'}
+          : targetBodyId
+            ? 'Select edges in the viewport or select every edge below.'
+            : 'Select a body or edge in the viewport first.'}
       </div>
+      {targetBodyId &&
+        availableEdgeCount &&
+        availableEdgeCount > 0 &&
+        onSelectAllEdges && (
+          <button
+            type="button"
+            className="secondary edge-selection-action"
+            onClick={
+              edgeHashes.length === availableEdgeCount && onClearEdges
+                ? onClearEdges
+                : onSelectAllEdges
+            }
+          >
+            {edgeHashes.length === availableEdgeCount
+              ? 'Clear edge selection'
+              : `Select all ${availableEdgeCount} edges`}
+          </button>
+        )}
+      <p className="muted edge-selection-hint">
+        Shift+Click adds or removes individual edges.
+      </p>
       <ExprInput
         label={kind === 'fillet' ? 'Radius' : 'Distance'}
         value={size}
