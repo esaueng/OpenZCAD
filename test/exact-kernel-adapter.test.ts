@@ -124,6 +124,74 @@ describe('exact OpenCascade kernel adapter', () => {
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
   });
 
+  it('fillets all twelve original box edges in one exact feature', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('All-edge fillet', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 18, depth: 24 }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const edgeHashes = Object.values(
+      baseDerived.bodyRepresentations
+    )[0]?.topology?.edges.map((edge) => edge.hash);
+    expect(edgeHashes).toHaveLength(12);
+
+    const filleted = filletEdges(base, {
+      name: 'All edges',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: edgeHashes!,
+      size: 2
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+
+    expect(derived.warnings).toEqual([]);
+    expect(body?.volume).toBeGreaterThan(0);
+    expect(body?.volume).toBeLessThan(40 * 18 * 24);
+    expect(body?.faceCount).toBeGreaterThan(6);
+    expect(body?.bbox.min.x).toBeCloseTo(0, 1);
+    expect(body?.bbox.min.y).toBeCloseTo(0, 1);
+    expect(body?.bbox.min.z).toBeCloseTo(0, 1);
+    expect(body?.bbox.max.x).toBeCloseTo(40, 1);
+    expect(body?.bbox.max.y).toBeCloseTo(18, 1);
+    expect(body?.bbox.max.z).toBeCloseTo(24, 1);
+
+    const step = await adapter.exportStep(filleted, [
+      filleted.bodyOrder.at(-1)!
+    ]);
+    const inspection = await adapter.inspectStep(step);
+    expect(inspection).toMatchObject({ solid: true, valid: true });
+    expect(inspection.volume).toBeCloseTo(body!.volume, 3);
+  });
+
+  it('reports an actionable diagnostic when an edge fillet is invalid', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Invalid fillet', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const invalid = filletEdges(base, {
+      name: 'Oversized fillet',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [1],
+      size: 50
+    }).document;
+    const derived = await adapter.syncDocument(invalid);
+
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toContain(
+      'Fillet could not be created on 1 selected edge with radius 50.'
+    );
+    expect(derived.warnings[0]).toContain('Try a smaller radius');
+    expect(derived.warnings[0]).not.toContain('WebAssembly.Exception');
+  });
+
   it('builds linear and circular exact body patterns', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Patterns', toUserId('user_exact')),
