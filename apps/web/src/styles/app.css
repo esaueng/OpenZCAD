@@ -9,7 +9,9 @@
 .app-shell {
   height: 100vh;
   display: grid;
-  grid-template-rows: var(--topbar-h) var(--toolbar-h) minmax(0, 1fr) auto var(--statusbar-h);
+  grid-template-rows: var(--topbar-h) var(--toolbar-h) minmax(0, 1fr) auto var(
+      --statusbar-h
+    );
   background: var(--color-bg);
 }
 
@@ -665,6 +667,30 @@
 .selection-callout.sketch-callout {
   color: var(--color-accent);
   border-color: rgba(77, 163, 255, 0.3);
+}
+
+.selection-callout.direct-edit-callout {
+  color: #e8f3ff;
+  background: rgba(10, 22, 36, 0.94);
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  transform: translateY(-18px);
+}
+
+.direct-edit-hud {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  min-width: 112px;
+  padding: 6px 9px;
+  color: #f3f8ff;
+  background: rgba(8, 18, 30, 0.96);
+  border: 1px solid rgba(96, 165, 250, 0.7);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .viewer-notice {

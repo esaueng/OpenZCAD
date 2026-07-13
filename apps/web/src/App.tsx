@@ -72,11 +72,15 @@ import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { AiCommandRail } from './components/AiCommandRail';
-import { CommandPalette, type PaletteCommand } from './components/CommandPalette';
+import {
+  CommandPalette,
+  type PaletteCommand
+} from './components/CommandPalette';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
 import type {
   DisplayMode,
+  FaceResizeCommit,
   SketchOverlay,
   StandardView,
   ViewerSettings
@@ -97,7 +101,11 @@ const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 
-const DISPLAY_MODE_ORDER: DisplayMode[] = ['shaded-edges', 'shaded', 'wireframe'];
+const DISPLAY_MODE_ORDER: DisplayMode[] = [
+  'shaded-edges',
+  'shaded',
+  'wireframe'
+];
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -318,6 +326,23 @@ export function App() {
             )
           : [],
     [doc, previewDoc]
+  );
+
+  const directEditableBodyIds = useMemo<string[]>(
+    () =>
+      previewDoc
+        ? []
+        : features.flatMap((feature) =>
+            feature.bodyId &&
+            feature.data.featureKind === 'primitive' &&
+            feature.data.primitiveKind === 'box' &&
+            Object.values(feature.data.dimensions).every(
+              (value) => typeof value === 'number'
+            )
+              ? [feature.bodyId]
+              : []
+          ),
+    [features, previewDoc]
   );
 
   const bodyOptions = useMemo(() => {
@@ -928,18 +953,59 @@ export function App() {
         : [...selectedBodyIds, selection.bodyId]
       : [selection.bodyId];
     setSelectedBodyIds(nextIds);
-    if (!additive) {
+    if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
       setTool(null);
     }
     // The edit panel and topology context follow a single-body selection;
     // multi-select keeps them clear so the pick order reads as boolean input.
     if (nextIds.length === 1) {
-      setSelectedTopology(additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection);
+      setSelectedTopology(
+        additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection
+      );
       setSelectedFeatureNodeId(featureNodeIdForBody(nextIds[0]!));
     } else {
       setSelectedTopology(null);
       setSelectedFeatureNodeId(null);
     }
+  }
+
+  function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (!doc) {
+      return;
+    }
+    const nodeId = featureNodeIdForBody(commit.bodyId);
+    const feature = nodeId ? doc.nodes[nodeId] : undefined;
+    if (
+      feature?.kind !== 'feature' ||
+      feature.data.featureKind !== 'primitive' ||
+      feature.data.primitiveKind !== 'box'
+    ) {
+      setStatus('Direct face resize is available for primitive boxes.');
+      return;
+    }
+    const dimension =
+      commit.axis === 'x' ? 'width' : commit.axis === 'y' ? 'height' : 'depth';
+    const existing = feature.data.dimensions[dimension];
+    if (typeof existing !== 'number') {
+      setStatus(
+        `${feature.name} ${dimension} is expression-driven; edit it in the inspector.`
+      );
+      return;
+    }
+    executeCommand(
+      commandFactories.updateFeature(
+        {
+          featureId: feature.featureId,
+          data: {
+            dimensions: {
+              ...feature.data.dimensions,
+              [dimension]: Math.max(0.1, commit.value)
+            }
+          }
+        },
+        `Resize ${feature.name} ${dimension}`
+      )
+    );
   }
 
   function handleSelectFeatureFromTree(nodeId: string) {
@@ -1032,7 +1098,10 @@ export function App() {
         case 'Backspace':
           if (selectedFeature) {
             event.preventDefault();
-            handleDeleteFeature(selectedFeature.featureId, selectedFeature.name);
+            handleDeleteFeature(
+              selectedFeature.featureId,
+              selectedFeature.name
+            );
           }
           return;
         case '?':
@@ -1296,7 +1365,10 @@ export function App() {
           settings={viewerSettings}
           fitSignal={fitSignal}
           viewRequest={viewRequest}
+          units={doc.units}
+          editableBodyIds={directEditableBodyIds}
           onSelectTopology={handleSelectTopologyFromViewer}
+          onResizePrimitiveFace={handleResizePrimitiveFace}
           onToggleGrid={() =>
             setViewerSettings((current) => ({
               ...current,

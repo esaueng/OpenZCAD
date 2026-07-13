@@ -3,7 +3,10 @@ import type { BodyRepresentation, MeshGeometry } from '@openzcad/shared';
 
 function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.vertices, 3));
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(mesh.vertices, 3)
+  );
   geometry.setIndex(mesh.indices);
   geometry.computeVertexNormals();
   return geometry;
@@ -18,15 +21,21 @@ export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
   const geometry = geometryFromMesh(body.mesh);
   const material = new THREE.MeshStandardMaterial({
     color: body.color,
-    metalness: 0.15,
-    roughness: 0.72
+    metalness: 0.06,
+    roughness: 0.56
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = body.name;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
 
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry, 24),
-    new THREE.LineBasicMaterial({ color: '#0c1118', transparent: true, opacity: 0.55 })
+    new THREE.LineBasicMaterial({
+      color: '#070b10',
+      transparent: true,
+      opacity: 0.78
+    })
   );
   edges.raycast = () => undefined; // selection picks faces, not edge lines
   mesh.add(edges);
@@ -54,7 +63,11 @@ export function fitCameraToObjects(
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const distance = maxDim * 2.4;
 
-  camera.position.set(center.x + distance, center.y + distance, center.z + distance);
+  camera.position.set(
+    center.x + distance,
+    center.y + distance,
+    center.z + distance
+  );
   controlsTarget.copy(center);
   camera.near = 0.1;
   camera.far = distance * 10;

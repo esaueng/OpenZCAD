@@ -72,5 +72,7 @@ All visible controls and text are code-native. The concept image is a visual spe
 - Functional adaptation: the compact rail shows the proposal summary; Preview makes the proposed geometry inspectable before Apply. Without an AI API key, the rail reports the configuration state.
 - Functional adaptation: authenticated identity and live-room presence sit in the top bar without displacing the core modeling actions.
 - Functional adaptation: finishing and pattern tools extend the contextual inspector while preserving the concept's compact tool density; exact face/edge IDs appear only when selected.
+- Direct modeling adaptation: literal box dimensions can be changed by dragging an exact selected face, with a live numeric HUD and a single document-history command on release. Expression-driven dimensions are deliberately preserved for inspector editing.
+- Selection-order adaptation: fillet and chamfer accept either edge-first or tool-first workflows while still storing stable exact edge hashes in the canonical feature.
 - QA result: the implemented layout, rail hierarchy, control density, typography, graphite/blue visual system, and core viewport-first workflow remain faithful to the concept. The live QA capture uses actual exact fillet and pattern geometry rather than concept-only sample content.
 - Compact breakpoints preserve the model and viewport first; the inspector hides only below 820 px, where full CAD editing is not the primary target.

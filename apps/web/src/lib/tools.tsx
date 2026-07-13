@@ -47,7 +47,13 @@ export interface ToolMeta {
   hint: string;
 }
 
-export const PRIMITIVE_TOOLS: ToolId[] = ['box', 'cylinder', 'sphere', 'cone', 'torus'];
+export const PRIMITIVE_TOOLS: ToolId[] = [
+  'box',
+  'cylinder',
+  'sphere',
+  'cone',
+  'torus'
+];
 
 const icon = (node: ReactNode) => node;
 
@@ -137,13 +143,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     label: 'Fillet',
     icon: icon(<Spline size={16} aria-hidden="true" />),
     group: 'finish',
-    hint: 'Round a selected edge'
+    hint: 'Pick an edge, then set its radius'
   },
   chamfer: {
     label: 'Chamfer',
     icon: icon(<TriangleRight size={16} aria-hidden="true" />),
     group: 'finish',
-    hint: 'Bevel a selected edge'
+    hint: 'Pick an edge, then set its distance'
   },
   'linear-pattern': {
     label: 'Linear pattern',
@@ -159,16 +165,21 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
   }
 };
 
-export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] = [
-  { id: 'solid', label: 'Solids', tools: PRIMITIVE_TOOLS },
-  { id: 'sketch', label: 'Sketch', tools: ['sketch', 'extrude', 'revolve'] },
-  { id: 'modify', label: 'Modify', tools: ['union', 'subtract', 'intersect', 'transform'] },
-  {
-    id: 'finish',
-    label: 'Finish & repeat',
-    tools: ['fillet', 'chamfer', 'linear-pattern', 'circular-pattern']
-  }
-];
+export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
+  [
+    { id: 'solid', label: 'Solids', tools: PRIMITIVE_TOOLS },
+    { id: 'sketch', label: 'Sketch', tools: ['sketch', 'extrude', 'revolve'] },
+    {
+      id: 'modify',
+      label: 'Modify',
+      tools: ['union', 'subtract', 'intersect', 'transform']
+    },
+    {
+      id: 'finish',
+      label: 'Finish & repeat',
+      tools: ['fillet', 'chamfer', 'linear-pattern', 'circular-pattern']
+    }
+  ];
 
 export interface ToolAvailability {
   sketchCount: number;
@@ -178,7 +189,10 @@ export interface ToolAvailability {
 }
 
 /** Why a tool cannot run right now, or null when it can. */
-export function toolDisabledReason(tool: ToolId, avail: ToolAvailability): string | null {
+export function toolDisabledReason(
+  tool: ToolId,
+  avail: ToolAvailability
+): string | null {
   if ((tool === 'extrude' || tool === 'revolve') && avail.sketchCount === 0) {
     return 'Create a sketch first';
   }
@@ -191,8 +205,8 @@ export function toolDisabledReason(tool: ToolId, avail: ToolAvailability): strin
   if (tool === 'transform' && avail.liveBodyCount < 1) {
     return 'Needs a body';
   }
-  if ((tool === 'fillet' || tool === 'chamfer') && !avail.hasEdgeSelected) {
-    return 'Click an edge in the viewport first';
+  if ((tool === 'fillet' || tool === 'chamfer') && avail.liveBodyCount < 1) {
+    return 'Needs a body';
   }
   if (
     (tool === 'linear-pattern' || tool === 'circular-pattern') &&
