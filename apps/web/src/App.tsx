@@ -3,8 +3,10 @@ import {
   Download,
   FolderOpen,
   Grid3x3,
+  Layers3,
   Maximize2,
   Monitor,
+  PenLine,
   Save,
   Upload
 } from 'lucide-react';
@@ -41,6 +43,7 @@ import type {
   FeatureNode,
   ProjectDocument,
   ProjectSummary,
+  SketchId,
   SketchNode,
   SketchObjectData,
   TopologySelection,
@@ -72,6 +75,12 @@ import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { AiCommandRail } from './components/AiCommandRail';
+import { SketchWorkspace } from './components/SketchWorkspace';
+import {
+  ExtrudeOverlay,
+  ProfileQuickAction
+} from './components/DirectModelingOverlays';
+import type { SketchFormValue } from './components/forms/FeatureForms';
 import {
   CommandPalette,
   type PaletteCommand
@@ -80,6 +89,7 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
 import type {
   DisplayMode,
+  ExtrudePreview,
   FaceResizeCommit,
   SketchOverlay,
   StandardView,
@@ -138,6 +148,11 @@ export function App() {
     useState<TopologySelection | null>(null);
   // Viewport body selection in pick order; drives boolean/move pre-fills.
   const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
+  const [selectedSketchProfileId, setSelectedSketchProfileId] =
+    useState<SketchId | null>(null);
+  const [extrudePreview, setExtrudePreview] = useState<ExtrudePreview | null>(
+    null
+  );
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
@@ -476,12 +491,26 @@ export function App() {
         {
           sketchId: sketch.sketchId,
           name: sketch.name,
-          selected: selectedSketch?.sketchId === sketch.sketchId,
+          selected:
+            selectedSketchProfileId === sketch.sketchId ||
+            selectedSketch?.sketchId === sketch.sketchId,
+          profile,
+          normal: basis.normal,
           points
         }
       ];
     });
-  }, [doc, parameterScope, selectedSketch]);
+  }, [doc, parameterScope, selectedSketch, selectedSketchProfileId]);
+
+  const selectedSketchProfileName = useMemo(
+    () =>
+      selectedSketchProfileId
+        ? (sketchOptions.find(
+            (candidate) => candidate.sketchId === selectedSketchProfileId
+          )?.name ?? 'Closed profile')
+        : null,
+    [selectedSketchProfileId, sketchOptions]
+  );
 
   const availability: ToolAvailability = {
     sketchCount: sketchOptions.length,
@@ -498,6 +527,8 @@ export function App() {
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
     setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
     setTool(null);
   }
 
@@ -539,7 +570,65 @@ export function App() {
       setSelectedFeatureNodeId(null);
       setSelectedTopology(null);
       setSelectedBodyIds([]);
+      setSelectedSketchProfileId(null);
+      setExtrudePreview(null);
     }
+  }
+
+  function startExtrude(sketchId: SketchId) {
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedBodyIds([]);
+    setSelectedSketchProfileId(sketchId);
+    setExtrudePreview({ sketchId, distance: 0 });
+    setTool('extrude');
+    requestView('iso');
+    setStatus('Extrude: drag the arrow to either side of the sketch plane.');
+  }
+
+  function finishSketch(value: SketchFormValue) {
+    if (!executeCommand(commandFactories.addSketch(value))) {
+      return;
+    }
+    const sketchId = managerRef.current?.document.sketchOrder.at(-1);
+    if (!sketchId) {
+      return;
+    }
+    setTool(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedSketchProfileId(sketchId);
+    requestView(
+      value.plane === 'XY' ? 'front' : value.plane === 'XZ' ? 'top' : 'right'
+    );
+    setStatus('Closed profile created. Select Extrude or press E.');
+  }
+
+  function confirmExtrude() {
+    if (!extrudePreview || Math.abs(extrudePreview.distance) < 0.1) {
+      setStatus('Drag the extrusion arrow away from the sketch plane first.');
+      return;
+    }
+    const created = executeCommand(
+      commandFactories.extrudeSketch({
+        name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
+        sketchId: extrudePreview.sketchId as SketchId,
+        distance: extrudePreview.distance
+      })
+    );
+    if (!created) {
+      return;
+    }
+    const createdFeature = listFeaturesInOrder(managerRef.current!.document).at(
+      -1
+    );
+    setExtrudePreview(null);
+    setSelectedSketchProfileId(null);
+    setTool(null);
+    setSelectedFeatureNodeId(createdFeature?.id ?? null);
+    setSelectedBodyIds(createdFeature?.bodyId ? [createdFeature.bodyId] : []);
+    setStatus(
+      `Created ${createdFeature?.name ?? 'extrusion'} ${extrudePreview.distance > 0 ? 'above' : 'below'} the sketch plane.`
+    );
   }
 
   function launchTool(nextTool: ToolId) {
@@ -548,11 +637,36 @@ export function App() {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
     }
+    if (nextTool === 'sketch') {
+      clearSelection();
+      setExtrudePreview(null);
+      setTool('sketch');
+      setStatus('Sketch mode: draw one closed profile on the selected plane.');
+      return;
+    }
+    if (nextTool === 'extrude') {
+      const sketchId =
+        selectedSketchProfileId ??
+        selectedSketch?.sketchId ??
+        (sketchOptions.length === 1 ? sketchOptions[0]!.sketchId : null);
+      if (sketchId) {
+        startExtrude(sketchId);
+      } else {
+        setSelectedFeatureNodeId(null);
+        setSelectedTopology(null);
+        setSelectedBodyIds([]);
+        setTool('extrude');
+        setStatus('Extrude: select a shaded closed profile in the viewport.');
+      }
+      return;
+    }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
+    setExtrudePreview(null);
     setTool(nextTool);
   }
 
   function cancelPanel() {
+    setExtrudePreview(null);
     setTool(null);
     setSelectedFeatureNodeId(null);
   }
@@ -561,6 +675,7 @@ export function App() {
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
     setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
   }
 
   function requestView(view: StandardView) {
@@ -640,6 +755,8 @@ export function App() {
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
     setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
     setTool(null);
     try {
       const [local, remote] = await Promise.all([
@@ -660,6 +777,8 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.undo());
+    setExtrudePreview(null);
+    setTool(null);
     clearSelection();
     setStatus('Undo');
   }
@@ -669,6 +788,8 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.redo());
+    setExtrudePreview(null);
+    setTool(null);
     clearSelection();
     setStatus('Redo');
   }
@@ -934,6 +1055,24 @@ export function App() {
     return feature?.id ?? null;
   }
 
+  function handleSelectSketchProfile(sketchId: string) {
+    const typedSketchId = sketchId as SketchId;
+    if (tool === 'extrude' && !extrudePreview) {
+      startExtrude(typedSketchId);
+      return;
+    }
+    setTool(null);
+    setExtrudePreview(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedBodyIds([]);
+    setSelectedSketchProfileId(typedSketchId);
+    const name =
+      sketchOptions.find((candidate) => candidate.sketchId === typedSketchId)
+        ?.name ?? 'Profile';
+    setStatus(`${name}: closed profile selected · press E to extrude.`);
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean
@@ -941,6 +1080,8 @@ export function App() {
     if (!doc) {
       return;
     }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
     if (!selection) {
       if (!additive) {
         clearSelection();
@@ -1010,11 +1151,17 @@ export function App() {
 
   function handleSelectFeatureFromTree(nodeId: string) {
     setTool(null);
+    setExtrudePreview(null);
     setSelectedTopology(null);
     const next = selectedFeatureNodeId === nodeId ? null : nodeId;
     setSelectedFeatureNodeId(next);
     const node = next && doc ? doc.nodes[next] : undefined;
     const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
+    setSelectedSketchProfileId(
+      node?.kind === 'feature' && node.data.featureKind === 'sketch'
+        ? node.data.sketchId
+        : null
+    );
     const representation = bodyId
       ? doc?.derived.bodyRepresentations[bodyId]
       : undefined;
@@ -1058,6 +1205,21 @@ export function App() {
         if (event.key === 'Escape') {
           setPaletteOpen(false);
           setShortcutsOpen(false);
+        }
+        return;
+      }
+
+      if (tool === 'sketch') {
+        // The focused sketch workspace owns drawing shortcuts and Escape.
+        return;
+      }
+      if (tool === 'extrude') {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelPanel();
+        } else if (event.key === 'Enter' && !typing) {
+          event.preventDefault();
+          confirmExtrude();
         }
         return;
       }
@@ -1169,17 +1331,24 @@ export function App() {
   const tone: 'ready' | 'warning' | 'running' =
     /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
 
-  const hint = tool
-    ? 'Enter creates · Esc cancels'
-    : selectedBodyIds.length >= 2
-      ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-      : selectedTopology?.kind === 'edge'
-        ? 'Edge selected — Fillet or Chamfer from the toolbar'
-        : selectedFeature
-          ? 'Edit in the panel · Del deletes · Esc closes'
-          : viewerBodies.length > 0
-            ? 'Click a body, face, or edge · Shift+Click adds to selection'
-            : 'Ctrl+K commands · ? shortcuts';
+  const hint =
+    tool === 'sketch'
+      ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+      : tool === 'extrude'
+        ? extrudePreview
+          ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
+          : 'Click a shaded closed profile · Esc cancels'
+        : tool
+          ? 'Enter creates · Esc cancels'
+          : selectedBodyIds.length >= 2
+            ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+            : selectedTopology?.kind === 'edge'
+              ? 'Edge selected — Fillet or Chamfer from the toolbar'
+              : selectedFeature
+                ? 'Edit in the panel · Del deletes · Esc closes'
+                : viewerBodies.length > 0
+                  ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                  : 'Ctrl+K commands · ? shortcuts';
 
   const paletteCommands: PaletteCommand[] = [
     ...TOOL_GROUPS.flatMap((group) =>
@@ -1296,7 +1465,9 @@ export function App() {
     }
   ];
 
-  const inspectorActive = tool !== null || selectedFeature !== null;
+  const directMode = tool === 'sketch' || tool === 'extrude';
+  const inspectorActive =
+    !directMode && (tool !== null || selectedFeature !== null);
 
   return (
     <AppShell
@@ -1332,11 +1503,29 @@ export function App() {
         />
       }
       toolBar={
-        <ToolBar
-          activeTool={tool}
-          availability={availability}
-          onLaunchTool={launchTool}
-        />
+        tool === 'sketch' ? (
+          <div className="direct-mode-strip">
+            <PenLine size={16} aria-hidden="true" />
+            <strong>Sketch mode</strong>
+            <span>
+              Draw one closed profile · dimensions stay editable in history
+            </span>
+          </div>
+        ) : tool === 'extrude' ? (
+          <div className="direct-mode-strip extrude-mode">
+            <Layers3 size={16} aria-hidden="true" />
+            <strong>Direct extrude</strong>
+            <span>
+              Drag across the plane for a positive or negative distance
+            </span>
+          </div>
+        ) : (
+          <ToolBar
+            activeTool={tool}
+            availability={availability}
+            onLaunchTool={launchTool}
+          />
+        )
       }
       sidebar={
         <Sidebar
@@ -1367,8 +1556,56 @@ export function App() {
           viewRequest={viewRequest}
           units={doc.units}
           editableBodyIds={directEditableBodyIds}
+          extrudePreview={extrudePreview}
+          hideViewerToolbar={tool === 'sketch'}
+          modeOverlay={
+            tool === 'sketch' ? (
+              <SketchWorkspace
+                sketchNumber={sketchOptions.length + 1}
+                units={doc.units}
+                onCancel={cancelPanel}
+                onFinish={finishSketch}
+              />
+            ) : extrudePreview && selectedSketchProfileName ? (
+              <ExtrudeOverlay
+                profileName={selectedSketchProfileName}
+                distance={extrudePreview.distance}
+                units={doc.units}
+                onDistanceChange={(distance) =>
+                  Number.isFinite(distance) &&
+                  setExtrudePreview((current) =>
+                    current ? { ...current, distance } : current
+                  )
+                }
+                onConfirm={confirmExtrude}
+                onCancel={cancelPanel}
+              />
+            ) : tool === 'extrude' ? (
+              <div className="profile-pick-prompt" role="status">
+                <Layers3 size={18} aria-hidden="true" />
+                <span>
+                  <strong>Select a closed profile</strong>
+                  <small>
+                    Click a shaded sketch region to begin extruding.
+                  </small>
+                </span>
+              </div>
+            ) : selectedSketchProfileId && selectedSketchProfileName ? (
+              <ProfileQuickAction
+                profileName={selectedSketchProfileName}
+                onExtrude={() => startExtrude(selectedSketchProfileId)}
+                onDismiss={() => setSelectedSketchProfileId(null)}
+              />
+            ) : null
+          }
           onSelectTopology={handleSelectTopologyFromViewer}
+          onSelectSketchProfile={handleSelectSketchProfile}
           onResizePrimitiveFace={handleResizePrimitiveFace}
+          onExtrudeDistanceChange={(distance) =>
+            setExtrudePreview((current) =>
+              current ? { ...current, distance } : current
+            )
+          }
           onToggleGrid={() =>
             setViewerSettings((current) => ({
               ...current,
@@ -1594,12 +1831,14 @@ export function App() {
         ) : null
       }
       assistant={
-        <AiCommandRail
-          document={doc}
-          selectedTopology={selectedTopology}
-          onApply={handleApplyPatch}
-          onPreview={handlePreviewPatch}
-        />
+        directMode ? null : (
+          <AiCommandRail
+            document={doc}
+            selectedTopology={selectedTopology}
+            onApply={handleApplyPatch}
+            onPreview={handlePreviewPatch}
+          />
+        )
       }
       statusBar={
         <StatusBar

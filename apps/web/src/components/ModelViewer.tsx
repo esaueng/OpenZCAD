@@ -54,7 +54,15 @@ export interface SketchOverlay {
   sketchId: string;
   name: string;
   selected: boolean;
+  /** Original local coordinates are used to triangulate the selectable region. */
+  profile: { x: number; y: number }[];
+  normal: { x: number; y: number; z: number };
   points: { x: number; y: number; z: number }[];
+}
+
+export interface ExtrudePreview {
+  sketchId: string;
+  distance: number;
 }
 
 interface ModelViewerProps {
@@ -71,11 +79,14 @@ interface ModelViewerProps {
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
+  extrudePreview: ExtrudePreview | null;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean
   ): void;
+  onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
+  onExtrudeDistanceChange(distance: number): void;
 }
 
 interface SceneContext {
@@ -87,6 +98,7 @@ interface SceneContext {
   bodyGroup: THREE.Group;
   sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
+  gizmoGroup: THREE.Group;
   grid: THREE.GridHelper;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
@@ -95,7 +107,8 @@ interface SceneContext {
 }
 
 interface PickResult {
-  selection: TopologySelection;
+  selection: TopologySelection | null;
+  sketchId?: string;
   hit: THREE.Intersection<THREE.Object3D>;
   faceNormal?: THREE.Vector3;
 }
@@ -115,6 +128,16 @@ interface FaceDragState {
   pixelsPerUnit: number;
   initialPosition: THREE.Vector3;
   initialScale: THREE.Vector3;
+}
+
+interface ExtrudeDragState {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  initialDistance: number;
+  directionX: number;
+  directionY: number;
+  pixelsPerUnit: number;
 }
 
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
@@ -234,6 +257,76 @@ function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
   });
 }
 
+function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {
+  const centroid = new THREE.Vector3();
+  for (const point of sketch.points) {
+    centroid.add(new THREE.Vector3(point.x, point.y, point.z));
+  }
+  return centroid.divideScalar(Math.max(sketch.points.length, 1));
+}
+
+/** A lightweight live prism; the canonical B-rep is only created on confirm. */
+export function createExtrudePreviewGeometry(
+  sketch: SketchOverlay,
+  distance: number
+): THREE.BufferGeometry {
+  const count = sketch.points.length;
+  const normal = new THREE.Vector3(
+    sketch.normal.x,
+    sketch.normal.y,
+    sketch.normal.z
+  );
+  const vertices: number[] = [];
+  for (const point of sketch.points) {
+    vertices.push(point.x, point.y, point.z);
+  }
+  for (const point of sketch.points) {
+    vertices.push(
+      point.x + normal.x * distance,
+      point.y + normal.y * distance,
+      point.z + normal.z * distance
+    );
+  }
+
+  const localPoints = sketch.profile.map(
+    (point) => new THREE.Vector2(point.x, point.y)
+  );
+  const capTriangles = THREE.ShapeUtils.triangulateShape(localPoints, []);
+  const indices: number[] = [];
+  for (const triangle of capTriangles) {
+    const [a, b, c] = triangle;
+    if (a === undefined || b === undefined || c === undefined) {
+      continue;
+    }
+    indices.push(a, c, b, a + count, b + count, c + count);
+  }
+  for (let index = 0; index < count; index += 1) {
+    const next = (index + 1) % count;
+    indices.push(index, next, next + count, index, next + count, index + count);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(vertices, 3)
+  );
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function markExtrudeGizmo(object: THREE.Object3D) {
+  object.traverse((child) => {
+    child.userData.extrudeGizmo = true;
+    child.renderOrder = 20;
+    const material = (child as THREE.Mesh | THREE.Line).material;
+    if (material instanceof THREE.Material) {
+      material.depthTest = false;
+      material.transparent = true;
+    }
+  });
+}
+
 export function ModelViewer({
   bodies,
   sketches,
@@ -244,8 +337,11 @@ export function ModelViewer({
   viewRequest,
   units,
   editableBodyIds,
+  extrudePreview,
   onSelectTopology,
-  onResizePrimitiveFace
+  onSelectSketchProfile,
+  onResizePrimitiveFace,
+  onExtrudeDistanceChange
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
@@ -253,6 +349,14 @@ export function ModelViewer({
   onSelectTopologyRef.current = onSelectTopology;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
+  const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
+  onSelectSketchProfileRef.current = onSelectSketchProfile;
+  const onExtrudeDistanceChangeRef = useRef(onExtrudeDistanceChange);
+  onExtrudeDistanceChangeRef.current = onExtrudeDistanceChange;
+  const extrudePreviewRef = useRef(extrudePreview);
+  extrudePreviewRef.current = extrudePreview;
+  const sketchesRef = useRef(sketches);
+  sketchesRef.current = sketches;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -325,6 +429,10 @@ export function ModelViewer({
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
 
+    const gizmoGroup = new THREE.Group();
+    gizmoGroup.name = 'direct-modeling-gizmo';
+    scene.add(gizmoGroup);
+
     const context: SceneContext = {
       scene,
       camera,
@@ -334,6 +442,7 @@ export function ModelViewer({
       bodyGroup,
       sketchGroup,
       overlayGroup,
+      gizmoGroup,
       grid,
       raycaster: new THREE.Raycaster(),
       objectsByBodyId: new Map(),
@@ -353,6 +462,7 @@ export function ModelViewer({
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
     let faceDrag: FaceDragState | null = null;
+    let extrudeDrag: ExtrudeDragState | null = null;
     const dragHud = document.createElement('div');
     dragHud.className = 'direct-edit-hud';
     dragHud.hidden = true;
@@ -360,11 +470,41 @@ export function ModelViewer({
 
     context.raycaster.params.Line = { threshold: 2.4 };
 
-    function pick(event: PointerEvent): PickResult | null {
+    function setRayFromEvent(event: PointerEvent) {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       context.raycaster.setFromCamera(pointer, camera);
+    }
+
+    function pickExtrudeGizmo(event: PointerEvent) {
+      if (!extrudePreviewRef.current) {
+        return null;
+      }
+      setRayFromEvent(event);
+      return (
+        context.raycaster
+          .intersectObjects(gizmoGroup.children, true)
+          .find((hit) => hit.object.userData.extrudeGizmo) ?? null
+      );
+    }
+
+    function pick(event: PointerEvent): PickResult | null {
+      setRayFromEvent(event);
+      const sketchHits = context.raycaster.intersectObjects(
+        sketchGroup.children,
+        true
+      );
+      const sketchHit = sketchHits.find(
+        (hit) => typeof hit.object.userData.sketchId === 'string'
+      );
+      if (sketchHit) {
+        return {
+          selection: null,
+          sketchId: sketchHit.object.userData.sketchId as string,
+          hit: sketchHit
+        };
+      }
       const hits = context.raycaster.intersectObjects(bodyGroup.children, true);
       for (const hit of hits) {
         if (!hit.object.visible) {
@@ -427,15 +567,17 @@ export function ModelViewer({
     }
 
     function applyHover(result: PickResult | null) {
-      const bodyId = result?.selection.bodyId ?? null;
+      const bodyId = result?.selection?.bodyId ?? null;
       const canDragFace =
-        result?.selection.kind === 'face' &&
+        result?.selection?.kind === 'face' &&
         editableBodyIdsRef.current.has(result.selection.bodyId);
-      renderer.domElement.style.cursor = canDragFace
+      renderer.domElement.style.cursor = extrudePreviewRef.current
         ? 'grab'
-        : bodyId
-          ? 'pointer'
-          : '';
+        : canDragFace
+          ? 'grab'
+          : bodyId || result?.sketchId
+            ? 'pointer'
+            : '';
       if (context.hoveredBodyId === bodyId) {
         return;
       }
@@ -480,7 +622,48 @@ export function ModelViewer({
       }
     }
 
+    function positionExtrudeHud(event: PointerEvent, distance: number) {
+      const hostRect = hostRef.current?.getBoundingClientRect();
+      if (!hostRect) {
+        return;
+      }
+      const side = distance < 0 ? 'opposite side' : 'positive side';
+      dragHud.textContent = `Extrude ${distance > 0 ? '+' : ''}${Math.round(distance * 10) / 10} ${unitsRef.current} · ${side}`;
+      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
+      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
+      dragHud.hidden = false;
+    }
+
+    function restoreExtrudeDrag() {
+      if (!extrudeDrag) {
+        return;
+      }
+      controls.enabled = true;
+      dragHud.hidden = true;
+      renderer.domElement.style.cursor = 'grab';
+      if (renderer.domElement.hasPointerCapture(extrudeDrag.pointerId)) {
+        renderer.domElement.releasePointerCapture(extrudeDrag.pointerId);
+      }
+    }
+
     const handlePointerMove = (event: PointerEvent) => {
+      if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
+        event.preventDefault();
+        const dx = event.clientX - extrudeDrag.startX;
+        const dy = event.clientY - extrudeDrag.startY;
+        const projected =
+          dx * extrudeDrag.directionX + dy * extrudeDrag.directionY;
+        const distance =
+          Math.round(
+            (extrudeDrag.initialDistance +
+              projected / extrudeDrag.pixelsPerUnit) *
+              2
+          ) / 2;
+        onExtrudeDistanceChangeRef.current(distance);
+        renderer.domElement.style.cursor = 'grabbing';
+        positionExtrudeHud(event, distance);
+        return;
+      }
       if (faceDrag && event.pointerId === faceDrag.pointerId) {
         event.preventDefault();
         const dx = event.clientX - faceDrag.startX;
@@ -511,10 +694,50 @@ export function ModelViewer({
       if (event.button !== 0) {
         return;
       }
+      const activeExtrude = extrudePreviewRef.current;
+      if (activeExtrude && pickExtrudeGizmo(event)) {
+        const sketch = sketchesRef.current.find(
+          (candidate) => candidate.sketchId === activeExtrude.sketchId
+        );
+        if (sketch) {
+          const rect = renderer.domElement.getBoundingClientRect();
+          const centroid = sketchCentroid(sketch);
+          const normal = new THREE.Vector3(
+            sketch.normal.x,
+            sketch.normal.y,
+            sketch.normal.z
+          ).normalize();
+          const projectedStart = centroid.clone().project(camera);
+          const projectedEnd = centroid.clone().add(normal).project(camera);
+          const projectedX =
+            ((projectedEnd.x - projectedStart.x) * rect.width) / 2;
+          const projectedY =
+            (-(projectedEnd.y - projectedStart.y) * rect.height) / 2;
+          const projectedLength = Math.hypot(projectedX, projectedY);
+          const fallback = Math.max(rect.height / 120, 1);
+          extrudeDrag = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            initialDistance: activeExtrude.distance,
+            directionX:
+              projectedLength > 0.1 ? projectedX / projectedLength : 0,
+            directionY:
+              projectedLength > 0.1 ? projectedY / projectedLength : -1,
+            pixelsPerUnit: Math.max(projectedLength, fallback)
+          };
+          controls.enabled = false;
+          renderer.domElement.setPointerCapture(event.pointerId);
+          positionExtrudeHud(event, activeExtrude.distance);
+          renderer.domElement.style.cursor = 'grabbing';
+          event.preventDefault();
+          return;
+        }
+      }
       const result = pick(event);
       if (
         !result?.faceNormal ||
-        result.selection.kind !== 'face' ||
+        result.selection?.kind !== 'face' ||
         !editableBodyIdsRef.current.has(result.selection.bodyId)
       ) {
         return;
@@ -577,6 +800,12 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
+        restoreExtrudeDrag();
+        extrudeDrag = null;
+        downPosition = null;
+        return;
+      }
       if (faceDrag && event.pointerId === faceDrag.pointerId) {
         const completed = faceDrag;
         const moved = Math.hypot(
@@ -605,13 +834,22 @@ export function ModelViewer({
       );
       downPosition = null;
       if (moved < 5) {
-        onSelectTopologyRef.current(
-          pick(event)?.selection ?? null,
-          event.shiftKey
-        );
+        const result = pick(event);
+        if (result?.sketchId) {
+          onSelectSketchProfileRef.current(result.sketchId);
+        } else {
+          onSelectTopologyRef.current(
+            result?.selection ?? null,
+            event.shiftKey
+          );
+        }
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
+        restoreExtrudeDrag();
+        extrudeDrag = null;
+      }
       if (faceDrag && event.pointerId === faceDrag.pointerId) {
         restoreFaceDrag();
         faceDrag = null;
@@ -678,6 +916,7 @@ export function ModelViewer({
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
+      clearGroup(gizmoGroup);
       grid.dispose();
       axes.dispose();
       controls.dispose();
@@ -858,6 +1097,35 @@ export function ModelViewer({
       if (sketch.points.length < 2) {
         continue;
       }
+      const profileGeometry = new THREE.BufferGeometry();
+      profileGeometry.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(
+          sketch.points.flatMap((point) => [point.x, point.y, point.z]),
+          3
+        )
+      );
+      profileGeometry.setIndex(
+        THREE.ShapeUtils.triangulateShape(
+          sketch.profile.map((point) => new THREE.Vector2(point.x, point.y)),
+          []
+        ).flat()
+      );
+      const profileFill = new THREE.Mesh(
+        profileGeometry,
+        new THREE.MeshBasicMaterial({
+          color: sketch.selected ? 0x3b82f6 : 0x2f78c9,
+          transparent: true,
+          opacity: sketch.selected ? 0.3 : 0.1,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -1
+        })
+      );
+      profileFill.userData.sketchId = sketch.sketchId;
+      context.sketchGroup.add(profileFill);
+
       const geometry = new THREE.BufferGeometry().setFromPoints(
         sketch.points.map(
           (point) => new THREE.Vector3(point.x, point.y, point.z)
@@ -888,7 +1156,129 @@ export function ModelViewer({
         context.sketchGroup.add(label);
       }
     }
-  }, [sketches]);
+
+    if (
+      bodies.length === 0 &&
+      !context.hasFitCamera &&
+      context.sketchGroup.children.length > 0
+    ) {
+      fitCameraToObjects(
+        context.camera,
+        context.controls.target,
+        context.sketchGroup.children
+      );
+      context.controls.update();
+      context.hasFitCamera = true;
+    }
+  }, [bodies.length, sketches]);
+
+  // Direct extrusion stays an ephemeral viewport preview until the user
+  // confirms, keeping document history as the only durable modeling truth.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) {
+      return;
+    }
+    clearGroup(context.gizmoGroup);
+    if (!extrudePreview) {
+      return;
+    }
+    const sketch = sketches.find(
+      (candidate) => candidate.sketchId === extrudePreview.sketchId
+    );
+    if (!sketch || sketch.points.length < 3) {
+      return;
+    }
+
+    const normal = new THREE.Vector3(
+      sketch.normal.x,
+      sketch.normal.y,
+      sketch.normal.z
+    ).normalize();
+    const centroid = sketchCentroid(sketch);
+    const distance = extrudePreview.distance;
+
+    if (Math.abs(distance) >= 0.01) {
+      const previewGeometry = createExtrudePreviewGeometry(sketch, distance);
+      const previewMesh = new THREE.Mesh(
+        previewGeometry,
+        new THREE.MeshStandardMaterial({
+          color: 0x4da3ff,
+          emissive: 0x102f54,
+          transparent: true,
+          opacity: 0.36,
+          roughness: 0.5,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      previewMesh.raycast = () => undefined;
+      context.gizmoGroup.add(previewMesh);
+      const previewEdges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(previewGeometry, 25),
+        new THREE.LineBasicMaterial({
+          color: 0x8fc8ff,
+          transparent: true,
+          opacity: 0.9
+        })
+      );
+      previewEdges.raycast = () => undefined;
+      context.gizmoGroup.add(previewEdges);
+    }
+
+    const activeDirection = distance < 0 ? normal.clone().negate() : normal;
+    // Keep the handle head outside the translucent preview so it remains an
+    // obvious drag target even after the solid grows past the sketch plane.
+    const activeLength = Math.max(Math.abs(distance) + 7, 13);
+    const activeArrow = new THREE.ArrowHelper(
+      activeDirection,
+      centroid,
+      activeLength,
+      0x4da3ff,
+      Math.min(4, activeLength * 0.32),
+      2.2
+    );
+    markExtrudeGizmo(activeArrow);
+    context.gizmoGroup.add(activeArrow);
+
+    const oppositeArrow = new THREE.ArrowHelper(
+      activeDirection.clone().negate(),
+      centroid,
+      distance === 0 ? activeLength : 8,
+      distance === 0 ? 0x4da3ff : 0x365779,
+      3,
+      1.8
+    );
+    markExtrudeGizmo(oppositeArrow);
+    context.gizmoGroup.add(oppositeArrow);
+
+    const hitLength = Math.max(activeLength * 2.4, 52);
+    const hitTarget = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.8, 2.8, hitLength, 10),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0,
+        depthWrite: false
+      })
+    );
+    hitTarget.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+    hitTarget.position.copy(centroid);
+    hitTarget.userData.extrudeGizmo = true;
+    context.gizmoGroup.add(hitTarget);
+
+    const valuePosition = centroid
+      .clone()
+      .addScaledVector(activeDirection, activeLength + 3);
+    const valueLabel = makeLabel(
+      'selection-callout extrude-value-callout',
+      distance === 0
+        ? 'Drag either direction'
+        : `${distance > 0 ? '+' : ''}${Math.round(distance * 10) / 10} ${units}`
+    );
+    valueLabel.position.copy(valuePosition);
+    context.gizmoGroup.add(valueLabel);
+  }, [extrudePreview, sketches, units]);
 
   useEffect(() => {
     const context = contextRef.current;
