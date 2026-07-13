@@ -61,6 +61,8 @@ export interface InspectorCallbacks {
     kind: 'fillet' | 'chamfer',
     value: EdgeModifierFormValue
   ): void;
+  onSelectAllEdges(body: BodyRepresentation): void;
+  onClearSelectedEdges(): void;
   onCreatePattern(value: PatternFormValue): void;
   onApplyPrimitive(
     feature: FeatureNode,
@@ -102,6 +104,8 @@ interface InspectorProps extends InspectorCallbacks {
   selectedSketchObject: SketchObjectData | null;
   selectedBody: BodyRepresentation | null;
   selectedTopology: TopologySelection | null;
+  selectedEdges: TopologySelection[];
+  edgeModifierBody: BodyRepresentation | null;
   scope: Record<string, number>;
   sketches: SketchOption[];
   bodies: BodyOption[];
@@ -159,6 +163,8 @@ export function Inspector(props: InspectorProps) {
     selectedSketchObject,
     selectedBody,
     selectedTopology,
+    selectedEdges,
+    edgeModifierBody,
     scope,
     sketches,
     bodies,
@@ -254,16 +260,20 @@ export function Inspector(props: InspectorProps) {
     } else if (tool === 'fillet' || tool === 'chamfer') {
       body = (
         <EdgeModifierForm
-          key={`create-${tool}-${selectedTopology?.topologyId ?? 'none'}`}
+          key={`create-${tool}-${edgeModifierBody?.bodyId ?? 'none'}`}
           kind={tool}
           scope={scope}
-          targetBodyId={selectedTopology?.bodyId ?? null}
-          edgeHashes={
-            selectedTopology?.kind === 'edge' &&
-            selectedTopology.hash !== undefined
-              ? [selectedTopology.hash]
-              : []
+          targetBodyId={edgeModifierBody?.bodyId ?? null}
+          edgeHashes={selectedEdges.flatMap((edge) =>
+            edge.hash === undefined ? [] : [edge.hash]
+          )}
+          availableEdgeCount={edgeModifierBody?.topology?.edges.length}
+          onSelectAllEdges={
+            edgeModifierBody
+              ? () => props.onSelectAllEdges(edgeModifierBody)
+              : undefined
           }
+          onClearEdges={props.onClearSelectedEdges}
           submitLabel="Create"
           onSubmit={(value) => props.onCreateEdgeModifier(tool, value)}
           onCancel={props.onCancel}
