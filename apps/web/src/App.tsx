@@ -12,7 +12,9 @@ import { parseStepMetadata } from '@openzcad/io-step';
 import { exportBodiesToStl, parseStl } from '@openzcad/io-stl';
 import { createMockKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
+  BodyId,
   BodyRepresentation,
+  EditableDimension,
   PrimitiveKind,
   ProjectDocument,
   ProjectSummary,
@@ -25,6 +27,7 @@ import { ModelTree } from './components/ModelTree';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { StatusBar } from './components/StatusBar';
 import type { ViewPreset } from './lib/view';
+import type { GeometrySelection, ModelingTool } from './lib/selection';
 
 const kernel = createMockKernelAdapter();
 
@@ -32,18 +35,24 @@ export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [document, setDocument] = useState<ProjectDocument | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [geometrySelection, setGeometrySelection] =
+    useState<GeometrySelection | null>(null);
+  const [activeTool, setActiveTool] = useState<ModelingTool>('select');
   const [status, setStatus] = useState('Checking beta API...');
   const [viewPreset, setViewPreset] = useState<ViewPreset>('iso');
   const [fitToken, setFitToken] = useState(0);
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
+  const lastGeometryVersionRef = useRef<number | null>(null);
 
   useEffect(() => {
     geometryWorkerRef.current = new Worker(
       new URL('./worker/geometryWorker.ts', import.meta.url),
       { type: 'module' }
     );
-    geometryWorkerRef.current.onmessage = (event: MessageEvent<ProjectDocument['derived']>) => {
+    geometryWorkerRef.current.onmessage = (
+      event: MessageEvent<ProjectDocument['derived']>
+    ) => {
       if (!managerRef.current) {
         return;
       }
@@ -70,15 +79,23 @@ export function App() {
           hydrateDocument(loaded);
         }
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : 'Failed to reach API.');
+        setStatus(
+          error instanceof Error ? error.message : 'Failed to reach API.'
+        );
       }
     })();
   }, []);
 
   useEffect(() => {
-    if (document && geometryWorkerRef.current) {
-      geometryWorkerRef.current.postMessage(document);
+    if (
+      !document ||
+      !geometryWorkerRef.current ||
+      lastGeometryVersionRef.current === document.version
+    ) {
+      return;
     }
+    lastGeometryVersionRef.current = document.version;
+    geometryWorkerRef.current.postMessage(document);
   }, [document]);
 
   const bodies = useMemo<BodyRepresentation[]>(
@@ -105,16 +122,20 @@ export function App() {
   );
 
   const selectedNode = useMemo(
-    () => (document && selectedId ? document.nodes[selectedId] ?? null : null),
+    () =>
+      document && selectedId ? (document.nodes[selectedId] ?? null) : null,
     [document, selectedId]
   );
 
   function hydrateDocument(nextDocument: ProjectDocument) {
     managerRef.current = new CommandManager(nextDocument);
+    lastGeometryVersionRef.current = null;
     startTransition(() => {
       setDocument(nextDocument);
     });
     setSelectedId(nextDocument.activePartId);
+    setGeometrySelection(null);
+    setActiveTool('select');
     setViewPreset('iso');
     setFitToken((current) => current + 1);
   }
@@ -247,6 +268,74 @@ export function App() {
     setStatus('Applied transform feature to the latest body.');
   }
 
+  function handleGeometrySelection(nextSelection: GeometrySelection | null) {
+    setGeometrySelection(nextSelection);
+    if (!nextSelection || !document) {
+      return;
+    }
+    const bodyNode = Object.values(document.nodes).find(
+      (node) => node.kind === 'body' && node.bodyId === nextSelection.bodyId
+    );
+    if (bodyNode) {
+      setSelectedId(bodyNode.id);
+    }
+  }
+
+  function handleToolChange(tool: ModelingTool) {
+    setActiveTool(tool);
+    if (tool === 'fillet' && geometrySelection?.kind === 'face') {
+      setGeometrySelection(null);
+    }
+    setStatus(
+      tool === 'fillet'
+        ? geometrySelection?.kind === 'edge'
+          ? 'Edge selected. Set a radius and apply the fillet.'
+          : 'Fillet active. Select a box edge.'
+        : 'Select mode. Pick a face to resize or an edge to modify.'
+    );
+  }
+
+  function handleResizeCommit(
+    bodyId: BodyId,
+    dimension: EditableDimension,
+    value: number
+  ) {
+    try {
+      executeCommand(
+        commandFactories.resizeBody({ targetBodyId: bodyId, dimension, value })
+      );
+      setGeometrySelection((current) =>
+        current?.kind === 'face' && current.bodyId === bodyId
+          ? { ...current, value }
+          : current
+      );
+      setStatus(
+        `${dimension} set to ${value.toFixed(2)} ${document?.units ?? 'mm'}.`
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Direct edit failed.');
+    }
+  }
+
+  function handleFilletCommit(
+    bodyId: BodyId,
+    edgeIds: string[],
+    radius: number
+  ) {
+    try {
+      executeCommand(
+        commandFactories.filletBody({ targetBodyId: bodyId, edgeIds, radius })
+      );
+      setGeometrySelection(null);
+      setActiveTool('select');
+      setStatus(
+        `Fillet preview applied at ${radius.toFixed(2)} ${document?.units ?? 'mm'}.`
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Fillet failed.');
+    }
+  }
+
   function handleUndo() {
     const manager = managerRef.current;
     if (!manager) {
@@ -330,17 +419,22 @@ export function App() {
       await refreshProjects();
       setViewPreset('iso');
       setFitToken((current) => current + 1);
-      setStatus(`Imported STL mesh reference (${parsed.triangleCount} triangles).`);
+      setStatus(
+        `Imported STL mesh reference (${parsed.triangleCount} triangles).`
+      );
       return;
     }
 
-    const metadata = await parseStepMetadata(kernel, file.name, await file.text());
+    const metadata = await parseStepMetadata(
+      kernel,
+      file.name,
+      await file.text()
+    );
     const nextDocument = managerRef.current.execute(
       commandFactories.importMesh({
-        name:
-          metadata.products[0]
-            ? `${metadata.products[0]} Preview`
-            : `${file.name.replace(/\.(stp|step)$/i, '')} Preview`,
+        name: metadata.products[0]
+          ? `${metadata.products[0]} Preview`
+          : `${file.name.replace(/\.(stp|step)$/i, '')} Preview`,
         artifactId: uploadSession.session.artifactId,
         sourceName: file.name,
         triangleCount: Math.max(metadata.products.length * 24, 48)
@@ -399,18 +493,24 @@ export function App() {
         <div className="window-bar__meta">
           <span>{activeProject?.name ?? 'No active project'}</span>
           <span>{projects.length} saved projects</span>
-          <span>{document ? `${document.revisions.length} revisions` : 'No revision history'}</span>
+          <span>
+            {document
+              ? `${document.revisions.length} revisions`
+              : 'No revision history'}
+          </span>
         </div>
       </header>
 
       <CommandConsole
         document={document}
+        activeTool={activeTool}
         onCreateProject={handleCreateProject}
         onPrimitive={handlePrimitive}
         onSketch={handleSketch}
         onExtrude={handleExtrude}
         onBoolean={handleBoolean}
         onTransform={handleTransform}
+        onToolChange={handleToolChange}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onSave={handleSave}
@@ -433,13 +533,17 @@ export function App() {
             </div>
             <div className="project-list">
               {projects.length === 0 ? (
-                <div className="panel-empty">Create a project to start modeling.</div>
+                <div className="panel-empty">
+                  Create a project to start modeling.
+                </div>
               ) : (
                 projects.map((project) => (
                   <button
                     key={project.projectId}
                     className={`project-list__item ${
-                      document?.projectId === project.projectId ? 'is-active' : ''
+                      document?.projectId === project.projectId
+                        ? 'is-active'
+                        : ''
                     }`}
                     onClick={() => void handleLoadProject(project.projectId)}
                   >
@@ -457,9 +561,19 @@ export function App() {
                 <p className="panel-kicker">Assembly</p>
                 <h2>Model tree</h2>
               </div>
-              <span className="pane-count">{document?.bodyOrder.length ?? 0}</span>
+              <span className="pane-count">
+                {document?.bodyOrder.length ?? 0}
+              </span>
             </div>
-            <ModelTree document={document} selectedId={selectedId} onSelect={setSelectedId} />
+            <ModelTree
+              document={document}
+              selectedId={selectedId}
+              onSelect={(nodeId) => {
+                setSelectedId(nodeId);
+                setGeometrySelection(null);
+                setActiveTool('select');
+              }}
+            />
           </section>
         </aside>
 
@@ -470,8 +584,14 @@ export function App() {
               <h2>{document?.name ?? 'No project loaded'}</h2>
             </div>
             <div className="viewport-header__stats">
-              <span>{document ? `${document.bodyOrder.length} bodies` : '0 bodies'}</span>
-              <span>{document ? `${document.featureOrder.length} features` : '0 features'}</span>
+              <span>
+                {document ? `${document.bodyOrder.length} bodies` : '0 bodies'}
+              </span>
+              <span>
+                {document
+                  ? `${document.featureOrder.length} features`
+                  : '0 features'}
+              </span>
               <span>
                 {document?.derived.warnings.length
                   ? `${document.derived.warnings.length} warnings`
@@ -482,13 +602,67 @@ export function App() {
           <CadViewport
             bodies={deferredBodies}
             selectedBodyId={selectedBodyId}
+            selection={geometrySelection}
+            activeTool={activeTool}
             viewPreset={viewPreset}
             fitToken={fitToken}
             onViewPresetChange={setViewPreset}
+            onSelectionChange={handleGeometrySelection}
+            onToolChange={handleToolChange}
+            onResizeCommit={handleResizeCommit}
+            onFilletCommit={handleFilletCommit}
           />
         </section>
 
         <aside className="right-pane cad-panel">
+          <section className="pane-section selection-inspector">
+            <div className="pane-section__header">
+              <div>
+                <p className="panel-kicker">Selection</p>
+                <h2>
+                  {geometrySelection
+                    ? `${geometrySelection.kind} selected`
+                    : 'Nothing selected'}
+                </h2>
+              </div>
+              <span
+                className={`selection-kind ${geometrySelection ? 'is-active' : ''}`}
+              >
+                {geometrySelection?.kind ?? activeTool}
+              </span>
+            </div>
+            {geometrySelection ? (
+              <div className="selection-summary">
+                <strong>{geometrySelection.bodyName}</strong>
+                {geometrySelection.kind === 'face' ? (
+                  <span>
+                    {geometrySelection.dimension} ·{' '}
+                    {geometrySelection.value.toFixed(2)}{' '}
+                    {document?.units ?? 'mm'}
+                  </span>
+                ) : (
+                  <span>
+                    {geometrySelection.edgeKey.split(':').at(-1)} · ready for
+                    Fillet
+                  </span>
+                )}
+                <small>
+                  {geometrySelection.kind === 'face'
+                    ? 'Drag the highlighted face or type an exact value in the canvas.'
+                    : 'Use Fillet from the ribbon or the control beside the edge.'}
+                </small>
+              </div>
+            ) : (
+              <div className="selection-summary selection-summary--empty">
+                <span>Faces resize. Edges open modify actions.</span>
+                <small>
+                  Selection follows geometry, while model history remains the
+                  source of truth.
+                </small>
+              </div>
+            )}
+          </section>
+
           <section className="pane-section">
             <div className="pane-section__header">
               <div>
@@ -534,6 +708,8 @@ export function App() {
         document={document}
         selectedId={selectedId}
         viewPreset={viewPreset}
+        geometrySelection={geometrySelection}
+        activeTool={activeTool}
       />
     </div>
   );

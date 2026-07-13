@@ -31,6 +31,12 @@ export type ConstraintKind =
   | 'radius'
   | 'diameter';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
+export type EditableDimension = 'width' | 'height' | 'depth' | 'radius';
+
+export interface FilletDefinition {
+  radius: number;
+  edgeIds: string[];
+}
 
 export interface Vector3 {
   x: number;
@@ -120,6 +126,7 @@ export interface FeatureNode extends BaseNode {
         featureKind: 'primitive';
         primitiveKind: PrimitiveKind;
         dimensions: Record<string, number>;
+        fillet?: FilletDefinition;
       }
     | {
         featureKind: 'sketch';
@@ -129,6 +136,7 @@ export interface FeatureNode extends BaseNode {
         featureKind: 'extrude';
         sketchId: SketchId;
         distance: number;
+        fillet?: FilletDefinition;
       }
     | {
         featureKind: 'boolean';
@@ -171,6 +179,7 @@ export type DocumentNode =
 export interface PrimitiveGeometry {
   kind: PrimitiveKind;
   dimensions: Record<string, number>;
+  fillet?: FilletDefinition;
 }
 
 export interface MeshGeometry {
@@ -185,7 +194,10 @@ export interface CompositeGeometry {
   children: BodyRepresentation[];
 }
 
-export type DisplayGeometry = PrimitiveGeometry | MeshGeometry | CompositeGeometry;
+export type DisplayGeometry =
+  | PrimitiveGeometry
+  | MeshGeometry
+  | CompositeGeometry;
 
 export interface BodyRepresentation {
   bodyId: BodyId;
@@ -250,7 +262,13 @@ export interface UploadSessionRecord {
 export interface ArtifactRecord {
   artifactId: ArtifactId;
   projectId: ProjectId;
-  kind: 'step-import' | 'stl-import' | 'step-export' | 'stl-export' | 'snapshot' | 'thumbnail';
+  kind:
+    | 'step-import'
+    | 'stl-import'
+    | 'step-export'
+    | 'stl-export'
+    | 'snapshot'
+    | 'thumbnail';
   name: string;
   objectKey: string;
   contentType: string;
@@ -269,7 +287,13 @@ export interface ProjectSummary {
 
 export interface JobRecord {
   jobId: JobId;
-  kind: 'thumbnail' | 'validation' | 'import' | 'export' | 'analysis' | 'generative';
+  kind:
+    | 'thumbnail'
+    | 'validation'
+    | 'import'
+    | 'export'
+    | 'analysis'
+    | 'generative';
   status: 'queued' | 'running' | 'completed' | 'failed';
   projectId: ProjectId;
   artifactId?: ArtifactId;

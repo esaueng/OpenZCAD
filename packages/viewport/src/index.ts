@@ -1,13 +1,26 @@
 import * as THREE from 'three';
-import type { BodyRepresentation, MeshGeometry, PrimitiveGeometry } from '@openzcad/shared';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import type {
+  BodyRepresentation,
+  MeshGeometry,
+  PrimitiveGeometry
+} from '@openzcad/shared';
 
-function geometryFromPrimitive(geometry: PrimitiveGeometry): THREE.BufferGeometry {
+function geometryFromPrimitive(
+  geometry: PrimitiveGeometry
+): THREE.BufferGeometry {
   if (geometry.kind === 'box') {
-    return new THREE.BoxGeometry(
-      geometry.dimensions.width ?? 1,
-      geometry.dimensions.height ?? 1,
-      geometry.dimensions.depth ?? 1
+    const width = geometry.dimensions.width ?? 1;
+    const height = geometry.dimensions.height ?? 1;
+    const depth = geometry.dimensions.depth ?? 1;
+    const requestedRadius = geometry.fillet?.radius ?? 0;
+    const radius = Math.min(
+      requestedRadius,
+      Math.min(width, height, depth) / 2 - 0.05
     );
+    return radius > 0
+      ? new RoundedBoxGeometry(width, height, depth, 5, radius)
+      : new THREE.BoxGeometry(width, height, depth);
   }
 
   if (geometry.kind === 'cylinder') {
@@ -15,16 +28,19 @@ function geometryFromPrimitive(geometry: PrimitiveGeometry): THREE.BufferGeometr
       geometry.dimensions.radius ?? 1,
       geometry.dimensions.radius ?? 1,
       geometry.dimensions.height ?? 1,
-      24
+      64
     );
   }
 
-  return new THREE.SphereGeometry(geometry.dimensions.radius ?? 1, 24, 18);
+  return new THREE.SphereGeometry(geometry.dimensions.radius ?? 1, 48, 32);
 }
 
 function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(mesh.vertices, 3));
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(mesh.vertices, 3)
+  );
   geometry.setIndex(mesh.indices);
   geometry.computeVertexNormals();
   return geometry;
@@ -46,12 +62,15 @@ export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
       ? geometryFromMesh(body.geometry)
       : geometryFromPrimitive(body.geometry);
   const material = new THREE.MeshStandardMaterial({
-    color: body.color,
-    metalness: 0.15,
-    roughness: 0.72
+    color: new THREE.Color(body.color).lerp(new THREE.Color('#c9d1da'), 0.68),
+    metalness: 0.08,
+    roughness: 0.48
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = body.name;
+  mesh.userData.bodyId = body.bodyId;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   applyTransform(mesh, body);
   return mesh;
 }
@@ -90,10 +109,13 @@ export function fitCameraToObjects(
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const distance = maxDim * 2.4;
 
-  camera.position.set(center.x + distance, center.y + distance, center.z + distance);
+  camera.position.set(
+    center.x + distance,
+    center.y + distance,
+    center.z + distance
+  );
   controlsTarget.copy(center);
   camera.near = 0.1;
   camera.far = distance * 10;
   camera.updateProjectionMatrix();
 }
-

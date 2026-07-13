@@ -1,20 +1,45 @@
 import { useState, type ChangeEvent } from 'react';
+import {
+  Box,
+  Circle,
+  Combine,
+  Cylinder,
+  Download,
+  FilePlus2,
+  Maximize2,
+  Minus,
+  MousePointer2,
+  Move3d,
+  Radius,
+  Redo2,
+  Save,
+  Square,
+  SquaresIntersect,
+  SquaresSubtract,
+  SquaresUnite,
+  Undo2,
+  Upload,
+  type LucideIcon
+} from 'lucide-react';
 import type {
   BooleanOperation,
   PrimitiveKind,
   ProjectDocument,
   SketchObjectKind
 } from '@openzcad/shared';
+import type { ModelingTool } from '../lib/selection';
 import type { ViewPreset } from '../lib/view';
 
 interface CommandConsoleProps {
   document: ProjectDocument | null;
+  activeTool: ModelingTool;
   onCreateProject(name: string): Promise<void>;
   onPrimitive(kind: PrimitiveKind): void;
   onSketch(kind: SketchObjectKind): void;
   onExtrude(): void;
   onBoolean(operation: BooleanOperation): void;
   onTransform(): void;
+  onToolChange(tool: ModelingTool): void;
   onUndo(): void;
   onRedo(): void;
   onSave(): Promise<void>;
@@ -27,12 +52,14 @@ interface CommandConsoleProps {
 
 export function CommandConsole({
   document,
+  activeTool,
   onCreateProject,
   onPrimitive,
   onSketch,
   onExtrude,
   onBoolean,
   onTransform,
+  onToolChange,
   onUndo,
   onRedo,
   onSave,
@@ -45,28 +72,36 @@ export function CommandConsole({
   const [projectName, setProjectName] = useState('OpenZCAD Beta Project');
 
   return (
-    <div className="ribbon">
-      <div className="ribbon-group ribbon-group--project">
-        <span className="ribbon-label">Project</span>
+    <div className="ribbon" role="toolbar" aria-label="Modeling tools">
+      <div className="ribbon-project">
         <input
           className="ribbon-input"
+          aria-label="New project name"
           value={projectName}
           onChange={(event: ChangeEvent<HTMLInputElement>) =>
             setProjectName(event.target.value)
           }
         />
-        <button className="ribbon-button ribbon-button--accent" onClick={() => void onCreateProject(projectName)}>
-          New
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => void onSave()}>
-          Save
-        </button>
+        <ToolButton
+          label="New"
+          icon={FilePlus2}
+          onClick={() => void onCreateProject(projectName)}
+          emphasized
+        />
       </div>
 
-      <div className="ribbon-group">
-        <span className="ribbon-label">File</span>
-        <label className={`ribbon-button ribbon-button--file ${document ? '' : 'is-disabled'}`}>
-          Import
+      <RibbonGroup label="File">
+        <ToolButton
+          label="Save"
+          icon={Save}
+          disabled={!document}
+          onClick={() => void onSave()}
+        />
+        <label
+          className={`tool-button tool-button--file ${document ? '' : 'is-disabled'}`}
+        >
+          <Upload size={18} aria-hidden="true" />
+          <span>Import</span>
           <input
             type="file"
             accept=".stl,.step,.stp"
@@ -80,90 +115,183 @@ export function CommandConsole({
             }}
           />
         </label>
-        <button className="ribbon-button" disabled={!document} onClick={() => void onExport('stl')}>
-          STL
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => void onExport('step')}>
-          STEP
-        </button>
-      </div>
+        <ToolButton
+          label="STL"
+          icon={Download}
+          disabled={!document}
+          onClick={() => void onExport('stl')}
+        />
+        <ToolButton
+          label="STEP"
+          icon={Download}
+          disabled={!document}
+          onClick={() => void onExport('step')}
+        />
+      </RibbonGroup>
 
-      <div className="ribbon-group">
-        <span className="ribbon-label">Solid</span>
-        <button className="ribbon-button" disabled={!document} onClick={() => onPrimitive('box')}>
-          Box
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onPrimitive('cylinder')}>
-          Cylinder
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onPrimitive('sphere')}>
-          Sphere
-        </button>
-      </div>
+      <RibbonGroup label="Create">
+        <ToolButton
+          label="Box"
+          icon={Box}
+          disabled={!document}
+          onClick={() => onPrimitive('box')}
+        />
+        <ToolButton
+          label="Cylinder"
+          icon={Cylinder}
+          disabled={!document}
+          onClick={() => onPrimitive('cylinder')}
+        />
+        <ToolButton
+          label="Sphere"
+          icon={Circle}
+          disabled={!document}
+          onClick={() => onPrimitive('sphere')}
+        />
+        <ToolButton
+          label="Sketch"
+          icon={Square}
+          disabled={!document}
+          onClick={() => onSketch('rectangle')}
+        />
+        <ToolButton
+          label="Circle"
+          icon={Circle}
+          disabled={!document}
+          onClick={() => onSketch('circle')}
+        />
+        <ToolButton
+          label="Line"
+          icon={Minus}
+          disabled={!document}
+          onClick={() => onSketch('line')}
+        />
+        <ToolButton
+          label="Extrude"
+          icon={Combine}
+          disabled={!document}
+          onClick={onExtrude}
+        />
+      </RibbonGroup>
 
-      <div className="ribbon-group">
-        <span className="ribbon-label">Sketch</span>
-        <button className="ribbon-button" disabled={!document} onClick={() => onSketch('rectangle')}>
-          Rect
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onSketch('circle')}>
-          Circle
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onSketch('line')}>
-          Line
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onExtrude()}>
-          Extrude
-        </button>
-      </div>
+      <RibbonGroup label="Modify">
+        <ToolButton
+          label="Select"
+          icon={MousePointer2}
+          active={activeTool === 'select'}
+          onClick={() => onToolChange('select')}
+        />
+        <ToolButton
+          label="Fillet"
+          icon={Radius}
+          disabled={!document}
+          active={activeTool === 'fillet'}
+          onClick={() =>
+            onToolChange(activeTool === 'fillet' ? 'select' : 'fillet')
+          }
+        />
+        <ToolButton
+          label="Move"
+          icon={Move3d}
+          disabled={!document}
+          onClick={onTransform}
+        />
+        <ToolButton
+          label="Union"
+          icon={SquaresUnite}
+          disabled={!document}
+          onClick={() => onBoolean('union')}
+        />
+        <ToolButton
+          label="Subtract"
+          icon={SquaresSubtract}
+          disabled={!document}
+          onClick={() => onBoolean('subtract')}
+        />
+        <ToolButton
+          label="Intersect"
+          icon={SquaresIntersect}
+          disabled={!document}
+          onClick={() => onBoolean('intersect')}
+        />
+        <ToolButton
+          label="Undo"
+          icon={Undo2}
+          disabled={!document}
+          onClick={onUndo}
+        />
+        <ToolButton
+          label="Redo"
+          icon={Redo2}
+          disabled={!document}
+          onClick={onRedo}
+        />
+      </RibbonGroup>
 
-      <div className="ribbon-group">
-        <span className="ribbon-label">Modify</span>
-        <button className="ribbon-button" disabled={!document} onClick={() => onBoolean('union')}>
-          Union
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onBoolean('subtract')}>
-          Subtract
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onBoolean('intersect')}>
-          Intersect
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onTransform()}>
-          Move/Rotate
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onUndo()}>
-          Undo
-        </button>
-        <button className="ribbon-button" disabled={!document} onClick={() => onRedo()}>
-          Redo
-        </button>
-      </div>
+      <RibbonGroup label="View" compact>
+        {(['top', 'front', 'right', 'iso'] as ViewPreset[]).map((preset) => (
+          <button
+            key={preset}
+            className="view-preset-button"
+            onClick={() => onSetView(preset)}
+          >
+            {preset === 'iso' ? 'ISO' : preset.charAt(0).toUpperCase()}
+          </button>
+        ))}
+        <ToolButton label="Fit" icon={Maximize2} onClick={onFitView} />
+      </RibbonGroup>
 
-      <div className="ribbon-group">
-        <span className="ribbon-label">View</span>
-        <button className="ribbon-button" onClick={() => onSetView('top')}>
-          Top
-        </button>
-        <button className="ribbon-button" onClick={() => onSetView('front')}>
-          Front
-        </button>
-        <button className="ribbon-button" onClick={() => onSetView('right')}>
-          Right
-        </button>
-        <button className="ribbon-button" onClick={() => onSetView('iso')}>
-          Iso
-        </button>
-        <button className="ribbon-button" onClick={() => onFitView()}>
-          Fit
-        </button>
-      </div>
-
-      <div className="ribbon-status">
+      <div className="ribbon-status" title={status}>
         <span className={`status-pill ${document ? 'is-ready' : 'is-idle'}`}>
-          {document ? 'Model ready' : 'No project'}
+          {document ? 'Ready' : 'No project'}
         </span>
         <small>{status}</small>
       </div>
     </div>
+  );
+}
+
+function RibbonGroup({
+  label,
+  compact = false,
+  children
+}: {
+  label: string;
+  compact?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`ribbon-group ${compact ? 'ribbon-group--compact' : ''}`}>
+      <span className="ribbon-label">{label}</span>
+      <div className="ribbon-group__tools">{children}</div>
+    </div>
+  );
+}
+
+function ToolButton({
+  label,
+  icon: Icon,
+  active = false,
+  emphasized = false,
+  disabled = false,
+  onClick
+}: {
+  label: string;
+  icon: LucideIcon;
+  active?: boolean;
+  emphasized?: boolean;
+  disabled?: boolean;
+  onClick(): void;
+}) {
+  return (
+    <button
+      className={`tool-button ${active ? 'is-active' : ''} ${emphasized ? 'is-emphasized' : ''}`}
+      disabled={disabled}
+      onClick={onClick}
+      aria-pressed={active}
+    >
+      <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
   );
 }

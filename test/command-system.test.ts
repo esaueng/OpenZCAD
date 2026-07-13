@@ -20,8 +20,30 @@ describe('command-system', () => {
 
     expect(manager.document.bodyOrder).toHaveLength(1);
 
+    const bodyId = manager.document.bodyOrder[0];
+    expect(bodyId).toBeTruthy();
+    if (!bodyId) {
+      return;
+    }
+
+    manager.execute(
+      commandFactories.resizeBody({
+        targetBodyId: bodyId,
+        dimension: 'depth',
+        value: 18
+      })
+    );
+    manager.execute(
+      commandFactories.filletBody({
+        targetBodyId: bodyId,
+        edgeIds: [`${bodyId}:m0:e0`],
+        radius: 2
+      })
+    );
+    expect(manager.document.commandLog.at(-1)?.kind).toBe('feature.fillet');
+
     manager.undo();
-    expect(manager.document.bodyOrder).toHaveLength(0);
+    expect(manager.document.bodyOrder).toHaveLength(1);
 
     manager.redo();
     expect(manager.document.bodyOrder).toHaveLength(1);
@@ -29,6 +51,7 @@ describe('command-system', () => {
     const kernel = createMockKernelAdapter();
     const derived = kernel.syncDocument(manager.document);
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
+    const representation = derived.bodyRepresentations[bodyId];
+    expect(representation?.geometry.kind).toBe('box');
   });
 });
-

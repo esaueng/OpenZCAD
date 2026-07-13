@@ -14,6 +14,7 @@ import {
   type BooleanOperation,
   type ConstraintKind,
   type DocumentNode,
+  type EditableDimension,
   type FeatureNode,
   type PlaneId,
   type PrimitiveKind,
@@ -73,6 +74,18 @@ export interface ImportedMeshInput {
   artifactId: string;
   sourceName: string;
   triangleCount: number;
+}
+
+export interface ResizeBodyInput {
+  targetBodyId: BodyId;
+  dimension: EditableDimension;
+  value: number;
+}
+
+export interface FilletBodyInput {
+  targetBodyId: BodyId;
+  edgeIds: string[];
+  radius: number;
 }
 
 export function createProjectDocument(
@@ -157,7 +170,9 @@ export function getNode<TNode extends DocumentNode>(
   document: ProjectDocument,
   nodeId: string
 ): TNode | undefined {
-  return document.nodes[nodeId as keyof typeof document.nodes] as TNode | undefined;
+  return document.nodes[nodeId as keyof typeof document.nodes] as
+    | TNode
+    | undefined;
 }
 
 export function listNodesByKind<TNode extends DocumentNode['kind']>(
@@ -463,6 +478,162 @@ export function transformBody(
   return { document: next, bodyId: input.targetBodyId };
 }
 
+export function resizeBody(
+  document: ProjectDocument,
+  input: ResizeBodyInput
+): ProjectDocument {
+  if (!Number.isFinite(input.value) || input.value <= 0.1) {
+    throw new Error('Direct-edit dimensions must be greater than 0.1.');
+  }
+
+  const next = cloneDocument(document);
+  const body = listNodesByKind(next, 'body').find(
+    (candidate) => candidate.bodyId === input.targetBodyId
+  );
+  const feature = body
+    ? listNodesByKind(next, 'feature').find(
+        (candidate) => candidate.featureId === body.featureId
+      )
+    : undefined;
+
+  if (!body || !feature) {
+    throw new Error(`Body ${input.targetBodyId} was not found.`);
+  }
+
+  if (feature.data.featureKind === 'primitive') {
+    if (!(input.dimension in feature.data.dimensions)) {
+      throw new Error(
+        `${feature.data.primitiveKind} does not expose ${input.dimension}.`
+      );
+    }
+    feature.data.dimensions[input.dimension] = input.value;
+    next.version += 1;
+    return next;
+  }
+
+  if (feature.data.featureKind !== 'extrude') {
+    throw new Error(
+      'Direct face editing is available for primitives and extrudes.'
+    );
+  }
+
+  const extrudeData = feature.data;
+
+  if (input.dimension === 'depth') {
+    extrudeData.distance = input.value;
+    next.version += 1;
+    return next;
+  }
+
+  const sketch = listNodesByKind(next, 'sketch').find(
+    (candidate) => candidate.sketchId === extrudeData.sketchId
+  );
+  const profile = sketch
+    ? listNodesByKind(next, 'sketch-object').find((candidate) =>
+        sketch.objectIds.includes(candidate.id)
+      )
+    : undefined;
+
+  if (profile?.data.objectKind === 'rectangle') {
+    if (input.dimension !== 'width' && input.dimension !== 'height') {
+      throw new Error(`Rectangle extrudes do not expose ${input.dimension}.`);
+    }
+    profile.data[input.dimension] = input.value;
+    next.version += 1;
+    return next;
+  }
+
+  if (profile?.data.objectKind === 'circle' && input.dimension === 'radius') {
+    profile.data.radius = input.value;
+    next.version += 1;
+    return next;
+  }
+
+  throw new Error(
+    'This extrude profile does not support direct face editing yet.'
+  );
+}
+
+export function filletBody(
+  document: ProjectDocument,
+  input: FilletBodyInput
+): ProjectDocument {
+  if (input.edgeIds.length === 0) {
+    throw new Error('Select at least one edge to fillet.');
+  }
+  if (!Number.isFinite(input.radius) || input.radius <= 0) {
+    throw new Error('Fillet radius must be greater than zero.');
+  }
+
+  const next = cloneDocument(document);
+  const body = listNodesByKind(next, 'body').find(
+    (candidate) => candidate.bodyId === input.targetBodyId
+  );
+  const feature = body
+    ? listNodesByKind(next, 'feature').find(
+        (candidate) => candidate.featureId === body.featureId
+      )
+    : undefined;
+
+  if (!body || !feature) {
+    throw new Error(`Body ${input.targetBodyId} was not found.`);
+  }
+
+  let dimensions: number[] | null = null;
+  if (
+    feature.data.featureKind === 'primitive' &&
+    feature.data.primitiveKind === 'box'
+  ) {
+    dimensions = [
+      feature.data.dimensions.width ?? 1,
+      feature.data.dimensions.height ?? 1,
+      feature.data.dimensions.depth ?? 1
+    ];
+  } else if (feature.data.featureKind === 'extrude') {
+    const extrudeData = feature.data;
+    const sketch = listNodesByKind(next, 'sketch').find(
+      (candidate) => candidate.sketchId === extrudeData.sketchId
+    );
+    const profile = sketch
+      ? listNodesByKind(next, 'sketch-object').find((candidate) =>
+          sketch.objectIds.includes(candidate.id)
+        )
+      : undefined;
+    if (profile?.data.objectKind === 'rectangle') {
+      dimensions = [
+        profile.data.width,
+        profile.data.height,
+        extrudeData.distance
+      ];
+    }
+  }
+
+  if (!dimensions) {
+    throw new Error(
+      'The beta fillet preview currently supports box solids only.'
+    );
+  }
+
+  const maximumRadius = Math.max(0.1, Math.min(...dimensions) / 2 - 0.05);
+  if (input.radius > maximumRadius) {
+    throw new Error(
+      `Fillet radius must be ${maximumRadius.toFixed(2)} or smaller.`
+    );
+  }
+
+  if (
+    feature.data.featureKind === 'primitive' ||
+    feature.data.featureKind === 'extrude'
+  ) {
+    feature.data.fillet = {
+      radius: input.radius,
+      edgeIds: [...new Set(input.edgeIds)]
+    };
+  }
+  next.version += 1;
+  return next;
+}
+
 export function importMeshBody(
   document: ProjectDocument,
   input: ImportedMeshInput
@@ -538,7 +709,9 @@ export function attachDerivedState(
   return next;
 }
 
-export function getLatestSketchId(document: ProjectDocument): SketchId | undefined {
+export function getLatestSketchId(
+  document: ProjectDocument
+): SketchId | undefined {
   return document.sketchOrder.at(-1);
 }
 
@@ -553,5 +726,8 @@ export function evaluateExpression(
   const normalized = expression.replace(/[^0-9+\-*/()._ a-zA-Z]/g, '');
   const argNames = Object.keys(scope);
   const argValues = Object.values(scope);
-  return Function(...argNames, `return (${normalized});`)(...argValues) as number;
+  return Function(
+    ...argNames,
+    `return (${normalized});`
+  )(...argValues) as number;
 }
