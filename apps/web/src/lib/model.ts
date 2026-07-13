@@ -1,5 +1,10 @@
 import { evaluateExpression } from '@openzcad/document-core';
-import type { FeatureKind, ParamValue, PlaneId, RevolveAxis } from '@openzcad/shared';
+import type {
+  FeatureKind,
+  ParamValue,
+  PlaneId,
+  RevolveAxis
+} from '@openzcad/shared';
 
 /** Raw text shown in an editable field for a stored parametric value. */
 export function paramValueText(value: ParamValue | undefined): string {
@@ -24,9 +29,31 @@ export function previewExpression(
     return { ok: false, text: 'required' };
   }
   try {
-    return { ok: true, text: `= ${formatNumber(evaluateExpression(trimmed, scope))}` };
+    return {
+      ok: true,
+      text: `= ${formatNumber(evaluateExpression(trimmed, scope))}`
+    };
   } catch (error) {
-    return { ok: false, text: error instanceof Error ? error.message : 'invalid' };
+    return {
+      ok: false,
+      text: error instanceof Error ? error.message : 'invalid'
+    };
+  }
+}
+
+/** Resolve a stored parametric value to a number, or null if it can't evaluate. */
+export function evalParamValue(
+  value: ParamValue,
+  scope: Record<string, number>
+): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  try {
+    const result = evaluateExpression(value, scope);
+    return Number.isFinite(result) ? result : null;
+  } catch {
+    return null;
   }
 }
 
@@ -48,6 +75,10 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   revolve: 'Revolve',
   boolean: 'Boolean',
   transform: 'Move / Rotate',
+  fillet: 'Fillet',
+  chamfer: 'Chamfer',
+  pattern: 'Pattern',
+  'imported-step': 'Imported STEP',
   'imported-mesh': 'Imported mesh'
 };
 

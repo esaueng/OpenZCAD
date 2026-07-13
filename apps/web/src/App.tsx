@@ -1,6 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CommandManager, commandFactories, type AnyCommand } from '@openzcad/command-system';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+  Camera,
+  Combine,
+  Download,
+  Eye,
+  FolderOpen,
+  Grid3x3,
+  Maximize2,
+  Monitor,
+  Move3d,
+  Save,
+  Scissors,
+  Spline,
+  Trash2,
+  TriangleRight,
+  Upload
+} from 'lucide-react';
+import {
+  CommandManager,
+  commandFactories,
+  commandsForCadPatch,
+  type AnyCommand
+} from '@openzcad/command-system';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
+import {
+  createProjectDocument,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -8,123 +32,214 @@ import {
   listParameters,
   normalizeDocument
 } from '@openzcad/document-core';
+import {
+  PLANE_BASES,
+  circleProfile,
+  polygonProfile,
+  rectangleProfile,
+  type Vec2
+} from '@openzcad/geometry';
 import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
   BodyId,
   BodyRepresentation,
-  BooleanOperation,
   FeatureId,
   FeatureNode,
-  PrimitiveKind,
   ProjectDocument,
   ProjectSummary,
-  SketchId,
   SketchNode,
   SketchObjectData,
+  TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
+import type { AuthSession } from '@openzcad/shared';
+import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
-import { downloadText, exportFileStem, inferContentType } from './lib/model';
-import { getCommand, type CommandContext, type WorkspaceId } from './lib/commands';
 import {
-  buildSessionCommand,
-  createSession,
-  formatDragValue,
-  sessionManipulator,
-  sessionPreview,
-  sessionTitle,
-  setSessionValue,
-  sketchOverlays,
-  toggleBooleanTarget,
-  validateSession,
-  type ToolSession
-} from './lib/session';
+  downloadText,
+  evalParamValue,
+  exportFileStem,
+  inferContentType
+} from './lib/model';
+import {
+  SHORTCUT_TO_TOOL,
+  TOOL_GROUPS,
+  TOOL_META,
+  toolDisabledReason,
+  type ToolAvailability,
+  type ToolId
+} from './lib/tools';
 import { AppShell } from './components/AppShell';
 import { TopBar } from './components/TopBar';
-import { ToolPalette } from './components/ToolPalette';
-import { ModelBrowser } from './components/ModelBrowser';
+import { ToolBar } from './components/ToolBar';
+import { Sidebar } from './components/Sidebar';
 import { ViewerShell } from './components/ViewerShell';
-import { CommandHUD } from './components/CommandHUD';
-import { CommandSearch } from './components/CommandSearch';
-import { ShortcutSheet } from './components/ShortcutSheet';
-import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
-import { PropertiesInspector } from './components/PropertiesInspector';
+import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
-import { VisualizePanel } from './components/VisualizePanel';
+import { AiCommandRail } from './components/AiCommandRail';
+import {
+  CommandPalette,
+  type PaletteCommand
+} from './components/CommandPalette';
+import { ShortcutsOverlay } from './components/ShortcutsOverlay';
+import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
+import {
+  ContextMenu,
+  type ContextMenuState
+} from './components/ContextMenu';
 import type {
   AxisProjection,
   DisplayMode,
+  FaceResizeCommit,
   ProjectionMode,
-  ViewerApi
+  SketchOverlay,
+  StandardView,
+  ViewerSettings
 } from './components/ModelViewer';
-import type { GeometrySyncResult } from './worker/geometryWorker';
+import {
+  listLocalProjects,
+  loadLocalProject,
+  selectProjectDocument,
+  saveLocalProject
+} from './lib/localProjectStore';
+import type {
+  GeometryExportResult,
+  GeometryWorkerResult
+} from './worker/geometryWorker';
+import { useCollaboration } from './lib/useCollaboration';
 
 const kernel = createKernelAdapter();
+const localUserId = toUserId('user_local_browser');
+const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 
-const NAV_HINT_KEY = 'ozc.hint.nav';
-const workspaceKey = (projectId: string) => `ozc.workspace.${projectId}`;
+const DISPLAY_MODE_ORDER: DisplayMode[] = [
+  'shaded-edges',
+  'shaded',
+  'wireframe'
+];
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function storageGet(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
+function mergeProjectSummaries(
+  local: ProjectSummary[],
+  remote: ProjectSummary[]
+): ProjectSummary[] {
+  const merged = new Map(local.map((project) => [project.projectId, project]));
+  for (const project of remote) {
+    const existing = merged.get(project.projectId);
+    if (!existing || project.updatedAt > existing.updatedAt) {
+      merged.set(project.projectId, project);
+    }
   }
-}
-
-function storageSet(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Persistence of UI niceties is best-effort.
-  }
+  return [...merged.values()].sort((a, b) =>
+    b.updatedAt.localeCompare(a.updatedAt)
+  );
 }
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
-  const [selectedFeatureNodeIds, setSelectedFeatureNodeIds] = useState<string[]>([]);
-  const [session, setSession] = useState<ToolSession | null>(null);
-  const [workspace, setWorkspace] = useState<WorkspaceId>('model');
+  const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
+    string | null
+  >(null);
+  const [selectedTopology, setSelectedTopology] =
+    useState<TopologySelection | null>(null);
+  // Viewport body selection in pick order; drives boolean/move pre-fills.
+  const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
+  const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [viewerSettings, setViewerSettings] = useState({
+  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>({
     showGrid: true,
-    displayMode: 'shaded-edges' as DisplayMode
+    displayMode: 'shaded-edges'
   });
-  const [projection, setProjection] = useState<ProjectionMode>('perspective');
-  const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(new Set());
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
-  const [lastSavedVersion, setLastSavedVersion] = useState<number | null>(null);
-  const [navHintDismissed, setNavHintDismissed] = useState(
-    () => storageGet(NAV_HINT_KEY) === '1'
+  const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
+    'saving'
   );
-
+  const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [fitSignal, setFitSignal] = useState(0);
+  const [viewRequest, setViewRequest] = useState<{
+    view: StandardView;
+    nonce: number;
+  } | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [projection, setProjection] = useState<ProjectionMode>('perspective');
+  const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
+    new Set()
+  );
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
+  const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
+  const exportRequestsRef = useRef(
+    new Map<
+      string,
+      {
+        resolve(result: Extract<GeometryExportResult, { ok: true }>): void;
+        reject(error: Error): void;
+      }
+    >()
+  );
   const lastSyncedKeyRef = useRef<string | null>(null);
-  const viewerApiRef = useRef<ViewerApi | null>(null);
-  const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
+  const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
+  const collaboration = useCollaboration({
+    document: doc,
+    session,
+    onRemoteDocument(remoteDocument) {
+      const current = managerRef.current?.document;
+      if (
+        !current ||
+        current.projectId !== remoteDocument.projectId ||
+        remoteDocument.version <= current.version
+      ) {
+        return;
+      }
+      hydrateDocument(remoteDocument);
+      setStatus(
+        `Applied live revision ${remoteDocument.version} from a collaborator.`
+      );
+    },
+    onConflict(remoteDocument) {
+      setStatus(
+        `Collaboration conflict at revision ${remoteDocument.version}; local edits were preserved.`
+      );
+    }
+  });
+
   useEffect(() => {
-    const worker = new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
-      type: 'module'
-    });
+    const worker = new Worker(
+      new URL('./worker/geometryWorker.ts', import.meta.url),
+      {
+        type: 'module'
+      }
+    );
     geometryWorkerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<GeometrySyncResult>) => {
+    worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
+      if (event.data.type === 'export') {
+        const pending = exportRequestsRef.current.get(event.data.requestId);
+        if (!pending) {
+          return;
+        }
+        exportRequestsRef.current.delete(event.data.requestId);
+        if (event.data.ok) {
+          pending.resolve(event.data);
+        } else {
+          pending.reject(new Error(event.data.error));
+        }
+        return;
+      }
       const manager = managerRef.current;
       if (!manager) {
         return;
@@ -145,6 +260,10 @@ export function App() {
     };
 
     return () => {
+      for (const request of exportRequestsRef.current.values()) {
+        request.reject(new Error('Geometry worker closed.'));
+      }
+      exportRequestsRef.current.clear();
       worker.terminate();
       geometryWorkerRef.current = null;
     };
@@ -152,18 +271,41 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      try {
-        const health = await api.health();
-        const listed = await api.listProjects();
-        setProjects(listed.projects);
-        setStatus(
-          `API ${health.status} on ${health.environment} · ${listed.projects.length} project(s)`
-        );
-      } catch (error) {
-        setStatus(errorMessage(error, 'Failed to reach API.'));
-      }
+      const [local, remote] = await Promise.all([
+        listLocalProjects().catch(() => []),
+        Promise.all([api.health(), api.session(), api.listProjects()]).catch(
+          () => null
+        )
+      ]);
+      const remoteProjects = remote?.[2].projects ?? [];
+      const merged = mergeProjectSummaries(local, remoteProjects);
+      setProjects(merged);
+      setCloudAvailable(Boolean(remote));
+      setSession(remote?.[1] ?? null);
+      setSaveState(remote ? 'saved' : 'offline');
+      setStatus(
+        remote
+          ? `Beta API ready · ${merged.length} project(s)`
+          : `Offline workspace · ${merged.length} local project(s)`
+      );
     })();
   }, []);
+
+  useEffect(() => {
+    if (!doc) {
+      return;
+    }
+    setSaveState('saving');
+    const timeout = window.setTimeout(() => {
+      void saveLocalProject(doc)
+        .then(() => setSaveState(cloudAvailable ? 'saved' : 'offline'))
+        .catch(() => {
+          setSaveState('offline');
+          setStatus('Local autosave failed. Export your model before closing.');
+        });
+    }, 450);
+    return () => window.clearTimeout(timeout);
+  }, [doc, cloudAvailable]);
 
   useEffect(() => {
     if (!doc || !geometryWorkerRef.current) {
@@ -177,47 +319,48 @@ export function App() {
       return;
     }
     lastSyncedKeyRef.current = syncKey;
-    geometryWorkerRef.current.postMessage(doc);
+    geometryWorkerRef.current.postMessage({ type: 'sync', document: doc });
   }, [doc]);
 
-  // ── Derived model state ────────────────────────────────────────────────
-
-  const features = useMemo<FeatureNode[]>(() => (doc ? listFeaturesInOrder(doc) : []), [doc]);
+  const features = useMemo<FeatureNode[]>(
+    () => (doc ? listFeaturesInOrder(doc) : []),
+    [doc]
+  );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
   );
-  const scope = parameterScope.scope;
 
-  const representations = useMemo(() => {
-    if (!doc) {
-      return {} as Record<string, BodyRepresentation>;
-    }
-    // Apply persisted appearance overrides (body node metadata.color).
-    const bodyNodes = listNodesByKind(doc, 'body');
-    const colorByBodyId = new Map<string, string>();
-    for (const node of bodyNodes) {
-      const color = node.metadata?.color;
-      if (typeof color === 'string') {
-        colorByBodyId.set(node.bodyId, color);
-      }
-    }
-    const entries = Object.entries(doc.derived.bodyRepresentations).map(([bodyId, body]) => {
-      const override = colorByBodyId.get(bodyId);
-      return [bodyId, override ? { ...body, color: override } : body] as const;
-    });
-    return Object.fromEntries(entries) as Record<string, BodyRepresentation>;
-  }, [doc]);
-
+  const representations = doc?.derived.bodyRepresentations ?? {};
   const warnings = doc?.derived.warnings ?? [];
 
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
-      Object.values(representations).filter(
-        (body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)
-      ),
-    [representations, hiddenBodyIds]
+      (previewDoc
+        ? Object.values(previewDoc.derived.bodyRepresentations)
+        : doc
+          ? Object.values(doc.derived.bodyRepresentations)
+          : []
+      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
+    [doc, previewDoc, hiddenBodyIds]
+  );
+
+  const directEditableBodyIds = useMemo<string[]>(
+    () =>
+      previewDoc
+        ? []
+        : features.flatMap((feature) =>
+            feature.bodyId &&
+            feature.data.featureKind === 'primitive' &&
+            feature.data.primitiveKind === 'box' &&
+            Object.values(feature.data.dimensions).every(
+              (value) => typeof value === 'number'
+            )
+              ? [feature.bodyId]
+              : []
+          ),
+    [features, previewDoc]
   );
 
   const bodyOptions = useMemo(() => {
@@ -233,7 +376,9 @@ export function App() {
         return [];
       }
       const representation = doc.derived.bodyRepresentations[bodyId];
-      return [{ bodyId, name: node.name, consumed: representation?.consumed ?? false }];
+      return [
+        { bodyId, name: node.name, consumed: representation?.consumed ?? false }
+      ];
     });
   }, [doc]);
 
@@ -243,25 +388,27 @@ export function App() {
     }
     const sketches = listNodesByKind(doc, 'sketch');
     return doc.sketchOrder.flatMap((sketchId) => {
-      const sketch = sketches.find((candidate) => candidate.sketchId === sketchId);
+      const sketch = sketches.find(
+        (candidate) => candidate.sketchId === sketchId
+      );
       return sketch ? [{ sketchId, name: sketch.name }] : [];
     });
   }, [doc]);
 
-  const selectedFeatures = useMemo<FeatureNode[]>(() => {
-    if (!doc) {
-      return [];
+  const selectedFeature = useMemo<FeatureNode | null>(() => {
+    if (!doc || !selectedFeatureNodeId) {
+      return null;
     }
-    return selectedFeatureNodeIds.flatMap((nodeId) => {
-      const node = doc.nodes[nodeId];
-      return node?.kind === 'feature' ? [node] : [];
-    });
-  }, [doc, selectedFeatureNodeIds]);
-
-  const selectedFeature = selectedFeatures[0] ?? null;
+    const node = doc.nodes[selectedFeatureNodeId];
+    return node?.kind === 'feature' ? node : null;
+  }, [doc, selectedFeatureNodeId]);
 
   const selectedSketch = useMemo<SketchNode | null>(() => {
-    if (!doc || !selectedFeature || selectedFeature.data.featureKind !== 'sketch') {
+    if (
+      !doc ||
+      !selectedFeature ||
+      selectedFeature.data.featureKind !== 'sketch'
+    ) {
       return null;
     }
     return findSketch(doc, selectedFeature.data.sketchId) ?? null;
@@ -277,33 +424,9 @@ export function App() {
     return objectNode?.kind === 'sketch-object' ? objectNode.data : null;
   }, [doc, selectedSketch]);
 
-  /** Live (non-consumed) bodies backing the selected features, in pick order. */
-  const selectedBodyIds = useMemo<BodyId[]>(
-    () =>
-      selectedFeatures.flatMap((feature) => {
-        if (!feature.bodyId) {
-          return [];
-        }
-        const body = representations[feature.bodyId];
-        return body && !body.consumed ? [feature.bodyId] : [];
-      }),
-    [selectedFeatures, representations]
-  );
-
   const selectedBody = selectedFeature?.bodyId
     ? (representations[selectedFeature.bodyId] ?? null)
     : null;
-
-  const bodyColorOverride = useMemo(() => {
-    if (!doc || !selectedFeature?.bodyId) {
-      return null;
-    }
-    const bodyNode = listNodesByKind(doc, 'body').find(
-      (node) => node.bodyId === selectedFeature.bodyId
-    );
-    const color = bodyNode?.metadata?.color;
-    return typeof color === 'string' ? color : null;
-  }, [doc, selectedFeature]);
 
   const exportBodyIds = useMemo<BodyId[]>(() => {
     if (!doc) {
@@ -315,110 +438,86 @@ export function App() {
     return doc.derived.exportableBodyIds;
   }, [doc, selectedBody]);
 
-  const liveBodyCount = useMemo(
-    () => Object.values(representations).filter((body) => !body.consumed).length,
-    [representations]
-  );
-
-  const commandCtx = useMemo<CommandContext>(
-    () => ({
-      sketchCount: doc?.sketchOrder.length ?? 0,
-      liveBodyCount,
-      selectedBodyCount: selectedBodyIds.length,
-      sketchSelected: selectedFeature?.data.featureKind === 'sketch',
-      featureSelected: selectedFeature !== null,
-      canUndo: managerRef.current?.canUndo ?? false,
-      canRedo: managerRef.current?.canRedo ?? false,
-      canExport: exportBodyIds.length > 0,
-      workspace
-    }),
-    [doc, liveBodyCount, selectedBodyIds, selectedFeature, exportBodyIds, workspace]
-  );
-
-  // ── Session-derived viewport state ─────────────────────────────────────
-
-  const preview = useMemo(
-    () => (session && doc ? sessionPreview(session, doc, scope) : null),
-    [session, doc, scope]
-  );
-  const manipulator = useMemo(
-    () => (session && doc ? sessionManipulator(session, doc, scope, representations) : null),
-    [session, doc, scope, representations]
-  );
-
-  const sketchOverlayViews = useMemo(() => {
+  // Sketch profiles lifted onto their 3D planes for the viewport overlay.
+  const sketchOverlays = useMemo<SketchOverlay[]>(() => {
     if (!doc) {
       return [];
     }
-    const selectedSketchIds = new Set(
-      selectedFeatures.flatMap((feature) =>
-        feature.data.featureKind === 'sketch' ? [feature.data.sketchId as string] : []
-      )
-    );
-    if (session?.kind === 'extrude' && session.sketchId) {
-      selectedSketchIds.add(session.sketchId);
-    }
-    if (session?.kind === 'revolve' && session.sketchId) {
-      selectedSketchIds.add(session.sketchId);
-    }
-    return sketchOverlays(doc, scope).map((overlay) => ({
-      ...overlay,
-      sketchId: overlay.sketchId as string,
-      selected: selectedSketchIds.has(overlay.sketchId as string)
-    }));
-  }, [doc, scope, selectedFeatures, session]);
+    const scope = parameterScope.scope;
+    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+      const objectNode = sketch.objectIds[0]
+        ? doc.nodes[sketch.objectIds[0]]
+        : undefined;
+      if (objectNode?.kind !== 'sketch-object') {
+        return [];
+      }
+      const data = objectNode.data;
+      const offset = evalParamValue(sketch.offset, scope) ?? 0;
+      const centerX = evalParamValue(data.centerX, scope);
+      const centerY = evalParamValue(data.centerY, scope);
+      if (centerX === null || centerY === null) {
+        return [];
+      }
+      let profile: Vec2[];
+      try {
+        if (data.objectKind === 'rectangle') {
+          const width = evalParamValue(data.width, scope);
+          const height = evalParamValue(data.height, scope);
+          if (width === null || height === null) {
+            return [];
+          }
+          profile = rectangleProfile(width, height, centerX, centerY);
+        } else if (data.objectKind === 'circle') {
+          const radius = evalParamValue(data.radius, scope);
+          if (radius === null) {
+            return [];
+          }
+          profile = circleProfile(radius, centerX, centerY);
+        } else {
+          const sides = evalParamValue(data.sides, scope);
+          const radius = evalParamValue(data.radius, scope);
+          if (sides === null || radius === null) {
+            return [];
+          }
+          profile = polygonProfile(sides, radius, centerX, centerY);
+        }
+      } catch {
+        return [];
+      }
+      const basis = PLANE_BASES[sketch.plane];
+      const points = profile.map((point) => ({
+        x: basis.u.x * point.x + basis.v.x * point.y + basis.normal.x * offset,
+        y: basis.u.y * point.x + basis.v.y * point.y + basis.normal.y * offset,
+        z: basis.u.z * point.x + basis.v.z * point.y + basis.normal.z * offset
+      }));
+      return [
+        {
+          sketchId: sketch.sketchId,
+          name: sketch.name,
+          selected: selectedSketch?.sketchId === sketch.sketchId,
+          points
+        }
+      ];
+    });
+  }, [doc, parameterScope, selectedSketch]);
 
-  // During a boolean session the viewport highlights the picked targets.
-  const highlightedBodyIds = useMemo<string[]>(() => {
-    if (session?.kind === 'boolean') {
-      return session.targetBodyIds;
-    }
-    if (session?.kind === 'move' && session.targetBodyId) {
-      return [session.targetBodyId];
-    }
-    return selectedBodyIds;
-  }, [session, selectedBodyIds]);
-
-  const pickedBodyNames = useMemo(() => {
-    if (session?.kind !== 'boolean') {
-      return [];
-    }
-    return session.targetBodyIds.map(
-      (bodyId) => representations[bodyId]?.name ?? 'Body'
-    );
-  }, [session, representations]);
-
-  const activeCommandId = useMemo(() => {
-    if (!session) {
-      return null;
-    }
-    switch (session.kind) {
-      case 'primitive':
-        return `primitive.${session.primitiveKind}`;
-      case 'sketch':
-        return 'sketch.create';
-      case 'boolean':
-        return `boolean.${session.operation}`;
-      case 'move':
-        return 'move';
-      default:
-        return session.kind;
-    }
-  }, [session]);
-
-  // ── Document / command plumbing ────────────────────────────────────────
+  const availability: ToolAvailability = {
+    sketchCount: sketchOptions.length,
+    liveBodyCount: viewerBodies.length,
+    hasEdgeSelected: selectedTopology?.kind === 'edge'
+  };
 
   function hydrateDocument(nextDocument: ProjectDocument) {
     const normalized = normalizeDocument(nextDocument);
     managerRef.current = new CommandManager(normalized);
     lastSyncedKeyRef.current = null;
     setDoc(normalized);
-    setSelectedFeatureNodeIds([]);
-    setSession(null);
+    setPreviewDoc(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedBodyIds([]);
     setHiddenBodyIds(new Set());
-    setLastSavedVersion(normalized.version);
-    const savedWorkspace = storageGet(workspaceKey(normalized.projectId));
-    setWorkspace(savedWorkspace === 'visualize' ? 'visualize' : 'model');
+    setTool(null);
   }
 
   function executeCommand(command: AnyCommand): boolean {
@@ -426,6 +525,7 @@ export function App() {
       return false;
     }
     try {
+      setPreviewDoc(null);
       setDoc(managerRef.current.execute(command));
       setStatus(command.label);
       return true;
@@ -440,6 +540,7 @@ export function App() {
       return false;
     }
     try {
+      setPreviewDoc(null);
       setDoc(managerRef.current.runTransaction(label, commands));
       setStatus(label);
       return true;
@@ -449,66 +550,104 @@ export function App() {
     }
   }
 
-  // ── Session lifecycle ──────────────────────────────────────────────────
-
-  const startSession = useCallback(
-    (
-      kind: ToolSession['kind'],
-      options?: { primitiveKind?: PrimitiveKind; operation?: BooleanOperation }
-    ) => {
-      if (!doc) {
-        return;
-      }
-      const selectedSketchId =
-        selectedFeature?.data.featureKind === 'sketch' ? selectedFeature.data.sketchId : null;
-      // Arming a new tool cancels the current session: nothing was committed,
-      // so the model is untouched — the predictable rule.
-      const next = createSession(kind, { doc, selectedBodyIds, selectedSketchId }, options);
-      setSession(next);
-      setStatus(`${sessionTitle(next)} — Enter confirms, Esc cancels.`);
-    },
-    [doc, selectedBodyIds, selectedFeature]
-  );
-
-  const cancelSession = useCallback(() => {
-    setSession((current) => {
-      if (current) {
-        setStatus(`${sessionTitle(current)} cancelled.`);
-      }
-      return null;
-    });
-  }, []);
-
-  const confirmSession = useCallback(() => {
-    if (!session || !doc) {
-      return;
-    }
-    const validation = validateSession(session, scope);
-    if (!validation.ok) {
-      setStatus(validation.message ?? 'Fix the highlighted values first.');
-      return;
-    }
-    const command = buildSessionCommand(session, doc);
-    if (!command) {
-      return;
-    }
+  function createFeature(command: AnyCommand): void {
     if (executeCommand(command)) {
-      setSession(null);
-      setSelectedFeatureNodeIds([]);
+      // Back to an idle viewport so sequential adds stay one key away; the
+      // new feature is selectable from the history or the viewport.
+      setTool(null);
+      setSelectedFeatureNodeId(null);
+      setSelectedTopology(null);
+      setSelectedBodyIds([]);
     }
-  }, [session, doc, scope]);
+  }
 
-  // ── High-level actions ─────────────────────────────────────────────────
+  function launchTool(nextTool: ToolId) {
+    const reason = toolDisabledReason(nextTool, availability);
+    if (reason) {
+      setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+      return;
+    }
+    // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
+    setTool(nextTool);
+  }
+
+  function cancelPanel() {
+    setTool(null);
+    setSelectedFeatureNodeId(null);
+  }
+
+  function clearSelection() {
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedBodyIds([]);
+  }
+
+  function requestView(view: StandardView) {
+    setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function cycleDisplayMode() {
+    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
+    const next =
+      DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
+      'shaded-edges';
+    setViewerSettings((current) => ({ ...current, displayMode: next }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+  }
+
+  function toggleProjection() {
+    setProjection((current) => {
+      const next = current === 'perspective' ? 'orthographic' : 'perspective';
+      setStatus(`Projection: ${next}.`);
+      return next;
+    });
+  }
+
+  function toggleBodyVisibility(bodyId: string) {
+    setHiddenBodyIds((current) => {
+      const next = new Set(current);
+      if (next.has(bodyId)) {
+        next.delete(bodyId);
+      } else {
+        next.add(bodyId);
+      }
+      return next;
+    });
+  }
+
+  function showAllBodies() {
+    setHiddenBodyIds(new Set());
+    setStatus('All bodies visible.');
+  }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
     setBusy(true);
     try {
       const response = await api.createProject({ name, units });
+      setCloudAvailable(true);
       hydrateDocument(response.document);
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to create project.'));
+      const localDocument = createProjectDocument(
+        name,
+        session?.userId ?? localUserId,
+        units
+      );
+      await saveLocalProject(localDocument);
+      hydrateDocument(localDocument);
+      setProjects((current) => [
+        {
+          projectId: localDocument.projectId,
+          name: localDocument.name,
+          updatedAt: localDocument.derived.updatedAt,
+          revisionCount: localDocument.checkpoints.length
+        },
+        ...current
+      ]);
+      setCloudAvailable(false);
+      setSaveState('offline');
+      setStatus(`${errorMessage(error, 'Cloud unavailable')} Working locally.`);
     } finally {
       setBusy(false);
     }
@@ -517,9 +656,21 @@ export function App() {
   async function handleOpenProject(projectId: string) {
     setBusy(true);
     try {
-      const loaded = await api.loadProject(projectId);
+      const [localDocument, remoteDocument] = await Promise.all([
+        loadLocalProject(projectId),
+        api.loadProject(projectId).catch(() => null)
+      ]);
+      const loaded = selectProjectDocument(localDocument, remoteDocument);
+      if (!loaded) {
+        throw new Error('Project not found locally or in the beta API.');
+      }
+      setCloudAvailable(Boolean(remoteDocument));
       hydrateDocument(loaded);
-      setStatus(`Opened ${loaded.name}.`);
+      setStatus(
+        loaded === localDocument && remoteDocument
+          ? `Opened newer local edits for ${loaded.name}.`
+          : `Opened ${loaded.name}.`
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
     } finally {
@@ -530,12 +681,19 @@ export function App() {
   async function handleGoHome() {
     managerRef.current = null;
     setDoc(null);
-    setSelectedFeatureNodeIds([]);
-    setSession(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedBodyIds([]);
+    setTool(null);
     try {
-      const listed = await api.listProjects();
-      setProjects(listed.projects);
-      setStatus(`${listed.projects.length} project(s) available. Unsaved changes are discarded.`);
+      const [local, remote] = await Promise.all([
+        listLocalProjects(),
+        api.listProjects().catch(() => null)
+      ]);
+      const merged = mergeProjectSummaries(local, remote?.projects ?? []);
+      setProjects(merged);
+      setCloudAvailable(Boolean(remote));
+      setStatus(`${merged.length} project(s) available.`);
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
@@ -546,7 +704,7 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.undo());
-    setSelectedFeatureNodeIds([]);
+    clearSelection();
     setStatus('Undo');
   }
 
@@ -555,7 +713,7 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.redo());
-    setSelectedFeatureNodeIds([]);
+    clearSelection();
     setStatus('Redo');
   }
 
@@ -564,11 +722,57 @@ export function App() {
       return;
     }
     try {
-      await api.saveRevision({ projectId: doc.projectId, reason: 'Manual save', document: doc });
-      setLastSavedVersion(doc.version);
+      setSaveState('saving');
+      await saveLocalProject(doc);
+      const saved = await api.saveRevision({
+        projectId: doc.projectId,
+        reason: 'Manual save',
+        document: doc
+      });
+      if (managerRef.current) {
+        managerRef.current.document = saved;
+      }
+      setDoc(saved);
+      setCloudAvailable(true);
+      setSaveState('saved');
       setStatus('Saved revision.');
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to save revision.'));
+      setCloudAvailable(false);
+      setSaveState('offline');
+      setStatus(`${errorMessage(error, 'Cloud save failed')} Saved locally.`);
+    }
+  }
+
+  function handlePreviewPatch(proposal: CadPatchProposal | null) {
+    if (!proposal || !doc) {
+      setPreviewDoc(null);
+      setStatus('Preview cleared.');
+      return;
+    }
+    try {
+      const previewManager = new CommandManager(doc);
+      const preview = previewManager.runTransaction(
+        'Preview AI patch',
+        commandsForCadPatch(doc, proposal)
+      );
+      setPreviewDoc({ ...preview, derived: kernel.syncDocument(preview) });
+      setStatus(
+        'Previewing proposed patch · exact rebuild occurs after apply.'
+      );
+    } catch (error) {
+      setPreviewDoc(null);
+      setStatus(errorMessage(error, 'Patch preview failed.'));
+    }
+  }
+
+  function handleApplyPatch(proposal: CadPatchProposal) {
+    if (!doc) {
+      return;
+    }
+    try {
+      executeTransaction('Apply AI patch', commandsForCadPatch(doc, proposal));
+    } catch (error) {
+      setStatus(errorMessage(error, 'Patch could not be applied.'));
     }
   }
 
@@ -605,7 +809,9 @@ export function App() {
             headers: { 'content-type': contentType }
           });
           if (!uploadResponse.ok) {
-            throw new Error(`Upload failed with status ${uploadResponse.status}.`);
+            throw new Error(
+              `Upload failed with status ${uploadResponse.status}.`
+            );
           }
         }
         await api.finalizeImport({
@@ -634,296 +840,463 @@ export function App() {
       if (created) {
         setStatus(
           `Imported ${parsed.triangleCount} triangles from ${file.name}` +
-            (archived ? '.' : ' (original file not archived: upload unavailable).')
+            (archived
+              ? '.'
+              : ' (original file not archived: upload unavailable).')
         );
       }
       return;
     }
 
-    try {
-      const metadata = parseStepMetadata(file.name, await file.text());
-      const products = metadata.products.slice(0, 3).join(', ') || 'no products found';
+    if (file.size > MAX_EMBEDDED_STEP_BYTES) {
       setStatus(
-        `STEP metadata read (${products}). Full B-Rep STEP import needs the native kernel and is not available yet.`
+        'STEP import is limited to 12 MB while source B-reps are stored in the offline document.'
       );
+      return;
+    }
+
+    try {
+      const stepText = await file.text();
+      const metadata = parseStepMetadata(file.name, stepText);
+      const productName = metadata.products[0]?.trim();
+      let artifactId = `artifact_local_${crypto.randomUUID()}`;
+      let archived = false;
+      try {
+        const uploadSession = await api.createUploadSession({
+          projectId: doc.projectId,
+          fileName: file.name,
+          contentType
+        });
+        if (uploadSession.session.uploadUrl) {
+          const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
+            method: 'PUT',
+            body: file,
+            headers: { 'content-type': contentType }
+          });
+          if (!uploadResponse.ok) {
+            throw new Error(`Upload failed (${uploadResponse.status}).`);
+          }
+        }
+        await api.finalizeImport({
+          projectId: doc.projectId,
+          uploadSessionId: uploadSession.session.uploadSessionId,
+          artifactId: uploadSession.session.artifactId,
+          fileName: file.name,
+          contentType
+        });
+        artifactId = uploadSession.session.artifactId;
+        archived = true;
+      } catch {
+        // The STEP source remains embedded for deterministic offline rebuilds.
+      }
+
+      const imported = executeCommand(
+        commandFactories.importStep({
+          name: productName || file.name.replace(/\.(step|stp)$/i, ''),
+          artifactId,
+          sourceName: file.name,
+          stepText
+        })
+      );
+      if (imported) {
+        setStatus(
+          `Imported editable STEP solid from ${file.name}` +
+            (archived
+              ? '.'
+              : ' (cloud archive unavailable; source saved locally).')
+        );
+      }
     } catch (error) {
-      setStatus(errorMessage(error, 'Import failed.'));
+      setStatus(errorMessage(error, 'STEP import failed.'));
     }
   }
 
-  function handleExport(format: 'step' | 'stl') {
+  function exportWithWorker(
+    format: 'step' | 'stl',
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<Extract<GeometryExportResult, { ok: true }>> {
+    const worker = geometryWorkerRef.current;
+    if (!worker) {
+      return Promise.reject(new Error('Geometry worker is unavailable.'));
+    }
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      exportRequestsRef.current.set(requestId, { resolve, reject });
+      worker.postMessage({
+        type: 'export',
+        requestId,
+        document,
+        bodyIds,
+        format
+      });
+    });
+  }
+
+  async function handleExport(format: 'step' | 'stl') {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
     }
     const stem = exportFileStem(doc.name);
     try {
+      setStatus(`Exporting exact ${format.toUpperCase()}…`);
+      const result = await exportWithWorker(format, doc, exportBodyIds);
+      downloadText(`${stem}.${format}`, result.text);
       if (format === 'step') {
-        const result = kernel.exportStep(doc, exportBodyIds);
-        downloadText(`${stem}.step`, result.text);
         setStatus(
           result.warnings.length > 0
             ? `Exported STEP with ${result.warnings.length} warning(s).`
             : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step (AP214).`
         );
       } else {
-        const stl = kernel.exportStl(doc, exportBodyIds);
-        downloadText(`${stem}.stl`, stl);
         setStatus(`Exported ${exportBodyIds.length} body(ies) to ${stem}.stl.`);
       }
       // Record the export with the worker API; the download already happened.
       api
-        .requestExport({ projectId: doc.projectId, bodyIds: exportBodyIds, format })
+        .requestExport({
+          projectId: doc.projectId,
+          bodyIds: exportBodyIds,
+          format
+        })
         .catch(() => undefined);
     } catch (error) {
       setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
     }
   }
 
-  function handleDeleteFeature(featureId: FeatureId, name: string) {
-    if (executeCommand(commandFactories.deleteFeature({ featureId }, `Delete ${name}`))) {
-      setSelectedFeatureNodeIds([]);
+  function featureNodeIdForBody(bodyId: BodyId): string | null {
+    if (!doc) {
+      return null;
     }
+    const bodyNode = listNodesByKind(doc, 'body').find(
+      (body) => body.bodyId === bodyId
+    );
+    const feature = bodyNode
+      ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
+      : undefined;
+    return feature?.id ?? null;
   }
 
-  // ── Selection ──────────────────────────────────────────────────────────
-
-  const featureNodeIdForBody = useCallback(
-    (bodyId: string): string | null => {
-      if (!doc) {
-        return null;
-      }
-      const bodyNode = listNodesByKind(doc, 'body').find((body) => body.bodyId === bodyId);
-      const feature = bodyNode
-        ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
-        : undefined;
-      return feature?.id ?? null;
-    },
-    [doc, features]
-  );
-
-  function handleSelectBodyFromViewer(bodyId: string | null, additive: boolean) {
-    // Boolean sessions capture viewport picks as operation targets.
-    if (session?.kind === 'boolean') {
-      if (bodyId) {
-        setSession(toggleBooleanTarget(session, bodyId as BodyId));
-      }
-      return;
-    }
-    // Move sessions re-target on body click.
-    if (session?.kind === 'move') {
-      if (bodyId) {
-        setSession({ ...session, targetBodyId: bodyId as BodyId });
-      }
-      return;
-    }
-    if (session) {
-      return; // other sessions ignore picks; Esc cancels, Enter commits
-    }
-    if (!bodyId) {
-      if (!additive) {
-        setSelectedFeatureNodeIds([]);
-      }
-      return;
-    }
-    const nodeId = featureNodeIdForBody(bodyId);
-    if (!nodeId) {
-      return;
-    }
-    setSelectedFeatureNodeIds((current) => {
-      if (additive) {
-        return current.includes(nodeId)
-          ? current.filter((id) => id !== nodeId)
-          : [...current, nodeId];
-      }
-      return current.length === 1 && current[0] === nodeId ? [] : [nodeId];
-    });
-    setInspectorCollapsed(false);
-  }
-
-  function handleSelectSketchFromViewer(sketchId: string, additive: boolean) {
-    // Retarget sweep sessions on profile click.
-    if (session?.kind === 'extrude' || session?.kind === 'revolve') {
-      setSession({ ...session, sketchId: sketchId as SketchId });
-      return;
-    }
-    if (session) {
-      return;
-    }
+  function handleSelectTopologyFromViewer(
+    selection: TopologySelection | null,
+    additive: boolean
+  ) {
     if (!doc) {
       return;
     }
-    const feature = features.find(
-      (candidate) =>
-        candidate.data.featureKind === 'sketch' && candidate.data.sketchId === sketchId
-    );
-    if (!feature) {
+    if (!selection) {
+      if (!additive) {
+        clearSelection();
+      }
       return;
     }
-    setSelectedFeatureNodeIds((current) => {
-      if (additive) {
-        return current.includes(feature.id)
-          ? current.filter((id) => id !== feature.id)
-          : [...current, feature.id];
-      }
-      return current.length === 1 && current[0] === feature.id ? [] : [feature.id];
-    });
-    setInspectorCollapsed(false);
+    const nextIds = additive
+      ? selectedBodyIds.includes(selection.bodyId)
+        ? selectedBodyIds.filter((id) => id !== selection.bodyId)
+        : [...selectedBodyIds, selection.bodyId]
+      : [selection.bodyId];
+    setSelectedBodyIds(nextIds);
+    if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
+      setTool(null);
+    }
+    // The edit panel and topology context follow a single-body selection;
+    // multi-select keeps them clear so the pick order reads as boolean input.
+    if (nextIds.length === 1) {
+      setSelectedTopology(
+        additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection
+      );
+      setSelectedFeatureNodeId(featureNodeIdForBody(nextIds[0]!));
+    } else {
+      setSelectedTopology(null);
+      setSelectedFeatureNodeId(null);
+    }
   }
 
-  function handleSelectFeatureFromTree(nodeId: string, additive: boolean) {
-    setSession(null);
-    setSelectedFeatureNodeIds((current) => {
-      if (additive) {
-        return current.includes(nodeId)
-          ? current.filter((id) => id !== nodeId)
-          : [...current, nodeId];
-      }
-      return current.length === 1 && current[0] === nodeId ? [] : [nodeId];
-    });
-    setInspectorCollapsed(false);
-  }
-
-  function toggleBodyVisibility(bodyId: string) {
-    setHiddenBodyIds((current) => {
-      const next = new Set(current);
-      if (next.has(bodyId)) {
-        next.delete(bodyId);
-      } else {
-        next.add(bodyId);
-      }
-      return next;
-    });
-  }
-
-  // ── Command dispatch ───────────────────────────────────────────────────
-
-  const runCommand = useCallback(
-    (commandId: string) => {
-      const spec = getCommand(commandId);
-      if (spec && !spec.isEnabled(commandCtx)) {
-        setStatus(spec.disabledReason(commandCtx) ?? `${spec.label} is unavailable.`);
-        return;
-      }
-      switch (commandId) {
-        case 'select':
-          cancelSession();
-          setSelectedFeatureNodeIds([]);
-          break;
-        case 'sketch.create':
-          startSession('sketch');
-          break;
-        case 'extrude':
-          startSession('extrude');
-          break;
-        case 'revolve':
-          startSession('revolve');
-          break;
-        case 'primitive.box':
-        case 'primitive.cylinder':
-        case 'primitive.sphere':
-        case 'primitive.cone':
-        case 'primitive.torus':
-          startSession('primitive', {
-            primitiveKind: commandId.split('.')[1] as PrimitiveKind
-          });
-          break;
-        case 'move':
-          startSession('move');
-          break;
-        case 'boolean.union':
-        case 'boolean.subtract':
-        case 'boolean.intersect':
-          startSession('boolean', {
-            operation: commandId.split('.')[1] as BooleanOperation
-          });
-          break;
-        case 'delete':
-          if (selectedFeature) {
-            handleDeleteFeature(selectedFeature.featureId, selectedFeature.name);
+  function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (!doc) {
+      return;
+    }
+    const nodeId = featureNodeIdForBody(commit.bodyId);
+    const feature = nodeId ? doc.nodes[nodeId] : undefined;
+    if (
+      feature?.kind !== 'feature' ||
+      feature.data.featureKind !== 'primitive' ||
+      feature.data.primitiveKind !== 'box'
+    ) {
+      setStatus('Direct face resize is available for primitive boxes.');
+      return;
+    }
+    const dimension =
+      commit.axis === 'x' ? 'width' : commit.axis === 'y' ? 'height' : 'depth';
+    const existing = feature.data.dimensions[dimension];
+    if (typeof existing !== 'number') {
+      setStatus(
+        `${feature.name} ${dimension} is expression-driven; edit it in the inspector.`
+      );
+      return;
+    }
+    executeCommand(
+      commandFactories.updateFeature(
+        {
+          featureId: feature.featureId,
+          data: {
+            dimensions: {
+              ...feature.data.dimensions,
+              [dimension]: Math.max(0.1, commit.value)
+            }
           }
-          break;
-        case 'view.fit':
-          viewerApiRef.current?.fit('all');
-          break;
-        case 'view.fitSelection':
-          viewerApiRef.current?.fit('selection');
-          break;
-        case 'view.front':
-        case 'view.top':
-        case 'view.right':
-        case 'view.iso':
-          viewerApiRef.current?.setView(commandId.split('.')[1] as 'front');
-          break;
-        case 'view.projection': {
-          const next = projection === 'perspective' ? 'orthographic' : 'perspective';
-          viewerApiRef.current?.setProjection(next);
-          setProjection(next);
-          break;
+        },
+        `Resize ${feature.name} ${dimension}`
+      )
+    );
+  }
+
+  function handleSelectFeatureFromTree(nodeId: string) {
+    setTool(null);
+    setSelectedTopology(null);
+    const next = selectedFeatureNodeId === nodeId ? null : nodeId;
+    setSelectedFeatureNodeId(next);
+    const node = next && doc ? doc.nodes[next] : undefined;
+    const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
+    const representation = bodyId
+      ? doc?.derived.bodyRepresentations[bodyId]
+      : undefined;
+    setSelectedBodyIds(
+      bodyId && representation && !representation.consumed ? [bodyId] : []
+    );
+  }
+
+  function handleDeleteFeature(featureId: FeatureId, name: string) {
+    if (
+      executeCommand(
+        commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
+      )
+    ) {
+      clearSelection();
+    }
+  }
+
+  function openContextMenu(
+    x: number,
+    y: number,
+    entries: { item: ContextMenuState['items'][number]; run(): void }[]
+  ) {
+    contextMenuActionsRef.current = Object.fromEntries(
+      entries.map((entry) => [entry.item.id, entry.run])
+    );
+    setContextMenu({ x, y, items: entries.map((entry) => entry.item) });
+  }
+
+  function handleViewportContextMenu(
+    x: number,
+    y: number,
+    selection: TopologySelection | null
+  ) {
+    if (!doc) {
+      return;
+    }
+    if (!selection) {
+      openContextMenu(x, y, [
+        {
+          item: {
+            id: 'fit',
+            label: 'Fit View',
+            icon: <Maximize2 size={13} aria-hidden="true" />,
+            shortcut: 'F'
+          },
+          run: () => setFitSignal((value) => value + 1)
+        },
+        {
+          item: {
+            id: 'grid',
+            label: viewerSettings.showGrid ? 'Hide Grid' : 'Show Grid',
+            icon: <Grid3x3 size={13} aria-hidden="true" />,
+            shortcut: 'G'
+          },
+          run: () =>
+            setViewerSettings((current) => ({
+              ...current,
+              showGrid: !current.showGrid
+            }))
+        },
+        {
+          item: {
+            id: 'projection',
+            label: `Projection: ${projection === 'perspective' ? 'Orthographic' : 'Perspective'}`,
+            icon: <Camera size={13} aria-hidden="true" />,
+            shortcut: 'P'
+          },
+          run: toggleProjection
+        },
+        {
+          item: {
+            id: 'showAll',
+            label: 'Show All Bodies',
+            icon: <Eye size={13} aria-hidden="true" />,
+            disabled: hiddenBodyIds.size === 0
+          },
+          run: showAllBodies
         }
-        case 'view.grid':
-          setViewerSettings((current) => ({ ...current, showGrid: !current.showGrid }));
-          break;
-        case 'view.showAll':
-          setHiddenBodyIds(new Set());
-          break;
-        case 'undo':
-          handleUndo();
-          break;
-        case 'redo':
-          handleRedo();
-          break;
-        case 'save':
-          void handleSave();
-          break;
-        case 'export.step':
-          handleExport('step');
-          break;
-        case 'export.stl':
-          handleExport('stl');
-          break;
-        case 'import':
-          importInputRef.current?.click();
-          break;
-        case 'search':
-          setSearchOpen(true);
-          break;
-        case 'help.shortcuts':
-          setShortcutsOpen(true);
-          break;
-        default:
-          break;
+      ]);
+      return;
+    }
+    // Adopt the clicked geometry as the selection so actions target it.
+    handleSelectTopologyFromViewer(selection, false);
+    const nodeId = featureNodeIdForBody(selection.bodyId);
+    const node = nodeId ? doc.nodes[nodeId] : undefined;
+    const feature = node?.kind === 'feature' ? node : null;
+    const edge = selection.kind === 'edge';
+    openContextMenu(x, y, [
+      ...(edge
+        ? [
+            {
+              item: {
+                id: 'fillet',
+                label: 'Fillet Edge…',
+                icon: <Spline size={13} aria-hidden="true" />
+              },
+              run: () => launchTool('fillet')
+            },
+            {
+              item: {
+                id: 'chamfer',
+                label: 'Chamfer Edge…',
+                icon: <TriangleRight size={13} aria-hidden="true" />
+              },
+              run: () => launchTool('chamfer')
+            }
+          ]
+        : []),
+      {
+        item: {
+          id: 'move',
+          label: 'Move / Rotate…',
+          icon: <Move3d size={13} aria-hidden="true" />,
+          shortcut: 'M',
+          section: edge
+        },
+        run: () => launchTool('transform')
+      },
+      {
+        item: {
+          id: 'union',
+          label: 'Union…',
+          icon: <Combine size={13} aria-hidden="true" />,
+          shortcut: 'U',
+          disabled: viewerBodies.length < 2
+        },
+        run: () => launchTool('union')
+      },
+      {
+        item: {
+          id: 'subtract',
+          label: 'Subtract…',
+          icon: <Scissors size={13} aria-hidden="true" />,
+          shortcut: 'X',
+          disabled: viewerBodies.length < 2
+        },
+        run: () => launchTool('subtract')
+      },
+      {
+        item: {
+          id: 'hide',
+          label: 'Hide Body',
+          icon: <Eye size={13} aria-hidden="true" />,
+          section: true
+        },
+        run: () => toggleBodyVisibility(selection.bodyId)
+      },
+      {
+        item: {
+          id: 'fit',
+          label: 'Fit View',
+          icon: <Maximize2 size={13} aria-hidden="true" />,
+          shortcut: 'F'
+        },
+        run: () => setFitSignal((value) => value + 1)
+      },
+      ...(feature
+        ? [
+            {
+              item: {
+                id: 'delete',
+                label: `Delete ${feature.name}`,
+                icon: <Trash2 size={13} aria-hidden="true" />,
+                shortcut: 'Del',
+                danger: true,
+                section: true
+              },
+              run: () => handleDeleteFeature(feature.featureId, feature.name)
+            }
+          ]
+        : [])
+    ]);
+  }
+
+  function handleFeatureContextMenu(
+    event: React.MouseEvent,
+    feature: FeatureNode
+  ) {
+    const bodyId = feature.bodyId ?? null;
+    const body = bodyId ? representations[bodyId] : null;
+    openContextMenu(event.clientX, event.clientY, [
+      {
+        item: { id: 'edit', label: 'Edit Properties' },
+        run: () => handleSelectFeatureFromTree(feature.id)
+      },
+      ...(bodyId && body && !body.consumed
+        ? [
+            {
+              item: {
+                id: 'visibility',
+                label: hiddenBodyIds.has(bodyId) ? 'Show Body' : 'Hide Body',
+                icon: <Eye size={13} aria-hidden="true" />
+              },
+              run: () => toggleBodyVisibility(bodyId)
+            }
+          ]
+        : []),
+      {
+        item: {
+          id: 'delete',
+          label: 'Delete',
+          icon: <Trash2 size={13} aria-hidden="true" />,
+          shortcut: 'Del',
+          danger: true,
+          section: true
+        },
+        run: () => handleDeleteFeature(feature.featureId, feature.name)
       }
-    },
-    [commandCtx, session, selectedFeature, projection, startSession, cancelSession]
-  );
+    ]);
+  }
 
-  // ── Keyboard map ───────────────────────────────────────────────────────
-
+  // Workspace keyboard map (ignored while typing in a field).
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (!doc) {
+        return;
+      }
       const target = event.target as HTMLElement | null;
       const typing =
-        target !== null &&
+        target &&
         (target.tagName === 'INPUT' ||
           target.tagName === 'SELECT' ||
           target.tagName === 'TEXTAREA');
-      const inHud = typing && target.closest('.command-hud') !== null;
       const meta = event.ctrlKey || event.metaKey;
 
-      // HUD inputs: Enter commits the command, Escape cancels it. Tab keeps
-      // its native behavior, which already cycles the HUD parameter inputs.
-      if (inHud) {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          confirmSession();
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          cancelSession();
-        }
+      if (meta && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setShortcutsOpen(false);
+        setPaletteOpen((open) => !open);
         return;
       }
-      if (typing) {
+      if (paletteOpen || shortcutsOpen) {
+        // Modals own their keys; Escape is handled here as a safety net.
+        if (event.key === 'Escape') {
+          setPaletteOpen(false);
+          setShortcutsOpen(false);
+        }
         return;
       }
 
@@ -946,215 +1319,82 @@ export function App() {
         void handleSave();
         return;
       }
-      if (meta && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setSearchOpen(true);
-        return;
-      }
-      if (meta || event.altKey) {
+
+      if (typing || meta || event.altKey) {
         return;
       }
 
-      if (event.key === 'Enter' && session) {
-        event.preventDefault();
-        confirmSession();
-        return;
-      }
-      if (event.key === 'Escape') {
-        if (searchOpen || shortcutsOpen || contextMenu) {
-          return; // overlays close themselves
-        }
-        event.preventDefault();
-        if (session) {
-          cancelSession();
-        } else {
-          setSelectedFeatureNodeIds([]);
-        }
-        return;
-      }
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedFeature && !session) {
+      switch (event.key) {
+        case 'Escape':
+          if (tool || selectedFeatureNodeId) {
+            cancelPanel();
+          } else {
+            clearSelection();
+          }
+          return;
+        case 'Delete':
+        case 'Backspace':
+          if (selectedFeature) {
+            event.preventDefault();
+            handleDeleteFeature(
+              selectedFeature.featureId,
+              selectedFeature.name
+            );
+          }
+          return;
+        case '?':
           event.preventDefault();
-          handleDeleteFeature(selectedFeature.featureId, selectedFeature.name);
-        }
-        return;
-      }
-      if (event.key === 'F' && event.shiftKey) {
-        event.preventDefault();
-        runCommand('view.fitSelection');
-        return;
-      }
-      if (event.shiftKey && event.key !== '?') {
-        return;
+          setShortcutsOpen(true);
+          return;
+        case '/':
+          event.preventDefault();
+          setPaletteOpen(true);
+          return;
+        case '1':
+          requestView('front');
+          return;
+        case '2':
+          requestView('top');
+          return;
+        case '3':
+          requestView('right');
+          return;
+        case '4':
+          requestView('iso');
+          return;
       }
 
-      const commandId = {
-        k: 'sketch.create',
-        e: 'extrude',
-        r: 'revolve',
-        b: 'primitive.box',
-        c: 'primitive.cylinder',
-        m: 'move',
-        f: 'view.fit',
-        g: 'view.grid',
-        p: 'view.projection',
-        s: 'search',
-        '1': 'view.front',
-        '2': 'view.top',
-        '3': 'view.right',
-        '0': 'view.iso',
-        '?': 'help.shortcuts'
-      }[event.key.toLowerCase()];
-      if (commandId) {
+      const key = event.key.toLowerCase();
+      if (key === 'f') {
+        setFitSignal((value) => value + 1);
+        return;
+      }
+      if (key === 'g') {
+        setViewerSettings((current) => ({
+          ...current,
+          showGrid: !current.showGrid
+        }));
+        return;
+      }
+      if (key === 'w') {
+        cycleDisplayMode();
+        return;
+      }
+      if (key === 'p') {
+        toggleProjection();
+        return;
+      }
+      const shortcutTool = SHORTCUT_TO_TOOL[key];
+      if (shortcutTool) {
+        // Without this the same keystroke would type into the form field
+        // that the tool dialog autofocuses.
         event.preventDefault();
-        runCommand(commandId);
+        launchTool(shortcutTool);
       }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   });
-
-  // ── Context menus ──────────────────────────────────────────────────────
-
-  const menuActionsRef = useRef<Record<string, () => void>>({});
-
-  function openMenu(
-    x: number,
-    y: number,
-    entries: { item: ContextMenuState['items'][number]; run(): void }[]
-  ) {
-    menuActionsRef.current = Object.fromEntries(entries.map((entry) => [entry.item.id, entry.run]));
-    setContextMenu({ x, y, items: entries.map((entry) => entry.item) });
-  }
-
-  function handleViewportContextMenu(x: number, y: number, bodyId: string | null) {
-    if (!doc) {
-      return;
-    }
-    if (!bodyId) {
-      openMenu(x, y, [
-        {
-          item: { id: 'fit', label: 'Fit View', icon: 'Maximize2', shortcut: 'F' },
-          run: () => runCommand('view.fit')
-        },
-        {
-          item: {
-            id: 'showAll',
-            label: 'Show All Bodies',
-            icon: 'Eye',
-            disabled: hiddenBodyIds.size === 0
-          },
-          run: () => runCommand('view.showAll')
-        },
-        {
-          item: { id: 'grid', label: 'Toggle Grid', icon: 'Grid3x3', shortcut: 'G' },
-          run: () => runCommand('view.grid')
-        }
-      ]);
-      return;
-    }
-    const nodeId = featureNodeIdForBody(bodyId);
-    const feature = nodeId ? features.find((candidate) => candidate.id === nodeId) : null;
-    if (!feature) {
-      return;
-    }
-    // Make sure the clicked body is selected so contextual commands target it.
-    if (!selectedFeatureNodeIds.includes(feature.id)) {
-      setSelectedFeatureNodeIds([feature.id]);
-    }
-    openMenu(x, y, [
-      {
-        item: { id: 'move', label: 'Move / Rotate', icon: 'Move3d', shortcut: 'M' },
-        run: () => runCommand('move')
-      },
-      {
-        item: {
-          id: 'subtract',
-          label: 'Subtract…',
-          icon: 'Scissors',
-          disabled: liveBodyCount < 2
-        },
-        run: () => runCommand('boolean.subtract')
-      },
-      {
-        item: {
-          id: 'union',
-          label: 'Union…',
-          icon: 'Combine',
-          disabled: liveBodyCount < 2
-        },
-        run: () => runCommand('boolean.union')
-      },
-      {
-        item: { id: 'hide', label: 'Hide Body', icon: 'Eye', section: true },
-        run: () => toggleBodyVisibility(bodyId)
-      },
-      {
-        item: { id: 'fitSel', label: 'Fit Selection', icon: 'Focus', shortcut: '⇧F' },
-        run: () => viewerApiRef.current?.fit('selection')
-      },
-      {
-        item: { id: 'rename', label: 'Rename', section: true },
-        run: () => setRenamingNodeId(feature.id)
-      },
-      {
-        item: { id: 'delete', label: 'Delete', icon: 'Trash2', shortcut: 'Del', danger: true },
-        run: () => handleDeleteFeature(feature.featureId, feature.name)
-      }
-    ]);
-  }
-
-  function handleFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode) {
-    const bodyId = feature.bodyId ?? null;
-    const body = bodyId ? representations[bodyId] : null;
-    openMenu(event.clientX, event.clientY, [
-      {
-        item: { id: 'edit', label: 'Edit Properties' },
-        run: () => {
-          setSelectedFeatureNodeIds([feature.id]);
-          setInspectorCollapsed(false);
-        }
-      },
-      {
-        item: { id: 'rename', label: 'Rename' },
-        run: () => setRenamingNodeId(feature.id)
-      },
-      ...(bodyId && body && !body.consumed
-        ? [
-            {
-              item: {
-                id: 'visibility',
-                label: hiddenBodyIds.has(bodyId) ? 'Show Body' : 'Hide Body',
-                icon: 'Eye',
-                section: true
-              },
-              run: () => toggleBodyVisibility(bodyId)
-            },
-            {
-              item: { id: 'zoom', label: 'Zoom To', icon: 'Focus' },
-              run: () => {
-                setSelectedFeatureNodeIds([feature.id]);
-                // Fit after selection state lands in the viewer.
-                window.setTimeout(() => viewerApiRef.current?.fit('selection'), 50);
-              }
-            }
-          ]
-        : []),
-      {
-        item: {
-          id: 'delete',
-          label: 'Delete',
-          icon: 'Trash2',
-          shortcut: 'Del',
-          danger: true,
-          section: true
-        },
-        run: () => handleDeleteFeature(feature.featureId, feature.name)
-      }
-    ]);
-  }
-
-  // ── Render ─────────────────────────────────────────────────────────────
 
   if (!doc) {
     return (
@@ -1168,172 +1408,301 @@ export function App() {
     );
   }
 
-  const tone: 'ready' | 'warning' | 'running' = /fail|error|invalid|unable|denied/i.test(status)
-    ? 'warning'
-    : 'ready';
+  const tone: 'ready' | 'warning' | 'running' =
+    /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
 
-  const hud = session ? (
-    <CommandHUD
-      session={session}
-      scope={scope}
-      units={doc.units}
-      pickedBodyNames={pickedBodyNames}
-      onSetValue={(key, value) => setSession((s) => (s ? setSessionValue(s, key, value) : s))}
-      onSetPlane={(plane) => setSession((s) => (s?.kind === 'sketch' ? { ...s, plane } : s))}
-      onSetShape={(shape) => setSession((s) => (s?.kind === 'sketch' ? { ...s, shape } : s))}
-      onSetAxis={(axis) => setSession((s) => (s?.kind === 'revolve' ? { ...s, axis } : s))}
-      onSetOperation={(operation) =>
-        setSession((s) => (s?.kind === 'boolean' ? { ...s, operation } : s))
-      }
-      onConfirm={confirmSession}
-      onCancel={cancelSession}
-    />
-  ) : null;
+  const hint = tool
+    ? 'Enter creates · Esc cancels'
+    : selectedBodyIds.length >= 2
+      ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+      : selectedTopology?.kind === 'edge'
+        ? 'Edge selected — Fillet or Chamfer from the toolbar'
+        : selectedFeature
+          ? 'Edit in the panel · Del deletes · Esc closes'
+          : viewerBodies.length > 0
+            ? 'Click a body, face, or edge · Shift+Click adds to selection'
+            : 'Ctrl+K commands · ? shortcuts';
+
+  const paletteCommands: PaletteCommand[] = [
+    ...TOOL_GROUPS.flatMap((group) =>
+      group.tools.map((toolId): PaletteCommand => {
+        const meta = TOOL_META[toolId];
+        return {
+          id: `tool-${toolId}`,
+          label: meta.label,
+          group: group.label,
+          shortcut: meta.shortcut,
+          icon: meta.icon,
+          disabledReason: toolDisabledReason(toolId, availability),
+          run: () => launchTool(toolId)
+        };
+      })
+    ),
+    {
+      id: 'view-front',
+      label: 'Front view',
+      group: 'View',
+      shortcut: '1',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('front')
+    },
+    {
+      id: 'view-top',
+      label: 'Top view',
+      group: 'View',
+      shortcut: '2',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('top')
+    },
+    {
+      id: 'view-right',
+      label: 'Right view',
+      group: 'View',
+      shortcut: '3',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('right')
+    },
+    {
+      id: 'view-iso',
+      label: 'Isometric view',
+      group: 'View',
+      shortcut: '4',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('iso')
+    },
+    {
+      id: 'view-fit',
+      label: 'Fit view',
+      group: 'View',
+      shortcut: 'F',
+      icon: <Maximize2 size={16} aria-hidden="true" />,
+      run: () => setFitSignal((value) => value + 1)
+    },
+    {
+      id: 'view-grid',
+      label: viewerSettings.showGrid ? 'Hide grid' : 'Show grid',
+      group: 'View',
+      shortcut: 'G',
+      icon: <Grid3x3 size={16} aria-hidden="true" />,
+      run: () =>
+        setViewerSettings((current) => ({
+          ...current,
+          showGrid: !current.showGrid
+        }))
+    },
+    {
+      id: 'view-display',
+      label: `Display mode: next (now ${DISPLAY_MODE_LABELS[viewerSettings.displayMode]})`,
+      group: 'View',
+      shortcut: 'W',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: cycleDisplayMode
+    },
+    {
+      id: 'view-projection',
+      label: `Projection: switch to ${projection === 'perspective' ? 'orthographic' : 'perspective'}`,
+      group: 'View',
+      shortcut: 'P',
+      icon: <Camera size={16} aria-hidden="true" />,
+      run: toggleProjection
+    },
+    {
+      id: 'view-show-all',
+      label: 'Show all bodies',
+      group: 'View',
+      icon: <Eye size={16} aria-hidden="true" />,
+      disabledReason: hiddenBodyIds.size === 0 ? 'No bodies are hidden' : null,
+      run: showAllBodies
+    },
+    {
+      id: 'file-save',
+      label: 'Save revision',
+      group: 'File',
+      shortcut: 'Ctrl+S',
+      icon: <Save size={16} aria-hidden="true" />,
+      run: () => void handleSave()
+    },
+    {
+      id: 'file-export-step',
+      label: 'Export STEP (AP214)',
+      group: 'File',
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
+      run: () => void handleExport('step')
+    },
+    {
+      id: 'file-export-stl',
+      label: 'Export STL',
+      group: 'File',
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
+      run: () => void handleExport('stl')
+    },
+    {
+      id: 'file-import',
+      label: 'Import STEP / STL…',
+      group: 'File',
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => importInputRef.current?.click()
+    },
+    {
+      id: 'file-home',
+      label: 'Back to projects',
+      group: 'File',
+      icon: <FolderOpen size={16} aria-hidden="true" />,
+      run: () => void handleGoHome()
+    }
+  ];
+
+  const inspectorActive = tool !== null || selectedFeature !== null;
 
   return (
-    <>
-      <input
-        ref={importInputRef}
-        type="file"
-        accept=".stl,.step,.stp"
-        style={{ display: 'none' }}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = '';
-          if (file) {
-            void handleImportFile(file);
+    <AppShell
+      topBar={
+        <TopBar
+          projectName={doc.name}
+          units={doc.units}
+          canUndo={managerRef.current?.canUndo ?? false}
+          canRedo={managerRef.current?.canRedo ?? false}
+          canExport={exportBodyIds.length > 0}
+          exportScope={
+            selectedBody &&
+            !selectedBody.consumed &&
+            selectedBody.exportableStep
+              ? selectedBody.name
+              : null
           }
-        }}
-      />
-      <AppShell
-        topBar={
-          <TopBar
-            projectName={doc.name}
-            units={doc.units}
-            dirty={lastSavedVersion !== null && doc.version !== lastSavedVersion}
-            workspace={workspace}
-            canUndo={managerRef.current?.canUndo ?? false}
-            canRedo={managerRef.current?.canRedo ?? false}
-            canExport={exportBodyIds.length > 0}
-            exportScope={
-              selectedBody && !selectedBody.consumed && selectedBody.exportableStep
-                ? selectedBody.name
-                : null
-            }
-            onWorkspaceChange={(next) => {
-              setWorkspace(next);
-              storageSet(workspaceKey(doc.projectId), next);
-            }}
-            onUndo={handleUndo}
-            onRedo={handleRedo}
-            onSave={() => void handleSave()}
-            onImportFile={(file) => void handleImportFile(file)}
-            onExport={handleExport}
-            onGoHome={() => void handleGoHome()}
-            onOpenSearch={() => setSearchOpen(true)}
-            onOpenShortcuts={() => setShortcutsOpen(true)}
-          />
-        }
-        palette={
-          workspace === 'model' ? (
-            <ToolPalette ctx={commandCtx} activeCommandId={activeCommandId} onRun={runCommand} />
-          ) : (
-            <VisualizePanel
-              displayMode={viewerSettings.displayMode}
-              showGrid={viewerSettings.showGrid}
-              projection={projection}
-              onDisplayMode={(displayMode) =>
-                setViewerSettings((current) => ({ ...current, displayMode }))
-              }
-              onToggleGrid={() => runCommand('view.grid')}
-              onToggleProjection={() => runCommand('view.projection')}
-            />
-          )
-        }
-        browser={
-          <ModelBrowser
-            parameters={parameters}
-            parameterValues={scope}
-            features={features}
-            representations={representations}
-            selectedFeatureNodeIds={selectedFeatureNodeIds}
-            hiddenBodyIds={hiddenBodyIds}
-            warnings={warnings}
-            renamingNodeId={renamingNodeId}
-            onSelectFeature={handleSelectFeatureFromTree}
-            onRenameNode={(nodeId, name) => {
-              const node = doc.nodes[nodeId];
-              const commands: AnyCommand[] = [commandFactories.renameNode({ nodeId, name })];
-              // Sketch features share their name with the sketch node.
-              if (node?.kind === 'feature' && node.data.featureKind === 'sketch') {
-                const sketch = findSketch(doc, node.data.sketchId);
-                if (sketch) {
-                  commands.push(commandFactories.renameNode({ nodeId: sketch.id, name }));
-                }
-              }
-              executeTransaction(`Rename to ${name}`, commands);
-            }}
-            onRenameStateChange={setRenamingNodeId}
-            onToggleBodyVisibility={toggleBodyVisibility}
-            onFeatureContextMenu={handleFeatureContextMenu}
-            onSetParameter={(name, expression) =>
-              executeCommand(commandFactories.setParameter({ name, expression }))
-            }
-            onDeleteParameter={(name) =>
-              executeCommand(commandFactories.deleteParameter({ name }))
-            }
-          />
-        }
-        viewer={
-          <ViewerShell
-            bodies={viewerBodies}
-            sketches={sketchOverlayViews}
-            totalFeatureCount={features.length}
-            selectedBodyIds={highlightedBodyIds}
-            settings={viewerSettings}
-            preview={preview}
-            manipulator={manipulator}
-            projection={projection}
-            apiRef={viewerApiRef}
-            orientationRef={orientationRef}
-            hud={hud}
-            showOrbitHint={!navHintDismissed}
-            onDismissOrbitHint={() => {
-              setNavHintDismissed(true);
-              storageSet(NAV_HINT_KEY, '1');
-            }}
-            onSelectBody={handleSelectBodyFromViewer}
-            onSelectSketch={handleSelectSketchFromViewer}
-            onContextMenu={handleViewportContextMenu}
-            onManipulatorDrag={(valueKey, value) =>
-              setSession((current) =>
-                current ? setSessionValue(current, valueKey, formatDragValue(value)) : current
-              )
-            }
-            onView={(view) => viewerApiRef.current?.setView(view)}
-            onToggleProjection={() => runCommand('view.projection')}
-            onToggleGrid={() => runCommand('view.grid')}
-            onFit={(target) => viewerApiRef.current?.fit(target)}
-            onStartSketch={() => runCommand('sketch.create')}
-            onStartBox={() => runCommand('primitive.box')}
-            onImportClick={() => importInputRef.current?.click()}
-          />
-        }
-        inspector={
-          <PropertiesInspector
-            workspace={workspace}
-            collapsed={inspectorCollapsed || session !== null}
-            onToggleCollapsed={() => setInspectorCollapsed((value) => !value)}
-            selectedFeature={session ? null : selectedFeature}
+          saveState={saveState}
+          session={session}
+          collaborationStatus={collaboration.status}
+          collaboratorCount={collaboration.members.length}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onSave={() => void handleSave()}
+          onImportFile={(file) => void handleImportFile(file)}
+          onExport={(format) => void handleExport(format)}
+          onRenameProject={(name) =>
+            executeCommand(
+              commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
+            )
+          }
+          onGoHome={() => void handleGoHome()}
+        />
+      }
+      toolBar={
+        <ToolBar
+          activeTool={tool}
+          availability={availability}
+          onLaunchTool={launchTool}
+        />
+      }
+      sidebar={
+        <Sidebar
+          parameters={parameters}
+          parameterValues={parameterScope.scope}
+          features={features}
+          representations={representations}
+          selectedFeatureNodeId={selectedFeatureNodeId}
+          hiddenBodyIds={hiddenBodyIds}
+          warnings={warnings}
+          onSelectFeature={handleSelectFeatureFromTree}
+          onToggleBodyVisibility={toggleBodyVisibility}
+          onFeatureContextMenu={handleFeatureContextMenu}
+          onSetParameter={(name, expression) =>
+            executeCommand(commandFactories.setParameter({ name, expression }))
+          }
+          onDeleteParameter={(name) =>
+            executeCommand(commandFactories.deleteParameter({ name }))
+          }
+          onDeleteFeature={handleDeleteFeature}
+        />
+      }
+      viewer={
+        <ViewerShell
+          bodies={viewerBodies}
+          sketches={sketchOverlays}
+          selectedBodyIds={selectedBodyIds}
+          selectedTopology={selectedTopology}
+          settings={viewerSettings}
+          fitSignal={fitSignal}
+          viewRequest={viewRequest}
+          units={doc.units}
+          editableBodyIds={directEditableBodyIds}
+          projection={projection}
+          orientationRef={orientationRef}
+          onSelectTopology={handleSelectTopologyFromViewer}
+          onResizePrimitiveFace={handleResizePrimitiveFace}
+          onContextMenu={handleViewportContextMenu}
+          onToggleGrid={() =>
+            setViewerSettings((current) => ({
+              ...current,
+              showGrid: !current.showGrid
+            }))
+          }
+          onFit={() => setFitSignal((value) => value + 1)}
+          onView={requestView}
+          onCycleDisplayMode={cycleDisplayMode}
+          onToggleProjection={toggleProjection}
+        />
+      }
+      inspector={
+        inspectorActive ? (
+          <Inspector
+            tool={tool}
+            selectedFeature={selectedFeature}
             selectedSketch={selectedSketch}
             selectedSketchObject={selectedSketchObject}
             selectedBody={selectedBody}
-            bodyColorOverride={bodyColorOverride}
-            scope={scope}
+            selectedTopology={selectedTopology}
+            scope={parameterScope.scope}
             sketches={sketchOptions}
             bodies={bodyOptions}
             units={doc.units}
-            onClearSelection={() => setSelectedFeatureNodeIds([])}
+            selectedBodyIds={selectedBodyIds}
+            preferredSketchId={selectedSketch?.sketchId ?? null}
+            onLaunchTool={launchTool}
+            onCancel={cancelPanel}
+            onCreatePrimitive={(kind, name, dimensions) =>
+              createFeature(
+                commandFactories.addPrimitive({
+                  name,
+                  primitiveKind: kind,
+                  dimensions
+                })
+              )
+            }
+            onCreateSketch={(value) =>
+              createFeature(commandFactories.addSketch(value))
+            }
+            onCreateExtrude={(value) =>
+              createFeature(commandFactories.extrudeSketch(value))
+            }
+            onCreateRevolve={(value) =>
+              createFeature(commandFactories.revolveSketch(value))
+            }
+            onCreateBoolean={(value) =>
+              createFeature(commandFactories.booleanBodies(value))
+            }
+            onCreateTransform={(value) =>
+              createFeature(
+                commandFactories.transformBody({
+                  name: value.name,
+                  targetBodyId: value.targetBodyId,
+                  translation: value.translation,
+                  rotationDeg: value.rotationDeg
+                })
+              )
+            }
+            onCreateEdgeModifier={(kind, value) =>
+              createFeature(
+                kind === 'fillet'
+                  ? commandFactories.filletEdges(value)
+                  : commandFactories.chamferEdges(value)
+              )
+            }
+            onCreatePattern={(value) =>
+              createFeature(commandFactories.patternBody(value))
+            }
             onApplyPrimitive={(feature, name, dimensions) =>
               executeCommand(
                 commandFactories.updateFeature(
@@ -1359,8 +1728,14 @@ export function App() {
               ];
               if (value.name !== feature.name) {
                 commands.push(
-                  commandFactories.renameNode({ nodeId: feature.id, name: value.name }),
-                  commandFactories.renameNode({ nodeId: selectedSketch.id, name: value.name })
+                  commandFactories.renameNode({
+                    nodeId: feature.id,
+                    name: value.name
+                  }),
+                  commandFactories.renameNode({
+                    nodeId: selectedSketch.id,
+                    name: value.name
+                  })
                 );
               }
               executeTransaction(`Edit ${value.name}`, commands);
@@ -1387,7 +1762,11 @@ export function App() {
                   {
                     featureId: feature.featureId,
                     name: value.name,
-                    data: { featureKind: 'revolve', sketchId: value.sketchId, axis: value.axis }
+                    data: {
+                      featureKind: 'revolve',
+                      sketchId: value.sketchId,
+                      axis: value.axis
+                    }
                   },
                   `Edit ${value.name}`
                 )
@@ -1428,55 +1807,111 @@ export function App() {
                 )
               )
             }
-            onDeleteFeature={(feature) => handleDeleteFeature(feature.featureId, feature.name)}
-            onSetBodyColor={(feature, color) => {
-              if (!feature.bodyId) {
-                return;
-              }
-              const bodyNode = listNodesByKind(doc, 'body').find(
-                (node) => node.bodyId === feature.bodyId
-              );
-              if (bodyNode) {
-                executeCommand(
-                  commandFactories.setNodeMetadata(
-                    { nodeId: bodyNode.id, metadata: { color } },
-                    color ? 'Set body color' : 'Reset body color'
-                  )
-                );
+            onApplyEdgeModifier={(feature, kind, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data:
+                      kind === 'fillet'
+                        ? {
+                            featureKind: 'fillet',
+                            targetBodyId: value.targetBodyId,
+                            edgeHashes: value.edgeHashes,
+                            radius: value.size
+                          }
+                        : {
+                            featureKind: 'chamfer',
+                            targetBodyId: value.targetBodyId,
+                            edgeHashes: value.edgeHashes,
+                            distance: value.size
+                          }
+                  },
+                  `Edit ${value.name}`
+                )
+              )
+            }
+            onApplyPattern={(feature, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'pattern',
+                      targetBodyId: value.targetBodyId,
+                      patternKind: value.patternKind,
+                      count: value.count,
+                      axis: value.axis,
+                      spacing: value.spacing,
+                      angleDeg: value.angleDeg
+                    }
+                  },
+                  `Edit ${value.name}`
+                )
+              )
+            }
+            onDeleteFeature={(feature) =>
+              handleDeleteFeature(feature.featureId, feature.name)
+            }
+          />
+        ) : null
+      }
+      assistant={
+        <AiCommandRail
+          document={doc}
+          selectedTopology={selectedTopology}
+          onApply={handleApplyPatch}
+          onPreview={handlePreviewPatch}
+        />
+      }
+      statusBar={
+        <StatusBar
+          status={status}
+          tone={tone}
+          hint={hint}
+          projectName={doc.name}
+          bodyCount={viewerBodies.length}
+          featureCount={features.length}
+          warningCount={warnings.length}
+          documentVersion={doc.version}
+          units={doc.units}
+        />
+      }
+      overlays={
+        <>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".stl,.step,.stp"
+            style={{ display: 'none' }}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) {
+                void handleImportFile(file);
               }
             }}
           />
-        }
-        statusBar={
-          <StatusBar
-            status={status}
-            tone={tone}
-            hint={
-              session
-                ? `${sessionTitle(session)} active — Enter confirms, Esc cancels`
-                : selectedBodyIds.length > 0
-                  ? `${selectedBodyIds.length} selected — right-click for actions`
-                  : 'S searches commands · ? shows shortcuts'
-            }
-            projectName={doc.name}
-            bodyCount={viewerBodies.length}
-            featureCount={features.length}
-            warningCount={warnings.length}
-            documentVersion={doc.version}
-          />
-        }
-      />
-      {searchOpen && (
-        <CommandSearch ctx={commandCtx} onRun={runCommand} onClose={() => setSearchOpen(false)} />
-      )}
-      {shortcutsOpen && <ShortcutSheet onClose={() => setShortcutsOpen(false)} />}
-      {contextMenu && (
-        <ContextMenu
-          menu={contextMenu}
-          onSelect={(itemId) => menuActionsRef.current[itemId]?.()}
-          onClose={() => setContextMenu(null)}
-        />
-      )}
-    </>
+          {paletteOpen && (
+            <CommandPalette
+              commands={paletteCommands}
+              onClose={() => setPaletteOpen(false)}
+            />
+          )}
+          {shortcutsOpen && (
+            <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
+          )}
+          {contextMenu && (
+            <ContextMenu
+              menu={contextMenu}
+              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
+        </>
+      }
+    />
   );
 }

@@ -11,12 +11,19 @@ import { toUserId } from '@openzcad/shared';
 async function stubApi(page: Page) {
   await page.route('**/api/health', (route) =>
     route.fulfill({
-      json: { status: 'ok', environment: 'beta', time: new Date().toISOString() }
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
     })
   );
   await page.route('**/api/projects', (route) => {
     if (route.request().method() === 'POST') {
-      const payload = route.request().postDataJSON() as { name: string; units?: string };
+      const payload = route.request().postDataJSON() as {
+        name: string;
+        units?: string;
+      };
       const document = createProjectDocument(
         payload.name,
         toUserId('user_e2e'),
@@ -41,14 +48,12 @@ async function stubApi(page: Page) {
     const payload = route.request().postDataJSON() as { document: unknown };
     return route.fulfill({ json: payload.document });
   });
-  await page.route('**/api/exports', (route) => route.fulfill({ status: 404, json: { error: 'stub' } }));
-  await page.route('**/api/uploads', (route) => route.fulfill({ status: 404, json: { error: 'stub' } }));
-}
-
-async function createProject(page: Page, name: string) {
-  await page.getByLabel('Project name').fill(name);
-  await page.getByRole('button', { name: 'Create project' }).click();
-  await expect(page.locator('.tool-palette')).toBeVisible();
+  await page.route('**/api/exports', (route) =>
+    route.fulfill({ status: 404, json: { error: 'stub' } })
+  );
+  await page.route('**/api/uploads', (route) =>
+    route.fulfill({ status: 404, json: { error: 'stub' } })
+  );
 }
 
 test('loads the OpenZCAD shell', async ({ page }) => {
@@ -58,92 +63,65 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
-test('empty project offers primary actions and the palette groups every tool', async ({
+test('resizes a literal box by dragging an exact face', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Direct Edit Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: bounds!.x + bounds!.width * xRatio,
+        y: bounds!.y + bounds!.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.down();
+  await page.mouse.move(facePoint!.x + 72, facePoint!.y - 54, { steps: 6 });
+  await page.mouse.up();
+
+  await expect(page.getByRole('contentinfo')).toContainText('Resize Box');
+  const dimensions = await Promise.all([
+    page.getByLabel('Width (X)').inputValue(),
+    page.getByLabel('Height (Y)').inputValue(),
+    page.getByLabel('Depth (Z)').inputValue()
+  ]);
+  expect(dimensions).not.toEqual(['40', '18', '24']);
+});
+
+test('models a parametric part and exports a true STEP file', async ({
   page
 }) => {
   await stubApi(page);
   await page.goto('/');
-  await createProject(page, 'Empty State');
 
-  // A new user can identify how to start a sketch from an empty project.
-  const emptyState = page.locator('.viewer-empty-state');
-  await expect(emptyState.getByRole('button', { name: /Create Sketch/ })).toBeVisible();
-  await expect(emptyState.getByRole('button', { name: /Add Box/ })).toBeVisible();
-
-  // The palette exposes grouped tools with shortcuts; on an empty project the
-  // contextual group also surfaces Create Sketch, so two entries are expected.
-  const palette = page.locator('.tool-palette');
-  await expect(palette.getByRole('button', { name: /Create Sketch/ }).first()).toBeVisible();
-  await expect(palette.getByRole('button', { name: /Extrude/ })).toBeDisabled();
-  await expect(palette.getByRole('button', { name: /Union/ })).toBeDisabled();
-});
-
-test('sketch-to-extrude flows through the on-canvas HUD without any modal', async ({ page }) => {
-  await stubApi(page);
-  await page.goto('/');
-  await createProject(page, 'HUD Part');
-
-  // Start a sketch from the empty-state action; the HUD appears in-viewport.
-  await page.locator('.viewer-empty-state').getByRole('button', { name: /Create Sketch/ }).click();
-  const hud = page.locator('.command-hud');
-  await expect(hud).toBeVisible();
-  await expect(hud).toContainText('Sketch');
-
-  // Size the rectangle and confirm with Enter (numeric input behavior).
-  await hud.getByLabel('Width').fill('20');
-  await hud.getByLabel('Height').fill('10');
-  await hud.getByLabel('Width').press('Enter');
-  await expect(hud).toBeHidden();
-  await expect(page.locator('.feature-row-main', { hasText: 'Sketch' })).toBeVisible();
-
-  // Extrude via keyboard shortcut; the last sketch is picked up automatically.
-  await page.keyboard.press('e');
-  await expect(hud).toBeVisible();
-  await expect(hud).toContainText('Extrude');
-  await hud.getByLabel('Distance').fill('12');
-  await hud.getByRole('button', { name: /Confirm/ }).click();
-  await expect(page.locator('.feature-row-main', { hasText: 'Extrude' })).toBeVisible();
-
-  // The extrude produced real geometry: select it and read measurements.
-  await page.locator('.feature-row-main', { hasText: 'Extrude' }).click();
-  await expect(page.locator('.inspector .panel-body')).toContainText('2400'); // 20×10×12
-});
-
-test('escape cancels a session without touching the model', async ({ page }) => {
-  await stubApi(page);
-  await page.goto('/');
-  await createProject(page, 'Cancel Part');
-
-  await page.keyboard.press('b'); // arm Box
-  await expect(page.locator('.command-hud')).toContainText('Box');
-  await page.keyboard.press('Escape');
-  await expect(page.locator('.command-hud')).toBeHidden();
-  await expect(page.locator('.feature-row')).toHaveCount(0);
-});
-
-test('command search finds and runs commands and explains unavailable ones', async ({ page }) => {
-  await stubApi(page);
-  await page.goto('/');
-  await createProject(page, 'Search Part');
-
-  await page.keyboard.press('s');
-  const search = page.locator('.command-search');
-  await expect(search).toBeVisible();
-  await search.getByLabel('Search commands').fill('extrude');
-  // Extrude is listed but disabled with its reason (no sketch yet).
-  await expect(search.locator('.search-result.disabled', { hasText: 'Extrude' })).toContainText(
-    /sketch/i
-  );
-  await search.getByLabel('Search commands').fill('box');
-  await page.keyboard.press('Enter');
-  await expect(page.locator('.command-hud')).toContainText('Box');
-  await page.keyboard.press('Escape');
-});
-
-test('models a parametric part and exports a true STEP file', async ({ page }) => {
-  await stubApi(page);
-  await page.goto('/');
-  await createProject(page, 'E2E Part');
+  // Create a project.
+  await page.getByLabel('Project name').fill('E2E Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   // Define a parameter the box will use.
   await page.getByLabel('New parameter name').fill('w');
@@ -152,38 +130,52 @@ test('models a parametric part and exports a true STEP file', async ({ page }) =
   await expect(page.locator('.param-row')).toContainText('w');
 
   // Box driven by the parameter: 60 x 18 x 24 = 25920.
-  await page.locator('.tool-palette').getByRole('button', { name: /^Box/ }).click();
-  const hud = page.locator('.command-hud');
-  await hud.getByLabel('Width').fill('w * 2');
-  await hud.getByRole('button', { name: /Confirm/ }).click();
-  await expect(page.locator('.feature-row-main', { hasText: 'Box' })).toBeVisible();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page.getByLabel('Width (X)').fill('w * 2');
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
 
   // The kernel worker rebuilds and reports real measurements.
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.inspector .panel-body')).toContainText('volume', {
+  await expect(page.locator('.panel-body')).toContainText('volume', {
     ignoreCase: true
   });
-  await expect(page.locator('.inspector .panel-body')).toContainText('25920');
-  await page.keyboard.press('Escape'); // clear the selection
+  await expect(page.locator('.panel-body')).toContainText('25920');
+
+  // Tool-first finishing stays active while the user chooses an exact edge.
+  const filletTool = page.getByRole('button', { name: /^Fillet/ });
+  await expect(filletTool).toBeEnabled();
+  await filletTool.click();
+  await expect(page.locator('.selection-summary')).toContainText(
+    'Select an edge in the viewport first.'
+  );
+  await page.keyboard.press('Escape'); // back to the tool launcher
 
   // Second body and a subtract that consumes both inputs.
-  await page.locator('.tool-palette').getByRole('button', { name: /Cylinder/ }).click();
-  await hud.getByRole('button', { name: /Confirm/ }).click();
-  await expect(page.locator('.feature-row-main', { hasText: 'Cylinder' })).toBeVisible();
-
-  // Boolean via multi-select in the tree, then the contextual palette group.
-  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   await page
-    .locator('.feature-row-main', { hasText: 'Cylinder' })
-    .click({ modifiers: ['Shift'] });
-  await page
-    .locator('.palette-group.contextual')
-    .getByRole('button', { name: /Subtract/ })
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(hud).toContainText('Subtract');
-  await expect(hud.locator('.hud-pick')).toHaveCount(2);
-  await hud.getByRole('button', { name: /Confirm/ }).click();
-  await expect(page.locator('.feature-row', { hasText: 'Subtract' })).toBeVisible();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await page.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await page.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row', { hasText: 'Subtract' })
+  ).toBeVisible();
   await expect(page.locator('.feature-row.consumed')).toHaveCount(2);
 
   // Export STEP and verify the download is a real ISO 10303-21 file.
@@ -208,20 +200,62 @@ test('models a parametric part and exports a true STEP file', async ({ page }) =
   await paramInput.fill('40');
   await paramInput.press('Enter');
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.inspector .panel-body')).toContainText('34560');
+  await expect(page.locator('.panel-body')).toContainText('34560');
 });
 
-test('undo and redo restore the model around a HUD commit', async ({ page }) => {
+test('viewport context menu hides a body and the sidebar eye restores it', async ({
+  page
+}) => {
   await stubApi(page);
   await page.goto('/');
-  await createProject(page, 'Undo Part');
+  await page.getByLabel('Project name').fill('Visibility Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.keyboard.press('b');
-  await page.locator('.command-hud').getByRole('button', { name: /Confirm/ }).click();
-  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect(page.locator('.feature-row')).toHaveCount(0);
-  await page.keyboard.press('ControlOrMeta+Shift+z');
-  await expect(page.locator('.feature-row')).toHaveCount(1);
+  // Right-click the body → contextual actions → Hide Body.
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width / 2, y: bounds.height / 2 }
+  });
+  const menu = page.locator('.context-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /Move \/ Rotate/ })).toBeVisible();
+  await menu.getByRole('menuitem', { name: 'Hide Body' }).click();
+  await expect(menu).toBeHidden();
+
+  // Hidden bodies leave the viewport (empty-state notice returns) but stay
+  // in the tree with an eye toggle.
+  await expect(page.locator('.viewer-notice')).toBeVisible();
+  const showButton = page.getByRole('button', { name: /^Show Box/ });
+  await expect(showButton).toBeVisible();
+  await showButton.click();
+  await expect(page.locator('.viewer-notice')).toBeHidden();
+});
+
+test('P toggles the camera projection', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Projection Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const orthoButton = page.getByRole('button', { name: /Ortho/ });
+  await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('p');
+  await expect(orthoButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.status-bar')).toContainText(
+    'Projection: orthographic'
+  );
+  await orthoButton.click();
+  await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
 });

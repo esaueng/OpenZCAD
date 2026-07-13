@@ -6,25 +6,17 @@ import {
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { createObjectForBody, fitCameraToObjects } from '@openzcad/viewport';
-import type { BodyRepresentation, Vector3 } from '@openzcad/shared';
-import type { ManipulatorSpec, PreviewSpec } from '../lib/session';
+import type {
+  BodyRepresentation,
+  BodyTopology,
+  TopologySelection
+} from '@openzcad/shared';
 
-export type StandardView = 'front' | 'top' | 'right' | 'iso';
+export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
+
+export type StandardView = 'iso' | 'front' | 'top' | 'right';
+
 export type ProjectionMode = 'perspective' | 'orthographic';
-export type DisplayMode = 'shaded' | 'shaded-edges' | 'wireframe';
-
-export interface ViewerSettings {
-  showGrid: boolean;
-  displayMode: DisplayMode;
-}
-
-/** Imperative camera API exposed to the app (views, projection, fit). */
-export interface ViewerApi {
-  setView(view: StandardView): void;
-  setProjection(mode: ProjectionMode): void;
-  getProjection(): ProjectionMode;
-  fit(target: 'all' | 'selection'): void;
-}
 
 /** Screen-space projections of the world axes, for the orientation widget. */
 export interface AxisProjection {
@@ -33,79 +25,149 @@ export interface AxisProjection {
   z: { x: number; y: number };
 }
 
-export interface SketchOverlayView {
+export type DirectEditAxis = 'x' | 'y' | 'z';
+
+export interface FaceResizeCommit {
+  bodyId: TopologySelection['bodyId'];
+  axis: DirectEditAxis;
+  value: number;
+}
+
+export interface DirectEditDirection {
+  axis: DirectEditAxis;
+  side: -1 | 1;
+}
+
+/** Maps an exact picked face normal to the parametric box dimension it edits. */
+export function directEditDirectionFromNormal(
+  normal: Pick<THREE.Vector3, 'x' | 'y' | 'z'>
+): DirectEditDirection {
+  const components = [
+    ['x', normal.x],
+    ['y', normal.y],
+    ['z', normal.z]
+  ] as const;
+  const [axis, value] = components.reduce((largest, candidate) =>
+    Math.abs(candidate[1]) > Math.abs(largest[1]) ? candidate : largest
+  );
+  return { axis, side: value < 0 ? -1 : 1 };
+}
+
+export interface ViewerSettings {
+  showGrid: boolean;
+  displayMode: DisplayMode;
+}
+
+/** Sketch profile polyline, already lifted onto its 3D plane. */
+export interface SketchOverlay {
   sketchId: string;
-  points: Vector3[];
+  name: string;
   selected: boolean;
+  points: { x: number; y: number; z: number }[];
 }
 
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
-  /** Persistent sketch profile outlines (visible and pickable). */
-  sketches: SketchOverlayView[];
-  /** Selected bodies in pick order; first is primary. */
+  sketches: SketchOverlay[];
+  /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
+  selectedTopology: TopologySelection | null;
   settings: ViewerSettings;
-  preview: PreviewSpec | null;
-  manipulator: ManipulatorSpec | null;
-  apiRef: MutableRefObject<ViewerApi | null>;
+  /** Increment to re-fit the camera to the current geometry. */
+  fitSignal: number;
+  /** Set to move the camera to a standard view; nonce forces re-runs. */
+  viewRequest: { view: StandardView; nonce: number } | null;
+  units: string;
+  /** Primitive box bodies whose planar faces can drive document dimensions. */
+  editableBodyIds: string[];
+  projection: ProjectionMode;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
-  onSelectBody(bodyId: string | null, additive: boolean): void;
-  onSelectSketch(sketchId: string, additive: boolean): void;
-  onContextMenu(x: number, y: number, bodyId: string | null): void;
-  /** Fired (rAF-throttled) while a manipulator handle is dragged. */
-  onManipulatorDrag(valueKey: string, value: number): void;
+  onSelectTopology(
+    selection: TopologySelection | null,
+    additive: boolean
+  ): void;
+  onResizePrimitiveFace(commit: FaceResizeCommit): void;
+  /** Stationary right-click; right-drag stays a pan. */
+  onContextMenu(x: number, y: number, selection: TopologySelection | null): void;
 }
 
 interface SceneContext {
   scene: THREE.Scene;
-  perspective: THREE.PerspectiveCamera;
+  camera: THREE.PerspectiveCamera;
   orthographic: THREE.OrthographicCamera;
   activeCamera: THREE.Camera;
   projection: ProjectionMode;
+  /** Switches projection, rebinding controls and syncing camera poses. */
+  applyProjection(mode: ProjectionMode): void;
+  /** Mirrors the perspective pose onto the ortho camera and its frustum. */
+  syncOrthographic(resetZoom: boolean): void;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
   controls: OrbitControls;
   bodyGroup: THREE.Group;
   sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
-  previewGroup: THREE.Group;
-  manipulatorGroup: THREE.Group;
   grid: THREE.GridHelper;
   raycaster: THREE.Raycaster;
+  objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
   hoveredBodyId: string | null;
-  dragging: DragState | null;
 }
 
-interface DragState {
-  valueKey: string;
-  origin: THREE.Vector3;
-  direction: THREE.Vector3;
-  startValue: number;
-  /** Axis parameter at the drag start, so dragging is relative. */
-  startT: number;
-  pendingValue: number | null;
-  rafHandle: number | null;
+interface PickResult {
+  selection: TopologySelection;
+  hit: THREE.Intersection<THREE.Object3D>;
+  faceNormal?: THREE.Vector3;
+}
+
+interface FaceDragState {
+  pointerId: number;
+  selection: TopologySelection;
+  object: THREE.Object3D;
+  axis: DirectEditAxis;
+  side: -1 | 1;
+  initialValue: number;
+  latestValue: number;
+  startX: number;
+  startY: number;
+  directionX: number;
+  directionY: number;
+  pixelsPerUnit: number;
+  initialPosition: THREE.Vector3;
+  initialScale: THREE.Vector3;
 }
 
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 
 const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
-const PREVIEW_COLOR = 0x58d6c2;
-const HANDLE_COLORS: Record<string, number> = {
-  x: 0xef6a6a,
-  y: 0x6fd66f,
-  z: 0x5f8fef,
-  single: 0x58d6c2
+const SKETCH_COLOR = 0x4da3ff;
+const SKETCH_SELECTED_COLOR = 0x9ecbff;
+
+const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
+  // Direction from the target toward the camera. Top keeps a hair of X/Z so
+  // OrbitControls never sees the camera axis parallel to its up vector.
+  iso: new THREE.Vector3(1, 0.9, 1).normalize(),
+  front: new THREE.Vector3(0, 0, 1),
+  top: new THREE.Vector3(0.0001, 1, 0.0001).normalize(),
+  right: new THREE.Vector3(1, 0, 0)
 };
 
-function forEachMesh(object: THREE.Object3D, visit: (mesh: ViewerMesh) => void) {
+export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
+  return (
+    object instanceof THREE.Mesh &&
+    object.material instanceof THREE.MeshStandardMaterial
+  );
+}
+
+function forEachMesh(
+  object: THREE.Object3D,
+  visit: (mesh: ViewerMesh) => void
+) {
   object.traverse((child: THREE.Object3D) => {
-    if (child instanceof THREE.Mesh) {
-      visit(child as ViewerMesh);
+    if (isViewerMesh(child)) {
+      visit(child);
     }
   });
 }
@@ -140,6 +202,13 @@ function clearGroup(group: THREE.Group) {
   }
 }
 
+function makeLabel(className: string, text: string): CSS2DObject {
+  const element = document.createElement('div');
+  element.className = className;
+  element.textContent = text;
+  return new CSS2DObject(element);
+}
+
 function findBodyId(object: THREE.Object3D): string | null {
   let current: THREE.Object3D | null = object;
   while (current) {
@@ -152,316 +221,73 @@ function findBodyId(object: THREE.Object3D): string | null {
   return null;
 }
 
-function toThree(v: Vector3): THREE.Vector3 {
-  return new THREE.Vector3(v.x, v.y, v.z);
+function normalForTriangle(
+  body: BodyRepresentation,
+  triangleStart: number
+): THREE.Vector3 | null {
+  const offset = triangleStart * 3;
+  const indices = body.mesh.indices.slice(offset, offset + 3);
+  if (indices.length !== 3) {
+    return null;
+  }
+  const [aIndex, bIndex, cIndex] = indices;
+  if (aIndex === undefined || bIndex === undefined || cIndex === undefined) {
+    return null;
+  }
+  const a = new THREE.Vector3().fromArray(body.mesh.vertices, aIndex * 3);
+  const b = new THREE.Vector3().fromArray(body.mesh.vertices, bIndex * 3);
+  const c = new THREE.Vector3().fromArray(body.mesh.vertices, cIndex * 3);
+  return new THREE.Triangle(a, b, c).getNormal(new THREE.Vector3());
 }
 
-function ghostMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: PREVIEW_COLOR,
-    transparent: true,
-    opacity: 0.45,
-    depthWrite: false,
-    metalness: 0.1,
-    roughness: 0.6
+/**
+ * Meshes render solid or wireframe; the baked feature-edge overlay
+ * (LineSegments) toggles with the mode. Exact topology edge curves are
+ * `THREE.Line` pick targets and stay visible in every mode.
+ */
+function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
+  bodyGroup.traverse((child: THREE.Object3D) => {
+    if (isViewerMesh(child)) {
+      child.material.wireframe = mode === 'wireframe';
+    } else if (child instanceof THREE.LineSegments) {
+      child.visible = mode === 'shaded-edges';
+    }
   });
-}
-
-function outline(geometry: THREE.BufferGeometry): THREE.LineSegments {
-  return new THREE.LineSegments(
-    new THREE.EdgesGeometry(geometry, 30),
-    new THREE.LineBasicMaterial({ color: PREVIEW_COLOR, transparent: true, opacity: 0.9 })
-  );
-}
-
-/** Ghost geometry for a primitive session, mirroring the kernel generators. */
-function primitivePreviewGeometry(
-  kind: string,
-  dims: Record<string, number>
-): THREE.BufferGeometry | null {
-  const d = (key: string) => dims[key] ?? 0;
-  switch (kind) {
-    case 'box':
-      return new THREE.BoxGeometry(d('width'), d('height'), d('depth'));
-    case 'cylinder':
-      return new THREE.CylinderGeometry(d('radius'), d('radius'), d('height'), 32);
-    case 'sphere':
-      return new THREE.SphereGeometry(d('radius'), 32, 20);
-    case 'cone':
-      return new THREE.CylinderGeometry(
-        Math.max(d('topRadius'), 0.0001),
-        d('bottomRadius'),
-        d('height'),
-        32
-      );
-    case 'torus': {
-      const geometry = new THREE.TorusGeometry(d('majorRadius'), d('minorRadius'), 20, 40);
-      geometry.rotateX(Math.PI / 2); // kernel torus ring lies in XZ (Y up)
-      return geometry;
-    }
-    default:
-      return null;
-  }
-}
-
-/** Watertight-enough ghost prism from a convex profile (fan triangulation). */
-function extrudePreviewGeometry(
-  points: Vector3[],
-  normal: Vector3,
-  distance: number
-): THREE.BufferGeometry {
-  const n = points.length;
-  const offset = toThree(normal).multiplyScalar(distance);
-  const bottom = points.map(toThree);
-  const top = bottom.map((point) => point.clone().add(offset));
-  const positions: number[] = [];
-  const push = (...vertices: THREE.Vector3[]) => {
-    for (const vertex of vertices) {
-      positions.push(vertex.x, vertex.y, vertex.z);
-    }
-  };
-  for (let i = 1; i < n - 1; i++) {
-    push(bottom[0]!, bottom[i + 1]!, bottom[i]!);
-    push(top[0]!, top[i]!, top[i + 1]!);
-  }
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    push(bottom[i]!, bottom[j]!, top[j]!);
-    push(bottom[i]!, top[j]!, top[i]!);
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function profileLine(points: Vector3[], color: number): THREE.LineLoop {
-  const geometry = new THREE.BufferGeometry().setFromPoints(points.map(toThree));
-  return new THREE.LineLoop(
-    geometry,
-    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 })
-  );
-}
-
-function buildPreviewObject(
-  preview: PreviewSpec,
-  bodyObjects: Map<string, THREE.Object3D>
-): THREE.Object3D | null {
-  switch (preview.kind) {
-    case 'primitive': {
-      const geometry = primitivePreviewGeometry(preview.primitiveKind, preview.dims);
-      if (!geometry) {
-        return null;
-      }
-      const mesh = new THREE.Mesh(geometry, ghostMaterial());
-      mesh.add(outline(geometry));
-      return mesh;
-    }
-    case 'profile': {
-      const group = new THREE.Group();
-      group.add(profileLine(preview.points, PREVIEW_COLOR));
-      return group;
-    }
-    case 'extrude': {
-      const geometry = extrudePreviewGeometry(preview.points, preview.normal, preview.distance);
-      const mesh = new THREE.Mesh(geometry, ghostMaterial());
-      mesh.add(outline(geometry));
-      return mesh;
-    }
-    case 'revolve': {
-      const group = new THREE.Group();
-      group.add(profileLine(preview.points, PREVIEW_COLOR));
-      const axisDir = toThree(preview.axisDirection).normalize();
-      const origin = toThree(preview.axisOrigin);
-      const axisGeometry = new THREE.BufferGeometry().setFromPoints([
-        origin.clone().addScaledVector(axisDir, -80),
-        origin.clone().addScaledVector(axisDir, 80)
-      ]);
-      const axisLine = new THREE.Line(
-        axisGeometry,
-        new THREE.LineDashedMaterial({
-          color: PREVIEW_COLOR,
-          dashSize: 3,
-          gapSize: 2,
-          transparent: true,
-          opacity: 0.8
-        })
-      );
-      axisLine.computeLineDistances();
-      group.add(axisLine);
-      return group;
-    }
-    case 'move': {
-      // The real body object is transformed in place (kernel rotation is
-      // about the world origin, which object rotation reproduces because
-      // vertices are world-space); no extra ghost is needed.
-      const target = bodyObjects.get(preview.bodyId);
-      if (target) {
-        target.position.set(
-          preview.translation.x,
-          preview.translation.y,
-          preview.translation.z
-        );
-        target.rotation.set(
-          THREE.MathUtils.degToRad(preview.rotationDeg.x),
-          THREE.MathUtils.degToRad(preview.rotationDeg.y),
-          THREE.MathUtils.degToRad(preview.rotationDeg.z)
-        );
-      }
-      return null;
-    }
-  }
-}
-
-interface HandleUserData {
-  manipulatorHandle: true;
-  valueKey: string;
-  axis: string;
-}
-
-function buildArrow(
-  origin: THREE.Vector3,
-  direction: THREE.Vector3,
-  length: number,
-  color: number,
-  valueKey: string,
-  axis: string,
-  scale: number
-): THREE.Group {
-  const group = new THREE.Group();
-  const dir = direction.clone().normalize();
-  const visualLength = Math.max(Math.abs(length), scale * 0.6);
-  const sign = length < 0 ? -1 : 1;
-  const end = origin.clone().addScaledVector(dir, sign * visualLength);
-
-  const shaftGeometry = new THREE.CylinderGeometry(
-    scale * 0.045,
-    scale * 0.045,
-    visualLength,
-    12
-  );
-  const shaft = new THREE.Mesh(
-    shaftGeometry,
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false })
-  );
-  const mid = origin.clone().addScaledVector(dir, (sign * visualLength) / 2);
-  shaft.position.copy(mid);
-  shaft.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    dir.clone().multiplyScalar(sign)
-  );
-
-  const headGeometry = new THREE.ConeGeometry(scale * 0.14, scale * 0.34, 16);
-  const head = new THREE.Mesh(
-    headGeometry,
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false })
-  );
-  head.position.copy(end);
-  head.quaternion.copy(shaft.quaternion);
-
-  // Generous invisible hit target so the handle is easy to grab.
-  const hitGeometry = new THREE.CylinderGeometry(
-    scale * 0.22,
-    scale * 0.22,
-    visualLength + scale * 0.5,
-    8
-  );
-  const hit = new THREE.Mesh(
-    hitGeometry,
-    new THREE.MeshBasicMaterial({ visible: false })
-  );
-  hit.position.copy(mid);
-  hit.quaternion.copy(shaft.quaternion);
-
-  const userData: HandleUserData = { manipulatorHandle: true, valueKey, axis };
-  for (const part of [shaft, head, hit]) {
-    part.userData = { ...userData };
-    part.renderOrder = 10;
-    group.add(part);
-  }
-  return group;
-}
-
-function buildManipulatorObject(spec: ManipulatorSpec, cameraDistance: number): THREE.Group {
-  const group = new THREE.Group();
-  const scale = Math.max(cameraDistance * 0.12, 8);
-  if (spec.kind === 'linear-arrow') {
-    group.add(
-      buildArrow(
-        toThree(spec.origin),
-        toThree(spec.direction),
-        spec.value !== 0 ? spec.value : scale,
-        HANDLE_COLORS.single!,
-        spec.valueKey,
-        'single',
-        scale
-      )
-    );
-  } else {
-    const axisNames = ['x', 'y', 'z'] as const;
-    spec.axes.forEach((axis, index) => {
-      group.add(
-        buildArrow(
-          toThree(spec.origin),
-          toThree(axis.direction),
-          spec.values[index] || scale,
-          HANDLE_COLORS[axisNames[index] ?? 'single']!,
-          axis.valueKey,
-          axisNames[index] ?? 'single',
-          scale
-        )
-      );
-    });
-  }
-  return group;
-}
-
-/** Parameter t of the closest point on a line to a pointer ray. */
-function closestAxisT(
-  raycaster: THREE.Raycaster,
-  origin: THREE.Vector3,
-  direction: THREE.Vector3
-): number | null {
-  const axis = new THREE.Ray(origin.clone(), direction.clone().normalize());
-  const ray = raycaster.ray;
-  // Solve for the closest points of two lines (Ericson, Real-Time Collision Detection).
-  const r = axis.origin.clone().sub(ray.origin);
-  const a = axis.direction.dot(axis.direction);
-  const b = axis.direction.dot(ray.direction);
-  const c = axis.direction.dot(r);
-  const e = ray.direction.dot(ray.direction);
-  const f = ray.direction.dot(r);
-  const denominator = a * e - b * b;
-  if (Math.abs(denominator) < 1e-9) {
-    return null; // axis parallel to the view ray
-  }
-  return (b * f - c * e) / denominator;
 }
 
 export function ModelViewer({
   bodies,
   sketches,
   selectedBodyIds,
+  selectedTopology,
   settings,
-  preview,
-  manipulator,
-  apiRef,
+  fitSignal,
+  viewRequest,
+  units,
+  editableBodyIds,
+  projection,
   orientationRef,
-  onSelectBody,
-  onSelectSketch,
-  onContextMenu,
-  onManipulatorDrag
+  onSelectTopology,
+  onResizePrimitiveFace,
+  onContextMenu
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
-  const bodyObjectsRef = useRef<Map<string, THREE.Object3D>>(new Map());
-  const callbacksRef = useRef({ onSelectBody, onSelectSketch, onContextMenu, onManipulatorDrag });
-  callbacksRef.current = { onSelectBody, onSelectSketch, onContextMenu, onManipulatorDrag };
-  const manipulatorRef = useRef(manipulator);
-  manipulatorRef.current = manipulator;
+  const onSelectTopologyRef = useRef(onSelectTopology);
+  onSelectTopologyRef.current = onSelectTopology;
+  const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
+  onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
+  const onContextMenuRef = useRef(onContextMenu);
+  onContextMenuRef.current = onContextMenu;
+  const editableBodyIdsRef = useRef(new Set(editableBodyIds));
+  editableBodyIdsRef.current = new Set(editableBodyIds);
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
+  const displayModeRef = useRef(settings.displayMode);
+  displayModeRef.current = settings.displayMode;
 
   // Scene, renderers, controls, and the render loop live for the component's
-  // lifetime; only the body/preview/manipulator groups rebuild on data changes.
+  // lifetime; only the body/sketch/overlay groups rebuild on data changes.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) {
@@ -472,14 +298,26 @@ export function ModelViewer({
     scene.background = new THREE.Color('#070b10');
 
     const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-    const perspective = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
-    perspective.position.set(90, 80, 90);
-    const orthographic = new THREE.OrthographicCamera(-90, 90, 90 / aspect, -90 / aspect, -2000, 4000);
-    orthographic.position.copy(perspective.position);
+    const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
+    camera.position.set(90, 80, 90);
+    const orthographic = new THREE.OrthographicCamera(
+      -90,
+      90,
+      90 / aspect,
+      -90 / aspect,
+      -2000,
+      4000
+    );
+    orthographic.position.copy(camera.position);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(host.clientWidth, host.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.appendChild(renderer.domElement);
 
     const labelRenderer = new CSS2DRenderer();
@@ -489,15 +327,16 @@ export function ModelViewer({
     labelRenderer.domElement.style.pointerEvents = 'none';
     host.appendChild(labelRenderer.domElement);
 
-    let controls = new OrbitControls(perspective, renderer.domElement);
+    let controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
-    scene.add(new THREE.HemisphereLight('#cfe2ff', '#0a0f16', 1.0));
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.15);
+    scene.add(new THREE.HemisphereLight('#dbeafe', '#070b10', 1.25));
+    const keyLight = new THREE.DirectionalLight('#ffffff', 1.45);
     keyLight.position.set(90, 140, 100);
+    keyLight.castShadow = true;
     scene.add(keyLight);
-    const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.35);
+    const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.5);
     rimLight.position.set(-80, 40, -90);
     scene.add(rimLight);
 
@@ -521,39 +360,15 @@ export function ModelViewer({
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
 
-    const previewGroup = new THREE.Group();
-    previewGroup.name = 'preview';
-    scene.add(previewGroup);
-
-    const manipulatorGroup = new THREE.Group();
-    manipulatorGroup.name = 'manipulators';
-    scene.add(manipulatorGroup);
-
-    const context: SceneContext = {
-      scene,
-      perspective,
-      orthographic,
-      activeCamera: perspective,
-      projection: 'perspective',
-      renderer,
-      labelRenderer,
-      controls,
-      bodyGroup,
-      sketchGroup,
-      overlayGroup,
-      previewGroup,
-      manipulatorGroup,
-      grid,
-      raycaster: new THREE.Raycaster(),
-      hasFitCamera: false,
-      hoveredBodyId: null,
-      dragging: null
-    };
-    contextRef.current = context;
-
-    function syncOrthoFrustum() {
-      const distance = perspective.position.distanceTo(controls.target);
-      const halfHeight = distance * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2));
+    function syncOrthographic(resetZoom: boolean) {
+      orthographic.position.copy(camera.position);
+      orthographic.quaternion.copy(camera.quaternion);
+      if (resetZoom) {
+        orthographic.zoom = 1;
+      }
+      const distance = camera.position.distanceTo(controls.target);
+      const halfHeight =
+        distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
       const currentAspect = host!.clientWidth / Math.max(host!.clientHeight, 1);
       orthographic.left = -halfHeight * currentAspect;
       orthographic.right = halfHeight * currentAspect;
@@ -562,297 +377,426 @@ export function ModelViewer({
       orthographic.updateProjectionMatrix();
     }
 
-    function rebindControls() {
+    function rebindControls(nextCamera: THREE.Camera) {
       const target = controls.target.clone();
       controls.dispose();
-      controls = new OrbitControls(context.activeCamera, renderer.domElement);
+      controls = new OrbitControls(nextCamera, renderer.domElement);
       controls.enableDamping = true;
       controls.target.copy(target);
       context.controls = controls;
     }
 
-    const api: ViewerApi = {
-      setView(view) {
-        const target = controls.target.clone();
-        const distance = Math.max(
-          context.activeCamera.position.distanceTo(target),
-          40
-        );
-        const directions: Record<StandardView, THREE.Vector3> = {
-          front: new THREE.Vector3(0, 0, 1),
-          top: new THREE.Vector3(0, 1, 0.0001),
-          right: new THREE.Vector3(1, 0, 0),
-          iso: new THREE.Vector3(1, 0.85, 1).normalize()
-        };
-        const position = target
-          .clone()
-          .addScaledVector(directions[view].normalize(), distance);
-        perspective.position.copy(position);
-        orthographic.position.copy(position);
-        perspective.lookAt(target);
-        orthographic.lookAt(target);
-        syncOrthoFrustum();
-        controls.update();
-      },
-      setProjection(mode) {
-        if (context.projection === mode) {
-          return;
-        }
-        context.projection = mode;
-        if (mode === 'orthographic') {
-          orthographic.position.copy(perspective.position);
-          orthographic.quaternion.copy(perspective.quaternion);
-          syncOrthoFrustum();
-          context.activeCamera = orthographic;
-        } else {
-          perspective.position.copy(orthographic.position);
-          perspective.quaternion.copy(orthographic.quaternion);
-          context.activeCamera = perspective;
-        }
-        rebindControls();
-      },
-      getProjection() {
-        return context.projection;
-      },
-      fit(target) {
-        const objects =
-          target === 'selection'
-            ? bodyGroup.children.filter((child) => {
-                const bodyId = findBodyId(child);
-                return bodyId !== null && selectedIdsRef.current.includes(bodyId);
-              })
-            : bodyGroup.children;
-        if (objects.length === 0) {
-          return;
-        }
-        fitCameraToObjects(perspective, controls.target, objects);
-        orthographic.position.copy(perspective.position);
-        orthographic.quaternion.copy(perspective.quaternion);
-        syncOrthoFrustum();
-        controls.update();
+    function applyProjection(mode: ProjectionMode) {
+      if (context.projection === mode) {
+        return;
       }
+      context.projection = mode;
+      if (mode === 'orthographic') {
+        syncOrthographic(true);
+        context.activeCamera = orthographic;
+      } else {
+        // Bake the ortho dolly zoom back into a perspective distance so the
+        // framing survives the switch.
+        const direction = orthographic.position
+          .clone()
+          .sub(controls.target)
+          .normalize();
+        const distance =
+          orthographic.position.distanceTo(controls.target) /
+          Math.max(orthographic.zoom, 0.0001);
+        camera.position
+          .copy(controls.target)
+          .addScaledVector(direction, distance);
+        camera.quaternion.copy(orthographic.quaternion);
+        context.activeCamera = camera;
+      }
+      rebindControls(context.activeCamera);
+    }
+
+    const context: SceneContext = {
+      scene,
+      camera,
+      orthographic,
+      activeCamera: camera,
+      projection: 'perspective',
+      applyProjection,
+      syncOrthographic,
+      renderer,
+      labelRenderer,
+      controls,
+      bodyGroup,
+      sketchGroup,
+      overlayGroup,
+      grid,
+      raycaster: new THREE.Raycaster(),
+      objectsByBodyId: new Map(),
+      hasFitCamera: false,
+      hoveredBodyId: null
     };
-    apiRef.current = api;
+    contextRef.current = context;
 
     const observer = new ResizeObserver(() => {
-      const width = host.clientWidth;
-      const height = Math.max(host.clientHeight, 1);
-      perspective.aspect = width / height;
-      perspective.updateProjectionMatrix();
-      syncOrthoFrustum();
-      renderer.setSize(width, height);
-      labelRenderer.setSize(width, height);
+      camera.aspect = host.clientWidth / Math.max(host.clientHeight, 1);
+      camera.updateProjectionMatrix();
+      if (context.projection === 'orthographic') {
+        const zoom = orthographic.zoom;
+        syncOrthographic(false);
+        orthographic.zoom = zoom;
+        orthographic.updateProjectionMatrix();
+      }
+      renderer.setSize(host.clientWidth, host.clientHeight);
+      labelRenderer.setSize(host.clientWidth, host.clientHeight);
     });
     observer.observe(host);
 
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
-    let rightDownPosition: { x: number; y: number } | null = null;
+    let faceDrag: FaceDragState | null = null;
+    const dragHud = document.createElement('div');
+    dragHud.className = 'direct-edit-hud';
+    dragHud.hidden = true;
+    host.appendChild(dragHud);
 
-    function setPointerFromEvent(event: PointerEvent | MouseEvent) {
+    context.raycaster.params.Line = { threshold: 2.4 };
+
+    function pick(event: PointerEvent | MouseEvent): PickResult | null {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       context.raycaster.setFromCamera(pointer, context.activeCamera);
-    }
-
-    function pickHandle(event: PointerEvent): HandleUserData | null {
-      setPointerFromEvent(event);
-      const hits = context.raycaster.intersectObjects(manipulatorGroup.children, true);
-      for (const hit of hits) {
-        const data = hit.object.userData as Partial<HandleUserData>;
-        if (data.manipulatorHandle && data.valueKey) {
-          return data as HandleUserData;
-        }
-      }
-      return null;
-    }
-
-    function pickBodyId(event: PointerEvent | MouseEvent): string | null {
-      setPointerFromEvent(event);
       const hits = context.raycaster.intersectObjects(bodyGroup.children, true);
       for (const hit of hits) {
         if (!hit.object.visible) {
           continue;
         }
-        const bodyId = findBodyId(hit.object);
-        if (bodyId) {
-          return bodyId;
+        const data = hit.object.userData as {
+          bodyId?: string;
+          topologyKind?: 'edge';
+          topologyId?: string;
+          topologyHash?: number;
+          topology?: BodyTopology;
+        };
+        const bodyId = data.bodyId ?? findBodyId(hit.object);
+        if (!bodyId) {
+          continue;
         }
-      }
-      return null;
-    }
-
-    /** Nearest pick across bodies and sketch outlines. */
-    function pickEntity(
-      event: PointerEvent | MouseEvent
-    ): { type: 'body' | 'sketch'; id: string } | null {
-      setPointerFromEvent(event);
-      context.raycaster.params.Line = { threshold: 1.5 };
-      const bodyHits = context.raycaster.intersectObjects(bodyGroup.children, true);
-      const sketchHits = context.raycaster.intersectObjects(sketchGroup.children, true);
-      const bodyHit = bodyHits.find((hit) => hit.object.visible && findBodyId(hit.object));
-      const sketchHit = sketchHits.find(
-        (hit) => (hit.object.userData as { sketchId?: string }).sketchId
-      );
-      // Sketch outlines win narrow ties so profiles lying on faces stay pickable.
-      if (sketchHit && (!bodyHit || sketchHit.distance <= bodyHit.distance + 0.75)) {
+        if (data.topologyKind === 'edge' && data.topologyId) {
+          return {
+            selection: {
+              bodyId: bodyId as TopologySelection['bodyId'],
+              kind: 'edge',
+              topologyId: data.topologyId,
+              hash: data.topologyHash
+            },
+            hit
+          };
+        }
+        const faceIndex = hit.faceIndex;
+        const face =
+          typeof faceIndex === 'number'
+            ? data.topology?.faces.find(
+                (candidate) =>
+                  faceIndex >= candidate.triangleStart &&
+                  faceIndex < candidate.triangleStart + candidate.triangleCount
+              )
+            : undefined;
+        if (face) {
+          return {
+            selection: {
+              bodyId: bodyId as TopologySelection['bodyId'],
+              kind: 'face',
+              topologyId: face.topologyId,
+              hash: face.hash
+            },
+            hit,
+            faceNormal: hit.face?.normal
+              .clone()
+              .transformDirection(hit.object.matrixWorld)
+          };
+        }
         return {
-          type: 'sketch',
-          id: (sketchHit.object.userData as { sketchId: string }).sketchId
+          selection: {
+            bodyId: bodyId as TopologySelection['bodyId'],
+            kind: 'body'
+          },
+          hit
         };
       }
-      if (bodyHit) {
-        return { type: 'body', id: findBodyId(bodyHit.object)! };
-      }
       return null;
     }
 
-    function applyHover(bodyId: string | null, handleHover: boolean) {
-      renderer.domElement.style.cursor = handleHover ? 'grab' : bodyId ? 'pointer' : '';
+    function applyHover(result: PickResult | null) {
+      const bodyId = result?.selection.bodyId ?? null;
+      const canDragFace =
+        result?.selection.kind === 'face' &&
+        editableBodyIdsRef.current.has(result.selection.bodyId);
+      renderer.domElement.style.cursor = canDragFace
+        ? 'grab'
+        : bodyId
+          ? 'pointer'
+          : '';
       if (context.hoveredBodyId === bodyId) {
         return;
       }
       context.hoveredBodyId = bodyId;
       forEachMesh(bodyGroup, (mesh) => {
         const meshBodyId = findBodyId(mesh);
-        const base = (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
+        const base =
+          (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
         mesh.material.emissive.setHex(
           bodyId && meshBodyId === bodyId && base === 0 ? HOVER_EMISSIVE : base
         );
       });
     }
 
-    function flushDrag() {
-      const drag = context.dragging;
-      if (!drag || drag.pendingValue === null) {
+    function positionDragHud(
+      event: PointerEvent,
+      value: number,
+      axis: DirectEditAxis
+    ) {
+      const hostRect = hostRef.current?.getBoundingClientRect();
+      if (!hostRect) {
         return;
       }
-      const value = drag.pendingValue;
-      drag.pendingValue = null;
-      drag.rafHandle = null;
-      callbacksRef.current.onManipulatorDrag(drag.valueKey, value);
+      const label = axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
+      dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitsRef.current}`;
+      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
+      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
+      dragHud.hidden = false;
     }
 
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.button === 0) {
-        const handle = pickHandle(event);
-        const spec = manipulatorRef.current;
-        if (handle && spec) {
-          const axisIndex =
-            spec.kind === 'triad'
-              ? spec.axes.findIndex((axis) => axis.valueKey === handle.valueKey)
-              : -1;
-          const origin = toThree(spec.origin);
-          const direction =
-            spec.kind === 'linear-arrow'
-              ? toThree(spec.direction)
-              : toThree(spec.axes[axisIndex]!.direction);
-          const startValue =
-            spec.kind === 'linear-arrow' ? spec.value : (spec.values[axisIndex] ?? 0);
-          setPointerFromEvent(event);
-          const startT = closestAxisT(context.raycaster, origin, direction);
-          if (startT !== null) {
-            context.dragging = {
-              valueKey: handle.valueKey,
-              origin,
-              direction: direction.normalize(),
-              startValue,
-              startT,
-              pendingValue: null,
-              rafHandle: null
-            };
-            controls.enabled = false;
-            renderer.domElement.setPointerCapture(event.pointerId);
-            renderer.domElement.style.cursor = 'grabbing';
-            return;
-          }
-        }
-      }
-      if (event.button === 2) {
-        rightDownPosition = { x: event.clientX, y: event.clientY };
-      }
-      downPosition = { x: event.clientX, y: event.clientY };
-    };
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const drag = context.dragging;
-      if (drag) {
-        setPointerFromEvent(event);
-        const t = closestAxisT(context.raycaster, drag.origin, drag.direction);
-        if (t !== null) {
-          drag.pendingValue = drag.startValue + (t - drag.startT);
-          drag.rafHandle ??= window.requestAnimationFrame(flushDrag);
-        }
+    function restoreFaceDrag() {
+      if (!faceDrag) {
         return;
       }
-      const picked = pickEntity(event);
-      applyHover(
-        picked?.type === 'body' ? picked.id : null,
-        pickHandle(event) !== null || picked?.type === 'sketch'
-      );
-    };
+      faceDrag.object.position.copy(faceDrag.initialPosition);
+      faceDrag.object.scale.copy(faceDrag.initialScale);
+      controls.enabled = true;
+      dragHud.hidden = true;
+      renderer.domElement.style.cursor = 'grab';
+      if (renderer.domElement.hasPointerCapture(faceDrag.pointerId)) {
+        renderer.domElement.releasePointerCapture(faceDrag.pointerId);
+      }
+    }
 
+    const handlePointerMove = (event: PointerEvent) => {
+      if (faceDrag && event.pointerId === faceDrag.pointerId) {
+        event.preventDefault();
+        const dx = event.clientX - faceDrag.startX;
+        const dy = event.clientY - faceDrag.startY;
+        const projected = dx * faceDrag.directionX + dy * faceDrag.directionY;
+        const value =
+          Math.round(
+            Math.max(
+              0.1,
+              faceDrag.initialValue + projected / faceDrag.pixelsPerUnit
+            ) * 10
+          ) / 10;
+        faceDrag.latestValue = value;
+        const scale = value / faceDrag.initialValue;
+        faceDrag.object.scale[faceDrag.axis] =
+          faceDrag.initialScale[faceDrag.axis] * scale;
+        faceDrag.object.position[faceDrag.axis] =
+          faceDrag.initialPosition[faceDrag.axis] +
+          (faceDrag.side * (value - faceDrag.initialValue)) / 2;
+        renderer.domElement.style.cursor = 'grabbing';
+        positionDragHud(event, value, faceDrag.axis);
+        return;
+      }
+      applyHover(pick(event));
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      downPosition = { x: event.clientX, y: event.clientY };
+      if (event.button !== 0) {
+        return;
+      }
+      const result = pick(event);
+      if (
+        !result?.faceNormal ||
+        result.selection.kind !== 'face' ||
+        !editableBodyIdsRef.current.has(result.selection.bodyId)
+      ) {
+        return;
+      }
+      const object = context.objectsByBodyId.get(result.selection.bodyId);
+      if (!object) {
+        return;
+      }
+      const direction = directEditDirectionFromNormal(result.faceNormal);
+      const size = new THREE.Box3()
+        .setFromObject(object)
+        .getSize(new THREE.Vector3());
+      const initialValue = size[direction.axis];
+      if (!Number.isFinite(initialValue) || initialValue <= 0) {
+        return;
+      }
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      const projectedStart = result.hit.point
+        .clone()
+        .project(context.activeCamera);
+      const projectedEnd = result.hit.point
+        .clone()
+        .add(result.faceNormal)
+        .project(context.activeCamera);
+      const projectedX = ((projectedEnd.x - projectedStart.x) * rect.width) / 2;
+      const projectedY =
+        (-(projectedEnd.y - projectedStart.y) * rect.height) / 2;
+      const projectedLength = Math.hypot(projectedX, projectedY);
+      const distance = Math.max(
+        camera.position.distanceTo(result.hit.point),
+        1
+      );
+      const fallbackPixelsPerUnit =
+        context.projection === 'orthographic'
+          ? (rect.height * orthographic.zoom) /
+            Math.max(orthographic.top - orthographic.bottom, 0.0001)
+          : rect.height /
+            (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance);
+      const useProjectedDirection =
+        projectedLength >= fallbackPixelsPerUnit * 0.15;
+
+      faceDrag = {
+        pointerId: event.pointerId,
+        selection: result.selection,
+        object,
+        axis: direction.axis,
+        side: direction.side,
+        initialValue,
+        latestValue: initialValue,
+        startX: event.clientX,
+        startY: event.clientY,
+        directionX: useProjectedDirection ? projectedX / projectedLength : 0,
+        directionY: useProjectedDirection ? projectedY / projectedLength : -1,
+        pixelsPerUnit: Math.max(
+          useProjectedDirection ? projectedLength : fallbackPixelsPerUnit,
+          0.1
+        ),
+        initialPosition: object.position.clone(),
+        initialScale: object.scale.clone()
+      };
+      controls.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      positionDragHud(event, initialValue, direction.axis);
+      event.preventDefault();
+    };
     const handlePointerUp = (event: PointerEvent) => {
-      const drag = context.dragging;
-      if (drag) {
-        if (drag.rafHandle !== null) {
-          window.cancelAnimationFrame(drag.rafHandle);
-          drag.rafHandle = null;
+      if (faceDrag && event.pointerId === faceDrag.pointerId) {
+        const completed = faceDrag;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        restoreFaceDrag();
+        faceDrag = null;
+        downPosition = null;
+        onSelectTopologyRef.current(completed.selection, false);
+        if (moved >= 4 && completed.latestValue !== completed.initialValue) {
+          onResizePrimitiveFaceRef.current({
+            bodyId: completed.selection.bodyId,
+            axis: completed.axis,
+            value: completed.latestValue
+          });
         }
-        flushDrag();
-        context.dragging = null;
-        controls.enabled = true;
-        renderer.domElement.releasePointerCapture(event.pointerId);
-        renderer.domElement.style.cursor = '';
         return;
       }
       if (!downPosition) {
         return;
       }
-      const moved = Math.hypot(event.clientX - downPosition.x, event.clientY - downPosition.y);
+      const moved = Math.hypot(
+        event.clientX - downPosition.x,
+        event.clientY - downPosition.y
+      );
       downPosition = null;
-      if (moved < 5 && event.button === 0) {
-        const additive = event.shiftKey || event.metaKey || event.ctrlKey;
-        const picked = pickEntity(event);
-        if (picked?.type === 'sketch') {
-          callbacksRef.current.onSelectSketch(picked.id, additive);
-        } else {
-          callbacksRef.current.onSelectBody(picked?.id ?? null, additive);
-        }
+      if (moved < 5) {
+        onSelectTopologyRef.current(
+          pick(event)?.selection ?? null,
+          event.shiftKey
+        );
       }
     };
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (faceDrag && event.pointerId === faceDrag.pointerId) {
+        restoreFaceDrag();
+        faceDrag = null;
+      }
+      downPosition = null;
+    };
+    const handleDoubleClick = () => {
+      if (bodyGroup.children.length === 0) {
+        return;
+      }
+      fitCameraToObjects(camera, controls.target, bodyGroup.children);
+      if (context.projection === 'orthographic') {
+        syncOrthographic(true);
+      }
+      controls.update();
+    };
 
+    let rightDownPosition: { x: number; y: number } | null = null;
+    const handleRightDown = (event: PointerEvent) => {
+      if (event.button === 2) {
+        rightDownPosition = { x: event.clientX, y: event.clientY };
+      }
+    };
     const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault();
       // A right-drag is a pan (OrbitControls); only a stationary right-click
       // opens the context menu.
       const moved = rightDownPosition
-        ? Math.hypot(event.clientX - rightDownPosition.x, event.clientY - rightDownPosition.y)
+        ? Math.hypot(
+            event.clientX - rightDownPosition.x,
+            event.clientY - rightDownPosition.y
+          )
         : 0;
       rightDownPosition = null;
       if (moved < 5) {
-        callbacksRef.current.onContextMenu(event.clientX, event.clientY, pickBodyId(event));
+        onContextMenuRef.current(
+          event.clientX,
+          event.clientY,
+          pick(event)?.selection ?? null
+        );
       }
     };
 
-    renderer.domElement.addEventListener('pointermove', handlePointerMove);
-    renderer.domElement.addEventListener('pointerdown', handlePointerDown);
-    renderer.domElement.addEventListener('pointerup', handlePointerUp);
+    renderer.domElement.addEventListener(
+      'pointermove',
+      handlePointerMove,
+      true
+    );
+    renderer.domElement.addEventListener(
+      'pointerdown',
+      handlePointerDown,
+      true
+    );
+    renderer.domElement.addEventListener('pointerup', handlePointerUp, true);
+    renderer.domElement.addEventListener(
+      'pointercancel',
+      handlePointerCancel,
+      true
+    );
+    renderer.domElement.addEventListener('dblclick', handleDoubleClick);
+    renderer.domElement.addEventListener('pointerdown', handleRightDown, true);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
 
     const lastQuaternion = new THREE.Quaternion();
     let animationFrame = window.requestAnimationFrame(function animate() {
-      context.controls.update();
+      controls.update();
+      // The perspective camera stays the pose master; mirror it while the
+      // ortho camera drives so switches and fits never jump.
+      if (context.projection === 'orthographic') {
+        camera.position.copy(orthographic.position);
+        camera.quaternion.copy(orthographic.quaternion);
+      }
       renderer.render(scene, context.activeCamera);
       labelRenderer.render(scene, context.activeCamera);
 
       // Push camera orientation to the view widget only when it changes.
-      if (!context.activeCamera.quaternion.equals(lastQuaternion)) {
-        lastQuaternion.copy(context.activeCamera.quaternion);
+      if (!camera.quaternion.equals(lastQuaternion)) {
+        lastQuaternion.copy(camera.quaternion);
         const sink = orientationRef.current;
         if (sink) {
-          const inverse = context.activeCamera.quaternion.clone().invert();
+          const inverse = camera.quaternion.clone().invert();
           const project = (axis: THREE.Vector3) => {
             const view = axis.clone().applyQuaternion(inverse);
             return { x: view.x, y: -view.y };
@@ -870,29 +814,46 @@ export function ModelViewer({
     return () => {
       window.cancelAnimationFrame(animationFrame);
       observer.disconnect();
-      renderer.domElement.removeEventListener('pointermove', handlePointerMove);
-      renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
-      renderer.domElement.removeEventListener('pointerup', handlePointerUp);
+      renderer.domElement.removeEventListener(
+        'pointermove',
+        handlePointerMove,
+        true
+      );
+      renderer.domElement.removeEventListener(
+        'pointerdown',
+        handlePointerDown,
+        true
+      );
+      renderer.domElement.removeEventListener(
+        'pointerup',
+        handlePointerUp,
+        true
+      );
+      renderer.domElement.removeEventListener(
+        'pointercancel',
+        handlePointerCancel,
+        true
+      );
+      renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
+      renderer.domElement.removeEventListener(
+        'pointerdown',
+        handleRightDown,
+        true
+      );
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
-      clearGroup(previewGroup);
-      clearGroup(manipulatorGroup);
       grid.dispose();
       axes.dispose();
       controls.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
-      apiRef.current = null;
+      host.removeChild(dragHud);
       contextRef.current = null;
     };
   }, []);
-
-  // Selection ids in a ref so the imperative fit('selection') sees fresh state.
-  const selectedIdsRef = useRef(selectedBodyIds);
-  selectedIdsRef.current = selectedBodyIds;
 
   // Rebuild bodies + selection callout when derived geometry changes.
   useEffect(() => {
@@ -904,8 +865,7 @@ export function ModelViewer({
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
     context.hoveredBodyId = null;
-
-    const objectsByBodyId = new Map<string, THREE.Object3D>();
+    context.objectsByBodyId.clear();
 
     for (const body of bodies) {
       const object = createObjectForBody(body);
@@ -916,39 +876,125 @@ export function ModelViewer({
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
-        if (settings.displayMode === 'wireframe') {
-          mesh.material.wireframe = true;
-        }
+        mesh.userData.bodyId = body.bodyId;
+        mesh.userData.topology = body.topology;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
       });
-      if (settings.displayMode !== 'shaded-edges') {
-        object.traverse((child) => {
-          if (child instanceof THREE.LineSegments) {
-            child.visible = false;
+
+      for (const edge of body.topology?.edges ?? []) {
+        if (edge.points.length < 6) {
+          continue;
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(edge.points, 3)
+        );
+        const active =
+          selectedTopology?.kind === 'edge' &&
+          selectedTopology.bodyId === body.bodyId &&
+          selectedTopology.topologyId === edge.topologyId;
+        const line = new THREE.Line(
+          geometry,
+          new THREE.LineBasicMaterial({
+            color: active ? 0x60a5fa : 0x202a36,
+            transparent: true,
+            opacity: active ? 1 : 0.52,
+            depthTest: true
+          })
+        );
+        line.userData.bodyId = body.bodyId;
+        line.userData.topologyKind = 'edge';
+        line.userData.topologyId = edge.topologyId;
+        line.userData.topologyHash = edge.hash;
+        object.add(line);
+      }
+
+      const selectedFace =
+        selectedTopology?.kind === 'face' &&
+        selectedTopology.bodyId === body.bodyId
+          ? body.topology?.faces.find(
+              (face) => face.topologyId === selectedTopology.topologyId
+            )
+          : undefined;
+      if (selectedFace) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
+        );
+        geometry.setIndex(
+          body.mesh.indices.slice(
+            selectedFace.triangleStart * 3,
+            (selectedFace.triangleStart + selectedFace.triangleCount) * 3
+          )
+        );
+        geometry.computeVertexNormals();
+        const highlight = new THREE.Mesh(
+          geometry,
+          new THREE.MeshBasicMaterial({
+            color: 0x3b82f6,
+            transparent: true,
+            opacity: 0.42,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -2
+          })
+        );
+        highlight.raycast = () => undefined;
+        object.add(highlight);
+
+        if (editableBodyIds.includes(body.bodyId)) {
+          const normal = normalForTriangle(body, selectedFace.triangleStart);
+          if (normal) {
+            const { axis } = directEditDirectionFromNormal(normal);
+            const value = body.bbox.max[axis] - body.bbox.min[axis];
+            geometry.computeBoundingBox();
+            const center = geometry.boundingBox?.getCenter(new THREE.Vector3());
+            if (center) {
+              const dimension =
+                axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
+              const label = makeLabel(
+                'selection-callout direct-edit-callout',
+                `Drag face · ${dimension} ${Math.round(value * 100) / 100} ${units}`
+              );
+              label.position.copy(center);
+              context.overlayGroup.add(label);
+            }
           }
-        });
+        }
       }
 
       context.bodyGroup.add(object);
-      objectsByBodyId.set(body.bodyId, object);
+      context.objectsByBodyId.set(body.bodyId, object);
     }
-    bodyObjectsRef.current = objectsByBodyId;
 
-    const primaryId = selectedBodyIds[0];
+    applyDisplayMode(context.bodyGroup, displayModeRef.current);
+
+    // Name callout on the primary (last picked) selected body.
+    const primaryId = selectedBodyIds.at(-1);
     if (primaryId) {
-      const target = objectsByBodyId.get(primaryId);
+      const target = context.objectsByBodyId.get(primaryId);
       const body = bodies.find((candidate) => candidate.bodyId === primaryId);
       if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
           const top = box.getCenter(new THREE.Vector3());
-          top.y = box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
-          const element = document.createElement('div');
-          element.className = 'selection-callout';
-          element.textContent =
-            selectedBodyIds.length > 1
-              ? `${body.name} +${selectedBodyIds.length - 1}`
-              : body.name;
-          const label = new CSS2DObject(element);
+          top.y =
+            box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
+          const suffix =
+            selectedTopology?.bodyId === primaryId &&
+            selectedTopology.topologyId
+              ? ` · ${selectedTopology.topologyId}`
+              : '';
+          const count =
+            selectedBodyIds.length > 1 ? ` +${selectedBodyIds.length - 1}` : '';
+          const label = makeLabel(
+            'selection-callout',
+            `${body.name}${suffix}${count}`
+          );
           label.position.copy(top);
           context.overlayGroup.add(label);
         }
@@ -956,13 +1002,25 @@ export function ModelViewer({
     }
 
     if (!context.hasFitCamera && context.bodyGroup.children.length > 0) {
-      fitCameraToObjects(context.perspective, context.controls.target, context.bodyGroup.children);
+      fitCameraToObjects(
+        context.camera,
+        context.controls.target,
+        context.bodyGroup.children
+      );
+      if (context.projection === 'orthographic') {
+        context.syncOrthographic(true);
+      }
       context.controls.update();
       context.hasFitCamera = true;
     }
-  }, [bodies, selectedBodyIds, settings.displayMode]);
+  }, [bodies, editableBodyIds, selectedBodyIds, selectedTopology, units]);
 
-  // Persistent sketch profile outlines (visible and pickable).
+  useEffect(() => {
+    contextRef.current?.applyProjection(projection);
+  }, [projection]);
+
+  // Sketch profiles render as line loops on their planes so upcoming
+  // extrudes/revolves are visible before they exist.
   useEffect(() => {
     const context = contextRef.current;
     if (!context) {
@@ -970,68 +1028,89 @@ export function ModelViewer({
     }
     clearGroup(context.sketchGroup);
     for (const sketch of sketches) {
-      if (sketch.points.length < 3) {
+      if (sketch.points.length < 2) {
         continue;
       }
-      const geometry = new THREE.BufferGeometry().setFromPoints(sketch.points.map(toThree));
+      const geometry = new THREE.BufferGeometry().setFromPoints(
+        sketch.points.map(
+          (point) => new THREE.Vector3(point.x, point.y, point.z)
+        )
+      );
       const line = new THREE.LineLoop(
         geometry,
         new THREE.LineBasicMaterial({
-          color: sketch.selected ? 0x4da3ff : 0xe1a948,
+          color: sketch.selected ? SKETCH_SELECTED_COLOR : SKETCH_COLOR,
           transparent: true,
-          opacity: sketch.selected ? 1 : 0.75
+          opacity: sketch.selected ? 1 : 0.5
         })
       );
-      line.userData.sketchId = sketch.sketchId;
+      line.raycast = () => undefined;
       context.sketchGroup.add(line);
+
+      if (sketch.selected) {
+        const centroid = new THREE.Vector3();
+        for (const point of sketch.points) {
+          centroid.add(new THREE.Vector3(point.x, point.y, point.z));
+        }
+        centroid.divideScalar(sketch.points.length);
+        const label = makeLabel(
+          'selection-callout sketch-callout',
+          sketch.name
+        );
+        label.position.copy(centroid);
+        context.sketchGroup.add(label);
+      }
     }
   }, [sketches]);
-
-  // Live command preview (ghost geometry / in-place transform).
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context) {
-      return;
-    }
-    clearGroup(context.previewGroup);
-    // Reset any in-place move preview before applying the next one.
-    for (const object of bodyObjectsRef.current.values()) {
-      object.position.set(0, 0, 0);
-      object.rotation.set(0, 0, 0);
-    }
-    if (!preview) {
-      return;
-    }
-    const object = buildPreviewObject(preview, bodyObjectsRef.current);
-    if (object) {
-      context.previewGroup.add(object);
-    }
-  }, [preview, bodies]);
-
-  // Manipulator handles.
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context) {
-      return;
-    }
-    // Never rebuild handles mid-drag: the drag math owns them until release.
-    if (context.dragging) {
-      return;
-    }
-    clearGroup(context.manipulatorGroup);
-    if (!manipulator) {
-      return;
-    }
-    const distance = context.activeCamera.position.distanceTo(context.controls.target);
-    context.manipulatorGroup.add(buildManipulatorObject(manipulator, distance));
-  }, [manipulator]);
 
   useEffect(() => {
     const context = contextRef.current;
     if (context) {
       context.grid.visible = settings.showGrid;
+      applyDisplayMode(context.bodyGroup, settings.displayMode);
     }
-  }, [settings.showGrid]);
+  }, [settings.showGrid, settings.displayMode]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    if (
+      !context ||
+      fitSignal === 0 ||
+      context.bodyGroup.children.length === 0
+    ) {
+      return;
+    }
+    fitCameraToObjects(
+      context.camera,
+      context.controls.target,
+      context.bodyGroup.children
+    );
+    if (context.projection === 'orthographic') {
+      context.syncOrthographic(true);
+    }
+    context.controls.update();
+  }, [fitSignal]);
+
+  // Standard views keep the current zoom and orbit the camera to the axis.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !viewRequest) {
+      return;
+    }
+    const { camera, controls } = context;
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+    const direction = VIEW_DIRECTIONS[viewRequest.view];
+    camera.position.copy(controls.target).addScaledVector(direction, distance);
+    camera.updateProjectionMatrix();
+    if (context.projection === 'orthographic') {
+      // Keep the dolly zoom; only the orbit direction changes.
+      const zoom = context.orthographic.zoom;
+      context.syncOrthographic(false);
+      context.orthographic.zoom = zoom;
+      context.orthographic.updateProjectionMatrix();
+    }
+    controls.update();
+  }, [viewRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
 }

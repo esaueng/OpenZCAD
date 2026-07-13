@@ -59,6 +59,9 @@ importers:
       '@cloudflare/vite-plugin':
         specifier: ^1.13.4
         version: 1.31.2(vite@6.4.2(@types/node@22.19.17))(workerd@1.20260409.1)(wrangler@4.81.1)
+      '@openzcad/ai-contracts':
+        specifier: workspace:*
+        version: link:../../packages/ai-contracts
       '@openzcad/cloudflare-adapters':
         specifier: workspace:*
         version: link:../../packages/cloudflare-adapters
@@ -112,6 +115,15 @@ importers:
         specifier: ^4.11.1
         version: 4.81.1
 
+  packages/ai-contracts:
+    dependencies:
+      '@openzcad/document-core':
+        specifier: workspace:*
+        version: link:../document-core
+      '@openzcad/shared':
+        specifier: workspace:*
+        version: link:../shared
+
   packages/cloudflare-adapters:
     dependencies:
       '@openzcad/document-core':
@@ -132,6 +144,9 @@ importers:
 
   packages/command-system:
     dependencies:
+      '@openzcad/ai-contracts':
+        specifier: workspace:*
+        version: link:../ai-contracts
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
@@ -181,6 +196,9 @@ importers:
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
+      occt-wasm:
+        specifier: ^3.6.1
+        version: 3.6.1
 
   packages/persistence:
     dependencies:
@@ -1284,6 +1302,9 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
 
+  comlink@4.4.2:
+    resolution: {integrity: sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g==}
+
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
 
@@ -1585,6 +1606,9 @@ packages:
 
   node-releases@2.0.37:
     resolution: {integrity: sha512-1h5gKZCF+pO/o3Iqt5Jp7wc9rH3eJJ0+nh/CIoiRwjRxde/hAHyLPXYN4V3CqKAbiZPSeJFSWHmJsbkicta0Eg==}
+
+  occt-wasm@3.6.1:
+    resolution: {integrity: sha512-j25qLLPoLAmYEN7+hO+hU7gX2WPmLBL9XavAunSyPYGUcJRiMYqrgtuD+cf/um8vQxrnZrWW0ZqpfHevki8RHw==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -2819,6 +2843,8 @@ snapshots:
 
   color-name@1.1.4: {}
 
+  comlink@4.4.2: {}
+
   concat-map@0.0.1: {}
 
   convert-source-map@2.0.0: {}
@@ -3130,6 +3156,10 @@ snapshots:
   natural-compare@1.4.0: {}
 
   node-releases@2.0.37: {}
+
+  occt-wasm@3.6.1:
+    dependencies:
+      comlink: 4.4.2
 
   optionator@0.9.4:
     dependencies:
