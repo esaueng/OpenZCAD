@@ -85,6 +85,47 @@
   text-overflow: ellipsis;
 }
 
+.project-title-button {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text);
+}
+
+.project-title-button strong {
+  min-width: 0;
+}
+
+.project-title-button svg {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.project-title-button:hover svg,
+.project-title-button:focus-visible svg {
+  opacity: 1;
+}
+
+.project-title-input {
+  width: clamp(120px, 18vw, 280px);
+  height: 28px;
+  padding: 0 7px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-weight: var(--fw-medium);
+  outline: none;
+}
+
+.project-title-input:focus {
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
 .breadcrumb .mono {
   font-size: var(--fs-xs);
   color: var(--color-text-subtle);
