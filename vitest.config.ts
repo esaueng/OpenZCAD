@@ -1,4 +1,28 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+
+const WORKSPACE_PACKAGES = [
+  'shared',
+  'geometry',
+  'document-core',
+  'command-system',
+  'kernel-adapter',
+  'ai-contracts',
+  'viewport',
+  'io-step',
+  'io-stl',
+  'plugin-api',
+  'jobs',
+  'persistence',
+  'cloudflare-adapters'
+] as const;
+
+const workspaceAliases = Object.fromEntries(
+  WORKSPACE_PACKAGES.map((name) => [
+    `@openzcad/${name}`,
+    fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url))
+  ])
+);
 
 export default defineConfig({
   test: {
@@ -8,18 +32,13 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@openzcad/shared': '/packages/shared/src/index.ts',
-      '@openzcad/document-core': '/packages/document-core/src/index.ts',
-      '@openzcad/command-system': '/packages/command-system/src/index.ts',
-      '@openzcad/kernel-adapter': '/packages/kernel-adapter/src/index.ts',
-      '@openzcad/viewport': '/packages/viewport/src/index.ts',
-      '@openzcad/io-step': '/packages/io-step/src/index.ts',
-      '@openzcad/io-stl': '/packages/io-stl/src/index.ts',
-      '@openzcad/plugin-api': '/packages/plugin-api/src/index.ts',
-      '@openzcad/jobs': '/packages/jobs/src/index.ts',
-      '@openzcad/persistence': '/packages/persistence/src/index.ts',
-      '@openzcad/cloudflare-adapters': '/packages/cloudflare-adapters/src/index.ts',
-      'cloudflare:workers': '/test/cloudflare-workers.mock.ts'
+      '@openzcad/kernel-adapter/exact': fileURLToPath(
+        new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
+      ),
+      ...workspaceAliases,
+      'cloudflare:workers': fileURLToPath(
+        new URL('./test/cloudflare-workers.mock.ts', import.meta.url)
+      )
     }
   }
 });

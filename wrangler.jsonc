@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "openzcad-beta",
+  "name": "openzcad",
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
@@ -15,6 +15,10 @@
     "run_worker_first": ["/api/*"]
   },
   "vars": {
-    "ENVIRONMENT": "beta"
+    "ENVIRONMENT": "beta",
+    "AUTH_MODE": "development",
+    "AI_PROVIDER": "openai",
+    "AI_MODEL": "gpt-5.6-sol",
+    "AI_REASONING_EFFORT": "high"
   }
 }

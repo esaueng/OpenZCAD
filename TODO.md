@@ -1,17 +1,25 @@
 # OpenZCAD Roadmap
 
-## Phase 1
-- Bootstrap monorepo, docs, Worker app, and package contracts.
-- Deliver project creation, project listing, revision persistence, and CAD shell layout.
+## Working now
 
-## Phase 2
-- Implement primitives, sketch entities, sketch constraints, extrude, transforms, undo/redo, and mesh projection.
-- Add import/export adapters, background jobs, and artifact manifests.
+- Schema-v2 canonical documents with migrations, checkpoints, asset references, command replay, transactions, undo/redo, and local-first autosave.
+- OpenCascade browser-worker kernel with exact primitives, sweeps, transforms, booleans, validity checks, measurements, and exact STEP/STL export.
+- Editable exact STEP import, deterministic face/edge selection, fillet/chamfer, and linear/circular patterns.
+- Three-pane CAD workspace, feature editing, diagnostics, contextual topology actions, responsive compact layout, and AI command rail.
+- Configurable streamed AI proposals with compact topology-aware context, broad feature commands, strict structured output, dry-run preview, explicit approval, and undoable application.
+- Cloudflare Access identity, owner-scoped beta APIs, and legacy-owner mapping.
+- Live per-project Durable Object rooms with presence, version-aware synchronization, and conflict preservation.
 
-## Phase 3
-- Replace mock kernel seams with OpenCascade.js-backed browser worker execution.
-- Expand sketch solver coverage and boolean fidelity.
+## Next
 
-## Phase 4
-- Enable collaboration room semantics, locks, presence, remote compute providers, FEA, CAM, and generative design jobs.
+- Invitations, viewer/editor roles, edit locks, and durable collaboration history.
+- Face-attached sketches, shell/offset, mirror, and persistent topology naming.
+- Multi-profile sketches, holes/pockets, partial revolve, and symmetric/two-sided extrude.
+- AI-created sketches and symbolic references between newly generated operations in one proposal.
+- Cache and loading UX improvements for the exact-kernel WASM module.
 
+## Later
+
+- Assemblies and mates.
+- Drawings, dimensions, and inspection tools.
+- Constraint solving, design tables, and variant management.
