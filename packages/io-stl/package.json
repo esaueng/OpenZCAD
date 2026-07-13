@@ -3,10 +3,5 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
-  "dependencies": {
-    "@openzcad/kernel-adapter": "workspace:*",
-    "@openzcad/shared": "workspace:*"
-  }
+  "exports": "./src/index.ts"
 }
-

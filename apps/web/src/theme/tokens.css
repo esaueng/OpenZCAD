@@ -1,0 +1,202 @@
+/* ─────────────────────────────────────────────────────────────
+   OpenZCAD Design Tokens
+   Import once in main.tsx before app.css.
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Surfaces & text ──────────────────────────────────── */
+  --color-bg: #0c0d0f;
+  --color-surface: #141619;
+  --color-surface-2: #1b1e22;
+  --color-surface-hover: #23262b;
+  --color-border: #2c3036;
+  --color-border-strong: #444952;
+  --color-text: #eef0f2;
+  --color-text-muted: #a0a5ad;
+  --color-text-subtle: #696f78;
+
+  /* ── Semantic ─────────────────────────────────────────── */
+  --color-accent: #3b82f6;
+  --color-accent-dim: rgba(59, 130, 246, 0.13);
+  --color-accent-border: rgba(59, 130, 246, 0.5);
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+  --color-success: #22c55e;
+  --color-viewport-bg: #090a0c;
+
+  /* ── Typography ───────────────────────────────────────── */
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --fs-mini: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 22px;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+
+  --lh-tight: 1.35;
+  --lh-normal: 1.5;
+  --lh-loose: 1.7;
+
+  --ls-eyebrow: 0.14em;
+
+  /* ── Spacing scale (4-based) ──────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* ── Radii ────────────────────────────────────────────── */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  /* ── Borders (composed) ───────────────────────────────── */
+  --border-thin: 1px solid var(--color-border);
+  --border-strong: 1px solid var(--color-border-strong);
+
+  /* ── Layout dimensions ────────────────────────────────── */
+  --topbar-h: 46px;
+  --toolbar-h: 48px;
+  --statusbar-h: 28px;
+  --sidebar-w: 252px;
+  --context-w: 330px;
+
+  /* ── Motion ───────────────────────────────────────────── */
+  --dur-fast: 100ms;
+  --dur-base: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Z-index scale ────────────────────────────────────── */
+  --z-viewer-overlay: 2;
+  --z-inspector-float: 5;
+  --z-modal: 50;
+  --z-start-screen: 100;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 5px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Base reset
+   ───────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  height: 30px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: 'zero' 1;
+}

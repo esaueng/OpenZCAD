@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./exact": "./src/exact.ts"
+  },
   "dependencies": {
     "@openzcad/document-core": "workspace:*",
-    "@openzcad/shared": "workspace:*"
+    "@openzcad/geometry": "workspace:*",
+    "@openzcad/io-step": "workspace:*",
+    "@openzcad/io-stl": "workspace:*",
+    "@openzcad/shared": "workspace:*",
+    "occt-wasm": "^3.6.1"
   }
 }
-

@@ -11,32 +11,39 @@ export type ArtifactId = Brand<string, 'ArtifactId'>;
 export type RevisionId = Brand<string, 'RevisionId'>;
 export type JobId = Brand<string, 'JobId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
+export type AssetId = Brand<string, 'AssetId'>;
+
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2 as const;
+export type ProjectDocumentSchemaVersion =
+  typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
-export type PrimitiveKind = 'box' | 'cylinder' | 'sphere';
+export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus';
 export type FeatureKind =
   | 'primitive'
   | 'sketch'
   | 'extrude'
+  | 'revolve'
   | 'boolean'
   | 'transform'
+  | 'fillet'
+  | 'chamfer'
+  | 'pattern'
+  | 'imported-step'
   | 'imported-mesh';
-export type SketchObjectKind = 'line' | 'rectangle' | 'circle';
-export type ConstraintKind =
-  | 'coincident'
-  | 'horizontal'
-  | 'vertical'
-  | 'distance'
-  | 'radius'
-  | 'diameter';
+export type SketchObjectKind = 'rectangle' | 'circle' | 'polygon';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
-export type EditableDimension = 'width' | 'height' | 'depth' | 'radius';
+export type PatternKind = 'linear' | 'circular';
+export type AxisId = 'x' | 'y' | 'z';
 
-export interface FilletDefinition {
-  radius: number;
-  edgeIds: string[];
-}
+/**
+ * A parametric scalar: either a literal number or an expression string that is
+ * evaluated against the document's parameter table when geometry is rebuilt
+ * (e.g. `"width / 2 + 5"`). Storing the raw expression keeps features fully
+ * parametric — editing a parameter regenerates every feature that uses it.
+ */
+export type ParamValue = number | string;
 
 export interface Vector3 {
   x: number;
@@ -44,9 +51,20 @@ export interface Vector3 {
   z: number;
 }
 
+export interface ParametricVector3 {
+  x: ParamValue;
+  y: ParamValue;
+  z: ParamValue;
+}
+
 export interface Transform3D {
   translation: Vector3;
   rotationDeg: Vector3;
+}
+
+export interface ParametricTransform3D {
+  translation: ParametricVector3;
+  rotationDeg: ParametricVector3;
 }
 
 export interface BaseNode {
@@ -74,6 +92,11 @@ export interface PartNode extends BaseNode {
   childIds: EntityId[];
 }
 
+/**
+ * A named model parameter. `expression` may reference other parameters;
+ * `value` caches the last successful evaluation for display, but consumers
+ * always re-evaluate the full scope when rebuilding geometry.
+ */
 export interface ParameterNode extends BaseNode {
   kind: 'parameter';
   parameterId: ParameterId;
@@ -85,75 +108,117 @@ export interface SketchNode extends BaseNode {
   kind: 'sketch';
   sketchId: SketchId;
   plane: PlaneId;
+  /** Offset of the sketch plane along its normal. */
+  offset: ParamValue;
   objectIds: EntityId[];
-  constraintIds: EntityId[];
 }
+
+export type SketchObjectData =
+  | {
+      objectKind: 'rectangle';
+      width: ParamValue;
+      height: ParamValue;
+      centerX: ParamValue;
+      centerY: ParamValue;
+    }
+  | {
+      objectKind: 'circle';
+      radius: ParamValue;
+      centerX: ParamValue;
+      centerY: ParamValue;
+    }
+  | {
+      objectKind: 'polygon';
+      sides: ParamValue;
+      radius: ParamValue;
+      centerX: ParamValue;
+      centerY: ParamValue;
+    };
 
 export interface SketchObjectNode extends BaseNode {
   kind: 'sketch-object';
   objectKind: SketchObjectKind;
-  data:
-    | {
-        objectKind: 'line';
-        start: { x: number; y: number };
-        end: { x: number; y: number };
-      }
-    | {
-        objectKind: 'rectangle';
-        width: number;
-        height: number;
-      }
-    | {
-        objectKind: 'circle';
-        radius: number;
-      };
+  data: SketchObjectData;
 }
 
-export interface ConstraintNode extends BaseNode {
-  kind: 'constraint';
-  constraintKind: ConstraintKind;
-  targetIds: EntityId[];
-  value?: number;
-}
+/** In-sketch axis a revolve sweeps the profile around. */
+export type RevolveAxis = 'horizontal' | 'vertical';
+
+export type FeatureData =
+  | {
+      featureKind: 'primitive';
+      primitiveKind: PrimitiveKind;
+      dimensions: Record<string, ParamValue>;
+    }
+  | {
+      featureKind: 'sketch';
+      sketchId: SketchId;
+    }
+  | {
+      featureKind: 'extrude';
+      sketchId: SketchId;
+      distance: ParamValue;
+    }
+  | {
+      featureKind: 'revolve';
+      sketchId: SketchId;
+      axis: RevolveAxis;
+    }
+  | {
+      featureKind: 'boolean';
+      operation: BooleanOperation;
+      targetBodyIds: BodyId[];
+    }
+  | {
+      featureKind: 'transform';
+      targetBodyId: BodyId;
+      transform: ParametricTransform3D;
+    }
+  | {
+      featureKind: 'fillet';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      radius: ParamValue;
+    }
+  | {
+      featureKind: 'chamfer';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      distance: ParamValue;
+    }
+  | {
+      featureKind: 'pattern';
+      targetBodyId: BodyId;
+      patternKind: PatternKind;
+      count: ParamValue;
+      axis: AxisId;
+      spacing: ParamValue;
+      angleDeg: ParamValue;
+    }
+  | {
+      featureKind: 'imported-mesh';
+      artifactId: ArtifactId;
+      sourceName: string;
+      triangleCount: number;
+      /** Flat xyz triples in document units. */
+      vertices: number[];
+      /** Triangle vertex indices. */
+      indices: number[];
+    }
+  | {
+      featureKind: 'imported-step';
+      artifactId: ArtifactId;
+      sourceName: string;
+      /** ISO 10303-21 source retained for deterministic offline rebuilds. */
+      stepText: string;
+    };
 
 export interface FeatureNode extends BaseNode {
   kind: 'feature';
   featureId: FeatureId;
   featureKind: FeatureKind;
   bodyId?: BodyId;
-  data:
-    | {
-        featureKind: 'primitive';
-        primitiveKind: PrimitiveKind;
-        dimensions: Record<string, number>;
-        fillet?: FilletDefinition;
-      }
-    | {
-        featureKind: 'sketch';
-        sketchId: SketchId;
-      }
-    | {
-        featureKind: 'extrude';
-        sketchId: SketchId;
-        distance: number;
-        fillet?: FilletDefinition;
-      }
-    | {
-        featureKind: 'boolean';
-        operation: BooleanOperation;
-        targetBodyIds: BodyId[];
-      }
-    | {
-        featureKind: 'transform';
-        targetBodyId: BodyId;
-        transform: Transform3D;
-      }
-    | {
-        featureKind: 'imported-mesh';
-        artifactId: ArtifactId;
-        sourceName: string;
-        triangleCount: number;
-      };
+  data: FeatureData;
 }
 
 export interface BodyNode extends BaseNode {
@@ -161,7 +226,7 @@ export interface BodyNode extends BaseNode {
   bodyId: BodyId;
   featureId: FeatureId;
   bodyType: 'solid' | 'mesh-reference';
-  representationSource: 'mock' | 'native' | 'mesh-reference' | 'composite';
+  representationSource: 'brep' | 'step-import' | 'mesh-import';
   exportableStep: boolean;
 }
 
@@ -172,15 +237,8 @@ export type DocumentNode =
   | ParameterNode
   | SketchNode
   | SketchObjectNode
-  | ConstraintNode
   | FeatureNode
   | BodyNode;
-
-export interface PrimitiveGeometry {
-  kind: PrimitiveKind;
-  dimensions: Record<string, number>;
-  fillet?: FilletDefinition;
-}
 
 export interface MeshGeometry {
   kind: 'mesh';
@@ -188,25 +246,56 @@ export interface MeshGeometry {
   indices: number[];
 }
 
-export interface CompositeGeometry {
-  kind: 'composite';
-  operation: BooleanOperation;
-  children: BodyRepresentation[];
+export interface BoundingBox {
+  min: Vector3;
+  max: Vector3;
 }
 
-export type DisplayGeometry =
-  | PrimitiveGeometry
-  | MeshGeometry
-  | CompositeGeometry;
+export interface FaceTopology {
+  topologyId: string;
+  hash: number;
+  triangleStart: number;
+  triangleCount: number;
+}
 
+export interface EdgeTopology {
+  topologyId: string;
+  hash: number;
+  /** XYZ-interleaved sampled polyline points. */
+  points: number[];
+}
+
+export interface BodyTopology {
+  faces: FaceTopology[];
+  edges: EdgeTopology[];
+}
+
+export interface TopologySelection {
+  bodyId: BodyId;
+  kind: 'body' | 'face' | 'edge';
+  topologyId?: string;
+  hash?: number;
+}
+
+/**
+ * Display/export projection of one body, derived by the kernel. Vertices are
+ * already in world space (transform features are baked in), so the viewport
+ * renders representations without additional placement.
+ */
 export interface BodyRepresentation {
   bodyId: BodyId;
   name: string;
   source: FeatureKind;
-  geometry: DisplayGeometry;
-  transform: Transform3D;
+  mesh: MeshGeometry;
+  /** Number of planar B-Rep faces in the underlying solid. */
+  faceCount: number;
   color: string;
   exportableStep: boolean;
+  /** True when a later boolean feature consumed this body. */
+  consumed: boolean;
+  volume: number;
+  bbox: BoundingBox;
+  topology?: BodyTopology;
 }
 
 export interface RevisionRecord {
@@ -214,6 +303,31 @@ export interface RevisionRecord {
   createdAt: string;
   reason: string;
   commandCount: number;
+}
+
+/** Durable user-visible save point. Command history and undo state remain separate. */
+export interface ProjectCheckpoint {
+  checkpointId: string;
+  revisionId: RevisionId;
+  documentVersion: number;
+  createdAt: string;
+  reason: string;
+}
+
+/**
+ * Metadata-only reference to a large source or generated asset. Binary data is
+ * stored outside the canonical document (IndexedDB locally, R2 when synced).
+ */
+export interface ProjectAssetRef {
+  assetId: AssetId;
+  artifactId?: ArtifactId;
+  kind: 'step-source' | 'stl-source' | 'mesh-cache' | 'thumbnail' | 'export';
+  name: string;
+  contentType: string;
+  bytes?: number;
+  checksum?: string;
+  storage: 'local' | 'remote' | 'local-and-remote';
+  createdAt: string;
 }
 
 export interface DerivedState {
@@ -224,6 +338,7 @@ export interface DerivedState {
 }
 
 export interface ProjectDocument {
+  schemaVersion: ProjectDocumentSchemaVersion;
   projectId: ProjectId;
   ownerUserId: UserId;
   rootNodeId: EntityId;
@@ -236,8 +351,11 @@ export interface ProjectDocument {
   featureOrder: FeatureId[];
   bodyOrder: BodyId[];
   sketchOrder: SketchId[];
+  parameterOrder: ParameterId[];
   revisions: RevisionRecord[];
+  checkpoints: ProjectCheckpoint[];
   commandLog: SerializedCommand[];
+  assets: Record<AssetId, ProjectAssetRef>;
   derived: DerivedState;
 }
 
@@ -287,13 +405,7 @@ export interface ProjectSummary {
 
 export interface JobRecord {
   jobId: JobId;
-  kind:
-    | 'thumbnail'
-    | 'validation'
-    | 'import'
-    | 'export'
-    | 'analysis'
-    | 'generative';
+  kind: 'thumbnail' | 'validation' | 'import' | 'export';
   status: 'queued' | 'running' | 'completed' | 'failed';
   projectId: ProjectId;
   artifactId?: ArtifactId;
@@ -360,6 +472,44 @@ export interface HealthResponse {
   time: string;
 }
 
+export interface AuthSession {
+  userId: UserId;
+  displayName: string;
+  email?: string;
+  mode: 'development' | 'cloudflare-access';
+}
+
+export interface CollaborationMember {
+  clientId: string;
+  userId: UserId;
+  displayName: string;
+  status: 'active' | 'idle';
+}
+
+export type CollaborationClientMessage =
+  | {
+      type: 'hello';
+      clientId: string;
+      displayName: string;
+      document: ProjectDocument;
+    }
+  | {
+      type: 'document';
+      clientId: string;
+      document: ProjectDocument;
+    }
+  | { type: 'presence'; clientId: string; status: 'active' | 'idle' };
+
+export type CollaborationServerMessage =
+  | {
+      type: 'state';
+      members: CollaborationMember[];
+      document: ProjectDocument | null;
+    }
+  | { type: 'presence'; members: CollaborationMember[] }
+  | { type: 'document'; clientId: string; document: ProjectDocument }
+  | { type: 'conflict'; document: ProjectDocument };
+
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 }
@@ -380,11 +530,57 @@ export const toProjectId = (value: string): ProjectId => value as ProjectId;
 export const toFeatureId = (value: string): FeatureId => value as FeatureId;
 export const toBodyId = (value: string): BodyId => value as BodyId;
 export const toSketchId = (value: string): SketchId => value as SketchId;
+export const toParameterId = (value: string): ParameterId =>
+  value as ParameterId;
 export const toRevisionId = (value: string): RevisionId => value as RevisionId;
 export const toArtifactId = (value: string): ArtifactId => value as ArtifactId;
 export const toUploadSessionId = (value: string): UploadSessionId =>
   value as UploadSessionId;
 export const toUserId = (value: string): UserId => value as UserId;
 export const toJobId = (value: string): JobId => value as JobId;
+export const toAssetId = (value: string): AssetId => value as AssetId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
+
+export const FEATURE_COLORS: Record<FeatureKind, string> = {
+  primitive: '#e1a948',
+  sketch: DEFAULT_BODY_COLOR,
+  extrude: '#4bb7a7',
+  revolve: '#5fb3e8',
+  boolean: '#ff7452',
+  transform: '#8b80f9',
+  fillet: '#f59e0b',
+  chamfer: '#fb7185',
+  pattern: '#38bdf8',
+  'imported-step': '#d6a653',
+  'imported-mesh': '#7aa3ff'
+};
+
+export const featureColor = (kind: FeatureKind): string =>
+  FEATURE_COLORS[kind] ?? DEFAULT_BODY_COLOR;
+
+/** Millimetres per document unit, used by exporters that fix a unit. */
+export const UNIT_TO_MM: Record<UnitSystem, number> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  inch: 25.4
+};
+
+const FILE_NAME_MAX_LENGTH = 128;
+
+/**
+ * Normalizes a user-supplied file name so it is safe to embed in storage
+ * object keys and artifact names: strips path segments, control characters,
+ * and key-hostile punctuation, and caps the length.
+ */
+export function sanitizeFileName(fileName: string): string {
+  const baseName = fileName.split(/[/\\]/).pop() ?? '';
+  const cleaned = baseName
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^[.-]+/, '')
+    .slice(0, FILE_NAME_MAX_LENGTH);
+  return cleaned.length > 0 ? cleaned : 'upload';
+}

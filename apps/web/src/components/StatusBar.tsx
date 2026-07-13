@@ -1,42 +1,59 @@
-import type { ProjectDocument } from '@openzcad/shared';
-import type { ViewPreset } from '../lib/view';
-import type { GeometrySelection, ModelingTool } from '../lib/selection';
-
 interface StatusBarProps {
   status: string;
-  document: ProjectDocument | null;
-  selectedId: string | null;
-  viewPreset: ViewPreset;
-  geometrySelection: GeometrySelection | null;
-  activeTool: ModelingTool;
+  tone: 'ready' | 'warning' | 'running';
+  /** Context-sensitive next-step hint, e.g. shortcuts for the selection. */
+  hint: string | null;
+  projectName: string | null;
+  bodyCount: number;
+  featureCount: number;
+  warningCount: number;
+  documentVersion: number | null;
+  units: string;
 }
 
 export function StatusBar({
   status,
-  document,
-  selectedId,
-  viewPreset,
-  geometrySelection,
-  activeTool
+  tone,
+  hint,
+  projectName,
+  bodyCount,
+  featureCount,
+  warningCount,
+  documentVersion,
+  units
 }: StatusBarProps) {
   return (
     <footer className="status-bar">
-      <div className="status-bar__primary">
-        <span className="status-dot" />
-        <span>{status}</span>
-      </div>
-      <div className="status-bar__meta">
-        <span>View {viewPreset.toUpperCase()}</span>
-        <span>Tool {activeTool === 'fillet' ? 'FILLET' : 'SELECT'}</span>
+      <span
+        className={`status-state ${tone === 'ready' ? '' : tone}`}
+        title={status}
+      >
+        <i />
+        {status}
+      </span>
+      {hint && <span className="status-hint">{hint}</span>}
+      <div className="status-groups" aria-label="Workspace status">
         <span>
-          {document ? `${document.bodyOrder.length} bodies` : 'No model'}
+          <b>kernel</b>
+          Exact B-rep
         </span>
         <span>
-          {geometrySelection
-            ? `${geometrySelection.kind} · ${geometrySelection.bodyName}`
-            : selectedId
-              ? 'Model-tree selection'
-              : 'Selection none'}
+          <b>units</b>
+          {units}
+        </span>
+        <span>
+          <b>warnings</b>
+          {warningCount}
+        </span>
+        <span>
+          <b>rev</b>
+          {documentVersion ?? '—'}
+        </span>
+        <span
+          title={`${projectName ?? 'Project'} · ${featureCount} features · ${bodyCount} bodies`}
+        >
+          <b>sync</b>
+          Synced
         </span>
       </div>
     </footer>

@@ -24,9 +24,16 @@ declare interface DurableObjectNamespace<T = unknown> {
   getByName(name: string): T;
 }
 
+declare interface D1RunResult {
+  success?: boolean;
+  meta?: {
+    changes?: number;
+  };
+}
+
 declare interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
-  run(): Promise<unknown>;
+  run(): Promise<D1RunResult>;
   first<T = Record<string, unknown>>(): Promise<T | null>;
   all<T = Record<string, unknown>>(): Promise<{ results?: T[] }>;
 }
@@ -40,6 +47,18 @@ declare interface R2Bucket {}
 
 declare interface Queue<T = unknown> {
   send(message: T): Promise<void>;
+}
+
+declare interface WebSocket {
+  accept(): void;
+}
+
+declare const WebSocketPair: {
+  new (): { 0: WebSocket; 1: WebSocket };
+};
+
+declare interface ResponseInit {
+  webSocket?: WebSocket;
 }
 
 declare module 'cloudflare:workers' {
