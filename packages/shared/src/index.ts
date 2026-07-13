@@ -11,6 +11,11 @@ export type ArtifactId = Brand<string, 'ArtifactId'>;
 export type RevisionId = Brand<string, 'RevisionId'>;
 export type JobId = Brand<string, 'JobId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
+export type AssetId = Brand<string, 'AssetId'>;
+
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2 as const;
+export type ProjectDocumentSchemaVersion =
+  typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
@@ -22,9 +27,15 @@ export type FeatureKind =
   | 'revolve'
   | 'boolean'
   | 'transform'
+  | 'fillet'
+  | 'chamfer'
+  | 'pattern'
+  | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind = 'rectangle' | 'circle' | 'polygon';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
+export type PatternKind = 'linear' | 'circular';
+export type AxisId = 'x' | 'y' | 'z';
 
 /**
  * A parametric scalar: either a literal number or an expression string that is
@@ -164,6 +175,27 @@ export type FeatureData =
       transform: ParametricTransform3D;
     }
   | {
+      featureKind: 'fillet';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      radius: ParamValue;
+    }
+  | {
+      featureKind: 'chamfer';
+      targetBodyId: BodyId;
+      edgeHashes: number[];
+      distance: ParamValue;
+    }
+  | {
+      featureKind: 'pattern';
+      targetBodyId: BodyId;
+      patternKind: PatternKind;
+      count: ParamValue;
+      axis: AxisId;
+      spacing: ParamValue;
+      angleDeg: ParamValue;
+    }
+  | {
       featureKind: 'imported-mesh';
       artifactId: ArtifactId;
       sourceName: string;
@@ -172,6 +204,13 @@ export type FeatureData =
       vertices: number[];
       /** Triangle vertex indices. */
       indices: number[];
+    }
+  | {
+      featureKind: 'imported-step';
+      artifactId: ArtifactId;
+      sourceName: string;
+      /** ISO 10303-21 source retained for deterministic offline rebuilds. */
+      stepText: string;
     };
 
 export interface FeatureNode extends BaseNode {
@@ -187,7 +226,7 @@ export interface BodyNode extends BaseNode {
   bodyId: BodyId;
   featureId: FeatureId;
   bodyType: 'solid' | 'mesh-reference';
-  representationSource: 'brep' | 'mesh-import';
+  representationSource: 'brep' | 'step-import' | 'mesh-import';
   exportableStep: boolean;
 }
 
@@ -212,6 +251,32 @@ export interface BoundingBox {
   max: Vector3;
 }
 
+export interface FaceTopology {
+  topologyId: string;
+  hash: number;
+  triangleStart: number;
+  triangleCount: number;
+}
+
+export interface EdgeTopology {
+  topologyId: string;
+  hash: number;
+  /** XYZ-interleaved sampled polyline points. */
+  points: number[];
+}
+
+export interface BodyTopology {
+  faces: FaceTopology[];
+  edges: EdgeTopology[];
+}
+
+export interface TopologySelection {
+  bodyId: BodyId;
+  kind: 'body' | 'face' | 'edge';
+  topologyId?: string;
+  hash?: number;
+}
+
 /**
  * Display/export projection of one body, derived by the kernel. Vertices are
  * already in world space (transform features are baked in), so the viewport
@@ -230,6 +295,7 @@ export interface BodyRepresentation {
   consumed: boolean;
   volume: number;
   bbox: BoundingBox;
+  topology?: BodyTopology;
 }
 
 export interface RevisionRecord {
@@ -237,6 +303,31 @@ export interface RevisionRecord {
   createdAt: string;
   reason: string;
   commandCount: number;
+}
+
+/** Durable user-visible save point. Command history and undo state remain separate. */
+export interface ProjectCheckpoint {
+  checkpointId: string;
+  revisionId: RevisionId;
+  documentVersion: number;
+  createdAt: string;
+  reason: string;
+}
+
+/**
+ * Metadata-only reference to a large source or generated asset. Binary data is
+ * stored outside the canonical document (IndexedDB locally, R2 when synced).
+ */
+export interface ProjectAssetRef {
+  assetId: AssetId;
+  artifactId?: ArtifactId;
+  kind: 'step-source' | 'stl-source' | 'mesh-cache' | 'thumbnail' | 'export';
+  name: string;
+  contentType: string;
+  bytes?: number;
+  checksum?: string;
+  storage: 'local' | 'remote' | 'local-and-remote';
+  createdAt: string;
 }
 
 export interface DerivedState {
@@ -247,6 +338,7 @@ export interface DerivedState {
 }
 
 export interface ProjectDocument {
+  schemaVersion: ProjectDocumentSchemaVersion;
   projectId: ProjectId;
   ownerUserId: UserId;
   rootNodeId: EntityId;
@@ -261,7 +353,9 @@ export interface ProjectDocument {
   sketchOrder: SketchId[];
   parameterOrder: ParameterId[];
   revisions: RevisionRecord[];
+  checkpoints: ProjectCheckpoint[];
   commandLog: SerializedCommand[];
+  assets: Record<AssetId, ProjectAssetRef>;
   derived: DerivedState;
 }
 
@@ -286,7 +380,13 @@ export interface UploadSessionRecord {
 export interface ArtifactRecord {
   artifactId: ArtifactId;
   projectId: ProjectId;
-  kind: 'step-import' | 'stl-import' | 'step-export' | 'stl-export' | 'snapshot' | 'thumbnail';
+  kind:
+    | 'step-import'
+    | 'stl-import'
+    | 'step-export'
+    | 'stl-export'
+    | 'snapshot'
+    | 'thumbnail';
   name: string;
   objectKey: string;
   contentType: string;
@@ -372,6 +472,44 @@ export interface HealthResponse {
   time: string;
 }
 
+export interface AuthSession {
+  userId: UserId;
+  displayName: string;
+  email?: string;
+  mode: 'development' | 'cloudflare-access';
+}
+
+export interface CollaborationMember {
+  clientId: string;
+  userId: UserId;
+  displayName: string;
+  status: 'active' | 'idle';
+}
+
+export type CollaborationClientMessage =
+  | {
+      type: 'hello';
+      clientId: string;
+      displayName: string;
+      document: ProjectDocument;
+    }
+  | {
+      type: 'document';
+      clientId: string;
+      document: ProjectDocument;
+    }
+  | { type: 'presence'; clientId: string; status: 'active' | 'idle' };
+
+export type CollaborationServerMessage =
+  | {
+      type: 'state';
+      members: CollaborationMember[];
+      document: ProjectDocument | null;
+    }
+  | { type: 'presence'; members: CollaborationMember[] }
+  | { type: 'document'; clientId: string; document: ProjectDocument }
+  | { type: 'conflict'; document: ProjectDocument };
+
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 }
@@ -392,13 +530,15 @@ export const toProjectId = (value: string): ProjectId => value as ProjectId;
 export const toFeatureId = (value: string): FeatureId => value as FeatureId;
 export const toBodyId = (value: string): BodyId => value as BodyId;
 export const toSketchId = (value: string): SketchId => value as SketchId;
-export const toParameterId = (value: string): ParameterId => value as ParameterId;
+export const toParameterId = (value: string): ParameterId =>
+  value as ParameterId;
 export const toRevisionId = (value: string): RevisionId => value as RevisionId;
 export const toArtifactId = (value: string): ArtifactId => value as ArtifactId;
 export const toUploadSessionId = (value: string): UploadSessionId =>
   value as UploadSessionId;
 export const toUserId = (value: string): UserId => value as UserId;
 export const toJobId = (value: string): JobId => value as JobId;
+export const toAssetId = (value: string): AssetId => value as AssetId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
 
@@ -409,6 +549,10 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   revolve: '#5fb3e8',
   boolean: '#ff7452',
   transform: '#8b80f9',
+  fillet: '#f59e0b',
+  chamfer: '#fb7185',
+  pattern: '#38bdf8',
+  'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff'
 };
 

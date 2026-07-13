@@ -7,14 +7,15 @@ interface AppShellProps {
   viewer: ReactNode;
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
+  assistant: ReactNode;
   statusBar: ReactNode;
   overlays?: ReactNode;
 }
 
 /**
- * Workspace layout frame: TopBar / ToolBar / [Sidebar | Viewer] / StatusBar.
- * The inspector floats over the viewer like a CAD dialog instead of taking a
- * permanent column, so the viewport keeps its size while editing.
+ * Workspace layout frame: TopBar / ToolBar / [Sidebar | Viewer] / AI rail /
+ * StatusBar. The inspector floats over the viewer like a CAD dialog instead
+ * of taking a permanent column, so the viewport keeps its size while editing.
  */
 export function AppShell({
   topBar,
@@ -22,6 +23,7 @@ export function AppShell({
   sidebar,
   viewer,
   inspector,
+  assistant,
   statusBar,
   overlays
 }: AppShellProps) {
@@ -36,6 +38,7 @@ export function AppShell({
           {inspector && <div className="inspector-float">{inspector}</div>}
         </div>
       </main>
+      {assistant}
       {statusBar}
       {overlays}
     </div>

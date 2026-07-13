@@ -3,6 +3,7 @@ import {
   Box,
   Combine,
   Cone,
+  CopyPlus,
   Cylinder,
   Globe,
   Layers,
@@ -11,7 +12,9 @@ import {
   RotateCw,
   Scissors,
   Shapes,
-  Torus
+  Spline,
+  Torus,
+  TriangleRight
 } from 'lucide-react';
 
 export type ToolId =
@@ -26,9 +29,13 @@ export type ToolId =
   | 'union'
   | 'subtract'
   | 'intersect'
-  | 'transform';
+  | 'transform'
+  | 'fillet'
+  | 'chamfer'
+  | 'linear-pattern'
+  | 'circular-pattern';
 
-export type ToolGroup = 'solid' | 'sketch' | 'modify';
+export type ToolGroup = 'solid' | 'sketch' | 'modify' | 'finish';
 
 export interface ToolMeta {
   label: string;
@@ -125,18 +132,49 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'modify',
     shortcut: 'M',
     hint: 'Translate or rotate a body'
+  },
+  fillet: {
+    label: 'Fillet',
+    icon: icon(<Spline size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Round a selected edge'
+  },
+  chamfer: {
+    label: 'Chamfer',
+    icon: icon(<TriangleRight size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Bevel a selected edge'
+  },
+  'linear-pattern': {
+    label: 'Linear pattern',
+    icon: icon(<CopyPlus size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Repeat a body along an axis'
+  },
+  'circular-pattern': {
+    label: 'Circular pattern',
+    icon: icon(<RotateCw size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Repeat a body around an axis'
   }
 };
 
 export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] = [
   { id: 'solid', label: 'Solids', tools: PRIMITIVE_TOOLS },
   { id: 'sketch', label: 'Sketch', tools: ['sketch', 'extrude', 'revolve'] },
-  { id: 'modify', label: 'Modify', tools: ['union', 'subtract', 'intersect', 'transform'] }
+  { id: 'modify', label: 'Modify', tools: ['union', 'subtract', 'intersect', 'transform'] },
+  {
+    id: 'finish',
+    label: 'Finish & repeat',
+    tools: ['fillet', 'chamfer', 'linear-pattern', 'circular-pattern']
+  }
 ];
 
 export interface ToolAvailability {
   sketchCount: number;
   liveBodyCount: number;
+  /** An exact edge is picked in the viewport (enables fillet/chamfer). */
+  hasEdgeSelected: boolean;
 }
 
 /** Why a tool cannot run right now, or null when it can. */
@@ -151,6 +189,15 @@ export function toolDisabledReason(tool: ToolId, avail: ToolAvailability): strin
     return 'Needs at least two bodies';
   }
   if (tool === 'transform' && avail.liveBodyCount < 1) {
+    return 'Needs a body';
+  }
+  if ((tool === 'fillet' || tool === 'chamfer') && !avail.hasEdgeSelected) {
+    return 'Click an edge in the viewport first';
+  }
+  if (
+    (tool === 'linear-pattern' || tool === 'circular-pattern') &&
+    avail.liveBodyCount < 1
+  ) {
     return 'Needs a body';
   }
   return null;

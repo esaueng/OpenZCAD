@@ -1,7 +1,18 @@
-import { type ChangeEvent } from 'react';
-import { Download, Redo2, Save, Undo2, Upload } from 'lucide-react';
-import type { UnitSystem } from '@openzcad/shared';
+import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import {
+  Check,
+  CloudOff,
+  Download,
+  LoaderCircle,
+  Pencil,
+  Redo2,
+  Undo2,
+  Upload,
+  Users
+} from 'lucide-react';
+import type { AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import type { CollaborationStatus } from '../lib/useCollaboration';
 
 interface TopBarProps {
   projectName: string | null;
@@ -11,13 +22,16 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
-  /** True when the document has edits that are not saved as a revision. */
-  dirty: boolean;
+  saveState: 'saved' | 'saving' | 'offline';
+  session: AuthSession | null;
+  collaborationStatus: CollaborationStatus;
+  collaboratorCount: number;
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
+  onRenameProject(name: string): void;
   onGoHome(): void;
 }
 
@@ -28,14 +42,46 @@ export function TopBar({
   canRedo,
   canExport,
   exportScope,
-  dirty,
+  saveState,
+  session,
+  collaborationStatus,
+  collaboratorCount,
   onUndo,
   onRedo,
   onSave,
   onImportFile,
   onExport,
+  onRenameProject,
   onGoHome
 }: TopBarProps) {
+  const [editingProjectName, setEditingProjectName] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
+  const projectNameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingProjectName) {
+      projectNameInputRef.current?.select();
+    }
+  }, [editingProjectName]);
+
+  function beginProjectRename() {
+    if (!projectName) {
+      return;
+    }
+    setProjectNameDraft(projectName);
+    setEditingProjectName(true);
+  }
+
+  function commitProjectRename() {
+    const nextName = projectNameDraft.trim();
+    setEditingProjectName(false);
+    if (nextName && nextName !== projectName) {
+      onRenameProject(nextName);
+      return;
+    }
+    setProjectNameDraft(projectName ?? '');
+  }
+
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}`
@@ -43,17 +89,54 @@ export function TopBar({
 
   return (
     <header className="topbar">
-      <button className="brand" type="button" onClick={onGoHome} title="Back to projects">
+      <button
+        className="brand"
+        type="button"
+        onClick={onGoHome}
+        title="Back to projects"
+      >
         <BrandMark />
         OpenZCAD <span className="beta-tag">Beta</span>
       </button>
       <div className="topbar-divider" />
       <div className="breadcrumb">
-        <strong>{projectName ?? 'No project'}</strong>
-        {projectName && <span className="mono">{units ?? ''}</span>}
-        {dirty && (
-          <span className="dirty-dot" title="Unsaved changes — Ctrl+S saves a revision" />
+        {projectName ? (
+          editingProjectName ? (
+            <input
+              ref={projectNameInputRef}
+              className="project-title-input"
+              value={projectNameDraft}
+              maxLength={200}
+              aria-label="Project name"
+              onChange={(event) => setProjectNameDraft(event.target.value)}
+              onBlur={commitProjectRename}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitProjectRename();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setProjectNameDraft(projectName);
+                  setEditingProjectName(false);
+                }
+              }}
+            />
+          ) : (
+            <button
+              className="project-title-button"
+              type="button"
+              aria-label="Rename project"
+              title="Rename project"
+              onClick={beginProjectRename}
+            >
+              <strong>{projectName}</strong>
+              <Pencil size={11} aria-hidden="true" />
+            </button>
+          )
+        ) : (
+          <strong>No project</strong>
         )}
+        {projectName && <span className="mono">{units ?? ''}</span>}
       </div>
       <div className="topbar-tools" aria-label="Workspace tools">
         <button
@@ -77,7 +160,10 @@ export function TopBar({
           <Redo2 size={15} aria-hidden="true" />
         </button>
       </div>
-      <label className="secondary topbar-action" title="Import an STL mesh or inspect STEP metadata">
+      <label
+        className="secondary topbar-action"
+        title="Import an editable STEP solid or STL mesh"
+      >
         <Upload size={14} aria-hidden="true" />
         Import
         <input
@@ -114,15 +200,43 @@ export function TopBar({
         STL
       </button>
       <button
-        className={`primary topbar-action ${dirty ? 'attention' : ''}`}
+        className="save-state topbar-action"
         type="button"
         disabled={!projectName}
         onClick={onSave}
-        title={dirty ? 'Unsaved changes — save a revision (Ctrl+S)' : 'Save a revision (Ctrl+S)'}
+        title="Save a revision (Ctrl+S)"
       >
-        <Save size={15} aria-hidden="true" />
-        Save
+        {saveState === 'saving' ? (
+          <LoaderCircle className="spin" size={14} aria-hidden="true" />
+        ) : saveState === 'offline' ? (
+          <CloudOff size={14} aria-hidden="true" />
+        ) : (
+          <Check size={14} aria-hidden="true" />
+        )}
+        {saveState === 'saving'
+          ? 'Saving'
+          : saveState === 'offline'
+            ? 'Local only'
+            : 'Saved'}
       </button>
+      {session && (
+        <span className="session-user" title={session.email ?? session.userId}>
+          {session.displayName}
+        </span>
+      )}
+      <span
+        className={`collaboration-state ${collaborationStatus}`}
+        title={`Collaboration: ${collaborationStatus}`}
+      >
+        <Users size={13} aria-hidden="true" />
+        {collaborationStatus === 'live'
+          ? `${collaboratorCount} live`
+          : collaborationStatus === 'conflict'
+            ? 'Conflict'
+            : collaborationStatus === 'oversize'
+              ? 'Local only'
+              : collaborationStatus}
+      </span>
     </header>
   );
 }
