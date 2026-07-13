@@ -7,7 +7,7 @@ import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
-export const DEFAULT_AI_PROVIDER = 'openai';
+export const DEFAULT_AI_PROVIDER = 'openrouter';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
 
@@ -41,7 +41,30 @@ export interface AssistantStatus {
 }
 
 function providerFor(env: CloudflareEnv) {
-  return env.AI_PROVIDER ?? DEFAULT_AI_PROVIDER;
+  const genericKey = env.AI_API_KEY?.trim();
+  const openAiKey = env.OPENAI_API_KEY?.trim();
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  if (env.AI_PROVIDER === 'openai' && !genericKey && !openAiKey && openRouterKey) {
+    return 'openrouter';
+  }
+  if (
+    env.AI_PROVIDER === 'openrouter' &&
+    !genericKey &&
+    !openRouterKey &&
+    openAiKey
+  ) {
+    return 'openai';
+  }
+  if (env.AI_PROVIDER) {
+    return env.AI_PROVIDER;
+  }
+  if (openRouterKey) {
+    return 'openrouter';
+  }
+  if (openAiKey) {
+    return 'openai';
+  }
+  return DEFAULT_AI_PROVIDER;
 }
 
 function apiKeyFor(env: CloudflareEnv, provider: string) {
@@ -56,6 +79,11 @@ function apiKeyFor(env: CloudflareEnv, provider: string) {
 }
 
 function modelFor(env: CloudflareEnv, provider: string) {
+  if (env.AI_PROVIDER && env.AI_PROVIDER !== provider) {
+    return provider === 'openrouter'
+      ? DEFAULT_OPENROUTER_MODEL
+      : DEFAULT_AI_MODEL;
+  }
   return (
     env.AI_MODEL ??
     (provider === 'openrouter' ? DEFAULT_OPENROUTER_MODEL : DEFAULT_AI_MODEL)

@@ -82,8 +82,24 @@ describe('assistant integration', () => {
   });
 
   it('uses one centralized frontier-model default', () => {
-    expect(DEFAULT_AI_PROVIDER).toBe('openai');
+    expect(DEFAULT_AI_PROVIDER).toBe('openrouter');
+    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-5.6-terra');
     expect(DEFAULT_AI_MODEL).toBe('gpt-5.6-sol');
+  });
+
+  it('recovers from a stale direct-provider variable when only OpenRouter is configured', () => {
+    expect(
+      getAssistantStatus({
+        AI_PROVIDER: 'openai',
+        AI_MODEL: 'gpt-5.6-sol',
+        OPENROUTER_API_KEY: 'openrouter-key'
+      })
+    ).toEqual({
+      configured: true,
+      provider: 'openrouter',
+      model: 'openai/gpt-5.6-terra',
+      reasoningEffort: 'high'
+    });
   });
 
   it('reports configuration state without returning the API key', () => {
@@ -94,7 +110,7 @@ describe('assistant integration', () => {
     });
     expect(status).toEqual({
       configured: true,
-      provider: 'openai',
+      provider: 'openrouter',
       model: 'configured-model',
       reasoningEffort: 'high'
     });

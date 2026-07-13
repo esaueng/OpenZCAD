@@ -45,13 +45,20 @@ type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
 
+export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
+  return (
+    object instanceof THREE.Mesh &&
+    object.material instanceof THREE.MeshStandardMaterial
+  );
+}
+
 function forEachMesh(
   object: THREE.Object3D,
   visit: (mesh: ViewerMesh) => void
 ) {
   object.traverse((child: THREE.Object3D) => {
-    if (child instanceof THREE.Mesh) {
-      visit(child as ViewerMesh);
+    if (isViewerMesh(child)) {
+      visit(child);
     }
   });
 }

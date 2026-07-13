@@ -80,7 +80,7 @@ describe('worker api routes', () => {
     };
     expect(status).toMatchObject({
       configured: true,
-      provider: 'openai',
+      provider: 'openrouter',
       model: 'model-test',
       reasoningEffort: 'high'
     });
