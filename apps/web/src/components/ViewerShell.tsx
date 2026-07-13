@@ -1,5 +1,6 @@
 import {
   ModelViewer,
+  type FaceResizeCommit,
   type SketchOverlay,
   type StandardView,
   type ViewerSettings
@@ -15,7 +16,13 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: StandardView; nonce: number } | null;
-  onSelectTopology(selection: TopologySelection | null, additive: boolean): void;
+  units: string;
+  editableBodyIds: string[];
+  onSelectTopology(
+    selection: TopologySelection | null,
+    additive: boolean
+  ): void;
+  onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
@@ -30,7 +37,10 @@ export function ViewerShell({
   settings,
   fitSignal,
   viewRequest,
+  units,
+  editableBodyIds,
   onSelectTopology,
+  onResizePrimitiveFace,
   onToggleGrid,
   onFit,
   onView,
@@ -46,7 +56,10 @@ export function ViewerShell({
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        units={units}
+        editableBodyIds={editableBodyIds}
         onSelectTopology={onSelectTopology}
+        onResizePrimitiveFace={onResizePrimitiveFace}
       />
       <ViewerToolbar
         settings={settings}
