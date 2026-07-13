@@ -16,6 +16,34 @@ export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
 export type StandardView = 'iso' | 'front' | 'top' | 'right';
 
+export type DirectEditAxis = 'x' | 'y' | 'z';
+
+export interface FaceResizeCommit {
+  bodyId: TopologySelection['bodyId'];
+  axis: DirectEditAxis;
+  value: number;
+}
+
+export interface DirectEditDirection {
+  axis: DirectEditAxis;
+  side: -1 | 1;
+}
+
+/** Maps an exact picked face normal to the parametric box dimension it edits. */
+export function directEditDirectionFromNormal(
+  normal: Pick<THREE.Vector3, 'x' | 'y' | 'z'>
+): DirectEditDirection {
+  const components = [
+    ['x', normal.x],
+    ['y', normal.y],
+    ['z', normal.z]
+  ] as const;
+  const [axis, value] = components.reduce((largest, candidate) =>
+    Math.abs(candidate[1]) > Math.abs(largest[1]) ? candidate : largest
+  );
+  return { axis, side: value < 0 ? -1 : 1 };
+}
+
 export interface ViewerSettings {
   showGrid: boolean;
   displayMode: DisplayMode;
@@ -40,7 +68,14 @@ interface ModelViewerProps {
   fitSignal: number;
   /** Set to move the camera to a standard view; nonce forces re-runs. */
   viewRequest: { view: StandardView; nonce: number } | null;
-  onSelectTopology(selection: TopologySelection | null, additive: boolean): void;
+  units: string;
+  /** Primitive box bodies whose planar faces can drive document dimensions. */
+  editableBodyIds: string[];
+  onSelectTopology(
+    selection: TopologySelection | null,
+    additive: boolean
+  ): void;
+  onResizePrimitiveFace(commit: FaceResizeCommit): void;
 }
 
 interface SceneContext {
@@ -54,8 +89,32 @@ interface SceneContext {
   overlayGroup: THREE.Group;
   grid: THREE.GridHelper;
   raycaster: THREE.Raycaster;
+  objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
   hoveredBodyId: string | null;
+}
+
+interface PickResult {
+  selection: TopologySelection;
+  hit: THREE.Intersection<THREE.Object3D>;
+  faceNormal?: THREE.Vector3;
+}
+
+interface FaceDragState {
+  pointerId: number;
+  selection: TopologySelection;
+  object: THREE.Object3D;
+  axis: DirectEditAxis;
+  side: -1 | 1;
+  initialValue: number;
+  latestValue: number;
+  startX: number;
+  startY: number;
+  directionX: number;
+  directionY: number;
+  pixelsPerUnit: number;
+  initialPosition: THREE.Vector3;
+  initialScale: THREE.Vector3;
 }
 
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
@@ -141,6 +200,25 @@ function findBodyId(object: THREE.Object3D): string | null {
   return null;
 }
 
+function normalForTriangle(
+  body: BodyRepresentation,
+  triangleStart: number
+): THREE.Vector3 | null {
+  const offset = triangleStart * 3;
+  const indices = body.mesh.indices.slice(offset, offset + 3);
+  if (indices.length !== 3) {
+    return null;
+  }
+  const [aIndex, bIndex, cIndex] = indices;
+  if (aIndex === undefined || bIndex === undefined || cIndex === undefined) {
+    return null;
+  }
+  const a = new THREE.Vector3().fromArray(body.mesh.vertices, aIndex * 3);
+  const b = new THREE.Vector3().fromArray(body.mesh.vertices, bIndex * 3);
+  const c = new THREE.Vector3().fromArray(body.mesh.vertices, cIndex * 3);
+  return new THREE.Triangle(a, b, c).getNormal(new THREE.Vector3());
+}
+
 /**
  * Meshes render solid or wireframe; the baked feature-edge overlay
  * (LineSegments) toggles with the mode. Exact topology edge curves are
@@ -164,12 +242,21 @@ export function ModelViewer({
   settings,
   fitSignal,
   viewRequest,
-  onSelectTopology
+  units,
+  editableBodyIds,
+  onSelectTopology,
+  onResizePrimitiveFace
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
+  onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
+  const editableBodyIdsRef = useRef(new Set(editableBodyIds));
+  editableBodyIdsRef.current = new Set(editableBodyIds);
+  const unitsRef = useRef(units);
+  unitsRef.current = units;
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
 
@@ -190,7 +277,12 @@ export function ModelViewer({
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(host.clientWidth, host.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.appendChild(renderer.domElement);
 
     const labelRenderer = new CSS2DRenderer();
@@ -204,11 +296,12 @@ export function ModelViewer({
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
-    scene.add(new THREE.HemisphereLight('#cfe2ff', '#0a0f16', 1.0));
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.15);
+    scene.add(new THREE.HemisphereLight('#dbeafe', '#070b10', 1.25));
+    const keyLight = new THREE.DirectionalLight('#ffffff', 1.45);
     keyLight.position.set(90, 140, 100);
+    keyLight.castShadow = true;
     scene.add(keyLight);
-    const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.35);
+    const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.5);
     rimLight.position.set(-80, 40, -90);
     scene.add(rimLight);
 
@@ -243,6 +336,7 @@ export function ModelViewer({
       overlayGroup,
       grid,
       raycaster: new THREE.Raycaster(),
+      objectsByBodyId: new Map(),
       hasFitCamera: false,
       hoveredBodyId: null
     };
@@ -258,10 +352,15 @@ export function ModelViewer({
 
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
+    let faceDrag: FaceDragState | null = null;
+    const dragHud = document.createElement('div');
+    dragHud.className = 'direct-edit-hud';
+    dragHud.hidden = true;
+    host.appendChild(dragHud);
 
-    context.raycaster.params.Line = { threshold: 1.8 };
+    context.raycaster.params.Line = { threshold: 2.4 };
 
-    function pickSelection(event: PointerEvent): TopologySelection | null {
+    function pick(event: PointerEvent): PickResult | null {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -284,10 +383,13 @@ export function ModelViewer({
         }
         if (data.topologyKind === 'edge' && data.topologyId) {
           return {
-            bodyId: bodyId as TopologySelection['bodyId'],
-            kind: 'edge',
-            topologyId: data.topologyId,
-            hash: data.topologyHash
+            selection: {
+              bodyId: bodyId as TopologySelection['bodyId'],
+              kind: 'edge',
+              topologyId: data.topologyId,
+              hash: data.topologyHash
+            },
+            hit
           };
         }
         const faceIndex = hit.faceIndex;
@@ -301,23 +403,43 @@ export function ModelViewer({
             : undefined;
         if (face) {
           return {
-            bodyId: bodyId as TopologySelection['bodyId'],
-            kind: 'face',
-            topologyId: face.topologyId,
-            hash: face.hash
+            selection: {
+              bodyId: bodyId as TopologySelection['bodyId'],
+              kind: 'face',
+              topologyId: face.topologyId,
+              hash: face.hash
+            },
+            hit,
+            faceNormal: hit.face?.normal
+              .clone()
+              .transformDirection(hit.object.matrixWorld)
           };
         }
-        return { bodyId: bodyId as TopologySelection['bodyId'], kind: 'body' };
+        return {
+          selection: {
+            bodyId: bodyId as TopologySelection['bodyId'],
+            kind: 'body'
+          },
+          hit
+        };
       }
       return null;
     }
 
-    function applyHover(bodyId: string | null) {
+    function applyHover(result: PickResult | null) {
+      const bodyId = result?.selection.bodyId ?? null;
+      const canDragFace =
+        result?.selection.kind === 'face' &&
+        editableBodyIdsRef.current.has(result.selection.bodyId);
+      renderer.domElement.style.cursor = canDragFace
+        ? 'grab'
+        : bodyId
+          ? 'pointer'
+          : '';
       if (context.hoveredBodyId === bodyId) {
         return;
       }
       context.hoveredBodyId = bodyId;
-      renderer.domElement.style.cursor = bodyId ? 'pointer' : '';
       forEachMesh(bodyGroup, (mesh) => {
         const meshBodyId = findBodyId(mesh);
         const base =
@@ -328,13 +450,152 @@ export function ModelViewer({
       });
     }
 
+    function positionDragHud(
+      event: PointerEvent,
+      value: number,
+      axis: DirectEditAxis
+    ) {
+      const hostRect = hostRef.current?.getBoundingClientRect();
+      if (!hostRect) {
+        return;
+      }
+      const label = axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
+      dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitsRef.current}`;
+      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
+      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
+      dragHud.hidden = false;
+    }
+
+    function restoreFaceDrag() {
+      if (!faceDrag) {
+        return;
+      }
+      faceDrag.object.position.copy(faceDrag.initialPosition);
+      faceDrag.object.scale.copy(faceDrag.initialScale);
+      controls.enabled = true;
+      dragHud.hidden = true;
+      renderer.domElement.style.cursor = 'grab';
+      if (renderer.domElement.hasPointerCapture(faceDrag.pointerId)) {
+        renderer.domElement.releasePointerCapture(faceDrag.pointerId);
+      }
+    }
+
     const handlePointerMove = (event: PointerEvent) => {
-      applyHover(pickSelection(event)?.bodyId ?? null);
+      if (faceDrag && event.pointerId === faceDrag.pointerId) {
+        event.preventDefault();
+        const dx = event.clientX - faceDrag.startX;
+        const dy = event.clientY - faceDrag.startY;
+        const projected = dx * faceDrag.directionX + dy * faceDrag.directionY;
+        const value =
+          Math.round(
+            Math.max(
+              0.1,
+              faceDrag.initialValue + projected / faceDrag.pixelsPerUnit
+            ) * 10
+          ) / 10;
+        faceDrag.latestValue = value;
+        const scale = value / faceDrag.initialValue;
+        faceDrag.object.scale[faceDrag.axis] =
+          faceDrag.initialScale[faceDrag.axis] * scale;
+        faceDrag.object.position[faceDrag.axis] =
+          faceDrag.initialPosition[faceDrag.axis] +
+          (faceDrag.side * (value - faceDrag.initialValue)) / 2;
+        renderer.domElement.style.cursor = 'grabbing';
+        positionDragHud(event, value, faceDrag.axis);
+        return;
+      }
+      applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
       downPosition = { x: event.clientX, y: event.clientY };
+      if (event.button !== 0) {
+        return;
+      }
+      const result = pick(event);
+      if (
+        !result?.faceNormal ||
+        result.selection.kind !== 'face' ||
+        !editableBodyIdsRef.current.has(result.selection.bodyId)
+      ) {
+        return;
+      }
+      const object = context.objectsByBodyId.get(result.selection.bodyId);
+      if (!object) {
+        return;
+      }
+      const direction = directEditDirectionFromNormal(result.faceNormal);
+      const size = new THREE.Box3()
+        .setFromObject(object)
+        .getSize(new THREE.Vector3());
+      const initialValue = size[direction.axis];
+      if (!Number.isFinite(initialValue) || initialValue <= 0) {
+        return;
+      }
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      const projectedStart = result.hit.point.clone().project(camera);
+      const projectedEnd = result.hit.point
+        .clone()
+        .add(result.faceNormal)
+        .project(camera);
+      const projectedX = ((projectedEnd.x - projectedStart.x) * rect.width) / 2;
+      const projectedY =
+        (-(projectedEnd.y - projectedStart.y) * rect.height) / 2;
+      const projectedLength = Math.hypot(projectedX, projectedY);
+      const distance = Math.max(
+        camera.position.distanceTo(result.hit.point),
+        1
+      );
+      const fallbackPixelsPerUnit =
+        rect.height /
+        (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance);
+      const useProjectedDirection =
+        projectedLength >= fallbackPixelsPerUnit * 0.15;
+
+      faceDrag = {
+        pointerId: event.pointerId,
+        selection: result.selection,
+        object,
+        axis: direction.axis,
+        side: direction.side,
+        initialValue,
+        latestValue: initialValue,
+        startX: event.clientX,
+        startY: event.clientY,
+        directionX: useProjectedDirection ? projectedX / projectedLength : 0,
+        directionY: useProjectedDirection ? projectedY / projectedLength : -1,
+        pixelsPerUnit: Math.max(
+          useProjectedDirection ? projectedLength : fallbackPixelsPerUnit,
+          0.1
+        ),
+        initialPosition: object.position.clone(),
+        initialScale: object.scale.clone()
+      };
+      controls.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      positionDragHud(event, initialValue, direction.axis);
+      event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (faceDrag && event.pointerId === faceDrag.pointerId) {
+        const completed = faceDrag;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        restoreFaceDrag();
+        faceDrag = null;
+        downPosition = null;
+        onSelectTopologyRef.current(completed.selection, false);
+        if (moved >= 4 && completed.latestValue !== completed.initialValue) {
+          onResizePrimitiveFaceRef.current({
+            bodyId: completed.selection.bodyId,
+            axis: completed.axis,
+            value: completed.latestValue
+          });
+        }
+        return;
+      }
       if (!downPosition) {
         return;
       }
@@ -344,8 +605,18 @@ export function ModelViewer({
       );
       downPosition = null;
       if (moved < 5) {
-        onSelectTopologyRef.current(pickSelection(event), event.shiftKey);
+        onSelectTopologyRef.current(
+          pick(event)?.selection ?? null,
+          event.shiftKey
+        );
       }
+    };
+    const handlePointerCancel = (event: PointerEvent) => {
+      if (faceDrag && event.pointerId === faceDrag.pointerId) {
+        restoreFaceDrag();
+        faceDrag = null;
+      }
+      downPosition = null;
     };
     const handleDoubleClick = () => {
       if (bodyGroup.children.length === 0) {
@@ -355,9 +626,22 @@ export function ModelViewer({
       controls.update();
     };
 
-    renderer.domElement.addEventListener('pointermove', handlePointerMove);
-    renderer.domElement.addEventListener('pointerdown', handlePointerDown);
-    renderer.domElement.addEventListener('pointerup', handlePointerUp);
+    renderer.domElement.addEventListener(
+      'pointermove',
+      handlePointerMove,
+      true
+    );
+    renderer.domElement.addEventListener(
+      'pointerdown',
+      handlePointerDown,
+      true
+    );
+    renderer.domElement.addEventListener('pointerup', handlePointerUp, true);
+    renderer.domElement.addEventListener(
+      'pointercancel',
+      handlePointerCancel,
+      true
+    );
     renderer.domElement.addEventListener('dblclick', handleDoubleClick);
 
     let animationFrame = window.requestAnimationFrame(function animate() {
@@ -370,9 +654,26 @@ export function ModelViewer({
     return () => {
       window.cancelAnimationFrame(animationFrame);
       observer.disconnect();
-      renderer.domElement.removeEventListener('pointermove', handlePointerMove);
-      renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
-      renderer.domElement.removeEventListener('pointerup', handlePointerUp);
+      renderer.domElement.removeEventListener(
+        'pointermove',
+        handlePointerMove,
+        true
+      );
+      renderer.domElement.removeEventListener(
+        'pointerdown',
+        handlePointerDown,
+        true
+      );
+      renderer.domElement.removeEventListener(
+        'pointerup',
+        handlePointerUp,
+        true
+      );
+      renderer.domElement.removeEventListener(
+        'pointercancel',
+        handlePointerCancel,
+        true
+      );
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
@@ -383,6 +684,7 @@ export function ModelViewer({
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
+      host.removeChild(dragHud);
       contextRef.current = null;
     };
   }, []);
@@ -397,8 +699,7 @@ export function ModelViewer({
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
     context.hoveredBodyId = null;
-
-    const objectsByBodyId = new Map<string, THREE.Object3D>();
+    context.objectsByBodyId.clear();
 
     for (const body of bodies) {
       const object = createObjectForBody(body);
@@ -411,6 +712,8 @@ export function ModelViewer({
         mesh.userData.baseEmissive = baseEmissive;
         mesh.userData.bodyId = body.bodyId;
         mesh.userData.topology = body.topology;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
       });
 
       for (const edge of body.topology?.edges ?? []) {
@@ -476,10 +779,30 @@ export function ModelViewer({
         );
         highlight.raycast = () => undefined;
         object.add(highlight);
+
+        if (editableBodyIds.includes(body.bodyId)) {
+          const normal = normalForTriangle(body, selectedFace.triangleStart);
+          if (normal) {
+            const { axis } = directEditDirectionFromNormal(normal);
+            const value = body.bbox.max[axis] - body.bbox.min[axis];
+            geometry.computeBoundingBox();
+            const center = geometry.boundingBox?.getCenter(new THREE.Vector3());
+            if (center) {
+              const dimension =
+                axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
+              const label = makeLabel(
+                'selection-callout direct-edit-callout',
+                `Drag face · ${dimension} ${Math.round(value * 100) / 100} ${units}`
+              );
+              label.position.copy(center);
+              context.overlayGroup.add(label);
+            }
+          }
+        }
       }
 
       context.bodyGroup.add(object);
-      objectsByBodyId.set(body.bodyId, object);
+      context.objectsByBodyId.set(body.bodyId, object);
     }
 
     applyDisplayMode(context.bodyGroup, displayModeRef.current);
@@ -487,7 +810,7 @@ export function ModelViewer({
     // Name callout on the primary (last picked) selected body.
     const primaryId = selectedBodyIds.at(-1);
     if (primaryId) {
-      const target = objectsByBodyId.get(primaryId);
+      const target = context.objectsByBodyId.get(primaryId);
       const body = bodies.find((candidate) => candidate.bodyId === primaryId);
       if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
@@ -501,9 +824,7 @@ export function ModelViewer({
               ? ` · ${selectedTopology.topologyId}`
               : '';
           const count =
-            selectedBodyIds.length > 1
-              ? ` +${selectedBodyIds.length - 1}`
-              : '';
+            selectedBodyIds.length > 1 ? ` +${selectedBodyIds.length - 1}` : '';
           const label = makeLabel(
             'selection-callout',
             `${body.name}${suffix}${count}`
@@ -523,7 +844,7 @@ export function ModelViewer({
       context.controls.update();
       context.hasFitCamera = true;
     }
-  }, [bodies, selectedBodyIds, selectedTopology]);
+  }, [bodies, editableBodyIds, selectedBodyIds, selectedTopology, units]);
 
   // Sketch profiles render as line loops on their planes so upcoming
   // extrudes/revolves are visible before they exist.
@@ -538,7 +859,9 @@ export function ModelViewer({
         continue;
       }
       const geometry = new THREE.BufferGeometry().setFromPoints(
-        sketch.points.map((point) => new THREE.Vector3(point.x, point.y, point.z))
+        sketch.points.map(
+          (point) => new THREE.Vector3(point.x, point.y, point.z)
+        )
       );
       const line = new THREE.LineLoop(
         geometry,
@@ -557,7 +880,10 @@ export function ModelViewer({
           centroid.add(new THREE.Vector3(point.x, point.y, point.z));
         }
         centroid.divideScalar(sketch.points.length);
-        const label = makeLabel('selection-callout sketch-callout', sketch.name);
+        const label = makeLabel(
+          'selection-callout sketch-callout',
+          sketch.name
+        );
         label.position.copy(centroid);
         context.sketchGroup.add(label);
       }
