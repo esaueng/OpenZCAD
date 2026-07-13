@@ -15,6 +15,7 @@ interface ViewerShellProps {
   sketches: SketchOverlay[];
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
+  selectedEdges: TopologySelection[];
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: StandardView; nonce: number } | null;
@@ -41,6 +42,7 @@ export function ViewerShell({
   sketches,
   selectedBodyIds,
   selectedTopology,
+  selectedEdges,
   settings,
   fitSignal,
   viewRequest,
@@ -65,6 +67,7 @@ export function ViewerShell({
         sketches={sketches}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
+        selectedEdges={selectedEdges}
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}

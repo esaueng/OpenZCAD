@@ -1492,6 +1492,17 @@
   font-size: var(--fs-mini);
 }
 
+.edge-selection-action {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 7px;
+}
+
+.edge-selection-hint {
+  margin: 0 0 10px;
+  font-size: var(--fs-mini);
+}
+
 .field-triple {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

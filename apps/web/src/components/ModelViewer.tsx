@@ -71,6 +71,8 @@ interface ModelViewerProps {
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
+  /** Exact edges highlighted for a single edge-modifier operation. */
+  selectedEdges: TopologySelection[];
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
@@ -332,6 +334,7 @@ export function ModelViewer({
   sketches,
   selectedBodyIds,
   selectedTopology,
+  selectedEdges,
   settings,
   fitSignal,
   viewRequest,
@@ -939,6 +942,9 @@ export function ModelViewer({
     clearGroup(context.overlayGroup);
     context.hoveredBodyId = null;
     context.objectsByBodyId.clear();
+    const selectedEdgeKeys = new Set(
+      selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
+    );
 
     for (const body of bodies) {
       const object = createObjectForBody(body);
@@ -964,10 +970,9 @@ export function ModelViewer({
           'position',
           new THREE.Float32BufferAttribute(edge.points, 3)
         );
-        const active =
-          selectedTopology?.kind === 'edge' &&
-          selectedTopology.bodyId === body.bodyId &&
-          selectedTopology.topologyId === edge.topologyId;
+        const active = selectedEdgeKeys.has(
+          `${body.bodyId}:${edge.topologyId}`
+        );
         const line = new THREE.Line(
           geometry,
           new THREE.LineBasicMaterial({
@@ -1083,7 +1088,14 @@ export function ModelViewer({
       context.controls.update();
       context.hasFitCamera = true;
     }
-  }, [bodies, editableBodyIds, selectedBodyIds, selectedTopology, units]);
+  }, [
+    bodies,
+    editableBodyIds,
+    selectedBodyIds,
+    selectedEdges,
+    selectedTopology,
+    units
+  ]);
 
   // Sketch profiles render as line loops on their planes so upcoming
   // extrudes/revolves are visible before they exist.

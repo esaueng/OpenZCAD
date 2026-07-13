@@ -146,6 +146,9 @@ export function App() {
   >(null);
   const [selectedTopology, setSelectedTopology] =
     useState<TopologySelection | null>(null);
+  // Viewport-only edge picks for one fillet/chamfer feature. The document
+  // remains the source of truth once the command is committed.
+  const [selectedEdges, setSelectedEdges] = useState<TopologySelection[]>([]);
   // Viewport body selection in pick order; drives boolean/move pre-fills.
   const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
@@ -425,6 +428,22 @@ export function App() {
     ? (representations[selectedFeature.bodyId] ?? null)
     : null;
 
+  const edgeModifierBody = useMemo<BodyRepresentation | null>(() => {
+    const candidateId =
+      selectedEdges[0]?.bodyId ??
+      selectedTopology?.bodyId ??
+      selectedBodyIds.at(-1);
+    if (candidateId) {
+      const candidate = viewerBodies.find(
+        (body) => body.bodyId === candidateId
+      );
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return viewerBodies.length === 1 ? viewerBodies[0]! : null;
+  }, [selectedBodyIds, selectedEdges, selectedTopology, viewerBodies]);
+
   const exportBodyIds = useMemo<BodyId[]>(() => {
     if (!doc) {
       return [];
@@ -515,7 +534,7 @@ export function App() {
   const availability: ToolAvailability = {
     sketchCount: sketchOptions.length,
     liveBodyCount: viewerBodies.length,
-    hasEdgeSelected: selectedTopology?.kind === 'edge'
+    hasEdgeSelected: selectedEdges.length > 0
   };
 
   function hydrateDocument(nextDocument: ProjectDocument) {
@@ -526,6 +545,7 @@ export function App() {
     setPreviewDoc(null);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
@@ -569,6 +589,7 @@ export function App() {
       setTool(null);
       setSelectedFeatureNodeId(null);
       setSelectedTopology(null);
+      setSelectedEdges([]);
       setSelectedBodyIds([]);
       setSelectedSketchProfileId(null);
       setExtrudePreview(null);
@@ -578,6 +599,7 @@ export function App() {
   function startExtrude(sketchId: SketchId) {
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
     setExtrudePreview({ sketchId, distance: 0 });
@@ -654,6 +676,7 @@ export function App() {
       } else {
         setSelectedFeatureNodeId(null);
         setSelectedTopology(null);
+        setSelectedEdges([]);
         setSelectedBodyIds([]);
         setTool('extrude');
         setStatus('Extrude: select a shaded closed profile in the viewport.');
@@ -674,6 +697,7 @@ export function App() {
   function clearSelection() {
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
   }
@@ -754,6 +778,7 @@ export function App() {
     setDoc(null);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
@@ -1065,6 +1090,7 @@ export function App() {
     setExtrudePreview(null);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(typedSketchId);
     const name =
@@ -1088,6 +1114,38 @@ export function App() {
       }
       return;
     }
+    if (selection.kind === 'edge') {
+      const sameBody = selectedEdges.every(
+        (edge) => edge.bodyId === selection.bodyId
+      );
+      const alreadySelected = selectedEdges.some(
+        (edge) => edge.topologyId === selection.topologyId
+      );
+      const nextEdges =
+        additive && sameBody
+          ? alreadySelected
+            ? selectedEdges.filter(
+                (edge) => edge.topologyId !== selection.topologyId
+              )
+            : [...selectedEdges, selection]
+          : [selection];
+      setSelectedEdges(nextEdges);
+      setSelectedBodyIds([selection.bodyId]);
+      setSelectedTopology(
+        nextEdges.at(-1) ?? { bodyId: selection.bodyId, kind: 'body' }
+      );
+      setSelectedFeatureNodeId(featureNodeIdForBody(selection.bodyId));
+      if (!additive && tool !== 'fillet' && tool !== 'chamfer') {
+        setTool(null);
+      }
+      setStatus(
+        nextEdges.length > 0
+          ? `${nextEdges.length} exact edge${nextEdges.length === 1 ? '' : 's'} selected.`
+          : 'Edge selection cleared.'
+      );
+      return;
+    }
+    setSelectedEdges([]);
     const nextIds = additive
       ? selectedBodyIds.includes(selection.bodyId)
         ? selectedBodyIds.filter((id) => id !== selection.bodyId)
@@ -1108,6 +1166,30 @@ export function App() {
       setSelectedTopology(null);
       setSelectedFeatureNodeId(null);
     }
+  }
+
+  function handleSelectAllEdges(body: BodyRepresentation) {
+    const edges = (body.topology?.edges ?? []).map(
+      (edge): TopologySelection => ({
+        bodyId: body.bodyId,
+        kind: 'edge',
+        topologyId: edge.topologyId,
+        hash: edge.hash
+      })
+    );
+    setSelectedEdges(edges);
+    setSelectedBodyIds([body.bodyId]);
+    setSelectedTopology(edges.at(-1) ?? { bodyId: body.bodyId, kind: 'body' });
+    setSelectedFeatureNodeId(featureNodeIdForBody(body.bodyId));
+    setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
+  }
+
+  function handleClearSelectedEdges() {
+    setSelectedEdges([]);
+    const bodyId = edgeModifierBody?.bodyId;
+    setSelectedTopology(bodyId ? { bodyId, kind: 'body' } : null);
+    setSelectedBodyIds(bodyId ? [bodyId] : []);
+    setStatus('Edge selection cleared.');
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
@@ -1153,6 +1235,7 @@ export function App() {
     setTool(null);
     setExtrudePreview(null);
     setSelectedTopology(null);
+    setSelectedEdges([]);
     const next = selectedFeatureNodeId === nodeId ? null : nodeId;
     setSelectedFeatureNodeId(next);
     const node = next && doc ? doc.nodes[next] : undefined;
@@ -1338,17 +1421,21 @@ export function App() {
         ? extrudePreview
           ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
           : 'Click a shaded closed profile · Esc cancels'
-        : tool
-          ? 'Enter creates · Esc cancels'
-          : selectedBodyIds.length >= 2
-            ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-            : selectedTopology?.kind === 'edge'
-              ? 'Edge selected — Fillet or Chamfer from the toolbar'
-              : selectedFeature
-                ? 'Edit in the panel · Del deletes · Esc closes'
-                : viewerBodies.length > 0
-                  ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                  : 'Ctrl+K commands · ? shortcuts';
+        : tool === 'fillet' || tool === 'chamfer'
+          ? selectedEdges.length > 0
+            ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+            : 'Click edges with Shift or choose Select all edges · Esc cancels'
+          : tool
+            ? 'Enter creates · Esc cancels'
+            : selectedBodyIds.length >= 2
+              ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+              : selectedTopology?.kind === 'edge'
+                ? 'Edge selected — Fillet or Chamfer from the toolbar'
+                : selectedFeature
+                  ? 'Edit in the panel · Del deletes · Esc closes'
+                  : viewerBodies.length > 0
+                    ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                    : 'Ctrl+K commands · ? shortcuts';
 
   const paletteCommands: PaletteCommand[] = [
     ...TOOL_GROUPS.flatMap((group) =>
@@ -1551,6 +1638,7 @@ export function App() {
           sketches={sketchOverlays}
           selectedBodyIds={selectedBodyIds}
           selectedTopology={selectedTopology}
+          selectedEdges={selectedEdges}
           settings={viewerSettings}
           fitSignal={fitSignal}
           viewRequest={viewRequest}
@@ -1626,6 +1714,8 @@ export function App() {
             selectedSketchObject={selectedSketchObject}
             selectedBody={selectedBody}
             selectedTopology={selectedTopology}
+            selectedEdges={selectedEdges}
+            edgeModifierBody={edgeModifierBody}
             scope={parameterScope.scope}
             sketches={sketchOptions}
             bodies={bodyOptions}
@@ -1634,6 +1724,8 @@ export function App() {
             preferredSketchId={selectedSketch?.sketchId ?? null}
             onLaunchTool={launchTool}
             onCancel={cancelPanel}
+            onSelectAllEdges={handleSelectAllEdges}
+            onClearSelectedEdges={handleClearSelectedEdges}
             onCreatePrimitive={(kind, name, dimensions) =>
               createFeature(
                 commandFactories.addPrimitive({
