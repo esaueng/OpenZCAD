@@ -11,7 +11,13 @@ interface StartScreenProps {
   onOpen(projectId: string): void;
 }
 
-export function StartScreen({ projects, status, busy, onCreate, onOpen }: StartScreenProps) {
+export function StartScreen({
+  projects,
+  status,
+  busy,
+  onCreate,
+  onOpen
+}: StartScreenProps) {
   const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>('mm');
 

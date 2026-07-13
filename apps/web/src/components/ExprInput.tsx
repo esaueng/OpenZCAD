@@ -18,7 +18,15 @@ interface ExprInputProps {
  * over the parameter table ("w / 2 + 5") and previews the evaluated result
  * inline so broken references are visible before the model rebuilds.
  */
-export function ExprInput({ label, value, scope, onChange, placeholder, optional, autoFocus }: ExprInputProps) {
+export function ExprInput({
+  label,
+  value,
+  scope,
+  onChange,
+  placeholder,
+  optional,
+  autoFocus
+}: ExprInputProps) {
   const id = useId();
   const preview = previewExpression(value, scope);
   const showError = !preview.ok && !(optional && value.trim().length === 0);
@@ -40,7 +48,9 @@ export function ExprInput({ label, value, scope, onChange, placeholder, optional
           onChange={(event) => onChange(event.target.value)}
         />
         {!isPlainNumber && (
-          <small className={`expr-preview ${showError ? 'error' : ''}`}>{preview.text}</small>
+          <small className={`expr-preview ${showError ? 'error' : ''}`}>
+            {preview.text}
+          </small>
         )}
       </div>
     </label>

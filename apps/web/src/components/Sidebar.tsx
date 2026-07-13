@@ -62,7 +62,12 @@ interface ParameterRowProps {
   onDelete(name: string): void;
 }
 
-function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) {
+function ParameterRow({
+  parameter,
+  value,
+  onSet,
+  onDelete
+}: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
 
   function commit() {
@@ -75,7 +80,10 @@ function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) 
   }
 
   return (
-    <div className="param-row" title={`${parameter.name} = ${parameter.expression}`}>
+    <div
+      className="param-row"
+      title={`${parameter.name} = ${parameter.expression}`}
+    >
       <span className="param-name mono">{parameter.name}</span>
       <input
         className="mono"
@@ -93,7 +101,9 @@ function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) 
           }
         }}
       />
-      <span className={`param-value mono ${value === undefined ? 'error' : ''}`}>
+      <span
+        className={`param-value mono ${value === undefined ? 'error' : ''}`}
+      >
         {value === undefined ? 'err' : formatNumber(value)}
       </span>
       <button
@@ -109,7 +119,11 @@ function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) 
   );
 }
 
-function AddParameterRow({ onSet }: { onSet(name: string, expression: string): void }) {
+function AddParameterRow({
+  onSet
+}: {
+  onSet(name: string, expression: string): void;
+}) {
   const [name, setName] = useState('');
   const [expression, setExpression] = useState('');
 
@@ -145,7 +159,12 @@ function AddParameterRow({ onSet }: { onSet(name: string, expression: string): v
         aria-label="New parameter expression"
         onChange={(event) => setExpression(event.target.value)}
       />
-      <button type="submit" className="icon-button" title="Add parameter" aria-label="Add parameter">
+      <button
+        type="submit"
+        className="icon-button"
+        title="Add parameter"
+        aria-label="Add parameter"
+      >
         <Plus size={13} aria-hidden="true" />
       </button>
     </form>
@@ -179,6 +198,7 @@ export function Sidebar({
 }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="Model browser">
+      <div className="sidebar-label">Model</div>
       <section className="sidebar-section">
         <h3 className="section-title">Parameters</h3>
         <div className="param-list">
@@ -195,8 +215,8 @@ export function Sidebar({
         </div>
         {parameters.length === 0 && (
           <p className="muted sidebar-hint">
-            Name a value here (e.g. <span className="mono">w = 30</span>), then use it in any
-            feature field.
+            Name a value here (e.g. <span className="mono">w = 30</span>), then
+            use it in any feature field.
           </p>
         )}
       </section>
@@ -210,7 +230,9 @@ export function Sidebar({
             </p>
           )}
           {features.map((feature) => {
-            const body = feature.bodyId ? representations[feature.bodyId] : undefined;
+            const body = feature.bodyId
+              ? representations[feature.bodyId]
+              : undefined;
             const consumed = body?.consumed ?? false;
             const failed =
               feature.bodyId !== undefined &&
@@ -230,7 +252,10 @@ export function Sidebar({
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">{feature.name}</span>
                   {failed && (
-                    <span className="feature-flag error" title="Feature failed to build">
+                    <span
+                      className="feature-flag error"
+                      title="Feature failed to build"
+                    >
                       <AlertTriangle size={11} aria-hidden="true" />
                     </span>
                   )}
@@ -241,7 +266,9 @@ export function Sidebar({
                   className="row-delete"
                   title={`Delete ${feature.name}`}
                   aria-label={`Delete ${feature.name}`}
-                  onClick={() => onDeleteFeature(feature.featureId, feature.name)}
+                  onClick={() =>
+                    onDeleteFeature(feature.featureId, feature.name)
+                  }
                 >
                   <Trash2 size={12} aria-hidden="true" />
                 </button>

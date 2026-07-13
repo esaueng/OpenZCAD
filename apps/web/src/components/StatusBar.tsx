@@ -8,6 +8,7 @@ interface StatusBarProps {
   featureCount: number;
   warningCount: number;
   documentVersion: number | null;
+  units: string;
 }
 
 export function StatusBar({
@@ -18,37 +19,41 @@ export function StatusBar({
   bodyCount,
   featureCount,
   warningCount,
-  documentVersion
+  documentVersion,
+  units
 }: StatusBarProps) {
   return (
     <footer className="status-bar">
-      <span className={`status-state ${tone === 'ready' ? '' : tone}`} title={status}>
+      <span
+        className={`status-state ${tone === 'ready' ? '' : tone}`}
+        title={status}
+      >
         <i />
         {status}
       </span>
       {hint && <span className="status-hint">{hint}</span>}
       <div className="status-groups" aria-label="Workspace status">
         <span>
-          <b>project</b>
-          {projectName ?? '—'}
+          <b>kernel</b>
+          Exact B-rep
         </span>
         <span>
-          <b>features</b>
-          {featureCount}
+          <b>units</b>
+          {units}
         </span>
         <span>
-          <b>bodies</b>
-          {bodyCount}
+          <b>warnings</b>
+          {warningCount}
         </span>
-        {warningCount > 0 && (
-          <span className="status-warning">
-            <b>warnings</b>
-            {warningCount}
-          </span>
-        )}
         <span>
           <b>rev</b>
           {documentVersion ?? '—'}
+        </span>
+        <span
+          title={`${projectName ?? 'Project'} · ${featureCount} features · ${bodyCount} bodies`}
+        >
+          <b>sync</b>
+          Synced
         </span>
       </div>
     </footer>

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories, replayCommands } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  commandsForCadPatch,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   createProjectDocument,
   getLatestBodyId,
@@ -36,22 +41,57 @@ describe('command-system', () => {
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
   });
 
+  it('renames the project through replayable undoable document history', () => {
+    const base = createProjectDocument('Original Name', toUserId('user_test'));
+    const manager = new CommandManager(base);
+
+    manager.execute(
+      commandFactories.renameNode({
+        nodeId: base.rootNodeId,
+        name: 'Renamed Part'
+      })
+    );
+
+    expect(manager.document.name).toBe('Renamed Part');
+    expect(manager.document.nodes[base.rootNodeId]?.name).toBe('Renamed Part');
+    expect(replayCommands(base, manager.document.commandLog).name).toBe(
+      'Renamed Part'
+    );
+
+    manager.undo();
+    expect(manager.document.name).toBe('Original Name');
+    manager.redo();
+    expect(manager.document.name).toBe('Renamed Part');
+  });
+
   it('replays a full parametric command log into an identical entity graph', () => {
     const base = createProjectDocument('Replay Test', toUserId('user_test'));
     const manager = new CommandManager(base);
 
-    manager.execute(commandFactories.setParameter({ name: 'depth', expression: '24' }));
+    manager.execute(
+      commandFactories.setParameter({ name: 'depth', expression: '24' })
+    );
     manager.execute(
       commandFactories.addSketch({
         name: 'Profile',
         plane: 'XY',
         offset: 0,
-        object: { objectKind: 'rectangle', width: 32, height: 18, centerX: 0, centerY: 0 }
+        object: {
+          objectKind: 'rectangle',
+          width: 32,
+          height: 18,
+          centerX: 0,
+          centerY: 0
+        }
       })
     );
     const sketchId = getLatestSketchId(manager.document)!;
     manager.execute(
-      commandFactories.extrudeSketch({ name: 'Extrude', sketchId, distance: 'depth' })
+      commandFactories.extrudeSketch({
+        name: 'Extrude',
+        sketchId,
+        distance: 'depth'
+      })
     );
     const bodyId = getLatestBodyId(manager.document)!;
     manager.execute(
@@ -62,7 +102,8 @@ describe('command-system', () => {
       })
     );
     const extrudeFeature = Object.values(manager.document.nodes).find(
-      (node): node is FeatureNode => node.kind === 'feature' && node.featureKind === 'extrude'
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'extrude'
     )!;
     manager.execute(
       commandFactories.updateFeature(
@@ -113,11 +154,36 @@ describe('command-system', () => {
     const feature = Object.values(manager.document.nodes).find(
       (node): node is FeatureNode => node.kind === 'feature'
     )!;
-    manager.execute(commandFactories.deleteFeature({ featureId: feature.featureId }));
+    manager.execute(
+      commandFactories.deleteFeature({ featureId: feature.featureId })
+    );
 
     const replayed = replayCommands(base, manager.document.commandLog);
     expect(replayed.bodyOrder).toHaveLength(0);
     expect(replayed.featureOrder).toHaveLength(0);
+  });
+
+  it('replays embedded editable STEP imports without losing source data', () => {
+    const base = createProjectDocument('STEP Replay', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Imported',
+        artifactId: 'artifact_step',
+        sourceName: 'part.step',
+        stepText: 'ISO-10303-21;END-ISO-10303-21;'
+      })
+    );
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    const feature = Object.values(replayed.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'imported-step'
+    );
+    expect(feature?.data.featureKind).toBe('imported-step');
+    if (feature?.data.featureKind === 'imported-step') {
+      expect(feature.data.stepText).toContain('ISO-10303-21');
+    }
   });
 
   it('validates command preconditions before applying', () => {
@@ -179,5 +245,84 @@ describe('command-system', () => {
 
     manager.undo();
     expect(manager.document.bodyOrder).toHaveLength(0);
+  });
+
+  it('turns a reviewed AI patch into normal undoable commands', () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI Patch', toUserId('user_test'))
+    );
+    const commands = commandsForCadPatch(manager.document, {
+      proposalId: 'proposal_1',
+      summary: 'Add a driven mounting block.',
+      assumptions: [],
+      operations: [
+        { kind: 'set_parameter', name: 'width', expression: '80' },
+        {
+          kind: 'add_primitive',
+          name: 'Mounting block',
+          primitiveKind: 'box',
+          dimensions: {
+            width: 'width',
+            height: 20,
+            depth: 8,
+            radius: null,
+            bottomRadius: null,
+            topRadius: null,
+            majorRadius: null,
+            minorRadius: null
+          }
+        }
+      ]
+    });
+
+    manager.runTransaction('Apply AI patch', commands);
+    expect(manager.document.parameterOrder).toHaveLength(1);
+    expect(manager.document.bodyOrder).toHaveLength(1);
+    manager.undo();
+    expect(manager.document.parameterOrder).toHaveLength(0);
+    expect(manager.document.bodyOrder).toHaveLength(0);
+  });
+
+  it('converts advanced AI operations into replayable feature commands', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Advanced AI Patch', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Seed',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const bodyId = manager.document.bodyOrder[0]!;
+    const commands = commandsForCadPatch(manager.document, {
+      proposalId: 'proposal_advanced',
+      summary: 'Move and repeat the seed.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_transform',
+          name: 'Move seed',
+          targetBodyId: bodyId,
+          translation: { x: 5, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        },
+        {
+          kind: 'add_pattern',
+          name: 'Seed pattern',
+          targetBodyId: bodyId,
+          patternKind: 'linear',
+          count: 3,
+          axis: 'x',
+          spacing: 20,
+          angleDeg: 360
+        }
+      ]
+    });
+
+    manager.runTransaction('Apply advanced AI patch', commands);
+    expect(manager.document.commandLog.at(-2)?.kind).toBe('feature.transform');
+    expect(manager.document.commandLog.at(-1)?.kind).toBe('feature.pattern');
+    expect(manager.document.featureOrder).toHaveLength(3);
   });
 });

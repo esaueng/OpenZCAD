@@ -1,6 +1,7 @@
 import {
   deepClone,
   nowIso,
+  type BodyId,
   type ProjectDocument,
   type SerializedCommand
 } from '@openzcad/shared';
@@ -10,6 +11,7 @@ import {
   appendRevision,
   attachDerivedState,
   booleanBodies,
+  chamferEdges,
   createBodyFeatureIds,
   createFeatureOnlyIds,
   createParameterIds,
@@ -17,9 +19,12 @@ import {
   deleteFeature,
   deleteParameter,
   extrudeSketch,
+  filletEdges,
   findFeature,
   findSketch,
   importMeshBody,
+  importStepBody,
+  patternBody,
   renameNode,
   revolveSketch,
   setNodeMetadata,
@@ -29,19 +34,23 @@ import {
   updateSketch,
   type BooleanInput,
   type ExtrudeInput,
+  type EdgeModifierInput,
   type FeatureDeleteInput,
   type FeatureUpdateInput,
   type ImportedMeshInput,
+  type ImportedStepInput,
   type NodeMetadataInput,
   type NodeRenameInput,
   type ParameterDeleteInput,
   type ParameterSetInput,
+  type PatternInput,
   type PrimitiveInput,
   type RevolveInput,
   type SketchInput,
   type SketchUpdateInput,
   type TransformInput
 } from '@openzcad/document-core';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 
 export type CommandKind =
   | 'primitive.add'
@@ -51,11 +60,15 @@ export type CommandKind =
   | 'feature.revolve'
   | 'feature.boolean'
   | 'feature.transform'
+  | 'feature.fillet'
+  | 'feature.chamfer'
+  | 'feature.pattern'
   | 'feature.update'
   | 'feature.delete'
   | 'parameter.set'
   | 'parameter.delete'
   | 'import.mesh'
+  | 'import.step'
   | 'node.rename'
   | 'node.metadata.set';
 
@@ -83,11 +96,14 @@ export type AnyCommand =
   | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
+  | CommandDefinition<EdgeModifierInput>
+  | CommandDefinition<PatternInput>
   | CommandDefinition<FeatureUpdateInput>
   | CommandDefinition<FeatureDeleteInput>
   | CommandDefinition<ParameterSetInput>
   | CommandDefinition<ParameterDeleteInput>
   | CommandDefinition<ImportedMeshInput>
+  | CommandDefinition<ImportedStepInput>
   | CommandDefinition<NodeRenameInput>
   | CommandDefinition<NodeMetadataInput>;
 
@@ -117,6 +133,12 @@ function makeCommand<TPayload>(
   };
 }
 
+function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
+  if (!document.bodyOrder.includes(bodyId)) {
+    throw new Error(`Target body ${bodyId} not found.`);
+  }
+}
+
 // Every factory resolves the IDs the operation will create *before* the
 // command is serialized, so replaying a command log rebuilds the exact same
 // entity graph. Without this, commands that reference earlier results
@@ -132,7 +154,10 @@ export const commandFactories = {
     );
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createSketchFeatureIds() };
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? createSketchFeatureIds()
+    };
     return makeCommand(
       'sketch.add',
       `Add ${payload.object.objectKind} sketch`,
@@ -210,9 +235,45 @@ export const commandFactories = {
       (document) => transformBody(document, withIds).document,
       (document) => {
         if (!document.bodyOrder.includes(payload.targetBodyId)) {
-          throw new Error(`Transform target body ${payload.targetBodyId} not found.`);
+          throw new Error(
+            `Transform target body ${payload.targetBodyId} not found.`
+          );
         }
       }
+    );
+  },
+  filletEdges(
+    payload: EdgeModifierInput
+  ): CommandDefinition<EdgeModifierInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.fillet',
+      'Fillet edges',
+      withIds,
+      (document) => filletEdges(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
+    );
+  },
+  chamferEdges(
+    payload: EdgeModifierInput
+  ): CommandDefinition<EdgeModifierInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.chamfer',
+      'Chamfer edges',
+      withIds,
+      (document) => chamferEdges(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
+    );
+  },
+  patternBody(payload: PatternInput): CommandDefinition<PatternInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.pattern',
+      `${payload.patternKind === 'linear' ? 'Linear' : 'Circular'} pattern`,
+      withIds,
+      (document) => patternBody(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
     );
   },
   updateFeature(
@@ -247,7 +308,9 @@ export const commandFactories = {
       }
     );
   },
-  setParameter(payload: ParameterSetInput): CommandDefinition<ParameterSetInput> {
+  setParameter(
+    payload: ParameterSetInput
+  ): CommandDefinition<ParameterSetInput> {
     const withIds = { ...payload, ids: payload.ids ?? createParameterIds() };
     return makeCommand(
       'parameter.set',
@@ -256,7 +319,9 @@ export const commandFactories = {
       (document) => setParameter(document, withIds)
     );
   },
-  deleteParameter(payload: ParameterDeleteInput): CommandDefinition<ParameterDeleteInput> {
+  deleteParameter(
+    payload: ParameterDeleteInput
+  ): CommandDefinition<ParameterDeleteInput> {
     return makeCommand(
       'parameter.delete',
       `Delete parameter ${payload.name}`,
@@ -266,13 +331,28 @@ export const commandFactories = {
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand('import.mesh', 'Import STL mesh', withIds, (document) =>
-      importMeshBody(document, withIds).document
+    return makeCommand(
+      'import.mesh',
+      'Import STL mesh',
+      withIds,
+      (document) => importMeshBody(document, withIds).document
+    );
+  },
+  importStep(payload: ImportedStepInput): CommandDefinition<ImportedStepInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'import.step',
+      'Import editable STEP solid',
+      withIds,
+      (document) => importStepBody(document, withIds).document
     );
   },
   renameNode(payload: NodeRenameInput): CommandDefinition<NodeRenameInput> {
-    return makeCommand('node.rename', `Rename to ${payload.name}`, payload, (document) =>
-      renameNode(document, payload)
+    return makeCommand(
+      'node.rename',
+      `Rename to ${payload.name}`,
+      payload,
+      (document) => renameNode(document, payload)
     );
   },
   setNodeMetadata(
@@ -284,6 +364,165 @@ export const commandFactories = {
     );
   }
 };
+
+/** Converts a reviewed AI proposal into normal undoable document commands. */
+export function commandsForCadPatch(
+  document: ProjectDocument,
+  proposal: CadPatchProposal
+): AnyCommand[] {
+  return proposal.operations.map((operation) => {
+    switch (operation.kind) {
+      case 'set_parameter':
+        return commandFactories.setParameter({
+          name: operation.name,
+          expression: operation.expression
+        });
+      case 'add_primitive': {
+        const dimensions = Object.fromEntries(
+          Object.entries(operation.dimensions).filter(
+            (entry) => entry[1] !== null
+          )
+        ) as Record<string, string | number>;
+        return commandFactories.addPrimitive({
+          name: operation.name,
+          primitiveKind: operation.primitiveKind,
+          dimensions
+        });
+      }
+      case 'delete_feature':
+        return commandFactories.deleteFeature({
+          featureId: operation.featureId
+        });
+      case 'rename_feature': {
+        const feature = findFeature(document, operation.featureId);
+        if (!feature) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        return commandFactories.renameNode({
+          nodeId: feature.id,
+          name: operation.name
+        });
+      }
+      case 'add_extrude':
+        return commandFactories.extrudeSketch({
+          name: operation.name,
+          sketchId: operation.sketchId,
+          distance: operation.distance
+        });
+      case 'add_revolve':
+        return commandFactories.revolveSketch({
+          name: operation.name,
+          sketchId: operation.sketchId,
+          axis: operation.axis
+        });
+      case 'add_boolean':
+        return commandFactories.booleanBodies({
+          name: operation.name,
+          operation: operation.operation,
+          targetBodyIds: operation.targetBodyIds
+        });
+      case 'add_transform':
+        return commandFactories.transformBody({
+          name: operation.name,
+          targetBodyId: operation.targetBodyId,
+          translation: operation.translation,
+          rotationDeg: operation.rotationDeg
+        });
+      case 'add_edge_modifier': {
+        const payload = {
+          name: operation.name,
+          targetBodyId: operation.targetBodyId,
+          edgeHashes: operation.edgeHashes,
+          size: operation.size
+        };
+        return operation.modifier === 'fillet'
+          ? commandFactories.filletEdges(payload)
+          : commandFactories.chamferEdges(payload);
+      }
+      case 'add_pattern':
+        return commandFactories.patternBody({
+          name: operation.name,
+          targetBodyId: operation.targetBodyId,
+          patternKind: operation.patternKind,
+          count: operation.count,
+          axis: operation.axis,
+          spacing: operation.spacing,
+          angleDeg: operation.angleDeg
+        });
+      case 'set_feature_dimension': {
+        const feature = findFeature(document, operation.featureId);
+        if (!feature) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        if (feature.data.featureKind === 'primitive') {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { dimensions: { [operation.field]: operation.value } }
+          });
+        }
+        if (
+          feature.data.featureKind === 'extrude' &&
+          operation.field === 'distance'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { distance: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'fillet' &&
+          operation.field === 'radius'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { radius: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'chamfer' &&
+          operation.field === 'distance'
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { distance: operation.value }
+          });
+        }
+        if (
+          feature.data.featureKind === 'pattern' &&
+          ['count', 'spacing', 'angleDeg'].includes(operation.field)
+        ) {
+          return commandFactories.updateFeature({
+            featureId: feature.featureId,
+            data: { [operation.field]: operation.value }
+          });
+        }
+        if (feature.data.featureKind === 'transform') {
+          const [group, axis] = operation.field.split('.');
+          if (
+            (group === 'translation' || group === 'rotationDeg') &&
+            (axis === 'x' || axis === 'y' || axis === 'z')
+          ) {
+            return commandFactories.updateFeature({
+              featureId: feature.featureId,
+              data: {
+                transform: {
+                  ...feature.data.transform,
+                  [group]: {
+                    ...feature.data.transform[group],
+                    [axis]: operation.value
+                  }
+                }
+              }
+            });
+          }
+        }
+        throw new Error(
+          `Feature ${feature.name} does not expose an editable ${operation.field} dimension.`
+        );
+      }
+    }
+  });
+}
 
 /** Bound on stored undo/redo entries so long sessions cannot exhaust memory. */
 const MAX_HISTORY_DEPTH = 100;
@@ -413,6 +652,18 @@ export function replayCommands(
       case 'feature.transform':
         next = transformBody(next, command.payload as TransformInput).document;
         break;
+      case 'feature.fillet':
+        next = filletEdges(next, command.payload as EdgeModifierInput).document;
+        break;
+      case 'feature.chamfer':
+        next = chamferEdges(
+          next,
+          command.payload as EdgeModifierInput
+        ).document;
+        break;
+      case 'feature.pattern':
+        next = patternBody(next, command.payload as PatternInput).document;
+        break;
       case 'feature.update':
         next = updateFeature(next, command.payload as FeatureUpdateInput);
         break;
@@ -426,7 +677,16 @@ export function replayCommands(
         next = deleteParameter(next, command.payload as ParameterDeleteInput);
         break;
       case 'import.mesh':
-        next = importMeshBody(next, command.payload as ImportedMeshInput).document;
+        next = importMeshBody(
+          next,
+          command.payload as ImportedMeshInput
+        ).document;
+        break;
+      case 'import.step':
+        next = importStepBody(
+          next,
+          command.payload as ImportedStepInput
+        ).document;
         break;
       case 'node.rename':
         next = renameNode(next, command.payload as NodeRenameInput);
@@ -437,7 +697,9 @@ export function replayCommands(
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer
         // clients still load; the skip is surfaced for debuggability.
-        console.warn(`replayCommands: skipping unknown command kind "${command.kind}".`);
+        console.warn(
+          `replayCommands: skipping unknown command kind "${command.kind}".`
+        );
         continue;
     }
 
