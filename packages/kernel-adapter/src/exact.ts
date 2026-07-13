@@ -409,12 +409,22 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             if (size <= 0) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
-            const modified = addHandle(
-              result,
-              feature.data.featureKind === 'fillet'
-                ? this.kernel.fillet(target, selected, size)
-                : this.kernel.chamfer(target, selected, size)
-            );
+            let modifiedShape: ShapeHandle;
+            try {
+              modifiedShape =
+                feature.data.featureKind === 'fillet'
+                  ? this.kernel.fillet(target, selected, size)
+                  : this.kernel.chamfer(target, selected, size);
+            } catch {
+              const label =
+                feature.data.featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
+              const dimension =
+                feature.data.featureKind === 'fillet' ? 'radius' : 'distance';
+              throw new Error(
+                `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}; for a uniformly rounded box, select the original edges together in one ${label} feature.`
+              );
+            }
+            const modified = addHandle(result, modifiedShape);
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, modified);
             break;

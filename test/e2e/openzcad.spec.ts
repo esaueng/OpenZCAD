@@ -112,6 +112,47 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   expect(dimensions).not.toEqual(['40', '18', '24']);
 });
 
+test('fillets all twelve edges of a box in one exact feature', async ({
+  page
+}) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('All-edge Fillet');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await expect(inspector.locator('.selection-summary')).toContainText(
+    '12 exact edges selected'
+  );
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const fillet = page.locator('.feature-row', { hasText: 'Fillet' });
+  await expect(fillet).toBeVisible();
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await fillet.locator('.feature-row-main').click();
+  await expect(page.locator('.panel-body')).toContainText('volume', {
+    ignoreCase: true
+  });
+  await expect(page.locator('.panel-body')).toContainText('faces');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('models a parametric part and exports a true STEP file', async ({
   page
 }) => {
@@ -152,7 +193,7 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(filletTool).toBeEnabled();
   await filletTool.click();
   await expect(page.locator('.selection-summary')).toContainText(
-    'Select an edge in the viewport first.'
+    'Select edges in the viewport or select every edge below.'
   );
   await page.keyboard.press('Escape'); // back to the tool launcher
 
@@ -230,7 +271,9 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   });
   const menu = page.locator('.context-menu');
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole('menuitem', { name: /Move \/ Rotate/ })).toBeVisible();
+  await expect(
+    menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
+  ).toBeVisible();
   await menu.getByRole('menuitem', { name: 'Hide Body' }).click();
   await expect(menu).toBeHidden();
 
