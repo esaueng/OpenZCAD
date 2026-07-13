@@ -12,13 +12,17 @@ import {
   attachDerivedState,
   booleanBodies,
   extrudeSketch,
+  filletBody,
   importMeshBody,
+  resizeBody,
   transformBody,
   type BooleanInput,
   type ConstraintInput,
   type ExtrudeInput,
+  type FilletBodyInput,
   type ImportedMeshInput,
   type PrimitiveInput,
+  type ResizeBodyInput,
   type SketchInput,
   type TransformInput
 } from '@openzcad/document-core';
@@ -29,6 +33,8 @@ export interface CommandDefinition<TPayload> {
     | 'sketch.add'
     | 'constraint.add'
     | 'feature.extrude'
+    | 'feature.fillet'
+    | 'feature.resize'
     | 'feature.boolean'
     | 'feature.transform'
     | 'import.mesh';
@@ -50,6 +56,8 @@ export type AnyCommand =
   | CommandDefinition<SketchInput>
   | CommandDefinition<ConstraintInput>
   | CommandDefinition<ExtrudeInput>
+  | CommandDefinition<FilletBodyInput>
+  | CommandDefinition<ResizeBodyInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<ImportedMeshInput>;
@@ -90,8 +98,11 @@ export const commandFactories = {
     );
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
-    return makeCommand('sketch.add', `Add ${payload.objectKind} sketch`, payload, (document) =>
-      addSketchFeature(document, payload).document
+    return makeCommand(
+      'sketch.add',
+      `Add ${payload.objectKind} sketch`,
+      payload,
+      (document) => addSketchFeature(document, payload).document
     );
   },
   addConstraint(payload: ConstraintInput): CommandDefinition<ConstraintInput> {
@@ -103,23 +114,51 @@ export const commandFactories = {
     );
   },
   extrudeSketch(payload: ExtrudeInput): CommandDefinition<ExtrudeInput> {
-    return makeCommand('feature.extrude', 'Extrude sketch', payload, (document) =>
-      extrudeSketch(document, payload).document
+    return makeCommand(
+      'feature.extrude',
+      'Extrude sketch',
+      payload,
+      (document) => extrudeSketch(document, payload).document
+    );
+  },
+  resizeBody(payload: ResizeBodyInput): CommandDefinition<ResizeBodyInput> {
+    return makeCommand(
+      'feature.resize',
+      `Resize ${payload.dimension}`,
+      payload,
+      (document) => resizeBody(document, payload)
+    );
+  },
+  filletBody(payload: FilletBodyInput): CommandDefinition<FilletBodyInput> {
+    return makeCommand(
+      'feature.fillet',
+      'Fillet selected edge',
+      payload,
+      (document) => filletBody(document, payload)
     );
   },
   booleanBodies(payload: BooleanInput): CommandDefinition<BooleanInput> {
-    return makeCommand('feature.boolean', `Boolean ${payload.operation}`, payload, (document) =>
-      booleanBodies(document, payload).document
+    return makeCommand(
+      'feature.boolean',
+      `Boolean ${payload.operation}`,
+      payload,
+      (document) => booleanBodies(document, payload).document
     );
   },
   transformBody(payload: TransformInput): CommandDefinition<TransformInput> {
-    return makeCommand('feature.transform', 'Transform body', payload, (document) =>
-      transformBody(document, payload).document
+    return makeCommand(
+      'feature.transform',
+      'Transform body',
+      payload,
+      (document) => transformBody(document, payload).document
     );
   },
   importMesh(payload: ImportedMeshInput): CommandDefinition<ImportedMeshInput> {
-    return makeCommand('import.mesh', 'Import external reference', payload, (document) =>
-      importMeshBody(document, payload).document
+    return makeCommand(
+      'import.mesh',
+      'Import external reference',
+      payload,
+      (document) => importMeshBody(document, payload).document
     );
   }
 };
@@ -152,7 +191,10 @@ export class CommandManager {
     if (!entry) {
       return this.document;
     }
-    this.redoStack.push({ before: deepClone(this.document), command: entry.command });
+    this.redoStack.push({
+      before: deepClone(this.document),
+      command: entry.command
+    });
     this.document = entry.before;
     return this.document;
   }
@@ -162,7 +204,10 @@ export class CommandManager {
     if (!entry) {
       return this.document;
     }
-    this.undoStack.push({ before: deepClone(this.document), command: entry.command });
+    this.undoStack.push({
+      before: deepClone(this.document),
+      command: entry.command
+    });
     this.document = entry.before;
     return this.document;
   }
@@ -216,6 +261,12 @@ export function replayCommands(
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;
         break;
+      case 'feature.resize':
+        next = resizeBody(next, command.payload as ResizeBodyInput);
+        break;
+      case 'feature.fillet':
+        next = filletBody(next, command.payload as FilletBodyInput);
+        break;
       case 'feature.boolean':
         next = booleanBodies(next, command.payload as BooleanInput).document;
         break;
@@ -223,7 +274,10 @@ export function replayCommands(
         next = transformBody(next, command.payload as TransformInput).document;
         break;
       case 'import.mesh':
-        next = importMeshBody(next, command.payload as ImportedMeshInput).document;
+        next = importMeshBody(
+          next,
+          command.payload as ImportedMeshInput
+        ).document;
         break;
       default:
         continue;

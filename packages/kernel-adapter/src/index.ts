@@ -14,9 +14,18 @@ import {
 
 export interface KernelAdapter {
   syncDocument(document: ProjectDocument): ProjectDocument['derived'];
-  buildFeature(document: ProjectDocument, featureId: string): BodyRepresentation | null;
-  booleanOp(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null;
-  transformBody(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null;
+  buildFeature(
+    document: ProjectDocument,
+    featureId: string
+  ): BodyRepresentation | null;
+  booleanOp(
+    document: ProjectDocument,
+    bodyId: BodyId
+  ): BodyRepresentation | null;
+  transformBody(
+    document: ProjectDocument,
+    bodyId: BodyId
+  ): BodyRepresentation | null;
   importStep(input: { fileName: string; text: string }): Promise<{
     name: string;
     products: string[];
@@ -28,10 +37,14 @@ export interface KernelAdapter {
 }
 
 function dimensionsToPrimitive(feature: FeatureNode): PrimitiveGeometry | null {
-  if (feature.featureKind === 'primitive' && feature.data.featureKind === 'primitive') {
+  if (
+    feature.featureKind === 'primitive' &&
+    feature.data.featureKind === 'primitive'
+  ) {
     return {
       kind: feature.data.primitiveKind,
-      dimensions: feature.data.dimensions
+      dimensions: feature.data.dimensions,
+      fillet: feature.data.fillet
     };
   }
 
@@ -64,8 +77,30 @@ function triangleMeshFromPrimitive(geometry: PrimitiveGeometry): MeshGeometry {
     const y = height / 2;
     const z = depth / 2;
     const vertices = [
-      -x, -y, -z, x, -y, -z, x, y, -z, -x, y, -z, -x, -y, z, x, -y, z, x, y, z,
-      -x, y, z
+      -x,
+      -y,
+      -z,
+      x,
+      -y,
+      -z,
+      x,
+      y,
+      -z,
+      -x,
+      y,
+      -z,
+      -x,
+      -y,
+      z,
+      x,
+      -y,
+      z,
+      x,
+      y,
+      z,
+      -x,
+      y,
+      z
     ];
     const indices = [
       0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6, 0, 4, 5, 0, 5, 1, 1, 5, 6, 1, 6, 2, 2,
@@ -138,7 +173,12 @@ function triangleMeshFromPrimitive(geometry: PrimitiveGeometry): MeshGeometry {
   return { kind: 'mesh', vertices, indices };
 }
 
-function asciiStlFacet(vertices: number[], a: number, b: number, c: number): string {
+function asciiStlFacet(
+  vertices: number[],
+  a: number,
+  b: number,
+  c: number
+): string {
   const ax = vertices[a * 3];
   const ay = vertices[a * 3 + 1];
   const az = vertices[a * 3 + 2];
@@ -168,7 +208,9 @@ export class MockKernelAdapter implements KernelAdapter {
     const warnings: string[] = [];
 
     for (const body of bodies) {
-      const feature = features.find((candidate) => candidate.featureId === body.featureId);
+      const feature = features.find(
+        (candidate) => candidate.featureId === body.featureId
+      );
       if (!feature) {
         warnings.push(`Body ${body.bodyId} has no feature.`);
         continue;
@@ -185,14 +227,16 @@ export class MockKernelAdapter implements KernelAdapter {
         bodyId: body.bodyId,
         name: body.name,
         color:
-          String(body.metadata?.color ?? colorForFeature(feature.featureKind)) ||
-          DEFAULT_BODY_COLOR,
+          String(
+            body.metadata?.color ?? colorForFeature(feature.featureKind)
+          ) || DEFAULT_BODY_COLOR,
         exportableStep: body.exportableStep
       };
     }
 
     return {
-      bodyRepresentations: bodyRepresentations as ProjectDocument['derived']['bodyRepresentations'],
+      bodyRepresentations:
+        bodyRepresentations as ProjectDocument['derived']['bodyRepresentations'],
       exportableBodyIds: Object.values(bodyRepresentations)
         .filter((body) => body.exportableStep)
         .map((body) => body.bodyId),
@@ -201,18 +245,27 @@ export class MockKernelAdapter implements KernelAdapter {
     };
   }
 
-  buildFeature(document: ProjectDocument, featureId: string): BodyRepresentation | null {
+  buildFeature(
+    document: ProjectDocument,
+    featureId: string
+  ): BodyRepresentation | null {
     const feature = listNodesByKind(document, 'feature').find(
       (candidate) => candidate.featureId === featureId
     );
     return feature ? this.representationForFeature(document, feature) : null;
   }
 
-  booleanOp(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null {
+  booleanOp(
+    document: ProjectDocument,
+    bodyId: BodyId
+  ): BodyRepresentation | null {
     return document.derived.bodyRepresentations[bodyId] ?? null;
   }
 
-  transformBody(document: ProjectDocument, bodyId: BodyId): BodyRepresentation | null {
+  transformBody(
+    document: ProjectDocument,
+    bodyId: BodyId
+  ): BodyRepresentation | null {
     return document.derived.bodyRepresentations[bodyId] ?? null;
   }
 
@@ -221,8 +274,9 @@ export class MockKernelAdapter implements KernelAdapter {
       input.text.matchAll(/PRODUCT\('([^']+)'/g),
       (match) => match[1]
     ).filter((value): value is string => Boolean(value));
-    const colors = Array.from(input.text.matchAll(/COLOUR_RGB\('([^']*)'/g), (match) =>
-      match[1] || 'unnamed'
+    const colors = Array.from(
+      input.text.matchAll(/COLOUR_RGB\('([^']*)'/g),
+      (match) => match[1] || 'unnamed'
     );
 
     return {
@@ -232,13 +286,19 @@ export class MockKernelAdapter implements KernelAdapter {
     };
   }
 
-  async exportStep(_document: ProjectDocument, _bodyIds: BodyId[]): Promise<string> {
+  async exportStep(
+    _document: ProjectDocument,
+    _bodyIds: BodyId[]
+  ): Promise<string> {
     throw new Error(
       'STEP export is not available until a native OpenCascade.js-backed kernel is connected.'
     );
   }
 
-  async exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string> {
+  async exportStl(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<string> {
     const facets: string[] = ['solid openzcad'];
 
     for (const bodyId of bodyIds) {
@@ -269,7 +329,9 @@ export class MockKernelAdapter implements KernelAdapter {
     }
 
     if (body.geometry.kind === 'composite') {
-      const childMeshes = body.geometry.children.map((child) => this.tessellate(child));
+      const childMeshes = body.geometry.children.map((child) =>
+        this.tessellate(child)
+      );
       const vertices: number[] = [];
       const indices: number[] = [];
       let vertexOffset = 0;
@@ -322,7 +384,8 @@ export class MockKernelAdapter implements KernelAdapter {
                 width: sketchData.width,
                 height: sketchData.height,
                 depth: extrudeData.distance
-              }
+              },
+              fillet: extrudeData.fillet
             }
           };
         }
@@ -359,7 +422,9 @@ export class MockKernelAdapter implements KernelAdapter {
     if (feature.data.featureKind === 'boolean') {
       const children = feature.data.targetBodyIds
         .map((bodyId) => document.derived.bodyRepresentations[bodyId])
-        .filter((candidate): candidate is BodyRepresentation => Boolean(candidate));
+        .filter((candidate): candidate is BodyRepresentation =>
+          Boolean(candidate)
+        );
 
       return {
         ...base,
@@ -372,7 +437,8 @@ export class MockKernelAdapter implements KernelAdapter {
     }
 
     if (feature.data.featureKind === 'transform') {
-      const target = document.derived.bodyRepresentations[feature.data.targetBodyId];
+      const target =
+        document.derived.bodyRepresentations[feature.data.targetBodyId];
       if (!target) {
         return null;
       }
