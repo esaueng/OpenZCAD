@@ -1,5 +1,6 @@
 import {
   nowIso,
+  sanitizeFileName,
   toArtifactId,
   toUploadSessionId,
   type ArtifactMetadataResponse,
@@ -18,14 +19,38 @@ import {
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createCheckpoint,
+  createProjectDocument,
+  normalizeDocument
+} from '@openzcad/document-core';
 import { InMemoryJobRunner } from '@openzcad/jobs';
+
+export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
+
+/** Thrown by saveRevision when the target project does not exist. */
+export class ProjectNotFoundError extends Error {
+  constructor(projectId: string) {
+    super(`Project ${projectId} not found.`);
+    this.name = 'ProjectNotFoundError';
+  }
+}
 
 export interface PersistenceService {
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
-  createProject(userId: UserId, request: CreateProjectRequest): Promise<CreateProjectResponse>;
-  loadProject(projectId: string): Promise<ProjectDocument | null>;
-  saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument>;
+  createProject(
+    userId: UserId,
+    request: CreateProjectRequest
+  ): Promise<CreateProjectResponse>;
+  loadProject(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectDocument | null>;
+  /** @throws ProjectNotFoundError when the project does not exist. */
+  saveRevision(
+    userId: UserId,
+    request: SaveRevisionRequest
+  ): Promise<ProjectDocument>;
   createUploadSession(
     userId: UserId,
     request: CreateUploadSessionRequest
@@ -38,7 +63,10 @@ export interface PersistenceService {
     userId: UserId,
     request: RequestExportRequest
   ): Promise<RequestExportResponse>;
-  getArtifactMetadata(artifactId: string): Promise<ArtifactMetadataResponse>;
+  getArtifactMetadata(
+    userId: UserId,
+    artifactId: string
+  ): Promise<ArtifactMetadataResponse>;
 }
 
 export class InMemoryPersistenceService implements PersistenceService {
@@ -47,11 +75,11 @@ export class InMemoryPersistenceService implements PersistenceService {
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly jobRunner = new InMemoryJobRunner();
 
-  async listProjects(_userId: UserId): Promise<ListProjectsResponse> {
+  async listProjects(userId: UserId): Promise<ListProjectsResponse> {
     return {
-      projects: Array.from(this.projects.values()).map((document) =>
-        summarizeDocument(document)
-      )
+      projects: Array.from(this.projects.values())
+        .filter((document) => document.ownerUserId === userId)
+        .map((document) => summarizeDocument(document))
     };
   }
 
@@ -67,24 +95,44 @@ export class InMemoryPersistenceService implements PersistenceService {
     };
   }
 
-  async loadProject(projectId: string): Promise<ProjectDocument | null> {
-    return this.projects.get(projectId) ?? null;
+  async loadProject(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectDocument | null> {
+    const document = this.projects.get(projectId);
+    return document?.ownerUserId === userId
+      ? normalizeDocument(document)
+      : null;
   }
 
-  async saveRevision(request: SaveRevisionRequest): Promise<ProjectDocument> {
-    this.projects.set(request.projectId, request.document);
-    return request.document;
+  async saveRevision(
+    userId: UserId,
+    request: SaveRevisionRequest
+  ): Promise<ProjectDocument> {
+    const existing = this.projects.get(request.projectId);
+    if (!existing || existing.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const normalized = normalizeDocument(request.document);
+    if (normalized.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const document = createCheckpoint(normalized, request.reason);
+    this.projects.set(request.projectId, document);
+    return document;
   }
 
   async createUploadSession(
-    _userId: UserId,
+    userId: UserId,
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse> {
+    this.assertProjectOwner(userId, request.projectId);
+    this.pruneExpiredUploads();
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
-      objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${request.fileName}`,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${sanitizeFileName(request.fileName)}`,
+      expiresAt: new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString(),
       fileName: request.fileName,
       contentType: request.contentType
     };
@@ -93,13 +141,15 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   async finalizeImport(
-    _userId: UserId,
+    userId: UserId,
     request: FinalizeImportRequest
   ): Promise<ArtifactRecord | null> {
+    this.assertProjectOwner(userId, request.projectId);
     const upload = this.uploads.get(request.uploadSessionId);
-    if (!upload) {
+    if (!upload || Date.parse(upload.expiresAt) < Date.now()) {
       return null;
     }
+    this.uploads.delete(request.uploadSessionId);
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
@@ -118,9 +168,10 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   async requestExport(
-    _userId: UserId,
+    userId: UserId,
     request: RequestExportRequest
   ): Promise<RequestExportResponse> {
+    this.assertProjectOwner(userId, request.projectId);
     const artifact: ArtifactRecord = {
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
       projectId: request.projectId,
@@ -144,10 +195,33 @@ export class InMemoryPersistenceService implements PersistenceService {
     return { artifact, job };
   }
 
-  async getArtifactMetadata(artifactId: string): Promise<ArtifactMetadataResponse> {
+  async getArtifactMetadata(
+    userId: UserId,
+    artifactId: string
+  ): Promise<ArtifactMetadataResponse> {
+    const artifact = this.artifacts.get(artifactId);
     return {
-      artifact: this.artifacts.get(artifactId) ?? null
+      artifact:
+        artifact &&
+        this.projects.get(artifact.projectId)?.ownerUserId === userId
+          ? artifact
+          : null
     };
+  }
+
+  private assertProjectOwner(userId: UserId, projectId: string): void {
+    if (this.projects.get(projectId)?.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(projectId);
+    }
+  }
+
+  private pruneExpiredUploads(): void {
+    const now = Date.now();
+    for (const [sessionId, session] of this.uploads) {
+      if (Date.parse(session.expiresAt) < now) {
+        this.uploads.delete(sessionId);
+      }
+    }
   }
 }
 
@@ -171,4 +245,3 @@ export function getInMemoryPersistence(): InMemoryPersistenceService {
 
   return singleton;
 }
-

@@ -26,11 +26,7 @@ export default tseslint.config(
       ],
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/unbound-method": "off",
-      "@typescript-eslint/no-implied-eval": "off",
-      "@typescript-eslint/no-empty-object-type": "off",
-      "@typescript-eslint/no-unnecessary-type-assertion": "off",
-      "@typescript-eslint/no-unsafe-assignment": "off",
-      "@typescript-eslint/no-unsafe-call": "off"
+      "@typescript-eslint/no-empty-object-type": "off"
     }
   }
 );

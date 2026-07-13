@@ -1,39 +1,5 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import type {
-  BodyRepresentation,
-  MeshGeometry,
-  PrimitiveGeometry
-} from '@openzcad/shared';
-
-function geometryFromPrimitive(
-  geometry: PrimitiveGeometry
-): THREE.BufferGeometry {
-  if (geometry.kind === 'box') {
-    const width = geometry.dimensions.width ?? 1;
-    const height = geometry.dimensions.height ?? 1;
-    const depth = geometry.dimensions.depth ?? 1;
-    const requestedRadius = geometry.fillet?.radius ?? 0;
-    const radius = Math.min(
-      requestedRadius,
-      Math.min(width, height, depth) / 2 - 0.05
-    );
-    return radius > 0
-      ? new RoundedBoxGeometry(width, height, depth, 5, radius)
-      : new THREE.BoxGeometry(width, height, depth);
-  }
-
-  if (geometry.kind === 'cylinder') {
-    return new THREE.CylinderGeometry(
-      geometry.dimensions.radius ?? 1,
-      geometry.dimensions.radius ?? 1,
-      geometry.dimensions.height ?? 1,
-      64
-    );
-  }
-
-  return new THREE.SphereGeometry(geometry.dimensions.radius ?? 1, 48, 32);
-}
+import type { BodyRepresentation, MeshGeometry } from '@openzcad/shared';
 
 function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
@@ -46,46 +12,34 @@ function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
   return geometry;
 }
 
+/**
+ * Builds the render object for one body: a flat-shaded mesh plus a subtle
+ * feature-edge overlay for the classic CAD look. Body vertices are already
+ * in world space (the kernel bakes transforms), so no placement is applied.
+ */
 export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
-  if (body.geometry.kind === 'composite') {
-    const group = new THREE.Group();
-    group.name = body.name;
-    for (const child of body.geometry.children) {
-      group.add(createObjectForBody(child));
-    }
-    applyTransform(group, body);
-    return group;
-  }
-
-  const geometry =
-    body.geometry.kind === 'mesh'
-      ? geometryFromMesh(body.geometry)
-      : geometryFromPrimitive(body.geometry);
+  const geometry = geometryFromMesh(body.mesh);
   const material = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(body.color).lerp(new THREE.Color('#c9d1da'), 0.68),
-    metalness: 0.08,
-    roughness: 0.48
+    color: body.color,
+    metalness: 0.06,
+    roughness: 0.56
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = body.name;
-  mesh.userData.bodyId = body.bodyId;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  applyTransform(mesh, body);
-  return mesh;
-}
 
-function applyTransform(object: THREE.Object3D, body: BodyRepresentation) {
-  object.position.set(
-    body.transform.translation.x,
-    body.transform.translation.y,
-    body.transform.translation.z
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry, 24),
+    new THREE.LineBasicMaterial({
+      color: '#070b10',
+      transparent: true,
+      opacity: 0.78
+    })
   );
-  object.rotation.set(
-    THREE.MathUtils.degToRad(body.transform.rotationDeg.x),
-    THREE.MathUtils.degToRad(body.transform.rotationDeg.y),
-    THREE.MathUtils.degToRad(body.transform.rotationDeg.z)
-  );
+  edges.raycast = () => undefined; // selection picks faces, not edge lines
+  mesh.add(edges);
+  return mesh;
 }
 
 export function fitCameraToObjects(

@@ -9,4 +9,8 @@ worker-configuration.d.ts
 .DS_Store
 playwright-report
 test-results
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
 
+*.tsbuildinfo

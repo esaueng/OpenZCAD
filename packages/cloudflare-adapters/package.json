@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@openzcad/document-core": "workspace:*",
     "@openzcad/jobs": "workspace:*",
     "@openzcad/persistence": "workspace:*",
     "@openzcad/shared": "workspace:*",
