@@ -1,37 +1,63 @@
 import { type ChangeEvent } from 'react';
-import { Download, Redo2, Save, Undo2, Upload } from 'lucide-react';
+import {
+  Download,
+  HelpCircle,
+  Redo2,
+  Save,
+  Search,
+  Undo2,
+  Upload
+} from 'lucide-react';
 import type { UnitSystem } from '@openzcad/shared';
+import type { WorkspaceId } from '../lib/commands';
 import { BrandMark } from './BrandMark';
 
 interface TopBarProps {
   projectName: string | null;
   units: UnitSystem | null;
+  /** True when the document has changes not yet saved as a revision. */
+  dirty: boolean;
+  workspace: WorkspaceId;
   canUndo: boolean;
   canRedo: boolean;
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  onWorkspaceChange(workspace: WorkspaceId): void;
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
   onGoHome(): void;
+  onOpenSearch(): void;
+  onOpenShortcuts(): void;
 }
 
+const WORKSPACES: { id: WorkspaceId; label: string }[] = [
+  { id: 'model', label: 'Model' },
+  { id: 'visualize', label: 'Visualize' }
+];
+
+/** Global bar: navigation, project identity, workspaces, and global actions. */
 export function TopBar({
   projectName,
   units,
+  dirty,
+  workspace,
   canUndo,
   canRedo,
   canExport,
   exportScope,
+  onWorkspaceChange,
   onUndo,
   onRedo,
   onSave,
   onImportFile,
   onExport,
-  onGoHome
+  onGoHome,
+  onOpenSearch,
+  onOpenShortcuts
 }: TopBarProps) {
   const exportTitle = (format: string) =>
     canExport
@@ -48,8 +74,32 @@ export function TopBar({
       <div className="breadcrumb">
         <strong>{projectName ?? 'No project'}</strong>
         {projectName && <span className="mono">{units ?? ''}</span>}
+        {projectName && (
+          <span
+            className={`save-state ${dirty ? 'dirty' : ''}`}
+            title={dirty ? 'Unsaved changes — Ctrl+S saves a revision' : 'All changes saved'}
+          >
+            {dirty ? '● unsaved' : 'saved'}
+          </span>
+        )}
       </div>
-      <div className="topbar-tools" aria-label="Workspace tools">
+
+      <div className="workspace-switcher" role="tablist" aria-label="Workspaces">
+        {WORKSPACES.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="tab"
+            aria-selected={workspace === entry.id}
+            className={`workspace-tab ${workspace === entry.id ? 'active' : ''}`}
+            onClick={() => onWorkspaceChange(entry.id)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="topbar-tools" aria-label="Global tools">
         <button
           className="icon-button"
           type="button"
@@ -70,7 +120,18 @@ export function TopBar({
         >
           <Redo2 size={15} aria-hidden="true" />
         </button>
+        <button
+          className="search-trigger"
+          type="button"
+          title="Search commands (S)"
+          onClick={onOpenSearch}
+        >
+          <Search size={13} aria-hidden="true" />
+          <span>Search</span>
+          <kbd>S</kbd>
+        </button>
       </div>
+
       <label className="secondary topbar-action" title="Import an STL mesh or inspect STEP metadata">
         <Upload size={14} aria-hidden="true" />
         Import
@@ -116,6 +177,15 @@ export function TopBar({
       >
         <Save size={15} aria-hidden="true" />
         Save
+      </button>
+      <button
+        className="icon-button"
+        type="button"
+        title="Keyboard shortcuts (?)"
+        aria-label="Keyboard shortcuts"
+        onClick={onOpenShortcuts}
+      >
+        <HelpCircle size={15} aria-hidden="true" />
       </button>
     </header>
   );
