@@ -1,5 +1,10 @@
-import { Box, Eye, Grid3x3, Maximize2 } from 'lucide-react';
-import type { DisplayMode, StandardView, ViewerSettings } from './ModelViewer';
+import { Box, Camera, Eye, Grid3x3, Maximize2 } from 'lucide-react';
+import type {
+  DisplayMode,
+  ProjectionMode,
+  StandardView,
+  ViewerSettings
+} from './ModelViewer';
 
 const VIEWS: { id: StandardView; label: string; shortcut: string }[] = [
   { id: 'front', label: 'Front', shortcut: '1' },
@@ -16,18 +21,22 @@ export const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
 
 interface ViewerToolbarProps {
   settings: ViewerSettings;
+  projection: ProjectionMode;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
   onCycleDisplayMode(): void;
+  onToggleProjection(): void;
 }
 
 export function ViewerToolbar({
   settings,
+  projection,
   onToggleGrid,
   onFit,
   onView,
-  onCycleDisplayMode
+  onCycleDisplayMode,
+  onToggleProjection
 }: ViewerToolbarProps) {
   return (
     <div className="viewer-toolbar" role="toolbar" aria-label="Viewer controls">
@@ -56,6 +65,16 @@ export function ViewerToolbar({
       >
         <Grid3x3 size={13} aria-hidden="true" />
         Grid
+      </button>
+      <button
+        type="button"
+        className={projection === 'orthographic' ? 'active' : ''}
+        onClick={onToggleProjection}
+        title={`Projection (P) — now: ${projection}`}
+        aria-pressed={projection === 'orthographic'}
+      >
+        <Camera size={13} aria-hidden="true" />
+        Ortho
       </button>
       <button
         type="button"

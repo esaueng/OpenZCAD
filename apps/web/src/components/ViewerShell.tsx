@@ -1,11 +1,15 @@
+import type { MutableRefObject } from 'react';
 import {
   ModelViewer,
+  type AxisProjection,
   type FaceResizeCommit,
+  type ProjectionMode,
   type SketchOverlay,
   type StandardView,
   type ViewerSettings
 } from './ModelViewer';
 import { ViewerToolbar } from './ViewerToolbar';
+import { OrientationWidget } from './OrientationWidget';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 
 interface ViewerShellProps {
@@ -18,15 +22,19 @@ interface ViewerShellProps {
   viewRequest: { view: StandardView; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
+  projection: ProjectionMode;
+  orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean
   ): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
+  onContextMenu(x: number, y: number, selection: TopologySelection | null): void;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
   onCycleDisplayMode(): void;
+  onToggleProjection(): void;
 }
 
 export function ViewerShell({
@@ -39,12 +47,16 @@ export function ViewerShell({
   viewRequest,
   units,
   editableBodyIds,
+  projection,
+  orientationRef,
   onSelectTopology,
   onResizePrimitiveFace,
+  onContextMenu,
   onToggleGrid,
   onFit,
   onView,
-  onCycleDisplayMode
+  onCycleDisplayMode,
+  onToggleProjection
 }: ViewerShellProps) {
   return (
     <section className="viewer-shell" aria-label="3D viewport">
@@ -58,16 +70,22 @@ export function ViewerShell({
         viewRequest={viewRequest}
         units={units}
         editableBodyIds={editableBodyIds}
+        projection={projection}
+        orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
         onResizePrimitiveFace={onResizePrimitiveFace}
+        onContextMenu={onContextMenu}
       />
       <ViewerToolbar
         settings={settings}
+        projection={projection}
         onToggleGrid={onToggleGrid}
         onFit={onFit}
         onView={onView}
         onCycleDisplayMode={onCycleDisplayMode}
+        onToggleProjection={onToggleProjection}
       />
+      <OrientationWidget orientationRef={orientationRef} />
       {bodies.length === 0 && sketches.length === 0 && (
         <div className="viewer-notice">
           <div>

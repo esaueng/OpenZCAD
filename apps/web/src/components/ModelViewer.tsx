@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
@@ -15,6 +15,15 @@ import type {
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
 export type StandardView = 'iso' | 'front' | 'top' | 'right';
+
+export type ProjectionMode = 'perspective' | 'orthographic';
+
+/** Screen-space projections of the world axes, for the orientation widget. */
+export interface AxisProjection {
+  x: { x: number; y: number };
+  y: { x: number; y: number };
+  z: { x: number; y: number };
+}
 
 export type DirectEditAxis = 'x' | 'y' | 'z';
 
@@ -71,16 +80,28 @@ interface ModelViewerProps {
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
+  projection: ProjectionMode;
+  /** Imperative sink for per-frame axis projections (no React re-render). */
+  orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean
   ): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
+  /** Stationary right-click; right-drag stays a pan. */
+  onContextMenu(x: number, y: number, selection: TopologySelection | null): void;
 }
 
 interface SceneContext {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
+  orthographic: THREE.OrthographicCamera;
+  activeCamera: THREE.Camera;
+  projection: ProjectionMode;
+  /** Switches projection, rebinding controls and syncing camera poses. */
+  applyProjection(mode: ProjectionMode): void;
+  /** Mirrors the perspective pose onto the ortho camera and its frustum. */
+  syncOrthographic(resetZoom: boolean): void;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
   controls: OrbitControls;
@@ -244,8 +265,11 @@ export function ModelViewer({
   viewRequest,
   units,
   editableBodyIds,
+  projection,
+  orientationRef,
   onSelectTopology,
-  onResizePrimitiveFace
+  onResizePrimitiveFace,
+  onContextMenu
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
@@ -253,6 +277,8 @@ export function ModelViewer({
   onSelectTopologyRef.current = onSelectTopology;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
+  const onContextMenuRef = useRef(onContextMenu);
+  onContextMenuRef.current = onContextMenu;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
@@ -274,6 +300,15 @@ export function ModelViewer({
     const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
     const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
     camera.position.set(90, 80, 90);
+    const orthographic = new THREE.OrthographicCamera(
+      -90,
+      90,
+      90 / aspect,
+      -90 / aspect,
+      -2000,
+      4000
+    );
+    orthographic.position.copy(camera.position);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(host.clientWidth, host.clientHeight);
@@ -292,7 +327,7 @@ export function ModelViewer({
     labelRenderer.domElement.style.pointerEvents = 'none';
     host.appendChild(labelRenderer.domElement);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
+    let controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
@@ -325,9 +360,67 @@ export function ModelViewer({
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
 
+    function syncOrthographic(resetZoom: boolean) {
+      orthographic.position.copy(camera.position);
+      orthographic.quaternion.copy(camera.quaternion);
+      if (resetZoom) {
+        orthographic.zoom = 1;
+      }
+      const distance = camera.position.distanceTo(controls.target);
+      const halfHeight =
+        distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const currentAspect = host!.clientWidth / Math.max(host!.clientHeight, 1);
+      orthographic.left = -halfHeight * currentAspect;
+      orthographic.right = halfHeight * currentAspect;
+      orthographic.top = halfHeight;
+      orthographic.bottom = -halfHeight;
+      orthographic.updateProjectionMatrix();
+    }
+
+    function rebindControls(nextCamera: THREE.Camera) {
+      const target = controls.target.clone();
+      controls.dispose();
+      controls = new OrbitControls(nextCamera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.target.copy(target);
+      context.controls = controls;
+    }
+
+    function applyProjection(mode: ProjectionMode) {
+      if (context.projection === mode) {
+        return;
+      }
+      context.projection = mode;
+      if (mode === 'orthographic') {
+        syncOrthographic(true);
+        context.activeCamera = orthographic;
+      } else {
+        // Bake the ortho dolly zoom back into a perspective distance so the
+        // framing survives the switch.
+        const direction = orthographic.position
+          .clone()
+          .sub(controls.target)
+          .normalize();
+        const distance =
+          orthographic.position.distanceTo(controls.target) /
+          Math.max(orthographic.zoom, 0.0001);
+        camera.position
+          .copy(controls.target)
+          .addScaledVector(direction, distance);
+        camera.quaternion.copy(orthographic.quaternion);
+        context.activeCamera = camera;
+      }
+      rebindControls(context.activeCamera);
+    }
+
     const context: SceneContext = {
       scene,
       camera,
+      orthographic,
+      activeCamera: camera,
+      projection: 'perspective',
+      applyProjection,
+      syncOrthographic,
       renderer,
       labelRenderer,
       controls,
@@ -345,6 +438,12 @@ export function ModelViewer({
     const observer = new ResizeObserver(() => {
       camera.aspect = host.clientWidth / Math.max(host.clientHeight, 1);
       camera.updateProjectionMatrix();
+      if (context.projection === 'orthographic') {
+        const zoom = orthographic.zoom;
+        syncOrthographic(false);
+        orthographic.zoom = zoom;
+        orthographic.updateProjectionMatrix();
+      }
       renderer.setSize(host.clientWidth, host.clientHeight);
       labelRenderer.setSize(host.clientWidth, host.clientHeight);
     });
@@ -360,11 +459,11 @@ export function ModelViewer({
 
     context.raycaster.params.Line = { threshold: 2.4 };
 
-    function pick(event: PointerEvent): PickResult | null {
+    function pick(event: PointerEvent | MouseEvent): PickResult | null {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      context.raycaster.setFromCamera(pointer, camera);
+      context.raycaster.setFromCamera(pointer, context.activeCamera);
       const hits = context.raycaster.intersectObjects(bodyGroup.children, true);
       for (const hit of hits) {
         if (!hit.object.visible) {
@@ -533,11 +632,13 @@ export function ModelViewer({
       }
 
       const rect = renderer.domElement.getBoundingClientRect();
-      const projectedStart = result.hit.point.clone().project(camera);
+      const projectedStart = result.hit.point
+        .clone()
+        .project(context.activeCamera);
       const projectedEnd = result.hit.point
         .clone()
         .add(result.faceNormal)
-        .project(camera);
+        .project(context.activeCamera);
       const projectedX = ((projectedEnd.x - projectedStart.x) * rect.width) / 2;
       const projectedY =
         (-(projectedEnd.y - projectedStart.y) * rect.height) / 2;
@@ -547,8 +648,11 @@ export function ModelViewer({
         1
       );
       const fallbackPixelsPerUnit =
-        rect.height /
-        (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance);
+        context.projection === 'orthographic'
+          ? (rect.height * orthographic.zoom) /
+            Math.max(orthographic.top - orthographic.bottom, 0.0001)
+          : rect.height /
+            (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance);
       const useProjectedDirection =
         projectedLength >= fallbackPixelsPerUnit * 0.15;
 
@@ -623,7 +727,36 @@ export function ModelViewer({
         return;
       }
       fitCameraToObjects(camera, controls.target, bodyGroup.children);
+      if (context.projection === 'orthographic') {
+        syncOrthographic(true);
+      }
       controls.update();
+    };
+
+    let rightDownPosition: { x: number; y: number } | null = null;
+    const handleRightDown = (event: PointerEvent) => {
+      if (event.button === 2) {
+        rightDownPosition = { x: event.clientX, y: event.clientY };
+      }
+    };
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      // A right-drag is a pan (OrbitControls); only a stationary right-click
+      // opens the context menu.
+      const moved = rightDownPosition
+        ? Math.hypot(
+            event.clientX - rightDownPosition.x,
+            event.clientY - rightDownPosition.y
+          )
+        : 0;
+      rightDownPosition = null;
+      if (moved < 5) {
+        onContextMenuRef.current(
+          event.clientX,
+          event.clientY,
+          pick(event)?.selection ?? null
+        );
+      }
     };
 
     renderer.domElement.addEventListener(
@@ -643,11 +776,38 @@ export function ModelViewer({
       true
     );
     renderer.domElement.addEventListener('dblclick', handleDoubleClick);
+    renderer.domElement.addEventListener('pointerdown', handleRightDown, true);
+    renderer.domElement.addEventListener('contextmenu', handleContextMenu);
 
+    const lastQuaternion = new THREE.Quaternion();
     let animationFrame = window.requestAnimationFrame(function animate() {
       controls.update();
-      renderer.render(scene, camera);
-      labelRenderer.render(scene, camera);
+      // The perspective camera stays the pose master; mirror it while the
+      // ortho camera drives so switches and fits never jump.
+      if (context.projection === 'orthographic') {
+        camera.position.copy(orthographic.position);
+        camera.quaternion.copy(orthographic.quaternion);
+      }
+      renderer.render(scene, context.activeCamera);
+      labelRenderer.render(scene, context.activeCamera);
+
+      // Push camera orientation to the view widget only when it changes.
+      if (!camera.quaternion.equals(lastQuaternion)) {
+        lastQuaternion.copy(camera.quaternion);
+        const sink = orientationRef.current;
+        if (sink) {
+          const inverse = camera.quaternion.clone().invert();
+          const project = (axis: THREE.Vector3) => {
+            const view = axis.clone().applyQuaternion(inverse);
+            return { x: view.x, y: -view.y };
+          };
+          sink({
+            x: project(new THREE.Vector3(1, 0, 0)),
+            y: project(new THREE.Vector3(0, 1, 0)),
+            z: project(new THREE.Vector3(0, 0, 1))
+          });
+        }
+      }
       animationFrame = window.requestAnimationFrame(animate);
     });
 
@@ -675,6 +835,12 @@ export function ModelViewer({
         true
       );
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
+      renderer.domElement.removeEventListener(
+        'pointerdown',
+        handleRightDown,
+        true
+      );
+      renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
@@ -841,10 +1007,17 @@ export function ModelViewer({
         context.controls.target,
         context.bodyGroup.children
       );
+      if (context.projection === 'orthographic') {
+        context.syncOrthographic(true);
+      }
       context.controls.update();
       context.hasFitCamera = true;
     }
   }, [bodies, editableBodyIds, selectedBodyIds, selectedTopology, units]);
+
+  useEffect(() => {
+    contextRef.current?.applyProjection(projection);
+  }, [projection]);
 
   // Sketch profiles render as line loops on their planes so upcoming
   // extrudes/revolves are visible before they exist.
@@ -912,6 +1085,9 @@ export function ModelViewer({
       context.controls.target,
       context.bodyGroup.children
     );
+    if (context.projection === 'orthographic') {
+      context.syncOrthographic(true);
+    }
     context.controls.update();
   }, [fitSignal]);
 
@@ -926,6 +1102,13 @@ export function ModelViewer({
     const direction = VIEW_DIRECTIONS[viewRequest.view];
     camera.position.copy(controls.target).addScaledVector(direction, distance);
     camera.updateProjectionMatrix();
+    if (context.projection === 'orthographic') {
+      // Keep the dolly zoom; only the orbit direction changes.
+      const zoom = context.orthographic.zoom;
+      context.syncOrthographic(false);
+      context.orthographic.zoom = zoom;
+      context.orthographic.updateProjectionMatrix();
+    }
     controls.update();
   }, [viewRequest]);
 
