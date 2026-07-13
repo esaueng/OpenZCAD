@@ -9,6 +9,8 @@ interface ExprInputProps {
   placeholder?: string;
   /** Allow an empty / zero-result field without flagging it (e.g. offsets). */
   optional?: boolean;
+  /** Focus this field when the form opens so typing replaces the default. */
+  autoFocus?: boolean;
 }
 
 /**
@@ -22,7 +24,8 @@ export function ExprInput({
   scope,
   onChange,
   placeholder,
-  optional
+  optional,
+  autoFocus
 }: ExprInputProps) {
   const id = useId();
   const preview = previewExpression(value, scope);
@@ -40,6 +43,8 @@ export function ExprInput({
           placeholder={placeholder}
           spellCheck={false}
           autoComplete="off"
+          autoFocus={autoFocus}
+          onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => onChange(event.target.value)}
         />
         {!isPlainNumber && (

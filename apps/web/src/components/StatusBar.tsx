@@ -1,6 +1,8 @@
 interface StatusBarProps {
   status: string;
   tone: 'ready' | 'warning' | 'running';
+  /** Context-sensitive next-step hint, e.g. shortcuts for the selection. */
+  hint: string | null;
   projectName: string | null;
   bodyCount: number;
   featureCount: number;
@@ -12,6 +14,7 @@ interface StatusBarProps {
 export function StatusBar({
   status,
   tone,
+  hint,
   projectName,
   bodyCount,
   featureCount,
@@ -28,6 +31,7 @@ export function StatusBar({
         <i />
         {status}
       </span>
+      {hint && <span className="status-hint">{hint}</span>}
       <div className="status-groups" aria-label="Workspace status">
         <span>
           <b>kernel</b>

@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import {
+  Download,
+  FolderOpen,
+  Grid3x3,
+  Maximize2,
+  Monitor,
+  Save,
+  Upload
+} from 'lucide-react';
 import {
   CommandManager,
   commandFactories,
@@ -15,6 +24,13 @@ import {
   listParameters,
   normalizeDocument
 } from '@openzcad/document-core';
+import {
+  PLANE_BASES,
+  circleProfile,
+  polygonProfile,
+  rectangleProfile,
+  type Vec2
+} from '@openzcad/geometry';
 import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import { createKernelAdapter } from '@openzcad/kernel-adapter';
@@ -33,15 +49,38 @@ import type {
 import type { AuthSession } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
-import { downloadText, exportFileStem, inferContentType } from './lib/model';
+import {
+  downloadText,
+  evalParamValue,
+  exportFileStem,
+  inferContentType
+} from './lib/model';
+import {
+  SHORTCUT_TO_TOOL,
+  TOOL_GROUPS,
+  TOOL_META,
+  toolDisabledReason,
+  type ToolAvailability,
+  type ToolId
+} from './lib/tools';
 import { AppShell } from './components/AppShell';
 import { TopBar } from './components/TopBar';
+import { ToolBar } from './components/ToolBar';
 import { Sidebar } from './components/Sidebar';
 import { ViewerShell } from './components/ViewerShell';
-import { Inspector, type ToolId } from './components/Inspector';
+import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { AiCommandRail } from './components/AiCommandRail';
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette';
+import { ShortcutsOverlay } from './components/ShortcutsOverlay';
+import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
+import type {
+  DisplayMode,
+  SketchOverlay,
+  StandardView,
+  ViewerSettings
+} from './components/ModelViewer';
 import {
   listLocalProjects,
   loadLocalProject,
@@ -57,6 +96,8 @@ import { useCollaboration } from './lib/useCollaboration';
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
+
+const DISPLAY_MODE_ORDER: DisplayMode[] = ['shaded-edges', 'shaded', 'wireframe'];
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -87,10 +128,15 @@ export function App() {
   >(null);
   const [selectedTopology, setSelectedTopology] =
     useState<TopologySelection | null>(null);
+  // Viewport body selection in pick order; drives boolean/move pre-fills.
+  const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [viewerSettings, setViewerSettings] = useState({ showGrid: true });
+  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>({
+    showGrid: true,
+    displayMode: 'shaded-edges'
+  });
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
     'saving'
@@ -98,6 +144,12 @@ export function App() {
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [fitSignal, setFitSignal] = useState(0);
+  const [viewRequest, setViewRequest] = useState<{
+    view: StandardView;
+    nonce: number;
+  } | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
   const exportRequestsRef = useRef(
@@ -110,6 +162,8 @@ export function App() {
     >()
   );
   const lastSyncedKeyRef = useRef<string | null>(null);
+  const viewNonceRef = useRef(0);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const collaboration = useCollaboration({
     document: doc,
@@ -330,9 +384,6 @@ export function App() {
   const selectedBody = selectedFeature?.bodyId
     ? (representations[selectedFeature.bodyId] ?? null)
     : null;
-  const selectedBodyId =
-    selectedTopology?.bodyId ??
-    (selectedBody && !selectedBody.consumed ? selectedBody.bodyId : null);
 
   const exportBodyIds = useMemo<BodyId[]>(() => {
     if (!doc) {
@@ -344,6 +395,75 @@ export function App() {
     return doc.derived.exportableBodyIds;
   }, [doc, selectedBody]);
 
+  // Sketch profiles lifted onto their 3D planes for the viewport overlay.
+  const sketchOverlays = useMemo<SketchOverlay[]>(() => {
+    if (!doc) {
+      return [];
+    }
+    const scope = parameterScope.scope;
+    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+      const objectNode = sketch.objectIds[0]
+        ? doc.nodes[sketch.objectIds[0]]
+        : undefined;
+      if (objectNode?.kind !== 'sketch-object') {
+        return [];
+      }
+      const data = objectNode.data;
+      const offset = evalParamValue(sketch.offset, scope) ?? 0;
+      const centerX = evalParamValue(data.centerX, scope);
+      const centerY = evalParamValue(data.centerY, scope);
+      if (centerX === null || centerY === null) {
+        return [];
+      }
+      let profile: Vec2[];
+      try {
+        if (data.objectKind === 'rectangle') {
+          const width = evalParamValue(data.width, scope);
+          const height = evalParamValue(data.height, scope);
+          if (width === null || height === null) {
+            return [];
+          }
+          profile = rectangleProfile(width, height, centerX, centerY);
+        } else if (data.objectKind === 'circle') {
+          const radius = evalParamValue(data.radius, scope);
+          if (radius === null) {
+            return [];
+          }
+          profile = circleProfile(radius, centerX, centerY);
+        } else {
+          const sides = evalParamValue(data.sides, scope);
+          const radius = evalParamValue(data.radius, scope);
+          if (sides === null || radius === null) {
+            return [];
+          }
+          profile = polygonProfile(sides, radius, centerX, centerY);
+        }
+      } catch {
+        return [];
+      }
+      const basis = PLANE_BASES[sketch.plane];
+      const points = profile.map((point) => ({
+        x: basis.u.x * point.x + basis.v.x * point.y + basis.normal.x * offset,
+        y: basis.u.y * point.x + basis.v.y * point.y + basis.normal.y * offset,
+        z: basis.u.z * point.x + basis.v.z * point.y + basis.normal.z * offset
+      }));
+      return [
+        {
+          sketchId: sketch.sketchId,
+          name: sketch.name,
+          selected: selectedSketch?.sketchId === sketch.sketchId,
+          points
+        }
+      ];
+    });
+  }, [doc, parameterScope, selectedSketch]);
+
+  const availability: ToolAvailability = {
+    sketchCount: sketchOptions.length,
+    liveBodyCount: viewerBodies.length,
+    hasEdgeSelected: selectedTopology?.kind === 'edge'
+  };
+
   function hydrateDocument(nextDocument: ProjectDocument) {
     const normalized = normalizeDocument(nextDocument);
     managerRef.current = new CommandManager(normalized);
@@ -352,6 +472,7 @@ export function App() {
     setPreviewDoc(null);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedBodyIds([]);
     setTool(null);
   }
 
@@ -387,12 +508,47 @@ export function App() {
 
   function createFeature(command: AnyCommand): void {
     if (executeCommand(command)) {
-      // Back to the tool launcher so sequential adds stay one click away;
-      // the new feature is selectable from the history or the viewport.
+      // Back to an idle viewport so sequential adds stay one key away; the
+      // new feature is selectable from the history or the viewport.
       setTool(null);
       setSelectedFeatureNodeId(null);
       setSelectedTopology(null);
+      setSelectedBodyIds([]);
     }
+  }
+
+  function launchTool(nextTool: ToolId) {
+    const reason = toolDisabledReason(nextTool, availability);
+    if (reason) {
+      setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+      return;
+    }
+    // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
+    setTool(nextTool);
+  }
+
+  function cancelPanel() {
+    setTool(null);
+    setSelectedFeatureNodeId(null);
+  }
+
+  function clearSelection() {
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedBodyIds([]);
+  }
+
+  function requestView(view: StandardView) {
+    setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function cycleDisplayMode() {
+    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
+    const next =
+      DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
+      'shaded-edges';
+    setViewerSettings((current) => ({ ...current, displayMode: next }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
@@ -458,6 +614,7 @@ export function App() {
     setDoc(null);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
+    setSelectedBodyIds([]);
     setTool(null);
     try {
       const [local, remote] = await Promise.all([
@@ -478,8 +635,7 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.undo());
-    setSelectedFeatureNodeId(null);
-    setSelectedTopology(null);
+    clearSelection();
     setStatus('Undo');
   }
 
@@ -488,8 +644,7 @@ export function App() {
       return;
     }
     setDoc(managerRef.current.redo());
-    setSelectedFeatureNodeId(null);
-    setSelectedTopology(null);
+    clearSelection();
     setStatus('Redo');
   }
 
@@ -741,21 +896,65 @@ export function App() {
     }
   }
 
-  function handleSelectTopologyFromViewer(selection: TopologySelection | null) {
-    if (!doc || !selection) {
-      setSelectedFeatureNodeId(null);
-      setSelectedTopology(null);
-      return;
+  function featureNodeIdForBody(bodyId: BodyId): string | null {
+    if (!doc) {
+      return null;
     }
     const bodyNode = listNodesByKind(doc, 'body').find(
-      (body) => body.bodyId === selection.bodyId
+      (body) => body.bodyId === bodyId
     );
     const feature = bodyNode
       ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
       : undefined;
+    return feature?.id ?? null;
+  }
+
+  function handleSelectTopologyFromViewer(
+    selection: TopologySelection | null,
+    additive: boolean
+  ) {
+    if (!doc) {
+      return;
+    }
+    if (!selection) {
+      if (!additive) {
+        clearSelection();
+      }
+      return;
+    }
+    const nextIds = additive
+      ? selectedBodyIds.includes(selection.bodyId)
+        ? selectedBodyIds.filter((id) => id !== selection.bodyId)
+        : [...selectedBodyIds, selection.bodyId]
+      : [selection.bodyId];
+    setSelectedBodyIds(nextIds);
+    if (!additive) {
+      setTool(null);
+    }
+    // The edit panel and topology context follow a single-body selection;
+    // multi-select keeps them clear so the pick order reads as boolean input.
+    if (nextIds.length === 1) {
+      setSelectedTopology(additive ? { bodyId: nextIds[0]!, kind: 'body' } : selection);
+      setSelectedFeatureNodeId(featureNodeIdForBody(nextIds[0]!));
+    } else {
+      setSelectedTopology(null);
+      setSelectedFeatureNodeId(null);
+    }
+  }
+
+  function handleSelectFeatureFromTree(nodeId: string) {
     setTool(null);
-    setSelectedTopology(selection);
-    setSelectedFeatureNodeId(feature?.id ?? null);
+    setSelectedTopology(null);
+    const next = selectedFeatureNodeId === nodeId ? null : nodeId;
+    setSelectedFeatureNodeId(next);
+    const node = next && doc ? doc.nodes[next] : undefined;
+    const bodyId = node?.kind === 'feature' ? node.bodyId : undefined;
+    const representation = bodyId
+      ? doc?.derived.bodyRepresentations[bodyId]
+      : undefined;
+    setSelectedBodyIds(
+      bodyId && representation && !representation.consumed ? [bodyId] : []
+    );
   }
 
   function handleDeleteFeature(featureId: FeatureId, name: string) {
@@ -764,24 +963,39 @@ export function App() {
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
       )
     ) {
-      setSelectedFeatureNodeId(null);
-      setSelectedTopology(null);
+      clearSelection();
     }
   }
 
-  // Keyboard shortcuts: undo/redo/save/delete (ignored while typing).
+  // Workspace keyboard map (ignored while typing in a field).
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (!doc) {
+        return;
+      }
       const target = event.target as HTMLElement | null;
-      if (
+      const typing =
         target &&
         (target.tagName === 'INPUT' ||
           target.tagName === 'SELECT' ||
-          target.tagName === 'TEXTAREA')
-      ) {
+          target.tagName === 'TEXTAREA');
+      const meta = event.ctrlKey || event.metaKey;
+
+      if (meta && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setShortcutsOpen(false);
+        setPaletteOpen((open) => !open);
         return;
       }
-      const meta = event.ctrlKey || event.metaKey;
+      if (paletteOpen || shortcutsOpen) {
+        // Modals own their keys; Escape is handled here as a safety net.
+        if (event.key === 'Escape') {
+          setPaletteOpen(false);
+          setShortcutsOpen(false);
+        }
+        return;
+      }
+
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         if (event.shiftKey) {
@@ -789,19 +1003,82 @@ export function App() {
         } else {
           handleUndo();
         }
-      } else if (meta && event.key.toLowerCase() === 'y') {
+        return;
+      }
+      if (meta && event.key.toLowerCase() === 'y') {
         event.preventDefault();
         handleRedo();
-      } else if (meta && event.key.toLowerCase() === 's') {
+        return;
+      }
+      if (meta && event.key.toLowerCase() === 's') {
         event.preventDefault();
         void handleSave();
-      } else if (event.key === 'Delete' && selectedFeature) {
+        return;
+      }
+
+      if (typing || meta || event.altKey) {
+        return;
+      }
+
+      switch (event.key) {
+        case 'Escape':
+          if (tool || selectedFeatureNodeId) {
+            cancelPanel();
+          } else {
+            clearSelection();
+          }
+          return;
+        case 'Delete':
+        case 'Backspace':
+          if (selectedFeature) {
+            event.preventDefault();
+            handleDeleteFeature(selectedFeature.featureId, selectedFeature.name);
+          }
+          return;
+        case '?':
+          event.preventDefault();
+          setShortcutsOpen(true);
+          return;
+        case '/':
+          event.preventDefault();
+          setPaletteOpen(true);
+          return;
+        case '1':
+          requestView('front');
+          return;
+        case '2':
+          requestView('top');
+          return;
+        case '3':
+          requestView('right');
+          return;
+        case '4':
+          requestView('iso');
+          return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === 'f') {
+        setFitSignal((value) => value + 1);
+        return;
+      }
+      if (key === 'g') {
+        setViewerSettings((current) => ({
+          ...current,
+          showGrid: !current.showGrid
+        }));
+        return;
+      }
+      if (key === 'w') {
+        cycleDisplayMode();
+        return;
+      }
+      const shortcutTool = SHORTCUT_TO_TOOL[key];
+      if (shortcutTool) {
+        // Without this the same keystroke would type into the form field
+        // that the tool dialog autofocuses.
         event.preventDefault();
-        handleDeleteFeature(selectedFeature.featureId, selectedFeature.name);
-      } else if (event.key === 'Escape') {
-        setTool(null);
-        setSelectedFeatureNodeId(null);
-        setSelectedTopology(null);
+        launchTool(shortcutTool);
       }
     }
     window.addEventListener('keydown', onKeyDown);
@@ -822,6 +1099,135 @@ export function App() {
 
   const tone: 'ready' | 'warning' | 'running' =
     /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
+
+  const hint = tool
+    ? 'Enter creates · Esc cancels'
+    : selectedBodyIds.length >= 2
+      ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+      : selectedTopology?.kind === 'edge'
+        ? 'Edge selected — Fillet or Chamfer from the toolbar'
+        : selectedFeature
+          ? 'Edit in the panel · Del deletes · Esc closes'
+          : viewerBodies.length > 0
+            ? 'Click a body, face, or edge · Shift+Click adds to selection'
+            : 'Ctrl+K commands · ? shortcuts';
+
+  const paletteCommands: PaletteCommand[] = [
+    ...TOOL_GROUPS.flatMap((group) =>
+      group.tools.map((toolId): PaletteCommand => {
+        const meta = TOOL_META[toolId];
+        return {
+          id: `tool-${toolId}`,
+          label: meta.label,
+          group: group.label,
+          shortcut: meta.shortcut,
+          icon: meta.icon,
+          disabledReason: toolDisabledReason(toolId, availability),
+          run: () => launchTool(toolId)
+        };
+      })
+    ),
+    {
+      id: 'view-front',
+      label: 'Front view',
+      group: 'View',
+      shortcut: '1',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('front')
+    },
+    {
+      id: 'view-top',
+      label: 'Top view',
+      group: 'View',
+      shortcut: '2',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('top')
+    },
+    {
+      id: 'view-right',
+      label: 'Right view',
+      group: 'View',
+      shortcut: '3',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('right')
+    },
+    {
+      id: 'view-iso',
+      label: 'Isometric view',
+      group: 'View',
+      shortcut: '4',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('iso')
+    },
+    {
+      id: 'view-fit',
+      label: 'Fit view',
+      group: 'View',
+      shortcut: 'F',
+      icon: <Maximize2 size={16} aria-hidden="true" />,
+      run: () => setFitSignal((value) => value + 1)
+    },
+    {
+      id: 'view-grid',
+      label: viewerSettings.showGrid ? 'Hide grid' : 'Show grid',
+      group: 'View',
+      shortcut: 'G',
+      icon: <Grid3x3 size={16} aria-hidden="true" />,
+      run: () =>
+        setViewerSettings((current) => ({
+          ...current,
+          showGrid: !current.showGrid
+        }))
+    },
+    {
+      id: 'view-display',
+      label: `Display mode: next (now ${DISPLAY_MODE_LABELS[viewerSettings.displayMode]})`,
+      group: 'View',
+      shortcut: 'W',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: cycleDisplayMode
+    },
+    {
+      id: 'file-save',
+      label: 'Save revision',
+      group: 'File',
+      shortcut: 'Ctrl+S',
+      icon: <Save size={16} aria-hidden="true" />,
+      run: () => void handleSave()
+    },
+    {
+      id: 'file-export-step',
+      label: 'Export STEP (AP214)',
+      group: 'File',
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
+      run: () => void handleExport('step')
+    },
+    {
+      id: 'file-export-stl',
+      label: 'Export STL',
+      group: 'File',
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
+      run: () => void handleExport('stl')
+    },
+    {
+      id: 'file-import',
+      label: 'Import STEP / STL…',
+      group: 'File',
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => importInputRef.current?.click()
+    },
+    {
+      id: 'file-home',
+      label: 'Back to projects',
+      group: 'File',
+      icon: <FolderOpen size={16} aria-hidden="true" />,
+      run: () => void handleGoHome()
+    }
+  ];
+
+  const inspectorActive = tool !== null || selectedFeature !== null;
 
   return (
     <AppShell
@@ -856,6 +1262,13 @@ export function App() {
           onGoHome={() => void handleGoHome()}
         />
       }
+      toolBar={
+        <ToolBar
+          activeTool={tool}
+          availability={availability}
+          onLaunchTool={launchTool}
+        />
+      }
       sidebar={
         <Sidebar
           parameters={parameters}
@@ -864,13 +1277,7 @@ export function App() {
           representations={representations}
           selectedFeatureNodeId={selectedFeatureNodeId}
           warnings={warnings}
-          onSelectFeature={(nodeId) => {
-            setTool(null);
-            setSelectedTopology(null);
-            setSelectedFeatureNodeId((current) =>
-              current === nodeId ? null : nodeId
-            );
-          }}
+          onSelectFeature={handleSelectFeatureFromTree}
           onSetParameter={(name, expression) =>
             executeCommand(commandFactories.setParameter({ name, expression }))
           }
@@ -883,10 +1290,12 @@ export function App() {
       viewer={
         <ViewerShell
           bodies={viewerBodies}
-          selectedBodyId={selectedBodyId}
+          sketches={sketchOverlays}
+          selectedBodyIds={selectedBodyIds}
           selectedTopology={selectedTopology}
           settings={viewerSettings}
           fitSignal={fitSignal}
+          viewRequest={viewRequest}
           onSelectTopology={handleSelectTopologyFromViewer}
           onToggleGrid={() =>
             setViewerSettings((current) => ({
@@ -895,222 +1304,222 @@ export function App() {
             }))
           }
           onFit={() => setFitSignal((value) => value + 1)}
+          onView={requestView}
+          onCycleDisplayMode={cycleDisplayMode}
         />
       }
       inspector={
-        <Inspector
-          tool={tool}
-          selectedFeature={selectedFeature}
-          selectedSketch={selectedSketch}
-          selectedSketchObject={selectedSketchObject}
-          selectedBody={selectedBody}
-          selectedTopology={selectedTopology}
-          scope={parameterScope.scope}
-          sketches={sketchOptions}
-          bodies={bodyOptions}
-          units={doc.units}
-          onLaunchTool={(nextTool) => {
-            setTool(nextTool);
-          }}
-          onCancel={() => {
-            setTool(null);
-            setSelectedFeatureNodeId(null);
-            setSelectedTopology(null);
-          }}
-          onCreatePrimitive={(kind, name, dimensions) =>
-            createFeature(
-              commandFactories.addPrimitive({
-                name,
-                primitiveKind: kind,
-                dimensions
-              })
-            )
-          }
-          onCreateSketch={(value) =>
-            createFeature(commandFactories.addSketch(value))
-          }
-          onCreateExtrude={(value) =>
-            createFeature(commandFactories.extrudeSketch(value))
-          }
-          onCreateRevolve={(value) =>
-            createFeature(commandFactories.revolveSketch(value))
-          }
-          onCreateBoolean={(value) =>
-            createFeature(commandFactories.booleanBodies(value))
-          }
-          onCreateTransform={(value) =>
-            createFeature(
-              commandFactories.transformBody({
-                name: value.name,
-                targetBodyId: value.targetBodyId,
-                translation: value.translation,
-                rotationDeg: value.rotationDeg
-              })
-            )
-          }
-          onCreateEdgeModifier={(kind, value) =>
-            createFeature(
-              kind === 'fillet'
-                ? commandFactories.filletEdges(value)
-                : commandFactories.chamferEdges(value)
-            )
-          }
-          onCreatePattern={(value) =>
-            createFeature(commandFactories.patternBody(value))
-          }
-          onApplyPrimitive={(feature, name, dimensions) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                { featureId: feature.featureId, name, data: { dimensions } },
-                `Edit ${name}`
-              )
-            )
-          }
-          onApplySketch={(feature, value) => {
-            if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
-              return;
-            }
-            const commands: AnyCommand[] = [
-              commandFactories.updateSketch(
-                {
-                  sketchId: feature.data.sketchId,
-                  plane: value.plane,
-                  offset: value.offset,
-                  object: value.object
-                },
-                `Edit ${value.name}`
-              )
-            ];
-            if (value.name !== feature.name) {
-              commands.push(
-                commandFactories.renameNode({
-                  nodeId: feature.id,
-                  name: value.name
-                }),
-                commandFactories.renameNode({
-                  nodeId: selectedSketch.id,
-                  name: value.name
+        inspectorActive ? (
+          <Inspector
+            tool={tool}
+            selectedFeature={selectedFeature}
+            selectedSketch={selectedSketch}
+            selectedSketchObject={selectedSketchObject}
+            selectedBody={selectedBody}
+            selectedTopology={selectedTopology}
+            scope={parameterScope.scope}
+            sketches={sketchOptions}
+            bodies={bodyOptions}
+            units={doc.units}
+            selectedBodyIds={selectedBodyIds}
+            preferredSketchId={selectedSketch?.sketchId ?? null}
+            onLaunchTool={launchTool}
+            onCancel={cancelPanel}
+            onCreatePrimitive={(kind, name, dimensions) =>
+              createFeature(
+                commandFactories.addPrimitive({
+                  name,
+                  primitiveKind: kind,
+                  dimensions
                 })
-              );
+              )
             }
-            executeTransaction(`Edit ${value.name}`, commands);
-          }}
-          onApplyExtrude={(feature, value) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                {
-                  featureId: feature.featureId,
+            onCreateSketch={(value) =>
+              createFeature(commandFactories.addSketch(value))
+            }
+            onCreateExtrude={(value) =>
+              createFeature(commandFactories.extrudeSketch(value))
+            }
+            onCreateRevolve={(value) =>
+              createFeature(commandFactories.revolveSketch(value))
+            }
+            onCreateBoolean={(value) =>
+              createFeature(commandFactories.booleanBodies(value))
+            }
+            onCreateTransform={(value) =>
+              createFeature(
+                commandFactories.transformBody({
                   name: value.name,
-                  data: {
-                    featureKind: 'extrude',
-                    sketchId: value.sketchId,
-                    distance: value.distance
-                  }
-                },
-                `Edit ${value.name}`
+                  targetBodyId: value.targetBodyId,
+                  translation: value.translation,
+                  rotationDeg: value.rotationDeg
+                })
               )
-            )
-          }
-          onApplyRevolve={(feature, value) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                {
-                  featureId: feature.featureId,
-                  name: value.name,
-                  data: {
-                    featureKind: 'revolve',
-                    sketchId: value.sketchId,
-                    axis: value.axis
-                  }
-                },
-                `Edit ${value.name}`
+            }
+            onCreateEdgeModifier={(kind, value) =>
+              createFeature(
+                kind === 'fillet'
+                  ? commandFactories.filletEdges(value)
+                  : commandFactories.chamferEdges(value)
               )
-            )
-          }
-          onApplyBoolean={(feature, value) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                {
-                  featureId: feature.featureId,
-                  name: value.name,
-                  data: {
-                    featureKind: 'boolean',
-                    operation: value.operation,
-                    targetBodyIds: value.targetBodyIds
-                  }
-                },
-                `Edit ${value.name}`
+            }
+            onCreatePattern={(value) =>
+              createFeature(commandFactories.patternBody(value))
+            }
+            onApplyPrimitive={(feature, name, dimensions) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  { featureId: feature.featureId, name, data: { dimensions } },
+                  `Edit ${name}`
+                )
               )
-            )
-          }
-          onApplyTransform={(feature, value) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                {
-                  featureId: feature.featureId,
-                  name: value.name,
-                  data: {
-                    featureKind: 'transform',
-                    targetBodyId: value.targetBodyId,
-                    transform: {
-                      translation: value.translation,
-                      rotationDeg: value.rotationDeg
+            }
+            onApplySketch={(feature, value) => {
+              if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
+                return;
+              }
+              const commands: AnyCommand[] = [
+                commandFactories.updateSketch(
+                  {
+                    sketchId: feature.data.sketchId,
+                    plane: value.plane,
+                    offset: value.offset,
+                    object: value.object
+                  },
+                  `Edit ${value.name}`
+                )
+              ];
+              if (value.name !== feature.name) {
+                commands.push(
+                  commandFactories.renameNode({
+                    nodeId: feature.id,
+                    name: value.name
+                  }),
+                  commandFactories.renameNode({
+                    nodeId: selectedSketch.id,
+                    name: value.name
+                  })
+                );
+              }
+              executeTransaction(`Edit ${value.name}`, commands);
+            }}
+            onApplyExtrude={(feature, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'extrude',
+                      sketchId: value.sketchId,
+                      distance: value.distance
                     }
-                  }
-                },
-                `Edit ${value.name}`
+                  },
+                  `Edit ${value.name}`
+                )
               )
-            )
-          }
-          onApplyEdgeModifier={(feature, kind, value) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                {
-                  featureId: feature.featureId,
-                  name: value.name,
-                  data:
-                    kind === 'fillet'
-                      ? {
-                          featureKind: 'fillet',
-                          targetBodyId: value.targetBodyId,
-                          edgeHashes: value.edgeHashes,
-                          radius: value.size
-                        }
-                      : {
-                          featureKind: 'chamfer',
-                          targetBodyId: value.targetBodyId,
-                          edgeHashes: value.edgeHashes,
-                          distance: value.size
-                        }
-                },
-                `Edit ${value.name}`
+            }
+            onApplyRevolve={(feature, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'revolve',
+                      sketchId: value.sketchId,
+                      axis: value.axis
+                    }
+                  },
+                  `Edit ${value.name}`
+                )
               )
-            )
-          }
-          onApplyPattern={(feature, value) =>
-            executeCommand(
-              commandFactories.updateFeature(
-                {
-                  featureId: feature.featureId,
-                  name: value.name,
-                  data: {
-                    featureKind: 'pattern',
-                    targetBodyId: value.targetBodyId,
-                    patternKind: value.patternKind,
-                    count: value.count,
-                    axis: value.axis,
-                    spacing: value.spacing,
-                    angleDeg: value.angleDeg
-                  }
-                },
-                `Edit ${value.name}`
+            }
+            onApplyBoolean={(feature, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'boolean',
+                      operation: value.operation,
+                      targetBodyIds: value.targetBodyIds
+                    }
+                  },
+                  `Edit ${value.name}`
+                )
               )
-            )
-          }
-          onDeleteFeature={(feature) =>
-            handleDeleteFeature(feature.featureId, feature.name)
-          }
-        />
+            }
+            onApplyTransform={(feature, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'transform',
+                      targetBodyId: value.targetBodyId,
+                      transform: {
+                        translation: value.translation,
+                        rotationDeg: value.rotationDeg
+                      }
+                    }
+                  },
+                  `Edit ${value.name}`
+                )
+              )
+            }
+            onApplyEdgeModifier={(feature, kind, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data:
+                      kind === 'fillet'
+                        ? {
+                            featureKind: 'fillet',
+                            targetBodyId: value.targetBodyId,
+                            edgeHashes: value.edgeHashes,
+                            radius: value.size
+                          }
+                        : {
+                            featureKind: 'chamfer',
+                            targetBodyId: value.targetBodyId,
+                            edgeHashes: value.edgeHashes,
+                            distance: value.size
+                          }
+                  },
+                  `Edit ${value.name}`
+                )
+              )
+            }
+            onApplyPattern={(feature, value) =>
+              executeCommand(
+                commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'pattern',
+                      targetBodyId: value.targetBodyId,
+                      patternKind: value.patternKind,
+                      count: value.count,
+                      axis: value.axis,
+                      spacing: value.spacing,
+                      angleDeg: value.angleDeg
+                    }
+                  },
+                  `Edit ${value.name}`
+                )
+              )
+            }
+            onDeleteFeature={(feature) =>
+              handleDeleteFeature(feature.featureId, feature.name)
+            }
+          />
+        ) : null
       }
       assistant={
         <AiCommandRail
@@ -1124,6 +1533,7 @@ export function App() {
         <StatusBar
           status={status}
           tone={tone}
+          hint={hint}
           projectName={doc.name}
           bodyCount={viewerBodies.length}
           featureCount={features.length}
@@ -1131,6 +1541,32 @@ export function App() {
           documentVersion={doc.version}
           units={doc.units}
         />
+      }
+      overlays={
+        <>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".stl,.step,.stp"
+            style={{ display: 'none' }}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) {
+                void handleImportFile(file);
+              }
+            }}
+          />
+          {paletteOpen && (
+            <CommandPalette
+              commands={paletteCommands}
+              onClose={() => setPaletteOpen(false)}
+            />
+          )}
+          {shortcutsOpen && (
+            <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
+          )}
+        </>
       }
     />
   );

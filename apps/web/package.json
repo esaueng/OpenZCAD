@@ -18,6 +18,7 @@
     "@openzcad/ai-contracts": "workspace:*",
     "@openzcad/command-system": "workspace:*",
     "@openzcad/document-core": "workspace:*",
+    "@openzcad/geometry": "workspace:*",
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/kernel-adapter": "workspace:*",
