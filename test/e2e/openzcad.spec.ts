@@ -202,3 +202,60 @@ test('models a parametric part and exports a true STEP file', async ({
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
   await expect(page.locator('.panel-body')).toContainText('34560');
 });
+
+test('viewport context menu hides a body and the sidebar eye restores it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Visibility Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  // Right-click the body → contextual actions → Hide Body.
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width / 2, y: bounds.height / 2 }
+  });
+  const menu = page.locator('.context-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /Move \/ Rotate/ })).toBeVisible();
+  await menu.getByRole('menuitem', { name: 'Hide Body' }).click();
+  await expect(menu).toBeHidden();
+
+  // Hidden bodies leave the viewport (empty-state notice returns) but stay
+  // in the tree with an eye toggle.
+  await expect(page.locator('.viewer-notice')).toBeVisible();
+  const showButton = page.getByRole('button', { name: /^Show Box/ });
+  await expect(showButton).toBeVisible();
+  await showButton.click();
+  await expect(page.locator('.viewer-notice')).toBeHidden();
+});
+
+test('P toggles the camera projection', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Projection Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const orthoButton = page.getByRole('button', { name: /Ortho/ });
+  await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('p');
+  await expect(orthoButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.status-bar')).toContainText(
+    'Projection: orthographic'
+  );
+  await orthoButton.click();
+  await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+});
