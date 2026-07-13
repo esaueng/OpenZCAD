@@ -15,11 +15,14 @@ OpenZCAD is a browser-based parametric CAD design tool — nothing more. The bro
 
 ## Workspace UI
 
-`apps/web` is a classic three-pane CAD workspace: TopBar (save / undo / redo / import / STEP / STL export) over [Sidebar | Viewport | Inspector] over StatusBar.
+`apps/web` is a direct-modeling workspace: GlobalTopBar (project identity + save state, Model/Visualize workspace tabs, undo/redo, command search, import/export) over [ToolPalette+ModelBrowser | Viewport | PropertiesInspector] over StatusBar.
 
-- **Sidebar**: the parameter table (add/edit/delete named expressions, live values) and the ordered feature history (select to edit, delete, consumed-state badges) plus rebuild diagnostics.
-- **Viewport**: three.js scene with grid, axes, hover/selection picking, and fit. Consumed boolean inputs are hidden.
-- **Inspector**: tool launcher (primitives, sketch, extrude, revolve, union/subtract/intersect, move) and create/edit forms. Every numeric input is an expression field with live evaluation preview; selected bodies show volume/size/face-count measurements.
+- **Command registry** (`src/lib/commands.ts`): every user-facing command is declared once — label, icon name, category, shortcut, availability predicate, contextual-relevance score. The tool palette, command search (S / Ctrl+K), context menus, keyboard map, and shortcut sheet (?) all render from it.
+- **Tool sessions** (`src/lib/session.ts`): the live state of one in-progress command (armed → adjust via HUD or on-canvas manipulator → commit as one undoable command / cancel with zero document change). Pure data + pure functions; previews reuse the kernel's `PLANE_BASES`/profile builders so ghost geometry always matches what commit produces.
+- **ToolPalette**: vertical grouped tools (Sketch / Create / Modify / Combine) with labels + shortcuts, collapsible groups, and a contextual "For selection" group that reprioritizes (sketch → Extrude/Revolve; one body → Move; 2+ bodies → Booleans). Collapses to an icon rail under 1280px.
+- **ModelBrowser**: parameter table plus the feature tree with inline rename (double-click), hover visibility eyes, consumed/failed/hidden badges, and a right-click context menu.
+- **Viewport**: dominant region. Hover preselect, click select, shift-click multi-select, pickable sketch-profile outlines, live ghost previews, extrude arrow + move triad manipulators (drag writes back into the HUD value), CommandHUD floating top-center, orientation widget + standard views/projection/fit cluster upper-right, right-click context menu.
+- **PropertiesInspector**: collapsible right panel for full parameters of the selected feature (expression fields with live evaluation), measurements, and per-body appearance (Visualize workspace; persisted as node metadata, undoable).
 
 ## Geometry sync pipeline
 
