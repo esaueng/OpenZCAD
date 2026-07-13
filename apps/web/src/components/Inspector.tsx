@@ -1,20 +1,7 @@
 import type { ReactNode } from 'react';
-import {
-  Box,
-  Combine,
-  Cone,
-  Cylinder,
-  Globe,
-  Layers,
-  Move3d,
-  PenLine,
-  RotateCw,
-  Scissors,
-  Shapes,
-  Torus,
-  Trash2
-} from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import type {
+  BodyId,
   BodyRepresentation,
   BooleanOperation,
   FeatureNode,
@@ -37,41 +24,10 @@ import {
   type SketchOption,
   type TransformFormValue
 } from './forms/FeatureForms';
+import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
 import { FEATURE_KIND_LABELS, formatNumber } from '../lib/model';
 
-export type ToolId =
-  | 'box'
-  | 'cylinder'
-  | 'sphere'
-  | 'cone'
-  | 'torus'
-  | 'sketch'
-  | 'extrude'
-  | 'revolve'
-  | 'union'
-  | 'subtract'
-  | 'intersect'
-  | 'transform';
-
-const PRIMITIVE_TOOLS: ToolId[] = ['box', 'cylinder', 'sphere', 'cone', 'torus'];
-
-const TOOL_META: Record<ToolId, { label: string; icon: ReactNode }> = {
-  box: { label: 'Box', icon: <Box size={15} aria-hidden="true" /> },
-  cylinder: { label: 'Cylinder', icon: <Cylinder size={15} aria-hidden="true" /> },
-  sphere: { label: 'Sphere', icon: <Globe size={15} aria-hidden="true" /> },
-  cone: { label: 'Cone', icon: <Cone size={15} aria-hidden="true" /> },
-  torus: { label: 'Torus', icon: <Torus size={15} aria-hidden="true" /> },
-  sketch: { label: 'Sketch', icon: <PenLine size={15} aria-hidden="true" /> },
-  extrude: { label: 'Extrude', icon: <Layers size={15} aria-hidden="true" /> },
-  revolve: { label: 'Revolve', icon: <RotateCw size={15} aria-hidden="true" /> },
-  union: { label: 'Union', icon: <Combine size={15} aria-hidden="true" /> },
-  subtract: { label: 'Subtract', icon: <Scissors size={15} aria-hidden="true" /> },
-  intersect: { label: 'Intersect', icon: <Shapes size={15} aria-hidden="true" /> },
-  transform: { label: 'Move', icon: <Move3d size={15} aria-hidden="true" /> }
-};
-
 export interface InspectorCallbacks {
-  onLaunchTool(tool: ToolId): void;
   onCancel(): void;
   onCreatePrimitive(kind: PrimitiveKind, name: string, dimensions: Record<string, ParamValue>): void;
   onCreateSketch(value: SketchFormValue): void;
@@ -106,63 +62,10 @@ interface InspectorProps extends InspectorCallbacks {
   sketches: SketchOption[];
   bodies: BodyOption[];
   units: string;
-}
-
-function ToolLauncher({
-  bodies,
-  sketches,
-  onLaunchTool
-}: {
-  bodies: BodyOption[];
-  sketches: SketchOption[];
-  onLaunchTool(tool: ToolId): void;
-}) {
-  const liveBodies = bodies.filter((body) => !body.consumed).length;
-  const disabled = (tool: ToolId): boolean => {
-    if (tool === 'extrude' || tool === 'revolve') {
-      return sketches.length === 0;
-    }
-    if (tool === 'union' || tool === 'subtract' || tool === 'intersect') {
-      return liveBodies < 2;
-    }
-    if (tool === 'transform') {
-      return liveBodies < 1;
-    }
-    return false;
-  };
-
-  const group = (title: string, tools: ToolId[]) => (
-    <>
-      <h3 className="section-title">{title}</h3>
-      <div className="tool-grid">
-        {tools.map((tool) => (
-          <button
-            key={tool}
-            type="button"
-            className="tool-button"
-            disabled={disabled(tool)}
-            onClick={() => onLaunchTool(tool)}
-          >
-            {TOOL_META[tool].icon}
-            {TOOL_META[tool].label}
-          </button>
-        ))}
-      </div>
-    </>
-  );
-
-  return (
-    <>
-      {group('Primitives', PRIMITIVE_TOOLS)}
-      {group('Sketch based', ['sketch', 'extrude', 'revolve'])}
-      {group('Combine & place', ['union', 'subtract', 'intersect', 'transform'])}
-      <p className="muted">
-        Every numeric field accepts an expression over your parameters, e.g.{' '}
-        <span className="mono">w / 2 + 5</span>. Select a feature in the tree or the viewport to
-        edit it.
-      </p>
-    </>
-  );
+  /** Viewport selection, in click order — pre-fills boolean/move targets. */
+  selectedBodyIds: BodyId[];
+  /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
+  preferredSketchId: SketchId | null;
 }
 
 function BodyStats({ body, units }: { body: BodyRepresentation; units: string }) {
@@ -192,6 +95,10 @@ function BodyStats({ body, units }: { body: BodyRepresentation; units: string })
   );
 }
 
+/**
+ * Contextual properties panel. Renders the active tool's creation form or the
+ * selected feature's edit form; the parent hides it entirely when idle.
+ */
 export function Inspector(props: InspectorProps) {
   const {
     tool,
@@ -202,12 +109,14 @@ export function Inspector(props: InspectorProps) {
     scope,
     sketches,
     bodies,
-    units
+    units,
+    selectedBodyIds,
+    preferredSketchId
   } = props;
 
-  let eyebrow = 'Add feature';
-  let title = 'Tools';
-  let body: ReactNode;
+  let eyebrow = '';
+  let title = '';
+  let body: ReactNode = null;
 
   if (tool) {
     eyebrow = 'New feature';
@@ -241,6 +150,7 @@ export function Inspector(props: InspectorProps) {
           key="create-extrude"
           scope={scope}
           sketches={sketches}
+          initialSketchId={preferredSketchId ?? undefined}
           submitLabel="Create"
           onSubmit={props.onCreateExtrude}
           onCancel={props.onCancel}
@@ -252,6 +162,7 @@ export function Inspector(props: InspectorProps) {
           key="create-revolve"
           scope={scope}
           sketches={sketches}
+          initialSketchId={preferredSketchId ?? undefined}
           submitLabel="Create"
           onSubmit={props.onCreateRevolve}
           onCancel={props.onCancel}
@@ -263,6 +174,7 @@ export function Inspector(props: InspectorProps) {
           key={`create-${tool}`}
           bodies={bodies}
           presetOperation={tool}
+          initialSelection={selectedBodyIds}
           submitLabel="Create"
           onSubmit={props.onCreateBoolean}
           onCancel={props.onCancel}
@@ -274,6 +186,7 @@ export function Inspector(props: InspectorProps) {
           key="create-transform"
           scope={scope}
           bodies={bodies}
+          initialTarget={selectedBodyIds.at(-1)}
           submitLabel="Create"
           onSubmit={props.onCreateTransform}
           onCancel={props.onCancel}
@@ -397,6 +310,7 @@ export function Inspector(props: InspectorProps) {
           <button
             type="button"
             className="secondary danger"
+            title="Delete feature (Del)"
             onClick={() => props.onDeleteFeature(selectedFeature)}
           >
             <Trash2 size={13} aria-hidden="true" />
@@ -405,10 +319,10 @@ export function Inspector(props: InspectorProps) {
         </div>
       </>
     );
-  } else {
-    body = (
-      <ToolLauncher bodies={bodies} sketches={sketches} onLaunchTool={props.onLaunchTool} />
-    );
+  }
+
+  if (!body) {
+    return null;
   }
 
   return (
@@ -417,6 +331,15 @@ export function Inspector(props: InspectorProps) {
         <div className="panel-title-row">
           <h2>{title}</h2>
           <span className="panel-eyebrow">{eyebrow}</span>
+          <button
+            type="button"
+            className="icon-button panel-close"
+            title="Close (Esc)"
+            aria-label="Close panel"
+            onClick={props.onCancel}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
         </div>
       </div>
       <div className="panel-body">{body}</div>

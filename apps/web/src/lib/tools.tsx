@@ -1,0 +1,171 @@
+import type { ReactNode } from 'react';
+import {
+  Box,
+  Combine,
+  Cone,
+  Cylinder,
+  Globe,
+  Layers,
+  Move3d,
+  PenLine,
+  RotateCw,
+  Scissors,
+  Shapes,
+  Torus
+} from 'lucide-react';
+
+export type ToolId =
+  | 'box'
+  | 'cylinder'
+  | 'sphere'
+  | 'cone'
+  | 'torus'
+  | 'sketch'
+  | 'extrude'
+  | 'revolve'
+  | 'union'
+  | 'subtract'
+  | 'intersect'
+  | 'transform';
+
+export type ToolGroup = 'solid' | 'sketch' | 'modify';
+
+export interface ToolMeta {
+  label: string;
+  icon: ReactNode;
+  group: ToolGroup;
+  /** Single-key shortcut, if the tool has one. */
+  shortcut?: string;
+  /** One-line description for tooltips and the command palette. */
+  hint: string;
+}
+
+export const PRIMITIVE_TOOLS: ToolId[] = ['box', 'cylinder', 'sphere', 'cone', 'torus'];
+
+const icon = (node: ReactNode) => node;
+
+export const TOOL_META: Record<ToolId, ToolMeta> = {
+  box: {
+    label: 'Box',
+    icon: icon(<Box size={16} aria-hidden="true" />),
+    group: 'solid',
+    shortcut: 'B',
+    hint: 'Rectangular solid'
+  },
+  cylinder: {
+    label: 'Cylinder',
+    icon: icon(<Cylinder size={16} aria-hidden="true" />),
+    group: 'solid',
+    shortcut: 'C',
+    hint: 'Circular solid'
+  },
+  sphere: {
+    label: 'Sphere',
+    icon: icon(<Globe size={16} aria-hidden="true" />),
+    group: 'solid',
+    hint: 'Ball solid'
+  },
+  cone: {
+    label: 'Cone',
+    icon: icon(<Cone size={16} aria-hidden="true" />),
+    group: 'solid',
+    hint: 'Tapered solid'
+  },
+  torus: {
+    label: 'Torus',
+    icon: icon(<Torus size={16} aria-hidden="true" />),
+    group: 'solid',
+    hint: 'Ring solid'
+  },
+  sketch: {
+    label: 'Sketch',
+    icon: icon(<PenLine size={16} aria-hidden="true" />),
+    group: 'sketch',
+    shortcut: 'S',
+    hint: 'Draw a 2D profile on a plane'
+  },
+  extrude: {
+    label: 'Extrude',
+    icon: icon(<Layers size={16} aria-hidden="true" />),
+    group: 'sketch',
+    shortcut: 'E',
+    hint: 'Push a sketch into a solid'
+  },
+  revolve: {
+    label: 'Revolve',
+    icon: icon(<RotateCw size={16} aria-hidden="true" />),
+    group: 'sketch',
+    shortcut: 'R',
+    hint: 'Spin a sketch around an axis'
+  },
+  union: {
+    label: 'Union',
+    icon: icon(<Combine size={16} aria-hidden="true" />),
+    group: 'modify',
+    shortcut: 'U',
+    hint: 'Merge bodies into one'
+  },
+  subtract: {
+    label: 'Subtract',
+    icon: icon(<Scissors size={16} aria-hidden="true" />),
+    group: 'modify',
+    shortcut: 'X',
+    hint: 'Cut bodies out of a base body'
+  },
+  intersect: {
+    label: 'Intersect',
+    icon: icon(<Shapes size={16} aria-hidden="true" />),
+    group: 'modify',
+    shortcut: 'I',
+    hint: 'Keep only the overlap of bodies'
+  },
+  transform: {
+    label: 'Move',
+    icon: icon(<Move3d size={16} aria-hidden="true" />),
+    group: 'modify',
+    shortcut: 'M',
+    hint: 'Translate or rotate a body'
+  }
+};
+
+export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] = [
+  { id: 'solid', label: 'Solids', tools: PRIMITIVE_TOOLS },
+  { id: 'sketch', label: 'Sketch', tools: ['sketch', 'extrude', 'revolve'] },
+  { id: 'modify', label: 'Modify', tools: ['union', 'subtract', 'intersect', 'transform'] }
+];
+
+export interface ToolAvailability {
+  sketchCount: number;
+  liveBodyCount: number;
+}
+
+/** Why a tool cannot run right now, or null when it can. */
+export function toolDisabledReason(tool: ToolId, avail: ToolAvailability): string | null {
+  if ((tool === 'extrude' || tool === 'revolve') && avail.sketchCount === 0) {
+    return 'Create a sketch first';
+  }
+  if (
+    (tool === 'union' || tool === 'subtract' || tool === 'intersect') &&
+    avail.liveBodyCount < 2
+  ) {
+    return 'Needs at least two bodies';
+  }
+  if (tool === 'transform' && avail.liveBodyCount < 1) {
+    return 'Needs a body';
+  }
+  return null;
+}
+
+/** Tooltip text: label, shortcut, and either the hint or the disabled reason. */
+export function toolTitle(tool: ToolId, avail: ToolAvailability): string {
+  const meta = TOOL_META[tool];
+  const key = meta.shortcut ? ` (${meta.shortcut})` : '';
+  const reason = toolDisabledReason(tool, avail);
+  return `${meta.label}${key} — ${reason ?? meta.hint}`;
+}
+
+export const SHORTCUT_TO_TOOL: Record<string, ToolId> = Object.fromEntries(
+  (Object.entries(TOOL_META) as [ToolId, ToolMeta][])
+    .filter(([, meta]) => meta.shortcut)
+    .map(([tool, meta]) => [meta.shortcut!.toLowerCase(), tool])
+);

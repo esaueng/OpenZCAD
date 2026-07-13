@@ -56,6 +56,7 @@
   /* ── Radii ────────────────────────────────────────────── */
   --radius-sm: 3px;
   --radius-md: 4px;
+  --radius-lg: 8px;
 
   /* ── Borders (composed) ───────────────────────────────── */
   --border-thin: 1px solid var(--color-border);
@@ -63,6 +64,7 @@
 
   /* ── Layout dimensions ────────────────────────────────── */
   --topbar-h: 44px;
+  --toolbar-h: 48px;
   --statusbar-h: 30px;
   --sidebar-w: 248px;
   --context-w: 344px;
@@ -74,7 +76,24 @@
 
   /* ── Z-index scale ────────────────────────────────────── */
   --z-viewer-overlay: 2;
+  --z-inspector-float: 5;
+  --z-modal: 50;
   --z-start-screen: 100;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 5px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+  text-align: center;
 }
 
 /* ─────────────────────────────────────────────────────────────

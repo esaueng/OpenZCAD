@@ -11,6 +11,8 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  /** True when the document has edits that are not saved as a revision. */
+  dirty: boolean;
   onUndo(): void;
   onRedo(): void;
   onSave(): void;
@@ -26,6 +28,7 @@ export function TopBar({
   canRedo,
   canExport,
   exportScope,
+  dirty,
   onUndo,
   onRedo,
   onSave,
@@ -48,6 +51,9 @@ export function TopBar({
       <div className="breadcrumb">
         <strong>{projectName ?? 'No project'}</strong>
         {projectName && <span className="mono">{units ?? ''}</span>}
+        {dirty && (
+          <span className="dirty-dot" title="Unsaved changes — Ctrl+S saves a revision" />
+        )}
       </div>
       <div className="topbar-tools" aria-label="Workspace tools">
         <button
@@ -108,11 +114,11 @@ export function TopBar({
         STL
       </button>
       <button
-        className="primary topbar-action"
+        className={`primary topbar-action ${dirty ? 'attention' : ''}`}
         type="button"
         disabled={!projectName}
         onClick={onSave}
-        title="Save a revision (Ctrl+S)"
+        title={dirty ? 'Unsaved changes — save a revision (Ctrl+S)' : 'Save a revision (Ctrl+S)'}
       >
         <Save size={15} aria-hidden="true" />
         Save
