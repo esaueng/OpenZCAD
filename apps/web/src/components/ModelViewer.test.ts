@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { directEditDirectionFromNormal, isViewerMesh } from './ModelViewer';
+import {
+  createExtrudePreviewGeometry,
+  directEditDirectionFromNormal,
+  isViewerMesh
+} from './ModelViewer';
 
 describe('model viewer mesh classification', () => {
   it('applies emissive highlighting only to standard-material body meshes', () => {
@@ -35,5 +39,37 @@ describe('model viewer mesh classification', () => {
       axis: 'z',
       side: -1
     });
+  });
+
+  it('builds a signed extrusion preview on either side of a sketch plane', () => {
+    const sketch = {
+      sketchId: 'sketch-1',
+      name: 'Sketch 01',
+      selected: true,
+      profile: [
+        { x: -5, y: -5 },
+        { x: 5, y: -5 },
+        { x: 5, y: 5 },
+        { x: -5, y: 5 }
+      ],
+      normal: { x: 0, y: 0, z: 1 },
+      points: [
+        { x: -5, y: -5, z: 0 },
+        { x: 5, y: -5, z: 0 },
+        { x: 5, y: 5, z: 0 },
+        { x: -5, y: 5, z: 0 }
+      ]
+    };
+
+    const positive = createExtrudePreviewGeometry(sketch, 8);
+    positive.computeBoundingBox();
+    expect(positive.boundingBox?.min.z).toBe(0);
+    expect(positive.boundingBox?.max.z).toBe(8);
+
+    const opposite = createExtrudePreviewGeometry(sketch, -6);
+    opposite.computeBoundingBox();
+    expect(opposite.boundingBox?.min.z).toBe(-6);
+    expect(opposite.boundingBox?.max.z).toBe(0);
+    expect(opposite.getAttribute('position').count).toBe(8);
   });
 });

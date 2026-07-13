@@ -1,10 +1,12 @@
 import {
   ModelViewer,
+  type ExtrudePreview,
   type FaceResizeCommit,
   type SketchOverlay,
   type StandardView,
   type ViewerSettings
 } from './ModelViewer';
+import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 
@@ -18,11 +20,16 @@ interface ViewerShellProps {
   viewRequest: { view: StandardView; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
+  extrudePreview: ExtrudePreview | null;
+  modeOverlay?: ReactNode;
+  hideViewerToolbar?: boolean;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean
   ): void;
+  onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
+  onExtrudeDistanceChange(distance: number): void;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
@@ -39,8 +46,13 @@ export function ViewerShell({
   viewRequest,
   units,
   editableBodyIds,
+  extrudePreview,
+  modeOverlay,
+  hideViewerToolbar = false,
   onSelectTopology,
+  onSelectSketchProfile,
   onResizePrimitiveFace,
+  onExtrudeDistanceChange,
   onToggleGrid,
   onFit,
   onView,
@@ -58,16 +70,21 @@ export function ViewerShell({
         viewRequest={viewRequest}
         units={units}
         editableBodyIds={editableBodyIds}
+        extrudePreview={extrudePreview}
         onSelectTopology={onSelectTopology}
+        onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
+        onExtrudeDistanceChange={onExtrudeDistanceChange}
       />
-      <ViewerToolbar
-        settings={settings}
-        onToggleGrid={onToggleGrid}
-        onFit={onFit}
-        onView={onView}
-        onCycleDisplayMode={onCycleDisplayMode}
-      />
+      {!hideViewerToolbar && (
+        <ViewerToolbar
+          settings={settings}
+          onToggleGrid={onToggleGrid}
+          onFit={onFit}
+          onView={onView}
+          onCycleDisplayMode={onCycleDisplayMode}
+        />
+      )}
       {bodies.length === 0 && sketches.length === 0 && (
         <div className="viewer-notice">
           <div>
@@ -82,6 +99,7 @@ export function ViewerShell({
           </div>
         </div>
       )}
+      {modeOverlay}
       <div className="viewer-watermark">openzcad kernel · exact b-rep</div>
     </section>
   );
