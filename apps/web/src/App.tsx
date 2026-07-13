@@ -1,13 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent
+} from 'react';
+import {
+  Camera,
+  Combine,
   Download,
+  Eye,
   FolderOpen,
   Grid3x3,
   Layers3,
   Maximize2,
   Monitor,
   PenLine,
+  Move3d,
   Save,
+  Scissors,
+  Spline,
+  Trash2,
+  TriangleRight,
   Upload
 } from 'lucide-react';
 import {
@@ -87,10 +102,13 @@ import {
 } from './components/CommandPalette';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
+import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type {
+  AxisProjection,
   DisplayMode,
   ExtrudePreview,
   FaceResizeCommit,
+  ProjectionMode,
   SketchOverlay,
   StandardView,
   ViewerSettings
@@ -176,6 +194,13 @@ export function App() {
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [projection, setProjection] = useState<ProjectionMode>('perspective');
+  const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
+    new Set()
+  );
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
+  const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
   const exportRequestsRef = useRef(
@@ -334,16 +359,13 @@ export function App() {
 
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
-      previewDoc
-        ? Object.values(previewDoc.derived.bodyRepresentations).filter(
-            (body) => !body.consumed
-          )
+      (previewDoc
+        ? Object.values(previewDoc.derived.bodyRepresentations)
         : doc
-          ? Object.values(doc.derived.bodyRepresentations).filter(
-              (body) => !body.consumed
-            )
-          : [],
-    [doc, previewDoc]
+          ? Object.values(doc.derived.bodyRepresentations)
+          : []
+      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
+    [doc, previewDoc, hiddenBodyIds]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -549,6 +571,7 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
+    setHiddenBodyIds(new Set());
     setTool(null);
   }
 
@@ -713,6 +736,31 @@ export function App() {
       'shaded-edges';
     setViewerSettings((current) => ({ ...current, displayMode: next }));
     setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+  }
+
+  function toggleProjection() {
+    setProjection((current) => {
+      const next = current === 'perspective' ? 'orthographic' : 'perspective';
+      setStatus(`Projection: ${next}.`);
+      return next;
+    });
+  }
+
+  function toggleBodyVisibility(bodyId: string) {
+    setHiddenBodyIds((current) => {
+      const next = new Set(current);
+      if (next.has(bodyId)) {
+        next.delete(bodyId);
+      } else {
+        next.add(bodyId);
+      }
+      return next;
+    });
+  }
+
+  function showAllBodies() {
+    setHiddenBodyIds(new Set());
+    setStatus('All bodies visible.');
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
@@ -1263,8 +1311,202 @@ export function App() {
     }
   }
 
+  function openContextMenu(
+    x: number,
+    y: number,
+    entries: { item: ContextMenuState['items'][number]; run(): void }[]
+  ) {
+    contextMenuActionsRef.current = Object.fromEntries(
+      entries.map((entry) => [entry.item.id, entry.run])
+    );
+    setContextMenu({ x, y, items: entries.map((entry) => entry.item) });
+  }
+
+  function handleViewportContextMenu(
+    x: number,
+    y: number,
+    selection: TopologySelection | null
+  ) {
+    if (!doc) {
+      return;
+    }
+    if (!selection) {
+      openContextMenu(x, y, [
+        {
+          item: {
+            id: 'fit',
+            label: 'Fit View',
+            icon: <Maximize2 size={13} aria-hidden="true" />,
+            shortcut: 'F'
+          },
+          run: () => setFitSignal((value) => value + 1)
+        },
+        {
+          item: {
+            id: 'grid',
+            label: viewerSettings.showGrid ? 'Hide Grid' : 'Show Grid',
+            icon: <Grid3x3 size={13} aria-hidden="true" />,
+            shortcut: 'G'
+          },
+          run: () =>
+            setViewerSettings((current) => ({
+              ...current,
+              showGrid: !current.showGrid
+            }))
+        },
+        {
+          item: {
+            id: 'projection',
+            label: `Projection: ${projection === 'perspective' ? 'Orthographic' : 'Perspective'}`,
+            icon: <Camera size={13} aria-hidden="true" />,
+            shortcut: 'P'
+          },
+          run: toggleProjection
+        },
+        {
+          item: {
+            id: 'showAll',
+            label: 'Show All Bodies',
+            icon: <Eye size={13} aria-hidden="true" />,
+            disabled: hiddenBodyIds.size === 0
+          },
+          run: showAllBodies
+        }
+      ]);
+      return;
+    }
+    // Adopt the clicked geometry as the selection so actions target it.
+    handleSelectTopologyFromViewer(selection, false);
+    const nodeId = featureNodeIdForBody(selection.bodyId);
+    const node = nodeId ? doc.nodes[nodeId] : undefined;
+    const feature = node?.kind === 'feature' ? node : null;
+    const edge = selection.kind === 'edge';
+    openContextMenu(x, y, [
+      ...(edge
+        ? [
+            {
+              item: {
+                id: 'fillet',
+                label: 'Fillet Edge…',
+                icon: <Spline size={13} aria-hidden="true" />
+              },
+              run: () => launchTool('fillet')
+            },
+            {
+              item: {
+                id: 'chamfer',
+                label: 'Chamfer Edge…',
+                icon: <TriangleRight size={13} aria-hidden="true" />
+              },
+              run: () => launchTool('chamfer')
+            }
+          ]
+        : []),
+      {
+        item: {
+          id: 'move',
+          label: 'Move / Rotate…',
+          icon: <Move3d size={13} aria-hidden="true" />,
+          shortcut: 'M',
+          section: edge
+        },
+        run: () => launchTool('transform')
+      },
+      {
+        item: {
+          id: 'union',
+          label: 'Union…',
+          icon: <Combine size={13} aria-hidden="true" />,
+          shortcut: 'U',
+          disabled: viewerBodies.length < 2
+        },
+        run: () => launchTool('union')
+      },
+      {
+        item: {
+          id: 'subtract',
+          label: 'Subtract…',
+          icon: <Scissors size={13} aria-hidden="true" />,
+          shortcut: 'X',
+          disabled: viewerBodies.length < 2
+        },
+        run: () => launchTool('subtract')
+      },
+      {
+        item: {
+          id: 'hide',
+          label: 'Hide Body',
+          icon: <Eye size={13} aria-hidden="true" />,
+          section: true
+        },
+        run: () => toggleBodyVisibility(selection.bodyId)
+      },
+      {
+        item: {
+          id: 'fit',
+          label: 'Fit View',
+          icon: <Maximize2 size={13} aria-hidden="true" />,
+          shortcut: 'F'
+        },
+        run: () => setFitSignal((value) => value + 1)
+      },
+      ...(feature
+        ? [
+            {
+              item: {
+                id: 'delete',
+                label: `Delete ${feature.name}`,
+                icon: <Trash2 size={13} aria-hidden="true" />,
+                shortcut: 'Del',
+                danger: true,
+                section: true
+              },
+              run: () => handleDeleteFeature(feature.featureId, feature.name)
+            }
+          ]
+        : [])
+    ]);
+  }
+
+  function handleFeatureContextMenu(
+    event: React.MouseEvent,
+    feature: FeatureNode
+  ) {
+    const bodyId = feature.bodyId ?? null;
+    const body = bodyId ? representations[bodyId] : null;
+    openContextMenu(event.clientX, event.clientY, [
+      {
+        item: { id: 'edit', label: 'Edit Properties' },
+        run: () => handleSelectFeatureFromTree(feature.id)
+      },
+      ...(bodyId && body && !body.consumed
+        ? [
+            {
+              item: {
+                id: 'visibility',
+                label: hiddenBodyIds.has(bodyId) ? 'Show Body' : 'Hide Body',
+                icon: <Eye size={13} aria-hidden="true" />
+              },
+              run: () => toggleBodyVisibility(bodyId)
+            }
+          ]
+        : []),
+      {
+        item: {
+          id: 'delete',
+          label: 'Delete',
+          icon: <Trash2 size={13} aria-hidden="true" />,
+          shortcut: 'Del',
+          danger: true,
+          section: true
+        },
+        run: () => handleDeleteFeature(feature.featureId, feature.name)
+      }
+    ]);
+  }
+
   // Workspace keyboard map (ignored while typing in a field).
-  useEffect(() => {
+  useLayoutEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!doc) {
         return;
@@ -1385,6 +1627,10 @@ export function App() {
       }
       if (key === 'w') {
         cycleDisplayMode();
+        return;
+      }
+      if (key === 'p') {
+        toggleProjection();
         return;
       }
       const shortcutTool = SHORTCUT_TO_TOOL[key];
@@ -1513,6 +1759,22 @@ export function App() {
       run: cycleDisplayMode
     },
     {
+      id: 'view-projection',
+      label: `Projection: switch to ${projection === 'perspective' ? 'orthographic' : 'perspective'}`,
+      group: 'View',
+      shortcut: 'P',
+      icon: <Camera size={16} aria-hidden="true" />,
+      run: toggleProjection
+    },
+    {
+      id: 'view-show-all',
+      label: 'Show all bodies',
+      group: 'View',
+      icon: <Eye size={16} aria-hidden="true" />,
+      disabledReason: hiddenBodyIds.size === 0 ? 'No bodies are hidden' : null,
+      run: showAllBodies
+    },
+    {
       id: 'file-save',
       label: 'Save revision',
       group: 'File',
@@ -1621,8 +1883,11 @@ export function App() {
           features={features}
           representations={representations}
           selectedFeatureNodeId={selectedFeatureNodeId}
+          hiddenBodyIds={hiddenBodyIds}
           warnings={warnings}
           onSelectFeature={handleSelectFeatureFromTree}
+          onToggleBodyVisibility={toggleBodyVisibility}
+          onFeatureContextMenu={handleFeatureContextMenu}
           onSetParameter={(name, expression) =>
             executeCommand(commandFactories.setParameter({ name, expression }))
           }
@@ -1686,6 +1951,8 @@ export function App() {
               />
             ) : null
           }
+          projection={projection}
+          orientationRef={orientationRef}
           onSelectTopology={handleSelectTopologyFromViewer}
           onSelectSketchProfile={handleSelectSketchProfile}
           onResizePrimitiveFace={handleResizePrimitiveFace}
@@ -1694,6 +1961,7 @@ export function App() {
               current ? { ...current, distance } : current
             )
           }
+          onContextMenu={handleViewportContextMenu}
           onToggleGrid={() =>
             setViewerSettings((current) => ({
               ...current,
@@ -1703,6 +1971,7 @@ export function App() {
           onFit={() => setFitSignal((value) => value + 1)}
           onView={requestView}
           onCycleDisplayMode={cycleDisplayMode}
+          onToggleProjection={toggleProjection}
         />
       }
       inspector={
@@ -1968,6 +2237,13 @@ export function App() {
           )}
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
+          )}
+          {contextMenu && (
+            <ContextMenu
+              menu={contextMenu}
+              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onClose={() => setContextMenu(null)}
+            />
           )}
         </>
       }
