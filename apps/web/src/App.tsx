@@ -848,6 +848,11 @@ export function App() {
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
+          onRenameProject={(name) =>
+            executeCommand(
+              commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
+            )
+          }
           onGoHome={() => void handleGoHome()}
         />
       }

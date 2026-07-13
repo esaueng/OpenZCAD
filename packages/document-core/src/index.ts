@@ -1196,6 +1196,9 @@ export function renameNode(
     throw new Error(`Node ${input.nodeId} not found.`);
   }
   node.name = name;
+  if (node.kind === 'project') {
+    next.name = name;
+  }
   next.version += 1;
   return next;
 }

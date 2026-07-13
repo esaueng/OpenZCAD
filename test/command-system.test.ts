@@ -41,6 +41,29 @@ describe('command-system', () => {
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
   });
 
+  it('renames the project through replayable undoable document history', () => {
+    const base = createProjectDocument('Original Name', toUserId('user_test'));
+    const manager = new CommandManager(base);
+
+    manager.execute(
+      commandFactories.renameNode({
+        nodeId: base.rootNodeId,
+        name: 'Renamed Part'
+      })
+    );
+
+    expect(manager.document.name).toBe('Renamed Part');
+    expect(manager.document.nodes[base.rootNodeId]?.name).toBe('Renamed Part');
+    expect(replayCommands(base, manager.document.commandLog).name).toBe(
+      'Renamed Part'
+    );
+
+    manager.undo();
+    expect(manager.document.name).toBe('Original Name');
+    manager.redo();
+    expect(manager.document.name).toBe('Renamed Part');
+  });
+
   it('replays a full parametric command log into an identical entity graph', () => {
     const base = createProjectDocument('Replay Test', toUserId('user_test'));
     const manager = new CommandManager(base);

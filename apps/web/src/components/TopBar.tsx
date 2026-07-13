@@ -1,9 +1,10 @@
-import { type ChangeEvent } from 'react';
+import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Check,
   CloudOff,
   Download,
   LoaderCircle,
+  Pencil,
   Redo2,
   Undo2,
   Upload,
@@ -30,6 +31,7 @@ interface TopBarProps {
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
+  onRenameProject(name: string): void;
   onGoHome(): void;
 }
 
@@ -49,8 +51,37 @@ export function TopBar({
   onSave,
   onImportFile,
   onExport,
+  onRenameProject,
   onGoHome
 }: TopBarProps) {
+  const [editingProjectName, setEditingProjectName] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
+  const projectNameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingProjectName) {
+      projectNameInputRef.current?.select();
+    }
+  }, [editingProjectName]);
+
+  function beginProjectRename() {
+    if (!projectName) {
+      return;
+    }
+    setProjectNameDraft(projectName);
+    setEditingProjectName(true);
+  }
+
+  function commitProjectRename() {
+    const nextName = projectNameDraft.trim();
+    setEditingProjectName(false);
+    if (nextName && nextName !== projectName) {
+      onRenameProject(nextName);
+      return;
+    }
+    setProjectNameDraft(projectName ?? '');
+  }
+
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}`
@@ -69,7 +100,42 @@ export function TopBar({
       </button>
       <div className="topbar-divider" />
       <div className="breadcrumb">
-        <strong>{projectName ?? 'No project'}</strong>
+        {projectName ? (
+          editingProjectName ? (
+            <input
+              ref={projectNameInputRef}
+              className="project-title-input"
+              value={projectNameDraft}
+              maxLength={200}
+              aria-label="Project name"
+              onChange={(event) => setProjectNameDraft(event.target.value)}
+              onBlur={commitProjectRename}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitProjectRename();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setProjectNameDraft(projectName);
+                  setEditingProjectName(false);
+                }
+              }}
+            />
+          ) : (
+            <button
+              className="project-title-button"
+              type="button"
+              aria-label="Rename project"
+              title="Rename project"
+              onClick={beginProjectRename}
+            >
+              <strong>{projectName}</strong>
+              <Pencil size={11} aria-hidden="true" />
+            </button>
+          )
+        ) : (
+          <strong>No project</strong>
+        )}
         {projectName && <span className="mono">{units ?? ''}</span>}
       </div>
       <div className="topbar-tools" aria-label="Workspace tools">
