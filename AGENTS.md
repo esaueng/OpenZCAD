@@ -1,9 +1,9 @@
 # OpenZCAD Agent Notes
 
 ## Environment
-- Default branch is `beta`.
+- Default branch is `main`.
 - Do not create production deploy targets or production domain config.
-- Use `wrangler.jsonc` and beta-only Cloudflare resources.
+- Use `wrangler.jsonc` and non-production Cloudflare resources.
 
 ## Engineering Rules
 - Browser document/history model is the source of truth.
@@ -12,7 +12,6 @@
 - Keep package boundaries strict. Do not let viewport state leak into document or kernel packages.
 
 ## Delivery
-- Commit on `beta` with descriptive messages.
-- Push only to the current non-production branch when a remote exists.
+- Commit on `main` with descriptive messages.
+- Push to `main` when a remote exists.
 - Final status reports must separate working features, stubs, risks, and next milestones.
-
