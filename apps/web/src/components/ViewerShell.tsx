@@ -1,13 +1,17 @@
+import type { MutableRefObject } from 'react';
 import {
   ModelViewer,
   type ExtrudePreview,
+  type AxisProjection,
   type FaceResizeCommit,
+  type ProjectionMode,
   type SketchOverlay,
   type StandardView,
   type ViewerSettings
 } from './ModelViewer';
 import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
+import { OrientationWidget } from './OrientationWidget';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 
 interface ViewerShellProps {
@@ -24,6 +28,8 @@ interface ViewerShellProps {
   extrudePreview: ExtrudePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
+  projection: ProjectionMode;
+  orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean
@@ -31,10 +37,16 @@ interface ViewerShellProps {
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
+  onContextMenu(
+    x: number,
+    y: number,
+    selection: TopologySelection | null
+  ): void;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
   onCycleDisplayMode(): void;
+  onToggleProjection(): void;
 }
 
 export function ViewerShell({
@@ -51,14 +63,18 @@ export function ViewerShell({
   extrudePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  projection,
+  orientationRef,
   onSelectTopology,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
+  onContextMenu,
   onToggleGrid,
   onFit,
   onView,
-  onCycleDisplayMode
+  onCycleDisplayMode,
+  onToggleProjection
 }: ViewerShellProps) {
   return (
     <section className="viewer-shell" aria-label="3D viewport">
@@ -74,19 +90,27 @@ export function ViewerShell({
         units={units}
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
+        projection={projection}
+        orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}
+        onContextMenu={onContextMenu}
       />
       {!hideViewerToolbar && (
-        <ViewerToolbar
-          settings={settings}
-          onToggleGrid={onToggleGrid}
-          onFit={onFit}
-          onView={onView}
-          onCycleDisplayMode={onCycleDisplayMode}
-        />
+        <>
+          <ViewerToolbar
+            settings={settings}
+            projection={projection}
+            onToggleGrid={onToggleGrid}
+            onFit={onFit}
+            onView={onView}
+            onCycleDisplayMode={onCycleDisplayMode}
+            onToggleProjection={onToggleProjection}
+          />
+          <OrientationWidget orientationRef={orientationRef} />
+        </>
       )}
       {bodies.length === 0 && sketches.length === 0 && (
         <div className="viewer-notice">
