@@ -1,68 +1,65 @@
 # OpenZCAD Architecture
 
-OpenZCAD is a browser-based parametric CAD design tool — nothing more. The browser owns modeling, the Cloudflare Worker owns orchestration and persistence, and derived geometry artifacts are disposable projections of the parametric document.
+OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by OpenCascade in a browser Web Worker. The Cloudflare Worker coordinates persistence and AI, but never owns interactive geometry.
 
-## Core layers
+## Layers
 
-- `geometry`: the solid kernel. Solids are polyhedral B-Reps (shared vertices + planar, convex, outward-wound polygon faces). Generators cover box/cylinder/sphere/cone/torus, profile extrude, and full revolve; booleans run BSP CSG with post-pass T-junction healing; `validateSolid` checks the every-edge-used-twice watertightness contract; `solidVolume`/`solidBounds` feed measurements.
-- `document-core`: canonical project state — feature tree, sketches, and the **parameter table**. Feature inputs are `ParamValue`s: literal numbers or expression strings evaluated against the parameters at rebuild time (sandboxed recursive-descent parser; never `eval`). Documents are immutable values: every mutating operation clones and returns a new document. Features can be updated, renamed, and deleted after creation (deletion cascades to bodies/sketches; dependents degrade to warnings).
-- `command-system`: deterministic mutations, transactions, undo/redo, replay. Command factories pre-assign created IDs and serialize them with the payload, so replaying a command log rebuilds the exact same entity graph. Undo history is capped (100 entries).
-- `kernel-adapter`: rebuilds every body from its parametric definition on each sync — evaluate parameters, build solids in feature order, run booleans (inputs become *consumed*), bake transforms into world-space vertices — then derives per-body triangle meshes, face counts, volumes, and bounds. The same `buildSolids` path feeds STEP/STL export, so the viewport and the exported file always agree.
-- `io-step`: ISO 10303-21 writer (AP214 `AUTOMOTIVE_DESIGN`). Emits a full product structure and one faceted `MANIFOLD_SOLID_BREP` per body with exact shared topology: one `VERTEX_POINT` per vertex, one `EDGE_CURVE` per undirected edge, two `ORIENTED_EDGE`s per curve with opposite senses. Geometry is scaled to millimetres. Also provides metadata-level STEP reading (product names) for imports.
-- `io-stl`: full STL parsing (binary + ASCII, real triangles, 200k-triangle import cap) and ASCII STL writing with computed facet normals.
-- `viewport`: render projection only. Bodies arrive as world-space meshes (transforms are baked by the kernel) and render flat-shaded with feature-edge overlays.
-- `persistence` / `cloudflare-adapters`: save/load semantics, artifact manifests, upload sessions (15-minute TTL, single use), D1/R2/Queues/DO/Workflow implementations.
+- `shared`: branded IDs and schema-v2 contracts for nodes, revisions, checkpoints, assets, derived topology, collaboration messages, and API payloads.
+- `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern features, v1-to-v2 normalization, and checkpoint creation.
+- `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
+- `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
+- `kernel-adapter/exact`: the `occt-wasm` OpenCascade adapter. It owns exact primitives, STEP import, sweeps, transforms, booleans, edge finishing, patterns, tessellation/topology projection, validity checks, measurements, and STEP/STL export.
+- `kernel-adapter` and `geometry`: compatibility support for imported mesh bodies and deterministic legacy tests. They are not the primary exact modeling path.
+- `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state.
+- `persistence` and `cloudflare-adapters`: local/in-memory and D1/R2 implementations, schema normalization, revisions/checkpoints, upload sessions, and artifact coordination.
+- `apps/web`: React workspace, IndexedDB autosave, geometry worker, and Cloudflare Worker routes.
 
-## Workspace UI
+## Document lifecycle
 
-`apps/web` is a direct-modeling workspace: GlobalTopBar (project identity + save state, Model/Visualize workspace tabs, undo/redo, command search, import/export) over [ToolPalette+ModelBrowser | Viewport | PropertiesInspector] over StatusBar.
+1. A UI form or approved AI proposal creates validated commands.
+2. `CommandManager` applies one command or transaction, appends serialized replay data, and advances the document version.
+3. The React app autosaves the canonical document to IndexedDB.
+4. The geometry worker receives `{ type: "sync", document }` and rebuilds the feature history with OpenCascade.
+5. The worker returns derived meshes, bounds, volume, face counts, validity warnings, and exportable body IDs tagged with project/version.
+6. The app rejects stale results and attaches only matching derived state without advancing model history.
+7. Manual save creates a durable checkpoint in the beta persistence service.
 
-- **Command registry** (`src/lib/commands.ts`): every user-facing command is declared once — label, icon name, category, shortcut, availability predicate, contextual-relevance score. The tool palette, command search (S / Ctrl+K), context menus, keyboard map, and shortcut sheet (?) all render from it.
-- **Tool sessions** (`src/lib/session.ts`): the live state of one in-progress command (armed → adjust via HUD or on-canvas manipulator → commit as one undoable command / cancel with zero document change). Pure data + pure functions; previews reuse the kernel's `PLANE_BASES`/profile builders so ghost geometry always matches what commit produces.
-- **ToolPalette**: vertical grouped tools (Sketch / Create / Modify / Combine) with labels + shortcuts, collapsible groups, and a contextual "For selection" group that reprioritizes (sketch → Extrude/Revolve; one body → Move; 2+ bodies → Booleans). Collapses to an icon rail under 1280px.
-- **ModelBrowser**: parameter table plus the feature tree with inline rename (double-click), hover visibility eyes, consumed/failed/hidden badges, and a right-click context menu.
-- **Viewport**: dominant region. Hover preselect, click select, shift-click multi-select, pickable sketch-profile outlines, live ghost previews, extrude arrow + move triad manipulators (drag writes back into the HUD value), CommandHUD floating top-center, orientation widget + standard views/projection/fit cluster upper-right, right-click context menu.
-- **PropertiesInspector**: collapsible right panel for full parameters of the selected feature (expression fields with live evaluation), measurements, and per-body appearance (Visualize workspace; persisted as node metadata, undoable).
+Exact faces and edges are projected with deterministic one-based sub-shape ordinals. Selection remains viewport state until a command captures an ordinal; feature commands never depend on Three.js objects or transient OCCT handles.
 
-## Geometry sync pipeline
+When opening a project, local and remote copies are loaded together. The higher document version wins; derived timestamps break ties. This prevents an older cloud response from shadowing newer local edits.
 
-The app posts the document to a browser worker whenever `document.version` changes. The worker rebuilds all solids from the parametric definitions and replies with derived state tagged by `projectId`/`version`; the app discards stale replies and commits matching ones via `commitDerivedState`, which intentionally does not bump `version` (this breaks the re-derive feedback loop and distinguishes model edits from re-derivation). Parameter edits bump `version` like any other command, which is what makes the model parametric end-to-end.
+## Exact export lifecycle
 
-## Cloudflare mapping
+STEP/STL buttons send an export request to the existing geometry worker with the current document and selected live body IDs. The worker rebuilds the exact shapes and exports them through OpenCascade. The main thread only creates the download and records best-effort export metadata with the Worker API. The viewport and export therefore share the same exact build path.
 
-- Worker routes expose the project API and upload/export orchestration.
-- D1 stores metadata and revision pointers, never large blobs.
-- R2 stores uploads, exports, thumbnails, and large snapshots.
-- Durable Objects host collaboration room, lock, and presence scaffolding.
-- Queues handle background validation and thumbnail requests.
-- Workflows orchestrate multi-step import and export pipelines.
+## Editable STEP lifecycle
 
-## API behavior
+The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. OpenCascade imports the exact shape on every replay, so later transforms, booleans, fillets, chamfers, patterns, selection, and export use the same exact B-rep path. The Worker archives the source best-effort; replay does not depend on that network artifact.
 
-- All POST bodies are validated; malformed input returns `400` with `{ "error": string }`. Bodies over 25MB return `413`. Unknown routes/resources return `404`; unexpected failures return `500` without internals.
-- `POST /api/projects/:id/revisions` requires the path ID, payload `projectId`, and `document.projectId` to agree, and returns `404` for unknown projects.
-- `POST /api/imports/finalize` returns `404` when the upload session is unknown, expired, or already consumed (sessions are single-use).
-- Export workflow kick-off is best-effort: the browser performs the actual STEP/STL writing and download; the Worker records the artifact and job.
+## Collaboration lifecycle
 
-## CAD rules
+After project ownership is authorized, the client upgrades `GET /api/projects/:id/collaboration` to a WebSocket. A per-project Durable Object broadcasts presence and canonical document snapshots, accepts only newer versions, and reports same-version divergent documents as conflicts. Clients preserve local state on conflict, strip derived meshes before transmission, debounce edits, and pause live broadcasting above 900 KB. IndexedDB and manual D1 checkpoints remain the durable recovery path.
 
-- Viewport meshes are never the source of truth; the parametric document is.
-- Feature outputs are referenced through stable entity IDs; replay rebuilds identical graphs.
-- STEP export writes only real, validated B-Rep topology. Shells that fail the closed-shell check still export but carry an explicit warning instead of silently lying.
-- Transforms are baked into geometry by the kernel; representations carry no placement of their own, so every consumer (viewport, CSG, exporters) sees identical coordinates.
+## AI lifecycle
 
-## Local development
+`POST /api/assistant/proposals` accepts a user request and a compact document digest. Embedded STEP source and mesh arrays are omitted from model context; exact selected face/edge context is included. The beta Worker calls OpenRouter's OpenAI-compatible Responses endpoint by default (or direct OpenAI/another compatible endpoint) with streaming, `store: false`, a stable authenticated-user safety identifier, configurable reasoning effort, a strict JSON Schema structured output, and system instructions that require the smallest safe document patch and prohibit claims that a patch was applied.
 
-- `pnpm dev:web` runs the Vite dev server with the Cloudflare Vite plugin.
-- Browser workers execute geometry derivation.
-- Worker bindings fall back to in-memory development repositories when D1/R2 bindings are absent (state resets per isolate).
+The patch vocabulary covers named parameters, existing feature dimensions, primitive creation, sweeps, booleans, transforms, edge modifiers, patterns, renaming, and deletion. The client assembles `response.output_text.delta` events, validates the final proposal again, and displays it. Preview runs the proposal against a temporary `CommandManager`; Apply converts it to normal commands and commits one undoable transaction. `GET /api/assistant/status` exposes configuration metadata but never the secret.
 
-## Security posture and known limitations
+## Storage and Cloudflare mapping
 
-- **No authentication yet.** Every API request acts as a fixed development user (`user_beta_dev`); project access is not scoped per user beyond the listing query. Real auth must land before any non-beta exposure.
-- Parameter expressions are evaluated with a sandboxed recursive-descent parser (never `eval`/`Function`); unknown identifiers and cycles surface as per-parameter errors.
-- Upload file names are sanitized before being embedded in R2 object keys; upload sessions expire and are single-use.
-- `listProjects` on D1 parses each project's full document JSON to compute revision metadata; acceptable at beta scale, but revision metadata should move to columns before documents grow large.
-- The D1 `database_id` in wrangler config is a placeholder; deploys fall back to in-memory persistence until a real beta database is provisioned.
-- The kernel is polyhedral: STEP output is faceted B-Rep (planar faces). Curved faces are tessellated at fixed densities; analytic STEP surfaces and STEP B-Rep *import* require the staged OpenCascade.js adapter.
-- BSP booleans are robust for typical part modeling but coplanar-face overlaps can produce imperfect shells; such results are flagged by the closed-shell warning rather than hidden.
+- IndexedDB: immediate local autosave and offline reopen.
+- D1: project documents, project metadata, revision/checkpoint snapshots, upload sessions, and artifact metadata.
+- R2: large source/export assets when configured.
+- Durable Objects: authenticated per-project presence and live document synchronization.
+- Workflows/Queues: export/import orchestration scaffolding.
+- Worker secret: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or provider-neutral `AI_API_KEY`; never shipped to the browser.
+- `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_REASONING_EFFORT`, `AI_SITE_URL`, and `AI_APP_NAME` select and attribute a Responses-compatible provider/model without code changes.
+
+## API and errors
+
+All JSON POST bodies are validated. Oversized bodies return `413`, malformed data `400`, unauthenticated requests `401`, unauthorized resources `404`, unconfigured services `503`, upstream AI failure `502`, and unexpected errors a generic `500`. Provider error bodies and secrets are never returned to the client.
+
+## Security posture
+
+This remains beta-only. Beta requests require Cloudflare Access identity and all project, revision, artifact, import/export, and collaboration operations are owner-scoped. Development mode supplies an isolated local identity and must not be used on a public route. Cloudflare Access must be configured at the route boundary; the Worker intentionally trusts Access's injected assertion and email headers. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.

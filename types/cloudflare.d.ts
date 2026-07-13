@@ -49,6 +49,18 @@ declare interface Queue<T = unknown> {
   send(message: T): Promise<void>;
 }
 
+declare interface WebSocket {
+  accept(): void;
+}
+
+declare const WebSocketPair: {
+  new (): { 0: WebSocket; 1: WebSocket };
+};
+
+declare interface ResponseInit {
+  webSocket?: WebSocket;
+}
+
 declare module 'cloudflare:workers' {
   export class DurableObject {
     constructor(ctx: unknown, env: unknown);

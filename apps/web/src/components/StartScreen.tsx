@@ -11,7 +11,13 @@ interface StartScreenProps {
   onOpen(projectId: string): void;
 }
 
-export function StartScreen({ projects, status, busy, onCreate, onOpen }: StartScreenProps) {
+export function StartScreen({
+  projects,
+  status,
+  busy,
+  onCreate,
+  onOpen
+}: StartScreenProps) {
   const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>('mm');
 
@@ -24,13 +30,32 @@ export function StartScreen({ projects, status, busy, onCreate, onOpen }: StartS
           <span className="start-tagline">parametric cad in the browser</span>
         </div>
 
-        <div className="start-section">
+        <form
+          className="start-section"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy && name.trim().length > 0) {
+              onCreate(name.trim(), units);
+            }
+          }}
+          onKeyDown={(event) => {
+            // Enter creates from any field, including the units select.
+            if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+              event.preventDefault();
+              if (!busy && name.trim().length > 0) {
+                onCreate(name.trim(), units);
+              }
+            }
+          }}
+        >
           <h2>New project</h2>
           <div className="field">
             <span>Project name</span>
             <input
               value={name}
               aria-label="Project name"
+              autoFocus
+              onFocus={(event) => event.currentTarget.select()}
               onChange={(event) => setName(event.target.value)}
             />
           </div>
@@ -48,15 +73,14 @@ export function StartScreen({ projects, status, busy, onCreate, onOpen }: StartS
             </select>
           </div>
           <button
-            type="button"
+            type="submit"
             className="primary wide"
             disabled={busy || name.trim().length === 0}
-            onClick={() => onCreate(name.trim(), units)}
           >
             <Plus size={15} aria-hidden="true" />
             Create project
           </button>
-        </div>
+        </form>
 
         {projects.length > 0 && (
           <div className="start-section">

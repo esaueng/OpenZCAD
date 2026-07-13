@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   AlertTriangle,
   Box,
-  ChevronDown,
-  ChevronRight,
   Combine,
   Cone,
   Cylinder,
@@ -21,6 +19,7 @@ import {
 } from 'lucide-react';
 import type {
   BodyRepresentation,
+  FeatureId,
   FeatureNode,
   ParameterNode
 } from '@openzcad/shared';
@@ -65,7 +64,12 @@ interface ParameterRowProps {
   onDelete(name: string): void;
 }
 
-function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) {
+function ParameterRow({
+  parameter,
+  value,
+  onSet,
+  onDelete
+}: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
 
   function commit() {
@@ -78,7 +82,10 @@ function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) 
   }
 
   return (
-    <div className="param-row" title={`${parameter.name} = ${parameter.expression}`}>
+    <div
+      className="param-row"
+      title={`${parameter.name} = ${parameter.expression}`}
+    >
       <span className="param-name mono">{parameter.name}</span>
       <input
         className="mono"
@@ -96,7 +103,9 @@ function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) 
           }
         }}
       />
-      <span className={`param-value mono ${value === undefined ? 'error' : ''}`}>
+      <span
+        className={`param-value mono ${value === undefined ? 'error' : ''}`}
+      >
         {value === undefined ? 'err' : formatNumber(value)}
       </span>
       <button
@@ -112,7 +121,11 @@ function ParameterRow({ parameter, value, onSet, onDelete }: ParameterRowProps) 
   );
 }
 
-function AddParameterRow({ onSet }: { onSet(name: string, expression: string): void }) {
+function AddParameterRow({
+  onSet
+}: {
+  onSet(name: string, expression: string): void;
+}) {
   const [name, setName] = useState('');
   const [expression, setExpression] = useState('');
 
@@ -148,167 +161,98 @@ function AddParameterRow({ onSet }: { onSet(name: string, expression: string): v
         aria-label="New parameter expression"
         onChange={(event) => setExpression(event.target.value)}
       />
-      <button type="submit" className="icon-button" title="Add parameter" aria-label="Add parameter">
+      <button
+        type="submit"
+        className="icon-button"
+        title="Add parameter"
+        aria-label="Add parameter"
+      >
         <Plus size={13} aria-hidden="true" />
       </button>
     </form>
   );
 }
 
-function RenameInput({
-  initial,
-  onCommit,
-  onCancel
-}: {
-  initial: string;
-  onCommit(name: string): void;
-  onCancel(): void;
-}) {
-  const [value, setValue] = useState(initial);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-
-  return (
-    <input
-      ref={inputRef}
-      className="rename-input"
-      value={value}
-      aria-label="Rename"
-      onChange={(event) => setValue(event.target.value)}
-      onBlur={() => {
-        const trimmed = value.trim();
-        if (trimmed.length > 0 && trimmed !== initial) {
-          onCommit(trimmed);
-        } else {
-          onCancel();
-        }
-      }}
-      onKeyDown={(event) => {
-        event.stopPropagation();
-        if (event.key === 'Enter') {
-          event.currentTarget.blur();
-        }
-        if (event.key === 'Escape') {
-          setValue(initial);
-          onCancel();
-        }
-      }}
-    />
-  );
-}
-
-export interface ModelBrowserProps {
+interface SidebarProps {
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
-  selectedFeatureNodeIds: string[];
+  selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
   warnings: string[];
-  /** Node currently in inline-rename mode, controlled by App (F2 / menu). */
-  renamingNodeId: string | null;
-  onSelectFeature(nodeId: string, additive: boolean): void;
-  onRenameNode(nodeId: string, name: string): void;
-  onRenameStateChange(nodeId: string | null): void;
+  onSelectFeature(nodeId: string): void;
   onToggleBodyVisibility(bodyId: string): void;
   onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
+  onDeleteFeature(featureId: FeatureId, name: string): void;
 }
 
-/**
- * Collapsible model browser: parameter table plus the ordered feature tree
- * with inline rename, hover visibility toggles, and state badges. Secondary
- * controls appear on hover/selection; everything else lives in the context
- * menu so rows stay scannable.
- */
-export function ModelBrowser({
+export function Sidebar({
   parameters,
   parameterValues,
   features,
   representations,
-  selectedFeatureNodeIds,
+  selectedFeatureNodeId,
   hiddenBodyIds,
   warnings,
-  renamingNodeId,
   onSelectFeature,
-  onRenameNode,
-  onRenameStateChange,
   onToggleBodyVisibility,
   onFeatureContextMenu,
   onSetParameter,
-  onDeleteParameter
-}: ModelBrowserProps) {
-  const [showParams, setShowParams] = useState(true);
-
+  onDeleteParameter,
+  onDeleteFeature
+}: SidebarProps) {
   return (
-    <aside className="model-browser" aria-label="Model browser">
-      <section className="browser-section">
-        <button
-          type="button"
-          className="browser-section-title"
-          aria-expanded={showParams}
-          onClick={() => setShowParams((value) => !value)}
-        >
-          {showParams ? (
-            <ChevronDown size={11} aria-hidden="true" />
-          ) : (
-            <ChevronRight size={11} aria-hidden="true" />
-          )}
-          Parameters
-          <span className="browser-count">{parameters.length}</span>
-        </button>
-        {showParams && (
-          <div className="param-list">
-            {parameters.map((parameter) => (
-              <ParameterRow
-                key={parameter.parameterId}
-                parameter={parameter}
-                value={parameterValues[parameter.name]}
-                onSet={onSetParameter}
-                onDelete={onDeleteParameter}
-              />
-            ))}
-            <AddParameterRow onSet={onSetParameter} />
-            {parameters.length === 0 && (
-              <p className="muted browser-hint">
-                Name a value (e.g. <span className="mono">w = 30</span>) and use it in any field.
-              </p>
-            )}
-          </div>
+    <aside className="sidebar" aria-label="Model browser">
+      <div className="sidebar-label">Model</div>
+      <section className="sidebar-section">
+        <h3 className="section-title">Parameters</h3>
+        <div className="param-list">
+          {parameters.map((parameter) => (
+            <ParameterRow
+              key={parameter.parameterId}
+              parameter={parameter}
+              value={parameterValues[parameter.name]}
+              onSet={onSetParameter}
+              onDelete={onDeleteParameter}
+            />
+          ))}
+          <AddParameterRow onSet={onSetParameter} />
+        </div>
+        {parameters.length === 0 && (
+          <p className="muted sidebar-hint">
+            Name a value here (e.g. <span className="mono">w = 30</span>), then
+            use it in any feature field.
+          </p>
         )}
       </section>
 
-      <section className="browser-section grow">
-        <h3 className="browser-section-title static">
-          Features
-          <span className="browser-count">{features.length}</span>
-        </h3>
-        <div className="feature-list" role="tree" aria-label="Feature history">
+      <section className="sidebar-section grow">
+        <h3 className="section-title">Features</h3>
+        <div className="feature-list">
           {features.length === 0 && (
-            <p className="muted browser-hint">
-              Nothing yet — start a sketch (K) or add a box (B).
+            <p className="muted sidebar-hint">
+              No features yet. Pick a tool from the toolbar above.
             </p>
           )}
           {features.map((feature) => {
-            const body = feature.bodyId ? representations[feature.bodyId] : undefined;
+            const body = feature.bodyId
+              ? representations[feature.bodyId]
+              : undefined;
             const consumed = body?.consumed ?? false;
-            const hidden = feature.bodyId ? hiddenBodyIds.has(feature.bodyId) : false;
+            const hidden = feature.bodyId
+              ? hiddenBodyIds.has(feature.bodyId)
+              : false;
             const failed =
               feature.bodyId !== undefined &&
               feature.featureKind !== 'sketch' &&
               body === undefined;
-            const selected = selectedFeatureNodeIds.includes(feature.id);
             return (
               <div
                 key={feature.id}
-                role="treeitem"
-                aria-selected={selected}
-                className={`feature-row ${selected ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
+                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   onFeatureContextMenu(event, feature);
@@ -317,27 +261,16 @@ export function ModelBrowser({
                 <button
                   type="button"
                   className="feature-row-main"
-                  title={`${FEATURE_KIND_LABELS[feature.featureKind]} — double-click to rename`}
-                  onClick={(event) =>
-                    onSelectFeature(feature.id, event.shiftKey || event.metaKey || event.ctrlKey)
-                  }
-                  onDoubleClick={() => onRenameStateChange(feature.id)}
+                  onClick={() => onSelectFeature(feature.id)}
+                  title={`${FEATURE_KIND_LABELS[feature.featureKind]} — click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
-                  {renamingNodeId === feature.id ? (
-                    <RenameInput
-                      initial={feature.name}
-                      onCommit={(name) => {
-                        onRenameNode(feature.id, name);
-                        onRenameStateChange(null);
-                      }}
-                      onCancel={() => onRenameStateChange(null)}
-                    />
-                  ) : (
-                    <span className="feature-name">{feature.name}</span>
-                  )}
+                  <span className="feature-name">{feature.name}</span>
                   {failed && (
-                    <span className="feature-flag error" title="Feature failed to build">
+                    <span
+                      className="feature-flag error"
+                      title="Feature failed to build"
+                    >
                       <AlertTriangle size={11} aria-hidden="true" />
                     </span>
                   )}
@@ -348,7 +281,9 @@ export function ModelBrowser({
                     type="button"
                     className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
                     title={hidden ? `Show ${feature.name}` : `Hide ${feature.name}`}
-                    aria-label={hidden ? `Show ${feature.name}` : `Hide ${feature.name}`}
+                    aria-label={
+                      hidden ? `Show ${feature.name}` : `Hide ${feature.name}`
+                    }
                     aria-pressed={hidden}
                     onClick={() => onToggleBodyVisibility(feature.bodyId!)}
                   >
@@ -359,6 +294,17 @@ export function ModelBrowser({
                     )}
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="row-delete"
+                  title={`Delete ${feature.name}`}
+                  aria-label={`Delete ${feature.name}`}
+                  onClick={() =>
+                    onDeleteFeature(feature.featureId, feature.name)
+                  }
+                >
+                  <Trash2 size={12} aria-hidden="true" />
+                </button>
               </div>
             );
           })}
@@ -366,8 +312,8 @@ export function ModelBrowser({
       </section>
 
       {warnings.length > 0 && (
-        <section className="browser-section diagnostics">
-          <h3 className="browser-section-title static">Diagnostics</h3>
+        <section className="sidebar-section diagnostics">
+          <h3 className="section-title">Diagnostics</h3>
           {warnings.map((warning, index) => (
             <p key={index} className="diagnostic-row">
               <AlertTriangle size={12} aria-hidden="true" />

@@ -1,4 +1,5 @@
 import type {
+  AuthSession,
   ArtifactMetadataResponse,
   CreateProjectRequest,
   CreateProjectResponse,
@@ -13,7 +14,10 @@ import type {
   SaveRevisionRequest
 } from '@openzcad/shared';
 
-async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+async function requestJson<T>(
+  input: RequestInfo,
+  init?: RequestInit
+): Promise<T> {
   const response = await fetch(input, {
     ...init,
     headers: {
@@ -32,6 +36,7 @@ async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T
 
 export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
+  session: () => requestJson<AuthSession>('/api/session'),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {
@@ -41,10 +46,13 @@ export const api = {
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
   saveRevision: (payload: SaveRevisionRequest) =>
-    requestJson<ProjectDocument>(`/api/projects/${payload.projectId}/revisions`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
+    requestJson<ProjectDocument>(
+      `/api/projects/${payload.projectId}/revisions`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    ),
   createUploadSession: (payload: CreateUploadSessionRequest) =>
     requestJson<CreateUploadSessionResponse>('/api/uploads', {
       method: 'POST',
@@ -63,4 +71,3 @@ export const api = {
   getArtifactMetadata: (artifactId: string) =>
     requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`)
 };
-
