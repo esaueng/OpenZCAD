@@ -1,0 +1,20 @@
+<!--
+  Favicon: the OpenZCAD isometric Z-cube, mirroring src/components/BrandMark.tsx.
+  Optically tuned for small sizes: the Z is enlarged and the cube stroke thinned so
+  the diagonal still resolves at 16px. Keep in sync with BrandMark if the mark changes.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path
+    d="M12 2.5 21 7.5v9L12 21.5 3 16.5v-9L12 2.5Z"
+    stroke="#3b82f6"
+    stroke-width="1.6"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M7.9 8.4h8.2l-8.2 7.2h8.2"
+    stroke="#3b82f6"
+    stroke-width="2.1"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
