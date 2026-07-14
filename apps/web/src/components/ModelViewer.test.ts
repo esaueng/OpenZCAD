@@ -4,6 +4,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
+  applyMoveGizmoFocus,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   composeMoveTransform,
@@ -12,6 +13,7 @@ import {
   dimensionLabelLayout,
   directEditDirectionFromNormal,
   isViewerMesh,
+  moveGizmoHandleLabel,
   moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
@@ -212,6 +214,70 @@ describe('move gizmo snapping', () => {
     // Huge ring: 100px per degree → finest 0.1° step.
     expect(chooseRotateSnapStep(100)).toBe(0.1);
     expect(chooseRotateSnapStep(0)).toBe(15);
+  });
+});
+
+describe('move gizmo focus', () => {
+  it('names translation, rotation, and free-move handles explicitly', () => {
+    expect(moveGizmoHandleLabel('axis', 'x')).toBe('Move X axis');
+    expect(moveGizmoHandleLabel('ring', 'z')).toBe('Rotate Z axis');
+    expect(moveGizmoHandleLabel('center', 'y')).toBe('Move freely');
+  });
+
+  it('outlines the focused handle and dims competing handles', () => {
+    const group = new THREE.Group();
+    const focused = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({
+        color: 0xef6a6a,
+        opacity: 0.6,
+        transparent: true
+      })
+    );
+    focused.userData = {
+      moveHandleVisual: true,
+      kind: 'ring',
+      axis: 'x',
+      baseColor: 0xef6a6a,
+      baseOpacity: 0.6
+    };
+    const competing = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({
+        color: 0x5f8fef,
+        opacity: 0.95,
+        transparent: true
+      })
+    );
+    competing.userData = {
+      moveHandleVisual: true,
+      kind: 'axis',
+      axis: 'z',
+      baseColor: 0x5f8fef,
+      baseOpacity: 0.95
+    };
+    const outline = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    outline.userData = {
+      moveHandleFocus: true,
+      kind: 'ring',
+      axis: 'x'
+    };
+    outline.visible = false;
+    group.add(focused, competing, outline);
+
+    applyMoveGizmoFocus(group, { kind: 'ring', axis: 'x' });
+
+    expect(outline.visible).toBe(true);
+    expect(focused.material.opacity).toBe(1);
+    expect(competing.material.opacity).toBeCloseTo(0.19);
+
+    applyMoveGizmoFocus(group, null);
+    expect(outline.visible).toBe(false);
+    expect(focused.material.opacity).toBe(0.6);
+    expect(competing.material.opacity).toBe(0.95);
   });
 });
 
