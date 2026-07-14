@@ -14,6 +14,7 @@ import type {
   BodyTopology,
   TopologySelection
 } from '@openzcad/shared';
+import type { ViewportCameraState } from '../lib/workspaceSession';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
@@ -95,6 +96,10 @@ interface ModelViewerProps {
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
   projection: ProjectionMode;
+  /** Per-project camera pose restored before the first automatic fit. */
+  initialView: ViewportCameraState | null;
+  /** Durable camera pose emitted after navigation or programmatic view changes. */
+  onViewChange(view: ViewportCameraState): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
@@ -137,6 +142,16 @@ interface SceneContext {
   hoveredEdge: Line2 | null;
   /** Fat-line materials that need their resolution refreshed on resize. */
   edgeMaterials: Set<LineMaterial>;
+}
+
+function captureViewportCamera(context: SceneContext): ViewportCameraState {
+  const position = context.activeCamera.position;
+  const target = context.controls.target;
+  return {
+    position: [position.x, position.y, position.z],
+    target: [target.x, target.y, target.z],
+    orthographicZoom: context.orthographic.zoom
+  };
 }
 
 interface PickResult {
@@ -481,6 +496,8 @@ export function ModelViewer({
   editableBodyIds,
   extrudePreview,
   projection,
+  initialView,
+  onViewChange,
   orientationRef,
   onSelectTopology,
   onSelectSketchProfile,
@@ -510,6 +527,9 @@ export function ModelViewer({
   unitsRef.current = units;
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
+  const initialViewRef = useRef(initialView);
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
 
   // Scene, renderers, controls, and the render loop live for the component's
   // lifetime; only the body/sketch/overlay groups rebuild on data changes.
@@ -606,12 +626,18 @@ export function ModelViewer({
       orthographic.updateProjectionMatrix();
     }
 
+    function emitViewChange() {
+      onViewChangeRef.current(captureViewportCamera(context));
+    }
+
     function rebindControls(nextCamera: THREE.Camera) {
       const target = controls.target.clone();
+      controls.removeEventListener('end', emitViewChange);
       controls.dispose();
       controls = new OrbitControls(nextCamera, renderer.domElement);
       controls.enableDamping = true;
       controls.target.copy(target);
+      controls.addEventListener('end', emitViewChange);
       context.controls = controls;
     }
 
@@ -640,6 +666,8 @@ export function ModelViewer({
         context.activeCamera = camera;
       }
       rebindControls(context.activeCamera);
+      context.controls.update();
+      emitViewChange();
     }
 
     const context: SceneContext = {
@@ -666,6 +694,24 @@ export function ModelViewer({
       edgeMaterials: new Set()
     };
     contextRef.current = context;
+    controls.addEventListener('end', emitViewChange);
+
+    const restoredView = initialViewRef.current;
+    if (restoredView) {
+      camera.position.fromArray(restoredView.position);
+      controls.target.fromArray(restoredView.target);
+      camera.lookAt(controls.target);
+      camera.updateMatrixWorld(true);
+      controls.update();
+      context.hasFitCamera = true;
+      if (projection === 'orthographic') {
+        context.applyProjection('orthographic');
+        orthographic.zoom = restoredView.orthographicZoom;
+        orthographic.updateProjectionMatrix();
+        context.controls.update();
+        emitViewChange();
+      }
+    }
 
     const observer = new ResizeObserver(() => {
       camera.aspect = host.clientWidth / Math.max(host.clientHeight, 1);
@@ -1173,6 +1219,7 @@ export function ModelViewer({
         syncOrthographic(true);
       }
       controls.update();
+      emitViewChange();
     };
 
     const handleContextMenu = (event: MouseEvent) => {
@@ -1263,6 +1310,7 @@ export function ModelViewer({
       clearGroup(gizmoGroup);
       grid.dispose();
       axes.dispose();
+      controls.removeEventListener('end', emitViewChange);
       controls.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
@@ -1495,6 +1543,7 @@ export function ModelViewer({
       }
       context.controls.update();
       context.hasFitCamera = true;
+      onViewChangeRef.current(captureViewportCamera(context));
     }
   }, [
     bodies,
@@ -1593,6 +1642,7 @@ export function ModelViewer({
       );
       context.controls.update();
       context.hasFitCamera = true;
+      onViewChangeRef.current(captureViewportCamera(context));
     }
   }, [bodies.length, sketches]);
 
@@ -1730,6 +1780,7 @@ export function ModelViewer({
       context.syncOrthographic(true);
     }
     context.controls.update();
+    onViewChangeRef.current(captureViewportCamera(context));
   }, [fitSignal]);
 
   // Standard views keep the current zoom and orbit the camera to the axis.
@@ -1751,6 +1802,7 @@ export function ModelViewer({
       context.orthographic.updateProjectionMatrix();
     }
     controls.update();
+    onViewChangeRef.current(captureViewportCamera(context));
   }, [viewRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
