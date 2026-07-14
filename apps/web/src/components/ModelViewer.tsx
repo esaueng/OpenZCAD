@@ -50,7 +50,8 @@ export interface DimensionLabelLayout {
 
 /**
  * Keeps a dimension label aligned to its projected line without 180-degree
- * flips, while sizing it from the projected model rather than a fixed font.
+ * flips. Model-relative scaling is intentionally bounded at 1 so labels can
+ * shrink with the view but never grow beyond their base UI font size.
  */
 export function dimensionLabelLayout(
   start: { x: number; y: number },
@@ -81,9 +82,9 @@ export function dimensionLabelLayout(
   }
 
   const scale = THREE.MathUtils.clamp(
-    Math.sqrt(Math.max(modelSizePx, 1) / 260),
-    0.68,
-    1.12
+    Math.sqrt(Math.max(modelSizePx, 1) / 520),
+    0.72,
+    1
   );
   return { angleDeg, scale, lineLengthPx };
 }
