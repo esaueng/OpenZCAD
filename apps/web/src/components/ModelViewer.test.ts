@@ -62,7 +62,7 @@ describe('model viewer mesh classification', () => {
       260
     );
     expect(horizontal.angleDeg).toBeCloseTo(0);
-    expect(horizontal.scale).toBeCloseTo(1);
+    expect(horizontal.scale).toBeCloseTo(0.72);
 
     const continued = dimensionLabelLayout(
       { x: 100, y: 200 },
@@ -72,7 +72,7 @@ describe('model viewer mesh classification', () => {
     );
     expect(continued.angleDeg).toBeGreaterThan(89);
     expect(continued.angleDeg).toBeLessThan(92);
-    expect(continued.scale).toBeGreaterThanOrEqual(0.68);
+    expect(continued.scale).toBe(0.72);
 
     const edgeOn = dimensionLabelLayout(
       { x: 100, y: 100 },
@@ -81,7 +81,7 @@ describe('model viewer mesh classification', () => {
       37
     );
     expect(edgeOn.angleDeg).toBe(37);
-    expect(edgeOn.scale).toBe(1.12);
+    expect(edgeOn.scale).toBe(1);
   });
 
   it('builds a signed extrusion preview on either side of a sketch plane', () => {

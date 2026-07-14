@@ -806,9 +806,8 @@
 
 .selection-callout.dimension-callout {
   transform: rotate(var(--dimension-label-angle, 0deg))
-    translateY(calc(-50% - 6px))
     scale(var(--dimension-label-scale, 1));
-  transform-origin: center;
+  transform-origin: center center;
   will-change: transform;
 }
 
