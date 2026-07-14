@@ -1302,10 +1302,64 @@ export function ModelViewer({
             if (center) {
               const dimension =
                 axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
-              const label = makeLabel(
-                'selection-callout direct-edit-callout',
-                `Drag face · ${dimension} ${Math.round(value * 100) / 100} ${units}`
-              );
+              const rounded = Math.round(value * 100) / 100;
+              // Editable dimension pill: drag the face for a rough size, or
+              // click the value and type an exact one.
+              const element = document.createElement('div');
+              element.className =
+                'selection-callout direct-edit-callout editable';
+              element.style.pointerEvents = 'auto';
+              const valueButton = document.createElement('button');
+              valueButton.type = 'button';
+              valueButton.className = 'callout-value';
+              valueButton.title = `Click to type an exact ${dimension.toLowerCase()}`;
+              valueButton.textContent = `${dimension} ${rounded} ${units}`;
+              element.appendChild(valueButton);
+              const bodyId = body.bodyId;
+              valueButton.addEventListener('click', () => {
+                const input = document.createElement('input');
+                input.className = 'callout-input';
+                input.value = String(rounded);
+                input.inputMode = 'decimal';
+                input.setAttribute(
+                  'aria-label',
+                  `${dimension} in ${unitsRef.current}`
+                );
+                element.replaceChildren(input);
+                input.focus();
+                input.select();
+                let done = false;
+                const finish = (commit: boolean) => {
+                  if (done) {
+                    return;
+                  }
+                  done = true;
+                  element.replaceChildren(valueButton);
+                  const next = Number.parseFloat(input.value);
+                  if (
+                    commit &&
+                    Number.isFinite(next) &&
+                    next > 0 &&
+                    Math.abs(next - rounded) > 1e-9
+                  ) {
+                    onResizePrimitiveFaceRef.current({
+                      bodyId,
+                      axis,
+                      value: next
+                    });
+                  }
+                };
+                input.addEventListener('keydown', (keyEvent) => {
+                  keyEvent.stopPropagation();
+                  if (keyEvent.key === 'Enter') {
+                    finish(true);
+                  } else if (keyEvent.key === 'Escape') {
+                    finish(false);
+                  }
+                });
+                input.addEventListener('blur', () => finish(true));
+              });
+              const label = new CSS2DObject(element);
               label.position.copy(center);
               context.overlayGroup.add(label);
             }
