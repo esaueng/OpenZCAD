@@ -1345,6 +1345,16 @@
   width: 100%;
   padding-right: 38px;
   font-family: var(--font-mono);
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+/* The native spin buttons sit on top of the digits in narrow fields; the
+   gizmo, arrow keys, and typing cover the same interaction. */
+.extrude-distance-input input::-webkit-outer-spin-button,
+.extrude-distance-input input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
 }
 
 .extrude-distance-input b {
@@ -2339,7 +2349,7 @@
 /* ── Move/Rotate overlay ─────────────────────────────────── */
 
 .move-controller {
-  min-width: 250px;
+  width: 316px;
 }
 
 .move-grid {
@@ -2357,6 +2367,11 @@
 .move-grid .extrude-distance-input input {
   width: 100%;
   min-width: 0;
+  padding-right: 28px;
+}
+
+.move-grid .extrude-distance-input b {
+  right: 7px;
 }
 
 .move-axis {
