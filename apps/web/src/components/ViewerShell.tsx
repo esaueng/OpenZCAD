@@ -13,8 +13,10 @@ import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type { ViewportCameraState } from '../lib/workspaceSession';
 
 interface ViewerShellProps {
+  projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
   selectedBodyIds: string[];
@@ -32,6 +34,8 @@ interface ViewerShellProps {
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
   projection: ProjectionMode;
+  initialView: ViewportCameraState | null;
+  onViewChange(view: ViewportCameraState): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
@@ -53,6 +57,7 @@ interface ViewerShellProps {
 }
 
 export function ViewerShell({
+  projectId,
   bodies,
   sketches,
   selectedBodyIds,
@@ -69,6 +74,8 @@ export function ViewerShell({
   selectionChip,
   onClearSelection,
   projection,
+  initialView,
+  onViewChange,
   orientationRef,
   onSelectTopology,
   onSelectSketchProfile,
@@ -84,6 +91,7 @@ export function ViewerShell({
   return (
     <section className="viewer-shell" aria-label="3D viewport">
       <ModelViewer
+        key={projectId}
         bodies={bodies}
         sketches={sketches}
         selectedBodyIds={selectedBodyIds}
@@ -96,6 +104,8 @@ export function ViewerShell({
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
         projection={projection}
+        initialView={initialView}
+        onViewChange={onViewChange}
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
         onSelectSketchProfile={onSelectSketchProfile}

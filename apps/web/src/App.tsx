@@ -124,10 +124,22 @@ import type {
   GeometryWorkerResult
 } from './worker/geometryWorker';
 import { useCollaboration } from './lib/useCollaboration';
+import {
+  clearActiveProject,
+  loadActiveProjectId,
+  loadProjectView,
+  rememberActiveProject,
+  saveProjectView,
+  type ViewportCameraState
+} from './lib/workspaceSession';
 
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
+const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
+  showGrid: true,
+  displayMode: 'shaded-edges'
+};
 
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
@@ -177,10 +189,9 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>({
-    showGrid: true,
-    displayMode: 'shaded-edges'
-  });
+  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(
+    DEFAULT_VIEWER_SETTINGS
+  );
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
     'saving'
@@ -195,6 +206,8 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [projection, setProjection] = useState<ProjectionMode>('perspective');
+  const [initialView, setInitialView] =
+    useState<ViewportCameraState | null>(null);
   const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
     new Set()
   );
@@ -215,6 +228,7 @@ export function App() {
   const lastSyncedKeyRef = useRef<string | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const viewportCameraRef = useRef<ViewportCameraState | null>(null);
 
   const collaboration = useCollaboration({
     document: doc,
@@ -228,7 +242,10 @@ export function App() {
       ) {
         return;
       }
-      hydrateDocument(remoteDocument);
+      hydrateDocument(remoteDocument, {
+        restoreView: false,
+        rememberProject: false
+      });
       setStatus(
         `Applied live revision ${remoteDocument.version} from a collaborator.`
       );
@@ -293,18 +310,39 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      const [local, remote] = await Promise.all([
-        listLocalProjects().catch(() => []),
-        Promise.all([api.health(), api.session(), api.listProjects()]).catch(
-          () => null
-        )
-      ]);
+      const activeProjectId = loadActiveProjectId();
+      const [local, remote, rememberedLocal, rememberedRemote] =
+        await Promise.all([
+          listLocalProjects().catch(() => []),
+          Promise.all([api.health(), api.session(), api.listProjects()]).catch(
+            () => null
+          ),
+          activeProjectId
+            ? loadLocalProject(activeProjectId).catch(() => null)
+            : Promise.resolve(null),
+          activeProjectId
+            ? api.loadProject(activeProjectId).catch(() => null)
+            : Promise.resolve(null)
+        ]);
       const remoteProjects = remote?.[2].projects ?? [];
       const merged = mergeProjectSummaries(local, remoteProjects);
+      const restoredDocument = selectProjectDocument(
+        rememberedLocal,
+        rememberedRemote
+      );
+      const canUseCloud = Boolean(remote || rememberedRemote);
       setProjects(merged);
-      setCloudAvailable(Boolean(remote));
+      setCloudAvailable(canUseCloud);
       setSession(remote?.[1] ?? null);
-      setSaveState(remote ? 'saved' : 'offline');
+      setSaveState(canUseCloud ? 'saved' : 'offline');
+      if (activeProjectId && restoredDocument) {
+        hydrateDocument(restoredDocument);
+        setStatus(`Reopened ${restoredDocument.name}.`);
+        return;
+      }
+      if (activeProjectId) {
+        clearActiveProject();
+      }
       setStatus(
         remote
           ? `Beta API ready · ${merged.length} project(s)`
@@ -328,6 +366,25 @@ export function App() {
     }, 450);
     return () => window.clearTimeout(timeout);
   }, [doc, cloudAvailable]);
+
+  useEffect(() => {
+    const camera = viewportCameraRef.current;
+    if (!doc || !camera) {
+      return;
+    }
+    saveProjectView(doc.projectId, {
+      camera,
+      projection,
+      settings: viewerSettings,
+      hiddenBodyIds: [...hiddenBodyIds]
+    });
+  }, [
+    doc?.projectId,
+    hiddenBodyIds,
+    projection,
+    viewerSettings.displayMode,
+    viewerSettings.showGrid
+  ]);
 
   useEffect(() => {
     if (!doc || !geometryWorkerRef.current) {
@@ -604,8 +661,25 @@ export function App() {
     hasEdgeSelected: selectedEdges.length > 0
   };
 
-  function hydrateDocument(nextDocument: ProjectDocument) {
+  function hydrateDocument(
+    nextDocument: ProjectDocument,
+    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+  ) {
     const normalized = normalizeDocument(nextDocument);
+    const restoreView = options.restoreView ?? true;
+    const rememberProject = options.rememberProject ?? true;
+    if (restoreView) {
+      const savedView = loadProjectView(normalized.projectId);
+      const camera = savedView?.camera ?? null;
+      viewportCameraRef.current = camera;
+      setInitialView(camera);
+      setProjection(savedView?.projection ?? 'perspective');
+      setViewerSettings(savedView?.settings ?? DEFAULT_VIEWER_SETTINGS);
+      setHiddenBodyIds(new Set(savedView?.hiddenBodyIds ?? []));
+    }
+    if (rememberProject) {
+      rememberActiveProject(normalized.projectId);
+    }
     managerRef.current = new CommandManager(normalized);
     lastSyncedKeyRef.current = null;
     setDoc(normalized);
@@ -616,8 +690,20 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
-    setHiddenBodyIds(new Set());
     setTool(null);
+  }
+
+  function handleViewportChange(camera: ViewportCameraState) {
+    viewportCameraRef.current = camera;
+    if (!doc) {
+      return;
+    }
+    saveProjectView(doc.projectId, {
+      camera,
+      projection,
+      settings: viewerSettings,
+      hiddenBodyIds: [...hiddenBodyIds]
+    });
   }
 
   function executeCommand(command: AnyCommand): boolean {
@@ -867,6 +953,9 @@ export function App() {
   }
 
   async function handleGoHome() {
+    clearActiveProject();
+    viewportCameraRef.current = null;
+    setInitialView(null);
     managerRef.current = null;
     setDoc(null);
     setSelectedFeatureNodeId(null);
@@ -1945,6 +2034,7 @@ export function App() {
       }
       viewer={
         <ViewerShell
+          projectId={doc.projectId}
           bodies={viewerBodies}
           sketches={sketchOverlays}
           selectedBodyIds={selectedBodyIds}
@@ -1959,6 +2049,8 @@ export function App() {
           hideViewerToolbar={tool === 'sketch'}
           selectionChip={selectionChip}
           onClearSelection={clearSelection}
+          initialView={initialView}
+          onViewChange={handleViewportChange}
           modeOverlay={
             tool === 'sketch' ? (
               <SketchWorkspace
