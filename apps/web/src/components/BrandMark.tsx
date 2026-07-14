@@ -1,4 +1,7 @@
-/** Isometric Z-cube mark, drawn inline so it inherits currentColor. */
+/**
+ * Isometric Z-cube mark, drawn inline so it inherits currentColor.
+ * public/favicon.svg mirrors these paths with optical tweaks for 16px; update both.
+ */
 export function BrandMark() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
