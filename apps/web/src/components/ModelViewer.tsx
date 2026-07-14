@@ -77,6 +77,88 @@ export interface ExtrudePreview {
   distance: number;
 }
 
+/** Pending Move/Rotate values, previewed live and committed as one feature. */
+export interface MovePreview {
+  bodyId: string;
+  translation: { x: number; y: number; z: number };
+  rotationDeg: { x: number; y: number; z: number };
+}
+
+/** Current gizmo snap increments (shown in the overlay, zoom-adaptive). */
+export interface MoveSnap {
+  move: number;
+  rotate: number;
+}
+
+const MOVE_SNAP_STEPS = [100, 50, 25, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05, 0.01];
+const ROTATE_SNAP_STEPS = [90, 45, 15, 5, 1, 0.5, 0.1];
+/** A snap increment must span at least this many pixels to feel deliberate. */
+const SNAP_MIN_PIXELS = 8;
+
+/**
+ * Translation snap step for the current zoom: the smallest "nice" step that
+ * still spans ≥8px on screen. Zooming in therefore unlocks finer steps
+ * (10 mm → 1 mm → 0.1 mm …).
+ */
+export function chooseMoveSnapStep(worldPerPixel: number): number {
+  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
+    return 1;
+  }
+  const minWorld = worldPerPixel * SNAP_MIN_PIXELS;
+  const candidates = MOVE_SNAP_STEPS.filter((step) => step >= minWorld);
+  return candidates.at(-1) ?? MOVE_SNAP_STEPS[0]!;
+}
+
+/** Rotation snap step for the current zoom (ring arc pixels per degree). */
+export function chooseRotateSnapStep(pixelsPerDegree: number): number {
+  if (!Number.isFinite(pixelsPerDegree) || pixelsPerDegree <= 0) {
+    return 15;
+  }
+  const minDegrees = SNAP_MIN_PIXELS / pixelsPerDegree;
+  const candidates = ROTATE_SNAP_STEPS.filter((step) => step >= minDegrees);
+  return candidates.at(-1) ?? ROTATE_SNAP_STEPS[0]!;
+}
+
+/**
+ * The Move feature rotates about the world origin (X, then Y, then Z — the
+ * exact kernel applies the axes in that order, i.e. Euler 'ZYX'), then
+ * translates. To make the gizmo rotate the body about its own center, fold
+ * the difference into the committed translation: T = t + c − R·c.
+ */
+export function composeMoveTransform(
+  center: { x: number; y: number; z: number },
+  translation: { x: number; y: number; z: number },
+  rotationDeg: { x: number; y: number; z: number }
+): { x: number; y: number; z: number } {
+  const euler = new THREE.Euler(
+    THREE.MathUtils.degToRad(rotationDeg.x),
+    THREE.MathUtils.degToRad(rotationDeg.y),
+    THREE.MathUtils.degToRad(rotationDeg.z),
+    'ZYX'
+  );
+  const rotated = new THREE.Vector3(center.x, center.y, center.z).applyEuler(
+    euler
+  );
+  return {
+    x: translation.x + center.x - rotated.x,
+    y: translation.y + center.y - rotated.y,
+    z: translation.z + center.z - rotated.z
+  };
+}
+
+export function moveEuler(rotationDeg: {
+  x: number;
+  y: number;
+  z: number;
+}): THREE.Euler {
+  return new THREE.Euler(
+    THREE.MathUtils.degToRad(rotationDeg.x),
+    THREE.MathUtils.degToRad(rotationDeg.y),
+    THREE.MathUtils.degToRad(rotationDeg.z),
+    'ZYX'
+  );
+}
+
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
@@ -94,6 +176,7 @@ interface ModelViewerProps {
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
+  movePreview: MovePreview | null;
   projection: ProjectionMode;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
@@ -104,6 +187,12 @@ interface ModelViewerProps {
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
+  /** Fired while a move-gizmo handle drags; values are already snapped. */
+  onMovePreviewChange(
+    translation: MovePreview['translation'],
+    rotationDeg: MovePreview['rotationDeg'],
+    snap: MoveSnap
+  ): void;
   /** Stationary right-click; right-drag stays a pan. */
   onContextMenu(
     x: number,
@@ -129,6 +218,12 @@ interface SceneContext {
   sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
   gizmoGroup: THREE.Group;
+  moveGizmoGroup: THREE.Group;
+  /** Applies pending Move/Rotate values to the target body and the gizmo. */
+  applyMovePreview(
+    translation: MovePreview['translation'],
+    rotationDeg: MovePreview['rotationDeg']
+  ): void;
   grid: THREE.GridHelper;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
@@ -171,6 +266,66 @@ interface ExtrudeDragState {
   directionX: number;
   directionY: number;
   pixelsPerUnit: number;
+}
+
+type MoveAxis = 'x' | 'y' | 'z';
+
+interface MoveDragState {
+  pointerId: number;
+  kind: 'axis' | 'ring' | 'center';
+  axis: MoveAxis;
+  /** Gizmo center at drag start (base center + translation). */
+  pivot: THREE.Vector3;
+  axisDirection: THREE.Vector3;
+  startT: number;
+  ringU: THREE.Vector3;
+  ringV: THREE.Vector3;
+  startAngle: number;
+  startX: number;
+  startY: number;
+  cameraRight: THREE.Vector3;
+  cameraUp: THREE.Vector3;
+  worldPerPixel: number;
+  startTranslation: MovePreview['translation'];
+  startRotation: MovePreview['rotationDeg'];
+  snapMove: number;
+  snapRotate: number;
+}
+
+const MOVE_AXIS_VECTORS: Record<MoveAxis, THREE.Vector3> = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+  z: new THREE.Vector3(0, 0, 1)
+};
+
+const MOVE_AXIS_COLORS: Record<MoveAxis, number> = {
+  x: 0xef6a6a,
+  y: 0x6fd66f,
+  z: 0x5f8fef
+};
+
+/** Parameter t of the closest point on a line to the pointer ray. */
+function closestAxisT(
+  ray: THREE.Ray,
+  origin: THREE.Vector3,
+  direction: THREE.Vector3
+): number | null {
+  const r = origin.clone().sub(ray.origin);
+  const b = direction.dot(ray.direction);
+  const c = direction.dot(r);
+  const f = ray.direction.dot(r);
+  const denominator = 1 - b * b;
+  if (Math.abs(denominator) < 1e-9) {
+    return null; // axis parallel to the view ray
+  }
+  return (b * f - c) / denominator;
+}
+
+function snapTo(value: number, step: number, fine: boolean): number {
+  if (fine) {
+    return Math.round(value * 100) / 100;
+  }
+  return Math.round(value / step) * step;
 }
 
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
@@ -480,12 +635,14 @@ export function ModelViewer({
   units,
   editableBodyIds,
   extrudePreview,
+  movePreview,
   projection,
   orientationRef,
   onSelectTopology,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
+  onMovePreviewChange,
   onContextMenu
 }: ModelViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -500,6 +657,13 @@ export function ModelViewer({
   onExtrudeDistanceChangeRef.current = onExtrudeDistanceChange;
   const extrudePreviewRef = useRef(extrudePreview);
   extrudePreviewRef.current = extrudePreview;
+  const movePreviewRef = useRef(movePreview);
+  movePreviewRef.current = movePreview;
+  const onMovePreviewChangeRef = useRef(onMovePreviewChange);
+  onMovePreviewChangeRef.current = onMovePreviewChange;
+  /** Base (untranslated) gizmo pivot: the target body's bbox center. */
+  const moveCenterRef = useRef(new THREE.Vector3());
+  const moveDragActiveRef = useRef(false);
   const sketchesRef = useRef(sketches);
   sketchesRef.current = sketches;
   const onContextMenuRef = useRef(onContextMenu);
@@ -589,6 +753,32 @@ export function ModelViewer({
     gizmoGroup.name = 'direct-modeling-gizmo';
     scene.add(gizmoGroup);
 
+    const moveGizmoGroup = new THREE.Group();
+    moveGizmoGroup.name = 'move-rotate-gizmo';
+    scene.add(moveGizmoGroup);
+
+    function applyMovePreview(
+      translation: MovePreview['translation'],
+      rotationDeg: MovePreview['rotationDeg']
+    ) {
+      const preview = movePreviewRef.current;
+      if (!preview) {
+        return;
+      }
+      const center = moveCenterRef.current;
+      const object = context.objectsByBodyId.get(preview.bodyId);
+      if (object) {
+        const final = composeMoveTransform(center, translation, rotationDeg);
+        object.rotation.copy(moveEuler(rotationDeg));
+        object.position.set(final.x, final.y, final.z);
+      }
+      moveGizmoGroup.position.set(
+        center.x + translation.x,
+        center.y + translation.y,
+        center.z + translation.z
+      );
+    }
+
     function syncOrthographic(resetZoom: boolean) {
       orthographic.position.copy(camera.position);
       orthographic.quaternion.copy(camera.quaternion);
@@ -657,6 +847,8 @@ export function ModelViewer({
       sketchGroup,
       overlayGroup,
       gizmoGroup,
+      moveGizmoGroup,
+      applyMovePreview,
       grid,
       raycaster: new THREE.Raycaster(),
       objectsByBodyId: new Map(),
@@ -691,6 +883,7 @@ export function ModelViewer({
     let rightPanStartTarget: THREE.Vector3 | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
+    let moveDrag: MoveDragState | null = null;
     const dragHud = document.createElement('div');
     dragHud.className = 'direct-edit-hud';
     dragHud.hidden = true;
@@ -715,6 +908,65 @@ export function ModelViewer({
           .intersectObjects(gizmoGroup.children, true)
           .find((hit) => hit.object.userData.extrudeGizmo) ?? null
       );
+    }
+
+    /** World units spanned by one screen pixel at the given point. */
+    function worldPerPixelAt(point: THREE.Vector3): number {
+      const height = Math.max(renderer.domElement.clientHeight, 1);
+      if (context.projection === 'orthographic') {
+        return (
+          (orthographic.top - orthographic.bottom) /
+          Math.max(orthographic.zoom, 0.0001) /
+          height
+        );
+      }
+      const distance = Math.max(camera.position.distanceTo(point), 0.001);
+      return (
+        (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+        height
+      );
+    }
+
+    function pickMoveGizmo(event: PointerEvent) {
+      if (!movePreviewRef.current) {
+        return null;
+      }
+      setRayFromEvent(event);
+      return (
+        context.raycaster
+          .intersectObjects(moveGizmoGroup.children, true)
+          .find((hit) => hit.object.userData.moveHandle) ?? null
+      );
+    }
+
+    /** In-plane basis for a rotation ring about `axis`. */
+    function ringBasis(axis: MoveAxis): { u: THREE.Vector3; v: THREE.Vector3 } {
+      const normal = MOVE_AXIS_VECTORS[axis];
+      const seed = axis === 'x' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const u = seed
+        .clone()
+        .sub(normal.clone().multiplyScalar(seed.dot(normal)))
+        .normalize();
+      const v = new THREE.Vector3().crossVectors(normal, u);
+      return { u, v };
+    }
+
+    function ringAngleAt(
+      pivot: THREE.Vector3,
+      axis: MoveAxis,
+      u: THREE.Vector3,
+      v: THREE.Vector3
+    ): number | null {
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        MOVE_AXIS_VECTORS[axis],
+        pivot
+      );
+      const point = new THREE.Vector3();
+      if (!context.raycaster.ray.intersectPlane(plane, point)) {
+        return null;
+      }
+      const offset = point.sub(pivot);
+      return Math.atan2(offset.dot(v), offset.dot(u));
     }
 
     function pick(event: PointerEvent | MouseEvent): PickResult | null {
@@ -909,6 +1161,73 @@ export function ModelViewer({
 
     const handlePointerMove = (event: PointerEvent) => {
       rightClickGesture.move(event.pointerId, event.clientX, event.clientY);
+      if (moveDrag && event.pointerId === moveDrag.pointerId) {
+        event.preventDefault();
+        const drag = moveDrag;
+        const fine = event.shiftKey;
+        const translation = { ...drag.startTranslation };
+        const rotation = { ...drag.startRotation };
+        setRayFromEvent(event);
+        if (drag.kind === 'axis') {
+          const t = closestAxisT(
+            context.raycaster.ray,
+            drag.pivot,
+            drag.axisDirection
+          );
+          if (t !== null) {
+            translation[drag.axis] = snapTo(
+              drag.startTranslation[drag.axis] + (t - drag.startT),
+              drag.snapMove,
+              fine
+            );
+          }
+        } else if (drag.kind === 'ring') {
+          const angle = ringAngleAt(
+            drag.pivot,
+            drag.axis,
+            drag.ringU,
+            drag.ringV
+          );
+          if (angle !== null) {
+            let deltaDeg = THREE.MathUtils.radToDeg(angle - drag.startAngle);
+            deltaDeg = ((deltaDeg + 540) % 360) - 180;
+            rotation[drag.axis] = snapTo(
+              drag.startRotation[drag.axis] + deltaDeg,
+              drag.snapRotate,
+              fine
+            );
+          }
+        } else {
+          const dx = event.clientX - drag.startX;
+          const dy = event.clientY - drag.startY;
+          const world = drag.cameraRight
+            .clone()
+            .multiplyScalar(dx * drag.worldPerPixel)
+            .addScaledVector(drag.cameraUp, -dy * drag.worldPerPixel);
+          translation.x = snapTo(
+            drag.startTranslation.x + world.x,
+            drag.snapMove,
+            fine
+          );
+          translation.y = snapTo(
+            drag.startTranslation.y + world.y,
+            drag.snapMove,
+            fine
+          );
+          translation.z = snapTo(
+            drag.startTranslation.z + world.z,
+            drag.snapMove,
+            fine
+          );
+        }
+        context.applyMovePreview(translation, rotation);
+        onMovePreviewChangeRef.current(translation, rotation, {
+          move: drag.snapMove,
+          rotate: drag.snapRotate
+        });
+        renderer.domElement.style.cursor = 'grabbing';
+        return;
+      }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         event.preventDefault();
         const dx = event.clientX - extrudeDrag.startX;
@@ -949,6 +1268,10 @@ export function ModelViewer({
         positionDragHud(event, value, faceDrag.axis);
         return;
       }
+      if (movePreviewRef.current && pickMoveGizmo(event)) {
+        renderer.domElement.style.cursor = 'grab';
+        return;
+      }
       applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
@@ -965,6 +1288,72 @@ export function ModelViewer({
         return;
       }
       downPosition = { x: event.clientX, y: event.clientY };
+      const moveHit = pickMoveGizmo(event);
+      if (moveHit && movePreviewRef.current) {
+        const activeMove = movePreviewRef.current;
+        const data = moveHit.object.userData as {
+          kind: 'axis' | 'ring' | 'center';
+          axis?: MoveAxis;
+        };
+        const axis = data.axis ?? 'x';
+        const pivot = moveGizmoGroup.position.clone();
+        const worldPerPixel = worldPerPixelAt(pivot);
+        const gizmoScale =
+          (moveGizmoGroup.userData.gizmoScale as number | undefined) ?? 10;
+        const ringRadiusPx = (gizmoScale * 0.85) / Math.max(worldPerPixel, 1e-9);
+        const drag: MoveDragState = {
+          pointerId: event.pointerId,
+          kind: data.kind,
+          axis,
+          pivot,
+          axisDirection: MOVE_AXIS_VECTORS[axis],
+          startT: 0,
+          ringU: new THREE.Vector3(1, 0, 0),
+          ringV: new THREE.Vector3(0, 1, 0),
+          startAngle: 0,
+          startX: event.clientX,
+          startY: event.clientY,
+          cameraRight: new THREE.Vector3()
+            .setFromMatrixColumn(context.activeCamera.matrixWorld, 0)
+            .normalize(),
+          cameraUp: new THREE.Vector3()
+            .setFromMatrixColumn(context.activeCamera.matrixWorld, 1)
+            .normalize(),
+          worldPerPixel,
+          startTranslation: { ...activeMove.translation },
+          startRotation: { ...activeMove.rotationDeg },
+          snapMove: chooseMoveSnapStep(worldPerPixel),
+          snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180)
+        };
+        setRayFromEvent(event);
+        if (data.kind === 'axis') {
+          const t = closestAxisT(
+            context.raycaster.ray,
+            pivot,
+            drag.axisDirection
+          );
+          if (t === null) {
+            return;
+          }
+          drag.startT = t;
+        } else if (data.kind === 'ring') {
+          const basis = ringBasis(axis);
+          drag.ringU = basis.u;
+          drag.ringV = basis.v;
+          const angle = ringAngleAt(pivot, axis, basis.u, basis.v);
+          if (angle === null) {
+            return;
+          }
+          drag.startAngle = angle;
+        }
+        moveDrag = drag;
+        moveDragActiveRef.current = true;
+        controls.enabled = false;
+        renderer.domElement.setPointerCapture(event.pointerId);
+        renderer.domElement.style.cursor = 'grabbing';
+        event.preventDefault();
+        return;
+      }
       const activeExtrude = extrudePreviewRef.current;
       if (activeExtrude && pickExtrudeGizmo(event)) {
         const sketch = sketchesRef.current.find(
@@ -1103,6 +1492,17 @@ export function ModelViewer({
         }
         return;
       }
+      if (moveDrag && event.pointerId === moveDrag.pointerId) {
+        moveDrag = null;
+        moveDragActiveRef.current = false;
+        controls.enabled = true;
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId);
+        }
+        renderer.domElement.style.cursor = '';
+        downPosition = null;
+        return;
+      }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
         extrudeDrag = null;
@@ -1152,6 +1552,11 @@ export function ModelViewer({
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      if (moveDrag && event.pointerId === moveDrag.pointerId) {
+        moveDrag = null;
+        moveDragActiveRef.current = false;
+        controls.enabled = true;
+      }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
         extrudeDrag = null;
@@ -1261,6 +1666,7 @@ export function ModelViewer({
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
       clearGroup(gizmoGroup);
+      clearGroup(moveGizmoGroup);
       grid.dispose();
       axes.dispose();
       controls.dispose();
@@ -1504,6 +1910,125 @@ export function ModelViewer({
     selectedTopology,
     units
   ]);
+
+  // Move/Rotate gizmo: translation arrows, rotation rings, and a free-move
+  // center handle at the target body's center. The active drag owns the
+  // gizmo imperatively, so prop-driven rebuilds pause until release.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || moveDragActiveRef.current) {
+      return;
+    }
+    clearGroup(context.moveGizmoGroup);
+    if (!movePreview) {
+      // Cancel without a document change must restore the resting pose.
+      for (const object of context.objectsByBodyId.values()) {
+        object.position.set(0, 0, 0);
+        object.rotation.set(0, 0, 0);
+      }
+      return;
+    }
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === movePreview.bodyId
+    );
+    if (!body) {
+      return;
+    }
+    const center = new THREE.Vector3(
+      (body.bbox.min.x + body.bbox.max.x) / 2,
+      (body.bbox.min.y + body.bbox.max.y) / 2,
+      (body.bbox.min.z + body.bbox.max.z) / 2
+    );
+    moveCenterRef.current.copy(center);
+    const distance = Math.max(
+      context.activeCamera.position.distanceTo(center),
+      1
+    );
+    const scale = Math.max(distance * 0.13, 6);
+    context.moveGizmoGroup.userData.gizmoScale = scale;
+
+    const solid = (color: number, opacity = 0.95) =>
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthTest: false
+      });
+    const invisible = () => new THREE.MeshBasicMaterial({ visible: false });
+    const handleData = (kind: 'axis' | 'ring' | 'center', axis: MoveAxis) => ({
+      moveHandle: true,
+      kind,
+      axis
+    });
+
+    for (const axis of ['x', 'y', 'z'] as const) {
+      const direction = MOVE_AXIS_VECTORS[axis];
+      const color = MOVE_AXIS_COLORS[axis];
+      const alignment = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        direction
+      );
+
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(scale * 0.032, scale * 0.032, scale, 10),
+        solid(color)
+      );
+      shaft.position.copy(direction.clone().multiplyScalar(scale / 2));
+      shaft.quaternion.copy(alignment);
+
+      const head = new THREE.Mesh(
+        new THREE.ConeGeometry(scale * 0.09, scale * 0.22, 14),
+        solid(color)
+      );
+      head.position.copy(direction.clone().multiplyScalar(scale * 1.08));
+      head.quaternion.copy(alignment);
+
+      const arrowHit = new THREE.Mesh(
+        new THREE.CylinderGeometry(scale * 0.14, scale * 0.14, scale * 1.3, 8),
+        invisible()
+      );
+      arrowHit.position.copy(direction.clone().multiplyScalar(scale * 0.65));
+      arrowHit.quaternion.copy(alignment);
+
+      const ringRotation =
+        axis === 'x'
+          ? new THREE.Euler(0, Math.PI / 2, 0)
+          : axis === 'y'
+            ? new THREE.Euler(Math.PI / 2, 0, 0)
+            : new THREE.Euler(0, 0, 0);
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(scale * 0.85, scale * 0.016, 8, 56),
+        solid(color, 0.6)
+      );
+      ring.rotation.copy(ringRotation);
+      const ringHit = new THREE.Mesh(
+        new THREE.TorusGeometry(scale * 0.85, scale * 0.1, 6, 40),
+        invisible()
+      );
+      ringHit.rotation.copy(ringRotation);
+
+      for (const part of [shaft, head, arrowHit]) {
+        part.userData = handleData('axis', axis);
+        part.renderOrder = 20;
+        context.moveGizmoGroup.add(part);
+      }
+      for (const part of [ring, ringHit]) {
+        part.userData = handleData('ring', axis);
+        part.renderOrder = 19;
+        context.moveGizmoGroup.add(part);
+      }
+    }
+
+    const centerHandle = new THREE.Mesh(
+      new THREE.SphereGeometry(scale * 0.11, 18, 12),
+      solid(0xe8f3ff, 0.9)
+    );
+    centerHandle.userData = handleData('center', 'x');
+    centerHandle.renderOrder = 21;
+    context.moveGizmoGroup.add(centerHandle);
+
+    context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
+  }, [movePreview, bodies]);
 
   useEffect(() => {
     contextRef.current?.applyProjection(projection);

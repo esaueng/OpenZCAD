@@ -2335,3 +2335,44 @@
   color: var(--color-text-subtle);
   font-style: italic;
 }
+
+/* ── Move/Rotate overlay ─────────────────────────────────── */
+
+.move-controller {
+  min-width: 250px;
+}
+
+.move-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.move-grid label {
+  display: grid;
+  gap: 3px;
+}
+
+.move-grid .extrude-distance-input input {
+  width: 100%;
+  min-width: 0;
+}
+
+.move-axis {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-text-subtle);
+}
+
+.move-axis-x {
+  color: var(--color-handle-x);
+}
+
+.move-axis-y {
+  color: var(--color-handle-y);
+}
+
+.move-axis-z {
+  color: var(--color-handle-z);
+}
