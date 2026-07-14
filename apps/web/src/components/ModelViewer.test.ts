@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import {
   createExtrudePreviewGeometry,
   directEditDirectionFromNormal,
-  isViewerMesh
+  isViewerMesh,
+  RightClickGestureTracker
 } from './ModelViewer';
 
 describe('model viewer mesh classification', () => {
@@ -71,5 +72,22 @@ describe('model viewer mesh classification', () => {
     expect(opposite.boundingBox?.min.z).toBe(-6);
     expect(opposite.boundingBox?.max.z).toBe(0);
     expect(opposite.getAttribute('position').count).toBe(8);
+  });
+
+  it('opens the context menu only for a stationary right-click', () => {
+    const gesture = new RightClickGestureTracker();
+
+    gesture.begin(1, 120, 80);
+    gesture.move(1, 123, 82);
+    expect(gesture.end(1, 123, 82)).toBe(true);
+  });
+
+  it('keeps a right-drag classified as a pan after returning to its origin', () => {
+    const gesture = new RightClickGestureTracker();
+
+    gesture.begin(1, 120, 80);
+    gesture.move(1, 132, 90);
+    gesture.move(1, 120, 80);
+    expect(gesture.end(1, 120, 80)).toBe(false);
   });
 });

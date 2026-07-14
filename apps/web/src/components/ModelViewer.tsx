@@ -179,6 +179,55 @@ const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
+const RIGHT_DRAG_THRESHOLD_PX = 5;
+
+interface ActiveRightClickGesture {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  dragged: boolean;
+}
+
+/**
+ * Separates a stationary right-click from OrbitControls' right-button pan.
+ * Once the pointer crosses the threshold, returning to the start still counts
+ * as a drag and must not open the context menu.
+ */
+export class RightClickGestureTracker {
+  private active: ActiveRightClickGesture | null = null;
+
+  begin(pointerId: number, x: number, y: number) {
+    this.active = { pointerId, startX: x, startY: y, dragged: false };
+  }
+
+  move(pointerId: number, x: number, y: number) {
+    const active = this.active;
+    if (!active || active.pointerId !== pointerId || active.dragged) {
+      return;
+    }
+    const dx = x - active.startX;
+    const dy = y - active.startY;
+    active.dragged =
+      dx * dx + dy * dy >= RIGHT_DRAG_THRESHOLD_PX * RIGHT_DRAG_THRESHOLD_PX;
+  }
+
+  end(pointerId: number, x: number, y: number) {
+    const active = this.active;
+    if (!active || active.pointerId !== pointerId) {
+      return false;
+    }
+    this.move(pointerId, x, y);
+    const shouldOpenMenu = !active.dragged;
+    this.active = null;
+    return shouldOpenMenu;
+  }
+
+  cancel(pointerId: number) {
+    if (this.active?.pointerId === pointerId) {
+      this.active = null;
+    }
+  }
+}
 
 // Exact topology edges render as screen-space fat lines so they read clearly
 // and their states are unmistakable: idle slate, hover glow, selected accent.
@@ -599,6 +648,7 @@ export function ModelViewer({
 
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
+    const rightClickGesture = new RightClickGestureTracker();
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     const dragHud = document.createElement('div');
@@ -826,6 +876,7 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      rightClickGesture.move(event.pointerId, event.clientX, event.clientY);
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         event.preventDefault();
         const dx = event.clientX - extrudeDrag.startX;
@@ -869,10 +920,18 @@ export function ModelViewer({
       applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
-      downPosition = { x: event.clientX, y: event.clientY };
+      if (event.button === 2) {
+        rightClickGesture.begin(
+          event.pointerId,
+          event.clientX,
+          event.clientY
+        );
+        return;
+      }
       if (event.button !== 0) {
         return;
       }
+      downPosition = { x: event.clientX, y: event.clientY };
       const activeExtrude = extrudePreviewRef.current;
       if (activeExtrude && pickExtrudeGizmo(event)) {
         const sketch = sketchesRef.current.find(
@@ -984,6 +1043,22 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (event.button === 2) {
+        if (
+          rightClickGesture.end(
+            event.pointerId,
+            event.clientX,
+            event.clientY
+          )
+        ) {
+          onContextMenuRef.current(
+            event.clientX,
+            event.clientY,
+            pick(event)?.selection ?? null
+          );
+        }
+        return;
+      }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
         extrudeDrag = null;
@@ -1007,6 +1082,9 @@ export function ModelViewer({
             value: completed.latestValue
           });
         }
+        return;
+      }
+      if (event.button !== 0) {
         return;
       }
       if (!downPosition) {
@@ -1038,6 +1116,7 @@ export function ModelViewer({
         restoreFaceDrag();
         faceDrag = null;
       }
+      rightClickGesture.cancel(event.pointerId);
       downPosition = null;
     };
     const handleDoubleClick = () => {
@@ -1051,30 +1130,10 @@ export function ModelViewer({
       controls.update();
     };
 
-    let rightDownPosition: { x: number; y: number } | null = null;
-    const handleRightDown = (event: PointerEvent) => {
-      if (event.button === 2) {
-        rightDownPosition = { x: event.clientX, y: event.clientY };
-      }
-    };
     const handleContextMenu = (event: MouseEvent) => {
+      // Browsers may dispatch this before the right-button gesture finishes.
+      // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
-      // A right-drag is a pan (OrbitControls); only a stationary right-click
-      // opens the context menu.
-      const moved = rightDownPosition
-        ? Math.hypot(
-            event.clientX - rightDownPosition.x,
-            event.clientY - rightDownPosition.y
-          )
-        : 0;
-      rightDownPosition = null;
-      if (moved < 5) {
-        onContextMenuRef.current(
-          event.clientX,
-          event.clientY,
-          pick(event)?.selection ?? null
-        );
-      }
     };
 
     renderer.domElement.addEventListener(
@@ -1094,7 +1153,6 @@ export function ModelViewer({
       true
     );
     renderer.domElement.addEventListener('dblclick', handleDoubleClick);
-    renderer.domElement.addEventListener('pointerdown', handleRightDown, true);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
 
     const lastQuaternion = new THREE.Quaternion();
@@ -1153,11 +1211,6 @@ export function ModelViewer({
         true
       );
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
-      renderer.domElement.removeEventListener(
-        'pointerdown',
-        handleRightDown,
-        true
-      );
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
