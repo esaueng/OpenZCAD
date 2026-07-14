@@ -411,6 +411,12 @@ interface ExtrudeDragState {
 }
 
 type MoveAxis = 'x' | 'y' | 'z';
+type MoveHandleKind = 'axis' | 'ring' | 'center';
+
+interface MoveGizmoFocus {
+  kind: MoveHandleKind;
+  axis: MoveAxis;
+}
 
 interface MoveDragState {
   pointerId: number;
@@ -445,6 +451,70 @@ const MOVE_AXIS_COLORS: Record<MoveAxis, number> = {
   y: 0x6fd66f,
   z: 0x5f8fef
 };
+
+interface MoveGizmoVisualData {
+  moveHandleVisual?: boolean;
+  moveHandleFocus?: boolean;
+  kind?: MoveHandleKind;
+  axis?: MoveAxis;
+  baseColor?: number;
+  baseOpacity?: number;
+}
+
+function isSameMoveGizmoFocus(
+  left: MoveGizmoFocus | null,
+  right: MoveGizmoFocus | null
+): boolean {
+  return left?.kind === right?.kind && left?.axis === right?.axis;
+}
+
+export function moveGizmoHandleLabel(
+  kind: MoveHandleKind,
+  axis: MoveAxis
+): string {
+  if (kind === 'center') {
+    return 'Move freely';
+  }
+  return `${kind === 'ring' ? 'Rotate' : 'Move'} ${axis.toUpperCase()} axis`;
+}
+
+/**
+ * Keeps hover feedback inside Three.js instead of scheduling React renders on
+ * every pointer move. The focused handle retains its axis color and gains a
+ * white outline while all competing handles recede.
+ */
+export function applyMoveGizmoFocus(
+  group: THREE.Group,
+  focus: MoveGizmoFocus | null
+) {
+  group.userData.focus = focus;
+  group.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) {
+      return;
+    }
+    const data = object.userData as MoveGizmoVisualData;
+    const matches = data.kind === focus?.kind && data.axis === focus?.axis;
+    if (data.moveHandleFocus) {
+      object.visible = matches;
+      return;
+    }
+    if (!data.moveHandleVisual) {
+      return;
+    }
+    const material = (
+      object as THREE.Mesh<
+        THREE.BufferGeometry,
+        THREE.Material | THREE.Material[]
+      >
+    ).material;
+    if (!(material instanceof THREE.MeshBasicMaterial)) {
+      return;
+    }
+    const baseOpacity = data.baseOpacity ?? 1;
+    material.opacity = focus ? (matches ? 1 : baseOpacity * 0.2) : baseOpacity;
+    material.color.setHex(data.baseColor ?? 0xffffff);
+  });
+}
 
 /** Parameter t of the closest point on a line to the pointer ray. */
 function closestAxisT(
@@ -808,6 +878,7 @@ export function ModelViewer({
   /** Base (untranslated) gizmo pivot: the target body's bbox center. */
   const moveCenterRef = useRef(new THREE.Vector3());
   const moveDragActiveRef = useRef(false);
+  const moveGizmoHudRef = useRef<HTMLDivElement | null>(null);
   const sketchesRef = useRef(sketches);
   sketchesRef.current = sketches;
   const onContextMenuRef = useRef(onContextMenu);
@@ -1093,6 +1164,12 @@ export function ModelViewer({
     dragHud.className = 'direct-edit-hud';
     dragHud.hidden = true;
     host.appendChild(dragHud);
+    const moveGizmoHud = document.createElement('div');
+    moveGizmoHud.className = 'move-gizmo-hud';
+    moveGizmoHud.hidden = true;
+    moveGizmoHud.setAttribute('aria-hidden', 'true');
+    host.appendChild(moveGizmoHud);
+    moveGizmoHudRef.current = moveGizmoHud;
 
     configureEdgeRaycasting(context.raycaster);
 
@@ -1142,6 +1219,68 @@ export function ModelViewer({
           .intersectObjects(moveGizmoGroup.children, true)
           .find((hit) => hit.object.userData.moveHandle) ?? null
       );
+    }
+
+    function moveGizmoFocusFromHit(
+      hit: THREE.Intersection<THREE.Object3D> | null
+    ): MoveGizmoFocus | null {
+      if (!hit) {
+        return null;
+      }
+      const data = hit.object.userData as {
+        kind?: MoveHandleKind;
+        axis?: MoveAxis;
+      };
+      if (!data.kind) {
+        return null;
+      }
+      return { kind: data.kind, axis: data.axis ?? 'x' };
+    }
+
+    function updateMoveGizmoFocus(focus: MoveGizmoFocus | null) {
+      const previous =
+        (moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ?? null;
+      if (!isSameMoveGizmoFocus(previous, focus)) {
+        applyMoveGizmoFocus(moveGizmoGroup, focus);
+      }
+    }
+
+    function positionMoveGizmoHud(
+      event: PointerEvent,
+      focus: MoveGizmoFocus,
+      active = false,
+      value?: number
+    ) {
+      const hostRect = hostRef.current?.getBoundingClientRect();
+      if (!hostRect) {
+        return;
+      }
+      const axisColor =
+        focus.kind === 'center' ? 0xe8f3ff : MOVE_AXIS_COLORS[focus.axis];
+      const baseLabel = moveGizmoHandleLabel(focus.kind, focus.axis);
+      const suffix =
+        value === undefined
+          ? ''
+          : focus.kind === 'ring'
+            ? ` · ${Math.round(value * 10) / 10}°`
+            : ` · ${Math.round(value * 100) / 100} ${unitsRef.current}`;
+      moveGizmoHud.textContent = `${baseLabel}${suffix}`;
+      moveGizmoHud.dataset.kind = focus.kind;
+      moveGizmoHud.dataset.axis = focus.kind === 'center' ? 'free' : focus.axis;
+      moveGizmoHud.style.setProperty(
+        '--gizmo-axis-color',
+        `#${axisColor.toString(16).padStart(6, '0')}`
+      );
+      moveGizmoHud.style.left = `${event.clientX - hostRect.left + 16}px`;
+      moveGizmoHud.style.top = `${event.clientY - hostRect.top - 16}px`;
+      moveGizmoHud.classList.toggle('is-active', active);
+      moveGizmoHud.hidden = false;
+    }
+
+    function clearMoveGizmoHover() {
+      updateMoveGizmoFocus(null);
+      moveGizmoHud.hidden = true;
+      moveGizmoHud.classList.remove('is-active');
     }
 
     /** In-plane basis for a rotation ring about `axis`. */
@@ -1430,6 +1569,15 @@ export function ModelViewer({
           move: drag.snapMove,
           rotate: drag.snapRotate
         });
+        const focus = { kind: drag.kind, axis: drag.axis };
+        const value =
+          drag.kind === 'ring'
+            ? rotation[drag.axis]
+            : drag.kind === 'axis'
+              ? translation[drag.axis]
+              : undefined;
+        updateMoveGizmoFocus(focus);
+        positionMoveGizmoHud(event, focus, true, value);
         renderer.domElement.style.cursor = 'grabbing';
         return;
       }
@@ -1473,10 +1621,14 @@ export function ModelViewer({
         positionDragHud(event, value, faceDrag.axis);
         return;
       }
-      if (movePreviewRef.current && pickMoveGizmo(event)) {
+      const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
+      if (movePreviewRef.current && moveFocus) {
+        updateMoveGizmoFocus(moveFocus);
+        positionMoveGizmoHud(event, moveFocus);
         renderer.domElement.style.cursor = 'grab';
         return;
       }
+      clearMoveGizmoHover();
       applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
@@ -1497,7 +1649,7 @@ export function ModelViewer({
       if (moveHit && movePreviewRef.current) {
         const activeMove = movePreviewRef.current;
         const data = moveHit.object.userData as {
-          kind: 'axis' | 'ring' | 'center';
+          kind: MoveHandleKind;
           axis?: MoveAxis;
         };
         const axis = data.axis ?? 'x';
@@ -1553,6 +1705,9 @@ export function ModelViewer({
         }
         moveDrag = drag;
         moveDragActiveRef.current = true;
+        const focus = { kind: data.kind, axis };
+        updateMoveGizmoFocus(focus);
+        positionMoveGizmoHud(event, focus, true);
         controls.enabled = false;
         renderer.domElement.setPointerCapture(event.pointerId);
         renderer.domElement.style.cursor = 'grabbing';
@@ -1704,7 +1859,15 @@ export function ModelViewer({
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId);
         }
-        renderer.domElement.style.cursor = '';
+        const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
+        updateMoveGizmoFocus(moveFocus);
+        if (moveFocus) {
+          positionMoveGizmoHud(event, moveFocus);
+          renderer.domElement.style.cursor = 'grab';
+        } else {
+          moveGizmoHud.hidden = true;
+          renderer.domElement.style.cursor = '';
+        }
         downPosition = null;
         return;
       }
@@ -1761,6 +1924,7 @@ export function ModelViewer({
         moveDrag = null;
         moveDragActiveRef.current = false;
         controls.enabled = true;
+        clearMoveGizmoHover();
       }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
@@ -1773,6 +1937,13 @@ export function ModelViewer({
       rightClickGesture.cancel(event.pointerId);
       rightPanStartTarget = null;
       downPosition = null;
+    };
+    const handlePointerLeave = () => {
+      if (moveDrag) {
+        return;
+      }
+      clearMoveGizmoHover();
+      applyHover(null);
     };
     const handleDoubleClick = () => {
       if (bodyGroup.children.length === 0) {
@@ -1808,6 +1979,7 @@ export function ModelViewer({
       handlePointerCancel,
       true
     );
+    renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
     renderer.domElement.addEventListener('dblclick', handleDoubleClick);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
 
@@ -1882,6 +2054,10 @@ export function ModelViewer({
         handlePointerCancel,
         true
       );
+      renderer.domElement.removeEventListener(
+        'pointerleave',
+        handlePointerLeave
+      );
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       clearGroup(bodyGroup);
@@ -1901,6 +2077,8 @@ export function ModelViewer({
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       host.removeChild(dragHud);
+      host.removeChild(moveGizmoHud);
+      moveGizmoHudRef.current = null;
       contextRef.current = null;
     };
   }, []);
@@ -2219,6 +2397,10 @@ export function ModelViewer({
     }
     clearGroup(context.moveGizmoGroup);
     if (!movePreview) {
+      applyMoveGizmoFocus(context.moveGizmoGroup, null);
+      if (moveGizmoHudRef.current) {
+        moveGizmoHudRef.current.hidden = true;
+      }
       // Cancel without a document change must restore the resting pose.
       for (const object of context.objectsByBodyId.values()) {
         object.position.set(0, 0, 0);
@@ -2259,8 +2441,24 @@ export function ModelViewer({
         depthTest: false
       });
     const invisible = () => new THREE.MeshBasicMaterial({ visible: false });
-    const handleData = (kind: 'axis' | 'ring' | 'center', axis: MoveAxis) => ({
+    const handleData = (kind: MoveHandleKind, axis: MoveAxis) => ({
       moveHandle: true,
+      kind,
+      axis
+    });
+    const visualData = (
+      kind: MoveHandleKind,
+      axis: MoveAxis,
+      baseColor: number,
+      baseOpacity: number
+    ) => ({
+      ...handleData(kind, axis),
+      moveHandleVisual: true,
+      baseColor,
+      baseOpacity
+    });
+    const focusData = (kind: MoveHandleKind, axis: MoveAxis) => ({
+      moveHandleFocus: true,
       kind,
       axis
     });
@@ -2293,6 +2491,20 @@ export function ModelViewer({
       );
       arrowHit.position.copy(direction.clone().multiplyScalar(scale * 0.65));
       arrowHit.quaternion.copy(alignment);
+      const shaftFocus = new THREE.Mesh(
+        new THREE.CylinderGeometry(scale * 0.055, scale * 0.055, scale, 12),
+        solid(0xf8fbff)
+      );
+      shaftFocus.position.copy(shaft.position);
+      shaftFocus.quaternion.copy(alignment);
+      shaftFocus.visible = false;
+      const headFocus = new THREE.Mesh(
+        new THREE.ConeGeometry(scale * 0.12, scale * 0.255, 16),
+        solid(0xf8fbff)
+      );
+      headFocus.position.copy(head.position);
+      headFocus.quaternion.copy(alignment);
+      headFocus.visible = false;
 
       const ringRotation =
         axis === 'x'
@@ -2301,37 +2513,66 @@ export function ModelViewer({
             ? new THREE.Euler(Math.PI / 2, 0, 0)
             : new THREE.Euler(0, 0, 0);
       const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.016, 8, 56),
+        new THREE.TorusGeometry(scale * 0.85, scale * 0.02, 8, 56),
         solid(color, 0.6)
       );
       ring.rotation.copy(ringRotation);
+      const ringFocus = new THREE.Mesh(
+        new THREE.TorusGeometry(scale * 0.85, scale * 0.048, 10, 64),
+        solid(0xf8fbff)
+      );
+      ringFocus.rotation.copy(ringRotation);
+      ringFocus.visible = false;
       const ringHit = new THREE.Mesh(
         new THREE.TorusGeometry(scale * 0.85, scale * 0.1, 6, 40),
         invisible()
       );
       ringHit.rotation.copy(ringRotation);
 
-      for (const part of [shaft, head, arrowHit]) {
-        part.userData = handleData('axis', axis);
+      for (const part of [shaft, head]) {
+        part.userData = visualData('axis', axis, color, 0.95);
         part.renderOrder = 20;
         context.moveGizmoGroup.add(part);
       }
-      for (const part of [ring, ringHit]) {
-        part.userData = handleData('ring', axis);
+      arrowHit.userData = handleData('axis', axis);
+      context.moveGizmoGroup.add(arrowHit);
+      for (const part of [shaftFocus, headFocus]) {
+        part.userData = focusData('axis', axis);
         part.renderOrder = 19;
         context.moveGizmoGroup.add(part);
       }
+      ring.userData = visualData('ring', axis, color, 0.6);
+      ring.renderOrder = 19;
+      context.moveGizmoGroup.add(ring);
+      ringHit.userData = handleData('ring', axis);
+      context.moveGizmoGroup.add(ringHit);
+      ringFocus.userData = focusData('ring', axis);
+      ringFocus.renderOrder = 18;
+      context.moveGizmoGroup.add(ringFocus);
     }
 
     const centerHandle = new THREE.Mesh(
       new THREE.SphereGeometry(scale * 0.11, 18, 12),
       solid(0xe8f3ff, 0.9)
     );
-    centerHandle.userData = handleData('center', 'x');
+    centerHandle.userData = visualData('center', 'x', 0xe8f3ff, 0.9);
     centerHandle.renderOrder = 21;
     context.moveGizmoGroup.add(centerHandle);
+    const centerFocus = new THREE.Mesh(
+      new THREE.SphereGeometry(scale * 0.155, 20, 14),
+      solid(0xf8fbff)
+    );
+    centerFocus.userData = focusData('center', 'x');
+    centerFocus.renderOrder = 20;
+    centerFocus.visible = false;
+    context.moveGizmoGroup.add(centerFocus);
 
     context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
+    applyMoveGizmoFocus(
+      context.moveGizmoGroup,
+      (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
+        null
+    );
   }, [movePreview, bodies]);
 
   useEffect(() => {
