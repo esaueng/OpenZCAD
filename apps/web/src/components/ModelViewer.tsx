@@ -141,6 +141,20 @@ const MOVE_SNAP_STEPS = [100, 50, 25, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05, 0.01];
 const ROTATE_SNAP_STEPS = [90, 45, 15, 5, 1, 0.5, 0.1];
 /** A snap increment must span at least this many pixels to feel deliberate. */
 const SNAP_MIN_PIXELS = 8;
+/** Arrow shaft length in CSS pixels; rings and hit targets scale with it. */
+const MOVE_GIZMO_LENGTH_PIXELS = 104;
+
+/**
+ * Converts the desired fixed screen-space gizmo length into world units.
+ * Re-evaluating this as the camera zooms keeps the control usable without
+ * allowing it to grow over the model or collapse into an unpickable speck.
+ */
+export function moveGizmoWorldScale(worldPerPixel: number): number {
+  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
+    return 1;
+  }
+  return worldPerPixel * MOVE_GIZMO_LENGTH_PIXELS;
+}
 
 /**
  * Translation snap step for the current zoom: the smallest "nice" step that
@@ -1806,6 +1820,17 @@ export function ModelViewer({
         camera.position.copy(orthographic.position);
         camera.quaternion.copy(orthographic.quaternion);
       }
+      if (moveGizmoGroup.children.length > 0) {
+        const baseScale = Math.max(
+          (moveGizmoGroup.userData.baseGizmoScale as number | undefined) ?? 1,
+          1e-9
+        );
+        const gizmoScale = moveGizmoWorldScale(
+          worldPerPixelAt(moveGizmoGroup.position)
+        );
+        moveGizmoGroup.scale.setScalar(gizmoScale / baseScale);
+        moveGizmoGroup.userData.gizmoScale = gizmoScale;
+      }
       renderer.render(scene, context.activeCamera);
       updateDimensionLabels(
         context,
@@ -2213,11 +2238,17 @@ export function ModelViewer({
       (body.bbox.min.z + body.bbox.max.z) / 2
     );
     moveCenterRef.current.copy(center);
-    const distance = Math.max(
-      context.activeCamera.position.distanceTo(center),
-      1
+    const projectedUnitSizePx = projectedWorldSizePx(
+      context.activeCamera,
+      center,
+      1,
+      Math.max(context.renderer.domElement.clientHeight, 1)
     );
-    const scale = Math.max(distance * 0.13, 6);
+    const scale = moveGizmoWorldScale(
+      1 / Math.max(projectedUnitSizePx, 1e-9)
+    );
+    context.moveGizmoGroup.scale.setScalar(1);
+    context.moveGizmoGroup.userData.baseGizmoScale = scale;
     context.moveGizmoGroup.userData.gizmoScale = scale;
 
     const solid = (color: number, opacity = 0.95) =>

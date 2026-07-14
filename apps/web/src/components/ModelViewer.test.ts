@@ -12,6 +12,7 @@ import {
   dimensionLabelLayout,
   directEditDirectionFromNormal,
   isViewerMesh,
+  moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
   RightClickGestureTracker
@@ -182,6 +183,13 @@ describe('model viewer mesh classification', () => {
 });
 
 describe('move gizmo snapping', () => {
+  it('keeps a constant screen-space size as camera zoom changes', () => {
+    expect(moveGizmoWorldScale(1)).toBe(104);
+    expect(moveGizmoWorldScale(0.1)).toBeCloseTo(10.4);
+    expect(moveGizmoWorldScale(0.01)).toBeCloseTo(1.04);
+    expect(moveGizmoWorldScale(0)).toBe(1);
+  });
+
   it('coarsens the translation step as the camera zooms out', () => {
     // 1 world unit ≈ 1px → an 8px minimum needs a 10-unit step.
     expect(chooseMoveSnapStep(1)).toBe(10);
