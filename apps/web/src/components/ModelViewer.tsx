@@ -335,6 +335,7 @@ const HOVER_EMISSIVE = 0x14283f;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
 const RIGHT_DRAG_THRESHOLD_PX = 5;
+const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
 interface ActiveRightClickGesture {
   pointerId: number;
@@ -366,6 +367,12 @@ export class RightClickGestureTracker {
       dx * dx + dy * dy >= RIGHT_DRAG_THRESHOLD_PX * RIGHT_DRAG_THRESHOLD_PX;
   }
 
+  markDragged(pointerId: number) {
+    if (this.active?.pointerId === pointerId) {
+      this.active.dragged = true;
+    }
+  }
+
   end(pointerId: number, x: number, y: number) {
     const active = this.active;
     if (!active || active.pointerId !== pointerId) {
@@ -394,14 +401,46 @@ const EDGE_HOVER_WIDTH = 4;
 const EDGE_SELECTED_WIDTH = 4.5;
 const EDGE_IDLE_OPACITY = 0.85;
 /**
- * An edge hit wins over a face hit when it lies within this many world units
- * behind the nearest hit — otherwise the face in front of an edge swallows
- * nearly every click aimed at the edge.
+ * Extra screen-space width used only for edge picking. Line2 adds this to the
+ * rendered width before testing the pointer, so an idle edge has a 3 px pick
+ * radius without that radius changing as the camera zooms.
  */
-const EDGE_PICK_SLOP = 2.5;
+const EDGE_PICK_PADDING_PX = 4;
+/**
+ * Edge and face intersections for the same topological boundary can differ by
+ * a few floating-point ulps. Keep the allowance relative to camera distance;
+ * a fixed model-unit allowance can select an edge hidden behind the face.
+ */
+const EDGE_DEPTH_RELATIVE_EPSILON = 1e-4;
+const EDGE_DEPTH_ABSOLUTE_EPSILON = 1e-6;
 
 interface EdgeVisualState {
   selected: boolean;
+}
+
+type TopologyHit = Pick<THREE.Intersection, 'distance' | 'object'>;
+
+export function configureEdgeRaycasting(raycaster: THREE.Raycaster) {
+  raycaster.params.Line2 = { threshold: EDGE_PICK_PADDING_PX };
+}
+
+export function prioritizeVisibleEdgeHit<T extends TopologyHit>(hits: T[]) {
+  const nearestDistance = hits[0]?.distance;
+  if (nearestDistance === undefined) {
+    return hits;
+  }
+  const depthTolerance = Math.max(
+    EDGE_DEPTH_ABSOLUTE_EPSILON,
+    Math.abs(nearestDistance) * EDGE_DEPTH_RELATIVE_EPSILON
+  );
+  const edgeHit = hits.find(
+    (hit) =>
+      (hit.object.userData as { topologyKind?: string }).topologyKind ===
+        'edge' && hit.distance <= nearestDistance + depthTolerance
+  );
+  return edgeHit
+    ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)]
+    : hits;
 }
 
 const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
@@ -841,6 +880,7 @@ export function ModelViewer({
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
     const rightClickGesture = new RightClickGestureTracker();
+    let rightPanStartTarget: THREE.Vector3 | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
@@ -849,7 +889,7 @@ export function ModelViewer({
     dragHud.hidden = true;
     host.appendChild(dragHud);
 
-    context.raycaster.params.Line = { threshold: 3 };
+    configureEdgeRaycasting(context.raycaster);
 
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -948,18 +988,10 @@ export function ModelViewer({
       const hits = context.raycaster
         .intersectObjects(bodyGroup.children, true)
         .filter((hit) => hit.object.visible);
-      // An edge that lies barely behind the nearest face hit still wins the
-      // pick — otherwise the face swallows nearly every click aimed at an
-      // edge that runs across it.
-      const nearestDistance = hits[0]?.distance ?? Infinity;
-      const edgeHit = hits.find(
-        (hit) =>
-          (hit.object.userData as { topologyKind?: string }).topologyKind ===
-            'edge' && hit.distance <= nearestDistance + EDGE_PICK_SLOP
-      );
-      const ordered = edgeHit
-        ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)]
-        : hits;
+      // Prefer the rendered edge only when it is effectively coplanar with
+      // the nearest hit. This keeps edges usable without selecting geometry
+      // hidden behind the face under the pointer.
+      const ordered = prioritizeVisibleEdgeHit(hits);
       for (const hit of ordered) {
         const data = hit.object.userData as {
           bodyId?: string;
@@ -1249,6 +1281,7 @@ export function ModelViewer({
           event.clientX,
           event.clientY
         );
+        rightPanStartTarget = controls.target.clone();
         return;
       }
       if (event.button !== 0) {
@@ -1433,6 +1466,17 @@ export function ModelViewer({
     };
     const handlePointerUp = (event: PointerEvent) => {
       if (event.button === 2) {
+        const panStartTarget = rightPanStartTarget;
+        rightPanStartTarget = null;
+        if (
+          panStartTarget &&
+          controls.target.distanceToSquared(panStartTarget) >
+            RIGHT_PAN_TARGET_EPSILON * RIGHT_PAN_TARGET_EPSILON
+        ) {
+          // OrbitControls changed the camera target, so this gesture panned
+          // even if this element missed or coalesced its pointermove events.
+          rightClickGesture.markDragged(event.pointerId);
+        }
         if (
           rightClickGesture.end(
             event.pointerId,
@@ -1522,6 +1566,7 @@ export function ModelViewer({
         faceDrag = null;
       }
       rightClickGesture.cancel(event.pointerId);
+      rightPanStartTarget = null;
       downPosition = null;
     };
     const handleDoubleClick = () => {
@@ -1692,28 +1737,13 @@ export function ModelViewer({
         context.edgeMaterials.add(fatMaterial);
         const visual = new Line2(fatGeometry, fatMaterial);
         visual.computeLineDistances();
-        // Picking goes through the thin proxy below; the fat line is display only.
-        visual.raycast = () => undefined;
+        visual.userData.bodyId = body.bodyId;
+        visual.userData.topologyKind = 'edge';
+        visual.userData.topologyId = edge.topologyId;
+        visual.userData.topologyHash = edge.hash;
+        visual.userData.visual = visual;
         (visual.userData as EdgeVisualState).selected = active;
         object.add(visual);
-
-        // Invisible pick proxy: a plain THREE.Line raycasts reliably with the
-        // raycaster's Line threshold, giving the edge a generous hit target.
-        const proxyGeometry = new THREE.BufferGeometry();
-        proxyGeometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(edge.points, 3)
-        );
-        const proxy = new THREE.Line(
-          proxyGeometry,
-          new THREE.LineBasicMaterial({ visible: false })
-        );
-        proxy.userData.bodyId = body.bodyId;
-        proxy.userData.topologyKind = 'edge';
-        proxy.userData.topologyId = edge.topologyId;
-        proxy.userData.topologyHash = edge.hash;
-        proxy.userData.visual = visual;
-        object.add(proxy);
       }
 
       const selectedFace =
