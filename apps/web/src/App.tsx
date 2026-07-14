@@ -93,8 +93,10 @@ import { AiCommandRail } from './components/AiCommandRail';
 import { SketchWorkspace } from './components/SketchWorkspace';
 import {
   ExtrudeOverlay,
+  MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
+import { composeMoveTransform } from './components/ModelViewer';
 import type { SketchFormValue } from './components/forms/FeatureForms';
 import {
   CommandPalette,
@@ -108,6 +110,8 @@ import type {
   DisplayMode,
   ExtrudePreview,
   FaceResizeCommit,
+  MovePreview,
+  MoveSnap,
   ProjectionMode,
   SketchOverlay,
   StandardView,
@@ -186,6 +190,8 @@ export function App() {
   const [extrudePreview, setExtrudePreview] = useState<ExtrudePreview | null>(
     null
   );
+  const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
+  const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
@@ -837,6 +843,28 @@ export function App() {
       }
       return;
     }
+    if (nextTool === 'transform') {
+      // Prefer the gizmo flow when a target body is unambiguous; the classic
+      // form remains for multi-body documents with nothing selected.
+      const targetBodyId =
+        selectedBodyIds.at(-1) ??
+        (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null);
+      if (targetBodyId) {
+        setExtrudePreview(null);
+        setSelectedBodyIds([targetBodyId]);
+        setMovePreview({
+          bodyId: targetBodyId,
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        });
+        setMoveSnap(null);
+        setTool('transform');
+        setStatus(
+          'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
+        );
+        return;
+      }
+    }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
     setExtrudePreview(null);
     setTool(nextTool);
@@ -844,8 +872,50 @@ export function App() {
 
   function cancelPanel() {
     setExtrudePreview(null);
+    setMovePreview(null);
     setTool(null);
     setSelectedFeatureNodeId(null);
+  }
+
+  function confirmMove() {
+    const preview = movePreview;
+    if (!preview || !doc) {
+      return;
+    }
+    const body = representations[preview.bodyId as BodyId];
+    if (!body) {
+      return;
+    }
+    const center = {
+      x: (body.bbox.min.x + body.bbox.max.x) / 2,
+      y: (body.bbox.min.y + body.bbox.max.y) / 2,
+      z: (body.bbox.min.z + body.bbox.max.z) / 2
+    };
+    // Rotation is about the gizmo center; fold the pivot into the feature's
+    // world-origin translation (see composeMoveTransform).
+    const translation = composeMoveTransform(
+      center,
+      preview.translation,
+      preview.rotationDeg
+    );
+    const round = (value: number) => Math.round(value * 1000) / 1000;
+    setMovePreview(null);
+    createFeature(
+      commandFactories.transformBody({
+        name: 'Move',
+        targetBodyId: preview.bodyId as BodyId,
+        translation: {
+          x: round(translation.x),
+          y: round(translation.y),
+          z: round(translation.z)
+        },
+        rotationDeg: {
+          x: round(preview.rotationDeg.x),
+          y: round(preview.rotationDeg.y),
+          z: round(preview.rotationDeg.z)
+        }
+      })
+    );
   }
 
   function clearSelection() {
@@ -1682,6 +1752,18 @@ export function App() {
         }
         return;
       }
+      if (movePreview) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelPanel();
+          return;
+        }
+        if (event.key === 'Enter' && !typing) {
+          event.preventDefault();
+          confirmMove();
+          return;
+        }
+      }
 
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
@@ -1948,7 +2030,10 @@ export function App() {
     }
   ];
 
-  const directMode = tool === 'sketch' || tool === 'extrude';
+  const directMode =
+    tool === 'sketch' ||
+    tool === 'extrude' ||
+    (tool === 'transform' && movePreview !== null);
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
 
@@ -2046,13 +2131,46 @@ export function App() {
           units={doc.units}
           editableBodyIds={directEditableBodyIds}
           extrudePreview={extrudePreview}
+          movePreview={movePreview}
           hideViewerToolbar={tool === 'sketch'}
           selectionChip={selectionChip}
           onClearSelection={clearSelection}
           initialView={initialView}
           onViewChange={handleViewportChange}
+          onMovePreviewChange={(translation, rotationDeg, snap) => {
+            setMoveSnap(snap);
+            setMovePreview((current) =>
+              current ? { ...current, translation, rotationDeg } : current
+            );
+          }}
           modeOverlay={
-            tool === 'sketch' ? (
+            movePreview ? (
+              <MoveOverlay
+                bodyName={
+                  representations[movePreview.bodyId as BodyId]?.name ??
+                  'Selected body'
+                }
+                values={{
+                  translation: movePreview.translation,
+                  rotationDeg: movePreview.rotationDeg
+                }}
+                units={doc.units}
+                snap={moveSnap}
+                onChange={(values) =>
+                  setMovePreview((current) =>
+                    current
+                      ? {
+                          ...current,
+                          translation: values.translation,
+                          rotationDeg: values.rotationDeg
+                        }
+                      : current
+                  )
+                }
+                onConfirm={confirmMove}
+                onCancel={cancelPanel}
+              />
+            ) : tool === 'sketch' ? (
               <SketchWorkspace
                 sketchNumber={sketchOptions.length + 1}
                 units={doc.units}

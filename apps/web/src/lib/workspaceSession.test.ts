@@ -24,7 +24,8 @@ const view = {
   camera: {
     position: [42, 31, 18] as [number, number, number],
     target: [2, 3, 4] as [number, number, number],
-    orthographicZoom: 1.75
+    orthographicZoom: 1.75,
+    orthographicHalfHeight: 24
   },
   projection: 'orthographic' as const,
   settings: {
@@ -68,6 +69,14 @@ describe('workspace session persistence', () => {
             ...view,
             camera: { ...view.camera, position: [Number.NaN, 0, 0] },
             updatedAt: Date.now()
+          },
+          'project-2': {
+            ...view,
+            camera: {
+              ...view.camera,
+              orthographicHalfHeight: Number.POSITIVE_INFINITY
+            },
+            updatedAt: Date.now()
           }
         }
       })
@@ -75,5 +84,6 @@ describe('workspace session persistence', () => {
 
     expect(loadActiveProjectId(storage)).toBe('project-1');
     expect(loadProjectView('project-1', storage)).toBeNull();
+    expect(loadProjectView('project-2', storage)).toBeNull();
   });
 });
