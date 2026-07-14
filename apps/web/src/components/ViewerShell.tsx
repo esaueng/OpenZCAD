@@ -4,6 +4,8 @@ import {
   type ExtrudePreview,
   type AxisProjection,
   type FaceResizeCommit,
+  type MovePreview,
+  type MoveSnap,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -26,6 +28,7 @@ interface ViewerShellProps {
   units: string;
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
+  movePreview: MovePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
@@ -40,6 +43,11 @@ interface ViewerShellProps {
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
+  onMovePreviewChange(
+    translation: MovePreview['translation'],
+    rotationDeg: MovePreview['rotationDeg'],
+    snap: MoveSnap
+  ): void;
   onContextMenu(
     x: number,
     y: number,
@@ -64,6 +72,7 @@ export function ViewerShell({
   units,
   editableBodyIds,
   extrudePreview,
+  movePreview,
   modeOverlay,
   hideViewerToolbar = false,
   selectionChip,
@@ -74,6 +83,7 @@ export function ViewerShell({
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
+  onMovePreviewChange,
   onContextMenu,
   onToggleGrid,
   onFit,
@@ -95,12 +105,14 @@ export function ViewerShell({
         units={units}
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
+        movePreview={movePreview}
         projection={projection}
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}
+        onMovePreviewChange={onMovePreviewChange}
         onContextMenu={onContextMenu}
       />
       {!hideViewerToolbar && (
