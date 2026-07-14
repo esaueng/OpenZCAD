@@ -9,9 +9,7 @@
 .app-shell {
   height: 100vh;
   display: grid;
-  grid-template-rows: var(--topbar-h) var(--toolbar-h) minmax(0, 1fr) auto var(
-      --statusbar-h
-    );
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) auto var(--statusbar-h);
   background: var(--color-bg);
 }
 
@@ -251,90 +249,142 @@
   }
 }
 
-/* ── ToolBar ribbon ──────────────────────────────────────── */
+/* ── Floating tool palette (left edge of the viewport) ───── */
 
-.toolbar {
+.palette-float {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  bottom: 10px;
+  z-index: var(--z-viewer-overlay);
   display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  background: var(--color-surface);
-  border-bottom: var(--border-thin);
-  overflow-x: auto;
-  overflow-y: hidden;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.palette-float > * {
+  pointer-events: auto;
+}
+
+/* Direct-mode strips announce a modal state; float them top-center instead. */
+.palette-float:has(.direct-mode-strip) {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translateX(-50%);
+}
+
+.tool-palette {
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: rgba(17, 24, 33, 0.92);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  overflow-y: auto;
   scrollbar-width: none;
 }
 
-.toolbar::-webkit-scrollbar {
+.tool-palette::-webkit-scrollbar {
   display: none;
 }
 
-/* Icon-only buttons once full labels stop fitting; tooltips carry the names. */
-@media (max-width: 1600px) {
-  .toolbar-button span {
-    display: none;
-  }
-}
-
-.toolbar-group {
-  display: inline-flex;
-  align-items: center;
+.palette-group {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
 }
 
-.toolbar-sep {
-  width: 1px;
-  height: 22px;
-  flex: 0 0 auto;
+.palette-sep {
+  height: 1px;
+  margin: 4px 6px;
   background: var(--color-border);
-  margin: 0 var(--sp-1);
+  flex: 0 0 auto;
 }
 
-.toolbar-button {
-  min-height: 32px;
-  display: inline-flex;
+.palette-item {
+  min-height: 30px;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 9px;
+  gap: 8px;
+  padding: 4px 8px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
+  text-align: left;
   white-space: nowrap;
 }
 
-.toolbar-button svg {
+.palette-item svg {
   color: var(--color-text-subtle);
   flex: 0 0 auto;
 }
 
-.toolbar-button:hover:not(:disabled) {
+.palette-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item kbd {
+  opacity: 0.8;
+}
+
+.palette-item:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.toolbar-button:hover:not(:disabled) svg {
+.palette-item:hover:not(:disabled) svg {
   color: var(--color-accent);
 }
 
-.toolbar-button.active {
+.palette-item.active {
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
-.toolbar-button.active svg {
+.palette-item.active svg {
   color: var(--color-accent);
+}
+
+.palette-search {
+  color: var(--color-text-subtle);
+}
+
+/* Collapse to icons when the viewport gets tight; tooltips carry the names. */
+@media (max-width: 1280px), (max-height: 760px) {
+  .palette-label,
+  .palette-item kbd {
+    display: none;
+  }
+
+  .palette-item {
+    justify-content: center;
+    padding: 6px;
+  }
 }
 
 .direct-mode-strip {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 38px;
   padding: 0 14px;
   color: var(--color-text);
-  background: #15181c;
-  border-bottom: var(--border-thin);
+  background: rgba(17, 24, 33, 0.94);
+  border: var(--border-thin);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  white-space: nowrap;
 }
 
 .direct-mode-strip svg {
@@ -635,48 +685,93 @@
   inset: 0;
 }
 
-.viewer-toolbar {
+/* Right-hand utility stack: orientation widget on top, labeled rail below. */
+.viewer-rail-stack {
   position: absolute;
   top: 10px;
-  left: 10px;
+  right: 10px;
   z-index: var(--z-viewer-overlay);
-  display: inline-flex;
-  gap: var(--sp-1);
-  padding: 4px;
-  background: rgba(17, 24, 33, 0.85);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
 
-.viewer-toolbar button {
-  min-height: 24px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
+.viewer-rail-stack .orientation-widget {
+  position: static;
+}
+
+.viewer-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 5px;
+  background: rgba(17, 24, 33, 0.9);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.rail-views {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  margin-bottom: 2px;
+}
+
+.rail-views button {
+  min-width: 26px;
+  min-height: 22px;
+  padding: 0 5px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
 }
 
-.viewer-toolbar button:hover {
+.rail-views button:hover {
   color: var(--color-text);
   background: var(--color-surface-2);
 }
 
-.viewer-toolbar button.active {
+.rail-row {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 2px 6px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.rail-row:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-row.active {
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
-.viewer-toolbar-sep {
-  width: 1px;
-  align-self: stretch;
-  margin: 2px 3px;
-  background: var(--color-border);
+.rail-icon {
+  display: inline-grid;
+  place-items: center;
+  font-style: normal;
+}
+
+.rail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .selection-callout {
@@ -703,6 +798,90 @@
   border-color: rgba(96, 165, 250, 0.65);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   transform: translateY(-18px);
+}
+
+/* Editable dimension pill: drag the face, or click the value to type. */
+.selection-callout.direct-edit-callout.editable {
+  padding: 0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.callout-value {
+  padding: 4px 11px;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.callout-value:hover {
+  background: rgba(96, 165, 250, 0.18);
+}
+
+.callout-input {
+  width: 84px;
+  height: 26px;
+  padding: 0 9px;
+  color: #f3f8ff;
+  background: rgba(8, 18, 30, 0.98);
+  border: none;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.callout-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+/* Bottom-center selection summary with a quick measurement. */
+.selection-chip {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-viewer-overlay);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 4px 2px 12px;
+  color: var(--color-text);
+  background: rgba(17, 24, 33, 0.92);
+  border: var(--border-thin);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+}
+
+.selection-chip-label {
+  font-weight: var(--fw-medium);
+}
+
+.selection-chip-detail {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.selection-chip-clear {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: 999px;
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.selection-chip-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .direct-edit-hud {
@@ -2026,10 +2205,6 @@
 @media (max-width: 1120px) {
   .workspace {
     grid-template-columns: 220px minmax(320px, 1fr);
-  }
-
-  .toolbar-button span {
-    display: none;
   }
 
   .topbar .topbar-action:not(.save-state) {
