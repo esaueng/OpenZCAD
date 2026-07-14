@@ -42,6 +42,52 @@ export interface DirectEditDirection {
   side: -1 | 1;
 }
 
+export interface DimensionLabelLayout {
+  angleDeg: number;
+  scale: number;
+  lineLengthPx: number;
+}
+
+/**
+ * Keeps a dimension label aligned to its projected line without 180-degree
+ * flips, while sizing it from the projected model rather than a fixed font.
+ */
+export function dimensionLabelLayout(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  modelSizePx: number,
+  previousAngleDeg?: number
+): DimensionLabelLayout {
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const lineLengthPx = Math.hypot(deltaX, deltaY);
+  let angleDeg = THREE.MathUtils.radToDeg(Math.atan2(deltaY, deltaX));
+
+  if (Number.isFinite(previousAngleDeg)) {
+    angleDeg +=
+      180 * Math.round((previousAngleDeg! - angleDeg) / 180);
+  } else {
+    if (angleDeg > 90) {
+      angleDeg -= 180;
+    } else if (angleDeg < -90) {
+      angleDeg += 180;
+    }
+  }
+
+  // A dimension axis aimed nearly at the camera has no reliable screen
+  // angle. Hold the previous orientation instead of allowing it to jitter.
+  if (lineLengthPx < 6 && Number.isFinite(previousAngleDeg)) {
+    angleDeg = previousAngleDeg!;
+  }
+
+  const scale = THREE.MathUtils.clamp(
+    Math.sqrt(Math.max(modelSizePx, 1) / 260),
+    0.68,
+    1.12
+  );
+  return { angleDeg, scale, lineLengthPx };
+}
+
 /** Maps an exact picked face normal to the parametric box dimension it edits. */
 export function directEditDirectionFromNormal(
   normal: Pick<THREE.Vector3, 'x' | 'y' | 'z'>
@@ -237,6 +283,72 @@ interface SceneContext {
   hoveredEdge: Line2 | null;
   /** Fat-line materials that need their resolution refreshed on resize. */
   edgeMaterials: Set<LineMaterial>;
+  dimensionLabels: Set<DimensionLabelBinding>;
+}
+
+interface DimensionLabelBinding {
+  pill: HTMLDivElement;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  modelCenter: THREE.Vector3;
+  modelWorldSize: number;
+  angleDeg?: number;
+}
+
+function projectedWorldSizePx(
+  camera: THREE.Camera,
+  center: THREE.Vector3,
+  worldSize: number,
+  viewportHeight: number
+): number {
+  if (camera instanceof THREE.OrthographicCamera) {
+    const visibleHeight = Math.max(camera.top - camera.bottom, 1e-9);
+    return (viewportHeight * camera.zoom * worldSize) / visibleHeight;
+  }
+  if (camera instanceof THREE.PerspectiveCamera) {
+    const distance = Math.max(camera.position.distanceTo(center), 1e-9);
+    const visibleHeight =
+      2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    return (viewportHeight * worldSize) / Math.max(visibleHeight, 1e-9);
+  }
+  return viewportHeight;
+}
+
+function updateDimensionLabels(
+  context: SceneContext,
+  viewportWidth: number,
+  viewportHeight: number
+) {
+  for (const binding of context.dimensionLabels) {
+    const start = binding.start.clone().project(context.activeCamera);
+    const end = binding.end.clone().project(context.activeCamera);
+    const layout = dimensionLabelLayout(
+      {
+        x: (start.x * 0.5 + 0.5) * viewportWidth,
+        y: (-start.y * 0.5 + 0.5) * viewportHeight
+      },
+      {
+        x: (end.x * 0.5 + 0.5) * viewportWidth,
+        y: (-end.y * 0.5 + 0.5) * viewportHeight
+      },
+      projectedWorldSizePx(
+        context.activeCamera,
+        binding.modelCenter,
+        binding.modelWorldSize,
+        viewportHeight
+      ),
+      binding.angleDeg
+    );
+    binding.angleDeg = layout.angleDeg;
+    binding.pill.style.setProperty(
+      '--dimension-label-angle',
+      `${layout.angleDeg.toFixed(1)}deg`
+    );
+    binding.pill.style.setProperty(
+      '--dimension-label-scale',
+      layout.scale.toFixed(3)
+    );
+  }
 }
 
 function captureViewportCamera(context: SceneContext): ViewportCameraState {
@@ -901,7 +1013,8 @@ export function ModelViewer({
       hasFitCamera: false,
       hoveredBodyId: null,
       hoveredEdge: null,
-      edgeMaterials: new Set()
+      edgeMaterials: new Set(),
+      dimensionLabels: new Set()
     };
     contextRef.current = context;
     controls.addEventListener('end', emitViewChange);
@@ -1694,6 +1807,11 @@ export function ModelViewer({
         camera.quaternion.copy(orthographic.quaternion);
       }
       renderer.render(scene, context.activeCamera);
+      updateDimensionLabels(
+        context,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
+      );
       labelRenderer.render(scene, context.activeCamera);
 
       // Push camera orientation to the view widget only when it changes.
@@ -1771,6 +1889,7 @@ export function ModelViewer({
 
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
+    context.dimensionLabels.clear();
     context.hoveredBodyId = null;
     context.hoveredEdge = null;
     context.edgeMaterials.clear();
@@ -1878,16 +1997,78 @@ export function ModelViewer({
               const rounded = Math.round(value * 100) / 100;
               // Editable dimension pill: drag the face for a rough size, or
               // click the value and type an exact one.
+              const bboxSize = new THREE.Vector3(
+                body.bbox.max.x - body.bbox.min.x,
+                body.bbox.max.y - body.bbox.min.y,
+                body.bbox.max.z - body.bbox.min.z
+              );
+              const modelCenter = new THREE.Vector3(
+                (body.bbox.min.x + body.bbox.max.x) / 2,
+                (body.bbox.min.y + body.bbox.max.y) / 2,
+                (body.bbox.min.z + body.bbox.max.z) / 2
+              );
+              const modelWorldSize = Math.max(
+                bboxSize.x,
+                bboxSize.y,
+                bboxSize.z,
+                1e-6
+              );
+              const lineStart = modelCenter.clone();
+              const lineEnd = modelCenter.clone();
+              lineStart[axis] = body.bbox.min[axis];
+              lineEnd[axis] = body.bbox.max[axis];
+              const offsetAxis: DirectEditAxis =
+                axis === 'x' ? 'y' : axis === 'y' ? 'z' : 'x';
+              const lineOffset =
+                body.bbox.max[offsetAxis] +
+                Math.max(modelWorldSize * 0.08, 0.5);
+              lineStart[offsetAxis] = lineOffset;
+              lineEnd[offsetAxis] = lineOffset;
+
+              const dimensionGeometry = new LineGeometry();
+              dimensionGeometry.setPositions([
+                lineStart.x,
+                lineStart.y,
+                lineStart.z,
+                lineEnd.x,
+                lineEnd.y,
+                lineEnd.z
+              ]);
+              const dimensionMaterial = new LineMaterial({
+                color: 0x60a5fa,
+                linewidth: 1.5,
+                transparent: true,
+                opacity: 0.48,
+                depthTest: false,
+                depthWrite: false
+              });
+              dimensionMaterial.resolution.set(
+                edgeResolution.width,
+                edgeResolution.height
+              );
+              context.edgeMaterials.add(dimensionMaterial);
+              const dimensionLine = new Line2(
+                dimensionGeometry,
+                dimensionMaterial
+              );
+              dimensionLine.computeLineDistances();
+              dimensionLine.raycast = () => undefined;
+              dimensionLine.renderOrder = 18;
+              context.overlayGroup.add(dimensionLine);
+
               const element = document.createElement('div');
-              element.className =
-                'selection-callout direct-edit-callout editable';
+              element.className = 'dimension-callout-anchor';
               element.style.pointerEvents = 'auto';
+              const pill = document.createElement('div');
+              pill.className =
+                'selection-callout direct-edit-callout editable dimension-callout';
               const valueButton = document.createElement('button');
               valueButton.type = 'button';
               valueButton.className = 'callout-value';
               valueButton.title = `Click to type an exact ${dimension.toLowerCase()}`;
               valueButton.textContent = `${dimension} ${rounded} ${units}`;
-              element.appendChild(valueButton);
+              pill.appendChild(valueButton);
+              element.appendChild(pill);
               const bodyId = body.bodyId;
               valueButton.addEventListener('click', () => {
                 const input = document.createElement('input');
@@ -1898,7 +2079,7 @@ export function ModelViewer({
                   'aria-label',
                   `${dimension} in ${unitsRef.current}`
                 );
-                element.replaceChildren(input);
+                pill.replaceChildren(input);
                 input.focus();
                 input.select();
                 let done = false;
@@ -1907,7 +2088,7 @@ export function ModelViewer({
                     return;
                   }
                   done = true;
-                  element.replaceChildren(valueButton);
+                  pill.replaceChildren(valueButton);
                   const next = Number.parseFloat(input.value);
                   if (
                     commit &&
@@ -1933,8 +2114,15 @@ export function ModelViewer({
                 input.addEventListener('blur', () => finish(true));
               });
               const label = new CSS2DObject(element);
-              label.position.copy(center);
+              label.position.copy(lineStart).lerp(lineEnd, 0.5);
               context.overlayGroup.add(label);
+              context.dimensionLabels.add({
+                pill,
+                start: lineStart,
+                end: lineEnd,
+                modelCenter,
+                modelWorldSize
+              });
             }
           }
         }
