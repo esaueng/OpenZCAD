@@ -15,6 +15,8 @@ export interface ViewportCameraState {
   position: Vector3Tuple;
   target: Vector3Tuple;
   orthographicZoom: number;
+  /** Vertical half-size of the orthographic frustum before zoom is applied. */
+  orthographicHalfHeight?: number;
 }
 
 export interface ProjectViewState {
@@ -87,6 +89,9 @@ function parseStoredView(value: unknown): StoredProjectView | null {
     !isVector3Tuple(camera.target) ||
     !Number.isFinite(camera.orthographicZoom) ||
     camera.orthographicZoom <= 0 ||
+    (camera.orthographicHalfHeight !== undefined &&
+      (!Number.isFinite(camera.orthographicHalfHeight) ||
+        camera.orthographicHalfHeight <= 0)) ||
     !isProjectionMode(candidate.projection) ||
     !settings ||
     typeof settings.showGrid !== 'boolean' ||
@@ -102,7 +107,8 @@ function parseStoredView(value: unknown): StoredProjectView | null {
     camera: {
       position: [...camera.position],
       target: [...camera.target],
-      orthographicZoom: camera.orthographicZoom
+      orthographicZoom: camera.orthographicZoom,
+      orthographicHalfHeight: camera.orthographicHalfHeight
     },
     projection: candidate.projection,
     settings: { ...settings },
@@ -195,7 +201,8 @@ export function loadProjectView(
     camera: {
       position: [...view.camera.position],
       target: [...view.camera.target],
-      orthographicZoom: view.camera.orthographicZoom
+      orthographicZoom: view.camera.orthographicZoom,
+      orthographicHalfHeight: view.camera.orthographicHalfHeight
     },
     projection: view.projection,
     settings: { ...view.settings },
