@@ -90,4 +90,12 @@ describe('model viewer mesh classification', () => {
     gesture.move(1, 120, 80);
     expect(gesture.end(1, 120, 80)).toBe(false);
   });
+
+  it('suppresses the menu when OrbitControls confirms a camera pan', () => {
+    const gesture = new RightClickGestureTracker();
+
+    gesture.begin(1, 120, 80);
+    gesture.markDragged(1);
+    expect(gesture.end(1, 120, 80)).toBe(false);
+  });
 });

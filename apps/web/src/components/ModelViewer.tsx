@@ -180,6 +180,7 @@ const HOVER_EMISSIVE = 0x14283f;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
 const RIGHT_DRAG_THRESHOLD_PX = 5;
+const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
 interface ActiveRightClickGesture {
   pointerId: number;
@@ -209,6 +210,12 @@ export class RightClickGestureTracker {
     const dy = y - active.startY;
     active.dragged =
       dx * dx + dy * dy >= RIGHT_DRAG_THRESHOLD_PX * RIGHT_DRAG_THRESHOLD_PX;
+  }
+
+  markDragged(pointerId: number) {
+    if (this.active?.pointerId === pointerId) {
+      this.active.dragged = true;
+    }
   }
 
   end(pointerId: number, x: number, y: number) {
@@ -649,6 +656,7 @@ export function ModelViewer({
     const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
     const rightClickGesture = new RightClickGestureTracker();
+    let rightPanStartTarget: THREE.Vector3 | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     const dragHud = document.createElement('div');
@@ -926,6 +934,7 @@ export function ModelViewer({
           event.clientX,
           event.clientY
         );
+        rightPanStartTarget = controls.target.clone();
         return;
       }
       if (event.button !== 0) {
@@ -1044,6 +1053,17 @@ export function ModelViewer({
     };
     const handlePointerUp = (event: PointerEvent) => {
       if (event.button === 2) {
+        const panStartTarget = rightPanStartTarget;
+        rightPanStartTarget = null;
+        if (
+          panStartTarget &&
+          controls.target.distanceToSquared(panStartTarget) >
+            RIGHT_PAN_TARGET_EPSILON * RIGHT_PAN_TARGET_EPSILON
+        ) {
+          // OrbitControls changed the camera target, so this gesture panned
+          // even if this element missed or coalesced its pointermove events.
+          rightClickGesture.markDragged(event.pointerId);
+        }
         if (
           rightClickGesture.end(
             event.pointerId,
@@ -1117,6 +1137,7 @@ export function ModelViewer({
         faceDrag = null;
       }
       rightClickGesture.cancel(event.pointerId);
+      rightPanStartTarget = null;
       downPosition = null;
     };
     const handleDoubleClick = () => {
