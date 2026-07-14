@@ -793,11 +793,23 @@
 }
 
 .selection-callout.direct-edit-callout {
-  color: #e8f3ff;
-  background: rgba(10, 22, 36, 0.94);
-  border-color: rgba(96, 165, 250, 0.65);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-  transform: translateY(-18px);
+  color: rgba(232, 243, 255, 0.9);
+  background: rgba(10, 22, 36, 0.56);
+  border-color: rgba(96, 165, 250, 0.42);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(5px);
+}
+
+.dimension-callout-anchor {
+  pointer-events: auto;
+}
+
+.selection-callout.dimension-callout {
+  transform: rotate(var(--dimension-label-angle, 0deg))
+    translateY(calc(-50% - 6px))
+    scale(var(--dimension-label-scale, 1));
+  transform-origin: center;
+  will-change: transform;
 }
 
 /* Editable dimension pill: drag the face, or click the value to type. */

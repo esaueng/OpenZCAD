@@ -9,6 +9,7 @@ import {
   composeMoveTransform,
   configureEdgeRaycasting,
   createExtrudePreviewGeometry,
+  dimensionLabelLayout,
   directEditDirectionFromNormal,
   isViewerMesh,
   moveEuler,
@@ -49,6 +50,35 @@ describe('model viewer mesh classification', () => {
       axis: 'z',
       side: -1
     });
+  });
+
+  it('keeps dimension labels aligned, model-scaled, and flip-free', () => {
+    const horizontal = dimensionLabelLayout(
+      { x: 20, y: 40 },
+      { x: 220, y: 40 },
+      260
+    );
+    expect(horizontal.angleDeg).toBeCloseTo(0);
+    expect(horizontal.scale).toBeCloseTo(1);
+
+    const continued = dimensionLabelLayout(
+      { x: 100, y: 200 },
+      { x: 102, y: 0 },
+      90,
+      89
+    );
+    expect(continued.angleDeg).toBeGreaterThan(89);
+    expect(continued.angleDeg).toBeLessThan(92);
+    expect(continued.scale).toBeGreaterThanOrEqual(0.68);
+
+    const edgeOn = dimensionLabelLayout(
+      { x: 100, y: 100 },
+      { x: 102, y: 102 },
+      1200,
+      37
+    );
+    expect(edgeOn.angleDeg).toBe(37);
+    expect(edgeOn.scale).toBe(1.12);
   });
 
   it('builds a signed extrusion preview on either side of a sketch plane', () => {
