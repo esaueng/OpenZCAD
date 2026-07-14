@@ -1,6 +1,9 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   CSS2DObject,
   CSS2DRenderer
@@ -131,6 +134,9 @@ interface SceneContext {
   objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
   hoveredBodyId: string | null;
+  hoveredEdge: Line2 | null;
+  /** Fat-line materials that need their resolution refreshed on resize. */
+  edgeMaterials: Set<LineMaterial>;
 }
 
 interface PickResult {
@@ -173,6 +179,26 @@ const SELECTION_EMISSIVE = 0x1d4f86;
 const HOVER_EMISSIVE = 0x14283f;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
+
+// Exact topology edges render as screen-space fat lines so they read clearly
+// and their states are unmistakable: idle slate, hover glow, selected accent.
+const EDGE_IDLE_COLOR = 0x7d8ca0;
+const EDGE_HOVER_COLOR = 0xbfdcff;
+const EDGE_SELECTED_COLOR = 0x60a5fa;
+const EDGE_IDLE_WIDTH = 2;
+const EDGE_HOVER_WIDTH = 4;
+const EDGE_SELECTED_WIDTH = 4.5;
+const EDGE_IDLE_OPACITY = 0.85;
+/**
+ * An edge hit wins over a face hit when it lies within this many world units
+ * behind the nearest hit — otherwise the face in front of an edge swallows
+ * nearly every click aimed at the edge.
+ */
+const EDGE_PICK_SLOP = 2.5;
+
+interface EdgeVisualState {
+  selected: boolean;
+}
 
 const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
   // Direction from the target toward the camera. Top keeps a hair of X/Z so
@@ -547,7 +573,9 @@ export function ModelViewer({
       raycaster: new THREE.Raycaster(),
       objectsByBodyId: new Map(),
       hasFitCamera: false,
-      hoveredBodyId: null
+      hoveredBodyId: null,
+      hoveredEdge: null,
+      edgeMaterials: new Set()
     };
     contextRef.current = context;
 
@@ -562,6 +590,10 @@ export function ModelViewer({
       }
       renderer.setSize(host.clientWidth, host.clientHeight);
       labelRenderer.setSize(host.clientWidth, host.clientHeight);
+      // Screen-space fat lines rasterize against the drawing-buffer size.
+      for (const material of context.edgeMaterials) {
+        material.resolution.set(host.clientWidth, host.clientHeight);
+      }
     });
     observer.observe(host);
 
@@ -574,7 +606,7 @@ export function ModelViewer({
     dragHud.hidden = true;
     host.appendChild(dragHud);
 
-    context.raycaster.params.Line = { threshold: 2.4 };
+    context.raycaster.params.Line = { threshold: 3 };
 
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -611,11 +643,22 @@ export function ModelViewer({
           hit: sketchHit
         };
       }
-      const hits = context.raycaster.intersectObjects(bodyGroup.children, true);
-      for (const hit of hits) {
-        if (!hit.object.visible) {
-          continue;
-        }
+      const hits = context.raycaster
+        .intersectObjects(bodyGroup.children, true)
+        .filter((hit) => hit.object.visible);
+      // An edge that lies barely behind the nearest face hit still wins the
+      // pick — otherwise the face swallows nearly every click aimed at an
+      // edge that runs across it.
+      const nearestDistance = hits[0]?.distance ?? Infinity;
+      const edgeHit = hits.find(
+        (hit) =>
+          (hit.object.userData as { topologyKind?: string }).topologyKind ===
+            'edge' && hit.distance <= nearestDistance + EDGE_PICK_SLOP
+      );
+      const ordered = edgeHit
+        ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)]
+        : hits;
+      for (const hit of ordered) {
         const data = hit.object.userData as {
           bodyId?: string;
           topologyKind?: 'edge';
@@ -672,11 +715,41 @@ export function ModelViewer({
       return null;
     }
 
+    function setEdgeHover(next: Line2 | null) {
+      if (context.hoveredEdge === next) {
+        return;
+      }
+      const restore = context.hoveredEdge;
+      if (restore) {
+        const material = restore.material;
+        const state = restore.userData as EdgeVisualState;
+        material.color.setHex(
+          state.selected ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR
+        );
+        material.linewidth = state.selected
+          ? EDGE_SELECTED_WIDTH
+          : EDGE_IDLE_WIDTH;
+        material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
+      }
+      context.hoveredEdge = next;
+      if (next && !(next.userData as EdgeVisualState).selected) {
+        const material = next.material;
+        material.color.setHex(EDGE_HOVER_COLOR);
+        material.linewidth = EDGE_HOVER_WIDTH;
+        material.opacity = 1;
+      }
+    }
+
     function applyHover(result: PickResult | null) {
       const bodyId = result?.selection?.bodyId ?? null;
       const canDragFace =
         result?.selection?.kind === 'face' &&
         editableBodyIdsRef.current.has(result.selection.bodyId);
+      const hoveredEdge =
+        result?.selection?.kind === 'edge'
+          ? ((result.hit.object.userData as { visual?: Line2 }).visual ?? null)
+          : null;
+      setEdgeHover(hoveredEdge);
       renderer.domElement.style.cursor = extrudePreviewRef.current
         ? 'grab'
         : canDragFace
@@ -1111,7 +1184,13 @@ export function ModelViewer({
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
     context.hoveredBodyId = null;
+    context.hoveredEdge = null;
+    context.edgeMaterials.clear();
     context.objectsByBodyId.clear();
+    const edgeResolution = {
+      width: context.renderer.domElement.clientWidth || 1,
+      height: context.renderer.domElement.clientHeight || 1
+    };
     const selectedEdgeKeys = new Set(
       selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
     );
@@ -1135,28 +1214,47 @@ export function ModelViewer({
         if (edge.points.length < 6) {
           continue;
         }
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(edge.points, 3)
-        );
         const active = selectedEdgeKeys.has(
           `${body.bodyId}:${edge.topologyId}`
         );
-        const line = new THREE.Line(
-          geometry,
-          new THREE.LineBasicMaterial({
-            color: active ? 0x60a5fa : 0x202a36,
-            transparent: true,
-            opacity: active ? 1 : 0.52,
-            depthTest: true
-          })
+
+        // Visible fat line: WebGL ignores LineBasicMaterial linewidth, so
+        // edges render via Line2 with a real screen-space width.
+        const fatGeometry = new LineGeometry();
+        fatGeometry.setPositions(edge.points);
+        const fatMaterial = new LineMaterial({
+          color: active ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR,
+          linewidth: active ? EDGE_SELECTED_WIDTH : EDGE_IDLE_WIDTH,
+          transparent: true,
+          opacity: active ? 1 : EDGE_IDLE_OPACITY,
+          depthTest: true
+        });
+        fatMaterial.resolution.set(edgeResolution.width, edgeResolution.height);
+        context.edgeMaterials.add(fatMaterial);
+        const visual = new Line2(fatGeometry, fatMaterial);
+        visual.computeLineDistances();
+        // Picking goes through the thin proxy below; the fat line is display only.
+        visual.raycast = () => undefined;
+        (visual.userData as EdgeVisualState).selected = active;
+        object.add(visual);
+
+        // Invisible pick proxy: a plain THREE.Line raycasts reliably with the
+        // raycaster's Line threshold, giving the edge a generous hit target.
+        const proxyGeometry = new THREE.BufferGeometry();
+        proxyGeometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(edge.points, 3)
         );
-        line.userData.bodyId = body.bodyId;
-        line.userData.topologyKind = 'edge';
-        line.userData.topologyId = edge.topologyId;
-        line.userData.topologyHash = edge.hash;
-        object.add(line);
+        const proxy = new THREE.Line(
+          proxyGeometry,
+          new THREE.LineBasicMaterial({ visible: false })
+        );
+        proxy.userData.bodyId = body.bodyId;
+        proxy.userData.topologyKind = 'edge';
+        proxy.userData.topologyId = edge.topologyId;
+        proxy.userData.topologyHash = edge.hash;
+        proxy.userData.visual = visual;
+        object.add(proxy);
       }
 
       const selectedFace =
