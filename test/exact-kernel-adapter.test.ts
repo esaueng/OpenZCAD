@@ -167,6 +167,101 @@ describe('exact OpenCascade kernel adapter', () => {
     expect(inspection.volume).toBeCloseTo(body!.volume, 3);
   });
 
+  it('fillets an edge of an already-filleted body (sequential fillets)', async () => {
+    // Regression: OCCT fillet results arrive wrapped in a single-solid
+    // compound, and occt-wasm's fillet rejects compound inputs — a second
+    // fillet used to fail on every edge of the first fillet's body.
+    const base = addPrimitiveFeature(
+      createProjectDocument('Sequential fillets', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 18, depth: 24 }
+      }
+    );
+
+    const first = filletEdges(base, {
+      name: 'First fillet',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [1],
+      size: 2
+    }).document;
+    const firstDerived = await adapter.syncDocument(first);
+    const firstBodyId = first.bodyOrder.at(-1)!;
+    const firstBody = firstDerived.bodyRepresentations[firstBodyId];
+    expect(firstDerived.warnings).toEqual([]);
+    expect(firstBody?.topology?.edges.length).toBeGreaterThan(12);
+
+    // Fillet every edge of the filleted body one at a time. The two short
+    // edges that terminate on the first fillet's blend surface are a genuine
+    // OCCT limitation (they must be filleted together with the original
+    // edge); every other edge must build cleanly.
+    let succeeded = 0;
+    let failed = 0;
+    for (const edge of firstBody!.topology!.edges) {
+      const second = filletEdges(first, {
+        name: `Second fillet ${edge.hash}`,
+        targetBodyId: firstBodyId,
+        edgeHashes: [edge.hash],
+        size: 2
+      }).document;
+      const derived = await adapter.syncDocument(second);
+      if (derived.warnings.length === 0) {
+        succeeded += 1;
+        const body = derived.bodyRepresentations[second.bodyOrder.at(-1)!];
+        expect(body?.volume).toBeGreaterThan(0);
+        expect(body?.volume).toBeLessThan(firstBody!.volume);
+      } else {
+        failed += 1;
+        // The failure must carry the actionable diagnostic, not a raw crash.
+        expect(derived.warnings[0]).toMatch(/edit that earlier feature/i);
+      }
+    }
+    expect(succeeded).toBeGreaterThanOrEqual(13);
+    expect(failed).toBeLessThanOrEqual(2);
+  });
+
+  it('fillets the result of a boolean subtract', async () => {
+    const withBase = addPrimitiveFeature(
+      createProjectDocument('Boolean fillet', toUserId('user_exact')),
+      {
+        name: 'Base',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 18, depth: 24 }
+      }
+    );
+    const withCutter = addPrimitiveFeature(withBase, {
+      name: 'Cutter',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 30, depth: 10 }
+    });
+    const manager = new CommandManager(withCutter);
+    const subtracted = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Subtract',
+        operation: 'subtract',
+        targetBodyIds: [withCutter.bodyOrder[0]!, withCutter.bodyOrder[1]!]
+      })
+    );
+    const subtractedDerived = await adapter.syncDocument(subtracted);
+    expect(subtractedDerived.warnings).toEqual([]);
+    const booleanBodyId = subtracted.bodyOrder.at(-1)!;
+    const booleanBody = subtractedDerived.bodyRepresentations[booleanBodyId];
+    expect(booleanBody?.topology?.edges.length).toBeGreaterThan(0);
+
+    const filleted = filletEdges(subtracted, {
+      name: 'Boolean fillet',
+      targetBodyId: booleanBodyId,
+      edgeHashes: [booleanBody!.topology!.edges[0]!.hash],
+      size: 1
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    expect(derived.warnings).toEqual([]);
+    expect(
+      derived.bodyRepresentations[filleted.bodyOrder.at(-1)!]?.volume
+    ).toBeGreaterThan(0);
+  });
+
   it('reports an actionable diagnostic when an edge fillet is invalid', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Invalid fillet', toUserId('user_exact')),

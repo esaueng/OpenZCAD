@@ -476,6 +476,51 @@ export function App() {
     return doc.derived.exportableBodyIds;
   }, [doc, selectedBody]);
 
+  // Bottom-center selection summary: what is picked plus a quick measurement.
+  const selectionChip = useMemo<{ label: string; detail?: string } | null>(() => {
+    if (!doc || tool === 'sketch') {
+      return null;
+    }
+    const units = doc.units;
+    const round = (value: number) => Math.round(value * 100) / 100;
+    if (selectedEdges.length > 1) {
+      return { label: `${selectedEdges.length} edges` };
+    }
+    if (selectedEdges.length === 1 || selectedTopology?.kind === 'edge') {
+      return {
+        label: '1 edge',
+        detail: selectedEdges[0]?.topologyId ?? selectedTopology?.topologyId
+      };
+    }
+    if (selectedTopology?.kind === 'face') {
+      const body = representations[selectedTopology.bodyId];
+      return {
+        label: '1 face',
+        detail: body ? `${body.name} · ${selectedTopology.topologyId}` : selectedTopology.topologyId
+      };
+    }
+    if (selectedBodyIds.length > 1) {
+      return {
+        label: `${selectedBodyIds.length} bodies`,
+        detail: 'U union · X subtract · I intersect'
+      };
+    }
+    const bodyId = selectedBodyIds[0];
+    const body = bodyId ? representations[bodyId] : null;
+    if (body) {
+      const size = {
+        x: round(body.bbox.max.x - body.bbox.min.x),
+        y: round(body.bbox.max.y - body.bbox.min.y),
+        z: round(body.bbox.max.z - body.bbox.min.z)
+      };
+      return {
+        label: body.name,
+        detail: `${size.x} × ${size.y} × ${size.z} ${units}`
+      };
+    }
+    return null;
+  }, [doc, tool, selectedEdges, selectedTopology, selectedBodyIds, representations]);
+
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
     if (!doc) {
@@ -1873,6 +1918,7 @@ export function App() {
             activeTool={tool}
             availability={availability}
             onLaunchTool={launchTool}
+            onOpenSearch={() => setPaletteOpen(true)}
           />
         )
       }
@@ -1911,6 +1957,8 @@ export function App() {
           editableBodyIds={directEditableBodyIds}
           extrudePreview={extrudePreview}
           hideViewerToolbar={tool === 'sketch'}
+          selectionChip={selectionChip}
+          onClearSelection={clearSelection}
           modeOverlay={
             tool === 'sketch' ? (
               <SketchWorkspace

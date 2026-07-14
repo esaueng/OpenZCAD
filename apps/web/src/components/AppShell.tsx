@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 interface AppShellProps {
   topBar: ReactNode;
+  /** Floating tool palette (or a mode strip while a direct mode is active). */
   toolBar: ReactNode;
   sidebar: ReactNode;
   viewer: ReactNode;
@@ -13,9 +14,9 @@ interface AppShellProps {
 }
 
 /**
- * Workspace layout frame: TopBar / ToolBar / [Sidebar | Viewer] / AI rail /
- * StatusBar. The inspector floats over the viewer like a CAD dialog instead
- * of taking a permanent column, so the viewport keeps its size while editing.
+ * Workspace layout frame: TopBar / [Sidebar | Viewer] / AI rail / StatusBar.
+ * The tool palette and the inspector float over the viewer like CAD dialogs,
+ * so the viewport keeps its full size while modeling.
  */
 export function AppShell({
   topBar,
@@ -30,11 +31,11 @@ export function AppShell({
   return (
     <div className="app-shell">
       {topBar}
-      {toolBar}
       <main className="workspace">
         {sidebar}
         <div className="viewer-area">
           {viewer}
+          {toolBar && <div className="palette-float">{toolBar}</div>}
           {inspector && <div className="inspector-float">{inspector}</div>}
         </div>
       </main>

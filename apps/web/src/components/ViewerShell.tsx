@@ -28,6 +28,9 @@ interface ViewerShellProps {
   extrudePreview: ExtrudePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
+  /** Bottom-center summary of the current selection, with a measurement. */
+  selectionChip: { label: string; detail?: string } | null;
+  onClearSelection(): void;
   projection: ProjectionMode;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
@@ -63,6 +66,8 @@ export function ViewerShell({
   extrudePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  selectionChip,
+  onClearSelection,
   projection,
   orientationRef,
   onSelectTopology,
@@ -99,7 +104,8 @@ export function ViewerShell({
         onContextMenu={onContextMenu}
       />
       {!hideViewerToolbar && (
-        <>
+        <div className="viewer-rail-stack">
+          <OrientationWidget orientationRef={orientationRef} />
           <ViewerToolbar
             settings={settings}
             projection={projection}
@@ -109,21 +115,39 @@ export function ViewerShell({
             onCycleDisplayMode={onCycleDisplayMode}
             onToggleProjection={onToggleProjection}
           />
-          <OrientationWidget orientationRef={orientationRef} />
-        </>
+        </div>
       )}
       {bodies.length === 0 && sketches.length === 0 && (
         <div className="viewer-notice">
           <div>
             <strong>No geometry yet</strong>
             <small>
-              Pick a tool from the toolbar above — try <b>Box</b> (B) — or
-              sketch a profile and extrude it.
+              Pick a tool from the palette on the left — try <b>Box</b> (B) —
+              or sketch a profile and extrude it.
             </small>
             <small className="viewer-notice-keys">
               <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands · <kbd>?</kbd> shortcuts
             </small>
           </div>
+        </div>
+      )}
+      {selectionChip && (
+        <div className="selection-chip" role="status">
+          <span className="selection-chip-label">{selectionChip.label}</span>
+          {selectionChip.detail && (
+            <span className="selection-chip-detail">
+              {selectionChip.detail}
+            </span>
+          )}
+          <button
+            type="button"
+            className="selection-chip-clear"
+            title="Deselect all (Esc)"
+            aria-label="Deselect all"
+            onClick={onClearSelection}
+          >
+            ×
+          </button>
         </div>
       )}
       {modeOverlay}
