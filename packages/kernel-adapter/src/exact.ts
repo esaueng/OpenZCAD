@@ -108,6 +108,30 @@ function addHandle(result: ExactBuildResult, handle: ShapeHandle): ShapeHandle {
   return handle;
 }
 
+/**
+ * OCCT modeling algorithms (fillet, chamfer, booleans, STEP import) often wrap
+ * their result in a compound that holds a single solid, and several occt-wasm
+ * operations reject compound inputs outright — which is why e.g. a second
+ * fillet on an already-filleted body used to fail on every edge. Unwrapping
+ * unambiguous single-solid compounds keeps every stored body directly usable
+ * as a downstream target. Multi-solid compounds (patterns, multi-part STEP
+ * files) pass through untouched.
+ */
+function unwrapSingleSolid(
+  kernel: OcctKernel,
+  shape: ShapeHandle,
+  result: ExactBuildResult
+): ShapeHandle {
+  if (kernel.getShapeType(shape) !== 'compound') {
+    return shape;
+  }
+  const solids = kernel.getSubShapes(shape, 'solid');
+  for (const solid of solids) {
+    result.handles.add(solid);
+  }
+  return solids.length === 1 ? solids[0]! : shape;
+}
+
 export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'open-cascade' as const;
   private readonly legacy = new OpenZCADKernel();
@@ -280,7 +304,14 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             if (feature.bodyId) {
               result.shapes.set(
                 feature.bodyId,
-                addHandle(result, this.kernel.importStep(feature.data.stepText))
+                unwrapSingleSolid(
+                  this.kernel,
+                  addHandle(
+                    result,
+                    this.kernel.importStep(feature.data.stepText)
+                  ),
+                  result
+                )
               );
             }
             break;
@@ -360,13 +391,17 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             });
             let shape = operands[0]!;
             for (const operand of operands.slice(1)) {
-              shape = addHandle(
-                result,
-                feature.data.operation === 'union'
-                  ? this.kernel.fuse(shape, operand)
-                  : feature.data.operation === 'subtract'
-                    ? this.kernel.cut(shape, operand)
-                    : this.kernel.common(shape, operand)
+              shape = unwrapSingleSolid(
+                this.kernel,
+                addHandle(
+                  result,
+                  feature.data.operation === 'union'
+                    ? this.kernel.fuse(shape, operand)
+                    : feature.data.operation === 'subtract'
+                      ? this.kernel.cut(shape, operand)
+                      : this.kernel.common(shape, operand)
+                ),
+                result
               );
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
@@ -380,10 +415,13 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             if (!feature.bodyId) {
               throw new Error('Edge modifier has no result body.');
             }
-            const target = result.shapes.get(feature.data.targetBodyId);
-            if (!target) {
+            const storedTarget = result.shapes.get(feature.data.targetBodyId);
+            if (!storedTarget) {
               throw new Error('Edge modifier target is unavailable.');
             }
+            // Documents saved before compound unwrapping landed can still
+            // carry compound-wrapped targets; normalize here as well.
+            const target = unwrapSingleSolid(this.kernel, storedTarget, result);
             const requested = new Set(feature.data.edgeHashes);
             const edges = this.kernel.getSubShapes(target, 'edge');
             edges.forEach((edge) => result.handles.add(edge));
@@ -421,10 +459,14 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
               const dimension =
                 feature.data.featureKind === 'fillet' ? 'radius' : 'distance';
               throw new Error(
-                `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}; for a uniformly rounded box, select the original edges together in one ${label} feature.`
+                `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}. Edges that end on an existing fillet or chamfer usually cannot be rounded afterwards — edit that earlier feature and add this edge to it instead.`
               );
             }
-            const modified = addHandle(result, modifiedShape);
+            const modified = unwrapSingleSolid(
+              this.kernel,
+              addHandle(result, modifiedShape),
+              result
+            );
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, modified);
             break;
