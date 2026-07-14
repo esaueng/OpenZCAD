@@ -302,3 +302,42 @@ test('P toggles the camera projection', async ({ page }) => {
   await orthoButton.click();
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
 });
+
+test('M opens the move gizmo overlay and applies an exact move', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Move Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  // Single body: pressing M arms the gizmo flow directly.
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  await expect(overlay).toBeVisible();
+  await expect(page.getByText(/Drag an arrow to move/)).toBeVisible();
+
+  // Exact values through the overlay commit one undoable Move feature.
+  await overlay.getByLabel('Move X in mm').fill('12');
+  await overlay.getByLabel('Rotate Z in degrees').fill('45');
+  await overlay.getByRole('button', { name: /Apply move/ }).click();
+
+  const moveRow = page.locator('.feature-row', { hasText: 'Move' });
+  await expect(moveRow).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expect(overlay).toBeHidden();
+
+  // Esc cancels a fresh session without touching the model.
+  await page.keyboard.press('m');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeHidden();
+  await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(1);
+});
