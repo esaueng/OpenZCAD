@@ -1030,14 +1030,18 @@ export function App() {
     }
   }
 
-  function handleApplyPatch(proposal: CadPatchProposal) {
+  function handleApplyPatch(proposal: CadPatchProposal): boolean {
     if (!doc) {
-      return;
+      return false;
     }
     try {
-      executeTransaction('Apply AI patch', commandsForCadPatch(doc, proposal));
+      return executeTransaction(
+        'Apply AI patch',
+        commandsForCadPatch(doc, proposal)
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
+      return false;
     }
   }
 

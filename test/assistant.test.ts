@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_AI_MODEL,
   DEFAULT_AI_PROVIDER,
   DEFAULT_OPENROUTER_MODEL,
   getAssistantStatus,
+  maxOutputTokensFor,
   streamAssistantProposal
 } from '../apps/web/worker/assistant';
 import { readAssistantEvent } from '../apps/web/src/lib/assistantStream';
@@ -18,6 +20,7 @@ const input = {
     version: 1,
     parameters: [],
     features: [],
+    bodies: [],
     warnings: []
   }
 };
@@ -79,6 +82,70 @@ describe('assistant integration', () => {
         format: { type: 'json_schema', name: 'openzcad_patch', strict: true }
       }
     });
+  });
+
+  it('budgets enough output for a multi-part patch and allows an override', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await streamAssistantProposal(
+      input,
+      { AI_API_KEY: 'key', AI_BASE_URL: 'https://models.example.test/v1/responses' },
+      'user_test'
+    );
+    const budgeted = JSON.parse(
+      fetchMock.mock.calls[0]![1]?.body as string
+    ) as { max_output_tokens: number; instructions: string };
+    // Reasoning tokens share this budget; a box-and-lid patch is ~18 operations
+    // and silently truncates under the old 3k ceiling.
+    expect(budgeted.max_output_tokens).toBeGreaterThanOrEqual(16_000);
+    // The instructions must actually teach the non-obvious kernel conventions.
+    expect(budgeted.instructions).toContain('CORNER AT THE ORIGIN');
+    expect(budgeted.instructions).toContain('localId');
+
+    const overridden = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', overridden);
+    await streamAssistantProposal(
+      input,
+      {
+        AI_API_KEY: 'key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_MAX_OUTPUT_TOKENS: '4096'
+      },
+      'user_test'
+    );
+    expect(
+      (
+        JSON.parse(overridden.mock.calls[0]![1]?.body as string) as {
+          max_output_tokens: number;
+        }
+      ).max_output_tokens
+    ).toBe(4096);
+  });
+
+  it('falls back to the default output budget for unusable overrides', () => {
+    // A declared-but-blank Worker var reads as '', which Number() would turn
+    // into 0 and make the provider reject every request.
+    expect(maxOutputTokensFor({ AI_MAX_OUTPUT_TOKENS: '' })).toBe(
+      DEFAULT_AI_MAX_OUTPUT_TOKENS
+    );
+    expect(maxOutputTokensFor({ AI_MAX_OUTPUT_TOKENS: 'lots' })).toBe(
+      DEFAULT_AI_MAX_OUTPUT_TOKENS
+    );
+    expect(maxOutputTokensFor({ AI_MAX_OUTPUT_TOKENS: '0' })).toBe(
+      DEFAULT_AI_MAX_OUTPUT_TOKENS
+    );
+    expect(maxOutputTokensFor({})).toBe(DEFAULT_AI_MAX_OUTPUT_TOKENS);
+    expect(maxOutputTokensFor({ AI_MAX_OUTPUT_TOKENS: '8000' })).toBe(8000);
   });
 
   it('uses one centralized frontier-model default', () => {
