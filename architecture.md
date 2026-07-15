@@ -46,6 +46,10 @@ After project ownership is authorized, the client upgrades `GET /api/projects/:i
 
 The patch vocabulary covers named parameters, existing feature dimensions, primitive creation, sweeps, booleans, transforms, edge modifiers, patterns, renaming, and deletion. The client assembles `response.output_text.delta` events, validates the final proposal again, and displays it. Preview runs the proposal against a temporary `CommandManager`; Apply converts it to normal commands and commits one undoable transaction. `GET /api/assistant/status` exposes configuration metadata but never the secret.
 
+A proposal can build a complete multi-part object rather than one primitive at a time. A body-creating operation publishes a `localId` alias, and later operations in the same proposal reference it as `$alias`. `commandsForCadPatch` pre-assigns the real ids with `createBodyFeatureIds()` and resolves each alias as it converts, so aliases never enter a serialized payload and replay, undo, and persistence stay unchanged. `runTransaction` validates each command against the evolving document, so a boolean can consume bodies the same patch created. Hollow parts are therefore modelled as an outer solid minus a positioned cavity; there is no shell or offset operation in the kernel.
+
+The digest reports every body's liveness (`consumed`), placement (`bbox`), and volume, because the feature list alone cannot say whether an earlier boolean already absorbed a body. Conversion rejects a patch before it reaches the document when an alias dangles, is duplicated, or names a consumed body, when a boolean repeats an operand, when an edge modifier targets a body created in the same patch (its edges do not exist yet), or when any parameter expression cannot be evaluated — `setParameter` otherwise stores an unreadable expression verbatim and the body silently fails to build.
+
 ## Storage and Cloudflare mapping
 
 - IndexedDB: immediate local autosave and offline reopen.
