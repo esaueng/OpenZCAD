@@ -35,8 +35,9 @@ describe('primitive solids', () => {
     expect(box.vertices).toHaveLength(8);
     expect(solidVolume(box)).toBeCloseTo(6000, 6);
     const bounds = solidBounds(box);
-    expect(bounds.min).toEqual({ x: -5, y: -10, z: -15 });
-    expect(bounds.max).toEqual({ x: 5, y: 10, z: 15 });
+    // Corner at the origin, matching OCCT — not centred on it.
+    expect(bounds.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(bounds.max).toEqual({ x: 10, y: 20, z: 30 });
   });
 
   it('builds a watertight cylinder within 1% of the analytic volume', () => {
@@ -135,20 +136,35 @@ describe('transforms', () => {
       rotationDeg: { x: 0, y: 0, z: 0 }
     });
     const bounds = solidBounds(moved);
-    expect(bounds.min).toEqual({ x: 4, y: 5, z: 6 });
-    expect(bounds.max).toEqual({ x: 6, y: 7, z: 8 });
+    expect(bounds.min).toEqual({ x: 5, y: 6, z: 7 });
+    expect(bounds.max).toEqual({ x: 7, y: 8, z: 9 });
     expect(solidVolume(moved)).toBeCloseTo(8, 6);
   });
 
-  it('rotates 90 degrees about Z like three.js Euler XYZ', () => {
+  it('rotates 90 degrees about Z, about the world origin', () => {
     const rotated = transformSolid(makeBox(10, 2, 2), {
       translation: { x: 0, y: 0, z: 0 },
       rotationDeg: { x: 0, y: 0, z: 90 }
     });
     const bounds = solidBounds(rotated);
-    // x extent becomes y extent: (1,0,0) -> (0,1,0).
-    expect(bounds.max.y).toBeCloseTo(5, 6);
-    expect(bounds.max.x).toBeCloseTo(1, 6);
+    // The box spans x 0..10, so rotating about the origin sweeps it onto +Y.
+    expect(bounds.max.y).toBeCloseTo(10, 6);
+    expect(bounds.max.x).toBeCloseTo(0, 6);
+    expect(bounds.min.x).toBeCloseTo(-2, 6);
+    expect(solidVolume(rotated)).toBeCloseTo(40, 6);
+  });
+
+  it('applies rotations in the exact kernel order (X, then Y, then Z)', () => {
+    // Under the previous XYZ order this landed on a different axis entirely,
+    // so the preview disagreed with the applied model.
+    const rotated = transformSolid(makeBox(10, 2, 2), {
+      translation: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 90, z: 90 }
+    });
+    const bounds = solidBounds(rotated);
+    // Ry(90) sends +X to -Z; Rz(90) leaves -Z alone.
+    expect(bounds.min.z).toBeCloseTo(-10, 6);
+    expect(bounds.max.z).toBeCloseTo(0, 6);
     expect(solidVolume(rotated)).toBeCloseTo(40, 6);
   });
 });
@@ -181,11 +197,19 @@ describe('booleans', () => {
 
   it('drills a cylinder through a box and stays watertight', () => {
     const plate = makeBox(30, 10, 30);
-    const drill = makeCylinder(5, 40);
+    // The plate's corner is on the origin and the drill runs along +Z, so
+    // centre the drill in XY and start it below the face it enters. Radius 3
+    // keeps the hole strictly inside the plate's 10 of Y: a radius of 5 would
+    // sit tangent to both side faces, which is a degenerate cut.
+    const drill = transformSolid(makeCylinder(3, 40), {
+      translation: { x: 15, y: 5, z: -5 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    });
     const result = booleanSolids('subtract', plate, drill);
     expectClosed(result);
-    const cylinderVolume = solidVolume(makeCylinder(5, 10));
-    expect(solidVolume(result)).toBeCloseTo(9000 - cylinderVolume, 1);
+    // The hole runs the full 30 of the plate's Z thickness.
+    const plugVolume = solidVolume(makeCylinder(3, 30));
+    expect(solidVolume(result)).toBeCloseTo(9000 - plugVolume, 1);
   });
 
   it('returns an empty solid for disjoint intersection', () => {

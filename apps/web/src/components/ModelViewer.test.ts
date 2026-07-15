@@ -17,7 +17,8 @@ import {
   moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
-  RightClickGestureTracker
+  RightClickGestureTracker,
+  VIEW_DIRECTIONS
 } from './ModelViewer';
 
 describe('model viewer mesh classification', () => {
@@ -317,5 +318,60 @@ describe('composeMoveTransform', () => {
     expect(v.x).toBeCloseTo(1, 9);
     expect(v.y).toBeCloseTo(0, 9);
     expect(v.z).toBeCloseTo(0, 9);
+  });
+});
+
+describe('standard views are posed for a Z-up world', () => {
+  const UP = new THREE.Vector3(0, 0, 1);
+
+  it('looks down +Z for top, along +Y for front, and along -X for right', () => {
+    // Directions point from the target toward the camera.
+    expect(VIEW_DIRECTIONS.top.z).toBeGreaterThan(0.99);
+    expect(VIEW_DIRECTIONS.front.y).toBeCloseTo(-1, 6);
+    expect(VIEW_DIRECTIONS.right.x).toBeCloseTo(1, 6);
+    // Iso sits above the model, on the right and in front of it.
+    expect(VIEW_DIRECTIONS.iso.z).toBeGreaterThan(0);
+    expect(VIEW_DIRECTIONS.iso.x).toBeGreaterThan(0);
+    expect(VIEW_DIRECTIONS.iso.y).toBeLessThan(0);
+  });
+
+  it('keeps the top view off the up axis so OrbitControls cannot gimbal', () => {
+    const parallel = Math.abs(VIEW_DIRECTIONS.top.dot(UP));
+    expect(parallel).toBeLessThan(1);
+    // ...but still essentially straight down.
+    expect(parallel).toBeGreaterThan(0.999);
+  });
+
+  /** Screen basis of a camera parked along `direction` looking at the origin. */
+  function screenBasis(direction: THREE.Vector3) {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    camera.up.copy(UP);
+    camera.position.copy(direction).multiplyScalar(100);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true);
+    return {
+      right: new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0),
+      up: new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+    };
+  }
+
+  it('puts +X right and +Y up in the top view, so an XY sketch reads unmirrored', () => {
+    const { right, up } = screenBasis(VIEW_DIRECTIONS.top);
+    expect(right.x).toBeCloseTo(1, 3);
+    expect(up.y).toBeCloseTo(1, 3);
+  });
+
+  it('puts +Z up in the front and right views', () => {
+    for (const view of ['front', 'right'] as const) {
+      expect(screenBasis(VIEW_DIRECTIONS[view]).up.z).toBeCloseTo(1, 3);
+    }
+  });
+
+  it('shows an XY sketch face-on rather than edge-on in the top view', () => {
+    // The old Y-up mapping sent XY sketches to the front view, where the
+    // profile collapsed to an invisible line.
+    const normal = new THREE.Vector3(0, 0, 1); // PLANE_BASES.XY
+    expect(Math.abs(VIEW_DIRECTIONS.top.dot(normal))).toBeGreaterThan(0.99);
+    expect(Math.abs(VIEW_DIRECTIONS.front.dot(normal))).toBeLessThan(0.01);
   });
 });
