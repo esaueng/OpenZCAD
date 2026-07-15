@@ -16,7 +16,8 @@ interface AiCommandRailProps {
   selectedTopology: TopologySelection | null;
   /** Returns false when the patch could not be applied, so the rail can say so. */
   onApply(proposal: CadPatchProposal): boolean;
-  onPreview(proposal: CadPatchProposal | null): void;
+  /** Returns false when the patch could not be previewed. */
+  onPreview(proposal: CadPatchProposal | null): boolean;
 }
 
 export function AiCommandRail({
@@ -157,9 +158,20 @@ export function AiCommandRail({
               type="button"
               className={previewing ? 'active' : ''}
               onClick={() => {
-                const next = !previewing;
-                setPreviewing(next);
-                onPreview(next ? proposal : null);
+                if (previewing) {
+                  onPreview(null);
+                  setPreviewing(false);
+                  return;
+                }
+                // Leave the toggle off when the preview could not be built, so
+                // the button never claims to be showing something it is not.
+                if (!onPreview(proposal)) {
+                  setMessage(
+                    'That patch could not be previewed. See the status bar for details.'
+                  );
+                  return;
+                }
+                setPreviewing(true);
               }}
             >
               <Eye size={13} aria-hidden="true" />

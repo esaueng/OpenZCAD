@@ -361,7 +361,10 @@ export function App() {
   );
 
   const representations = doc?.derived.bodyRepresentations ?? {};
-  const warnings = doc?.derived.warnings ?? [];
+  // Warnings must describe what is actually on screen. While a preview is up the
+  // viewport shows previewDoc's bodies, so showing the live document's warnings
+  // would hide exactly the problems the preview exists to reveal.
+  const warnings = (previewDoc ?? doc)?.derived.warnings ?? [];
 
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
@@ -1008,11 +1011,11 @@ export function App() {
     }
   }
 
-  function handlePreviewPatch(proposal: CadPatchProposal | null) {
+  function handlePreviewPatch(proposal: CadPatchProposal | null): boolean {
     if (!proposal || !doc) {
       setPreviewDoc(null);
       setStatus('Preview cleared.');
-      return;
+      return true;
     }
     try {
       const previewManager = new CommandManager(doc);
@@ -1020,13 +1023,22 @@ export function App() {
         'Preview AI patch',
         commandsForCadPatch(doc, proposal)
       );
-      setPreviewDoc({ ...preview, derived: kernel.syncDocument(preview) });
+      // The compat kernel shares the exact kernel's primitive frame, so
+      // placement is faithful, but it cannot build every feature kind. Say so
+      // when it had to skip something rather than showing a quietly partial
+      // model.
+      const derived = kernel.syncDocument(preview);
+      setPreviewDoc({ ...preview, derived });
       setStatus(
-        'Previewing proposed patch · exact rebuild occurs after apply.'
+        derived.warnings.length > 0
+          ? `Previewing proposed patch · ${derived.warnings.length} warning(s) · exact rebuild occurs after apply.`
+          : 'Previewing proposed patch · exact rebuild occurs after apply.'
       );
+      return true;
     } catch (error) {
       setPreviewDoc(null);
       setStatus(errorMessage(error, 'Patch preview failed.'));
+      return false;
     }
   }
 
