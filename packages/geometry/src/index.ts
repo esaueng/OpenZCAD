@@ -78,22 +78,42 @@ function clampSegments(value: number, minimum: number, maximum: number): number 
 // Primitive generators (Y is up, matching the viewport ground grid on XZ).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Primitives.
+//
+// This polyhedral kernel is the compatibility/preview path; the exact
+// OpenCascade kernel is authoritative. Every generator here therefore uses
+// OCCT's frame, because the AI preview renders with this kernel and Apply
+// rebuilds with OCCT — any disagreement means the preview shows a model the
+// user is not actually agreeing to:
+//
+//   box            corner at the origin, spanning (0,0,0)-(width, height, depth)
+//   cylinder/cone  base on z=0, axis +Z, centred in XY
+//   sphere/torus   centred on the origin, torus ring in XY (axis +Z)
+//
+// test/kernel-conformance.test.ts pins these against the real OCCT kernel.
+// ---------------------------------------------------------------------------
+
+/**
+ * Corner at the origin, spanning (0,0,0) to (width, height, depth), matching
+ * OCCT's BRepPrimAPI_MakeBox.
+ */
 export function makeBox(width: number, height: number, depth: number): Solid {
   requirePositive(width, 'Box width');
   requirePositive(height, 'Box height');
   requirePositive(depth, 'Box depth');
-  const x = width / 2;
-  const y = height / 2;
-  const z = depth / 2;
+  const x = width;
+  const y = height;
+  const z = depth;
   const vertices: Vec3[] = [
-    vec(-x, -y, -z),
-    vec(x, -y, -z),
-    vec(x, y, -z),
-    vec(-x, y, -z),
-    vec(-x, -y, z),
-    vec(x, -y, z),
+    vec(0, 0, 0),
+    vec(x, 0, 0),
+    vec(x, y, 0),
+    vec(0, y, 0),
+    vec(0, 0, z),
+    vec(x, 0, z),
     vec(x, y, z),
-    vec(-x, y, z)
+    vec(0, y, z)
   ];
   const faces = [
     [0, 3, 2, 1], // -Z
@@ -114,7 +134,10 @@ export function makeCylinder(
   return makeCone(radius, radius, height, segments);
 }
 
-/** Frustum with independent bottom/top radii; a zero top radius gives a cone. */
+/**
+ * Frustum with independent bottom/top radii; a zero top radius gives a cone.
+ * Base on the z=0 plane with the axis along +Z, matching OCCT.
+ */
 export function makeCone(
   bottomRadius: number,
   topRadius: number,
@@ -127,7 +150,6 @@ export function makeCone(
     throw new GeometryError('Cone top radius must be zero or positive.');
   }
   const n = clampSegments(segments, 3, 128);
-  const half = height / 2;
   const vertices: Vec3[] = [];
   const faces: number[][] = [];
 
@@ -135,14 +157,14 @@ export function makeCone(
   for (let i = 0; i < n; i++) {
     const angle = (i / n) * Math.PI * 2;
     bottomRing.push(
-      vertices.push(vec(Math.cos(angle) * bottomRadius, -half, Math.sin(angle) * bottomRadius)) - 1
+      vertices.push(vec(Math.cos(angle) * bottomRadius, Math.sin(angle) * bottomRadius, 0)) - 1
     );
   }
 
   const pointedTop = topRadius < AXIS_EPSILON;
   const topRing: number[] = [];
   if (pointedTop) {
-    const apex = vertices.push(vec(0, half, 0)) - 1;
+    const apex = vertices.push(vec(0, 0, height)) - 1;
     for (let i = 0; i < n; i++) {
       topRing.push(apex);
     }
@@ -150,7 +172,7 @@ export function makeCone(
     for (let i = 0; i < n; i++) {
       const angle = (i / n) * Math.PI * 2;
       topRing.push(
-        vertices.push(vec(Math.cos(angle) * topRadius, half, Math.sin(angle) * topRadius)) - 1
+        vertices.push(vec(Math.cos(angle) * topRadius, Math.sin(angle) * topRadius, height)) - 1
       );
     }
   }
@@ -216,6 +238,7 @@ export function makeSphere(
   return orientOutward({ vertices, faces });
 }
 
+/** Centred on the origin with the ring in the XY plane and the axis +Z, matching OCCT. */
 export function makeTorus(
   majorRadius: number,
   minorRadius: number,
@@ -237,7 +260,7 @@ export function makeTorus(
     for (let k = 0; k < m; k++) {
       const v = (k / m) * Math.PI * 2;
       const r = majorRadius + Math.cos(v) * minorRadius;
-      vertices.push(vec(Math.cos(u) * r, Math.sin(v) * minorRadius, Math.sin(u) * r));
+      vertices.push(vec(Math.cos(u) * r, Math.sin(u) * r, Math.sin(v) * minorRadius));
     }
   }
   for (let i = 0; i < n; i++) {
@@ -474,29 +497,33 @@ export function revolveProfile(
 // ---------------------------------------------------------------------------
 
 /**
- * Rotation matrix for XYZ Euler angles matching three.js (`Euler` order
- * 'XYZ'): M = Rx · Ry · Rz, i.e. Z is applied to the vector first.
+ * M = Rz · Ry · Rx, i.e. X is applied to the vector first.
+ *
+ * The exact kernel rotates about X, then Y, then Z (Euler 'ZYX'), and the
+ * viewport's Move gizmo composes its transform the same way, so this must too —
+ * any other order silently disagrees with the applied model once more than one
+ * axis is non-zero.
  */
 function rotationMatrix(rotationDeg: Vec3): number[] {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
   const rz = (rotationDeg.z * Math.PI) / 180;
-  const c1 = Math.cos(rx);
-  const s1 = Math.sin(rx);
-  const c2 = Math.cos(ry);
-  const s2 = Math.sin(ry);
-  const c3 = Math.cos(rz);
-  const s3 = Math.sin(rz);
+  const ca = Math.cos(rx);
+  const sa = Math.sin(rx);
+  const cb = Math.cos(ry);
+  const sb = Math.sin(ry);
+  const cc = Math.cos(rz);
+  const sc = Math.sin(rz);
   return [
-    c2 * c3,
-    -c2 * s3,
-    s2,
-    c1 * s3 + c3 * s1 * s2,
-    c1 * c3 - s1 * s2 * s3,
-    -c2 * s1,
-    s1 * s3 - c1 * c3 * s2,
-    c3 * s1 + c1 * s2 * s3,
-    c1 * c2
+    cc * cb,
+    cc * sb * sa - sc * ca,
+    cc * sb * ca + sc * sa,
+    sc * cb,
+    sc * sb * sa + cc * ca,
+    sc * sb * ca - cc * sa,
+    -sb,
+    cb * sa,
+    cb * ca
   ];
 }
 

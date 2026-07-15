@@ -118,8 +118,8 @@ describe('STEP writer', () => {
       name: 'Inch Part',
       units: 'inch'
     });
-    // Half extent of 1 inch becomes 25.4 mm.
-    expect(text).toContain('25.4');
+    // The cube spans 2 inches from the origin, i.e. 50.8 mm.
+    expect(text).toContain('50.8');
     expect(text).toContain('SI_UNIT(.MILLI.,.METRE.)');
   });
 
