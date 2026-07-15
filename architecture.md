@@ -10,7 +10,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
 - `kernel-adapter/exact`: the `occt-wasm` OpenCascade adapter. It owns exact primitives, STEP import, sweeps, transforms, booleans, edge finishing, patterns, tessellation/topology projection, validity checks, measurements, and STEP/STL export.
 - `kernel-adapter` and `geometry`: compatibility support for imported mesh bodies and deterministic legacy tests. They are not the primary exact modeling path.
-- `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state.
+- `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state. It renders Z-up to match the kernel, so a part's vertical axis is +Z on screen exactly as it is in the solid.
 - `persistence` and `cloudflare-adapters`: local/in-memory and D1/R2 implementations, schema normalization, revisions/checkpoints, upload sessions, and artifact coordination.
 - `apps/web`: React workspace, IndexedDB autosave, geometry worker, and Cloudflare Worker routes.
 
@@ -45,6 +45,10 @@ After project ownership is authorized, the client upgrades `GET /api/projects/:i
 `POST /api/assistant/proposals` accepts a user request and a compact document digest. Embedded STEP source and mesh arrays are omitted from model context; exact selected face/edge context is included. The beta Worker calls OpenRouter's OpenAI-compatible Responses endpoint by default (or direct OpenAI/another compatible endpoint) with streaming, `store: false`, a stable authenticated-user safety identifier, configurable reasoning effort, a strict JSON Schema structured output, and system instructions that require the smallest safe document patch and prohibit claims that a patch was applied.
 
 The patch vocabulary covers named parameters, existing feature dimensions, primitive creation, sweeps, booleans, transforms, edge modifiers, patterns, renaming, and deletion. The client assembles `response.output_text.delta` events, validates the final proposal again, and displays it. Preview runs the proposal against a temporary `CommandManager`; Apply converts it to normal commands and commits one undoable transaction. `GET /api/assistant/status` exposes configuration metadata but never the secret.
+
+A proposal can build a complete multi-part object rather than one primitive at a time. A body-creating operation publishes a `localId` alias, and later operations in the same proposal reference it as `$alias`. `commandsForCadPatch` pre-assigns the real ids with `createBodyFeatureIds()` and resolves each alias as it converts, so aliases never enter a serialized payload and replay, undo, and persistence stay unchanged. `runTransaction` validates each command against the evolving document, so a boolean can consume bodies the same patch created. Hollow parts are therefore modelled as an outer solid minus a positioned cavity; there is no shell or offset operation in the kernel.
+
+The digest reports every body's liveness (`consumed`), placement (`bbox`), and volume, because the feature list alone cannot say whether an earlier boolean already absorbed a body. Conversion rejects a patch before it reaches the document when an alias dangles, is duplicated, or names a consumed body, when a boolean repeats an operand, when an edge modifier targets a body created in the same patch (its edges do not exist yet), or when any parameter expression cannot be evaluated — `setParameter` otherwise stores an unreadable expression verbatim and the body silently fails to build.
 
 ## Storage and Cloudflare mapping
 

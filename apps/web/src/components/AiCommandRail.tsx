@@ -14,8 +14,10 @@ import {
 interface AiCommandRailProps {
   document: ProjectDocument;
   selectedTopology: TopologySelection | null;
-  onApply(proposal: CadPatchProposal): void;
-  onPreview(proposal: CadPatchProposal | null): void;
+  /** Returns false when the patch could not be applied, so the rail can say so. */
+  onApply(proposal: CadPatchProposal): boolean;
+  /** Returns false when the patch could not be previewed. */
+  onPreview(proposal: CadPatchProposal | null): boolean;
 }
 
 export function AiCommandRail({
@@ -156,9 +158,20 @@ export function AiCommandRail({
               type="button"
               className={previewing ? 'active' : ''}
               onClick={() => {
-                const next = !previewing;
-                setPreviewing(next);
-                onPreview(next ? proposal : null);
+                if (previewing) {
+                  onPreview(null);
+                  setPreviewing(false);
+                  return;
+                }
+                // Leave the toggle off when the preview could not be built, so
+                // the button never claims to be showing something it is not.
+                if (!onPreview(proposal)) {
+                  setMessage(
+                    'That patch could not be previewed. See the status bar for details.'
+                  );
+                  return;
+                }
+                setPreviewing(true);
               }}
             >
               <Eye size={13} aria-hidden="true" />
@@ -169,9 +182,18 @@ export function AiCommandRail({
               className="apply"
               onClick={() => {
                 onPreview(null);
-                onApply(proposal);
-                setProposal(null);
                 setPreviewing(false);
+                // A patch can still fail at apply — an expression that will not
+                // evaluate, or a body an earlier operation consumed. Keep the
+                // proposal on screen when that happens instead of reporting a
+                // success that did not occur.
+                if (!onApply(proposal)) {
+                  setMessage(
+                    'That patch could not be applied. See the status bar for details.'
+                  );
+                  return;
+                }
+                setProposal(null);
                 setPrompt('');
                 setPhase('idle');
                 setMessage('Patch applied as one undoable edit.');
