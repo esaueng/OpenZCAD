@@ -696,8 +696,11 @@ export function App() {
     setTool(null);
     setSelectedFeatureNodeId(null);
     setSelectedSketchProfileId(sketchId);
+    // Face the finished profile so the extrude drag is usable. Each plane is
+    // named for the axes it spans, so with Z up the ground plane is XY: mapping
+    // it to the front view would put the profile edge-on and invisible.
     requestView(
-      value.plane === 'XY' ? 'front' : value.plane === 'XZ' ? 'top' : 'right'
+      value.plane === 'XY' ? 'top' : value.plane === 'XZ' ? 'front' : 'right'
     );
     setStatus('Closed profile created. Select Extrude or press E.');
   }
