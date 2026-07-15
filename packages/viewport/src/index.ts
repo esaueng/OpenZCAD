@@ -52,8 +52,11 @@ export function fitCameraToObjects(
     box.expandByObject(object);
   }
 
+  // Framing matches the Z-up isometric the viewer uses: right, front, above.
+  // Keeping the sign of Y negative here is what stops a fit from parking the
+  // camera behind the model.
   if (box.isEmpty()) {
-    camera.position.set(80, 80, 80);
+    camera.position.set(80, -80, 80);
     controlsTarget.set(0, 0, 0);
     return;
   }
@@ -65,7 +68,7 @@ export function fitCameraToObjects(
 
   camera.position.set(
     center.x + distance,
-    center.y + distance,
+    center.y - distance,
     center.z + distance
   );
   controlsTarget.copy(center);

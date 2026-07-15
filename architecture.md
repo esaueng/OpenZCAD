@@ -10,7 +10,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
 - `kernel-adapter/exact`: the `occt-wasm` OpenCascade adapter. It owns exact primitives, STEP import, sweeps, transforms, booleans, edge finishing, patterns, tessellation/topology projection, validity checks, measurements, and STEP/STL export.
 - `kernel-adapter` and `geometry`: compatibility support for imported mesh bodies and deterministic legacy tests. They are not the primary exact modeling path.
-- `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state.
+- `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state. It renders Z-up to match the kernel, so a part's vertical axis is +Z on screen exactly as it is in the solid.
 - `persistence` and `cloudflare-adapters`: local/in-memory and D1/R2 implementations, schema normalization, revisions/checkpoints, upload sessions, and artifact coordination.
 - `apps/web`: React workspace, IndexedDB autosave, geometry worker, and Cloudflare Worker routes.
 
