@@ -58,10 +58,25 @@ export function readAssistantEvent(
       response.error && typeof response.error === 'object'
         ? (response.error as Record<string, unknown>).message
         : undefined;
+    // A truncated response arrives as a normal `response.incomplete` event, not
+    // an upstream error, so name the cause instead of reporting it as a generic
+    // failure the user cannot act on.
+    const incompleteReason =
+      response.incomplete_details &&
+      typeof response.incomplete_details === 'object'
+        ? (response.incomplete_details as Record<string, unknown>).reason
+        : undefined;
+    if (incompleteReason === 'max_output_tokens') {
+      throw new Error(
+        'The modeling assistant ran out of output budget before finishing the patch. Try a simpler request, or raise AI_MAX_OUTPUT_TOKENS.'
+      );
+    }
     throw new Error(
       typeof detail === 'string'
         ? detail
-        : 'The modeling assistant could not complete the proposal.'
+        : typeof incompleteReason === 'string'
+          ? `The modeling assistant could not complete the proposal (${incompleteReason}).`
+          : 'The modeling assistant could not complete the proposal.'
     );
   }
   return { text: currentText, done: value.type === 'response.completed' };

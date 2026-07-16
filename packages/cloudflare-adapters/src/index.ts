@@ -59,6 +59,11 @@ export interface CloudflareEnv {
   AI_APP_NAME?: string;
   AI_MODEL?: string;
   AI_REASONING_EFFORT?: 'low' | 'medium' | 'high' | 'xhigh';
+  /**
+   * Output ceiling for one proposal. Reasoning tokens count against this, so it
+   * must stay well clear of a full multi-part patch or the model truncates.
+   */
+  AI_MAX_OUTPUT_TOKENS?: string;
   DB?: D1Database;
   ARTIFACTS?: R2Bucket;
   JOB_QUEUE?: Queue<unknown>;

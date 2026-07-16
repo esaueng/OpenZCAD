@@ -95,7 +95,7 @@ export function TopBar({
         onClick={onGoHome}
         title="Back to projects"
       >
-        <BrandMark />
+        <BrandMark compact />
         OpenZCAD <span className="beta-tag">Beta</span>
       </button>
       <div className="topbar-divider" />

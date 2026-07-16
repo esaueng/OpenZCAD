@@ -1,7 +1,6 @@
 import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
 import type {
   AxisId,
-  BodyId,
   BooleanOperation,
   FeatureId,
   PatternKind,
@@ -12,6 +11,29 @@ import type {
   SketchId,
   TopologySelection
 } from '@openzcad/shared';
+
+/**
+ * A body reference inside a proposal. Either a `bodyId` that already exists in
+ * the digest, or `$localId` naming a body an earlier operation in the same
+ * proposal creates. The `$` sigil keeps the two namespaces unambiguous, so a
+ * dangling reference is always a hard error instead of a silent mis-target.
+ */
+export type BodyRef = string;
+
+/** Local alias a body-creating operation publishes for later operations. */
+export type LocalBodyId = string | null;
+
+export const LOCAL_ID_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+/** Strips the reference sigil so `$lid` and `lid` register the same alias. */
+export function normalizeLocalId(value: string): string {
+  return value.startsWith('$') ? value.slice(1) : value;
+}
+
+/** True when a body reference points at another operation in the same patch. */
+export function isLocalBodyRef(value: string): boolean {
+  return value.startsWith('$');
+}
 
 export type CadPatchOperation =
   | {
@@ -28,6 +50,7 @@ export type CadPatchOperation =
   | {
       kind: 'add_primitive';
       name: string;
+      localId?: LocalBodyId;
       primitiveKind: PrimitiveKind;
       dimensions: {
         width: ParamValue | null;
@@ -52,40 +75,45 @@ export type CadPatchOperation =
   | {
       kind: 'add_extrude';
       name: string;
+      localId?: LocalBodyId;
       sketchId: SketchId;
       distance: ParamValue;
     }
   | {
       kind: 'add_revolve';
       name: string;
+      localId?: LocalBodyId;
       sketchId: SketchId;
       axis: RevolveAxis;
     }
   | {
       kind: 'add_boolean';
       name: string;
+      localId?: LocalBodyId;
       operation: BooleanOperation;
-      targetBodyIds: BodyId[];
+      targetBodyIds: BodyRef[];
     }
   | {
       kind: 'add_transform';
       name: string;
-      targetBodyId: BodyId;
+      targetBodyId: BodyRef;
       translation: { x: ParamValue; y: ParamValue; z: ParamValue };
       rotationDeg: { x: ParamValue; y: ParamValue; z: ParamValue };
     }
   | {
       kind: 'add_edge_modifier';
       name: string;
+      localId?: LocalBodyId;
       modifier: 'fillet' | 'chamfer';
-      targetBodyId: BodyId;
+      targetBodyId: BodyRef;
       edgeHashes: number[];
       size: ParamValue;
     }
   | {
       kind: 'add_pattern';
       name: string;
-      targetBodyId: BodyId;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
       patternKind: PatternKind;
       count: ParamValue;
       axis: AxisId;
@@ -114,6 +142,25 @@ export interface CadDocumentDigest {
     bodyId: string | null;
     data: unknown;
   }>;
+  /**
+   * The bodies that have been built, with the two facts the feature list cannot
+   * convey: whether a later boolean already consumed the body, and where it
+   * actually sits after any transforms. Without these the model has to replay
+   * the whole history in its head and routinely targets a dead body.
+   *
+   * Optional because a client older than this field still posts a valid digest.
+   */
+  bodies?: Array<{
+    bodyId: string;
+    name: string;
+    /** True when a later feature consumed this body; do not target it. */
+    consumed: boolean;
+    volume: number;
+    bbox: {
+      min: { x: number; y: number; z: number };
+      max: { x: number; y: number; z: number };
+    };
+  }>;
   selection?: {
     bodyId: string | null;
     topology: {
@@ -123,6 +170,15 @@ export interface CadDocumentDigest {
     } | null;
   };
   warnings: string[];
+}
+
+/**
+ * Kernel measurements carry full float noise (59.99999999999999). Model context
+ * reads better, and costs fewer tokens, at a precision far finer than any real
+ * tolerance.
+ */
+function round(value: number): number {
+  return Number.isFinite(value) ? Number(value.toFixed(4)) : 0;
 }
 
 function compactFeatureData(data: unknown): unknown {
@@ -172,6 +228,33 @@ export function createCadDocumentDigest(
       bodyId: feature.bodyId ?? null,
       data: compactFeatureData(feature.data)
     })),
+    // Meshes are deliberately dropped here: the model needs each body's
+    // identity, liveness, and placement, never its triangles.
+    bodies: document.bodyOrder.flatMap((bodyId) => {
+      const body = document.derived.bodyRepresentations[bodyId];
+      return body
+        ? [
+            {
+              bodyId: String(bodyId),
+              name: body.name,
+              consumed: body.consumed,
+              volume: round(body.volume),
+              bbox: {
+                min: {
+                  x: round(body.bbox.min.x),
+                  y: round(body.bbox.min.y),
+                  z: round(body.bbox.min.z)
+                },
+                max: {
+                  x: round(body.bbox.max.x),
+                  y: round(body.bbox.max.y),
+                  z: round(body.bbox.max.z)
+                }
+              }
+            }
+          ]
+        : [];
+    }),
     selection: {
       bodyId: selection?.bodyId ?? null,
       topology: selection
@@ -199,6 +282,25 @@ const vectorSchema = {
   properties: { x: scalarSchema, y: scalarSchema, z: scalarSchema },
   required: ['x', 'y', 'z']
 } as const;
+// Strict structured output requires every property to appear in `required`, so
+// an "omit this" field has to be expressed as an explicit null instead.
+const localIdSchema = {
+  anyOf: [{ type: 'string' }, { type: 'null' }],
+  description:
+    'Alias for the body this operation creates, e.g. "box_outer", or null when nothing needs to refer to it. Later operations in this same proposal reference it as "$box_outer".'
+} as const;
+const bodyRefSchema = {
+  type: 'string',
+  description:
+    'An existing bodyId from the digest, or "$localId" naming a body created earlier in this proposal.'
+} as const;
+
+/**
+ * Upper bound on operations in one proposal. A box with a lid runs to ~18
+ * (parameters, two primitives and a boolean per part, plus placement), so this
+ * leaves room for a several-part assembly while still bounding a runaway patch.
+ */
+export const MAX_PATCH_OPERATIONS = 60;
 
 export const CAD_PATCH_JSON_SCHEMA = {
   type: 'object',
@@ -210,7 +312,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
     operations: {
       type: 'array',
       minItems: 1,
-      maxItems: 20,
+      maxItems: MAX_PATCH_OPERATIONS,
       items: {
         anyOf: [
           {
@@ -240,6 +342,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_primitive' },
               name: { type: 'string' },
+              localId: localIdSchema,
               primitiveKind: {
                 type: 'string',
                 enum: ['box', 'cylinder', 'sphere', 'cone', 'torus']
@@ -269,7 +372,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
                 ]
               }
             },
-            required: ['kind', 'name', 'primitiveKind', 'dimensions']
+            required: ['kind', 'name', 'localId', 'primitiveKind', 'dimensions']
           },
           {
             type: 'object',
@@ -296,10 +399,11 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_extrude' },
               name: { type: 'string' },
+              localId: localIdSchema,
               sketchId: { type: 'string' },
               distance: scalarSchema
             },
-            required: ['kind', 'name', 'sketchId', 'distance']
+            required: ['kind', 'name', 'localId', 'sketchId', 'distance']
           },
           {
             type: 'object',
@@ -307,10 +411,11 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_revolve' },
               name: { type: 'string' },
+              localId: localIdSchema,
               sketchId: { type: 'string' },
               axis: { type: 'string', enum: ['horizontal', 'vertical'] }
             },
-            required: ['kind', 'name', 'sketchId', 'axis']
+            required: ['kind', 'name', 'localId', 'sketchId', 'axis']
           },
           {
             type: 'object',
@@ -318,6 +423,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_boolean' },
               name: { type: 'string' },
+              localId: localIdSchema,
               operation: {
                 type: 'string',
                 enum: ['union', 'subtract', 'intersect']
@@ -326,10 +432,10 @@ export const CAD_PATCH_JSON_SCHEMA = {
                 type: 'array',
                 minItems: 2,
                 maxItems: 12,
-                items: { type: 'string' }
+                items: bodyRefSchema
               }
             },
-            required: ['kind', 'name', 'operation', 'targetBodyIds']
+            required: ['kind', 'name', 'localId', 'operation', 'targetBodyIds']
           },
           {
             type: 'object',
@@ -337,7 +443,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_transform' },
               name: { type: 'string' },
-              targetBodyId: { type: 'string' },
+              targetBodyId: bodyRefSchema,
               translation: vectorSchema,
               rotationDeg: vectorSchema
             },
@@ -355,8 +461,9 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_edge_modifier' },
               name: { type: 'string' },
+              localId: localIdSchema,
               modifier: { type: 'string', enum: ['fillet', 'chamfer'] },
-              targetBodyId: { type: 'string' },
+              targetBodyId: bodyRefSchema,
               edgeHashes: {
                 type: 'array',
                 minItems: 1,
@@ -368,6 +475,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             required: [
               'kind',
               'name',
+              'localId',
               'modifier',
               'targetBodyId',
               'edgeHashes',
@@ -380,7 +488,8 @@ export const CAD_PATCH_JSON_SCHEMA = {
             properties: {
               kind: { type: 'string', const: 'add_pattern' },
               name: { type: 'string' },
-              targetBodyId: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: bodyRefSchema,
               patternKind: { type: 'string', enum: ['linear', 'circular'] },
               count: scalarSchema,
               axis: { type: 'string', enum: ['x', 'y', 'z'] },
@@ -390,6 +499,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
             required: [
               'kind',
               'name',
+              'localId',
               'targetBodyId',
               'patternKind',
               'count',
@@ -421,6 +531,60 @@ function isVector(value: unknown): boolean {
   return isScalar(vector.x) && isScalar(vector.y) && isScalar(vector.z);
 }
 
+/**
+ * Body-creating operations may publish a `localId`. Validation walks the
+ * operations in order and tracks the aliases declared so far, so a reference to
+ * an alias that is missing, duplicated, or declared later fails here rather
+ * than resolving to the wrong body during apply.
+ */
+function isNullableLocalId(value: unknown): value is LocalBodyId {
+  if (value === null || value === undefined) {
+    return true;
+  }
+  return (
+    typeof value === 'string' && LOCAL_ID_PATTERN.test(normalizeLocalId(value))
+  );
+}
+
+function declareLocalId(
+  operation: Record<string, unknown>,
+  declared: Set<string>
+): void {
+  const raw = operation.localId;
+  if (!isNullableLocalId(raw)) {
+    throw new Error(
+      `Invalid localId ${JSON.stringify(raw)}. Use a plain identifier such as "box_outer".`
+    );
+  }
+  if (typeof raw !== 'string') {
+    return;
+  }
+  const alias = normalizeLocalId(raw);
+  if (declared.has(alias)) {
+    throw new Error(`Duplicate localId "${alias}" in proposal.`);
+  }
+  declared.add(alias);
+}
+
+function requireBodyRef(
+  value: unknown,
+  declared: Set<string>,
+  label: string
+): void {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Invalid ${label}.`);
+  }
+  if (!isLocalBodyRef(value)) {
+    return;
+  }
+  const alias = normalizeLocalId(value);
+  if (!declared.has(alias)) {
+    throw new Error(
+      `${label} references "${value}" before any operation declares that localId.`
+    );
+  }
+}
+
 export function parseCadPatchProposal(value: unknown): CadPatchProposal {
   const candidate = record(value);
   if (
@@ -430,10 +594,12 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
     !candidate.assumptions.every((item) => typeof item === 'string') ||
     !Array.isArray(candidate.operations) ||
     candidate.operations.length === 0 ||
-    candidate.operations.length > 20
+    candidate.operations.length > MAX_PATCH_OPERATIONS
   ) {
     throw new Error('CAD patch proposal is missing required fields.');
   }
+
+  const declared = new Set<string>();
 
   for (const rawOperation of candidate.operations) {
     const operation = record(rawOperation);
@@ -467,6 +633,7 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_primitive operation.');
         }
+        declareLocalId(operation, declared);
         break;
       case 'delete_feature':
         if (typeof operation.featureId !== 'string') {
@@ -489,6 +656,7 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_extrude operation.');
         }
+        declareLocalId(operation, declared);
         break;
       case 'add_revolve':
         if (
@@ -498,6 +666,7 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_revolve operation.');
         }
+        declareLocalId(operation, declared);
         break;
       case 'add_boolean':
         if (
@@ -511,6 +680,21 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_boolean operation.');
         }
+        // Operands resolve against aliases declared *before* this operation, so
+        // a boolean can never reference its own result.
+        operation.targetBodyIds.forEach((id, index) =>
+          requireBodyRef(id, declared, `add_boolean targetBodyIds[${index}]`)
+        );
+        // A repeated operand is degenerate: subtracting a body from itself
+        // leaves nothing, and the emptiness would persist silently.
+        if (
+          new Set(operation.targetBodyIds).size !== operation.targetBodyIds.length
+        ) {
+          throw new Error(
+            'add_boolean lists the same body more than once in targetBodyIds.'
+          );
+        }
+        declareLocalId(operation, declared);
         break;
       case 'add_transform':
         if (
@@ -521,6 +705,11 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_transform operation.');
         }
+        requireBodyRef(
+          operation.targetBodyId,
+          declared,
+          'add_transform targetBodyId'
+        );
         break;
       case 'add_edge_modifier':
         if (
@@ -536,6 +725,21 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_edge_modifier operation.');
         }
+        requireBodyRef(
+          operation.targetBodyId,
+          declared,
+          'add_edge_modifier targetBodyId'
+        );
+        // Edge ordinals come from the derived topology of a body that already
+        // exists. A body created earlier in this same patch has no derived
+        // topology yet, so any ordinal against it would be invented — and it
+        // would persist into the command log and replay wrong forever.
+        if (isLocalBodyRef(String(operation.targetBodyId))) {
+          throw new Error(
+            'add_edge_modifier cannot target a body created in the same proposal, because its edges do not exist yet. Create the body first, then finish its edges in a later request.'
+          );
+        }
+        declareLocalId(operation, declared);
         break;
       case 'add_pattern':
         if (
@@ -549,6 +753,8 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_pattern operation.');
         }
+        requireBodyRef(operation.targetBodyId, declared, 'add_pattern targetBodyId');
+        declareLocalId(operation, declared);
         break;
       default:
         throw new Error(
