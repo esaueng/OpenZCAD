@@ -569,8 +569,13 @@ export class CommandManager {
     if (!entry) {
       return this.document;
     }
-    this.redoStack.push({ snapshot: this.document, command: entry.command });
-    this.document = entry.snapshot;
+    const current = this.document;
+    this.redoStack.push({ snapshot: current, command: entry.command });
+    this.document = restoreHistorySnapshot(
+      current,
+      entry.snapshot,
+      `Undo ${entry.command.label}`
+    );
     return this.document;
   }
 
@@ -579,8 +584,13 @@ export class CommandManager {
     if (!entry) {
       return this.document;
     }
-    this.undoStack.push({ snapshot: this.document, command: entry.command });
-    this.document = entry.snapshot;
+    const current = this.document;
+    this.undoStack.push({ snapshot: current, command: entry.command });
+    this.document = restoreHistorySnapshot(
+      current,
+      entry.snapshot,
+      `Redo ${entry.command.label}`
+    );
     return this.document;
   }
 
@@ -619,6 +629,28 @@ export class CommandManager {
       this.undoStack.shift();
     }
   }
+}
+
+/**
+ * Restores a model snapshot without rewinding the document's durable timeline.
+ * Collaboration treats `version` as a monotonic room clock, while checkpoints
+ * are save points rather than undoable model state. Preserve both collections
+ * and record Undo/Redo as new forward revisions.
+ */
+function restoreHistorySnapshot(
+  current: ProjectDocument,
+  snapshot: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  return appendRevision(
+    {
+      ...snapshot,
+      version: current.version,
+      revisions: current.revisions,
+      checkpoints: current.checkpoints
+    },
+    reason
+  );
 }
 
 export function replayCommands(

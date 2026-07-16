@@ -8,6 +8,7 @@ import {
   addPrimitiveFeature,
   createProjectDocument
 } from '@openzcad/document-core';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 
 describe('cloudflare adapters', () => {
   it('falls back to in-memory persistence when D1 is absent', async () => {
@@ -49,5 +50,25 @@ describe('cloudflare adapters', () => {
     expect(resolveCollaborationDocument(first, divergent).kind).toBe(
       'conflict'
     );
+  });
+
+  it('accepts undo and redo as forward collaboration revisions', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Undo Room', toUserId('user_room'))
+    );
+    const added = manager.execute(
+      commandFactories.addPrimitive({
+        name: 'A',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    const undone = manager.undo();
+    const redone = manager.redo();
+
+    expect(undone.version).toBeGreaterThan(added.version);
+    expect(redone.version).toBeGreaterThan(undone.version);
+    expect(resolveCollaborationDocument(added, undone).kind).toBe('accept');
+    expect(resolveCollaborationDocument(undone, redone).kind).toBe('accept');
   });
 });

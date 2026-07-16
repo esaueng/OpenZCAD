@@ -361,7 +361,7 @@
 
 /* Collapse to icons when the viewport gets tight; tooltips carry the names. */
 @media (max-width: 1280px), (max-height: 760px) {
-  .palette-label,
+  .tool-palette .palette-label,
   .palette-item kbd {
     display: none;
   }
@@ -2291,6 +2291,83 @@
     grid-template-columns: 190px minmax(320px, 1fr);
   }
   .ai-proposal {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .topbar {
+    gap: var(--sp-1);
+    padding-inline: 6px;
+  }
+
+  .brand {
+    flex: 0 0 auto;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .brand .beta-tag,
+  .topbar-divider,
+  .breadcrumb .mono,
+  .session-user {
+    display: none;
+  }
+
+  .breadcrumb {
+    flex: 1 1 auto;
+  }
+
+  .project-title-button {
+    max-width: 100%;
+  }
+
+  .topbar-tools {
+    flex: 0 0 auto;
+    margin-left: 0;
+  }
+
+  .topbar .topbar-action {
+    width: 28px;
+    flex: 0 0 28px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+    font-size: 0;
+  }
+
+  .collaboration-state {
+    flex: 0 0 auto;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(120px, 32%) minmax(160px, 1fr);
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: var(--border-thin);
+  }
+
+  .palette-float {
+    inset: 6px auto 6px 6px;
+  }
+
+  .viewer-rail-stack {
+    top: 6px;
+    right: 6px;
+  }
+
+  .status-bar {
+    gap: 6px;
+    padding-inline: 6px;
+  }
+
+  .status-hint,
+  .status-groups > span:not(:last-child) {
     display: none;
   }
 }

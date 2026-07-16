@@ -29,12 +29,21 @@ describe('command-system', () => {
     );
 
     expect(manager.document.bodyOrder).toHaveLength(1);
+    const executedVersion = manager.document.version;
+    const executedRevisionCount = manager.document.revisions.length;
 
     manager.undo();
     expect(manager.document.bodyOrder).toHaveLength(0);
+    expect(manager.document.version).toBeGreaterThan(executedVersion);
+    expect(manager.document.revisions).toHaveLength(executedRevisionCount + 1);
+    expect(manager.document.revisions.at(-1)?.reason).toBe('Undo Add box');
+    const undoneVersion = manager.document.version;
 
     manager.redo();
     expect(manager.document.bodyOrder).toHaveLength(1);
+    expect(manager.document.version).toBeGreaterThan(undoneVersion);
+    expect(manager.document.revisions).toHaveLength(executedRevisionCount + 2);
+    expect(manager.document.revisions.at(-1)?.reason).toBe('Redo Add box');
 
     const kernel = createKernelAdapter();
     const derived = kernel.syncDocument(manager.document);
@@ -244,6 +253,38 @@ describe('command-system', () => {
     expect(manager.document.commandLog).toHaveLength(2);
 
     manager.undo();
+    expect(manager.document.bodyOrder).toHaveLength(0);
+    expect(manager.document.revisions.at(-1)?.reason).toBe('Undo Two boxes');
+  });
+
+  it('preserves durable checkpoints while undoing model history', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Checkpoint Test', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    manager.document = {
+      ...manager.document,
+      checkpoints: [
+        ...manager.document.checkpoints,
+        {
+          checkpointId: 'checkpoint_manual',
+          revisionId: manager.document.revisions.at(-1)!.revisionId,
+          documentVersion: manager.document.version,
+          createdAt: new Date().toISOString(),
+          reason: 'Manual save'
+        }
+      ]
+    };
+
+    manager.undo();
+
+    expect(manager.document.checkpoints.at(-1)?.reason).toBe('Manual save');
     expect(manager.document.bodyOrder).toHaveLength(0);
   });
 
