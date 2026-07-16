@@ -656,12 +656,14 @@ export function prioritizeVisibleEdgeHit<T extends TopologyHit>(hits: T[]) {
     : hits;
 }
 
-const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
-  // Direction from the target toward the camera. Top keeps a hair of X/Z so
-  // OrbitControls never sees the camera axis parallel to its up vector.
-  iso: new THREE.Vector3(1, 0.9, 1).normalize(),
-  front: new THREE.Vector3(0, 0, 1),
-  top: new THREE.Vector3(0.0001, 1, 0.0001).normalize(),
+export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
+  // Direction from the target toward the camera, in the Z-up frame. Top now
+  // looks down +Z, which is parallel to the up vector, so it keeps a hair of
+  // -Y: that both stops OrbitControls seeing a degenerate axis and settles
+  // screen-up on +Y rather than an arbitrary diagonal.
+  iso: new THREE.Vector3(1, -1, 0.9).normalize(),
+  front: new THREE.Vector3(0, -1, 0),
+  top: new THREE.Vector3(0, -0.0001, 1).normalize(),
   right: new THREE.Vector3(1, 0, 0)
 };
 
@@ -907,7 +909,13 @@ export function ModelViewer({
 
     const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
     const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
-    camera.position.set(90, 80, 90);
+    // Z-up, matching the solid kernel: a part's vertical size is its `depth`,
+    // and cylinders extrude along +Z. This must be set before OrbitControls is
+    // constructed below — OrbitControls snapshots `object.up` into a quaternion
+    // in its constructor and never refreshes it, so assigning `up` afterwards
+    // leaves the orbit axis on +Y while `camera.up` reads (0,0,1).
+    camera.up.set(0, 0, 1);
+    camera.position.set(90, -90, 80);
     const orthographic = new THREE.OrthographicCamera(
       -90,
       90,
@@ -916,6 +924,9 @@ export function ModelViewer({
       -2000,
       4000
     );
+    // syncOrthographic copies position and quaternion but never `up`, and
+    // rebindControls can hand this camera to a fresh OrbitControls.
+    orthographic.up.copy(camera.up);
     orthographic.position.copy(camera.position);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -939,16 +950,25 @@ export function ModelViewer({
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
-    scene.add(new THREE.HemisphereLight('#dbeafe', '#070b10', 1.25));
+    // A HemisphereLight's sky/ground axis is its position, which defaults to
+    // Object3D.DEFAULT_UP (+Y); leave it and the sky colour washes in sideways.
+    const skyLight = new THREE.HemisphereLight('#dbeafe', '#070b10', 1.25);
+    skyLight.position.set(0, 0, 1);
+    scene.add(skyLight);
+    // Right, front, above.
     const keyLight = new THREE.DirectionalLight('#ffffff', 1.45);
-    keyLight.position.set(90, 140, 100);
+    keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     scene.add(keyLight);
+    // Left, behind, slightly above.
     const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.5);
-    rimLight.position.set(-80, 40, -90);
+    rimLight.position.set(-80, 90, 40);
     scene.add(rimLight);
 
+    // GridHelper is built in the XZ plane, so lay it onto XY — the ground the
+    // kernel's box corners and cylinder bases actually sit on.
     const grid = new THREE.GridHelper(240, 24, '#243140', '#141d28');
+    grid.rotation.x = Math.PI / 2;
     scene.add(grid);
 
     const axes = new THREE.AxesHelper(18);
@@ -2347,8 +2367,8 @@ export function ModelViewer({
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
           const top = box.getCenter(new THREE.Vector3());
-          top.y =
-            box.max.y + Math.max(box.getSize(new THREE.Vector3()).y * 0.12, 5);
+          top.z =
+            box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
           const suffix =
             selectedTopology?.bodyId === primaryId &&
             selectedTopology.topologyId

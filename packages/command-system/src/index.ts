@@ -2,6 +2,7 @@ import {
   deepClone,
   nowIso,
   type BodyId,
+  type ParamValue,
   type ProjectDocument,
   type SerializedCommand
 } from '@openzcad/shared';
@@ -18,14 +19,18 @@ import {
   createSketchFeatureIds,
   deleteFeature,
   deleteParameter,
+  evaluateExpression,
   extrudeSketch,
   filletEdges,
   findFeature,
   findSketch,
+  getParameterScope,
+  isValidParameterName,
   importMeshBody,
   importStepBody,
   patternBody,
   renameNode,
+  resolveParamValue,
   revolveSketch,
   setNodeMetadata,
   setParameter,
@@ -50,7 +55,11 @@ import {
   type SketchUpdateInput,
   type TransformInput
 } from '@openzcad/document-core';
-import type { CadPatchProposal } from '@openzcad/ai-contracts';
+import {
+  isLocalBodyRef,
+  normalizeLocalId,
+  type CadPatchProposal
+} from '@openzcad/ai-contracts';
 
 export type CommandKind =
   | 'primitive.add'
@@ -365,11 +374,268 @@ export const commandFactories = {
   }
 };
 
+function assertParameterName(name: string): void {
+  // document-core also rejects the built-in identifiers (pi, min, round, ...),
+  // which setParameter would otherwise throw on mid-transaction.
+  if (!isValidParameterName(name)) {
+    throw new Error(
+      `Parameter name "${name}" is not usable: use letters, digits, and underscores, and avoid the built-in names.`
+    );
+  }
+}
+
+/**
+ * Resolves the parameter values this proposal will produce, so the rest of the
+ * patch can be checked against real numbers.
+ *
+ * `setParameter` stores any string verbatim, and a broken expression only
+ * surfaces later as a non-fatal build warning whose body silently goes missing.
+ * A proposal is machine-authored, so reject it at conversion time instead.
+ *
+ * Parameters may reference each other in any order, so this mirrors
+ * getParameterScope's fixed-point pass over the proposal's own parameters
+ * layered on the document's. Anything still unresolved afterwards is a genuine
+ * fault — an unknown identifier, a non-finite result, or a reference cycle —
+ * and re-evaluating it surfaces the real reason.
+ */
+function projectedParameterScope(
+  document: ProjectDocument,
+  proposal: CadPatchProposal
+): Record<string, number> {
+  const scope: Record<string, number> = { ...getParameterScope(document).scope };
+  const pending = new Map<string, string>();
+  for (const operation of proposal.operations) {
+    if (operation.kind === 'set_parameter') {
+      assertParameterName(operation.name);
+      pending.set(operation.name, operation.expression);
+    }
+  }
+
+  let progressed = true;
+  while (progressed && pending.size > 0) {
+    progressed = false;
+    for (const [name, expression] of [...pending]) {
+      try {
+        scope[name] = evaluateExpression(expression, scope);
+        pending.delete(name);
+        progressed = true;
+      } catch {
+        // May depend on a parameter this proposal has not resolved yet.
+      }
+    }
+  }
+
+  for (const [name, expression] of pending) {
+    let reason = 'evaluation failed.';
+    try {
+      evaluateExpression(expression, scope);
+    } catch (error) {
+      reason = error instanceof Error ? error.message : reason;
+    }
+    // An identifier that is unresolved only because it is another stuck
+    // parameter means the proposal's parameters reference each other in a loop,
+    // which reads very differently from a name that simply does not exist.
+    const cyclic = [...pending.keys()].some((other) =>
+      reason.includes(`"${other}"`)
+    );
+    throw new Error(
+      cyclic
+        ? `Parameter "${name}" cannot be resolved: its expression "${expression}" depends on itself through another parameter.`
+        : `Parameter "${name}" has an invalid expression "${expression}": ${reason}`
+    );
+  }
+  return scope;
+}
+
+/**
+ * Uses the same resolver the kernel uses, so the boundary check accepts exactly
+ * what the build will accept — `evaluateExpression` alone would let a non-finite
+ * result through and fail later with the body silently missing.
+ */
+function assertEvaluableExpression(
+  scope: Record<string, number>,
+  label: string,
+  value: ParamValue
+): void {
+  try {
+    resolveParamValue(value, scope, label);
+  } catch (error) {
+    throw new Error(
+      `${label} has an invalid expression "${String(value)}": ${
+        error instanceof Error ? error.message : 'evaluation failed.'
+      }`
+    );
+  }
+}
+
+/**
+ * Every ParamValue an operation carries may be an expression string, and an
+ * unreadable one is accepted verbatim by document-core — the body then silently
+ * fails to build and leaves only a warning. Check them all up front.
+ */
+function assertOperationExpressions(
+  operation: CadPatchProposal['operations'][number],
+  scope: Record<string, number>
+): void {
+  const vector = (
+    label: string,
+    value: { x: ParamValue; y: ParamValue; z: ParamValue }
+  ) => {
+    assertEvaluableExpression(scope, `${label}.x`, value.x);
+    assertEvaluableExpression(scope, `${label}.y`, value.y);
+    assertEvaluableExpression(scope, `${label}.z`, value.z);
+  };
+
+  switch (operation.kind) {
+    // set_parameter is already resolved and checked by projectedParameterScope.
+    case 'set_feature_dimension':
+      assertEvaluableExpression(
+        scope,
+        `${operation.field} on ${operation.featureId}`,
+        operation.value
+      );
+      break;
+    case 'add_primitive':
+      for (const [field, value] of Object.entries(operation.dimensions)) {
+        if (value !== null) {
+          assertEvaluableExpression(scope, `${operation.name} ${field}`, value);
+        }
+      }
+      break;
+    case 'add_extrude':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} distance`,
+        operation.distance
+      );
+      break;
+    case 'add_transform':
+      vector(`${operation.name} translation`, operation.translation);
+      vector(`${operation.name} rotationDeg`, operation.rotationDeg);
+      break;
+    case 'add_edge_modifier':
+      assertEvaluableExpression(scope, `${operation.name} size`, operation.size);
+      break;
+    case 'add_pattern':
+      assertEvaluableExpression(scope, `${operation.name} count`, operation.count);
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} spacing`,
+        operation.spacing
+      );
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} angleDeg`,
+        operation.angleDeg
+      );
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Resolves the `$localId` aliases an AI proposal uses to reference bodies it
+ * creates within that same proposal.
+ *
+ * Body-creating factories accept pre-assigned ids, so the real `BodyId` is
+ * known at command-construction time and can be handed to later operations.
+ * Aliases are resolved here and never reach a serialized payload, which keeps
+ * the command log, replay, and undo free of AI-only concepts.
+ */
+class LocalBodyScope {
+  private readonly aliases = new Map<string, BodyId>();
+  private readonly consumed = new Map<BodyId, string>();
+
+  constructor(private readonly document: ProjectDocument) {
+    // Consumption is not limited to this proposal: a body an earlier turn's
+    // boolean absorbed is still listed in bodyOrder and would otherwise pass
+    // every check here.
+    for (const [bodyId, body] of Object.entries(
+      document.derived.bodyRepresentations
+    )) {
+      if (body.consumed) {
+        this.consumed.set(bodyId as BodyId, 'feature');
+      }
+    }
+  }
+
+  declare(localId: string | null | undefined, bodyId: BodyId): void {
+    if (typeof localId !== 'string') {
+      return;
+    }
+    const alias = normalizeLocalId(localId);
+    // The contract validator rejects duplicates too, but this function is also
+    // called directly, and a silent last-writer-wins rebind would retarget an
+    // already-resolved reference at the wrong body.
+    if (this.aliases.has(alias)) {
+      throw new Error(`Duplicate localId "${alias}" in proposal.`);
+    }
+    this.aliases.set(alias, bodyId);
+  }
+
+  /** Accepts an existing digest bodyId or a `$alias` declared earlier. */
+  resolve(reference: string): BodyId {
+    if (!isLocalBodyRef(reference)) {
+      return reference as BodyId;
+    }
+    const alias = normalizeLocalId(reference);
+    const bodyId = this.aliases.get(alias);
+    if (!bodyId) {
+      throw new Error(
+        `Proposal references "${reference}" but no earlier operation creates that body.`
+      );
+    }
+    return bodyId;
+  }
+
+  /**
+   * Booleans, edge modifiers, and patterns all consume their target: the body
+   * is gone from the result, so re-targeting it afterwards silently models the
+   * wrong thing. Reject it up front and name the operation that consumed it.
+   */
+  assertLive(bodyId: BodyId, reference: string): void {
+    const consumedBy = this.consumed.get(bodyId);
+    if (consumedBy) {
+      throw new Error(
+        `Body "${reference}" was already consumed by an earlier ${consumedBy} in this proposal.`
+      );
+    }
+  }
+
+  consume(bodyIds: BodyId[], operationKind: string): void {
+    bodyIds.forEach((bodyId) => this.consumed.set(bodyId, operationKind));
+  }
+
+  /** Guards against a reference to a body that is not in the document either. */
+  assertKnown(bodyId: BodyId, reference: string): void {
+    if (isLocalBodyRef(reference)) {
+      return;
+    }
+    if (!this.document.bodyOrder.includes(bodyId)) {
+      throw new Error(`Target body ${reference} not found in the document.`);
+    }
+  }
+}
+
 /** Converts a reviewed AI proposal into normal undoable document commands. */
 export function commandsForCadPatch(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): AnyCommand[] {
+  const scope = new LocalBodyScope(document);
+  const parameterScope = projectedParameterScope(document, proposal);
+  proposal.operations.forEach((operation) =>
+    assertOperationExpressions(operation, parameterScope)
+  );
+
+  const resolveBody = (reference: string): BodyId => {
+    const bodyId = scope.resolve(reference);
+    scope.assertKnown(bodyId, reference);
+    scope.assertLive(bodyId, reference);
+    return bodyId;
+  };
+
   return proposal.operations.map((operation) => {
     switch (operation.kind) {
       case 'set_parameter':
@@ -383,10 +649,13 @@ export function commandsForCadPatch(
             (entry) => entry[1] !== null
           )
         ) as Record<string, string | number>;
+        const ids = createBodyFeatureIds();
+        scope.declare(operation.localId, ids.bodyId);
         return commandFactories.addPrimitive({
           name: operation.name,
           primitiveKind: operation.primitiveKind,
-          dimensions
+          dimensions,
+          ids
         });
       }
       case 'delete_feature':
@@ -403,52 +672,81 @@ export function commandsForCadPatch(
           name: operation.name
         });
       }
-      case 'add_extrude':
+      case 'add_extrude': {
+        const ids = createBodyFeatureIds();
+        scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
           sketchId: operation.sketchId,
-          distance: operation.distance
+          distance: operation.distance,
+          ids
         });
-      case 'add_revolve':
+      }
+      case 'add_revolve': {
+        const ids = createBodyFeatureIds();
+        scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
           sketchId: operation.sketchId,
-          axis: operation.axis
+          axis: operation.axis,
+          ids
         });
-      case 'add_boolean':
+      }
+      case 'add_boolean': {
+        const targetBodyIds = operation.targetBodyIds.map(resolveBody);
+        const ids = createBodyFeatureIds();
+        // Operands are resolved before the result is declared, so a boolean can
+        // never reference itself, and they are marked consumed afterwards.
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume(targetBodyIds, 'boolean');
         return commandFactories.booleanBodies({
           name: operation.name,
           operation: operation.operation,
-          targetBodyIds: operation.targetBodyIds
+          targetBodyIds,
+          ids
         });
+      }
       case 'add_transform':
+        // transformBody mutates the target in place and returns the same body,
+        // so the alias (if any) keeps pointing at the same BodyId.
         return commandFactories.transformBody({
           name: operation.name,
-          targetBodyId: operation.targetBodyId,
+          targetBodyId: resolveBody(operation.targetBodyId),
           translation: operation.translation,
           rotationDeg: operation.rotationDeg
         });
       case 'add_edge_modifier': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], operation.modifier);
         const payload = {
           name: operation.name,
-          targetBodyId: operation.targetBodyId,
+          targetBodyId,
           edgeHashes: operation.edgeHashes,
-          size: operation.size
+          size: operation.size,
+          ids
         };
         return operation.modifier === 'fillet'
           ? commandFactories.filletEdges(payload)
           : commandFactories.chamferEdges(payload);
       }
-      case 'add_pattern':
+      case 'add_pattern': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'pattern');
         return commandFactories.patternBody({
           name: operation.name,
-          targetBodyId: operation.targetBodyId,
+          targetBodyId,
           patternKind: operation.patternKind,
           count: operation.count,
           axis: operation.axis,
           spacing: operation.spacing,
-          angleDeg: operation.angleDeg
+          angleDeg: operation.angleDeg,
+          ids
         });
+      }
       case 'set_feature_dimension': {
         const feature = findFeature(document, operation.featureId);
         if (!feature) {

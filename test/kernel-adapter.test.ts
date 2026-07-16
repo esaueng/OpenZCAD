@@ -52,7 +52,9 @@ describe('kernel sync', () => {
     expect(body.mesh.indices.length).toBeGreaterThan(0);
     expect(body.volume).toBeCloseTo(6000, 4);
     expect(body.faceCount).toBe(6);
-    expect(body.bbox.min).toEqual({ x: -5, y: -10, z: -15 });
+    // Corner on the origin, matching the exact kernel.
+    expect(body.bbox.min).toEqual({ x: 0, y: 0, z: 0 });
+    expect(body.bbox.max).toEqual({ x: 10, y: 20, z: 30 });
     expect(body.exportableStep).toBe(true);
     expect(body.consumed).toBe(false);
   });
@@ -98,8 +100,9 @@ describe('kernel sync', () => {
     const manager = managerWithTwoBoxes();
     const derived = kernel.syncDocument(manager.document);
     const moved = derived.bodyRepresentations[getLatestBodyId(manager.document)!]!;
-    expect(moved.bbox.min.x).toBeCloseTo(0, 6);
-    expect(moved.bbox.max.x).toBeCloseTo(10, 6);
+    // Box B spans 0..10 from the origin, then the transform shifts it +5.
+    expect(moved.bbox.min.x).toBeCloseTo(5, 6);
+    expect(moved.bbox.max.x).toBeCloseTo(15, 6);
   });
 
   it('runs real CSG for booleans and marks inputs consumed', () => {
