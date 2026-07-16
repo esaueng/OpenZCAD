@@ -88,6 +88,7 @@ Direct OpenAI and other Responses-compatible providers remain supported. Non-sec
 - `AI_BASE_URL` optionally overrides the provider endpoint and is required for `responses-compatible`.
 - `AI_MODEL` defaults to `openai/gpt-5.6-terra` for OpenRouter and `gpt-5.6-sol` for direct OpenAI when no app config overrides it.
 - `AI_REASONING_EFFORT` defaults to `high` and accepts `low`, `medium`, `high`, or `xhigh`.
+- `AI_MAX_OUTPUT_TOKENS` defaults to `32000`. Reasoning tokens share this budget, and a multi-part model runs to roughly 20 operations; too low a ceiling truncates the patch mid-stream, which the provider reports as a normal incomplete response rather than an error. Lower it only if your model caps output below the default.
 - `AI_SITE_URL` and `AI_APP_NAME` optionally send OpenRouter attribution headers.
 
 All provider/model choices are centralized; no API key is shipped to the browser or committed.
