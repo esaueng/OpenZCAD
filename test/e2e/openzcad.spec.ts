@@ -63,6 +63,73 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
+test('keeps command names visible at the compact desktop breakpoint', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Palette Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: 'Search commands (Ctrl+K)' }).click();
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await expect(
+    palette.locator('.palette-label', { hasText: 'Box' })
+  ).toBeVisible();
+  await palette.getByRole('textbox', { name: 'Search commands' }).fill('box');
+  await expect(
+    palette.locator('.palette-label', { hasText: 'Box' })
+  ).toBeVisible();
+});
+
+test('keeps every workspace surface inside a narrow viewport', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Narrow Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const selectors = [
+    '.topbar',
+    '.workspace',
+    '.sidebar',
+    '.viewer-area',
+    '.ai-rail',
+    '.status-bar'
+  ];
+  for (const selector of selectors) {
+    const bounds = await page.locator(selector).boundingBox();
+    expect(bounds, `${selector} should be laid out`).not.toBeNull();
+    expect(
+      bounds!.x,
+      `${selector} should not start offscreen`
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      bounds!.x + bounds!.width,
+      `${selector} should not end offscreen`
+    ).toBeLessThanOrEqual(390.5);
+  }
+
+  const sidebarBounds = await page.locator('.sidebar').boundingBox();
+  const viewerBounds = await page.locator('.viewer-area').boundingBox();
+  expect(viewerBounds!.y).toBeGreaterThanOrEqual(
+    sidebarBounds!.y + sidebarBounds!.height - 0.5
+  );
+  await expect(page.locator('.viewer-rail-stack')).toBeVisible();
+
+  const overflowingTopbarChildren = await page.locator('.topbar').evaluate(
+    (topbar) =>
+      [...topbar.children].filter((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.left < -0.5 || bounds.right > window.innerWidth + 0.5;
+      }).length
+  );
+  expect(overflowingTopbarChildren).toBe(0);
+});
+
 test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
@@ -339,5 +406,7 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeHidden();
-  await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(1);
+  await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
+    1
+  );
 });
