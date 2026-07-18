@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, type PluginOption } from 'vite';
+import wasm from 'vite-plugin-wasm';
 
 if (typeof globalThis.File === 'undefined') {
   // Node 18 lacks the global File constructor that some dependencies expect.
@@ -44,7 +45,7 @@ const workspaceAliases = Object.fromEntries(
 export default defineConfig(async ({ command, isPreview }) => {
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
-  plugins.push(react());
+  plugins.push(react(), wasm());
 
   const nodeMajor = Number.parseInt(
     process.versions.node.split('.')[0] ?? '0',
@@ -66,10 +67,13 @@ export default defineConfig(async ({ command, isPreview }) => {
     plugins,
     optimizeDeps: {
       // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
-      exclude: ['occt-wasm']
+      exclude: ['brepkit-wasm']
     },
     worker: {
-      format: 'es' as const
+      format: 'es' as const,
+      // The plugin supports several Vite majors, so narrow its cross-version
+      // return type to the Vite version used by this workspace.
+      plugins: (): PluginOption[] => [wasm() as PluginOption]
     },
     resolve: {
       alias: {

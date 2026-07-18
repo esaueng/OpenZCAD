@@ -82,21 +82,21 @@ function clampSegments(value: number, minimum: number, maximum: number): number 
 // Primitives.
 //
 // This polyhedral kernel is the compatibility/preview path; the exact
-// OpenCascade kernel is authoritative. Every generator here therefore uses
-// OCCT's frame, because the AI preview renders with this kernel and Apply
-// rebuilds with OCCT — any disagreement means the preview shows a model the
+// BrepKit kernel is authoritative. Every generator here therefore uses
+// BrepKit's frame, because the AI preview renders with this kernel and Apply
+// rebuilds with BrepKit — any disagreement means the preview shows a model the
 // user is not actually agreeing to:
 //
 //   box            corner at the origin, spanning (0,0,0)-(width, height, depth)
 //   cylinder/cone  base on z=0, axis +Z, centred in XY
 //   sphere/torus   centred on the origin, torus ring in XY (axis +Z)
 //
-// test/kernel-conformance.test.ts pins these against the real OCCT kernel.
+// test/kernel-conformance.test.ts pins these against the real BrepKit kernel.
 // ---------------------------------------------------------------------------
 
 /**
  * Corner at the origin, spanning (0,0,0) to (width, height, depth), matching
- * OCCT's BRepPrimAPI_MakeBox.
+ * BrepKit's makeBox primitive.
  */
 export function makeBox(width: number, height: number, depth: number): Solid {
   requirePositive(width, 'Box width');
@@ -136,7 +136,7 @@ export function makeCylinder(
 
 /**
  * Frustum with independent bottom/top radii; a zero top radius gives a cone.
- * Base on the z=0 plane with the axis along +Z, matching OCCT.
+ * Base on the z=0 plane with the axis along +Z, matching BrepKit.
  */
 export function makeCone(
   bottomRadius: number,
@@ -238,7 +238,7 @@ export function makeSphere(
   return orientOutward({ vertices, faces });
 }
 
-/** Centred on the origin with the ring in the XY plane and the axis +Z, matching OCCT. */
+/** Centred on the origin with the ring in the XY plane and the axis +Z, matching BrepKit. */
 export function makeTorus(
   majorRadius: number,
   minorRadius: number,
