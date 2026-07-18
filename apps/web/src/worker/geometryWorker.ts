@@ -3,7 +3,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import type { BodyId, ProjectDocument, ProjectId } from '@openzcad/shared';
 
 export type GeometryWorkerRequest =
-  | { type: 'sync'; document: ProjectDocument }
+  | { type: 'sync'; document: ProjectDocument; requestId?: string }
   | {
       type: 'export';
       requestId: string;
@@ -15,7 +15,8 @@ export type GeometryWorkerRequest =
 /**
  * Result messages are tagged with the source document's identity so the main
  * thread can discard responses that no longer match the current document
- * (e.g. after a fast undo while a sync was in flight).
+ * (e.g. after a fast undo while a sync was in flight). A `requestId` marks a
+ * caller-owned one-off sync (demo seeding) routed by promise instead.
  */
 export type GeometrySyncResult =
   | {
@@ -23,6 +24,7 @@ export type GeometrySyncResult =
       ok: true;
       projectId: ProjectId;
       version: number;
+      requestId?: string;
       derived: ProjectDocument['derived'];
     }
   | {
@@ -30,6 +32,7 @@ export type GeometrySyncResult =
       ok: false;
       projectId: ProjectId;
       version: number;
+      requestId?: string;
       error: string;
     };
 
@@ -100,6 +103,7 @@ self.onmessage = async (event: MessageEvent<GeometryWorkerRequest>) => {
       ok: true,
       projectId: document.projectId,
       version: document.version,
+      requestId: request.requestId,
       derived
     };
     self.postMessage(result);
@@ -121,6 +125,7 @@ self.onmessage = async (event: MessageEvent<GeometryWorkerRequest>) => {
       ok: false,
       projectId: document.projectId,
       version: document.version,
+      requestId: request.requestId,
       error: error instanceof Error ? error.message : 'Geometry sync failed.'
     };
     self.postMessage(result);

@@ -4,25 +4,27 @@
    ───────────────────────────────────────────────────────────── */
 
 :root {
-  /* ── Surfaces & text ──────────────────────────────────── */
-  --color-bg: #0c0d0f;
-  --color-surface: #141619;
-  --color-surface-2: #1b1e22;
-  --color-surface-hover: #23262b;
-  --color-border: #2c3036;
-  --color-border-strong: #444952;
-  --color-text: #eef0f2;
-  --color-text-muted: #a0a5ad;
-  --color-text-subtle: #696f78;
+  /* ── Surfaces & text (Esau / OpenCAE cool-steel ramp) ───── */
+  --color-bg: #0b0f14;
+  --color-surface: #111821;
+  --color-surface-2: #17202b;
+  --color-surface-hover: #1b2430;
+  --color-border: #2a3441;
+  --color-border-strong: #3a4554;
+  --color-text: #e6edf3;
+  --color-text-muted: #8b949e;
+  --color-text-subtle: #828d99;
 
   /* ── Semantic ─────────────────────────────────────────── */
-  --color-accent: #3b82f6;
-  --color-accent-dim: rgba(59, 130, 246, 0.13);
-  --color-accent-border: rgba(59, 130, 246, 0.5);
+  --color-accent: #4da3ff;
+  --color-accent-hi: #7cc0ff;
+  --color-accent-dim: rgba(77, 163, 255, 0.12);
+  --color-accent-border: rgba(77, 163, 255, 0.45);
+  --color-on-accent: #06111e;
   --color-warning: #f59e0b;
   --color-error: #ef4444;
   --color-success: #22c55e;
-  --color-viewport-bg: #090a0c;
+  --color-viewport-bg: #070b10;
 
   /* ── Viewport selection & manipulation ────────────────── */
   --color-select: #4da3ff;      /* selected geometry */
@@ -71,9 +73,9 @@
   --border-strong: 1px solid var(--color-border-strong);
 
   /* ── Layout dimensions ────────────────────────────────── */
-  --topbar-h: 46px;
+  --topbar-h: 44px;
   --toolbar-h: 48px;
-  --statusbar-h: 28px;
+  --statusbar-h: 30px;
   --sidebar-w: 252px;
   --context-w: 330px;
 
