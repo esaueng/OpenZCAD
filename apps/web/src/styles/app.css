@@ -2865,3 +2865,79 @@ textarea {
   font-size: var(--fs-mini);
   white-space: nowrap;
 }
+
+/* ── Revision timeline (checkpoint save points) ──────────── */
+
+.revision-list {
+  display: grid;
+  gap: 1px;
+}
+
+.revision-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 2px 4px 2px 18px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* The rail connecting the dots, split at the first/last rows. */
+.revision-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.revision-row:first-child::before {
+  top: 50%;
+}
+
+.revision-row:last-child::before {
+  bottom: 50%;
+}
+
+.revision-row:only-child::before {
+  display: none;
+}
+
+.revision-dot {
+  position: absolute;
+  left: 2px;
+  width: 7px;
+  height: 7px;
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+}
+
+.revision-row.latest .revision-dot {
+  background: var(--color-accent);
+  box-shadow: 0 0 7px var(--color-accent-border);
+}
+
+.revision-row.latest .revision-reason {
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
+.revision-reason {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.revision-time {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}

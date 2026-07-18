@@ -21,7 +21,8 @@ import type {
   BodyRepresentation,
   FeatureId,
   FeatureNode,
-  ParameterNode
+  ParameterNode,
+  ProjectCheckpoint
 } from '@openzcad/shared';
 import { FEATURE_KIND_LABELS, formatNumber } from '../lib/model';
 
@@ -181,6 +182,7 @@ interface SidebarProps {
   selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
   warnings: string[];
+  checkpoints: ProjectCheckpoint[];
   onSelectFeature(nodeId: string): void;
   onToggleBodyVisibility(bodyId: string): void;
   onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
@@ -197,6 +199,7 @@ export function Sidebar({
   selectedFeatureNodeId,
   hiddenBodyIds,
   warnings,
+  checkpoints,
   onSelectFeature,
   onToggleBodyVisibility,
   onFeatureContextMenu,
@@ -310,6 +313,27 @@ export function Sidebar({
           })}
         </div>
       </section>
+
+      {checkpoints.length > 0 && (
+        <section className="sidebar-section revisions">
+          <h3 className="section-title">Revisions</h3>
+          <div className="revision-list">
+            {[...checkpoints].reverse().map((checkpoint, index) => (
+              <div
+                key={checkpoint.checkpointId}
+                className={`revision-row ${index === 0 ? 'latest' : ''}`}
+                title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}`}
+              >
+                <span className="revision-dot" aria-hidden="true" />
+                <span className="revision-reason">{checkpoint.reason}</span>
+                <small className="revision-time mono">
+                  {new Date(checkpoint.createdAt).toLocaleDateString()}
+                </small>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {warnings.length > 0 && (
         <section className="sidebar-section diagnostics">
