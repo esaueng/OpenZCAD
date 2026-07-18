@@ -1,25 +1,34 @@
 import { useState } from 'react';
-import { FolderOpen, Plus } from 'lucide-react';
+import { FolderOpen, GraduationCap, Plus } from 'lucide-react';
 import type { ProjectSummary, UnitSystem } from '@openzcad/shared';
+import type { DemoDefinition } from '../lib/demos';
 import { BrandMark } from './BrandMark';
 
 interface StartScreenProps {
   projects: ProjectSummary[];
   status: string;
   busy: boolean;
+  demos: DemoDefinition[];
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
+  onOpenDemo(definition: DemoDefinition): void;
 }
 
 export function StartScreen({
   projects,
   status,
   busy,
+  demos,
   onCreate,
-  onOpen
+  onOpen,
+  onOpenDemo
 }: StartScreenProps) {
   const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>('mm');
+  const demoIds = new Set(demos.map((demo) => demo.projectId));
+  const userProjects = projects.filter(
+    (project) => !demoIds.has(project.projectId)
+  );
 
   return (
     <div className="start-screen">
@@ -28,6 +37,34 @@ export function StartScreen({
           <BrandMark />
           <h1>OpenZCAD</h1>
           <span className="start-tagline">parametric cad in the browser</span>
+        </div>
+
+        <div className="start-section">
+          <h2>Design revision demos</h2>
+          <div className="demo-list">
+            {demos.map((demo) => (
+              <button
+                key={demo.key}
+                type="button"
+                className="demo-card"
+                disabled={busy}
+                onClick={() => onOpenDemo(demo)}
+              >
+                <span className="demo-card-head">
+                  <GraduationCap size={14} aria-hidden="true" />
+                  <strong>{demo.name.replace('Demo · ', '')}</strong>
+                </span>
+                <span className="demo-card-tagline">{demo.tagline}</span>
+                <span className="demo-card-revs">
+                  {demo.revisions.map((revision) => (
+                    <span key={revision} className="demo-rev">
+                      {revision}
+                    </span>
+                  ))}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
         <form
@@ -82,11 +119,11 @@ export function StartScreen({
           </button>
         </form>
 
-        {projects.length > 0 && (
+        {userProjects.length > 0 && (
           <div className="start-section">
             <h2>Open existing</h2>
             <div className="start-project-list">
-              {projects.map((project) => (
+              {userProjects.map((project) => (
                 <button
                   key={project.projectId}
                   type="button"

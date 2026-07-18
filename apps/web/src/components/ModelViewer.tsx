@@ -8,7 +8,17 @@ import {
   CSS2DObject,
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { createObjectForBody, fitCameraToObjects } from '@openzcad/viewport';
+import {
+  computeFitPose,
+  createGradientBackground,
+  createObjectForBody,
+  createShadowCatcher,
+  createStudioEnvironment,
+  createStudioGrid,
+  fitCameraToObjects,
+  tuneShadowFrustum,
+  type CameraPose
+} from '@openzcad/viewport';
 import type {
   BodyRepresentation,
   BodyTopology,
@@ -267,6 +277,18 @@ interface ModelViewerProps {
   ): void;
 }
 
+interface CameraTween {
+  startTime: number;
+  duration: number;
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromTarget: THREE.Vector3;
+  toTarget: THREE.Vector3;
+  near: number;
+  far: number;
+  onComplete?: () => void;
+}
+
 interface SceneContext {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -290,7 +312,9 @@ interface SceneContext {
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg']
   ): void;
-  grid: THREE.GridHelper;
+  grid: THREE.Object3D;
+  shadowCatcher: THREE.Object3D;
+  keyLight: THREE.DirectionalLight;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
@@ -299,6 +323,17 @@ interface SceneContext {
   /** Fat-line materials that need their resolution refreshed on resize. */
   edgeMaterials: Set<LineMaterial>;
   dimensionLabels: Set<DimensionLabelBinding>;
+  /** Active camera glide, driven by the render loop until it settles. */
+  cameraTween: CameraTween | null;
+  /** Starts a glide toward a new pose; user input cancels it. */
+  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
+  /** Single reusable preselection overlay for the face under the pointer. */
+  hoverFaceMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  hoverFaceTarget: number;
+  hoverFaceKey: string | null;
+  /** Selection overlays fading in toward their resting opacity. */
+  fadeIns: Set<THREE.MeshBasicMaterial>;
+  clock: THREE.Clock;
 }
 
 interface DimensionLabelBinding {
@@ -543,10 +578,15 @@ function snapTo(value: number, step: number, fine: boolean): number {
 
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
 
-const SELECTION_EMISSIVE = 0x1d4f86;
-const HOVER_EMISSIVE = 0x14283f;
+const SELECTION_EMISSIVE = 0x173a5e;
+const HOVER_EMISSIVE = 0x101d2c;
+const HOVER_FACE_COLOR = 0x8fc8ff;
+const HOVER_FACE_OPACITY = 0.3;
+const SELECTED_FACE_COLOR = 0x4da3ff;
+const SELECTED_FACE_OPACITY = 0.5;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
+const CAMERA_TWEEN_MS = 420;
 const RIGHT_DRAG_THRESHOLD_PX = 5;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
@@ -608,7 +648,7 @@ export class RightClickGestureTracker {
 // and their states are unmistakable: idle slate, hover glow, selected accent.
 const EDGE_IDLE_COLOR = 0x7d8ca0;
 const EDGE_HOVER_COLOR = 0xbfdcff;
-const EDGE_SELECTED_COLOR = 0x60a5fa;
+const EDGE_SELECTED_COLOR = 0x7cc0ff;
 const EDGE_IDLE_WIDTH = 2;
 const EDGE_HOVER_WIDTH = 4;
 const EDGE_SELECTED_WIDTH = 4.5;
@@ -884,6 +924,8 @@ export function ModelViewer({
   const moveGizmoHudRef = useRef<HTMLDivElement | null>(null);
   const sketchesRef = useRef(sketches);
   sketchesRef.current = sketches;
+  const bodiesRef = useRef(bodies);
+  bodiesRef.current = bodies;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
@@ -905,7 +947,8 @@ export function ModelViewer({
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#070b10');
+    const gradientBackground = createGradientBackground();
+    scene.background = gradientBackground;
 
     const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
     const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
@@ -934,10 +977,16 @@ export function ModelViewer({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     host.appendChild(renderer.domElement);
+
+    // Studio environment rig: soft IBL reflections do the heavy lifting for
+    // "real CAD" shading, so the analytic lights stay gentle.
+    const environment = createStudioEnvironment(renderer);
+    scene.environment = environment;
+    scene.environmentIntensity = 0.4;
 
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(host.clientWidth, host.clientHeight);
@@ -952,28 +1001,31 @@ export function ModelViewer({
 
     // A HemisphereLight's sky/ground axis is its position, which defaults to
     // Object3D.DEFAULT_UP (+Y); leave it and the sky colour washes in sideways.
-    const skyLight = new THREE.HemisphereLight('#dbeafe', '#070b10', 1.25);
+    const skyLight = new THREE.HemisphereLight('#d7e6f7', '#0a0e14', 0.45);
     skyLight.position.set(0, 0, 1);
     scene.add(skyLight);
-    // Right, front, above.
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.45);
+    // Right, front, above — the studio key that casts the grounding shadow.
+    const keyLight = new THREE.DirectionalLight('#ffffff', 1.35);
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
+    tuneShadowFrustum(keyLight, 120);
     scene.add(keyLight);
-    // Left, behind, slightly above.
+    scene.add(keyLight.target);
+    // Left, behind, slightly above — cool rim for edge separation.
     const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.5);
     rimLight.position.set(-80, 90, 40);
     scene.add(rimLight);
 
-    // GridHelper is built in the XZ plane, so lay it onto XY — the ground the
-    // kernel's box corners and cylinder bases actually sit on.
-    const grid = new THREE.GridHelper(240, 24, '#243140', '#141d28');
-    grid.rotation.x = Math.PI / 2;
+    // Shader construction plane with distance fade, plus an invisible floor
+    // that only receives the key light's soft shadow.
+    const grid = createStudioGrid();
     scene.add(grid);
+    const shadowCatcher = createShadowCatcher();
+    scene.add(shadowCatcher);
 
-    const axes = new THREE.AxesHelper(18);
+    const axes = new THREE.AxesHelper(16);
     (axes.material as THREE.Material).transparent = true;
-    (axes.material as THREE.Material).opacity = 0.7;
+    (axes.material as THREE.Material).opacity = 0.55;
     scene.add(axes);
 
     const bodyGroup = new THREE.Group();
@@ -995,6 +1047,27 @@ export function ModelViewer({
     const moveGizmoGroup = new THREE.Group();
     moveGizmoGroup.name = 'move-rotate-gizmo';
     scene.add(moveGizmoGroup);
+
+    // Reusable preselection overlay: the face under the pointer gets a cool
+    // blue film that fades in and out, instead of a hard emissive snap.
+    // toneMapped:false keeps the tint saturated over brightly lit faces —
+    // ACES would otherwise wash the blue out to gray on hot caps.
+    const hoverFaceMesh = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: HOVER_FACE_COLOR,
+        toneMapped: false,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2
+      })
+    );
+    hoverFaceMesh.visible = false;
+    hoverFaceMesh.renderOrder = 15;
+    hoverFaceMesh.raycast = () => undefined;
 
     function applyMovePreview(
       translation: MovePreview['translation'],
@@ -1096,6 +1169,64 @@ export function ModelViewer({
       emitViewChange();
     }
 
+    /**
+     * Glides the active camera to a new pose instead of snapping. The tween
+     * always animates the perspective master camera; in orthographic mode the
+     * per-frame sync mirrors it into the ortho frustum, and any user input
+     * cancels the glide immediately.
+     */
+    function startCameraTween(pose: CameraPose, onComplete?: () => void) {
+      // Consume leftover damping inertia so the glide starts from rest.
+      controls.update();
+      context.cameraTween = {
+        startTime: performance.now(),
+        duration: CAMERA_TWEEN_MS,
+        fromPosition: camera.position.clone(),
+        toPosition: pose.position.clone(),
+        fromTarget: controls.target.clone(),
+        toTarget: pose.target.clone(),
+        near: pose.near,
+        far: pose.far,
+        onComplete
+      };
+    }
+
+    function cancelCameraTween() {
+      context.cameraTween = null;
+    }
+
+    function stepCameraTween(now: number): boolean {
+      const tween = context.cameraTween;
+      if (!tween) {
+        return false;
+      }
+      const t = Math.min((now - tween.startTime) / tween.duration, 1);
+      const eased =
+        t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      camera.position.lerpVectors(
+        tween.fromPosition,
+        tween.toPosition,
+        eased
+      );
+      controls.target.lerpVectors(
+        tween.fromTarget,
+        tween.toTarget,
+        eased
+      );
+      if (context.projection === 'orthographic') {
+        syncOrthographic(false);
+      }
+      if (t >= 1) {
+        context.cameraTween = null;
+        camera.near = tween.near;
+        camera.far = tween.far;
+        camera.updateProjectionMatrix();
+        tween.onComplete?.();
+        emitViewChange();
+      }
+      return true;
+    }
+
     const context: SceneContext = {
       scene,
       camera,
@@ -1114,13 +1245,22 @@ export function ModelViewer({
       moveGizmoGroup,
       applyMovePreview,
       grid,
+      shadowCatcher,
+      keyLight,
       raycaster: new THREE.Raycaster(),
       objectsByBodyId: new Map(),
       hasFitCamera: false,
       hoveredBodyId: null,
       hoveredEdge: null,
       edgeMaterials: new Set(),
-      dimensionLabels: new Set()
+      dimensionLabels: new Set(),
+      cameraTween: null,
+      startCameraTween,
+      hoverFaceMesh,
+      hoverFaceTarget: 0,
+      hoverFaceKey: null,
+      fadeIns: new Set(),
+      clock: new THREE.Clock()
     };
     contextRef.current = context;
     controls.addEventListener('end', emitViewChange);
@@ -1439,6 +1579,54 @@ export function ModelViewer({
       }
     }
 
+    /**
+     * Preselection feedback: the face under the pointer gets a fading blue
+     * film (real-CAD style), topology edges brighten via setEdgeHover, and
+     * only whole-body picks (imported meshes without face topology) fall back
+     * to a body-wide emissive lift.
+     */
+    function setHoverFace(selection: TopologySelection | null) {
+      const key =
+        selection?.kind === 'face' && selection.topologyId
+          ? `${selection.bodyId}:${selection.topologyId}`
+          : null;
+      if (context.hoverFaceKey === key) {
+        return;
+      }
+      context.hoverFaceKey = key;
+      context.hoverFaceTarget = 0;
+      if (!key || selection?.kind !== 'face') {
+        return;
+      }
+      const body = bodiesRef.current.find(
+        (candidate) => candidate.bodyId === selection.bodyId
+      );
+      const face = body?.topology?.faces.find(
+        (candidate) => candidate.topologyId === selection.topologyId
+      );
+      const object = context.objectsByBodyId.get(selection.bodyId);
+      if (!body || !face || !object) {
+        return;
+      }
+      const oldGeometry = context.hoverFaceMesh.geometry;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
+      );
+      geometry.setIndex(
+        body.mesh.indices.slice(
+          face.triangleStart * 3,
+          (face.triangleStart + face.triangleCount) * 3
+        )
+      );
+      context.hoverFaceMesh.geometry = geometry;
+      oldGeometry.dispose();
+      object.add(context.hoverFaceMesh);
+      context.hoverFaceMesh.visible = true;
+      context.hoverFaceTarget = HOVER_FACE_OPACITY;
+    }
+
     function applyHover(result: PickResult | null) {
       const bodyId = result?.selection?.bodyId ?? null;
       const canDragFace =
@@ -1449,6 +1637,7 @@ export function ModelViewer({
           ? ((result.hit.object.userData as { visual?: Line2 }).visual ?? null)
           : null;
       setEdgeHover(hoveredEdge);
+      setHoverFace(result?.selection ?? null);
       renderer.domElement.style.cursor = extrudePreviewRef.current
         ? 'grab'
         : canDragFace
@@ -1456,16 +1645,22 @@ export function ModelViewer({
           : bodyId || result?.sketchId
             ? 'pointer'
             : '';
-      if (context.hoveredBodyId === bodyId) {
+      // Only body-kind picks (mesh bodies without exact face topology) lift
+      // the whole body's emissive; faces and edges have their own overlays.
+      const emissiveBodyId =
+        result?.selection?.kind === 'body' ? bodyId : null;
+      if (context.hoveredBodyId === emissiveBodyId) {
         return;
       }
-      context.hoveredBodyId = bodyId;
+      context.hoveredBodyId = emissiveBodyId;
       forEachMesh(bodyGroup, (mesh) => {
         const meshBodyId = findBodyId(mesh);
         const base =
           (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
         mesh.material.emissive.setHex(
-          bodyId && meshBodyId === bodyId && base === 0 ? HOVER_EMISSIVE : base
+          emissiveBodyId && meshBodyId === emissiveBodyId && base === 0
+            ? HOVER_EMISSIVE
+            : base
         );
       });
     }
@@ -1653,6 +1848,7 @@ export function ModelViewer({
       applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
+      cancelCameraTween();
       if (event.button === 2) {
         rightClickGesture.begin(
           event.pointerId,
@@ -1970,18 +2166,22 @@ export function ModelViewer({
       if (bodyGroup.children.length === 0) {
         return;
       }
-      fitCameraToObjects(camera, controls.target, bodyGroup.children);
-      if (context.projection === 'orthographic') {
-        syncOrthographic(true);
-      }
-      controls.update();
-      emitViewChange();
+      const pose = computeFitPose(camera, bodyGroup.children);
+      startCameraTween(pose, () => {
+        if (context.projection === 'orthographic') {
+          syncOrthographic(true);
+        }
+      });
     };
 
     const handleContextMenu = (event: MouseEvent) => {
       // Browsers may dispatch this before the right-button gesture finishes.
       // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
+    };
+
+    const handleWheel = () => {
+      cancelCameraTween();
     };
 
     renderer.domElement.addEventListener(
@@ -2003,15 +2203,46 @@ export function ModelViewer({
     renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
     renderer.domElement.addEventListener('dblclick', handleDoubleClick);
     renderer.domElement.addEventListener('contextmenu', handleContextMenu);
+    renderer.domElement.addEventListener('wheel', handleWheel, {
+      passive: true
+    });
 
     const lastQuaternion = new THREE.Quaternion();
-    let animationFrame = window.requestAnimationFrame(function animate() {
+    let animationFrame = window.requestAnimationFrame(function animate(now) {
+      // Camera glide first so controls and the ortho mirror see the result.
+      const tweening = stepCameraTween(now);
       controls.update();
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
-      if (context.projection === 'orthographic') {
+      if (context.projection === 'orthographic' && !tweening) {
         camera.position.copy(orthographic.position);
         camera.quaternion.copy(orthographic.quaternion);
+      }
+
+      // Preselection and selection overlays ease toward their targets.
+      const dt = Math.min(context.clock.getDelta(), 0.05);
+      const ease = 1 - Math.exp(-dt * 16);
+      const hoverMaterial = context.hoverFaceMesh.material;
+      const hoverNext =
+        hoverMaterial.opacity +
+        (context.hoverFaceTarget - hoverMaterial.opacity) * ease;
+      hoverMaterial.opacity = hoverNext;
+      if (
+        context.hoverFaceTarget === 0 &&
+        hoverNext < 0.004 &&
+        context.hoverFaceMesh.visible
+      ) {
+        context.hoverFaceMesh.visible = false;
+      }
+      for (const material of context.fadeIns) {
+        const target =
+          (material.userData.targetOpacity as number | undefined) ?? 0.34;
+        const next = material.opacity + (target - material.opacity) * ease;
+        material.opacity = next;
+        if (Math.abs(target - next) < 0.004) {
+          material.opacity = target;
+          context.fadeIns.delete(material);
+        }
       }
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
@@ -2081,12 +2312,20 @@ export function ModelViewer({
       );
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
+      renderer.domElement.removeEventListener('wheel', handleWheel);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
       clearGroup(gizmoGroup);
       clearGroup(moveGizmoGroup);
-      grid.dispose();
+      for (const disposable of [grid, shadowCatcher] as THREE.Mesh[]) {
+        disposable.geometry.dispose();
+        (disposable.material as THREE.Material).dispose();
+      }
+      hoverFaceMesh.geometry.dispose();
+      hoverFaceMesh.material.dispose();
+      environment.dispose();
+      gradientBackground.dispose();
       axes.dispose();
       controls.removeEventListener('end', emitViewChange);
       controls.removeEventListener('change', scheduleSettledViewChange);
@@ -2118,6 +2357,10 @@ export function ModelViewer({
     context.hoveredEdge = null;
     context.edgeMaterials.clear();
     context.objectsByBodyId.clear();
+    context.fadeIns.clear();
+    context.hoverFaceKey = null;
+    context.hoverFaceTarget = 0;
+    context.hoverFaceMesh.visible = false;
     const edgeResolution = {
       width: context.renderer.domElement.clientWidth || 1,
       height: context.renderer.domElement.clientHeight || 1
@@ -2193,20 +2436,22 @@ export function ModelViewer({
           )
         );
         geometry.computeVertexNormals();
-        const highlight = new THREE.Mesh(
-          geometry,
-          new THREE.MeshBasicMaterial({
-            color: 0x3b82f6,
-            transparent: true,
-            opacity: 0.42,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            polygonOffset: true,
-            polygonOffsetFactor: -2
-          })
-        );
+        const highlightMaterial = new THREE.MeshBasicMaterial({
+          color: SELECTED_FACE_COLOR,
+          toneMapped: false,
+          transparent: true,
+          opacity: 0,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -3
+        });
+        highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
+        const highlight = new THREE.Mesh(geometry, highlightMaterial);
+        highlight.renderOrder = 16;
         highlight.raycast = () => undefined;
         object.add(highlight);
+        context.fadeIns.add(highlightMaterial);
 
         if (editableBodyIds.includes(body.bodyId)) {
           const normal = normalForTriangle(body, selectedFace.triangleStart);
@@ -2259,7 +2504,7 @@ export function ModelViewer({
                 lineEnd.z
               ]);
               const dimensionMaterial = new LineMaterial({
-                color: 0x60a5fa,
+                color: 0x7cc0ff,
                 linewidth: 1.5,
                 transparent: true,
                 opacity: 0.48,
@@ -2357,6 +2602,28 @@ export function ModelViewer({
     }
 
     applyDisplayMode(context.bodyGroup, displayModeRef.current);
+
+    // Retune the key light's shadow frustum around the current model so the
+    // grounding shadow stays crisp instead of being clipped or pixelated.
+    const sceneBox = new THREE.Box3();
+    for (const child of context.bodyGroup.children) {
+      sceneBox.expandByObject(child);
+    }
+    if (!sceneBox.isEmpty()) {
+      const sceneSize = sceneBox.getSize(new THREE.Vector3());
+      const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
+      tuneShadowFrustum(
+        context.keyLight,
+        Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
+      );
+      context.keyLight.position.set(
+        sceneCenter.x + 90,
+        sceneCenter.y - 100,
+        sceneCenter.z + 140
+      );
+      context.keyLight.target.position.copy(sceneCenter);
+      context.keyLight.target.updateMatrixWorld();
+    }
 
     // Name callout on the primary (last picked) selected body.
     const primaryId = selectedBodyIds.at(-1);
@@ -2629,7 +2896,7 @@ export function ModelViewer({
       const profileFill = new THREE.Mesh(
         profileGeometry,
         new THREE.MeshBasicMaterial({
-          color: sketch.selected ? 0x3b82f6 : 0x2f78c9,
+          color: sketch.selected ? 0x4da3ff : 0x2f6ea8,
           transparent: true,
           opacity: sketch.selected ? 0.3 : 0.1,
           side: THREE.DoubleSide,
@@ -2800,6 +3067,7 @@ export function ModelViewer({
     const context = contextRef.current;
     if (context) {
       context.grid.visible = settings.showGrid;
+      context.shadowCatcher.visible = settings.showGrid;
       applyDisplayMode(context.bodyGroup, settings.displayMode);
     }
   }, [settings.showGrid, settings.displayMode]);
@@ -2813,19 +3081,15 @@ export function ModelViewer({
     ) {
       return;
     }
-    fitCameraToObjects(
-      context.camera,
-      context.controls.target,
-      context.bodyGroup.children
-    );
-    if (context.projection === 'orthographic') {
-      context.syncOrthographic(true);
-    }
-    context.controls.update();
-    onViewChangeRef.current(captureViewportCamera(context));
+    const pose = computeFitPose(context.camera, context.bodyGroup.children);
+    context.startCameraTween(pose, () => {
+      if (context.projection === 'orthographic') {
+        context.syncOrthographic(true);
+      }
+    });
   }, [fitSignal]);
 
-  // Standard views keep the current zoom and orbit the camera to the axis.
+  // Standard views keep the current zoom and glide the camera to the axis.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !viewRequest) {
@@ -2834,17 +3098,12 @@ export function ModelViewer({
     const { camera, controls } = context;
     const distance = Math.max(camera.position.distanceTo(controls.target), 1);
     const direction = VIEW_DIRECTIONS[viewRequest.view];
-    camera.position.copy(controls.target).addScaledVector(direction, distance);
-    camera.updateProjectionMatrix();
-    if (context.projection === 'orthographic') {
-      // Keep the dolly zoom; only the orbit direction changes.
-      const zoom = context.orthographic.zoom;
-      context.syncOrthographic(false);
-      context.orthographic.zoom = zoom;
-      context.orthographic.updateProjectionMatrix();
-    }
-    controls.update();
-    onViewChangeRef.current(captureViewportCamera(context));
+    context.startCameraTween({
+      position: controls.target.clone().addScaledVector(direction, distance),
+      target: controls.target.clone(),
+      near: camera.near,
+      far: camera.far
+    });
   }, [viewRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;

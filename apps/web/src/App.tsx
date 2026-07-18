@@ -89,6 +89,8 @@ import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
+import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
+import type { DemoDefinition } from './lib/demos';
 import { AiCommandRail } from './components/AiCommandRail';
 import { SketchWorkspace } from './components/SketchWorkspace';
 import {
@@ -231,6 +233,15 @@ export function App() {
       }
     >()
   );
+  const syncRequestsRef = useRef(
+    new Map<
+      string,
+      {
+        resolve(derived: ProjectDocument['derived']): void;
+        reject(error: Error): void;
+      }
+    >()
+  );
   const lastSyncedKeyRef = useRef<string | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -285,6 +296,19 @@ export function App() {
         }
         return;
       }
+      // Caller-owned one-off syncs (demo seeding) resolve by request id.
+      if (event.data.requestId) {
+        const pending = syncRequestsRef.current.get(event.data.requestId);
+        if (pending) {
+          syncRequestsRef.current.delete(event.data.requestId);
+          if (event.data.ok) {
+            pending.resolve(event.data.derived);
+          } else {
+            pending.reject(new Error(event.data.error));
+          }
+        }
+        return;
+      }
       const manager = managerRef.current;
       if (!manager) {
         return;
@@ -309,6 +333,10 @@ export function App() {
         request.reject(new Error('Geometry worker closed.'));
       }
       exportRequestsRef.current.clear();
+      for (const request of syncRequestsRef.current.values()) {
+        request.reject(new Error('Geometry worker closed.'));
+      }
+      syncRequestsRef.current.clear();
       worker.terminate();
       geometryWorkerRef.current = null;
     };
@@ -998,6 +1026,64 @@ export function App() {
       setCloudAvailable(false);
       setSaveState('offline');
       setStatus(`${errorMessage(error, 'Cloud unavailable')} Working locally.`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * One-off exact sync against the geometry worker, resolved by request id —
+   * used for seeding demo documents, whose finishing features need exact edge
+   * ordinals before the document is ever opened.
+   */
+  function requestExactSync(
+    document: ProjectDocument
+  ): Promise<ProjectDocument['derived']> {
+    const worker = geometryWorkerRef.current;
+    if (!worker) {
+      return Promise.reject(new Error('Geometry worker unavailable.'));
+    }
+    return new Promise((resolve, reject) => {
+      const requestId = crypto.randomUUID();
+      syncRequestsRef.current.set(requestId, { resolve, reject });
+      worker.postMessage({ type: 'sync', document, requestId });
+    });
+  }
+
+  async function handleOpenDemo(definition: DemoDefinition) {
+    setBusy(true);
+    try {
+      const existing = await loadLocalProject(definition.projectId);
+      if (existing) {
+        hydrateDocument(existing);
+        setStatus(`Opened ${existing.name}.`);
+        return;
+      }
+      setStatus(`Building ${definition.name}…`);
+      const document = await buildDemoDocument(
+        definition,
+        session?.userId ?? localUserId,
+        requestExactSync
+      );
+      await saveLocalProject(document);
+      hydrateDocument(document);
+      setCloudAvailable(false);
+      setProjects((current) => [
+        {
+          projectId: document.projectId,
+          name: document.name,
+          updatedAt: document.derived.updatedAt,
+          revisionCount: document.checkpoints.length
+        },
+        ...current.filter(
+          (project) => project.projectId !== document.projectId
+        )
+      ]);
+      setStatus(
+        `${definition.name} ready — three revisions in the feature history.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Failed to build the demo.'));
     } finally {
       setBusy(false);
     }
@@ -1886,8 +1972,10 @@ export function App() {
         projects={projects}
         status={status}
         busy={busy}
+        demos={DEMO_DEFINITIONS}
         onCreate={(name, units) => void handleCreateProject(name, units)}
         onOpen={(projectId) => void handleOpenProject(projectId)}
+        onOpenDemo={(definition) => void handleOpenDemo(definition)}
       />
     );
   }
