@@ -2212,6 +2212,7 @@ export function App() {
           selectedFeatureNodeId={selectedFeatureNodeId}
           hiddenBodyIds={hiddenBodyIds}
           warnings={warnings}
+          checkpoints={doc?.checkpoints ?? []}
           onSelectFeature={handleSelectFeatureFromTree}
           onToggleBodyVisibility={toggleBodyVisibility}
           onFeatureContextMenu={handleFeatureContextMenu}
