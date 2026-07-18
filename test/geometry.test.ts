@@ -35,7 +35,7 @@ describe('primitive solids', () => {
     expect(box.vertices).toHaveLength(8);
     expect(solidVolume(box)).toBeCloseTo(6000, 6);
     const bounds = solidBounds(box);
-    // Corner at the origin, matching OCCT — not centred on it.
+    // Corner at the origin, matching BrepKit — not centred on it.
     expect(bounds.min).toEqual({ x: 0, y: 0, z: 0 });
     expect(bounds.max).toEqual({ x: 10, y: 20, z: 30 });
   });

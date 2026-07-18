@@ -1,4 +1,4 @@
-import { OcctError, OcctKernel, type ShapeHandle, type Vec3 } from 'occt-wasm';
+import { BrepKernel } from 'brepkit-wasm';
 import {
   findSketch,
   getParameterScope,
@@ -12,7 +12,8 @@ import {
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
-  type Vec2
+  type Vec2,
+  type Vec3
 } from '@openzcad/geometry';
 import {
   DEFAULT_BODY_COLOR,
@@ -20,6 +21,7 @@ import {
   nowIso,
   type BodyId,
   type BodyRepresentation,
+  type BodyTopology,
   type DerivedState,
   type FeatureNode,
   type ProjectDocument,
@@ -27,11 +29,33 @@ import {
 } from '@openzcad/shared';
 import { OpenZCADKernel } from './index';
 
+const TESSELLATION_DEFLECTION = 0.08;
+const TESSELLATION_ANGLE = 0.35;
+const CURVE_SEGMENTS = 32;
+const GEOMETRY_EPSILON = 1e-9;
+
+interface ExactShape {
+  /** A body can contain several independent solids, as with a pattern. */
+  solids: number[];
+}
+
 interface ExactBuildResult {
-  shapes: Map<BodyId, ShapeHandle>;
+  shapes: Map<BodyId, ExactShape>;
   consumed: Set<BodyId>;
   warnings: string[];
-  handles: Set<ShapeHandle>;
+}
+
+interface MeasuredShape {
+  vertices: number[];
+  indices: number[];
+  topology: BodyTopology;
+  faceCount: number;
+  volume: number;
+  valid: boolean;
+  bbox: {
+    min: Vec3;
+    max: Vec3;
+  };
 }
 
 function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
@@ -43,7 +67,7 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 export interface ExactKernelAdapter {
-  readonly kind: 'open-cascade';
+  readonly kind: 'brepkit';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
@@ -103,52 +127,76 @@ function profilePoints(
   }
 }
 
-function addHandle(result: ExactBuildResult, handle: ShapeHandle): ShapeHandle {
-  result.handles.add(handle);
-  return handle;
-}
-
 /**
- * OCCT modeling algorithms (fillet, chamfer, booleans, STEP import) often wrap
- * their result in a compound that holds a single solid, and several occt-wasm
- * operations reject compound inputs outright — which is why e.g. a second
- * fillet on an already-filleted body used to fail on every edge. Unwrapping
- * unambiguous single-solid compounds keeps every stored body directly usable
- * as a downstream target. Multi-solid compounds (patterns, multi-part STEP
- * files) pass through untouched.
+ * Build the same ZYX Euler transform used by the compatibility kernel and the
+ * viewport gizmo. BrepKit accepts row-major matrices and column vectors.
  */
-function unwrapSingleSolid(
-  kernel: OcctKernel,
-  shape: ShapeHandle,
-  result: ExactBuildResult
-): ShapeHandle {
-  if (kernel.getShapeType(shape) !== 'compound') {
-    return shape;
-  }
-  const solids = kernel.getSubShapes(shape, 'solid');
-  for (const solid of solids) {
-    result.handles.add(solid);
-  }
-  return solids.length === 1 ? solids[0]! : shape;
+function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
+  const rx = (rotationDeg.x * Math.PI) / 180;
+  const ry = (rotationDeg.y * Math.PI) / 180;
+  const rz = (rotationDeg.z * Math.PI) / 180;
+  const ca = Math.cos(rx);
+  const sa = Math.sin(rx);
+  const cb = Math.cos(ry);
+  const sb = Math.sin(ry);
+  const cc = Math.cos(rz);
+  const sc = Math.sin(rz);
+  return new Float64Array([
+    cc * cb,
+    cc * sb * sa - sc * ca,
+    cc * sb * ca + sc * sa,
+    translation.x,
+    sc * cb,
+    sc * sb * sa + cc * ca,
+    sc * sb * ca - cc * sa,
+    translation.y,
+    -sb,
+    cb * sa,
+    cb * ca,
+    translation.z,
+    0,
+    0,
+    0,
+    1
+  ]);
 }
 
-export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
-  readonly kind = 'open-cascade' as const;
+function copyShape(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  matrix: Float64Array
+): ExactShape {
+  return {
+    solids: shape.solids.map((solid) =>
+      kernel.copyAndTransformSolid(solid, matrix)
+    )
+  };
+}
+
+function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
+  if (shape.solids.length === 0) {
+    throw new Error('Exact body contains no solids.');
+  }
+  return shape.solids.length === 1
+    ? shape.solids[0]!
+    : kernel.fuseAll(Uint32Array.from(shape.solids));
+}
+
+function decodeText(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+
+export class BrepKitKernelAdapter implements ExactKernelAdapter {
+  readonly kind = 'brepkit' as const;
   private readonly legacy = new OpenZCADKernel();
 
-  private constructor(private readonly kernel: OcctKernel) {}
-
-  static async create(): Promise<OpenCascadeKernelAdapter> {
-    return new OpenCascadeKernelAdapter(await OcctKernel.init());
-  }
-
   private makeProfileFace(
+    kernel: BrepKernel,
     data: SketchObjectData,
     basis: PlaneBasis,
     offset: number,
-    scope: Record<string, number>,
-    build: ExactBuildResult
-  ): ShapeHandle {
+    scope: Record<string, number>
+  ): number {
     if (data.objectKind === 'circle') {
       const center = pointOnPlane(
         basis,
@@ -158,87 +206,80 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
         },
         offset
       );
-      const edge = addHandle(
-        build,
-        this.kernel.makeCircleEdge(
-          center,
-          basis.normal,
-          resolveParamValue(data.radius, scope, 'radius')
-        )
+      const edge = kernel.makeCircleEdge(
+        center.x,
+        center.y,
+        center.z,
+        basis.normal.x,
+        basis.normal.y,
+        basis.normal.z,
+        resolveParamValue(data.radius, scope, 'radius')
       );
-      const wire = addHandle(build, this.kernel.makeWire([edge]));
-      return addHandle(build, this.kernel.makeFace(wire));
+      const wire = kernel.makeWire(Uint32Array.of(edge), true);
+      return kernel.makePlanarFaceFromWire(wire);
     }
 
     const points = profilePoints(data, scope).map((point) =>
       pointOnPlane(basis, point, offset)
     );
-    const edges: ShapeHandle[] = [];
+    const edges: number[] = [];
     for (let index = 0; index < points.length; index += 1) {
+      const start = points[index]!;
+      const end = points[(index + 1) % points.length]!;
       edges.push(
-        addHandle(
-          build,
-          this.kernel.makeLineEdge(
-            points[index]!,
-            points[(index + 1) % points.length]!
-          )
-        )
+        kernel.makeLineEdge(start.x, start.y, start.z, end.x, end.y, end.z)
       );
     }
-    const wire = addHandle(build, this.kernel.makeWire(edges));
-    return addHandle(build, this.kernel.makeFace(wire));
+    const wire = kernel.makeWire(Uint32Array.from(edges), true);
+    return kernel.makePlanarFaceFromWire(wire);
   }
 
   private buildPrimitive(
+    kernel: BrepKernel,
     data: Extract<FeatureNode['data'], { featureKind: 'primitive' }>,
-    scope: Record<string, number>,
-    build: ExactBuildResult
-  ): ShapeHandle {
+    scope: Record<string, number>
+  ): ExactShape {
     const dimension = (key: string): number =>
       resolveParamValue(data.dimensions[key] ?? 0, scope, key);
+    let solid: number;
     switch (data.primitiveKind) {
       case 'box':
-        return addHandle(
-          build,
-          this.kernel.makeBox(
-            dimension('width'),
-            dimension('height'),
-            dimension('depth')
-          )
+        solid = kernel.makeBox(
+          dimension('width'),
+          dimension('height'),
+          dimension('depth')
         );
+        break;
       case 'cylinder':
-        return addHandle(
-          build,
-          this.kernel.makeCylinder(dimension('radius'), dimension('height'))
-        );
+        solid = kernel.makeCylinder(dimension('radius'), dimension('height'));
+        break;
       case 'sphere':
-        return addHandle(build, this.kernel.makeSphere(dimension('radius')));
+        solid = kernel.makeSphere(dimension('radius'), CURVE_SEGMENTS);
+        break;
       case 'cone':
-        return addHandle(
-          build,
-          this.kernel.makeCone(
-            dimension('bottomRadius'),
-            dimension('topRadius'),
-            dimension('height')
-          )
+        solid = kernel.makeCone(
+          dimension('bottomRadius'),
+          dimension('topRadius'),
+          dimension('height')
         );
+        break;
       case 'torus':
-        return addHandle(
-          build,
-          this.kernel.makeTorus(
-            dimension('majorRadius'),
-            dimension('minorRadius')
-          )
+        solid = kernel.makeTorus(
+          dimension('majorRadius'),
+          dimension('minorRadius'),
+          CURVE_SEGMENTS
         );
+        break;
     }
+    return { solids: [solid] };
   }
 
   private buildSweep(
+    kernel: BrepKernel,
     document: ProjectDocument,
     feature: FeatureNode,
-    scope: Record<string, number>,
-    build: ExactBuildResult
-  ): ShapeHandle {
+    scope: Record<string, number>
+  ): ExactShape {
     if (
       feature.data.featureKind !== 'extrude' &&
       feature.data.featureKind !== 'revolve'
@@ -253,7 +294,13 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     }
     const basis = PLANE_BASES[sketch.plane];
     const offset = resolveParamValue(sketch.offset, scope, 'sketch offset');
-    const face = this.makeProfileFace(object.data, basis, offset, scope, build);
+    const face = this.makeProfileFace(
+      kernel,
+      object.data,
+      basis,
+      offset,
+      scope
+    );
 
     if (feature.data.featureKind === 'extrude') {
       const distance = resolveParamValue(
@@ -261,36 +308,46 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
         scope,
         'distance'
       );
-      return addHandle(
-        build,
-        this.kernel.extrude(
-          face,
-          basis.normal.x * distance,
-          basis.normal.y * distance,
-          basis.normal.z * distance
-        )
-      );
+      return {
+        solids: [
+          kernel.extrude(
+            face,
+            basis.normal.x,
+            basis.normal.y,
+            basis.normal.z,
+            distance
+          )
+        ]
+      };
     }
 
-    const axisDirection = feature.data.axis === 'vertical' ? basis.v : basis.u;
-    const axisPoint = pointOnPlane(basis, { x: 0, y: 0 }, offset);
-    return addHandle(
-      build,
-      this.kernel.revolve(
-        face,
-        { point: axisPoint, direction: axisDirection },
-        Math.PI * 2
-      )
-    );
+    const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
+    const point = pointOnPlane(basis, { x: 0, y: 0 }, offset);
+    return {
+      solids: [
+        kernel.revolve(
+          face,
+          point.x,
+          point.y,
+          point.z,
+          direction.x,
+          direction.y,
+          direction.z,
+          360
+        )
+      ]
+    };
   }
 
-  private build(document: ProjectDocument): ExactBuildResult {
+  private build(
+    kernel: BrepKernel,
+    document: ProjectDocument
+  ): ExactBuildResult {
     const { scope, errors } = getParameterScope(document);
     const result: ExactBuildResult = {
       shapes: new Map(),
       consumed: new Set(),
-      warnings: [...errors],
-      handles: new Set()
+      warnings: [...errors]
     };
 
     for (const feature of listFeaturesInOrder(document)) {
@@ -300,26 +357,25 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             break;
           case 'imported-mesh':
             throw new Error('Legacy mesh bodies use the compatibility kernel.');
-          case 'imported-step':
+          case 'imported-step': {
             if (feature.bodyId) {
-              result.shapes.set(
-                feature.bodyId,
-                unwrapSingleSolid(
-                  this.kernel,
-                  addHandle(
-                    result,
-                    this.kernel.importStep(feature.data.stepText)
-                  ),
-                  result
+              const solids = Array.from(
+                kernel.importStep(
+                  new TextEncoder().encode(feature.data.stepText)
                 )
               );
+              if (solids.length === 0) {
+                throw new Error('STEP file contains no solids.');
+              }
+              result.shapes.set(feature.bodyId, { solids });
             }
             break;
+          }
           case 'primitive':
             if (feature.bodyId) {
               result.shapes.set(
                 feature.bodyId,
-                this.buildPrimitive(feature.data, scope, result)
+                this.buildPrimitive(kernel, feature.data, scope)
               );
             }
             break;
@@ -328,7 +384,7 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             if (feature.bodyId) {
               result.shapes.set(
                 feature.bodyId,
-                this.buildSweep(document, feature, scope, result)
+                this.buildSweep(kernel, document, feature, scope)
               );
             }
             break;
@@ -339,43 +395,25 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
-            let transformed = target;
-            const rotations: Array<[Vec3, number]> = [
-              [
-                { x: 1, y: 0, z: 0 },
-                resolveParamValue(rotation.x, scope, 'rotate X')
-              ],
-              [
-                { x: 0, y: 1, z: 0 },
-                resolveParamValue(rotation.y, scope, 'rotate Y')
-              ],
-              [
-                { x: 0, y: 0, z: 1 },
-                resolveParamValue(rotation.z, scope, 'rotate Z')
-              ]
-            ];
-            for (const [direction, degrees] of rotations) {
-              if (degrees !== 0) {
-                transformed = addHandle(
-                  result,
-                  this.kernel.rotate(
-                    transformed,
-                    { point: { x: 0, y: 0, z: 0 }, direction },
-                    (degrees * Math.PI) / 180
-                  )
-                );
-              }
-            }
-            transformed = addHandle(
-              result,
-              this.kernel.translate(
-                transformed,
-                resolveParamValue(translation.x, scope, 'X'),
-                resolveParamValue(translation.y, scope, 'Y'),
-                resolveParamValue(translation.z, scope, 'Z')
+            result.shapes.set(
+              feature.data.targetBodyId,
+              copyShape(
+                kernel,
+                target,
+                transformMatrix(
+                  {
+                    x: resolveParamValue(translation.x, scope, 'X'),
+                    y: resolveParamValue(translation.y, scope, 'Y'),
+                    z: resolveParamValue(translation.z, scope, 'Z')
+                  },
+                  {
+                    x: resolveParamValue(rotation.x, scope, 'rotate X'),
+                    y: resolveParamValue(rotation.y, scope, 'rotate Y'),
+                    z: resolveParamValue(rotation.z, scope, 'rotate Z')
+                  }
+                )
               )
             );
-            result.shapes.set(feature.data.targetBodyId, transformed);
             break;
           }
           case 'boolean': {
@@ -389,25 +427,25 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
               }
               return shape;
             });
-            let shape = operands[0]!;
-            for (const operand of operands.slice(1)) {
-              shape = unwrapSingleSolid(
-                this.kernel,
-                addHandle(
-                  result,
-                  feature.data.operation === 'union'
-                    ? this.kernel.fuse(shape, operand)
-                    : feature.data.operation === 'subtract'
-                      ? this.kernel.cut(shape, operand)
-                      : this.kernel.common(shape, operand)
-                ),
-                result
+            let solid: number;
+            if (feature.data.operation === 'union') {
+              solid = kernel.fuseAll(
+                Uint32Array.from(operands.flatMap((shape) => shape.solids))
               );
+            } else {
+              solid = collapseShape(kernel, operands[0]!);
+              for (const operand of operands.slice(1)) {
+                const tool = collapseShape(kernel, operand);
+                solid =
+                  feature.data.operation === 'subtract'
+                    ? kernel.cut(solid, tool)
+                    : kernel.intersect(solid, tool);
+              }
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)
             );
-            result.shapes.set(feature.bodyId, shape);
+            result.shapes.set(feature.bodyId, { solids: [solid] });
             break;
           }
           case 'fillet':
@@ -419,16 +457,9 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             if (!storedTarget) {
               throw new Error('Edge modifier target is unavailable.');
             }
-            // Documents saved before compound unwrapping landed can still
-            // carry compound-wrapped targets; normalize here as well.
-            const target = unwrapSingleSolid(this.kernel, storedTarget, result);
+            const target = collapseShape(kernel, storedTarget);
             const requested = new Set(feature.data.edgeHashes);
-            const edges = this.kernel.getSubShapes(target, 'edge');
-            edges.forEach((edge) => result.handles.add(edge));
-            // OCCT HashCode values identify transient shape handles and change
-            // whenever this adapter rebuilds the document. The one-based
-            // sub-shape ordinal is deterministic for an unchanged upstream
-            // feature and therefore survives rebuilds and command replay.
+            const edges = Array.from(kernel.getSolidEdges(target));
             const selected = edges.filter((_, index) =>
               requested.has(index + 1)
             );
@@ -444,31 +475,42 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
               scope,
               feature.data.featureKind === 'fillet' ? 'radius' : 'distance'
             );
-            if (size <= 0) {
+            if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
-            let modifiedShape: ShapeHandle;
+            const label =
+              feature.data.featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
+            const dimension =
+              feature.data.featureKind === 'fillet' ? 'radius' : 'distance';
+            const failureMessage = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}. Edges that end on an existing fillet or chamfer usually cannot be rounded afterwards — edit that earlier feature and add this edge to it instead.`;
+            let modified: number;
             try {
-              modifiedShape =
+              // BrepKit's fillet fallback can otherwise accept a radius larger
+              // than the selected edge and return a severely distorted blend.
+              if (
+                feature.data.featureKind === 'fillet' &&
+                selected.some(
+                  (edge) =>
+                    size > kernel.edgeLength(edge) / 2 + GEOMETRY_EPSILON
+                )
+              ) {
+                throw new Error('Fillet radius exceeds the selected edge.');
+              }
+              modified =
                 feature.data.featureKind === 'fillet'
-                  ? this.kernel.fillet(target, selected, size)
-                  : this.kernel.chamfer(target, selected, size);
+                  ? kernel.fillet(target, Uint32Array.from(selected), size)
+                  : kernel.chamfer(target, Uint32Array.from(selected), size);
+              // When a second blend cannot be attached to an existing NURBS
+              // blend, BrepKit intentionally falls back to the input handle.
+              // Treat that as a failed feature instead of reporting success.
+              if (modified === target) {
+                throw new Error('Edge modifier produced no geometric change.');
+              }
             } catch {
-              const label =
-                feature.data.featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
-              const dimension =
-                feature.data.featureKind === 'fillet' ? 'radius' : 'distance';
-              throw new Error(
-                `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}. Edges that end on an existing fillet or chamfer usually cannot be rounded afterwards — edit that earlier feature and add this edge to it instead.`
-              );
+              throw new Error(failureMessage);
             }
-            const modified = unwrapSingleSolid(
-              this.kernel,
-              addHandle(result, modifiedShape),
-              result
-            );
             result.consumed.add(feature.data.targetBodyId);
-            result.shapes.set(feature.bodyId, modified);
+            result.shapes.set(feature.bodyId, { solids: [modified] });
             break;
           }
           case 'pattern': {
@@ -486,28 +528,30 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
               throw new Error('Pattern count must be between 2 and 100.');
             }
             const direction = axisDirection(feature.data.axis);
-            const instances: ShapeHandle[] = [target];
+            const solids = [...target.solids];
             if (feature.data.patternKind === 'linear') {
               const spacing = resolveParamValue(
                 feature.data.spacing,
                 scope,
                 'spacing'
               );
-              if (spacing === 0) {
+              if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
                 throw new Error('Pattern spacing cannot be zero.');
               }
               for (let index = 1; index < count; index += 1) {
-                instances.push(
-                  addHandle(
-                    result,
-                    this.kernel.translate(
-                      target,
-                      direction.x * spacing * index,
-                      direction.y * spacing * index,
-                      direction.z * spacing * index
-                    )
+                const instance = copyShape(
+                  kernel,
+                  target,
+                  transformMatrix(
+                    {
+                      x: direction.x * spacing * index,
+                      y: direction.y * spacing * index,
+                      z: direction.z * spacing * index
+                    },
+                    { x: 0, y: 0, z: 0 }
                   )
                 );
+                solids.push(...instance.solids);
               }
             } else {
               const angle = resolveParamValue(
@@ -515,51 +559,126 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
                 scope,
                 'pattern angle'
               );
-              if (angle === 0) {
+              if (Math.abs(angle) <= GEOMETRY_EPSILON) {
                 throw new Error('Pattern angle cannot be zero.');
               }
               const angleStep =
-                Math.abs(angle) === 360 ? angle / count : angle / (count - 1);
+                Math.abs(Math.abs(angle) - 360) <= GEOMETRY_EPSILON
+                  ? angle / count
+                  : angle / (count - 1);
               for (let index = 1; index < count; index += 1) {
-                instances.push(
-                  addHandle(
-                    result,
-                    this.kernel.rotate(
-                      target,
-                      { point: { x: 0, y: 0, z: 0 }, direction },
-                      (angleStep * index * Math.PI) / 180
-                    )
-                  )
+                const rotation = {
+                  x: feature.data.axis === 'x' ? angleStep * index : 0,
+                  y: feature.data.axis === 'y' ? angleStep * index : 0,
+                  z: feature.data.axis === 'z' ? angleStep * index : 0
+                };
+                const instance = copyShape(
+                  kernel,
+                  target,
+                  transformMatrix({ x: 0, y: 0, z: 0 }, rotation)
                 );
+                solids.push(...instance.solids);
               }
             }
             result.consumed.add(feature.data.targetBodyId);
-            result.shapes.set(
-              feature.bodyId,
-              addHandle(result, this.kernel.makeCompound(instances))
-            );
+            result.shapes.set(feature.bodyId, { solids });
             break;
           }
         }
       } catch (error) {
         const reason =
-          error instanceof OcctError || error instanceof Error
-            ? error.message
-            : 'exact geometry failed';
+          error instanceof Error ? error.message : 'exact geometry failed';
         result.warnings.push(`Feature "${feature.name}": ${reason}`);
       }
     }
     return result;
   }
 
-  private release(result: ExactBuildResult): void {
-    for (const handle of result.handles) {
-      try {
-        this.kernel.release(handle);
-      } catch {
-        // A released parent can invalidate derived handles; cleanup remains best-effort.
-      }
+  private measureShape(kernel: BrepKernel, shape: ExactShape): MeasuredShape {
+    if (shape.solids.length === 0) {
+      throw new Error('Exact body contains no solids.');
     }
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    const topology: BodyTopology = { faces: [], edges: [] };
+    const bbox = {
+      min: { x: Infinity, y: Infinity, z: Infinity },
+      max: { x: -Infinity, y: -Infinity, z: -Infinity }
+    };
+    let volume = 0;
+    let valid = true;
+
+    for (const solid of shape.solids) {
+      const mesh = kernel.tessellateSolidGroupedBinary(
+        solid,
+        TESSELLATION_DEFLECTION,
+        TESSELLATION_ANGLE
+      );
+      try {
+        const localPositions = Array.from(mesh.positions);
+        const localIndices = Array.from(mesh.indices);
+        const faceOffsets = Array.from(mesh.faceOffsets);
+        const vertexOffset = vertices.length / 3;
+        const indexOffset = indices.length;
+        vertices.push(...localPositions);
+        indices.push(...localIndices.map((index) => index + vertexOffset));
+        for (let index = 0; index < faceOffsets.length - 1; index += 1) {
+          const start = faceOffsets[index]!;
+          const end = faceOffsets[index + 1]!;
+          const hash = topology.faces.length + 1;
+          topology.faces.push({
+            topologyId: `face:${hash}`,
+            hash,
+            triangleStart: (indexOffset + start) / 3,
+            triangleCount: (end - start) / 3
+          });
+        }
+      } finally {
+        mesh.free();
+      }
+
+      const edgeLines = kernel.meshEdgesAll(
+        solid,
+        TESSELLATION_DEFLECTION,
+        TESSELLATION_ANGLE
+      );
+      try {
+        const points = Array.from(edgeLines.positions);
+        const offsets = Array.from(edgeLines.offsets);
+        for (let index = 0; index < offsets.length; index += 1) {
+          const start = offsets[index]!;
+          const end = offsets[index + 1] ?? points.length;
+          const hash = topology.edges.length + 1;
+          topology.edges.push({
+            topologyId: `edge:${hash}`,
+            hash,
+            points: points.slice(start, end)
+          });
+        }
+      } finally {
+        edgeLines.free();
+      }
+
+      const bounds = kernel.boundingBox(solid);
+      bbox.min.x = Math.min(bbox.min.x, bounds[0]!);
+      bbox.min.y = Math.min(bbox.min.y, bounds[1]!);
+      bbox.min.z = Math.min(bbox.min.z, bounds[2]!);
+      bbox.max.x = Math.max(bbox.max.x, bounds[3]!);
+      bbox.max.y = Math.max(bbox.max.y, bounds[4]!);
+      bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
+      volume += kernel.volume(solid, TESSELLATION_DEFLECTION);
+      valid = valid && kernel.validateSolidRelaxed(solid) === 0;
+    }
+
+    return {
+      vertices,
+      indices,
+      topology,
+      faceCount: topology.faces.length,
+      volume,
+      valid,
+      bbox
+    };
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
@@ -570,8 +689,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     ) {
       return this.legacy.syncDocument(document);
     }
-    const build = this.build(document);
+
+    const kernel = new BrepKernel();
     try {
+      const build = this.build(kernel, document);
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -589,17 +710,9 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
           continue;
         }
         const feature = features.get(body.featureId);
-        const mesh = this.kernel.meshShape(shape, {
-          linearDeflection: 0.08,
-          angularDeflection: 0.35
-        });
-        const wireframe = this.kernel.wireframe(shape, 0.08);
-        const bounds = this.kernel.getBoundingBox(shape, true);
-        const subFaces = this.kernel.getSubShapes(shape, 'face');
-        const faceCount = subFaces.length;
-        subFaces.forEach((face) => this.kernel.release(face));
+        const measured = this.measureShape(kernel, shape);
         const consumed = build.consumed.has(bodyId);
-        if (!this.kernel.isValid(shape)) {
+        if (!measured.valid) {
           build.warnings.push(
             `Body "${body.name}" failed exact B-rep validation.`
           );
@@ -610,10 +723,10 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
           source: feature?.featureKind ?? 'primitive',
           mesh: {
             kind: 'mesh',
-            vertices: Array.from(mesh.positions),
-            indices: Array.from(mesh.indices)
+            vertices: measured.vertices,
+            indices: measured.indices
           },
-          faceCount,
+          faceCount: measured.faceCount,
           color:
             String(
               body.metadata?.color ??
@@ -621,42 +734,9 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
             ) || DEFAULT_BODY_COLOR,
           exportableStep: body.exportableStep,
           consumed,
-          volume: this.kernel.getVolume(shape),
-          bbox: {
-            min: { x: bounds.xmin, y: bounds.ymin, z: bounds.zmin },
-            max: { x: bounds.xmax, y: bounds.ymax, z: bounds.zmax }
-          },
-          topology: {
-            faces: Array.from(
-              { length: (mesh.faceGroups?.length ?? 0) / 3 },
-              (_, index) => {
-                const triangleStart = mesh.faceGroups![index * 3]! / 3;
-                const triangleCount = mesh.faceGroups![index * 3 + 1]! / 3;
-                const hash = index + 1;
-                return {
-                  topologyId: `face:${hash}`,
-                  hash,
-                  triangleStart,
-                  triangleCount
-                };
-              }
-            ),
-            edges: Array.from(
-              { length: wireframe.edgeGroups.length / 3 },
-              (_, index) => {
-                const pointStart = wireframe.edgeGroups[index * 3]!;
-                const pointCount = wireframe.edgeGroups[index * 3 + 1]!;
-                const hash = index + 1;
-                return {
-                  topologyId: `edge:${hash}`,
-                  hash,
-                  points: Array.from(
-                    wireframe.points.slice(pointStart, pointStart + pointCount)
-                  )
-                };
-              }
-            )
-          }
+          volume: measured.volume,
+          bbox: measured.bbox,
+          topology: measured.topology
         };
         if (body.exportableStep && !consumed) {
           exportableBodyIds.push(bodyId);
@@ -670,7 +750,7 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
         updatedAt: nowIso()
       };
     } finally {
-      this.release(build);
+      kernel.free();
     }
   }
 
@@ -678,22 +758,26 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const build = this.build(document);
+    const kernel = new BrepKernel();
     try {
-      const shapes = bodyIds.map((bodyId) => {
+      const build = this.build(kernel, document);
+      const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
           throw new Error(`Body ${bodyId} has no exact geometry.`);
         }
-        return shape;
+        return shape.solids;
       });
-      const exportShape =
-        shapes.length === 1
-          ? shapes[0]!
-          : addHandle(build, this.kernel.makeCompound(shapes));
-      return this.kernel.exportStep(exportShape);
+      if (solids.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      const exportSolid =
+        solids.length === 1
+          ? solids[0]!
+          : kernel.fuseAll(Uint32Array.from(solids));
+      return decodeText(kernel.exportStep(exportSolid));
     } finally {
-      this.release(build);
+      kernel.free();
     }
   }
 
@@ -701,22 +785,26 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const build = this.build(document);
+    const kernel = new BrepKernel();
     try {
-      const shapes = bodyIds.map((bodyId) => {
+      const build = this.build(kernel, document);
+      const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
           throw new Error(`Body ${bodyId} has no exact geometry.`);
         }
-        return shape;
+        return shape.solids;
       });
-      const exportShape =
-        shapes.length === 1
-          ? shapes[0]!
-          : addHandle(build, this.kernel.makeCompound(shapes));
-      return this.kernel.exportStl(exportShape, 0.08, true);
+      if (solids.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      return solids
+        .map((solid) =>
+          decodeText(kernel.exportStlAscii(solid, TESSELLATION_DEFLECTION))
+        )
+        .join('\n');
     } finally {
-      this.release(build);
+      kernel.free();
     }
   }
 
@@ -725,23 +813,34 @@ export class OpenCascadeKernelAdapter implements ExactKernelAdapter {
     valid: boolean;
     volume: number;
   }> {
-    const shape = this.kernel.importStep(data);
+    const kernel = new BrepKernel();
     try {
+      const bytes =
+        typeof data === 'string'
+          ? new TextEncoder().encode(data)
+          : new Uint8Array(data);
+      const solids = Array.from(kernel.importStep(bytes));
       return {
-        solid: this.kernel.isSolid(shape),
-        valid: this.kernel.isValid(shape),
-        volume: this.kernel.getVolume(shape)
+        solid: solids.length > 0,
+        valid:
+          solids.length > 0 &&
+          solids.every((solid) => kernel.validateSolidRelaxed(solid) === 0),
+        volume: solids.reduce(
+          (total, solid) =>
+            total + kernel.volume(solid, TESSELLATION_DEFLECTION),
+          0
+        )
       };
     } finally {
-      this.kernel.release(shape);
+      kernel.free();
     }
   }
 
   dispose(): void {
-    this.kernel[Symbol.dispose]();
+    // Each operation owns and releases a short-lived BrepKernel instance.
   }
 }
 
 export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
-  return OpenCascadeKernelAdapter.create();
+  return new BrepKitKernelAdapter();
 }

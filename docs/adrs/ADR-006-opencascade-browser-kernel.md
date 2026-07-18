@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Supersedes ADR-005 as the primary modeling and export path. The polyhedral kernel remains a compatibility path for imported mesh bodies.
+Superseded by ADR-009. This records the previous OpenCascade implementation; the polyhedral kernel remains a compatibility path for imported mesh bodies.
 
 ## Decision
 

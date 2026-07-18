@@ -1,6 +1,6 @@
 # OpenZCAD Architecture
 
-OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by OpenCascade in a browser Web Worker. The Cloudflare Worker coordinates persistence and AI, but never owns interactive geometry.
+OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by BrepKit in a browser Web Worker. The Cloudflare Worker coordinates persistence and AI, but never owns interactive geometry.
 
 ## Layers
 
@@ -8,7 +8,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 - `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern features, v1-to-v2 normalization, and checkpoint creation.
 - `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
-- `kernel-adapter/exact`: the `occt-wasm` OpenCascade adapter. It owns exact primitives, STEP import, sweeps, transforms, booleans, edge finishing, patterns, tessellation/topology projection, validity checks, measurements, and STEP/STL export.
+- `kernel-adapter/exact`: the `brepkit-wasm` adapter. It owns exact primitives, STEP import, sweeps, transforms, booleans, edge finishing, patterns, tessellation/topology projection, validity checks, measurements, and STEP/STL export.
 - `kernel-adapter` and `geometry`: compatibility support for imported mesh bodies and deterministic legacy tests. They are not the primary exact modeling path.
 - `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state. It renders Z-up to match the kernel, so a part's vertical axis is +Z on screen exactly as it is in the solid.
 - `persistence` and `cloudflare-adapters`: local/in-memory and D1/R2 implementations, schema normalization, revisions/checkpoints, upload sessions, and artifact coordination.
@@ -19,22 +19,22 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 1. A UI form or approved AI proposal creates validated commands.
 2. `CommandManager` applies one command or transaction, appends serialized replay data, and advances the document version.
 3. The React app autosaves the canonical document to IndexedDB.
-4. The geometry worker receives `{ type: "sync", document }` and rebuilds the feature history with OpenCascade.
+4. The geometry worker receives `{ type: "sync", document }` and rebuilds the feature history with BrepKit.
 5. The worker returns derived meshes, bounds, volume, face counts, validity warnings, and exportable body IDs tagged with project/version.
 6. The app rejects stale results and attaches only matching derived state without advancing model history.
 7. Manual save creates a durable checkpoint in the beta persistence service.
 
-Exact faces and edges are projected with deterministic one-based sub-shape ordinals. Selection remains viewport state until a command captures an ordinal; feature commands never depend on Three.js objects or transient OCCT handles.
+Exact faces and edges are projected with deterministic one-based sub-shape ordinals. Selection remains viewport state until a command captures an ordinal; feature commands never depend on Three.js objects or transient kernel handles.
 
 When opening a project, local and remote copies are loaded together. The higher document version wins; derived timestamps break ties. This prevents an older cloud response from shadowing newer local edits.
 
 ## Exact export lifecycle
 
-STEP/STL buttons send an export request to the existing geometry worker with the current document and selected live body IDs. The worker rebuilds the exact shapes and exports them through OpenCascade. The main thread only creates the download and records best-effort export metadata with the Worker API. The viewport and export therefore share the same exact build path.
+STEP/STL buttons send an export request to the existing geometry worker with the current document and selected live body IDs. The worker rebuilds the exact shapes and exports them through BrepKit. The main thread only creates the download and records best-effort export metadata with the Worker API. The viewport and export therefore share the same exact build path.
 
 ## Editable STEP lifecycle
 
-The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. OpenCascade imports the exact shape on every replay, so later transforms, booleans, fillets, chamfers, patterns, selection, and export use the same exact B-rep path. The Worker archives the source best-effort; replay does not depend on that network artifact.
+The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. BrepKit imports the exact shape on every replay, so later transforms, booleans, fillets, chamfers, patterns, selection, and export use the same exact B-rep path. The Worker archives the source best-effort; replay does not depend on that network artifact.
 
 ## Collaboration lifecycle
 

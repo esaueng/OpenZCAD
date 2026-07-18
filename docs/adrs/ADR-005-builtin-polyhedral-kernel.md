@@ -19,10 +19,10 @@ STEP export is implemented natively in `io-step` as an ISO 10303-21 AP214 writer
 
 - A real in-repo kernel makes the core promise of the product — model parametrically, export a true STEP file — hold today, with zero WASM payload and full determinism for replay tests.
 - Faceted B-Rep is valid, importable STEP (FreeCAD/SolidWorks/Fusion read closed solids); the trade-off is planar faces only.
-- The kernel-adapter seam is unchanged, so an OpenCascade.js adapter can later replace the geometry backend to add analytic surfaces, exact curved booleans, and STEP import without touching the document model or UI.
+- The kernel-adapter seam is unchanged, so an exact WASM adapter can replace the geometry backend to add analytic surfaces, exact curved booleans, and STEP import without touching the document model or UI.
 
 ## Consequences
 
 - Curved faces are tessellated at fixed segment counts; file sizes grow with tessellation density.
 - Boolean results with coplanar overlapping faces can produce imperfect shells; the export path surfaces a warning instead of hiding it.
-- Historical limitation: STEP import was metadata-only on this compatibility path. ADR-006 and ADR-008 replace that behavior with editable OpenCascade imports.
+- Historical limitation: STEP import was metadata-only on this compatibility path. ADR-006, ADR-008, and ADR-009 replace that behavior with editable exact imports.

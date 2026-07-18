@@ -12,7 +12,7 @@
 10. **Repeat a body**: choose **Linear pattern** or **Circular pattern** from the toolbar, select the latest live body, and set the count, axis, and spacing/angle. The source becomes consumed and the exact compound result remains editable in history.
 11. **Import and keep editing**: use **Import** to choose a STEP file. It becomes an `Imported STEP` feature backed by the embedded exact source, so it can participate in transforms, booleans, finishing, patterns, and export after replay. STL remains a mesh compatibility import.
 12. **Look around**: keys **1/2/3/4** jump to Front/Top/Right/Iso views, **F** (or double-click) fits, **G** toggles the grid, **W** cycles shaded/edges/wireframe.
-13. **Export**: the STEP button asks the same OpenCascade browser worker that built the viewport to write an exact ISO 10303-21 AP214 file of the selected body (or all live bodies); STL export follows the same path. Open the STEP file in FreeCAD, Fusion, or SolidWorks — it imports as a closed solid.
+13. **Export**: the STEP button asks the same BrepKit browser worker that built the viewport to write an exact ISO 10303-21 file of the selected body (or all live bodies); STL export follows the same path. Open the STEP file in FreeCAD, Fusion, or SolidWorks and verify that it imports as a closed solid.
 14. Keep modeling while IndexedDB autosaves every document change. Use **Save** (Ctrl+S) to create a durable beta-cloud checkpoint when the API is available. A green collaboration badge shows room presence; newer edits from another authenticated tab are applied live, while conflicts preserve the local copy for recovery.
 
 Press **Ctrl+K** for a searchable palette of every command, or **?** for the keyboard cheat sheet.
