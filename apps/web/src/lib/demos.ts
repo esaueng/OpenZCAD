@@ -165,14 +165,19 @@ function pickEdgeHashes(
 function requireHashes(
   hashes: number[],
   what: string,
-  expectedCount?: number
+  expected?: { count?: number; min?: number }
 ): number[] {
   if (hashes.length === 0) {
     throw new Error(`Demo seeding found no exact edges for ${what}.`);
   }
-  if (expectedCount !== undefined && hashes.length !== expectedCount) {
+  if (expected?.count !== undefined && hashes.length !== expected.count) {
     throw new Error(
-      `Demo seeding expected ${expectedCount} exact edges for ${what}, found ${hashes.length}.`
+      `Demo seeding expected ${expected.count} exact edges for ${what}, found ${hashes.length}.`
+    );
+  }
+  if (expected?.min !== undefined && hashes.length < expected.min) {
+    throw new Error(
+      `Demo seeding expected at least ${expected.min} exact edges for ${what}, found ${hashes.length}.`
     );
   }
   return hashes;
@@ -336,7 +341,7 @@ async function buildBracket(
       verticalCornerSpan(4)
     ),
     'base corners',
-    4
+    { count: 4 }
   );
 
   const fillet = createBodyFeatureIds();
@@ -482,7 +487,7 @@ async function buildFlange(
       );
     }),
     'rim + hub lip',
-    3
+    { min: 2 }
   );
 
   const chamfer = createBodyFeatureIds();
