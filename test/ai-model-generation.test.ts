@@ -19,7 +19,7 @@ import { toUserId } from '@openzcad/shared';
  * The assistant is expected to answer "make a box with a lid" with a real
  * box-and-lid design rather than two blocks. This fixture is that patch,
  * written exactly as the system instructions describe it, and the tests below
- * build it through the real OpenCascade kernel to prove the vocabulary can
+ * build it through the real BrepKit kernel to prove the vocabulary can
  * express the design and that the design itself is sound: hollow, open, and
  * assemblable with clearance.
  */

@@ -20,11 +20,11 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 
 /**
  * The AI preview renders with the compat polyhedral kernel on the main thread
- * while Apply rebuilds with the exact OpenCascade kernel in a worker. If the two
+ * while Apply rebuilds with the exact BrepKit kernel in a worker. If the two
  * disagree about where a primitive sits or which way it points, every preview
  * lies about the model the user is agreeing to.
  *
- * These cases pin the compat kernel to OCCT's conventions. The compat kernel
+ * These cases pin the compat kernel to BrepKit's conventions. The compat kernel
  * approximates curves with facets, so radial sizes and volumes are compared with
  * a tolerance; placement and orientation must agree closely.
  */
@@ -68,11 +68,6 @@ describe('compat kernel conforms to the exact kernel', () => {
     };
   }
 
-  /**
-   * OCCT's Bnd_Box pads every bound by 1e-7, so even a perfectly matching
-   * placement differs by ~1e-8 relative on a part of ordinary size. No
-   * placement tolerance below that is satisfiable.
-   */
   function expectAgreement(
     result: { compat: Measured; exact: Measured },
     { volumeTolerance = 0.02, placeTolerance = 0.02 } = {}
@@ -200,6 +195,33 @@ describe('compat kernel conforms to the exact kernel', () => {
     expectAgreement(await measure(document), {
       volumeTolerance: 1e-6,
       placeTolerance: 1e-6
+    });
+  });
+
+  it('agrees on a circular sketch extruded below its plane', async () => {
+    let document = createProjectDocument(
+      'Negative circle extrude',
+      toUserId('user_conformance')
+    );
+    document = addSketchFeature(document, {
+      name: 'Circle profile',
+      plane: 'XY',
+      offset: 4,
+      object: {
+        objectKind: 'circle',
+        radius: 6,
+        centerX: 3,
+        centerY: -2
+      }
+    }).document;
+    document = extrudeSketch(document, {
+      name: 'Negative pad',
+      sketchId: getLatestSketchId(document)!,
+      distance: -12
+    }).document;
+    expectAgreement(await measure(document), {
+      volumeTolerance: 0.03,
+      placeTolerance: 0.03
     });
   });
 

@@ -55,7 +55,7 @@ export type GeometryWorkerResult = GeometrySyncResult | GeometryExportResult;
 const kernel = createKernelAdapter();
 const exactKernel = createExactKernelAdapter().catch((error: unknown) => {
   console.warn(
-    'Exact OpenCascade kernel unavailable; using compatibility kernel.',
+    'Exact BrepKit kernel unavailable; using compatibility kernel.',
     error
   );
   return null;

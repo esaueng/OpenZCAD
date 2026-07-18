@@ -13,6 +13,6 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
-    "occt-wasm": "^3.6.1"
+    "brepkit-wasm": "2.126.19"
   }
 }
