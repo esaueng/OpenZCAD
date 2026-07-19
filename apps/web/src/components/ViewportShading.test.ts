@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createBodyMaterial, createObjectForBody } from '@openzcad/viewport';
+import {
+  createBodyMaterial,
+  createObjectForBody,
+  createStudioHemisphereLight
+} from '@openzcad/viewport';
 import {
   toBodyId,
   type BodyRepresentation,
@@ -149,5 +153,14 @@ describe('CAD viewport shading', () => {
     expect(material.specular.getHex()).toBe(0x667487);
     expect(object.castShadow).toBe(true);
     expect(object.receiveShadow).toBe(false);
+  });
+
+  it('uses a visible ground bounce for downward-facing surfaces', () => {
+    const light = createStudioHemisphereLight();
+
+    expect(light.color.getHex()).toBe(0xd7e6f7);
+    expect(light.groundColor.getHex()).toBe(0xe2e8f0);
+    expect(light.intensity).toBe(0.45);
+    expect(light.position.toArray()).toEqual([0, 0, 1]);
   });
 });

@@ -272,6 +272,16 @@ export function createStudioEnvironment(
   return texture.texture;
 }
 
+/**
+ * Z-up studio fill. The cool ground colour acts as bounced floor light so
+ * downward-facing surfaces stay legible without flattening the key light.
+ */
+export function createStudioHemisphereLight(): THREE.HemisphereLight {
+  const light = new THREE.HemisphereLight('#d7e6f7', '#e2e8f0', 0.45);
+  light.position.set(0, 0, 1);
+  return light;
+}
+
 /** Vertical engineering-studio gradient: graphite above, near-black below. */
 export function createGradientBackground(): THREE.Texture {
   const canvas = document.createElement('canvas');

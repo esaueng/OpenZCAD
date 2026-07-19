@@ -15,6 +15,7 @@ import {
   createShadowCatcher,
   createStudioEnvironment,
   createStudioGrid,
+  createStudioHemisphereLight,
   fitCameraToObjects,
   tuneShadowFrustum,
   type CameraPose
@@ -1002,10 +1003,9 @@ export function ModelViewer({
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
-    // A HemisphereLight's sky/ground axis is its position, which defaults to
-    // Object3D.DEFAULT_UP (+Y); leave it and the sky colour washes in sideways.
-    const skyLight = new THREE.HemisphereLight('#d7e6f7', '#0a0e14', 0.45);
-    skyLight.position.set(0, 0, 1);
+    // Z-up sky plus cool floor bounce keeps undersides readable without
+    // weakening the directional key that defines face orientation.
+    const skyLight = createStudioHemisphereLight();
     scene.add(skyLight);
     // Right, front, above — the studio key that casts the grounding shadow.
     const keyLight = new THREE.DirectionalLight('#ffffff', 1.35);
