@@ -226,14 +226,10 @@ export function createBodyMaterial(body: BodyRepresentation) {
     color: body.color,
     shininess: 38,
     specular: '#667487',
-    // STEP tessellators can preserve the exact closed B-rep while emitting
-    // individual face triangles with mixed winding. A front-side-only
-    // material then drops those faces even though the independent topology
-    // edge overlay remains, making a valid imported solid look like broken
-    // wireframe. Render imported STEP faces from both sides; Three.js flips
-    // the lighting normal for back-facing fragments so the result stays
-    // shaded instead of merely bypassing the cull.
-    side: body.source === 'imported-step' ? THREE.DoubleSide : THREE.FrontSide
+    // Exact kernels emit consistently oriented closed faces. Keep culling on
+    // so an orientation regression remains visible instead of being hidden by
+    // a double-sided material.
+    side: THREE.FrontSide
   });
 }
 

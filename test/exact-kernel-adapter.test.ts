@@ -14,7 +14,7 @@ import {
 import { toUserId } from '@openzcad/shared';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 
-describe('exact BrepKit kernel adapter', () => {
+describe('exact hybrid kernel adapter', () => {
   let adapter: ExactKernelAdapter;
 
   beforeAll(async () => {
@@ -159,7 +159,7 @@ describe('exact BrepKit kernel adapter', () => {
     });
   });
 
-  it('imports and tessellates STEP faces independently for complete rendering', async () => {
+  it('imports STEP through OCCT with complete exact topology', async () => {
     const source = addPrimitiveFeature(
       createProjectDocument('Source', toUserId('user_exact')),
       {
@@ -191,26 +191,36 @@ describe('exact BrepKit kernel adapter', () => {
         0
       )
     ).toBe((body?.mesh.indices.length ?? 0) / 3);
+    expect(body?.topology?.edges).toHaveLength(12);
+    expect(derived.warnings).toEqual([]);
 
-    // Imported faces intentionally own independent render vertices. This
-    // keeps complex STEP trims on the reliable per-face tessellation path
-    // instead of the grouped shared-edge path that can under-fill them.
-    const seenIndices = new Set<number>();
-    let sharesVertexAcrossFaces = false;
-    for (const face of body?.topology?.faces ?? []) {
-      const start = face.triangleStart * 3;
-      const end = start + face.triangleCount * 3;
-      const faceIndices = new Set(
-        body?.mesh.indices.slice(start, end) ?? []
-      );
-      for (const index of faceIndices) {
-        if (seenIndices.has(index)) {
-          sharesVertexAcrossFaces = true;
-        }
-        seenIndices.add(index);
-      }
-    }
-    expect(sharesVertexAcrossFaces).toBe(false);
+    const moved = transformBody(manager.document, {
+      name: 'Move imported STEP',
+      targetBodyId: manager.document.bodyOrder[0]!,
+      translation: { x: 5, y: 6, z: 7 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const movedBody = Object.values(
+      (await adapter.syncDocument(moved)).bodyRepresentations
+    )[0];
+    expect(movedBody?.bbox.min.x).toBeCloseTo(5, 6);
+    expect(movedBody?.bbox.min.y).toBeCloseTo(6, 6);
+    expect(movedBody?.bbox.min.z).toBeCloseTo(7, 6);
+    expect(movedBody?.volume).toBeCloseTo(504, 4);
+
+    const importedEdgeHash = body?.topology?.edges[0]?.hash;
+    expect(importedEdgeHash).toBeTypeOf('number');
+    const filleted = filletEdges(manager.document, {
+      name: 'Fillet imported STEP',
+      targetBodyId: manager.document.bodyOrder[0]!,
+      edgeHashes: [importedEdgeHash!],
+      size: 0.5
+    }).document;
+    const filletDerived = await adapter.syncDocument(filleted);
+    expect(filletDerived.warnings).toEqual([]);
+    expect(
+      filletDerived.bodyRepresentations[filleted.bodyOrder.at(-1)!]?.volume
+    ).toBeLessThan(504);
     expect(manager.document.commandLog[0]?.kind).toBe('import.step');
   });
 
