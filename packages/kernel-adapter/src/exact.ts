@@ -439,7 +439,24 @@ function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
   }
   return shape.solids.length === 1
     ? shape.solids[0]!
-    : kernel.fuseAll(Uint32Array.from(shape.solids));
+    : fuseUniformSolid(kernel, shape.solids);
+}
+
+/**
+ * Boolean union can leave adjacent coplanar faces split along the source-solid
+ * boundary. The result is one valid solid, but those fragments render as false
+ * seams and make a manufactured part look assembled from separate plates.
+ * BrepKit unifies only faces on the same underlying surface, so real part
+ * boundaries, holes, blends, and sharp corners remain intact.
+ */
+function unifyBooleanFaces(kernel: BrepKernel, solid: number): number {
+  kernel.unifyFaces(solid);
+  return solid;
+}
+
+function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
+  const fused = kernel.fuseAll(Uint32Array.from(solids));
+  return unifyBooleanFaces(kernel, fused);
 }
 
 function decodeText(bytes: Uint8Array): string {
@@ -689,8 +706,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             });
             let solid: number;
             if (feature.data.operation === 'union') {
-              solid = kernel.fuseAll(
-                Uint32Array.from(operands.flatMap((shape) => shape.solids))
+              solid = fuseUniformSolid(
+                kernel,
+                operands.flatMap((shape) => shape.solids)
               );
             } else {
               solid = collapseShape(kernel, operands[0]!);
@@ -702,6 +720,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                       kernel.cut(solid, tool))
                     : kernel.intersect(solid, tool);
               }
+              solid = unifyBooleanFaces(kernel, solid);
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)

@@ -22,12 +22,14 @@ Infer what the user is actually building and apply ordinary design conventions t
 
 Never emit a single solid primitive when the real object needs more construction. If the object is a container it is hollow and has an opening. If it has a lid, the lid needs a rim that locates it and a clearance that lets it come off. If it holds a part, there is a clearance. If it mounts to something, it has mounting features. A "box with a lid" modelled as two blocks is a wrong answer even though it contains the word box and the word lid.
 
+Construction complexity is not part count. Unless the user explicitly asks for an assembly, multiple/separate pieces, or an object that mechanically requires independently moving or removable parts, default to one finished physical part. A bracket made from a base, wall, boss, and ribs is one part, even though it needs several construction solids.
+
 Ask a question only when the missing information would substantially change the design or make a valid model impossible. Otherwise choose sensible, editable defaults, build the model, and report every assumption in \`assumptions\`.
 
 # 2. Plan before you emit operations
 
 Work out, before writing any operation:
-1. The parts. Which separate physical bodies exist, and what is each one's job?
+1. The parts. First decide whether the request truly requires more than one independently manufactured, moving, or removable piece. If not, plan ONE LIVE BODY for each physical part and default to one finished physical part. Construction solids are features, not parts.
 2. The features. Which cavities, openings, rims, or holes does each part need? (Fillets and chamfers are the exception: they can only be applied to a body that already exists in the digest, never to one you create in this proposal — see section 8.)
 3. The relationships. What mates with what, in which direction does it assemble, and what must therefore share a dimension?
 4. The numbers. Overall size, wall thickness, clearances, and offsets — each expressed against the document units in the digest.
@@ -41,6 +43,7 @@ Work out, before writing any operation:
 - \`sphere\` and \`torus\` are CENTRED ON THE ORIGIN.
 - \`add_transform\` rotates about the WORLD ORIGIN and then translates. It moves a body in place and does not create a new body. To rotate a body about its own centre you must account for the offset yourself.
 - \`add_boolean\` creates a new body and CONSUMES its operands: after a subtract, the original box and the cutting tool no longer exist as separate bodies. Never reference a consumed body again.
+- Every positive solid that belongs to the same physical part — plates, walls, bosses, ribs, gussets, and similar features — must overlap that part by more than modeling tolerance and be consumed by an \`add_boolean\` union. Face-only contact is not a reliable union. Do not leave those construction solids as separate live bodies.
 - The solid kernel is Z-up: a part's own vertical axis is +Z, which is why a box's upright size is \`depth\` and cylinders extrude along +Z. Build every part in that frame and keep it consistent across the whole model.
 - Bodies at the same coordinates overlap. Separate parts need distinct positions, and X is the safest axis to separate them along.
 
@@ -98,7 +101,8 @@ The governing rule for every opening: material must be removed all the way to th
 # 9. Check your own model before returning it
 
 Re-read the operations you are about to emit and confirm:
-- Every part the user asked for exists, as its own named body.
+- Every physical part the user asked for exists as ONE LIVE BODY. Unless separate pieces were explicit or mechanically necessary, exactly one finished live body remains.
+- Every positive construction solid belonging to that part intersects it with real overlap and is consumed by a union; only subtractive tools are left for cuts, and those are consumed too.
 - Anything that should be hollow has a cavity actually subtracted from it, and the cavity reaches the intended opening.
 - Mating parts differ by a real clearance and are not identical sizes.
 - Every \`$alias\` is declared earlier and is not already consumed.
