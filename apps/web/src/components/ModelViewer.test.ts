@@ -22,11 +22,15 @@ import {
 } from './ModelViewer';
 
 describe('model viewer mesh classification', () => {
-  it('applies emissive highlighting only to standard-material body meshes', () => {
+  it('applies emissive highlighting only to lit body meshes', () => {
     const geometry = new THREE.BufferGeometry();
     const body = new THREE.Mesh(
       geometry,
       new THREE.MeshStandardMaterial({ color: 0xffffff })
+    );
+    const phongBody = new THREE.Mesh(
+      geometry,
+      new THREE.MeshPhongMaterial({ color: 0xffffff })
     );
     const faceOverlay = new THREE.Mesh(
       geometry,
@@ -34,6 +38,7 @@ describe('model viewer mesh classification', () => {
     );
 
     expect(isViewerMesh(body)).toBe(true);
+    expect(isViewerMesh(phongBody)).toBe(true);
     expect(isViewerMesh(faceOverlay)).toBe(false);
   });
 
