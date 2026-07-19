@@ -1,32 +1,231 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import type { BodyRepresentation, MeshGeometry } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  BodyTopology,
+  MeshGeometry
+} from '@openzcad/shared';
 
-function geometryFromMesh(mesh: MeshGeometry): THREE.BufferGeometry {
+const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
+const DOT_EPSILON = 1e-10;
+
+interface MeshFace {
+  normal: THREE.Vector3;
+  cornerAngles: [number, number, number];
+}
+
+interface MeshEdge {
+  start: number;
+  end: number;
+  faces: number[];
+}
+
+function cornerAngle(
+  center: THREE.Vector3,
+  first: THREE.Vector3,
+  second: THREE.Vector3
+): number {
+  const firstDirection = first.clone().sub(center);
+  const secondDirection = second.clone().sub(center);
+  const crossLength = firstDirection.cross(secondDirection).length();
+  const dot = first.clone().sub(center).dot(second.clone().sub(center));
+  return Math.atan2(crossLength, dot);
+}
+
+/**
+ * Builds angle-weighted smoothing groups from triangle adjacency. Adjacent
+ * triangles share a render vertex only when their dihedral angle is below the
+ * CAD crease threshold, so large planar faces cannot borrow normals from their
+ * side walls while cylinders and fillets remain visually smooth.
+ */
+function geometryFromMesh(
+  mesh: MeshGeometry,
+  topology?: BodyTopology
+): THREE.BufferGeometry {
+  const sourcePositions = mesh.vertices;
+  const sourceIndices = mesh.indices;
+  const triangleCount = Math.floor(sourceIndices.length / 3);
+  const topologyFaceByTriangle = new Int32Array(triangleCount);
+  topologyFaceByTriangle.fill(-1);
+  for (const [topologyFaceIndex, face] of (topology?.faces ?? []).entries()) {
+    const start = Math.max(0, Math.floor(face.triangleStart));
+    const end = Math.min(
+      triangleCount,
+      Math.ceil(face.triangleStart + face.triangleCount)
+    );
+    for (let triangleIndex = start; triangleIndex < end; triangleIndex += 1) {
+      topologyFaceByTriangle[triangleIndex] = topologyFaceIndex;
+    }
+  }
+  const faces: MeshFace[] = [];
+  const edges = new Map<string, MeshEdge>();
+
+  for (let faceIndex = 0; faceIndex < triangleCount; faceIndex += 1) {
+    const cornerOffset = faceIndex * 3;
+    const indices = [
+      sourceIndices[cornerOffset]!,
+      sourceIndices[cornerOffset + 1]!,
+      sourceIndices[cornerOffset + 2]!
+    ] as const;
+    const points = indices.map((index) =>
+      new THREE.Vector3().fromArray(sourcePositions, index * 3)
+    ) as [THREE.Vector3, THREE.Vector3, THREE.Vector3];
+    const normal = new THREE.Vector3()
+      .subVectors(points[1], points[0])
+      .cross(new THREE.Vector3().subVectors(points[2], points[0]))
+      .normalize();
+    faces.push({
+      normal,
+      cornerAngles: [
+        cornerAngle(points[0], points[1], points[2]),
+        cornerAngle(points[1], points[2], points[0]),
+        cornerAngle(points[2], points[0], points[1])
+      ]
+    });
+
+    for (const [start, end] of [
+      [indices[0], indices[1]],
+      [indices[1], indices[2]],
+      [indices[2], indices[0]]
+    ] as const) {
+      const low = Math.min(start, end);
+      const high = Math.max(start, end);
+      const key = `${low}:${high}`;
+      const edge = edges.get(key) ?? { start: low, end: high, faces: [] };
+      edge.faces.push(faceIndex);
+      edges.set(key, edge);
+    }
+  }
+
+  const parent = sourceIndices.map((_, cornerIndex) => cornerIndex);
+  const rank = sourceIndices.map(() => 0);
+  const find = (cornerIndex: number): number => {
+    let root = cornerIndex;
+    while (parent[root] !== root) {
+      root = parent[root]!;
+    }
+    let current = cornerIndex;
+    while (parent[current] !== current) {
+      const next = parent[current]!;
+      parent[current] = root;
+      current = next;
+    }
+    return root;
+  };
+  const union = (left: number, right: number) => {
+    let leftRoot = find(left);
+    let rightRoot = find(right);
+    if (leftRoot === rightRoot) {
+      return;
+    }
+    if (rank[leftRoot]! < rank[rightRoot]!) {
+      [leftRoot, rightRoot] = [rightRoot, leftRoot];
+    }
+    parent[rightRoot] = leftRoot;
+    if (rank[leftRoot] === rank[rightRoot]) {
+      rank[leftRoot] = rank[leftRoot]! + 1;
+    }
+  };
+  const cornerForVertex = (faceIndex: number, vertexIndex: number) => {
+    const offset = faceIndex * 3;
+    for (let corner = offset; corner < offset + 3; corner += 1) {
+      if (sourceIndices[corner] === vertexIndex) {
+        return corner;
+      }
+    }
+    return null;
+  };
+
+  const creaseDot = Math.cos(CAD_CREASE_ANGLE);
+  for (const edge of edges.values()) {
+    // Non-manifold edges stay creased; smoothing across more than two incident
+    // faces can blend unrelated shells that merely share indexed vertices.
+    if (edge.faces.length !== 2) {
+      continue;
+    }
+    const [firstFaceIndex, secondFaceIndex] = edge.faces as [number, number];
+    const firstFace = faces[firstFaceIndex]!;
+    const secondFace = faces[secondFaceIndex]!;
+    const firstTopologyFace = topologyFaceByTriangle[firstFaceIndex]!;
+    const secondTopologyFace = topologyFaceByTriangle[secondFaceIndex]!;
+    const hasTopologyFace = firstTopologyFace >= 0 || secondTopologyFace >= 0;
+    const shouldSmooth = hasTopologyFace
+      ? firstTopologyFace >= 0 && firstTopologyFace === secondTopologyFace
+      : firstFace.normal.dot(secondFace.normal) + DOT_EPSILON >= creaseDot;
+    if (!shouldSmooth) {
+      continue;
+    }
+    for (const vertexIndex of [edge.start, edge.end]) {
+      const firstCorner = cornerForVertex(firstFaceIndex, vertexIndex);
+      const secondCorner = cornerForVertex(secondFaceIndex, vertexIndex);
+      if (firstCorner !== null && secondCorner !== null) {
+        union(firstCorner, secondCorner);
+      }
+    }
+  }
+
+  const normalsByGroup = new Map<number, THREE.Vector3>();
+  for (
+    let cornerIndex = 0;
+    cornerIndex < sourceIndices.length;
+    cornerIndex += 1
+  ) {
+    const root = find(cornerIndex);
+    const faceIndex = Math.floor(cornerIndex / 3);
+    const face = faces[faceIndex]!;
+    const angle = face.cornerAngles[cornerIndex % 3]!;
+    const contribution = face.normal.clone().multiplyScalar(angle);
+    const accumulated = normalsByGroup.get(root) ?? new THREE.Vector3();
+    accumulated.add(contribution);
+    normalsByGroup.set(root, accumulated);
+  }
+
+  const vertices: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  const outputIndexByGroup = new Map<number, number>();
+  for (
+    let cornerIndex = 0;
+    cornerIndex < sourceIndices.length;
+    cornerIndex += 1
+  ) {
+    const root = find(cornerIndex);
+    let outputIndex = outputIndexByGroup.get(root);
+    if (outputIndex === undefined) {
+      outputIndex = vertices.length / 3;
+      outputIndexByGroup.set(root, outputIndex);
+      const sourceIndex = sourceIndices[cornerIndex]!;
+      vertices.push(
+        sourcePositions[sourceIndex * 3]!,
+        sourcePositions[sourceIndex * 3 + 1]!,
+        sourcePositions[sourceIndex * 3 + 2]!
+      );
+      const normal = normalsByGroup.get(root)!.normalize();
+      normals.push(normal.x, normal.y, normal.z);
+    }
+    indices.push(outputIndex);
+  }
+
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
     'position',
-    new THREE.Float32BufferAttribute(mesh.vertices, 3)
+    new THREE.Float32BufferAttribute(vertices, 3)
   );
-  geometry.setIndex(mesh.indices);
-  geometry.computeVertexNormals();
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setIndex(indices);
   return geometry;
 }
 
 /**
- * Studio PBR body material: a low-metalness base with a tight clearcoat reads
- * like painted machined metal under the environment rig, which is how the
- * shipping CAD programs make solids look "expensive" instead of plasticky.
+ * Classic CAD body material. Phong gives planar faces an even technical shade
+ * and broad highlights on curves without environment-map reflections crawling
+ * across tessellation triangles.
  */
 export function createBodyMaterial(body: BodyRepresentation) {
-  return new THREE.MeshPhysicalMaterial({
+  return new THREE.MeshPhongMaterial({
     color: body.color,
-    metalness: 0.1,
-    roughness: 0.48,
-    clearcoat: 0.32,
-    clearcoatRoughness: 0.38,
-    envMapIntensity: 0.55,
-    specularIntensity: 0.55
+    shininess: 38,
+    specular: '#667487'
   });
 }
 
@@ -36,19 +235,22 @@ export function createBodyMaterial(body: BodyRepresentation) {
  * in world space (the kernel bakes transforms), so no placement is applied.
  */
 export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
-  const geometry = geometryFromMesh(body.mesh);
+  const geometry = geometryFromMesh(body.mesh, body.topology);
   const material = createBodyMaterial(body);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = body.name;
   mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  // CAD solids cast onto the ground plane but do not receive the shadow map.
+  // Self-shadowing on long tessellation triangles creates false triangular
+  // bands across otherwise planar analytic faces.
+  mesh.receiveShadow = false;
 
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(geometry, 24),
     new THREE.LineBasicMaterial({
       color: '#0a0f16',
       transparent: true,
-      opacity: 0.55
+      opacity: 0.78
     })
   );
   edges.raycast = () => undefined; // selection picks faces, not edge lines
@@ -174,7 +376,10 @@ export function createShadowCatcher(): THREE.Mesh {
 }
 
 /** Configures the key light's shadow frustum for a model of `radius` size. */
-export function tuneShadowFrustum(light: THREE.DirectionalLight, radius: number) {
+export function tuneShadowFrustum(
+  light: THREE.DirectionalLight,
+  radius: number
+) {
   const extent = Math.max(radius * 2.2, 40);
   const { camera } = light.shadow;
   camera.left = -extent;
