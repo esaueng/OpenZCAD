@@ -6,7 +6,7 @@ Accepted. Supersedes ADR-006 as the primary modeling and export path.
 
 ## Decision
 
-Run `brepkit-wasm` in the existing browser geometry Web Worker for parametric feature rebuilds, B-rep validation, measurement, tessellation, and STEP/STL import and export. Consume an immutable package commit built from the `esaueng/brepkit` fork and stored on that fork's `openzcad-wasm` distribution branch rather than resolving the same-named package from the npm registry. Keep the canonical document and command history independent of kernel handles. Keep geometry out of the Cloudflare Worker.
+Run `brepkit-wasm` in the existing browser geometry Web Worker for parametric feature rebuilds, B-rep validation, measurement, tessellation, and STEP/STL import and export. Consume the installable `crates/wasm/pkg` subpackage from the `esaueng/brepkit` fork's `main` branch rather than resolving the same-named package from the npm registry. Keep the canonical document and command history independent of kernel handles. Keep geometry out of the Cloudflare Worker.
 
 Represent a document body inside the adapter as one or more BrepKit solid handles. This preserves disjoint linear/circular pattern instances without leaking BrepKit compound handles into operations that only accept solids. Collapse a multi-solid body with `fuseAll` only when a downstream boolean, finishing operation, or STEP export requires one solid.
 
@@ -17,7 +17,7 @@ Represent a document body inside the adapter as one or more BrepKit solid handle
 ## Consequences
 
 - The exact adapter dependency and runtime identity change from `occt-wasm` to the fork-built `brepkit-wasm`; the compatibility kernel remains available for imported mesh bodies.
-- The git dependency and lockfile identify one distribution commit and its recorded fork source commit. Updating the fork does not silently change existing OpenZCAD builds; publish a new distribution commit, update the dependency, and rerun the geometry gates.
+- The git dependency targets `main` plus the WASM package subdirectory, while the lockfile identifies the exact resolved `main` commit and its recorded fork source commit. Updating the fork does not silently change existing OpenZCAD builds; publish the refreshed package on `main`, update the lockfile, and rerun the geometry gates.
 - Viewport meshes and topology polylines remain disposable projections of exact worker-owned B-reps.
 - BrepKit can return the unchanged input when a blend-on-blend fillet is unsupported. The adapter converts that no-op into an actionable feature warning and rejects clearly oversized selected-edge fillets.
 - Difficult booleans may use BrepKit's mesh fallback and are not guaranteed watertight. NURBS blend STEP round-trips can show a small measurement shift even when the re-imported solid validates.
