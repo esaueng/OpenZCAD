@@ -237,7 +237,7 @@ export function SketchWorkspace({
     context.moveTo(0, center.y + 0.5);
     context.lineTo(width, center.y + 0.5);
     context.stroke();
-    context.strokeStyle = '#2f78c9';
+    context.strokeStyle = '#2f6ea8';
     context.beginPath();
     context.moveTo(center.x + 0.5, 0);
     context.lineTo(center.x + 0.5, height);

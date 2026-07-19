@@ -173,7 +173,24 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <div className="viewer-watermark">openzcad kernel · exact b-rep</div>
+      <div className="viewport-frame" aria-hidden="true">
+        <div className="frame-corner tl" />
+        <div className="frame-corner tr" />
+        <div className="frame-corner bl" />
+        <div className="frame-corner br" />
+      </div>
+      <div className="vp-hud vp-hud-bl" aria-hidden="true">
+        <span className="vp-chip">{units}</span>
+        <span className="vp-chip">
+          {bodies.length} {bodies.length === 1 ? 'body' : 'bodies'}
+        </span>
+        {sketches.length > 0 && (
+          <span className="vp-chip">
+            {sketches.length}{' '}
+            {sketches.length === 1 ? 'sketch' : 'sketches'}
+          </span>
+        )}
+      </div>
     </section>
   );
 }
