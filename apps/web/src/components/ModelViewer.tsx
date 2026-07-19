@@ -576,7 +576,10 @@ function snapTo(value: number, step: number, fine: boolean): number {
   return Math.round(value / step) * step;
 }
 
-type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
+type ViewerBodyMaterial =
+  | THREE.MeshStandardMaterial
+  | THREE.MeshPhongMaterial;
+type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, ViewerBodyMaterial>;
 
 const SELECTION_EMISSIVE = 0x173a5e;
 const HOVER_EMISSIVE = 0x101d2c;
@@ -646,13 +649,13 @@ export class RightClickGestureTracker {
 
 // Exact topology edges render as screen-space fat lines so they read clearly
 // and their states are unmistakable: idle slate, hover glow, selected accent.
-const EDGE_IDLE_COLOR = 0x7d8ca0;
+const EDGE_IDLE_COLOR = 0x151c26;
 const EDGE_HOVER_COLOR = 0xbfdcff;
 const EDGE_SELECTED_COLOR = 0x7cc0ff;
-const EDGE_IDLE_WIDTH = 2;
+const EDGE_IDLE_WIDTH = 1.4;
 const EDGE_HOVER_WIDTH = 4;
 const EDGE_SELECTED_WIDTH = 4.5;
-const EDGE_IDLE_OPACITY = 0.85;
+const EDGE_IDLE_OPACITY = 0.92;
 /**
  * Extra screen-space width used only for edge picking. Line2 adds this to the
  * rendered width before testing the pointer, so an idle edge has a 3 px pick
@@ -710,7 +713,8 @@ export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
 export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
   return (
     object instanceof THREE.Mesh &&
-    object.material instanceof THREE.MeshStandardMaterial
+    (object.material instanceof THREE.MeshStandardMaterial ||
+      object.material instanceof THREE.MeshPhongMaterial)
   );
 }
 
@@ -794,15 +798,14 @@ function normalForTriangle(
 }
 
 /**
- * Meshes render solid or wireframe; the baked feature-edge overlay
- * (LineSegments) toggles with the mode. Exact topology edge curves are
- * `THREE.Line` pick targets and stay visible in every mode.
+ * Meshes render solid or wireframe; baked and exact topology edge overlays
+ * toggle together so plain Shaded mode contains surfaces only.
  */
 function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
   bodyGroup.traverse((child: THREE.Object3D) => {
     if (isViewerMesh(child)) {
       child.material.wireframe = mode === 'wireframe';
-    } else if (child instanceof THREE.LineSegments) {
+    } else if (child instanceof THREE.LineSegments || child instanceof Line2) {
       child.visible = mode === 'shaded-edges';
     }
   });
@@ -2381,7 +2384,7 @@ export function ModelViewer({
         mesh.userData.bodyId = body.bodyId;
         mesh.userData.topology = body.topology;
         mesh.castShadow = true;
-        mesh.receiveShadow = true;
+        mesh.receiveShadow = false;
       });
 
       for (const edge of body.topology?.edges ?? []) {
