@@ -55,6 +55,59 @@ describe('exact BrepKit kernel adapter', () => {
     expect(derived.warnings).toEqual([]);
   });
 
+  it('removes boolean seams from a unioned physical part', async () => {
+    const withBase = addPrimitiveFeature(
+      createProjectDocument('Uniform bracket', toUserId('user_exact')),
+      {
+        name: 'Base plate',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 30, depth: 6 }
+      }
+    );
+    const withWall = addPrimitiveFeature(withBase, {
+      name: 'Wall plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 6, depth: 24 }
+    });
+    const wallId = withWall.bodyOrder.at(-1)!;
+    const positioned = transformBody(withWall, {
+      name: 'Seat wall on base',
+      targetBodyId: wallId,
+      translation: { x: 0, y: 24, z: 5.5 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Uniform bracket',
+        operation: 'union',
+        targetBodyIds: [positioned.bodyOrder[0]!, wallId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId];
+
+    expect(derived.warnings).toEqual([]);
+    expect(
+      Object.values(derived.bodyRepresentations).filter(
+        (candidate) => !candidate.consumed
+      )
+    ).toHaveLength(1);
+    expect(body?.volume).toBeCloseTo(40 * 30 * 6 + 40 * 6 * 23.5, 4);
+    // An L prism has six rectangular side faces plus its L-shaped front/back.
+    // Coplanar boolean fragments inflate this to fourteen faces and render
+    // false seams in the shaded-with-edges viewport.
+    expect(body?.faceCount).toBe(8);
+
+    const step = await adapter.exportStep(document, [resultId]);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
   it('keeps a coaxial cylinder cut as smooth analytic B-rep surfaces', async () => {
     const withOuter = addPrimitiveFeature(
       createProjectDocument('Bottle cap', toUserId('user_exact')),
