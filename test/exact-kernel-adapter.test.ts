@@ -159,7 +159,7 @@ describe('exact BrepKit kernel adapter', () => {
     });
   });
 
-  it('imports a STEP solid into replayable editable document history', async () => {
+  it('imports and tessellates STEP faces independently for complete rendering', async () => {
     const source = addPrimitiveFeature(
       createProjectDocument('Source', toUserId('user_exact')),
       {
@@ -184,6 +184,33 @@ describe('exact BrepKit kernel adapter', () => {
     const body = Object.values(derived.bodyRepresentations)[0];
     expect(body?.source).toBe('imported-step');
     expect(body?.volume).toBeCloseTo(504, 4);
+    expect(body?.topology?.faces).toHaveLength(6);
+    expect(
+      body?.topology?.faces.reduce(
+        (total, face) => total + face.triangleCount,
+        0
+      )
+    ).toBe((body?.mesh.indices.length ?? 0) / 3);
+
+    // Imported faces intentionally own independent render vertices. This
+    // keeps complex STEP trims on the reliable per-face tessellation path
+    // instead of the grouped shared-edge path that can under-fill them.
+    const seenIndices = new Set<number>();
+    let sharesVertexAcrossFaces = false;
+    for (const face of body?.topology?.faces ?? []) {
+      const start = face.triangleStart * 3;
+      const end = start + face.triangleCount * 3;
+      const faceIndices = new Set(
+        body?.mesh.indices.slice(start, end) ?? []
+      );
+      for (const index of faceIndices) {
+        if (seenIndices.has(index)) {
+          sharesVertexAcrossFaces = true;
+        }
+        seenIndices.add(index);
+      }
+    }
+    expect(sharesVertexAcrossFaces).toBe(false);
     expect(manager.document.commandLog[0]?.kind).toBe('import.step');
   });
 
