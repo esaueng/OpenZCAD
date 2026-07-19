@@ -28,6 +28,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import { OpenZCADKernel } from './index';
+import { normalizeStepPlaneAnglesForKernel } from './step-import';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const TESSELLATION_ANGLE = 0.35;
@@ -638,7 +639,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (feature.bodyId) {
               const solids = Array.from(
                 kernel.importStep(
-                  new TextEncoder().encode(feature.data.stepText)
+                  new TextEncoder().encode(
+                    normalizeStepPlaneAnglesForKernel(feature.data.stepText)
+                  )
                 )
               );
               if (solids.length === 0) {
@@ -1095,10 +1098,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }> {
     const kernel = new BrepKernel();
     try {
-      const bytes =
-        typeof data === 'string'
-          ? new TextEncoder().encode(data)
-          : new Uint8Array(data);
+      const sourceText =
+        typeof data === 'string' ? data : decodeText(new Uint8Array(data));
+      const bytes = new TextEncoder().encode(
+        normalizeStepPlaneAnglesForKernel(sourceText)
+      );
       const solids = Array.from(kernel.importStep(bytes));
       return {
         solid: solids.length > 0,
