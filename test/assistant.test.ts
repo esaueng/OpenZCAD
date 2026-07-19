@@ -106,6 +106,12 @@ describe('assistant integration', () => {
     // The instructions must actually teach the non-obvious kernel conventions.
     expect(budgeted.instructions).toContain('CORNER AT THE ORIGIN');
     expect(budgeted.instructions).toContain('localId');
+    expect(budgeted.instructions).toContain(
+      'ONE LIVE BODY for each physical part'
+    );
+    expect(budgeted.instructions).toContain(
+      'default to one finished physical part'
+    );
 
     const overridden = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
