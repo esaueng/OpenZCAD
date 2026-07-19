@@ -104,7 +104,7 @@ pnpm build        # production web/worker bundle
 pnpm deploy:beta  # beta-only Cloudflare deployment
 ```
 
-The BrepKit WASM bundle is about 4.7 MB uncompressed (about 1.7 MB gzip). It is loaded in the geometry worker, not the main UI thread.
+The BrepKit WASM bundle is about 4.7 MB uncompressed (about 1.7 MB gzip). It is loaded in the geometry worker, not the main UI thread. OpenZCAD pins an immutable package commit on the `esaueng/brepkit` fork's `openzcad-wasm` distribution branch; it does not resolve BrepKit from the npm registry.
 
 ## API surface
 
