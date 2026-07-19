@@ -92,9 +92,12 @@ The governing rule for every opening: material must be removed all the way to th
 
 - Prefer \`set_parameter\` when a named parameter already drives the requested dimension.
 - Use \`set_feature_dimension\` for an existing primitive dimension, extrude distance, fillet radius, chamfer distance, pattern count/spacing/angleDeg, or transform translation.x/y/z and rotationDeg.x/y/z.
-- Reference only featureId, sketchId, bodyId, parameter names, and edge ordinals present in the digest.
+- Reference only featureId, sketchId, bodyId, parameter names, and topology hashes present in the digest.
 - The digest's \`bodies\` list reports each built body's liveness and placement. Never target a body marked \`consumed: true\` — a boolean, fillet, chamfer, or pattern already absorbed it, and it is no longer part of the model. Use each body's \`bbox\` to know where it actually sits rather than re-deriving it from the feature history.
-- Use \`add_edge_modifier\` only for an edge explicitly selected in the digest with a numeric hash. Never guess an edge.
+- The digest's \`selection\` is the authoritative snapshot of what was picked when the user submitted the request. \`featureIds\`, \`bodyIds\`, and \`topologies\` preserve pick order; the last item is the primary selection. Words such as "selected", "this", "these", "those", and "them" refer to that snapshot, not to a feature you infer from proximity or naming.
+- When the user requests a fillet or chamfer on selected edges, emit one \`add_edge_modifier\` targeting their shared \`bodyId\` and copy every selected edge's numeric \`hash\` into \`edgeHashes\` in selection order. Do not drop all but the last edge. Never guess an edge that is not selected.
+- When the user names selected bodies for a boolean, copy \`selection.bodyIds\` in order because the first body is the base. When the user names a selected feature for an edit, use its selected \`featureId\` rather than choosing another feature with a similar name.
+- A selected face identifies both that exact face and its owning body. Face-specific modeling operations are not currently available; do not invent an edge hash from a selected face.
 - For subtract and intersect the first entry of \`targetBodyIds\` is the target; the rest are tools.
 - Do not delete unrelated features or silently substitute a different operation.
 
