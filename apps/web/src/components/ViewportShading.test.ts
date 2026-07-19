@@ -14,12 +14,13 @@ import {
 
 function bodyWithMesh(
   mesh: MeshGeometry,
-  topology?: BodyTopology
+  topology?: BodyTopology,
+  source: BodyRepresentation['source'] = 'primitive'
 ): BodyRepresentation {
   return {
     bodyId: toBodyId('body_shading_test'),
     name: 'Shading test',
-    source: 'primitive',
+    source,
     mesh,
     faceCount: 2,
     color: '#356dff',
@@ -151,8 +152,25 @@ describe('CAD viewport shading', () => {
     expect(material).toBeInstanceOf(THREE.MeshPhongMaterial);
     expect(material.shininess).toBe(38);
     expect(material.specular.getHex()).toBe(0x667487);
+    expect(material.side).toBe(THREE.FrontSide);
     expect(object.castShadow).toBe(true);
     expect(object.receiveShadow).toBe(false);
+  });
+
+  it('keeps mixed-winding imported STEP faces shaded', () => {
+    const material = createBodyMaterial(
+      bodyWithMesh(
+        {
+          kind: 'mesh',
+          vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 2, 1]
+        },
+        undefined,
+        'imported-step'
+      )
+    );
+
+    expect(material.side).toBe(THREE.DoubleSide);
   });
 
   it('uses a visible ground bounce for downward-facing surfaces', () => {
