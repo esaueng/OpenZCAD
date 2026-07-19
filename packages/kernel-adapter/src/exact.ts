@@ -328,7 +328,7 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 export interface ExactKernelAdapter {
-  readonly kind: 'brepkit';
+  readonly kind: 'brepkit' | 'occt' | 'hybrid';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
@@ -877,11 +877,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     return result;
   }
 
-  private measureShape(
-    kernel: BrepKernel,
-    shape: ExactShape,
-    tessellateFacesIndividually = false
-  ): MeasuredShape {
+  private measureShape(kernel: BrepKernel, shape: ExactShape): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
     }
@@ -896,67 +892,32 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     let valid = true;
 
     for (const solid of shape.solids) {
-      if (tessellateFacesIndividually) {
-        // BrepKit's shared-edge grouped tessellator is ideal for native
-        // OpenZCAD solids, but imported STEP faces with complex trims can be
-        // reduced to only a handful of triangles and render with large
-        // wireframe-looking gaps. Its per-face tessellator preserves those
-        // trims and curved surfaces. STEP exports still use the exact B-rep,
-        // so duplicating boundary vertices here affects rendering only.
-        for (const face of kernel.getSolidFaces(solid)) {
-          const mesh = kernel.tessellateFace(
-            face,
-            TESSELLATION_DEFLECTION,
-            TESSELLATION_ANGLE
-          );
-          try {
-            const localPositions = Array.from(mesh.positions);
-            const localIndices = Array.from(mesh.indices);
-            const vertexOffset = vertices.length / 3;
-            const triangleStart = indices.length / 3;
-            vertices.push(...localPositions);
-            indices.push(
-              ...localIndices.map((index) => index + vertexOffset)
-            );
-            const hash = topology.faces.length + 1;
-            topology.faces.push({
-              topologyId: `face:${hash}`,
-              hash,
-              triangleStart,
-              triangleCount: localIndices.length / 3
-            });
-          } finally {
-            mesh.free();
-          }
+      const mesh = kernel.tessellateSolidGroupedBinary(
+        solid,
+        TESSELLATION_DEFLECTION,
+        TESSELLATION_ANGLE
+      );
+      try {
+        const localPositions = Array.from(mesh.positions);
+        const localIndices = Array.from(mesh.indices);
+        const faceOffsets = Array.from(mesh.faceOffsets);
+        const vertexOffset = vertices.length / 3;
+        const indexOffset = indices.length;
+        vertices.push(...localPositions);
+        indices.push(...localIndices.map((index) => index + vertexOffset));
+        for (let index = 0; index < faceOffsets.length - 1; index += 1) {
+          const start = faceOffsets[index]!;
+          const end = faceOffsets[index + 1]!;
+          const hash = topology.faces.length + 1;
+          topology.faces.push({
+            topologyId: `face:${hash}`,
+            hash,
+            triangleStart: (indexOffset + start) / 3,
+            triangleCount: (end - start) / 3
+          });
         }
-      } else {
-        const mesh = kernel.tessellateSolidGroupedBinary(
-          solid,
-          TESSELLATION_DEFLECTION,
-          TESSELLATION_ANGLE
-        );
-        try {
-          const localPositions = Array.from(mesh.positions);
-          const localIndices = Array.from(mesh.indices);
-          const faceOffsets = Array.from(mesh.faceOffsets);
-          const vertexOffset = vertices.length / 3;
-          const indexOffset = indices.length;
-          vertices.push(...localPositions);
-          indices.push(...localIndices.map((index) => index + vertexOffset));
-          for (let index = 0; index < faceOffsets.length - 1; index += 1) {
-            const start = faceOffsets[index]!;
-            const end = faceOffsets[index + 1]!;
-            const hash = topology.faces.length + 1;
-            topology.faces.push({
-              topologyId: `face:${hash}`,
-              hash,
-              triangleStart: (indexOffset + start) / 3,
-              triangleCount: (end - start) / 3
-            });
-          }
-        } finally {
-          mesh.free();
-        }
+      } finally {
+        mesh.free();
       }
 
       const edgeLines = kernel.meshEdgesAll(
@@ -1032,11 +993,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           continue;
         }
         const feature = features.get(body.featureId);
-        const measured = this.measureShape(
-          kernel,
-          shape,
-          feature?.featureKind === 'imported-step'
-        );
+        const measured = this.measureShape(kernel, shape);
         const consumed = build.consumed.has(bodyId);
         if (!measured.valid) {
           build.warnings.push(
@@ -1169,5 +1126,67 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 }
 
 export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
-  return new BrepKitKernelAdapter();
+  return new HybridExactKernelAdapter();
+}
+
+function containsImportedStep(document: ProjectDocument): boolean {
+  return listFeaturesInOrder(document).some(
+    (feature) => feature.data.featureKind === 'imported-step'
+  );
+}
+
+/**
+ * BrepKit remains the fast native modeling kernel. Documents containing STEP
+ * sources switch as a whole to OpenCascade so every downstream operation uses
+ * the same faithful imported B-rep instead of mixing exact and reconstructed
+ * geometry.
+ */
+class HybridExactKernelAdapter implements ExactKernelAdapter {
+  readonly kind = 'hybrid' as const;
+  private readonly brepkit = new BrepKitKernelAdapter();
+  private occt: Promise<ExactKernelAdapter> | null = null;
+
+  private getOcct(): Promise<ExactKernelAdapter> {
+    this.occt ??= import('./occt-step').then(({ OcctStepKernelAdapter }) =>
+      OcctStepKernelAdapter.create()
+    );
+    return this.occt;
+  }
+
+  async syncDocument(document: ProjectDocument): Promise<DerivedState> {
+    return containsImportedStep(document)
+      ? (await this.getOcct()).syncDocument(document)
+      : this.brepkit.syncDocument(document);
+  }
+
+  async exportStep(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<string> {
+    return containsImportedStep(document)
+      ? (await this.getOcct()).exportStep(document, bodyIds)
+      : this.brepkit.exportStep(document, bodyIds);
+  }
+
+  async exportStl(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<string> {
+    return containsImportedStep(document)
+      ? (await this.getOcct()).exportStl(document, bodyIds)
+      : this.brepkit.exportStl(document, bodyIds);
+  }
+
+  async inspectStep(data: string | ArrayBuffer): Promise<{
+    solid: boolean;
+    valid: boolean;
+    volume: number;
+  }> {
+    return (await this.getOcct()).inspectStep(data);
+  }
+
+  dispose(): void {
+    this.brepkit.dispose();
+    void this.occt?.then((adapter) => adapter.dispose());
+  }
 }

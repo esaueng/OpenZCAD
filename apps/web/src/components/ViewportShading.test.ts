@@ -157,7 +157,7 @@ describe('CAD viewport shading', () => {
     expect(object.receiveShadow).toBe(false);
   });
 
-  it('keeps mixed-winding imported STEP faces shaded', () => {
+  it('uses kernel-oriented front faces for imported STEP solids', () => {
     const material = createBodyMaterial(
       bodyWithMesh(
         {
@@ -170,7 +170,7 @@ describe('CAD viewport shading', () => {
       )
     );
 
-    expect(material.side).toBe(THREE.DoubleSide);
+    expect(material.side).toBe(THREE.FrontSide);
   });
 
   it('uses a visible ground bounce for downward-facing surfaces', () => {

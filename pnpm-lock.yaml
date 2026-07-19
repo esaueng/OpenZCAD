@@ -202,6 +202,9 @@ importers:
       brepkit-wasm:
         specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
         version: https://codeload.github.com/esaueng/brepkit/tar.gz/d9fc51d61bc3c22bad636f86500b5d49a0ad8387#path:/crates/wasm/pkg
+      occt-wasm:
+        specifier: 3.7.0
+        version: 3.7.0
 
   packages/persistence:
     dependencies:
@@ -1309,6 +1312,9 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
 
+  comlink@4.4.2:
+    resolution: {integrity: sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g==}
+
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
 
@@ -1610,6 +1616,9 @@ packages:
 
   node-releases@2.0.37:
     resolution: {integrity: sha512-1h5gKZCF+pO/o3Iqt5Jp7wc9rH3eJJ0+nh/CIoiRwjRxde/hAHyLPXYN4V3CqKAbiZPSeJFSWHmJsbkicta0Eg==}
+
+  occt-wasm@3.7.0:
+    resolution: {integrity: sha512-k18t7mwcyFrSEZbAIVl3pl5J/dKE3AOUAWuvyB/tWW9FHcN/Imf1Kjh9cJGbfuR/3uBEu1K/a4hATgQyT/abjg==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -2851,6 +2860,8 @@ snapshots:
 
   color-name@1.1.4: {}
 
+  comlink@4.4.2: {}
+
   concat-map@0.0.1: {}
 
   convert-source-map@2.0.0: {}
@@ -3162,6 +3173,10 @@ snapshots:
   natural-compare@1.4.0: {}
 
   node-releases@2.0.37: {}
+
+  occt-wasm@3.7.0:
+    dependencies:
+      comlink: 4.4.2
 
   optionator@0.9.4:
     dependencies:
