@@ -33,6 +33,7 @@ const TESSELLATION_DEFLECTION = 0.08;
 const TESSELLATION_ANGLE = 0.35;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
+const ANALYTIC_MATCH_EPSILON = 1e-7;
 
 interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
@@ -56,6 +57,265 @@ interface MeasuredShape {
     min: Vec3;
     max: Vec3;
   };
+}
+
+interface AnalyticCylinder {
+  origin: Vec3;
+  axis: Vec3;
+  radius: number;
+  axialMin: number;
+  axialMax: number;
+}
+
+function dot(left: Vec3, right: Vec3): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+function subtract(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z
+  };
+}
+
+function scale(vector: Vec3, factor: number): Vec3 {
+  return {
+    x: vector.x * factor,
+    y: vector.y * factor,
+    z: vector.z * factor
+  };
+}
+
+function cross(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x
+  };
+}
+
+function length(vector: Vec3): number {
+  return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function normalized(vector: Vec3): Vec3 | null {
+  const magnitude = length(vector);
+  return magnitude > GEOMETRY_EPSILON ? scale(vector, 1 / magnitude) : null;
+}
+
+function finiteVec3(value: unknown): Vec3 | null {
+  if (!Array.isArray(value) || value.length !== 3) {
+    return null;
+  }
+  const [x, y, z] = value as unknown[];
+  if (
+    typeof x !== 'number' ||
+    typeof y !== 'number' ||
+    typeof z !== 'number' ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(z)
+  ) {
+    return null;
+  }
+  return { x, y, z };
+}
+
+/**
+ * Read a simple analytic cylinder (one cylindrical wall and two planar caps).
+ * More complex solids deliberately fall through to BrepKit's general boolean.
+ */
+function readAnalyticCylinder(
+  kernel: BrepKernel,
+  solid: number
+): AnalyticCylinder | null {
+  const faces = Array.from(kernel.getSolidFaces(solid));
+  const cylinderFaces = faces.filter(
+    (face) => kernel.getSurfaceType(face) === 'cylinder'
+  );
+  if (
+    faces.length !== 3 ||
+    cylinderFaces.length !== 1 ||
+    faces.filter((face) => kernel.getSurfaceType(face) === 'plane').length !== 2
+  ) {
+    return null;
+  }
+
+  const face = cylinderFaces[0]!;
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    return null;
+  }
+  if (!parameters || typeof parameters !== 'object') {
+    return null;
+  }
+  const record = parameters as Record<string, unknown>;
+  const origin = finiteVec3(record.origin);
+  const rawAxis = finiteVec3(record.axis);
+  const axis = rawAxis ? normalized(rawAxis) : null;
+  const radius = record.radius;
+  const domain = Array.from(kernel.getSurfaceDomain(face));
+  if (
+    !origin ||
+    !axis ||
+    typeof radius !== 'number' ||
+    !Number.isFinite(radius) ||
+    radius <= GEOMETRY_EPSILON ||
+    domain.length !== 4 ||
+    !domain.every(Number.isFinite)
+  ) {
+    return null;
+  }
+
+  return {
+    origin,
+    axis,
+    radius,
+    axialMin: Math.min(domain[2]!, domain[3]!),
+    axialMax: Math.max(domain[2]!, domain[3]!)
+  };
+}
+
+function coordinateFrameMatrix(origin: Vec3, zAxis: Vec3): Float64Array {
+  const reference =
+    Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const xAxis = normalized(cross(reference, zAxis));
+  if (!xAxis) {
+    throw new Error('Could not construct a cylinder coordinate frame.');
+  }
+  const yAxis = cross(zAxis, xAxis);
+  return new Float64Array([
+    xAxis.x,
+    yAxis.x,
+    zAxis.x,
+    origin.x,
+    xAxis.y,
+    yAxis.y,
+    zAxis.y,
+    origin.y,
+    xAxis.z,
+    yAxis.z,
+    zAxis.z,
+    origin.z,
+    0,
+    0,
+    0,
+    1
+  ]);
+}
+
+/** Revolve a radial/axial section around local +Z, then place it in world space. */
+function revolveRadialProfile(
+  kernel: BrepKernel,
+  profile: Vec2[],
+  cylinder: AnalyticCylinder
+): number {
+  const edges = profile.map((point, index) => {
+    const next = profile[(index + 1) % profile.length]!;
+    return kernel.makeLineEdge(point.x, 0, point.y, next.x, 0, next.y);
+  });
+  const wire = kernel.makeWire(Uint32Array.from(edges), true);
+  const face = kernel.makePlanarFaceFromWire(wire);
+  const local = kernel.revolve(face, 0, 0, 0, 0, 0, 1, 360);
+  return kernel.copyAndTransformSolid(
+    local,
+    coordinateFrameMatrix(cylinder.origin, cylinder.axis)
+  );
+}
+
+/**
+ * Preserve analytic cylinder walls for the common hollow-part operation.
+ * BrepKit's generic boolean currently falls back to a triangular B-rep when a
+ * smaller coaxial cylinder opens exactly onto either cap. Revolving the exact
+ * radial section is the equivalent CSG result, but keeps true cylindrical
+ * surfaces in the document and exported STEP file.
+ */
+function tryExactCoaxialCylinderCut(
+  kernel: BrepKernel,
+  targetSolid: number,
+  toolSolid: number
+): number | null {
+  const target = readAnalyticCylinder(kernel, targetSolid);
+  const tool = readAnalyticCylinder(kernel, toolSolid);
+  if (!target || !tool) {
+    return null;
+  }
+
+  const alignment = dot(target.axis, tool.axis);
+  if (Math.abs(Math.abs(alignment) - 1) > ANALYTIC_MATCH_EPSILON) {
+    return null;
+  }
+
+  const offset = subtract(tool.origin, target.origin);
+  const axialOffset = dot(offset, target.axis);
+  const perpendicularOffset = subtract(offset, scale(target.axis, axialOffset));
+  const span = Math.max(
+    1,
+    target.radius,
+    tool.radius,
+    target.axialMax - target.axialMin,
+    tool.axialMax - tool.axialMin
+  );
+  const tolerance = ANALYTIC_MATCH_EPSILON * span;
+  if (
+    length(perpendicularOffset) > tolerance ||
+    tool.radius >= target.radius - tolerance
+  ) {
+    return null;
+  }
+
+  const toolA = axialOffset + alignment * tool.axialMin;
+  const toolB = axialOffset + alignment * tool.axialMax;
+  const toolMin = Math.min(toolA, toolB);
+  const toolMax = Math.max(toolA, toolB);
+  const cutMin = Math.max(target.axialMin, toolMin);
+  const cutMax = Math.min(target.axialMax, toolMax);
+  if (cutMax - cutMin <= tolerance) {
+    return null;
+  }
+
+  const opensBottom = toolMin <= target.axialMin + tolerance;
+  const opensTop = toolMax >= target.axialMax - tolerance;
+  if (!opensBottom && !opensTop) {
+    // A fully enclosed tool is already handled analytically by BrepKit as an
+    // inner shell. Only the cap-opening cases need this construction.
+    return null;
+  }
+
+  const inner = tool.radius;
+  const outer = target.radius;
+  let profile: Vec2[];
+  if (opensBottom && opensTop) {
+    profile = [
+      { x: inner, y: target.axialMin },
+      { x: outer, y: target.axialMin },
+      { x: outer, y: target.axialMax },
+      { x: inner, y: target.axialMax }
+    ];
+  } else if (opensTop) {
+    profile = [
+      { x: 0, y: target.axialMin },
+      { x: outer, y: target.axialMin },
+      { x: outer, y: target.axialMax },
+      { x: inner, y: target.axialMax },
+      { x: inner, y: cutMin },
+      { x: 0, y: cutMin }
+    ];
+  } else {
+    profile = [
+      { x: inner, y: target.axialMin },
+      { x: outer, y: target.axialMin },
+      { x: outer, y: target.axialMax },
+      { x: 0, y: target.axialMax },
+      { x: 0, y: cutMax },
+      { x: inner, y: cutMax }
+    ];
+  }
+
+  return revolveRadialProfile(kernel, profile, target);
 }
 
 function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
@@ -438,7 +698,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 const tool = collapseShape(kernel, operand);
                 solid =
                   feature.data.operation === 'subtract'
-                    ? kernel.cut(solid, tool)
+                    ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
+                      kernel.cut(solid, tool))
                     : kernel.intersect(solid, tool);
               }
             }

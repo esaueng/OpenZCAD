@@ -55,6 +55,57 @@ describe('exact BrepKit kernel adapter', () => {
     expect(derived.warnings).toEqual([]);
   });
 
+  it('keeps a coaxial cylinder cut as smooth analytic B-rep surfaces', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Bottle cap', toUserId('user_exact')),
+      {
+        name: 'Cap outer',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 32.9, height: 25 }
+      }
+    );
+    const outer = withOuter.bodyOrder.at(-1)!;
+    const withCavity = addPrimitiveFeature(withOuter, {
+      name: 'Cap cavity',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 30.4, height: 21.5 }
+    });
+    const cavity = withCavity.bodyOrder.at(-1)!;
+    const positioned = transformBody(withCavity, {
+      name: 'Position cap cavity',
+      targetBodyId: cavity,
+      translation: { x: 0, y: 0, z: 3.5 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Water bottle bottom cap',
+        operation: 'subtract',
+        targetBodyIds: [outer, cavity]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId];
+    const expectedVolume =
+      Math.PI * 32.9 ** 2 * 25 - Math.PI * 30.4 ** 2 * 21.5;
+
+    expect(derived.warnings).toEqual([]);
+    expect(body?.faceCount).toBe(5);
+    expect(body?.topology?.edges).toHaveLength(6);
+    expect(body?.volume).toBeCloseTo(expectedVolume, 4);
+
+    const step = await adapter.exportStep(document, [resultId]);
+    expect(step.match(/CYLINDRICAL_SURFACE/g)).toHaveLength(2);
+    expect(step.match(/ADVANCED_FACE/g)).toHaveLength(5);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
   it('imports a STEP solid into replayable editable document history', async () => {
     const source = addPrimitiveFeature(
       createProjectDocument('Source', toUserId('user_exact')),
