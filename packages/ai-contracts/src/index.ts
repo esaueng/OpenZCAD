@@ -128,6 +128,29 @@ export interface CadPatchProposal {
   operations: CadPatchOperation[];
 }
 
+/**
+ * The viewport and feature tree selection captured when an assistant request
+ * starts. Arrays preserve pick order, which is significant for booleans (the
+ * first body is the base) and makes plural references such as "these edges"
+ * deterministic.
+ */
+export interface CadSelectionContext {
+  featureIds: readonly FeatureId[];
+  bodyIds: readonly string[];
+  topologies: readonly TopologySelection[];
+}
+
+export interface CadDigestSelection {
+  featureIds: string[];
+  bodyIds: string[];
+  topologies: Array<{
+    bodyId: string;
+    kind: TopologySelection['kind'];
+    topologyId: string;
+    hash: number | null;
+  }>;
+}
+
 export interface CadDocumentDigest {
   schemaVersion: number;
   projectId: string;
@@ -161,14 +184,7 @@ export interface CadDocumentDigest {
       max: { x: number; y: number; z: number };
     };
   }>;
-  selection?: {
-    bodyId: string | null;
-    topology: {
-      kind: TopologySelection['kind'];
-      topologyId: string;
-      hash: number | null;
-    } | null;
-  };
+  selection?: CadDigestSelection;
   warnings: string[];
 }
 
@@ -208,8 +224,24 @@ function compactFeatureData(data: unknown): unknown {
 
 export function createCadDocumentDigest(
   document: ProjectDocument,
-  selection?: TopologySelection | null
+  selection?: TopologySelection | CadSelectionContext | null
 ): CadDocumentDigest {
+  const context: CadSelectionContext =
+    selection && 'topologies' in selection
+      ? selection
+      : {
+          featureIds: [],
+          bodyIds: selection ? [selection.bodyId] : [],
+          topologies: selection ? [selection] : []
+        };
+  const bodyIds = [...new Set(context.bodyIds.map(String))];
+  for (const topology of context.topologies) {
+    const bodyId = String(topology.bodyId);
+    if (!bodyIds.includes(bodyId)) {
+      bodyIds.push(bodyId);
+    }
+  }
+
   return {
     schemaVersion: document.schemaVersion,
     projectId: document.projectId,
@@ -256,18 +288,127 @@ export function createCadDocumentDigest(
         : [];
     }),
     selection: {
-      bodyId: selection?.bodyId ?? null,
-      topology: selection
-        ? {
-            kind: selection.kind,
-            topologyId:
-              selection.topologyId ?? `body:${String(selection.bodyId)}`,
-            hash: selection.hash ?? null
-          }
-        : null
+      featureIds: [...new Set(context.featureIds.map(String))],
+      bodyIds,
+      topologies: context.topologies.map((topology) => ({
+        bodyId: String(topology.bodyId),
+        kind: topology.kind,
+        topologyId:
+          topology.topologyId ?? `body:${String(topology.bodyId)}`,
+        hash: topology.hash ?? null
+      }))
     },
     warnings: document.derived.warnings
   };
+}
+
+const SELECTED_EDGES_PATTERN =
+  /\b(?:(?:selected|these|those)\s+edges?|edges?\s+(?:that|which)\s+(?:are\s+)?selected)\b/i;
+const SELECTED_FEATURE_PATTERN =
+  /\b(?:selected|this|that|these|those)\s+features?\b/i;
+const SELECTED_BODY_PATTERN =
+  /\b(?:selected|this|that|these|those)\s+(?:body|bodies|part|parts|solid|solids|feature|features)\b/i;
+
+function sameStrings(left: readonly string[], right: readonly string[]) {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+/**
+ * Grounds the model's proposed references back onto an explicitly named UI
+ * selection. The model still decides the operation and dimensions; the client
+ * owns which user-picked entities words such as "selected edges" refer to.
+ * This prevents a proposal from dropping all but the last edge or inventing a
+ * nearby topology id.
+ */
+export function groundCadPatchProposalToSelection(
+  prompt: string,
+  digest: CadDocumentDigest,
+  proposal: CadPatchProposal
+): CadPatchProposal {
+  const selection = digest.selection;
+  if (!selection) {
+    return proposal;
+  }
+
+  const selectedEdges = selection.topologies.filter(
+    (topology) => topology.kind === 'edge' && topology.hash !== null
+  );
+  const selectedEdgeBodyId = selectedEdges[0]?.bodyId;
+  const selectedEdgeHashes = [
+    ...new Set(selectedEdges.map((topology) => topology.hash as number))
+  ];
+  const edgesShareBody =
+    selectedEdgeBodyId !== undefined &&
+    selectedEdges.every((topology) => topology.bodyId === selectedEdgeBodyId);
+  const selectedFeatureId =
+    selection.featureIds.length === 1 ? selection.featureIds[0] : undefined;
+  const selectedBodyId =
+    selection.bodyIds.length === 1 ? selection.bodyIds[0] : undefined;
+  const referencesSelectedEdges = SELECTED_EDGES_PATTERN.test(prompt);
+  const referencesSelectedFeature = SELECTED_FEATURE_PATTERN.test(prompt);
+  const referencesSelectedBody = SELECTED_BODY_PATTERN.test(prompt);
+  let changed = false;
+
+  const operations = proposal.operations.map((operation): CadPatchOperation => {
+    if (
+      operation.kind === 'add_edge_modifier' &&
+      referencesSelectedEdges &&
+      edgesShareBody &&
+      selectedEdgeHashes.length > 0
+    ) {
+      if (
+        operation.targetBodyId === selectedEdgeBodyId &&
+        sameStrings(operation.edgeHashes.map(String), selectedEdgeHashes.map(String))
+      ) {
+        return operation;
+      }
+      changed = true;
+      return {
+        ...operation,
+        targetBodyId: selectedEdgeBodyId,
+        edgeHashes: selectedEdgeHashes
+      };
+    }
+
+    if (
+      referencesSelectedFeature &&
+      selectedFeatureId &&
+      (operation.kind === 'set_feature_dimension' ||
+        operation.kind === 'delete_feature' ||
+        operation.kind === 'rename_feature') &&
+      operation.featureId !== selectedFeatureId
+    ) {
+      changed = true;
+      return { ...operation, featureId: selectedFeatureId as FeatureId };
+    }
+
+    if (
+      referencesSelectedBody &&
+      selectedBodyId &&
+      (operation.kind === 'add_transform' || operation.kind === 'add_pattern') &&
+      operation.targetBodyId !== selectedBodyId
+    ) {
+      changed = true;
+      return { ...operation, targetBodyId: selectedBodyId };
+    }
+
+    if (
+      referencesSelectedBody &&
+      selection.bodyIds.length >= 2 &&
+      operation.kind === 'add_boolean' &&
+      !sameStrings(operation.targetBodyIds, selection.bodyIds)
+    ) {
+      changed = true;
+      return { ...operation, targetBodyIds: [...selection.bodyIds] };
+    }
+
+    return operation;
+  });
+
+  return changed ? { ...proposal, operations } : proposal;
 }
 
 const scalarSchema = {

@@ -220,6 +220,116 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('grounds an AI fillet request onto every selected edge', async ({ page }) => {
+  await stubApi(page);
+  type AssistantRequest = {
+    digest?: {
+      selection?: {
+        featureIds?: string[];
+        bodyIds?: string[];
+        topologies?: Array<{
+          bodyId: string;
+          kind: string;
+          hash: number | null;
+        }>;
+      };
+    };
+  };
+  let resolveAssistantRequest!: (request: AssistantRequest) => void;
+  const assistantRequestPromise = new Promise<AssistantRequest>((resolve) => {
+    resolveAssistantRequest = resolve;
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'selection-aware-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    const assistantRequest =
+      route.request().postDataJSON() as AssistantRequest;
+    resolveAssistantRequest(assistantRequest);
+    const selection = assistantRequest?.digest?.selection;
+    const firstEdge = selection?.topologies?.find(
+      (topology) => topology.kind === 'edge' && topology.hash !== null
+    );
+    const proposal = {
+      proposalId: 'proposal_selected_edges_e2e',
+      summary: 'Fillet every selected edge by 1 mm.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'AI selected edge fillets',
+          localId: null,
+          modifier: 'fillet',
+          // Deliberately return only the first selected edge. The client-side
+          // grounding guard must restore the full explicit selection.
+          targetBodyId: firstEdge?.bodyId ?? 'body_hallucinated',
+          edgeHashes: [firstEdge?.hash ?? 999],
+          size: 1
+        }
+      ]
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify(proposal)
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Selection Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await expect(page.getByLabel('CAD change request')).toHaveAttribute(
+    'placeholder',
+    'Ask OpenZCAD to change 12 selected edges…'
+  );
+  await page
+    .getByLabel('CAD change request')
+    .fill('Add fillets of 1 mm on the selected edges');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  await expect(page.locator('.ai-proposal.ready')).toContainText(
+    'Fillet every selected edge by 1 mm.'
+  );
+  const assistantRequest = await assistantRequestPromise;
+  expect(assistantRequest?.digest?.selection?.featureIds).toHaveLength(1);
+  expect(assistantRequest?.digest?.selection?.bodyIds).toHaveLength(1);
+  expect(assistantRequest?.digest?.selection?.topologies).toHaveLength(12);
+
+  await page.getByRole('button', { name: 'Apply patch' }).click();
+  const fillet = page.locator('.feature-row', {
+    hasText: 'AI selected edge fillets'
+  });
+  await expect(fillet).toBeVisible();
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expect(page.getByLabel('CAD change request')).toHaveAttribute(
+    'placeholder',
+    'Ask OpenZCAD to change the model…'
+  );
+  await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
+    0
+  );
+});
+
 test('models a parametric part and exports a true STEP file', async ({
   page
 }) => {

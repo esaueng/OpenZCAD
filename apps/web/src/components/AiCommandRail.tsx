@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowUp, Check, Eye, Sparkles, X } from 'lucide-react';
 import {
   createCadDocumentDigest,
+  type CadSelectionContext,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
-import type { ProjectDocument, TopologySelection } from '@openzcad/shared';
+import type { ProjectDocument } from '@openzcad/shared';
 import {
   loadAssistantStatus,
   streamCadPatchProposal,
@@ -13,7 +14,7 @@ import {
 
 interface AiCommandRailProps {
   document: ProjectDocument;
-  selectedTopology: TopologySelection | null;
+  selection: CadSelectionContext;
   /** Returns false when the patch could not be applied, so the rail can say so. */
   onApply(proposal: CadPatchProposal): boolean;
   /** Returns false when the patch could not be previewed. */
@@ -22,7 +23,7 @@ interface AiCommandRailProps {
 
 export function AiCommandRail({
   document,
-  selectedTopology,
+  selection,
   onApply,
   onPreview
 }: AiCommandRailProps) {
@@ -36,6 +37,26 @@ export function AiCommandRail({
   const abortRef = useRef<AbortController | null>(null);
   const [assistantStatus, setAssistantStatus] =
     useState<AssistantStatus | null>(null);
+
+  const selectionSummary = (() => {
+    const topologyKind = selection.topologies[0]?.kind;
+    if (
+      topologyKind &&
+      selection.topologies.every((topology) => topology.kind === topologyKind)
+    ) {
+      const count = selection.topologies.length;
+      return `${count} selected ${topologyKind}${count === 1 ? '' : 's'}`;
+    }
+    if (selection.bodyIds.length > 0) {
+      const count = selection.bodyIds.length;
+      return `${count} selected bod${count === 1 ? 'y' : 'ies'}`;
+    }
+    if (selection.featureIds.length > 0) {
+      const count = selection.featureIds.length;
+      return `${count} selected feature${count === 1 ? '' : 's'}`;
+    }
+    return null;
+  })();
 
   useEffect(() => () => abortRef.current?.abort(), []);
   useEffect(() => {
@@ -82,11 +103,19 @@ export function AiCommandRail({
     setPreviewing(false);
     onPreview(null);
     setPhase('thinking');
-    setMessage('Reasoning over the feature history…');
+    setMessage(
+      selectionSummary
+        ? `Reasoning over ${selectionSummary} and the feature history…`
+        : 'Reasoning over the feature history…'
+    );
     try {
+      // Capture one immutable context snapshot. If the user changes selection
+      // while the provider is thinking, this proposal still names the exact
+      // entities they meant when they submitted it.
+      const digest = createCadDocumentDigest(document, selection);
       const next = await streamCadPatchProposal(
         request,
-        createCadDocumentDigest(document, selectedTopology),
+        digest,
         { signal: controller.signal }
       );
       setProposal(next);
@@ -118,7 +147,11 @@ export function AiCommandRail({
         <textarea
           value={prompt}
           rows={1}
-          placeholder="Ask OpenZCAD to change the model…"
+          placeholder={
+            selectionSummary
+              ? `Ask OpenZCAD to change ${selectionSummary}…`
+              : 'Ask OpenZCAD to change the model…'
+          }
           aria-label="CAD change request"
           onChange={(event) => setPrompt(event.target.value)}
           onKeyDown={(event) => {

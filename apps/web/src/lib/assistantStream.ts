@@ -1,5 +1,7 @@
 import {
+  groundCadPatchProposalToSelection,
   parseCadPatchProposal,
+  type CadDocumentDigest,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
 
@@ -84,7 +86,7 @@ export function readAssistantEvent(
 
 export async function streamCadPatchProposal(
   prompt: string,
-  digest: unknown,
+  digest: CadDocumentDigest,
   options: AssistantStreamOptions = {}
 ): Promise<CadPatchProposal> {
   const response = await fetch('/api/assistant/proposals', {
@@ -133,5 +135,9 @@ export async function streamCadPatchProposal(
   if (!output.trim()) {
     throw new Error('The modeling assistant returned an empty proposal.');
   }
-  return parseCadPatchProposal(JSON.parse(output));
+  return groundCadPatchProposalToSelection(
+    prompt,
+    digest,
+    parseCadPatchProposal(JSON.parse(output))
+  );
 }

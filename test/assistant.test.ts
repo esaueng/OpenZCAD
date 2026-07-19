@@ -107,6 +107,9 @@ describe('assistant integration', () => {
     expect(budgeted.instructions).toContain('CORNER AT THE ORIGIN');
     expect(budgeted.instructions).toContain('localId');
     expect(budgeted.instructions).toContain(
+      'copy every selected edge\'s numeric `hash`'
+    );
+    expect(budgeted.instructions).toContain(
       'ONE LIVE BODY for each physical part'
     );
     expect(budgeted.instructions).toContain(

@@ -31,7 +31,10 @@ import {
   commandsForCadPatch,
   type AnyCommand
 } from '@openzcad/command-system';
-import type { CadPatchProposal } from '@openzcad/ai-contracts';
+import type {
+  CadPatchProposal,
+  CadSelectionContext
+} from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
   findSketch,
@@ -543,6 +546,20 @@ export function App() {
   const selectedBody = selectedFeature?.bodyId
     ? (representations[selectedFeature.bodyId] ?? null)
     : null;
+
+  const assistantSelection = useMemo<CadSelectionContext>(
+    () => ({
+      featureIds: selectedFeature ? [selectedFeature.featureId] : [],
+      bodyIds: selectedBodyIds,
+      topologies:
+        selectedEdges.length > 0
+          ? selectedEdges
+          : selectedTopology
+            ? [selectedTopology]
+            : []
+    }),
+    [selectedBodyIds, selectedEdges, selectedFeature, selectedTopology]
+  );
 
   const edgeModifierBody = useMemo<BodyRepresentation | null>(() => {
     const candidateId =
@@ -1225,10 +1242,18 @@ export function App() {
       return false;
     }
     try {
-      return executeTransaction(
+      const applied = executeTransaction(
         'Apply AI patch',
         commandsForCadPatch(doc, proposal)
       );
+      if (applied) {
+        // Topology ids belong to the pre-patch body. A fillet, boolean, or
+        // pattern may consume that body and rebuild different edges/faces, so
+        // retaining the old selection would poison the next assistant turn.
+        setTool(null);
+        clearSelection();
+      }
+      return applied;
     } catch (error) {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
       return false;
@@ -2561,7 +2586,7 @@ export function App() {
         directMode ? null : (
           <AiCommandRail
             document={doc}
-            selectedTopology={selectedTopology}
+            selection={assistantSelection}
             onApply={handleApplyPatch}
             onPreview={handlePreviewPatch}
           />

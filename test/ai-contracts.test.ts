@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CAD_PATCH_JSON_SCHEMA,
   createCadDocumentDigest,
+  groundCadPatchProposalToSelection,
   parseCadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
   importStepBody
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toBodyId, toFeatureId, toUserId } from '@openzcad/shared';
 
 describe('AI patch contracts', () => {
   it('declares a type for every strict-schema constant', () => {
@@ -329,6 +330,111 @@ describe('AI patch contracts', () => {
     expect(digest.bodies).toEqual([]);
     // Meshes must never reach model context, only identity and placement.
     expect(JSON.stringify(digest)).not.toContain('vertices');
+  });
+
+  it('captures the complete feature, body, and topology selection in pick order', () => {
+    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const bodyId = toBodyId('body_selected');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [toFeatureId('feature_selected')],
+      bodyIds: [bodyId],
+      topologies: [
+        { bodyId, kind: 'edge', topologyId: 'edge:9', hash: 109 },
+        { bodyId, kind: 'edge', topologyId: 'edge:12', hash: 212 }
+      ]
+    });
+
+    expect(digest.selection).toEqual({
+      featureIds: ['feature_selected'],
+      bodyIds: ['body_selected'],
+      topologies: [
+        {
+          bodyId: 'body_selected',
+          kind: 'edge',
+          topologyId: 'edge:9',
+          hash: 109
+        },
+        {
+          bodyId: 'body_selected',
+          kind: 'edge',
+          topologyId: 'edge:12',
+          hash: 212
+        }
+      ]
+    });
+  });
+
+  it('grounds a selected-edge proposal onto every picked edge', () => {
+    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const bodyId = toBodyId('body_selected');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [],
+      bodyIds: [bodyId],
+      topologies: [
+        { bodyId, kind: 'edge', topologyId: 'edge:9', hash: 109 },
+        { bodyId, kind: 'edge', topologyId: 'edge:12', hash: 212 }
+      ]
+    });
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_selected_edges',
+      summary: 'Fillet the selected edges.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Selected edge fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_hallucinated',
+          edgeHashes: [999],
+          size: 5
+        }
+      ]
+    });
+
+    expect(
+      groundCadPatchProposalToSelection(
+        'Add fillets of 5 mm on the selected edges',
+        digest,
+        proposal
+      ).operations[0]
+    ).toMatchObject({
+      targetBodyId: 'body_selected',
+      edgeHashes: [109, 212],
+      size: 5
+    });
+  });
+
+  it('does not retarget an edge modifier without an explicit selection reference', () => {
+    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const bodyId = toBodyId('body_selected');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [],
+      bodyIds: [bodyId],
+      topologies: [
+        { bodyId, kind: 'edge', topologyId: 'edge:9', hash: 109 }
+      ]
+    });
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_named_edge',
+      summary: 'Fillet edge 3.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Named edge fillet',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_named',
+          edgeHashes: [303],
+          size: 2
+        }
+      ]
+    });
+
+    expect(
+      groundCadPatchProposalToSelection('Fillet edge 3', digest, proposal)
+    ).toBe(proposal);
   });
 
   it('omits embedded geometry payloads from model context', () => {
