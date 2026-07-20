@@ -49,9 +49,12 @@ describe('exact hybrid kernel adapter', () => {
     expect(body?.topology?.faces.map((face) => face.hash)).toEqual([
       1, 2, 3, 4, 5, 6
     ]);
-    expect(body?.topology?.edges.map((edge) => edge.hash)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
-    ]);
+    const edgeHashes = body?.topology?.edges.map((edge) => edge.hash) ?? [];
+    expect(new Set(edgeHashes).size).toBe(12);
+    expect(edgeHashes.every((hash) => Number.isInteger(hash) && hash > 0)).toBe(
+      true
+    );
+    expect(edgeHashes).not.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(derived.warnings).toEqual([]);
   });
 
@@ -424,6 +427,17 @@ describe('exact hybrid kernel adapter', () => {
     const edgeHash = Object.values(baseDerived.bodyRepresentations)[0]?.topology
       ?.edges[0]?.hash;
     expect(edgeHash).toBeTypeOf('number');
+    expect(edgeHash).not.toBe(1);
+    const repeated = await adapter.syncDocument(base);
+    expect(
+      Object.values(repeated.bodyRepresentations)[0]?.topology?.edges.map(
+        (edge) => edge.hash
+      )
+    ).toEqual(
+      Object.values(baseDerived.bodyRepresentations)[0]?.topology?.edges.map(
+        (edge) => edge.hash
+      )
+    );
 
     const filleted = filletEdges(base, {
       name: 'Fillet',
@@ -511,11 +525,15 @@ describe('exact hybrid kernel adapter', () => {
         dimensions: { width: 30, height: 18, depth: 24 }
       }
     );
+    const baseDerived = await adapter.syncDocument(base);
+    const firstEdgeHash = Object.values(baseDerived.bodyRepresentations)[0]
+      ?.topology?.edges[0]?.hash;
+    expect(firstEdgeHash).toBeTypeOf('number');
 
     const first = filletEdges(base, {
       name: 'First fillet',
       targetBodyId: base.bodyOrder[0]!,
-      edgeHashes: [1],
+      edgeHashes: [firstEdgeHash!],
       size: 2
     }).document;
     const firstDerived = await adapter.syncDocument(first);
@@ -602,10 +620,14 @@ describe('exact hybrid kernel adapter', () => {
         dimensions: { width: 20, height: 20, depth: 20 }
       }
     );
+    const baseDerived = await adapter.syncDocument(base);
+    const edgeHash = Object.values(baseDerived.bodyRepresentations)[0]?.topology
+      ?.edges[0]?.hash;
+    expect(edgeHash).toBeTypeOf('number');
     const invalid = filletEdges(base, {
       name: 'Oversized fillet',
       targetBodyId: base.bodyOrder[0]!,
-      edgeHashes: [1],
+      edgeHashes: [edgeHash!],
       size: 50
     }).document;
     const derived = await adapter.syncDocument(invalid);

@@ -277,6 +277,10 @@ describe('evaluateExpression', () => {
     expect(evaluateExpression('round(2.6)', {})).toBe(3);
     expect(evaluateExpression('pi', {})).toBeCloseTo(Math.PI, 12);
     expect(evaluateExpression('2 * pi * 10', {})).toBeCloseTo(62.8318, 3);
+    expect(evaluateExpression('-2 ^ 2', {})).toBe(-4);
+    expect(evaluateExpression('(-2) ^ 2', {})).toBe(4);
+    expect(evaluateExpression('2 ^ -2', {})).toBe(0.25);
+    expect(evaluateExpression('2e3 + 5e-1', {})).toBe(2000.5);
   });
 
   it('resolves identifiers from the provided scope', () => {
