@@ -8,6 +8,7 @@ export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
+export const DEFAULT_AI_TIMEOUT_MS = 90_000;
 export const DEFAULT_AI_PROVIDER = 'openrouter';
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const OPENROUTER_RESPONSES_URL = 'https://openrouter.ai/api/v1/responses';
@@ -223,6 +224,13 @@ export function maxOutputTokensFor(env: CloudflareEnv): number {
     : DEFAULT_AI_MAX_OUTPUT_TOKENS;
 }
 
+export function timeoutFor(env: CloudflareEnv): number {
+  const configured = Number.parseInt((env.AI_TIMEOUT_MS ?? '').trim(), 10);
+  return Number.isFinite(configured) && configured >= 5_000
+    ? Math.min(configured, 5 * 60_000)
+    : DEFAULT_AI_TIMEOUT_MS;
+}
+
 function upstreamUrlFor(env: CloudflareEnv, provider: string) {
   if (env.AI_BASE_URL) {
     return env.AI_BASE_URL;
@@ -348,40 +356,59 @@ export async function streamAssistantProposal(
     }
   }
 
-  const upstream = await fetch(upstreamUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: modelFor(env, provider),
-      instructions: CAD_ASSISTANT_INSTRUCTIONS,
-      input: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
-            }
-          ]
-        }
-      ],
-      reasoning: {
-        effort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
-      },
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'openzcad_patch',
-          strict: true,
-          schema: CAD_PATCH_JSON_SCHEMA
-        }
-      },
-      max_output_tokens: maxOutputTokensFor(env),
-      store: false,
-      stream: true,
-      ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
-    })
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(upstreamUrl, {
+      method: 'POST',
+      headers,
+      signal: AbortSignal.timeout(timeoutFor(env)),
+      body: JSON.stringify({
+        model: modelFor(env, provider),
+        instructions: CAD_ASSISTANT_INSTRUCTIONS,
+        input: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
+              }
+            ]
+          }
+        ],
+        reasoning: {
+          effort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
+        },
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'openzcad_patch',
+            strict: true,
+            schema: CAD_PATCH_JSON_SCHEMA
+          }
+        },
+        max_output_tokens: maxOutputTokensFor(env),
+        store: false,
+        stream: true,
+        ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
+      })
+    });
+  } catch (error) {
+    const timedOut =
+      error instanceof DOMException &&
+      (error.name === 'TimeoutError' || error.name === 'AbortError');
+    console.error('AI Responses provider request failed:', {
+      provider,
+      reason: timedOut ? 'timeout' : 'network'
+    });
+    return jsonError(
+      timedOut
+        ? 'The modeling assistant timed out before producing a patch.'
+        : 'The modeling assistant could not reach its provider.',
+      timedOut ? 'AI_UPSTREAM_TIMEOUT' : 'AI_UPSTREAM_UNAVAILABLE',
+      timedOut ? 504 : 502
+    );
+  }
 
   if (!upstream.ok || !upstream.body) {
     const details = await readProviderErrorDetails(upstream);

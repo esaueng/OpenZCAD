@@ -3,12 +3,20 @@ import {
   DEFAULT_AI_MAX_OUTPUT_TOKENS,
   DEFAULT_AI_MODEL,
   DEFAULT_AI_PROVIDER,
+  DEFAULT_AI_TIMEOUT_MS,
   DEFAULT_OPENROUTER_MODEL,
   getAssistantStatus,
   maxOutputTokensFor,
-  streamAssistantProposal
+  streamAssistantProposal,
+  timeoutFor
 } from '../apps/web/worker/assistant';
-import { readAssistantEvent } from '../apps/web/src/lib/assistantStream';
+import { consumeAssistantQuota } from '../apps/web/worker/assistantRateLimit';
+import {
+  parseAssistantEventData,
+  readAssistantEvent,
+  streamCadPatchProposal
+} from '../apps/web/src/lib/assistantStream';
+import { toUserId } from '@openzcad/shared';
 
 const input = {
   prompt: 'Make the bracket wider',
@@ -40,6 +48,62 @@ describe('assistant integration', () => {
       first.text
     );
     expect(second.text).toBe('{"summary":"Wider"}');
+  });
+
+  it('ignores malformed SSE frames and rejects truncated streams', async () => {
+    expect(parseAssistantEventData('{not-json')).toBeNull();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          'data: {not-json}\n\ndata: {"type":"response.output_text.delta","delta":"{}"}\n\n',
+          { headers: { 'content-type': 'text/event-stream' } }
+        )
+      )
+    );
+
+    await expect(
+      streamCadPatchProposal(input.prompt, input.digest)
+    ).rejects.toThrow('stream ended before the proposal was complete');
+  });
+
+  it('reports a mid-stream provider disconnect', async () => {
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  'data: {"type":"response.output_text.delta","delta":"{"}\n\n'
+                )
+              );
+              controller.error(new Error('socket reset'));
+            }
+          }),
+          { headers: { 'content-type': 'text/event-stream' } }
+        )
+      )
+    );
+
+    await expect(
+      streamCadPatchProposal(input.prompt, input.digest)
+    ).rejects.toThrow('connection ended before the proposal was complete');
+  });
+
+  it('enforces a bounded per-user request quota', async () => {
+    const env = {
+      AI_RATE_LIMIT_REQUESTS: '2',
+      AI_RATE_LIMIT_WINDOW_SECONDS: '60'
+    };
+    const userId = toUserId('user_quota');
+    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(true);
+    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(true);
+    const limited = await consumeAssistantQuota(userId, env, 1_000);
+    expect(limited).toMatchObject({ allowed: false, limit: 2, remaining: 0 });
+    expect((await consumeAssistantQuota(userId, env, 61_000)).allowed).toBe(true);
   });
 
   it('requests a strict streamed response from the configured model', async () => {
@@ -158,6 +222,29 @@ describe('assistant integration', () => {
     );
     expect(maxOutputTokensFor({})).toBe(DEFAULT_AI_MAX_OUTPUT_TOKENS);
     expect(maxOutputTokensFor({ AI_MAX_OUTPUT_TOKENS: '8000' })).toBe(8000);
+    expect(timeoutFor({})).toBe(DEFAULT_AI_TIMEOUT_MS);
+    expect(timeoutFor({ AI_TIMEOUT_MS: '120000' })).toBe(120_000);
+    expect(timeoutFor({ AI_TIMEOUT_MS: '100' })).toBe(DEFAULT_AI_TIMEOUT_MS);
+  });
+
+  it('turns provider timeouts into an actionable gateway response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new DOMException('timed out', 'TimeoutError');
+      })
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      AI_API_KEY: 'key',
+      AI_BASE_URL: 'https://models.example.test/v1/responses'
+    });
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'AI_UPSTREAM_TIMEOUT'
+    });
   });
 
   it('uses one centralized frontier-model default', () => {

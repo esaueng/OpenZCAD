@@ -84,6 +84,16 @@ export function readAssistantEvent(
   return { text: currentText, done: value.type === 'response.completed' };
 }
 
+export function parseAssistantEventData(
+  data: string
+): { event: unknown } | null {
+  try {
+    return { event: JSON.parse(data) as unknown };
+  } catch {
+    return null;
+  }
+}
+
 export async function streamCadPatchProposal(
   prompt: string,
   digest: CadDocumentDigest,
@@ -108,30 +118,54 @@ export async function streamCadPatchProposal(
   const decoder = new TextDecoder();
   let buffer = '';
   let output = '';
+  let completed = false;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() ?? '';
-    for (const block of blocks) {
-      const data = block
-        .split(/\r?\n/)
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (!data || data === '[DONE]') {
-        continue;
+  const consumeBlock = (block: string) => {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!data || data === '[DONE]') {
+      return;
+    }
+    const parsed = parseAssistantEventData(data);
+    if (parsed === null) {
+      return;
+    }
+    const next = readAssistantEvent(parsed.event, output);
+    output = next.text;
+    completed ||= next.done;
+    options.onDelta?.(output);
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() ?? '';
+      for (const block of blocks) {
+        consumeBlock(block);
       }
-      const next = readAssistantEvent(JSON.parse(data), output);
-      output = next.text;
-      options.onDelta?.(output);
+      if (done) {
+        if (buffer.trim()) {
+          consumeBlock(buffer);
+        }
+        break;
+      }
     }
-    if (done) {
-      break;
-    }
+  } catch {
+    throw new Error(
+      'The modeling assistant connection ended before the proposal was complete.'
+    );
   }
 
+  if (!completed) {
+    throw new Error(
+      'The modeling assistant stream ended before the proposal was complete.'
+    );
+  }
   if (!output.trim()) {
     throw new Error('The modeling assistant returned an empty proposal.');
   }

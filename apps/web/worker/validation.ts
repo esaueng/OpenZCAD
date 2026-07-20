@@ -36,6 +36,8 @@ const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_REASON_LENGTH = 500;
 const MAX_AI_PROMPT_LENGTH = 4_000;
+const MAX_AI_DIGEST_BYTES = 128_000;
+const MAX_AI_DIGEST_ITEMS = 1_000;
 
 export interface AssistantProposalRequest {
   prompt: string;
@@ -197,9 +199,22 @@ export function parseAssistantProposalRequest(
     typeof digest.version !== 'number' ||
     !Array.isArray(digest.parameters) ||
     !Array.isArray(digest.features) ||
+    (digest.bodies !== undefined && !Array.isArray(digest.bodies)) ||
     !Array.isArray(digest.warnings)
   ) {
     throw badRequest('"digest" is missing required fields.');
+  }
+  for (const key of ['parameters', 'features', 'bodies', 'warnings'] as const) {
+    const value = digest[key];
+    if (Array.isArray(value) && value.length > MAX_AI_DIGEST_ITEMS) {
+      throw badRequest(`"digest.${key}" has too many items.`);
+    }
+  }
+  if (
+    new TextEncoder().encode(JSON.stringify(digest)).byteLength >
+    MAX_AI_DIGEST_BYTES
+  ) {
+    throw badRequest('"digest" is too large.');
   }
   return { prompt, digest: digest as unknown as CadDocumentDigest };
 }
