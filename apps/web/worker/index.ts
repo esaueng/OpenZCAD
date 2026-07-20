@@ -18,7 +18,11 @@ import {
 } from './validation';
 import { getAssistantStatus, streamAssistantProposal } from './assistant';
 import { consumeAssistantQuota } from './assistantRateLimit';
-import { authenticateRequest, AuthenticationError } from './auth';
+import {
+  authenticateRequest,
+  AuthenticationError,
+  identifyAssistantRequest
+} from './auth';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -70,22 +74,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  const session = await authenticateRequest(request, env);
-  const userId = session.userId;
-
-  if (request.method === 'GET' && pathname === '/api/session') {
-    return json(session);
-  }
-
   if (request.method === 'GET' && pathname === '/api/assistant/status') {
     return json(getAssistantStatus(env));
   }
 
-  if (request.method === 'GET' && pathname === '/api/projects') {
-    return json(await persistence.listProjects(userId));
-  }
-
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
+    const userId = await identifyAssistantRequest(request, env);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
     const quota = await consumeAssistantQuota(userId, env);
     if (!quota.allowed) {
@@ -107,6 +101,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     return streamAssistantProposal(payload, env, userId);
+  }
+
+  const session = await authenticateRequest(request, env);
+  const userId = session.userId;
+
+  if (request.method === 'GET' && pathname === '/api/session') {
+    return json(session);
+  }
+
+  if (request.method === 'GET' && pathname === '/api/projects') {
+    return json(await persistence.listProjects(userId));
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
