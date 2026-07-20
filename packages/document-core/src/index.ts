@@ -1114,7 +1114,7 @@ export function resolveParamValue(
   } catch (error) {
     const reason =
       error instanceof Error ? error.message : 'evaluation failed.';
-    throw new Error(label ? `${label}: ${reason}` : reason);
+    throw new Error(label ? `${label}: ${reason}` : reason, { cause: error });
   }
 }
 

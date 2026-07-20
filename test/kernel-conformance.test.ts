@@ -63,8 +63,8 @@ describe('compat kernel conforms to the exact kernel', () => {
     const fromCompat = compat.syncDocument(document);
     const fromExact = await exact.syncDocument(document);
     return {
-      compat: fromCompat.bodyRepresentations[bodyId]! as Measured,
-      exact: fromExact.bodyRepresentations[bodyId]! as Measured
+      compat: fromCompat.bodyRepresentations[bodyId]!,
+      exact: fromExact.bodyRepresentations[bodyId]!
     };
   }
 

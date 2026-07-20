@@ -20,7 +20,7 @@ function post(path: string, body: unknown): Request {
 async function createProject(name: string): Promise<CreateProjectResponse> {
   const response = await worker.fetch(
     post('/api/projects', { name }),
-    env as never
+    env
   );
   expect(response.status).toBe(201);
   return (await response.json()) as CreateProjectResponse;
@@ -32,7 +32,7 @@ describe('worker api routes', () => {
 
     const listResponse = await worker.fetch(
       new Request('https://example.com/api/projects'),
-      env as never
+      env
     );
     const listed = (await listResponse.json()) as {
       projects: Array<{ projectId: string }>;
@@ -47,7 +47,7 @@ describe('worker api routes', () => {
   it('returns health', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/health'),
-      env as never
+      env
     );
     expect(response.status).toBe(200);
   });
@@ -55,7 +55,7 @@ describe('worker api routes', () => {
   it('exposes the authenticated beta session', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/session'),
-      env as never
+      env
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
@@ -71,7 +71,7 @@ describe('worker api routes', () => {
         ...env,
         AI_API_KEY: 'secret-test-value',
         AI_MODEL: 'model-test'
-      } as never
+      }
     );
     expect(response.status).toBe(200);
     const status = (await response.json()) as {
@@ -103,7 +103,7 @@ describe('worker api routes', () => {
       headers: { 'x-openzcad-development-user': 'user_owner' },
       body: JSON.stringify({ name: 'Private worker project' })
     });
-    const createdResponse = await worker.fetch(ownerRequest, env as never);
+    const createdResponse = await worker.fetch(ownerRequest, env);
     const created = (await createdResponse.json()) as CreateProjectResponse;
 
     const intruderResponse = await worker.fetch(
@@ -111,7 +111,7 @@ describe('worker api routes', () => {
         `https://example.com/api/projects/${created.project.projectId}`,
         { headers: { 'x-openzcad-development-user': 'user_intruder' } }
       ),
-      env as never
+      env
     );
     expect(intruderResponse.status).toBe(404);
   });
@@ -131,7 +131,7 @@ describe('worker api routes', () => {
         `https://example.com/api/projects/${created.project.projectId}/collaboration`,
         { headers: { upgrade: 'websocket' } }
       ),
-      env as never
+      env
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
@@ -156,7 +156,7 @@ describe('worker api routes', () => {
           warnings: []
         }
       }),
-      env as never
+      env
     );
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
@@ -178,7 +178,7 @@ describe('worker api routes', () => {
           warnings: []
         }
       }),
-      env as never
+      env
     );
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -192,7 +192,7 @@ describe('worker api routes', () => {
         method: 'POST',
         body: '{nope'
       }),
-      env as never
+      env
     );
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
@@ -202,13 +202,13 @@ describe('worker api routes', () => {
   it('rejects project creation without a name', async () => {
     const response = await worker.fetch(
       post('/api/projects', {}),
-      env as never
+      env
     );
     expect(response.status).toBe(400);
 
     const blankResponse = await worker.fetch(
       post('/api/projects', { name: '   ' }),
-      env as never
+      env
     );
     expect(blankResponse.status).toBe(400);
   });
@@ -216,7 +216,7 @@ describe('worker api routes', () => {
   it('rejects invalid units', async () => {
     const response = await worker.fetch(
       post('/api/projects', { name: 'Units', units: 'furlong' }),
-      env as never
+      env
     );
     expect(response.status).toBe(400);
   });
@@ -224,13 +224,13 @@ describe('worker api routes', () => {
   it('returns 404 for unknown projects and nested paths', async () => {
     const missing = await worker.fetch(
       new Request('https://example.com/api/projects/proj_missing'),
-      env as never
+      env
     );
     expect(missing.status).toBe(404);
 
     const nested = await worker.fetch(
       new Request('https://example.com/api/projects/proj_x/unknown'),
-      env as never
+      env
     );
     expect(nested.status).toBe(404);
   });
@@ -246,7 +246,7 @@ describe('worker api routes', () => {
         expectedVersion: document.version,
         document
       }),
-      env as never
+      env
     );
     expect(saved.status).toBe(200);
     const savedDocument = (await saved.json()) as ProjectDocument;
@@ -259,7 +259,7 @@ describe('worker api routes', () => {
         expectedVersion: document.version,
         document
       }),
-      env as never
+      env
     );
     expect(mismatch.status).toBe(400);
   });
@@ -276,7 +276,7 @@ describe('worker api routes', () => {
         expectedVersion: document.version,
         document: newerDocument
       }),
-      env as never
+      env
     );
     expect(saved.status).toBe(200);
 
@@ -287,7 +287,7 @@ describe('worker api routes', () => {
         expectedVersion: document.version,
         document: { ...newerDocument, version: newerDocument.version + 1 }
       }),
-      env as never
+      env
     );
     expect(stale.status).toBe(409);
     expect(await stale.json()).toEqual({
@@ -309,7 +309,7 @@ describe('worker api routes', () => {
       expectedVersion: document.version,
       document
       }),
-      env as never
+      env
     );
     expect(response.status).toBe(404);
   });
@@ -325,7 +325,7 @@ describe('worker api routes', () => {
         contentType: 'model/stl',
         kind: 'stl-import'
       }),
-      env as never
+      env
     );
     expect(sessionResponse.status).toBe(201);
     const { session } = (await sessionResponse.json()) as {
@@ -342,12 +342,12 @@ describe('worker api routes', () => {
         `https://example.com/api/uploads/${session.uploadSessionId}/content`,
         { method: 'PUT', body: 'solid part' }
       ),
-      env as never
+      env
     );
     expect(uploaded.status).toBe(204);
     const finalized = await worker.fetch(
       post('/api/imports/finalize', finalizeBody),
-      env as never
+      env
     );
     expect(finalized.status).toBe(200);
     expect(
@@ -356,7 +356,7 @@ describe('worker api routes', () => {
 
     const replayed = await worker.fetch(
       post('/api/imports/finalize', finalizeBody),
-      env as never
+      env
     );
     expect(replayed.status).toBe(404);
   });
@@ -372,7 +372,7 @@ describe('worker api routes', () => {
         kind: 'step-export',
         metadata: { documentVersion: 1 }
       }),
-      env as never
+      env
     );
     const { session } = (await sessionResponse.json()) as {
       session: { uploadSessionId: string; artifactId: string };
@@ -382,7 +382,7 @@ describe('worker api routes', () => {
         `https://example.com/api/uploads/${session.uploadSessionId}/content`,
         { method: 'PUT', body: 'STEP DATA' }
       ),
-      env as never
+      env
     );
     await worker.fetch(
       post('/api/artifacts/finalize', {
@@ -390,12 +390,12 @@ describe('worker api routes', () => {
         uploadSessionId: session.uploadSessionId,
         artifactId: session.artifactId
       }),
-      env as never
+      env
     );
 
     const listed = await worker.fetch(
       new Request(`https://example.com/api/projects/${projectId}/artifacts`),
-      env as never
+      env
     );
     expect(await listed.json()).toMatchObject({
       artifacts: [{ artifactId: session.artifactId, bytes: 9 }]
@@ -404,7 +404,7 @@ describe('worker api routes', () => {
       new Request(
         `https://example.com/api/artifacts/${session.artifactId}/download`
       ),
-      env as never
+      env
     );
     expect(downloaded.status).toBe(200);
     expect(await downloaded.text()).toBe('STEP DATA');
@@ -417,7 +417,7 @@ describe('worker api routes', () => {
         body: '{}',
         headers: { 'content-length': String(30 * 1024 * 1024) }
       }),
-      env as never
+      env
     );
     expect(response.status).toBe(413);
   });
