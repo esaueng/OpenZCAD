@@ -535,11 +535,13 @@ export type CollaborationClientMessage =
       type: 'hello';
       clientId: string;
       displayName: string;
-      document: ProjectDocument;
+      baseVersion: number | null;
+      document: ProjectDocument | null;
     }
   | {
       type: 'document';
       clientId: string;
+      baseVersion: number | null;
       document: ProjectDocument;
     }
   | { type: 'presence'; clientId: string; status: 'active' | 'idle' };
@@ -552,6 +554,7 @@ export type CollaborationServerMessage =
     }
   | { type: 'presence'; members: CollaborationMember[] }
   | { type: 'document'; clientId: string; document: ProjectDocument }
+  | { type: 'ack'; version: number }
   | { type: 'conflict'; document: ProjectDocument };
 
 export const identityTransform = (): Transform3D => ({
