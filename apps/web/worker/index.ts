@@ -115,7 +115,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
-  if (request.method === 'GET' && collaborationMatch) {
+  if (
+    (request.method === 'GET' || request.method === 'POST') &&
+    collaborationMatch
+  ) {
     const projectId = collaborationMatch[1]!;
     const project = await persistence.loadProject(userId, projectId);
     if (!project) {
@@ -130,7 +133,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const roomUrl = new URL(request.url);
     roomUrl.searchParams.set('projectId', projectId);
     return env.PROJECT_ROOM.getByName(projectId).fetch(
-      new Request(roomUrl, { method: 'GET', headers })
+      new Request(roomUrl, {
+        method: request.method,
+        headers,
+        ...(request.method === 'POST'
+          ? { body: await request.arrayBuffer() }
+          : {})
+      })
     );
   }
 
