@@ -5,9 +5,6 @@ import type { CreateProjectResponse, ProjectDocument } from '@openzcad/shared';
 const env = {
   ENVIRONMENT: 'development' as const,
   AUTH_MODE: 'development' as const,
-  EXPORT_WORKFLOW: {
-    create: vi.fn(async () => undefined)
-  },
   PROJECT_ROOM: {
     getByName: vi.fn()
   }
@@ -222,6 +219,7 @@ describe('worker api routes', () => {
       post(`/api/projects/${document.projectId}/revisions`, {
         projectId: document.projectId,
         reason: 'Manual save',
+        expectedVersion: document.version,
         document
       }),
       env as never
@@ -234,11 +232,45 @@ describe('worker api routes', () => {
       post('/api/projects/proj_other/revisions', {
         projectId: document.projectId,
         reason: 'Manual save',
+        expectedVersion: document.version,
         document
       }),
       env as never
     );
     expect(mismatch.status).toBe(400);
+  });
+
+  it('returns a conflict response for stale revision writes', async () => {
+    const created = await createProject('Revision Conflict');
+    const document = created.document;
+    const newerDocument = { ...document, version: document.version + 1 };
+
+    const saved = await worker.fetch(
+      post(`/api/projects/${document.projectId}/revisions`, {
+        projectId: document.projectId,
+        reason: 'Newer save',
+        expectedVersion: document.version,
+        document: newerDocument
+      }),
+      env as never
+    );
+    expect(saved.status).toBe(200);
+
+    const stale = await worker.fetch(
+      post(`/api/projects/${document.projectId}/revisions`, {
+        projectId: document.projectId,
+        reason: 'Stale save',
+        expectedVersion: document.version,
+        document: { ...newerDocument, version: newerDocument.version + 1 }
+      }),
+      env as never
+    );
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({
+      error: `Project ${document.projectId} has a newer remote revision.`,
+      code: 'REVISION_CONFLICT',
+      currentVersion: newerDocument.version
+    });
   });
 
   it('returns 404 when saving a revision for an unknown project', async () => {
@@ -248,9 +280,10 @@ describe('worker api routes', () => {
 
     const response = await worker.fetch(
       post(`/api/projects/${ghostId}/revisions`, {
-        projectId: ghostId,
-        reason: 'Manual save',
-        document
+      projectId: ghostId,
+      reason: 'Manual save',
+      expectedVersion: document.version,
+      document
       }),
       env as never
     );
@@ -265,7 +298,8 @@ describe('worker api routes', () => {
       post('/api/uploads', {
         projectId,
         fileName: 'part.stl',
-        contentType: 'model/stl'
+        contentType: 'model/stl',
+        kind: 'stl-import'
       }),
       env as never
     );
@@ -277,10 +311,16 @@ describe('worker api routes', () => {
     const finalizeBody = {
       projectId,
       uploadSessionId: session.uploadSessionId,
-      artifactId: session.artifactId,
-      fileName: 'part.stl',
-      contentType: 'model/stl'
+      artifactId: session.artifactId
     };
+    const uploaded = await worker.fetch(
+      new Request(
+        `https://example.com/api/uploads/${session.uploadSessionId}/content`,
+        { method: 'PUT', body: 'solid part' }
+      ),
+      env as never
+    );
+    expect(uploaded.status).toBe(204);
     const finalized = await worker.fetch(
       post('/api/imports/finalize', finalizeBody),
       env as never
@@ -297,34 +337,53 @@ describe('worker api routes', () => {
     expect(replayed.status).toBe(404);
   });
 
-  it('validates export requests', async () => {
-    const badFormat = await worker.fetch(
-      post('/api/exports', {
-        projectId: 'proj_x',
-        bodyIds: ['body_1'],
-        format: 'obj'
+  it('lists and downloads completed artifacts', async () => {
+    const created = await createProject('Artifact Test');
+    const projectId = created.project.projectId;
+    const sessionResponse = await worker.fetch(
+      post('/api/uploads', {
+        projectId,
+        fileName: 'part.step',
+        contentType: 'model/step',
+        kind: 'step-export',
+        metadata: { documentVersion: 1 }
       }),
       env as never
     );
-    expect(badFormat.status).toBe(400);
-
-    const emptyBodies = await worker.fetch(
-      post('/api/exports', { projectId: 'proj_x', bodyIds: [], format: 'stl' }),
+    const { session } = (await sessionResponse.json()) as {
+      session: { uploadSessionId: string; artifactId: string };
+    };
+    await worker.fetch(
+      new Request(
+        `https://example.com/api/uploads/${session.uploadSessionId}/content`,
+        { method: 'PUT', body: 'STEP DATA' }
+      ),
       env as never
     );
-    expect(emptyBodies.status).toBe(400);
-
-    const created = await createProject('Export Test');
-    const accepted = await worker.fetch(
-      post('/api/exports', {
-        projectId: created.project.projectId,
-        bodyIds: ['body_1'],
-        format: 'stl'
+    await worker.fetch(
+      post('/api/artifacts/finalize', {
+        projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
       }),
       env as never
     );
-    expect(accepted.status).toBe(202);
-    expect(env.EXPORT_WORKFLOW.create).toHaveBeenCalled();
+
+    const listed = await worker.fetch(
+      new Request(`https://example.com/api/projects/${projectId}/artifacts`),
+      env as never
+    );
+    expect(await listed.json()).toMatchObject({
+      artifacts: [{ artifactId: session.artifactId, bytes: 9 }]
+    });
+    const downloaded = await worker.fetch(
+      new Request(
+        `https://example.com/api/artifacts/${session.artifactId}/download`
+      ),
+      env as never
+    );
+    expect(downloaded.status).toBe(200);
+    expect(await downloaded.text()).toBe('STEP DATA');
   });
 
   it('rejects oversized request bodies with 413', async () => {

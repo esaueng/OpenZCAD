@@ -6,10 +6,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@openzcad/document-core": "workspace:*",
-    "@openzcad/jobs": "workspace:*",
     "@openzcad/persistence": "workspace:*",
-    "@openzcad/shared": "workspace:*",
-    "aws4fetch": "^1.0.20"
+    "@openzcad/shared": "workspace:*"
   }
 }
-
