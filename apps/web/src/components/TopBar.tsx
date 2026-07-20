@@ -3,6 +3,7 @@ import {
   Check,
   CloudOff,
   Download,
+  Files,
   LoaderCircle,
   Pencil,
   Redo2,
@@ -10,7 +11,11 @@ import {
   Upload,
   Users
 } from 'lucide-react';
-import type { AuthSession, UnitSystem } from '@openzcad/shared';
+import type {
+  ArtifactRecord,
+  AuthSession,
+  UnitSystem
+} from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 
@@ -23,6 +28,7 @@ interface TopBarProps {
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
   saveState: 'saved' | 'saving' | 'offline';
+  artifacts: ArtifactRecord[];
   session: AuthSession | null;
   collaborationStatus: CollaborationStatus;
   collaboratorCount: number;
@@ -43,6 +49,7 @@ export function TopBar({
   canExport,
   exportScope,
   saveState,
+  artifacts,
   session,
   collaborationStatus,
   collaboratorCount,
@@ -199,6 +206,37 @@ export function TopBar({
         <Download size={14} aria-hidden="true" />
         STL
       </button>
+      <details className="artifact-menu">
+        <summary
+          className="secondary topbar-action"
+          title="Stored project files"
+        >
+          <Files size={14} aria-hidden="true" />
+          Files{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
+        </summary>
+        <div className="artifact-menu-panel">
+          <strong>Stored files</strong>
+          {artifacts.length === 0 ? (
+            <span>No archived imports or exports yet.</span>
+          ) : (
+            artifacts.map((artifact) => (
+              <a
+                key={artifact.artifactId}
+                href={`/api/artifacts/${artifact.artifactId}/download`}
+                download={artifact.name}
+              >
+                <Download size={13} aria-hidden="true" />
+                <span>{artifact.name}</span>
+                <small>
+                  {artifact.bytes === undefined
+                    ? artifact.kind
+                    : `${artifact.kind} · ${Math.max(1, Math.round(artifact.bytes / 1024))} KB`}
+                </small>
+              </a>
+            ))
+          )}
+        </div>
+      </details>
       <button
         className="save-state topbar-action"
         type="button"

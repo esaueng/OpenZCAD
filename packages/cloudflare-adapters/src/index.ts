@@ -1,17 +1,12 @@
-import { AwsClient } from 'aws4fetch';
+import { DurableObject } from 'cloudflare:workers';
 import {
-  DurableObject,
-  WorkflowEntrypoint,
-  type WorkflowEvent,
-  type WorkflowStep
-} from 'cloudflare:workers';
-import {
+  ArtifactStorageError,
   getInMemoryPersistence,
   ProjectNotFoundError,
+  RevisionConflictError,
   UPLOAD_SESSION_TTL_MS,
   type PersistenceService
 } from '@openzcad/persistence';
-import { InMemoryJobRunner } from '@openzcad/jobs';
 import {
   nowIso,
   sanitizeFileName,
@@ -26,12 +21,10 @@ import {
   type CollaborationClientMessage,
   type CollaborationMember,
   type CollaborationServerMessage,
-  type FinalizeImportRequest,
-  type JobRecord,
+  type FinalizeArtifactRequest,
+  type ListArtifactsResponse,
   type ListProjectsResponse,
   type ProjectDocument,
-  type RequestExportRequest,
-  type RequestExportResponse,
   type SaveRevisionRequest,
   type UploadSessionRecord,
   type UserId
@@ -68,56 +61,15 @@ export interface CloudflareEnv {
   AI_MAX_OUTPUT_TOKENS?: string;
   DB?: D1Database;
   ARTIFACTS?: R2Bucket;
-  JOB_QUEUE?: Queue<unknown>;
-  R2_PUBLIC_URL?: string;
-  R2_ACCESS_KEY_ID?: string;
-  R2_SECRET_ACCESS_KEY?: string;
-  R2_ACCOUNT_ID?: string;
-  R2_BUCKET_NAME?: string;
 }
 
 export class D1R2PersistenceService implements PersistenceService {
-  private readonly jobRunner = new InMemoryJobRunner();
-  private schemaReady: Promise<void> | undefined;
-
   constructor(private readonly env: CloudflareEnv) {}
-
-  /**
-   * Creates tables on first use. Memoized per service instance so the DDL
-   * batch runs once per isolate instead of once per request; a failed attempt
-   * clears the memo so the next request retries.
-   */
-  ensureSchema(): Promise<void> {
-    if (!this.env.DB) {
-      return Promise.resolve();
-    }
-    if (!this.schemaReady) {
-      this.schemaReady = this.createSchema().catch((error: unknown) => {
-        this.schemaReady = undefined;
-        throw error;
-      });
-    }
-    return this.schemaReady;
-  }
-
-  private async createSchema(): Promise<void> {
-    const statements = [
-      `CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT, created_at TEXT);`,
-      `CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, document_json TEXT NOT NULL, updated_at TEXT NOT NULL);`,
-      `CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, reason TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL);`,
-      `CREATE TABLE IF NOT EXISTS artifacts (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, object_key TEXT NOT NULL, content_type TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);`,
-      `CREATE TABLE IF NOT EXISTS upload_sessions (id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, project_id TEXT NOT NULL, object_key TEXT NOT NULL, file_name TEXT NOT NULL, content_type TEXT NOT NULL, expires_at TEXT NOT NULL);`
-    ];
-    await this.env.DB!.batch(
-      statements.map((sql) => this.env.DB!.prepare(sql))
-    );
-  }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().listProjects(userId);
     }
-    await this.ensureSchema();
     const rows = await this.env.DB.prepare(
       `SELECT id, name, updated_at, document_json FROM projects WHERE user_id = ? ORDER BY updated_at DESC`
     )
@@ -159,16 +111,16 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createProject(userId, request);
     }
-    await this.ensureSchema();
     const document = createProjectDocument(request.name, userId, request.units);
     await this.env.DB.prepare(
-      `INSERT INTO projects (id, user_id, name, document_json, updated_at) VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO projects (id, user_id, name, document_json, document_version, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
     )
       .bind(
         document.projectId,
         userId,
         document.name,
         JSON.stringify(document),
+        document.version,
         nowIso()
       )
       .run();
@@ -192,7 +144,6 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().loadProject(userId, projectId);
     }
-    await this.ensureSchema();
     const row = await this.env.DB.prepare(
       `SELECT document_json FROM projects WHERE id = ? AND user_id = ?`
     )
@@ -210,35 +161,51 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
-    await this.ensureSchema();
     const normalized = normalizeDocument(request.document);
     if (normalized.ownerUserId !== userId) {
       throw new ProjectNotFoundError(request.projectId);
     }
     const document = createCheckpoint(normalized, request.reason);
     const documentJson = JSON.stringify(document);
-    const result = await this.env.DB.prepare(
-      `UPDATE projects SET document_json = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ?`
-    )
-      .bind(documentJson, nowIso(), document.name, request.projectId, userId)
-      .run();
-    if (result.meta?.changes === 0) {
-      throw new ProjectNotFoundError(request.projectId);
-    }
-
     const latestRevision = document.revisions.at(-1);
-    if (latestRevision) {
-      await this.env.DB.prepare(
-        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at) VALUES (?, ?, ?, ?, ?)`
-      )
-        .bind(
+    if (!latestRevision) {
+      throw new Error('Checkpoint creation did not produce a revision.');
+    }
+    const results = await this.env.DB.batch([
+      this.env.DB.prepare(
+        `UPDATE projects SET document_json = ?, document_version = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
+      ).bind(
+        documentJson,
+        document.version,
+        nowIso(),
+        document.name,
+        request.projectId,
+        userId,
+        request.expectedVersion
+      ),
+      this.env.DB.prepare(
+        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at) SELECT ?, ?, ?, ?, ? WHERE changes() > 0`
+      ).bind(
           latestRevision.revisionId,
           request.projectId,
           request.reason,
           documentJson,
           latestRevision.createdAt
         )
-        .run();
+    ]);
+    if (results[0]?.meta?.changes === 0) {
+      const current = await this.env.DB.prepare(
+        `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
+      )
+        .bind(request.projectId, userId)
+        .first<{ document_version: number }>();
+      if (!current) {
+        throw new ProjectNotFoundError(request.projectId);
+      }
+      throw new RevisionConflictError(
+        request.projectId,
+        current.document_version
+      );
     }
     return document;
   }
@@ -250,11 +217,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
-    await this.ensureSchema();
     await this.assertProjectOwner(userId, request.projectId);
-    const session = await createSignedUploadSession(this.env, request);
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    await this.pruneExpiredUploads();
+    const session = createUploadSessionRecord(request);
     await this.env.DB.prepare(
-      `INSERT INTO upload_sessions (id, artifact_id, project_id, object_key, file_name, content_type, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO upload_sessions (id, artifact_id, project_id, object_key, file_name, content_type, kind, metadata_json, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         session.uploadSessionId,
@@ -263,112 +233,128 @@ export class D1R2PersistenceService implements PersistenceService {
         session.objectKey,
         session.fileName,
         session.contentType,
+        session.kind,
+        JSON.stringify(session.metadata),
         session.expiresAt
       )
       .run();
     return { session };
   }
 
-  async finalizeImport(
+  async putUpload(
     userId: UserId,
-    request: FinalizeImportRequest
+    uploadSessionId: string,
+    body: ArrayBuffer
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().putUpload(userId, uploadSessionId, body);
+    }
+    const upload = await this.env.DB.prepare(
+      `SELECT u.object_key, u.content_type, u.expires_at FROM upload_sessions u INNER JOIN projects p ON p.id = u.project_id WHERE u.id = ? AND p.user_id = ?`
+    )
+      .bind(uploadSessionId, userId)
+      .first<{
+        object_key: string;
+        content_type: string;
+        expires_at: string;
+      }>();
+    if (!upload || Date.parse(upload.expires_at) < Date.now()) {
+      throw new ArtifactStorageError('Upload session was not found or expired.');
+    }
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    await this.env.ARTIFACTS.put(upload.object_key, body, {
+      httpMetadata: { contentType: upload.content_type }
+    });
+  }
+
+  async finalizeArtifact(
+    userId: UserId,
+    request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().finalizeImport(userId, request);
+      return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    await this.ensureSchema();
     await this.assertProjectOwner(userId, request.projectId);
     const upload = await this.env.DB.prepare(
-      `SELECT object_key, project_id, expires_at FROM upload_sessions WHERE id = ?`
+      `SELECT artifact_id, object_key, project_id, file_name, content_type, kind, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
     )
       .bind(request.uploadSessionId)
-      .first<{ object_key: string; project_id: string; expires_at: string }>();
+      .first<{
+        artifact_id: string;
+        object_key: string;
+        project_id: string;
+        file_name: string;
+        content_type: string;
+        kind: ArtifactRecord['kind'];
+        metadata_json: string;
+        expires_at: string;
+      }>();
     if (
       !upload ||
       upload.project_id !== request.projectId ||
+      upload.artifact_id !== request.artifactId ||
       Date.parse(upload.expires_at) < Date.now()
     ) {
       return null;
     }
-    await this.env.DB.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
-      .bind(request.uploadSessionId)
-      .run();
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    const stored = await this.env.ARTIFACTS.head(upload.object_key);
+    if (!stored) {
+      return null;
+    }
 
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
       projectId: request.projectId,
-      kind: request.contentType.includes('step') ? 'step-import' : 'stl-import',
-      name: request.fileName,
+      kind: upload.kind,
+      name: upload.file_name,
       objectKey: upload.object_key,
-      contentType: request.contentType,
+      contentType: upload.content_type,
+      bytes: stored.size,
       createdAt: nowIso(),
-      metadata: {
-        source: 'direct-upload'
-      }
+      metadata: JSON.parse(upload.metadata_json) as ArtifactRecord['metadata']
     };
 
-    await this.env.DB.prepare(
-      `INSERT OR REPLACE INTO artifacts (id, project_id, kind, name, object_key, content_type, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
+    await this.env.DB.batch([
+      this.env.DB.prepare(
+        `DELETE FROM upload_sessions WHERE id = ? AND artifact_id = ?`
+      ).bind(request.uploadSessionId, request.artifactId),
+      this.env.DB.prepare(
+        `INSERT INTO artifacts (id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
         artifact.artifactId,
         artifact.projectId,
         artifact.kind,
         artifact.name,
         artifact.objectKey,
         artifact.contentType,
+        artifact.bytes,
         JSON.stringify(artifact.metadata),
         artifact.createdAt
       )
-      .run();
+    ]);
 
     return artifact;
   }
 
-  async requestExport(
+  async listArtifacts(
     userId: UserId,
-    request: RequestExportRequest
-  ): Promise<RequestExportResponse> {
+    projectId: string
+  ): Promise<ListArtifactsResponse> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().requestExport(userId, request);
+      return getInMemoryPersistence().listArtifacts(userId, projectId);
     }
-    await this.ensureSchema();
-    await this.assertProjectOwner(userId, request.projectId);
-    const artifact: ArtifactRecord = {
-      artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
-      projectId: request.projectId,
-      kind: request.format === 'step' ? 'step-export' : 'stl-export',
-      name: `export.${request.format}`,
-      objectKey: `${request.projectId}/exports/${crypto.randomUUID()}.${request.format}`,
-      contentType: request.format === 'step' ? 'model/step' : 'model/stl',
-      createdAt: nowIso(),
-      metadata: {
-        bodyIds: request.bodyIds.join(',')
-      }
-    };
-
-    await this.env.DB.prepare(
-      `INSERT OR REPLACE INTO artifacts (id, project_id, kind, name, object_key, content_type, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    await this.assertProjectOwner(userId, projectId);
+    const rows = await this.env.DB.prepare(
+      `SELECT id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at FROM artifacts WHERE project_id = ? ORDER BY created_at DESC`
     )
-      .bind(
-        artifact.artifactId,
-        artifact.projectId,
-        artifact.kind,
-        artifact.name,
-        artifact.objectKey,
-        artifact.contentType,
-        JSON.stringify(artifact.metadata),
-        artifact.createdAt
-      )
-      .run();
-
-    const job = await this.jobRunner.enqueue({
-      kind: 'export',
-      projectId: request.projectId,
-      artifactId: artifact.artifactId
-    });
-
-    return { artifact, job };
+      .bind(projectId)
+      .all<ArtifactRow>();
+    return { artifacts: (rows.results ?? []).map(artifactFromRow) };
   }
 
   async getArtifactMetadata(
@@ -378,38 +364,35 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().getArtifactMetadata(userId, artifactId);
     }
-    await this.ensureSchema();
     const row = await this.env.DB.prepare(
-      `SELECT a.id, a.project_id, a.kind, a.name, a.object_key, a.content_type, a.metadata_json, a.created_at FROM artifacts a INNER JOIN projects p ON p.id = a.project_id WHERE a.id = ? AND p.user_id = ?`
+      `SELECT a.id, a.project_id, a.kind, a.name, a.object_key, a.content_type, a.bytes, a.metadata_json, a.created_at FROM artifacts a INNER JOIN projects p ON p.id = a.project_id WHERE a.id = ? AND p.user_id = ?`
     )
       .bind(artifactId, userId)
-      .first<{
-        id: string;
-        project_id: string;
-        kind: ArtifactRecord['kind'];
-        name: string;
-        object_key: string;
-        content_type: string;
-        metadata_json: string;
-        created_at: string;
-      }>();
+      .first<ArtifactRow>();
 
     return {
-      artifact: row
-        ? {
-            artifactId: row.id as ArtifactRecord['artifactId'],
-            projectId: row.project_id as ArtifactRecord['projectId'],
-            kind: row.kind,
-            name: row.name,
-            objectKey: row.object_key,
-            contentType: row.content_type,
-            createdAt: row.created_at,
-            metadata: JSON.parse(
-              row.metadata_json
-            ) as ArtifactRecord['metadata']
-          }
-        : null
+      artifact: row ? artifactFromRow(row) : null
     };
+  }
+
+  async downloadArtifact(
+    userId: UserId,
+    artifactId: string
+  ): Promise<{ artifact: ArtifactRecord; body: ArrayBuffer } | null> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().downloadArtifact(userId, artifactId);
+    }
+    const { artifact } = await this.getArtifactMetadata(userId, artifactId);
+    if (!artifact) {
+      return null;
+    }
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    const stored = await this.env.ARTIFACTS.get(artifact.objectKey);
+    return stored
+      ? { artifact, body: await stored.arrayBuffer() }
+      : null;
   }
 
   private async assertProjectOwner(
@@ -424,54 +407,75 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(projectId);
     }
   }
+
+  private async pruneExpiredUploads(): Promise<void> {
+    if (!this.env.DB || !this.env.ARTIFACTS) {
+      return;
+    }
+    const expired = await this.env.DB.prepare(
+      `SELECT id, object_key FROM upload_sessions WHERE expires_at < ? LIMIT 100`
+    )
+      .bind(nowIso())
+      .all<{ id: string; object_key: string }>();
+    const rows = expired.results ?? [];
+    if (rows.length === 0) {
+      return;
+    }
+    await Promise.allSettled(
+      rows.map((row) => this.env.ARTIFACTS!.delete(row.object_key))
+    );
+    await this.env.DB.batch(
+      rows.map((row) =>
+        this.env.DB!.prepare(`DELETE FROM upload_sessions WHERE id = ?`).bind(
+          row.id
+        )
+      )
+    );
+  }
 }
 
-async function createSignedUploadSession(
-  env: CloudflareEnv,
+function createUploadSessionRecord(
   request: CreateUploadSessionRequest
-): Promise<UploadSessionRecord> {
+): UploadSessionRecord {
   const session: UploadSessionRecord = {
     uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
     artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
+    projectId: request.projectId,
     objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${sanitizeFileName(request.fileName)}`,
     fileName: request.fileName,
     contentType: request.contentType,
+    kind: request.kind,
+    metadata: request.metadata ?? {},
     expiresAt: new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString()
   };
-
-  if (
-    env.R2_PUBLIC_URL &&
-    env.R2_ACCESS_KEY_ID &&
-    env.R2_SECRET_ACCESS_KEY &&
-    env.R2_ACCOUNT_ID &&
-    env.R2_BUCKET_NAME
-  ) {
-    const client = new AwsClient({
-      accessKeyId: env.R2_ACCESS_KEY_ID,
-      secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-      service: 's3',
-      region: 'auto'
-    });
-    const signedRequest = await client.sign(
-      new Request(
-        `${env.R2_PUBLIC_URL}/${env.R2_BUCKET_NAME}/${session.objectKey}`,
-        {
-          method: 'PUT',
-          headers: {
-            'content-type': request.contentType
-          }
-        }
-      ),
-      {
-        aws: {
-          signQuery: true
-        }
-      }
-    );
-    session.uploadUrl = signedRequest.url;
-  }
-
+  session.uploadUrl = `/api/uploads/${session.uploadSessionId}/content`;
   return session;
+}
+
+interface ArtifactRow {
+  id: string;
+  project_id: string;
+  kind: ArtifactRecord['kind'];
+  name: string;
+  object_key: string;
+  content_type: string;
+  bytes: number | null;
+  metadata_json: string;
+  created_at: string;
+}
+
+function artifactFromRow(row: ArtifactRow): ArtifactRecord {
+  return {
+    artifactId: row.id as ArtifactRecord['artifactId'],
+    projectId: row.project_id as ArtifactRecord['projectId'],
+    kind: row.kind,
+    name: row.name,
+    objectKey: row.object_key,
+    contentType: row.content_type,
+    ...(row.bytes === null ? {} : { bytes: row.bytes }),
+    createdAt: row.created_at,
+    metadata: JSON.parse(row.metadata_json) as ArtifactRecord['metadata']
+  };
 }
 
 // Cache one service per env object (envs are stable per isolate) so schema
@@ -713,20 +717,4 @@ export function resolveCollaborationDocument(
   return sameHistory
     ? { kind: 'same', document: latest }
     : { kind: 'conflict', document: latest };
-}
-
-export class OpenZCADExportWorkflow extends WorkflowEntrypoint<
-  CloudflareEnv,
-  { artifactId: string }
-> {
-  override async run(
-    event: WorkflowEvent<{ artifactId: string }>,
-    step: WorkflowStep
-  ): Promise<{ artifactId: string; status: JobRecord['status'] }> {
-    const result = await step.do('record export request', async () => ({
-      artifactId: event.payload.artifactId,
-      status: 'completed' as const
-    }));
-    return result;
-  }
 }

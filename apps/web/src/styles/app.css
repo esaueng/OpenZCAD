@@ -203,6 +203,70 @@
   cursor: pointer;
 }
 
+.artifact-menu {
+  position: relative;
+}
+
+.artifact-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+
+.artifact-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact-menu-panel {
+  position: absolute;
+  z-index: var(--z-modal);
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(340px, 80vw);
+  max-height: 320px;
+  overflow: auto;
+  padding: var(--sp-3);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.artifact-menu-panel > strong,
+.artifact-menu-panel > span {
+  display: block;
+  margin-bottom: var(--sp-2);
+}
+
+.artifact-menu-panel a {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  padding: 8px;
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+}
+
+.artifact-menu-panel a:hover {
+  background: var(--color-surface-hover);
+}
+
+.artifact-menu-panel a svg {
+  grid-row: 1 / span 2;
+  margin-top: 2px;
+}
+
+.artifact-menu-panel a span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-menu-panel a small {
+  color: var(--color-text-subtle);
+}
+
 .save-state {
   display: inline-flex;
   align-items: center;

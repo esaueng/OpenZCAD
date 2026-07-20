@@ -28,8 +28,6 @@
       "@openzcad/viewport": ["packages/viewport/src/index.ts"],
       "@openzcad/io-step": ["packages/io-step/src/index.ts"],
       "@openzcad/io-stl": ["packages/io-stl/src/index.ts"],
-      "@openzcad/plugin-api": ["packages/plugin-api/src/index.ts"],
-      "@openzcad/jobs": ["packages/jobs/src/index.ts"],
       "@openzcad/persistence": ["packages/persistence/src/index.ts"],
       "@openzcad/cloudflare-adapters": [
         "packages/cloudflare-adapters/src/index.ts"

@@ -25,7 +25,8 @@
     {
       "binding": "DB",
       "database_name": "openzcad-beta",
-      "database_id": "beta-openzcad-d1-placeholder"
+      "database_id": "beta-openzcad-d1-placeholder",
+      "migrations_dir": "migrations"
     }
   ],
   "r2_buckets": [
@@ -34,14 +35,6 @@
       "bucket_name": "openzcad-beta-artifacts"
     }
   ],
-  "queues": {
-    "producers": [
-      {
-        "binding": "JOB_QUEUE",
-        "queue": "openzcad-beta-jobs"
-      }
-    ]
-  },
   "durable_objects": {
     "bindings": [
       {
@@ -50,13 +43,6 @@
       }
     ]
   },
-  "workflows": [
-    {
-      "name": "openzcad-export-beta",
-      "binding": "EXPORT_WORKFLOW",
-      "class_name": "OpenZCADExportWorkflow"
-    }
-  ],
   "migrations": [
     {
       "tag": "v1",
@@ -77,7 +63,8 @@
         {
           "binding": "DB",
           "database_name": "openzcad-beta",
-          "database_id": "beta-openzcad-d1-placeholder"
+          "database_id": "beta-openzcad-d1-placeholder",
+          "migrations_dir": "migrations"
         }
       ],
       "r2_buckets": [
@@ -86,14 +73,6 @@
           "bucket_name": "openzcad-beta-artifacts"
         }
       ],
-      "queues": {
-        "producers": [
-          {
-            "binding": "JOB_QUEUE",
-            "queue": "openzcad-beta-jobs"
-          }
-        ]
-      },
       "durable_objects": {
         "bindings": [
           {
@@ -101,14 +80,7 @@
             "class_name": "ProjectCollaborationRoom"
           }
         ]
-      },
-      "workflows": [
-        {
-          "name": "openzcad-export-beta",
-          "binding": "EXPORT_WORKFLOW",
-          "class_name": "OpenZCADExportWorkflow"
-        }
-      ]
+      }
     }
   }
 }

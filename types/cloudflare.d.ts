@@ -2,23 +2,6 @@ declare class DurableObject {
   constructor(ctx: unknown, env: unknown);
 }
 
-declare class WorkflowEntrypoint<TEnv = unknown, TPayload = unknown> {
-  env: TEnv;
-  constructor(ctx: unknown, env: TEnv);
-  run(event: WorkflowEvent<TPayload>, step: WorkflowStep): Promise<unknown>;
-}
-
-declare interface WorkflowEvent<TPayload = unknown> {
-  payload: TPayload;
-}
-
-declare interface WorkflowStep {
-  do<T>(name: string, callback: () => Promise<T> | T): Promise<T>;
-}
-
-declare interface Workflow<TPayload = unknown> {
-  create(input: { params: TPayload }): Promise<unknown>;
-}
 
 declare interface DurableObjectNamespace<T = unknown> {
   getByName(name: string): T;
@@ -40,10 +23,27 @@ declare interface D1PreparedStatement {
 
 declare interface D1Database {
   prepare(query: string): D1PreparedStatement;
-  batch(statements: D1PreparedStatement[]): Promise<unknown>;
+  batch(statements: D1PreparedStatement[]): Promise<D1RunResult[]>;
 }
 
-declare interface R2Bucket {}
+declare interface R2Object {
+  size: number;
+}
+
+declare interface R2ObjectBody extends R2Object {
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
+declare interface R2Bucket {
+  put(
+    key: string,
+    value: ArrayBuffer,
+    options?: { httpMetadata?: { contentType?: string } }
+  ): Promise<R2Object>;
+  head(key: string): Promise<R2Object | null>;
+  get(key: string): Promise<R2ObjectBody | null>;
+  delete(key: string): Promise<void>;
+}
 
 declare interface Queue<T = unknown> {
   send(message: T): Promise<void>;
@@ -66,11 +66,4 @@ declare module 'cloudflare:workers' {
     constructor(ctx: unknown, env: unknown);
   }
 
-  export class WorkflowEntrypoint<TEnv = unknown, TPayload = unknown> {
-    env: TEnv;
-    constructor(ctx: unknown, env: TEnv);
-    run(event: WorkflowEvent<TPayload>, step: WorkflowStep): Promise<unknown>;
-  }
-
-  export type { WorkflowEvent, WorkflowStep };
 }

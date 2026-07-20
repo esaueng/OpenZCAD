@@ -1,17 +1,19 @@
 import {
-  OpenZCADExportWorkflow,
   ProjectCollaborationRoom,
   createPersistenceService,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
-import { ProjectNotFoundError } from '@openzcad/persistence';
+import {
+  ArtifactStorageError,
+  ProjectNotFoundError,
+  RevisionConflictError
+} from '@openzcad/persistence';
 import {
   HttpError,
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
   parseCreateUploadSessionRequest,
   parseFinalizeImportRequest,
-  parseRequestExportRequest,
   parseSaveRevisionRequest
 } from './validation';
 import { getAssistantStatus, streamAssistantProposal } from './assistant';
@@ -19,18 +21,19 @@ import { authenticateRequest, AuthenticationError } from './auth';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
-  EXPORT_WORKFLOW?: Workflow<{
-    artifactId: string;
-  }>;
 };
 
 /** Upper bound for JSON request bodies; protects against oversized payloads. */
 const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
+const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
+const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
+const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
+const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -133,9 +136,33 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.createUploadSession(userId, payload), 201);
   }
 
-  if (request.method === 'POST' && pathname === '/api/imports/finalize') {
+  const uploadContentMatch = UPLOAD_CONTENT_ROUTE.exec(pathname);
+  if (request.method === 'PUT' && uploadContentMatch) {
+    const contentLength = Number(request.headers.get('content-length') ?? '0');
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_ARTIFACT_BODY_BYTES
+    ) {
+      throw new HttpError(413, 'Artifact is too large.');
+    }
+    const body = await request.arrayBuffer();
+    if (body.byteLength === 0 || body.byteLength > MAX_ARTIFACT_BODY_BYTES) {
+      throw new HttpError(
+        body.byteLength === 0 ? 400 : 413,
+        body.byteLength === 0 ? 'Artifact is empty.' : 'Artifact is too large.'
+      );
+    }
+    await persistence.putUpload(userId, uploadContentMatch[1]!, body);
+    return new Response(null, { status: 204 });
+  }
+
+  if (
+    request.method === 'POST' &&
+    (pathname === '/api/artifacts/finalize' ||
+      pathname === '/api/imports/finalize')
+  ) {
     const payload = parseFinalizeImportRequest(await readJsonBody(request));
-    const artifact = await persistence.finalizeImport(userId, payload);
+    const artifact = await persistence.finalizeArtifact(userId, payload);
     if (!artifact) {
       return json(
         { error: 'Upload session not found, expired, or already used.' },
@@ -145,21 +172,30 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json({ artifactId: artifact.artifactId });
   }
 
-  if (request.method === 'POST' && pathname === '/api/exports') {
-    const payload = parseRequestExportRequest(await readJsonBody(request));
-    const response = await persistence.requestExport(userId, payload);
-    if (env.EXPORT_WORKFLOW) {
-      try {
-        await env.EXPORT_WORKFLOW.create({
-          params: { artifactId: response.artifact.artifactId }
-        });
-      } catch (error) {
-        // The export artifact and job are already recorded; a workflow
-        // kick-off failure should not fail the request.
-        console.warn('Export workflow creation failed:', error);
-      }
+  const projectArtifactsMatch = PROJECT_ARTIFACTS_ROUTE.exec(pathname);
+  if (request.method === 'GET' && projectArtifactsMatch) {
+    return json(
+      await persistence.listArtifacts(userId, projectArtifactsMatch[1]!)
+    );
+  }
+
+  const artifactDownloadMatch = ARTIFACT_DOWNLOAD_ROUTE.exec(pathname);
+  if (request.method === 'GET' && artifactDownloadMatch) {
+    const download = await persistence.downloadArtifact(
+      userId,
+      artifactDownloadMatch[1]!
+    );
+    if (!download) {
+      return json({ error: 'Artifact not found.' }, 404);
     }
-    return json(response, 202);
+    return new Response(download.body, {
+      headers: {
+        'content-type': download.artifact.contentType,
+        'content-length': String(download.body.byteLength),
+        'content-disposition': `attachment; filename="${download.artifact.name.replace(/["\\\r\n]/g, '_')}"`,
+        'x-content-type-options': 'nosniff'
+      }
+    });
   }
 
   const artifactMatch = ARTIFACT_ROUTE.exec(pathname);
@@ -186,10 +222,23 @@ export default {
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);
       }
+      if (error instanceof RevisionConflictError) {
+        return json(
+          {
+            error: error.message,
+            code: 'REVISION_CONFLICT',
+            currentVersion: error.currentVersion
+          },
+          409
+        );
+      }
+      if (error instanceof ArtifactStorageError) {
+        return json({ error: error.message }, 503);
+      }
       console.error('Unhandled API error:', error);
       return json({ error: 'Internal error' }, 500);
     }
   }
 };
 
-export { OpenZCADExportWorkflow, ProjectCollaborationRoom };
+export { ProjectCollaborationRoom };

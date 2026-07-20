@@ -11,8 +11,6 @@ const WORKSPACE_PACKAGES = [
   'viewport',
   'io-step',
   'io-stl',
-  'plugin-api',
-  'jobs',
   'persistence',
   'cloudflare-adapters'
 ] as const;

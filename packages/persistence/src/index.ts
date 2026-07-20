@@ -9,12 +9,11 @@ import {
   type CreateProjectResponse,
   type CreateUploadSessionRequest,
   type CreateUploadSessionResponse,
-  type FinalizeImportRequest,
+  type FinalizeArtifactRequest,
+  type ListArtifactsResponse,
   type ListProjectsResponse,
   type ProjectDocument,
   type ProjectSummary,
-  type RequestExportRequest,
-  type RequestExportResponse,
   type SaveRevisionRequest,
   type UploadSessionRecord,
   type UserId
@@ -24,7 +23,6 @@ import {
   createProjectDocument,
   normalizeDocument
 } from '@openzcad/document-core';
-import { InMemoryJobRunner } from '@openzcad/jobs';
 
 export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
 
@@ -33,6 +31,23 @@ export class ProjectNotFoundError extends Error {
   constructor(projectId: string) {
     super(`Project ${projectId} not found.`);
     this.name = 'ProjectNotFoundError';
+  }
+}
+
+export class ArtifactStorageError extends Error {
+  constructor(message = 'Artifact storage is unavailable.') {
+    super(message);
+    this.name = 'ArtifactStorageError';
+  }
+}
+
+export class RevisionConflictError extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly currentVersion: number
+  ) {
+    super(`Project ${projectId} has a newer remote revision.`);
+    this.name = 'RevisionConflictError';
   }
 }
 
@@ -55,25 +70,34 @@ export interface PersistenceService {
     userId: UserId,
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse>;
-  finalizeImport(
+  putUpload(
     userId: UserId,
-    request: FinalizeImportRequest
+    uploadSessionId: string,
+    body: ArrayBuffer
+  ): Promise<void>;
+  finalizeArtifact(
+    userId: UserId,
+    request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null>;
-  requestExport(
+  listArtifacts(
     userId: UserId,
-    request: RequestExportRequest
-  ): Promise<RequestExportResponse>;
+    projectId: string
+  ): Promise<ListArtifactsResponse>;
   getArtifactMetadata(
     userId: UserId,
     artifactId: string
   ): Promise<ArtifactMetadataResponse>;
+  downloadArtifact(
+    userId: UserId,
+    artifactId: string
+  ): Promise<{ artifact: ArtifactRecord; body: ArrayBuffer } | null>;
 }
 
 export class InMemoryPersistenceService implements PersistenceService {
   private readonly projects = new Map<string, ProjectDocument>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
-  private readonly jobRunner = new InMemoryJobRunner();
+  private readonly uploadBodies = new Map<string, ArrayBuffer>();
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
     return {
@@ -113,6 +137,9 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (!existing || existing.ownerUserId !== userId) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    if (existing.version !== request.expectedVersion) {
+      throw new RevisionConflictError(request.projectId, existing.version);
+    }
     const normalized = normalizeDocument(request.document);
     if (normalized.ownerUserId !== userId) {
       throw new ProjectNotFoundError(request.projectId);
@@ -131,22 +158,45 @@ export class InMemoryPersistenceService implements PersistenceService {
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
+      projectId: request.projectId,
       objectKey: `${request.projectId}/uploads/${crypto.randomUUID()}-${sanitizeFileName(request.fileName)}`,
       expiresAt: new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString(),
       fileName: request.fileName,
-      contentType: request.contentType
+      contentType: request.contentType,
+      kind: request.kind,
+      metadata: request.metadata ?? {}
     };
     this.uploads.set(session.uploadSessionId, session);
     return { session };
   }
 
-  async finalizeImport(
+  async putUpload(
     userId: UserId,
-    request: FinalizeImportRequest
+    uploadSessionId: string,
+    body: ArrayBuffer
+  ): Promise<void> {
+    const upload = this.uploads.get(uploadSessionId);
+    if (!upload) {
+      throw new ArtifactStorageError('Upload session was not found.');
+    }
+    this.assertProjectOwner(userId, upload.projectId);
+    this.uploadBodies.set(upload.objectKey, body);
+  }
+
+  async finalizeArtifact(
+    userId: UserId,
+    request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null> {
     this.assertProjectOwner(userId, request.projectId);
     const upload = this.uploads.get(request.uploadSessionId);
-    if (!upload || Date.parse(upload.expiresAt) < Date.now()) {
+    const body = upload ? this.uploadBodies.get(upload.objectKey) : undefined;
+    if (
+      !upload ||
+      !body ||
+      upload.projectId !== request.projectId ||
+      upload.artifactId !== request.artifactId ||
+      Date.parse(upload.expiresAt) < Date.now()
+    ) {
       return null;
     }
     this.uploads.delete(request.uploadSessionId);
@@ -154,45 +204,28 @@ export class InMemoryPersistenceService implements PersistenceService {
     const artifact: ArtifactRecord = {
       artifactId: request.artifactId,
       projectId: request.projectId,
-      kind: request.contentType.includes('step') ? 'step-import' : 'stl-import',
-      name: request.fileName,
+      kind: upload.kind,
+      name: upload.fileName,
       objectKey: upload.objectKey,
-      contentType: request.contentType,
+      contentType: upload.contentType,
+      bytes: body.byteLength,
       createdAt: nowIso(),
-      metadata: {
-        finalized: true
-      }
+      metadata: upload.metadata
     };
     this.artifacts.set(artifact.artifactId, artifact);
     return artifact;
   }
 
-  async requestExport(
+  async listArtifacts(
     userId: UserId,
-    request: RequestExportRequest
-  ): Promise<RequestExportResponse> {
-    this.assertProjectOwner(userId, request.projectId);
-    const artifact: ArtifactRecord = {
-      artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
-      projectId: request.projectId,
-      kind: request.format === 'step' ? 'step-export' : 'stl-export',
-      name: `export.${request.format}`,
-      objectKey: `${request.projectId}/exports/${crypto.randomUUID()}.${request.format}`,
-      contentType: request.format === 'step' ? 'model/step' : 'model/stl',
-      createdAt: nowIso(),
-      metadata: {
-        bodyIds: request.bodyIds.join(',')
-      }
+    projectId: string
+  ): Promise<ListArtifactsResponse> {
+    this.assertProjectOwner(userId, projectId);
+    return {
+      artifacts: Array.from(this.artifacts.values())
+        .filter((artifact) => artifact.projectId === projectId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     };
-    this.artifacts.set(artifact.artifactId, artifact);
-
-    const job = await this.jobRunner.enqueue({
-      kind: 'export',
-      projectId: request.projectId,
-      artifactId: artifact.artifactId
-    });
-
-    return { artifact, job };
   }
 
   async getArtifactMetadata(
@@ -207,6 +240,18 @@ export class InMemoryPersistenceService implements PersistenceService {
           ? artifact
           : null
     };
+  }
+
+  async downloadArtifact(
+    userId: UserId,
+    artifactId: string
+  ): Promise<{ artifact: ArtifactRecord; body: ArrayBuffer } | null> {
+    const { artifact } = await this.getArtifactMetadata(userId, artifactId);
+    if (!artifact) {
+      return null;
+    }
+    const body = this.uploadBodies.get(artifact.objectKey);
+    return body ? { artifact, body } : null;
   }
 
   private assertProjectOwner(userId: UserId, projectId: string): void {

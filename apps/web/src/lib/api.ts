@@ -5,12 +5,11 @@ import type {
   CreateProjectResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
-  FinalizeImportRequest,
+  FinalizeArtifactRequest,
   HealthResponse,
   ListProjectsResponse,
   ProjectDocument,
-  RequestExportRequest,
-  RequestExportResponse,
+  ListArtifactsResponse,
   SaveRevisionRequest
 } from '@openzcad/shared';
 
@@ -58,16 +57,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  finalizeImport: (payload: FinalizeImportRequest) =>
-    requestJson<{ artifactId: string | null }>('/api/imports/finalize', {
+  uploadArtifact: async (uploadUrl: string, body: Blob) => {
+    const response = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'content-type': body.type || 'application/octet-stream' },
+      body
+    });
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Upload failed (${response.status}).`);
+    }
+  },
+  finalizeArtifact: (payload: FinalizeArtifactRequest) =>
+    requestJson<{ artifactId: string | null }>('/api/artifacts/finalize', {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  requestExport: (payload: RequestExportRequest) =>
-    requestJson<RequestExportResponse>('/api/exports', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
+  listArtifacts: (projectId: string) =>
+    requestJson<ListArtifactsResponse>(`/api/projects/${projectId}/artifacts`),
   getArtifactMetadata: (artifactId: string) =>
-    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`)
+    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`),
+  artifactDownloadUrl: (artifactId: string) =>
+    `/api/artifacts/${artifactId}/download`
 };

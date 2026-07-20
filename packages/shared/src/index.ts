@@ -9,7 +9,6 @@ export type SketchId = Brand<string, 'SketchId'>;
 export type ParameterId = Brand<string, 'ParameterId'>;
 export type ArtifactId = Brand<string, 'ArtifactId'>;
 export type RevisionId = Brand<string, 'RevisionId'>;
-export type JobId = Brand<string, 'JobId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
@@ -423,11 +422,14 @@ export interface SerializedCommand<TPayload = unknown> {
 export interface UploadSessionRecord {
   uploadSessionId: UploadSessionId;
   artifactId: ArtifactId;
+  projectId: ProjectId;
   objectKey: string;
   uploadUrl?: string;
   expiresAt: string;
   fileName: string;
   contentType: string;
+  kind: ArtifactKind;
+  metadata: Record<string, string | number | boolean>;
 }
 
 export interface ArtifactRecord {
@@ -448,21 +450,13 @@ export interface ArtifactRecord {
   metadata: Record<string, string | number | boolean>;
 }
 
+export type ArtifactKind = ArtifactRecord['kind'];
+
 export interface ProjectSummary {
   projectId: ProjectId;
   name: string;
   lastRevisionId?: RevisionId;
   revisionCount: number;
-  updatedAt: string;
-}
-
-export interface JobRecord {
-  jobId: JobId;
-  kind: 'thumbnail' | 'validation' | 'import' | 'export';
-  status: 'queued' | 'running' | 'completed' | 'failed';
-  projectId: ProjectId;
-  artifactId?: ArtifactId;
-  createdAt: string;
   updatedAt: string;
 }
 
@@ -483,6 +477,7 @@ export interface ListProjectsResponse {
 export interface SaveRevisionRequest {
   projectId: ProjectId;
   reason: string;
+  expectedVersion: number;
   document: ProjectDocument;
 }
 
@@ -490,29 +485,25 @@ export interface CreateUploadSessionRequest {
   projectId: ProjectId;
   fileName: string;
   contentType: string;
+  kind: ArtifactKind;
+  metadata?: Record<string, string | number | boolean>;
 }
 
 export interface CreateUploadSessionResponse {
   session: UploadSessionRecord;
 }
 
-export interface FinalizeImportRequest {
+export interface FinalizeArtifactRequest {
   projectId: ProjectId;
   uploadSessionId: UploadSessionId;
   artifactId: ArtifactId;
-  fileName: string;
-  contentType: string;
 }
 
-export interface RequestExportRequest {
-  projectId: ProjectId;
-  bodyIds: BodyId[];
-  format: 'step' | 'stl';
-}
+/** @deprecated Use FinalizeArtifactRequest. */
+export type FinalizeImportRequest = FinalizeArtifactRequest;
 
-export interface RequestExportResponse {
-  artifact: ArtifactRecord;
-  job: JobRecord;
+export interface ListArtifactsResponse {
+  artifacts: ArtifactRecord[];
 }
 
 export interface ArtifactMetadataResponse {
@@ -590,7 +581,6 @@ export const toArtifactId = (value: string): ArtifactId => value as ArtifactId;
 export const toUploadSessionId = (value: string): UploadSessionId =>
   value as UploadSessionId;
 export const toUserId = (value: string): UserId => value as UserId;
-export const toJobId = (value: string): JobId => value as JobId;
 export const toAssetId = (value: string): AssetId => value as AssetId;
 
 export const DEFAULT_BODY_COLOR = '#e1a948';
