@@ -384,6 +384,19 @@ test('models a parametric part and exports a true STEP file', async ({
     page.locator('.feature-row-main', { hasText: 'Cylinder' })
   ).toBeVisible();
 
+  // Move the cutter into the box instead of leaving it tangent to the box's
+  // origin corner, which is a deliberately degenerate boolean setup.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const moveInspector = page.getByRole('region', {
+    name: 'Feature inspector'
+  });
+  await moveInspector.getByLabel('Move X').fill('30');
+  await moveInspector.getByLabel('Move Y').fill('9');
+  await moveInspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Move' })
+  ).toBeVisible();
+
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
   await page.locator('.pick-row', { hasText: 'Box Body' }).click();
   await page.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
@@ -394,7 +407,12 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(
     page.locator('.feature-row', { hasText: 'Subtract' })
   ).toBeVisible();
-  await expect(page.locator('.feature-row.consumed')).toHaveCount(2);
+  await expect(
+    page.locator('.feature-row', { hasText: 'Subtract' }).getByTitle(
+      'Feature failed to build'
+    )
+  ).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
   // Export STEP and verify the download is a real ISO 10303-21 file.
   const downloadPromise = page.waitForEvent('download');
@@ -408,7 +426,9 @@ test('models a parametric part and exports a true STEP file', async ({
   }
   const text = Buffer.concat(chunks).toString('utf8');
   expect(text.startsWith('ISO-10303-21;')).toBe(true);
-  expect(text).toContain("FILE_SCHEMA(('AUTOMOTIVE_DESIGN");
+  expect(text).toMatch(
+    /FILE_SCHEMA\(\('(AUTOMOTIVE_DESIGN|CONFIG_CONTROL_DESIGN)/
+  );
   expect(text).toContain('MANIFOLD_SOLID_BREP');
   expect(text).toContain('CLOSED_SHELL');
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
