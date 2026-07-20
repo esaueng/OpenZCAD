@@ -298,6 +298,8 @@ interface SceneContext {
   projection: ProjectionMode;
   /** Switches projection, rebinding controls and syncing camera poses. */
   applyProjection(mode: ProjectionMode): void;
+  /** Invalidates the viewport and schedules a render if it is idle. */
+  requestRender(): void;
   /** Mirrors the perspective pose onto the ortho camera and its frustum. */
   syncOrthographic(resetZoom: boolean): void;
   renderer: THREE.WebGLRenderer;
@@ -1112,12 +1114,20 @@ export function ModelViewer({
     }
 
     let viewChangeTimeout: number | null = null;
+    let animationFrame: number | null = null;
+
+    function requestRender() {
+      if (animationFrame === null) {
+        animationFrame = window.requestAnimationFrame(animate);
+      }
+    }
 
     function emitViewChange() {
       onViewChangeRef.current(captureViewportCamera(context));
     }
 
     function scheduleSettledViewChange() {
+      requestRender();
       if (viewChangeTimeout !== null) {
         window.clearTimeout(viewChangeTimeout);
       }
@@ -1170,6 +1180,7 @@ export function ModelViewer({
       rebindControls(context.activeCamera);
       context.controls.update();
       emitViewChange();
+      requestRender();
     }
 
     /**
@@ -1192,6 +1203,7 @@ export function ModelViewer({
         far: pose.far,
         onComplete
       };
+      requestRender();
     }
 
     function cancelCameraTween() {
@@ -1237,6 +1249,7 @@ export function ModelViewer({
       activeCamera: camera,
       projection: 'perspective',
       applyProjection,
+      requestRender,
       syncOrthographic,
       renderer,
       labelRenderer,
@@ -1314,6 +1327,7 @@ export function ModelViewer({
       for (const material of context.edgeMaterials) {
         material.resolution.set(host.clientWidth, host.clientHeight);
       }
+      requestRender();
     });
     observer.observe(host);
 
@@ -1580,6 +1594,7 @@ export function ModelViewer({
         material.linewidth = EDGE_HOVER_WIDTH;
         material.opacity = 1;
       }
+      requestRender();
     }
 
     /**
@@ -1598,6 +1613,7 @@ export function ModelViewer({
       }
       context.hoverFaceKey = key;
       context.hoverFaceTarget = 0;
+      requestRender();
       if (!key || selection?.kind !== 'face') {
         return;
       }
@@ -1628,6 +1644,7 @@ export function ModelViewer({
       object.add(context.hoverFaceMesh);
       context.hoverFaceMesh.visible = true;
       context.hoverFaceTarget = HOVER_FACE_OPACITY;
+      requestRender();
     }
 
     function applyHover(result: PickResult | null) {
@@ -1798,6 +1815,7 @@ export function ModelViewer({
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true, value);
         renderer.domElement.style.cursor = 'grabbing';
+        requestRender();
         return;
       }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
@@ -1838,6 +1856,7 @@ export function ModelViewer({
           (faceDrag.side * (value - faceDrag.initialValue)) / 2;
         renderer.domElement.style.cursor = 'grabbing';
         positionDragHud(event, value, faceDrag.axis);
+        requestRender();
         return;
       }
       const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
@@ -2211,10 +2230,11 @@ export function ModelViewer({
     });
 
     const lastQuaternion = new THREE.Quaternion();
-    let animationFrame = window.requestAnimationFrame(function animate(now) {
+    function animate(now: number) {
+      animationFrame = null;
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = stepCameraTween(now);
-      controls.update();
+      const controlsChanged = controls.update();
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
       if (context.projection === 'orthographic' && !tweening) {
@@ -2283,11 +2303,23 @@ export function ModelViewer({
           });
         }
       }
-      animationFrame = window.requestAnimationFrame(animate);
-    });
+      const hoverAnimating =
+        Math.abs(context.hoverFaceTarget - hoverMaterial.opacity) >= 0.004;
+      if (
+        tweening ||
+        controlsChanged ||
+        hoverAnimating ||
+        context.fadeIns.size > 0
+      ) {
+        requestRender();
+      }
+    }
+    requestRender();
 
     return () => {
-      window.cancelAnimationFrame(animationFrame);
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+      }
       observer.disconnect();
       renderer.domElement.removeEventListener(
         'pointermove',
@@ -2669,6 +2701,7 @@ export function ModelViewer({
       context.hasFitCamera = true;
       onViewChangeRef.current(captureViewportCamera(context));
     }
+    context.requestRender();
   }, [
     bodies,
     editableBodyIds,
@@ -2687,6 +2720,7 @@ export function ModelViewer({
       return;
     }
     clearGroup(context.moveGizmoGroup);
+    context.requestRender();
     if (!movePreview) {
       applyMoveGizmoFocus(context.moveGizmoGroup, null);
       if (moveGizmoHudRef.current) {
@@ -2956,6 +2990,7 @@ export function ModelViewer({
       context.hasFitCamera = true;
       onViewChangeRef.current(captureViewportCamera(context));
     }
+    context.requestRender();
   }, [bodies.length, sketches]);
 
   // Direct extrusion stays an ephemeral viewport preview until the user
@@ -2966,6 +3001,7 @@ export function ModelViewer({
       return;
     }
     clearGroup(context.gizmoGroup);
+    context.requestRender();
     if (!extrudePreview) {
       return;
     }
@@ -3072,6 +3108,7 @@ export function ModelViewer({
       context.grid.visible = settings.showGrid;
       context.shadowCatcher.visible = settings.showGrid;
       applyDisplayMode(context.bodyGroup, settings.displayMode);
+      context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode]);
 
