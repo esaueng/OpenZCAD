@@ -1,13 +1,12 @@
 import {
   toArtifactId,
-  toBodyId,
   toProjectId,
   toUploadSessionId,
+  type ArtifactKind,
   type CreateProjectRequest,
   type CreateUploadSessionRequest,
   type FinalizeImportRequest,
   type ProjectDocument,
-  type RequestExportRequest,
   type SaveRevisionRequest,
   type UnitSystem
 } from '@openzcad/shared';
@@ -24,12 +23,18 @@ export class HttpError extends Error {
 }
 
 const UNIT_SYSTEMS: readonly UnitSystem[] = ['mm', 'cm', 'm', 'inch'];
-const EXPORT_FORMATS = ['step', 'stl'] as const;
+const ARTIFACT_KINDS: readonly ArtifactKind[] = [
+  'step-import',
+  'stl-import',
+  'step-export',
+  'stl-export',
+  'snapshot',
+  'thumbnail'
+];
 const MAX_NAME_LENGTH = 200;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_REASON_LENGTH = 500;
-const MAX_EXPORT_BODIES = 100;
 const MAX_AI_PROMPT_LENGTH = 4_000;
 
 export interface AssistantProposalRequest {
@@ -116,10 +121,18 @@ export function parseSaveRevisionRequest(
     throw badRequest('"projectId" must match the project id in the URL.');
   }
   const reason = requireString(record, 'reason', MAX_REASON_LENGTH);
+  if (
+    typeof record.expectedVersion !== 'number' ||
+    !Number.isInteger(record.expectedVersion) ||
+    record.expectedVersion < 0
+  ) {
+    throw badRequest('"expectedVersion" must be a non-negative integer.');
+  }
   const document = parseProjectDocument(record.document, projectIdFromPath);
   return {
     projectId: toProjectId(projectIdFromPath),
     reason,
+    expectedVersion: record.expectedVersion,
     document
   };
 }
@@ -128,10 +141,30 @@ export function parseCreateUploadSessionRequest(
   body: unknown
 ): CreateUploadSessionRequest {
   const record = asRecord(body, 'Request body');
+  if (!ARTIFACT_KINDS.includes(record.kind as ArtifactKind)) {
+    throw badRequest(`"kind" must be one of: ${ARTIFACT_KINDS.join(', ')}.`);
+  }
+  const metadata =
+    record.metadata === undefined ? {} : asRecord(record.metadata, '"metadata"');
+  if (JSON.stringify(metadata).length > 4_000) {
+    throw badRequest('"metadata" is too large.');
+  }
+  if (
+    Object.values(metadata).some(
+      (value) =>
+        typeof value !== 'string' &&
+        typeof value !== 'number' &&
+        typeof value !== 'boolean'
+    )
+  ) {
+    throw badRequest('"metadata" values must be strings, numbers, or booleans.');
+  }
   return {
     projectId: toProjectId(requireString(record, 'projectId', MAX_NAME_LENGTH)),
     fileName: requireString(record, 'fileName', MAX_FILE_NAME_LENGTH),
-    contentType: requireString(record, 'contentType', MAX_CONTENT_TYPE_LENGTH)
+    contentType: requireString(record, 'contentType', MAX_CONTENT_TYPE_LENGTH),
+    kind: record.kind as ArtifactKind,
+    metadata: metadata as Record<string, string | number | boolean>
   };
 }
 
@@ -146,37 +179,7 @@ export function parseFinalizeImportRequest(
     ),
     artifactId: toArtifactId(
       requireString(record, 'artifactId', MAX_NAME_LENGTH)
-    ),
-    fileName: requireString(record, 'fileName', MAX_FILE_NAME_LENGTH),
-    contentType: requireString(record, 'contentType', MAX_CONTENT_TYPE_LENGTH)
-  };
-}
-
-export function parseRequestExportRequest(body: unknown): RequestExportRequest {
-  const record = asRecord(body, 'Request body');
-  const format = record.format;
-  if (format !== 'step' && format !== 'stl') {
-    throw badRequest(`"format" must be one of: ${EXPORT_FORMATS.join(', ')}.`);
-  }
-  const rawBodyIds: unknown[] = Array.isArray(record.bodyIds)
-    ? record.bodyIds
-    : [];
-  const bodyIds = rawBodyIds.filter(
-    (id): id is string => typeof id === 'string' && id.length > 0
-  );
-  if (
-    bodyIds.length !== rawBodyIds.length ||
-    bodyIds.length === 0 ||
-    bodyIds.length > MAX_EXPORT_BODIES
-  ) {
-    throw badRequest(
-      `"bodyIds" must be a non-empty array of up to ${MAX_EXPORT_BODIES} body ids.`
-    );
-  }
-  return {
-    projectId: toProjectId(requireString(record, 'projectId', MAX_NAME_LENGTH)),
-    bodyIds: bodyIds.map((id) => toBodyId(id)),
-    format
+    )
   };
 }
 

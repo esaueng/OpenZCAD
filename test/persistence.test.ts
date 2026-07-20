@@ -3,6 +3,7 @@ import {
   InMemoryPersistenceService,
   ProjectNotFoundError
 } from '@openzcad/persistence';
+import type { RevisionConflictError } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 
@@ -14,9 +15,10 @@ describe('in-memory persistence', () => {
     const document = createProjectDocument('Ghost', userId);
     await expect(
       service.saveRevision(userId, {
-        projectId: document.projectId,
-        reason: 'Save',
-        document
+      projectId: document.projectId,
+      reason: 'Save',
+      expectedVersion: document.version,
+      document
       })
     ).rejects.toThrow(ProjectNotFoundError);
   });
@@ -27,6 +29,7 @@ describe('in-memory persistence', () => {
     const saved = await service.saveRevision(userId, {
       projectId: created.document.projectId,
       reason: 'Save',
+      expectedVersion: created.document.version,
       document: created.document
     });
     expect(saved.projectId).toBe(created.document.projectId);
@@ -39,13 +42,44 @@ describe('in-memory persistence', () => {
     expect(loaded?.schemaVersion).toBe(3);
   });
 
+  it('rejects stale revision writes without replacing the newer document', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Guarded Save' });
+    const newerDocument = { ...created.document, version: created.document.version + 1 };
+
+    await service.saveRevision(userId, {
+      projectId: created.document.projectId,
+      reason: 'Newer save',
+      expectedVersion: created.document.version,
+      document: newerDocument
+    });
+
+    await expect(
+      service.saveRevision(userId, {
+        projectId: created.document.projectId,
+        reason: 'Stale save',
+        expectedVersion: created.document.version,
+        document: { ...newerDocument, version: newerDocument.version + 1 }
+      })
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<RevisionConflictError>>({
+        currentVersion: newerDocument.version
+      })
+    );
+
+    expect((await service.loadProject(userId, created.document.projectId))?.version).toBe(
+      newerDocument.version
+    );
+  });
+
   it('sanitizes file names in upload object keys', async () => {
     const service = new InMemoryPersistenceService();
     const created = await service.createProject(userId, { name: 'Uploads' });
     const { session } = await service.createUploadSession(userId, {
       projectId: created.document.projectId,
       fileName: '../../etc/evil name.stl',
-      contentType: 'model/stl'
+      contentType: 'model/stl',
+      kind: 'stl-import'
     });
     expect(session.objectKey).toContain('evil-name.stl');
     expect(session.objectKey).not.toContain('..');
@@ -61,23 +95,27 @@ describe('in-memory persistence', () => {
     const { session } = await service.createUploadSession(userId, {
       projectId,
       fileName: 'part.stl',
-      contentType: 'model/stl'
+      contentType: 'model/stl',
+      kind: 'stl-import'
     });
 
     const request = {
       projectId,
       uploadSessionId: session.uploadSessionId,
       artifactId: session.artifactId,
-      fileName: 'part.stl',
-      contentType: 'model/stl'
     };
 
-    const artifact = await service.finalizeImport(userId, request);
+    await service.putUpload(
+      userId,
+      session.uploadSessionId,
+      new TextEncoder().encode('solid part').buffer
+    );
+    const artifact = await service.finalizeArtifact(userId, request);
     expect(artifact?.kind).toBe('stl-import');
     expect(artifact?.objectKey).toBe(session.objectKey);
 
     // The session was consumed; finalizing again must fail.
-    expect(await service.finalizeImport(userId, request)).toBeNull();
+    expect(await service.finalizeArtifact(userId, request)).toBeNull();
   });
 
   it("does not reveal or mutate another user's projects", async () => {
@@ -94,6 +132,7 @@ describe('in-memory persistence', () => {
       service.saveRevision(intruder, {
         projectId: created.document.projectId,
         reason: 'Unauthorized',
+        expectedVersion: created.document.version,
         document: created.document
       })
     ).rejects.toThrow(ProjectNotFoundError);

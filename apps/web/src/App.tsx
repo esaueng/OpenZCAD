@@ -55,6 +55,8 @@ import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
+  ArtifactKind,
+  ArtifactRecord,
   BodyId,
   BodyRepresentation,
   FeatureId,
@@ -180,6 +182,7 @@ function mergeProjectSummaries(
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
   const [selectedFeatureNodeId, setSelectedFeatureNodeId] = useState<
@@ -249,6 +252,7 @@ export function App() {
     >()
   );
   const lastSyncedKeyRef = useRef<string | null>(null);
+  const remoteVersionsRef = useRef(new Map<string, number>());
   const directEditInFlightRef = useRef(false);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -372,6 +376,12 @@ export function App() {
         rememberedRemote
       );
       const canUseCloud = Boolean(remote || rememberedRemote);
+      if (rememberedRemote) {
+        remoteVersionsRef.current.set(
+          rememberedRemote.projectId,
+          rememberedRemote.version
+        );
+      }
       setProjects(merged);
       setCloudAvailable(canUseCloud);
       setSession(remote?.[1] ?? null);
@@ -407,6 +417,29 @@ export function App() {
     }, 450);
     return () => window.clearTimeout(timeout);
   }, [doc, cloudAvailable]);
+
+  useEffect(() => {
+    if (!doc || !cloudAvailable) {
+      setArtifacts([]);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .listArtifacts(doc.projectId)
+      .then((response) => {
+        if (!cancelled) {
+          setArtifacts(response.artifacts);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setArtifacts([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [doc?.projectId, cloudAvailable]);
 
   useEffect(() => {
     const camera = viewportCameraRef.current;
@@ -1048,6 +1081,10 @@ export function App() {
     setBusy(true);
     try {
       const response = await api.createProject({ name, units });
+      remoteVersionsRef.current.set(
+        response.document.projectId,
+        response.document.version
+      );
       setCloudAvailable(true);
       hydrateDocument(response.document);
       setProjects((current) => [response.project, ...current]);
@@ -1145,6 +1182,12 @@ export function App() {
         throw new Error('Project not found locally or in the beta API.');
       }
       setCloudAvailable(Boolean(remoteDocument));
+      if (remoteDocument) {
+        remoteVersionsRef.current.set(
+          remoteDocument.projectId,
+          remoteDocument.version
+        );
+      }
       hydrateDocument(loaded);
       setStatus(
         loaded === localDocument && remoteDocument
@@ -1164,6 +1207,7 @@ export function App() {
     setInitialView(null);
     managerRef.current = null;
     setDoc(null);
+    setArtifacts([]);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
@@ -1214,11 +1258,19 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      let expectedVersion = remoteVersionsRef.current.get(doc.projectId);
+      if (expectedVersion === undefined) {
+        const remote = await api.loadProject(doc.projectId);
+        expectedVersion = remote.version;
+        remoteVersionsRef.current.set(doc.projectId, expectedVersion);
+      }
       const saved = await api.saveRevision({
         projectId: doc.projectId,
         reason: 'Manual save',
+        expectedVersion,
         document: doc
       });
+      remoteVersionsRef.current.set(saved.projectId, saved.version);
       if (managerRef.current) {
         managerRef.current.document = saved;
       }
@@ -1287,6 +1339,45 @@ export function App() {
     }
   }
 
+  async function archiveArtifact(input: {
+    fileName: string;
+    contentType: string;
+    kind: ArtifactKind;
+    body: Blob;
+    metadata?: Record<string, string | number | boolean>;
+  }): Promise<string> {
+    if (!doc) {
+      throw new Error('No project is open.');
+    }
+    const { session: upload } = await api.createUploadSession({
+      projectId: doc.projectId,
+      fileName: input.fileName,
+      contentType: input.contentType,
+      kind: input.kind,
+      metadata: input.metadata
+    });
+    if (!upload.uploadUrl) {
+      throw new Error('Artifact upload is unavailable.');
+    }
+    await api.uploadArtifact(upload.uploadUrl, input.body);
+    await api.finalizeArtifact({
+      projectId: doc.projectId,
+      uploadSessionId: upload.uploadSessionId,
+      artifactId: upload.artifactId
+    });
+    const stored = await api.getArtifactMetadata(upload.artifactId);
+    if (stored.artifact) {
+      const artifact = stored.artifact;
+      setArtifacts((current) => [
+        artifact,
+        ...current.filter(
+          (currentArtifact) => currentArtifact.artifactId !== artifact.artifactId
+        )
+      ]);
+    }
+    return upload.artifactId;
+  }
+
   async function handleImportFile(file: File) {
     if (!managerRef.current || !doc) {
       return;
@@ -1308,31 +1399,13 @@ export function App() {
       let artifactId = `artifact_local_${crypto.randomUUID()}`;
       let archived = false;
       try {
-        const uploadSession = await api.createUploadSession({
-          projectId: doc.projectId,
+        artifactId = await archiveArtifact({
           fileName: file.name,
-          contentType
+          contentType,
+          kind: 'stl-import',
+          body: file,
+          metadata: { source: 'direct-upload' }
         });
-        if (uploadSession.session.uploadUrl) {
-          const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
-            method: 'PUT',
-            body: file,
-            headers: { 'content-type': contentType }
-          });
-          if (!uploadResponse.ok) {
-            throw new Error(
-              `Upload failed with status ${uploadResponse.status}.`
-            );
-          }
-        }
-        await api.finalizeImport({
-          projectId: doc.projectId,
-          uploadSessionId: uploadSession.session.uploadSessionId,
-          artifactId: uploadSession.session.artifactId,
-          fileName: file.name,
-          contentType
-        });
-        artifactId = uploadSession.session.artifactId;
         archived = true;
       } catch {
         // Continue with the local import.
@@ -1373,29 +1446,13 @@ export function App() {
       let artifactId = `artifact_local_${crypto.randomUUID()}`;
       let archived = false;
       try {
-        const uploadSession = await api.createUploadSession({
-          projectId: doc.projectId,
+        artifactId = await archiveArtifact({
           fileName: file.name,
-          contentType
+          contentType,
+          kind: 'step-import',
+          body: file,
+          metadata: { source: 'direct-upload' }
         });
-        if (uploadSession.session.uploadUrl) {
-          const uploadResponse = await fetch(uploadSession.session.uploadUrl, {
-            method: 'PUT',
-            body: file,
-            headers: { 'content-type': contentType }
-          });
-          if (!uploadResponse.ok) {
-            throw new Error(`Upload failed (${uploadResponse.status}).`);
-          }
-        }
-        await api.finalizeImport({
-          projectId: doc.projectId,
-          uploadSessionId: uploadSession.session.uploadSessionId,
-          artifactId: uploadSession.session.artifactId,
-          fileName: file.name,
-          contentType
-        });
-        artifactId = uploadSession.session.artifactId;
         archived = true;
       } catch {
         // The STEP source remains embedded for deterministic offline rebuilds.
@@ -1453,24 +1510,37 @@ export function App() {
     try {
       setStatus(`Exporting exact ${format.toUpperCase()}…`);
       const result = await exportWithWorker(format, doc, exportBodyIds);
-      downloadText(`${stem}.${format}`, result.text);
+      const fileName = `${stem}.${format}`;
+      const contentType = format === 'step' ? 'model/step' : 'model/stl';
+      downloadText(fileName, result.text);
+      let archived = false;
+      try {
+        await archiveArtifact({
+          fileName,
+          contentType,
+          kind: format === 'step' ? 'step-export' : 'stl-export',
+          body: new Blob([result.text], { type: contentType }),
+          metadata: {
+            bodyIds: exportBodyIds.join(','),
+            documentVersion: doc.version,
+            units: doc.units
+          }
+        });
+        archived = true;
+      } catch {
+        // The local download has already completed successfully.
+      }
       if (format === 'step') {
         setStatus(
           result.warnings.length > 0
             ? `Exported STEP with ${result.warnings.length} warning(s).`
-            : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step (AP214).`
+            : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step (AP214)${archived ? ' and archived it' : ''}.`
         );
       } else {
-        setStatus(`Exported ${exportBodyIds.length} body(ies) to ${stem}.stl.`);
+        setStatus(
+          `Exported ${exportBodyIds.length} body(ies) to ${stem}.stl${archived ? ' and archived it' : ''}.`
+        );
       }
-      // Record the export with the worker API; the download already happened.
-      api
-        .requestExport({
-          projectId: doc.projectId,
-          bodyIds: exportBodyIds,
-          format
-        })
-        .catch(() => undefined);
     } catch (error) {
       setStatus(errorMessage(error, `${format.toUpperCase()} export failed.`));
     }
@@ -2319,6 +2389,7 @@ export function App() {
               : null
           }
           saveState={saveState}
+          artifacts={artifacts}
           session={session}
           collaborationStatus={collaboration.status}
           collaboratorCount={collaboration.members.length}
