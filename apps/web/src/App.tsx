@@ -1535,7 +1535,7 @@ export function App() {
         setStatus(
           result.warnings.length > 0
             ? `Exported STEP with ${result.warnings.length} warning(s).`
-            : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step (AP214)${archived ? ' and archived it' : ''}.`
+            : `Exported ${exportBodyIds.length} body(ies) to ${stem}.step${archived ? ' and archived it' : ''}.`
         );
       } else {
         setStatus(
@@ -2336,7 +2336,7 @@ export function App() {
     },
     {
       id: 'file-export-step',
-      label: 'Export STEP (AP214)',
+      label: 'Export STEP',
       group: 'File',
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,

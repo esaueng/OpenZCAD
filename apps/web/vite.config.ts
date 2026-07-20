@@ -87,10 +87,11 @@ export default defineConfig(async ({ command, isPreview }) => {
       target: 'esnext',
       rollupOptions: {
         output: {
-          manualChunks: {
-            // three.js dominates the bundle; isolate it for better caching.
-            three: ['three']
-          }
+          // Rolldown accepts functional chunk routing. three.js dominates the
+          // bundle, so isolate it for better caching without relying on the
+          // object form supported by Rollup-only Vite releases.
+          manualChunks: (id: string) =>
+            id.includes('/node_modules/three/') ? 'three' : undefined
         }
       }
     }

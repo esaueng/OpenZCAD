@@ -142,7 +142,7 @@ function boxWithLidProposal(): CadPatchProposal {
         rotationDeg: { x: 0, y: 0, z: 0 }
       }
     ]
-  } as CadPatchProposal;
+  };
 }
 
 describe('AI-generated box with a lid', () => {

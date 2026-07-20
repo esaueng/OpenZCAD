@@ -190,7 +190,7 @@ export function TopBar({
         className="secondary topbar-action"
         type="button"
         disabled={!canExport}
-        title={exportTitle('STEP (AP214)')}
+        title={exportTitle('STEP')}
         onClick={() => onExport('step')}
       >
         <Download size={14} aria-hidden="true" />

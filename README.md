@@ -115,13 +115,16 @@ The BrepKit WASM bundle is about 4.7 MB uncompressed (about 1.7 MB gzip). It is 
 - `GET /api/projects/:id`
 - `POST /api/projects/:id/revisions`
 - `GET /api/projects/:id/collaboration` (WebSocket upgrade)
+- `POST /api/projects/:id/collaboration` (oversize snapshot recovery)
 - `POST /api/uploads`
-- `POST /api/imports/finalize`
-- `POST /api/exports`
+- `PUT /api/uploads/:id/content`
+- `POST /api/artifacts/finalize`
+- `GET /api/projects/:id/artifacts`
 - `GET /api/artifacts/:id`
+- `GET /api/artifacts/:id/download`
 - `POST /api/assistant/proposals` (SSE)
 
-Existing project, revision, upload, import, export, and artifact route shapes were preserved. Session and collaboration routes are additive; existing data remains schema compatible.
+Project and revision routes remain schema compatible. The legacy finalize-without-upload and fake export-job routes were removed; artifacts now require an uploaded R2 object before finalization.
 
 ## Beta limitations and risks
 
@@ -129,15 +132,15 @@ Existing project, revision, upload, import, export, and artifact route shapes we
 - D1/R2 IDs in the checked-in Wrangler configuration are beta placeholders until real beta resources are provisioned.
 - Editable STEP sources are embedded in the canonical document for deterministic offline replay and capped at 12 MB. This preserves editability but can make large documents expensive to save and sync.
 - Imported STL remains a mesh body and uses the compatibility path; native parametric reconstruction is not attempted.
-- Topology references use deterministic sub-shape ordinals. Direct face edits additionally fingerprint exact surface area/center and cylindrical diameter/axis, so upstream topology changes fail closed rather than modifying a different same-sized face. Upstream geometry edits can still invalidate a downstream finishing feature with a visible diagnostic.
+- Edge topology references use geometric fingerprints instead of relying on unrelated kernel enumeration orders. Direct face edits additionally fingerprint exact surface area/center and cylindrical diameter/axis, so upstream topology changes fail closed rather than modifying a different same-sized face. Upstream geometry edits can still invalidate a downstream finishing feature with a visible diagnostic.
 - BrepKit's difficult boolean cases can fall back to mesh-derived topology, and its STEP round-trip of NURBS blends can shift measured volume slightly. Exports are still re-imported and validated in focused tests; persistent naming and broader STEP interoperability fixtures remain milestones.
-- Live rooms synchronize canonical documents and presence, but do not yet provide invitations, roles, edit locks, or durable room history. Snapshots above 900 KB continue to save locally/cloud-side but are not broadcast live.
-- AI proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions. They also cannot reference the generated body ID of an earlier operation in the same proposal, so multi-stage requests may require previewing and applying more than one patch.
+- Live rooms synchronize canonical documents and presence, persist a bounded room history, conservatively merge disjoint edits from a shared base, and recover oversized snapshots over authenticated HTTP. Invitations, viewer/editor roles, and edit locks remain future work.
+- AI proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions. Body-producing operations can publish a local alias for later operations in the same proposal.
 - Exactness-first geometry adds a meaningful initial worker download. Service-worker caching and finer code splitting are future performance milestones.
 
 ## Next milestones
 
-1. Sharing invitations, viewer/editor roles, locks, and durable collaboration history.
+1. Sharing invitations, viewer/editor roles, and edit locks.
 2. Expand imported-face dimension edits beyond complete through holes to blind/counterbored holes, bosses, pockets, tapers, and coordinated multi-face features; add mirror, shell/offset, face-attached sketches, and richer STEP assembly manifests.
 3. Persistent naming resilient to upstream topology changes.
 4. Broader AI patch operations as each feature receives a deterministic command contract.

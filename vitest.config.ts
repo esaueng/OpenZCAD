@@ -26,7 +26,17 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
-    setupFiles: ['test/setup.ts']
+    setupFiles: ['test/setup.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      include: [
+        'packages/*/src/**/*.ts',
+        'apps/web/worker/**/*.ts',
+        'apps/web/src/lib/**/*.ts'
+      ],
+      exclude: ['**/*.test.ts', '**/dist/**']
+    }
   },
   resolve: {
     alias: {

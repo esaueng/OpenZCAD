@@ -479,7 +479,8 @@ function assertEvaluableExpression(
     throw new Error(
       `${label} has an invalid expression "${String(value)}": ${
         error instanceof Error ? error.message : 'evaluation failed.'
-      }`
+      }`,
+      { cause: error }
     );
   }
 }
