@@ -521,7 +521,7 @@ export interface ArtifactMetadataResponse {
 
 export interface HealthResponse {
   status: 'ok';
-  environment: 'beta';
+  environment: 'development' | 'beta';
   time: string;
 }
 

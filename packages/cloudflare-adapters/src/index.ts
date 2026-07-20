@@ -43,9 +43,11 @@ import {
 } from '@openzcad/document-core';
 
 export interface CloudflareEnv {
-  ENVIRONMENT?: 'beta';
+  ENVIRONMENT?: 'development' | 'beta';
   AUTH_MODE?: 'development' | 'cloudflare-access';
   AUTH_LEGACY_OWNER_EMAIL?: string;
+  CF_ACCESS_TEAM_DOMAIN?: string;
+  CF_ACCESS_AUD?: string;
   AI_PROVIDER?: 'openai' | 'openrouter' | 'responses-compatible';
   AI_BASE_URL?: string;
   AI_API_KEY?: string;

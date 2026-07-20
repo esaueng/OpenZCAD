@@ -682,4 +682,30 @@ describe('exact hybrid kernel adapter', () => {
     expect(inspection.valid).toBe(true);
     expect(inspection.volume).toBeCloseTo(480, 4);
   });
+
+  it.each([
+    ['mm', 1],
+    ['cm', 10],
+    ['m', 1000],
+    ['inch', 25.4]
+  ] as const)(
+    'exports %s documents at their physical millimetre scale',
+    async (units, millimetersPerUnit) => {
+      const document = addPrimitiveFeature(
+        createProjectDocument('Unit export', toUserId('user_exact'), units),
+        {
+          name: 'Unit box',
+          primitiveKind: 'box',
+          dimensions: { width: 2, height: 3, depth: 4 }
+        }
+      );
+      const step = await adapter.exportStep(document, [document.bodyOrder[0]!]);
+      const inspection = await adapter.inspectStep(step);
+      expect(inspection).toMatchObject({ solid: true, valid: true });
+      expect(inspection.volume).toBeCloseTo(
+        24 * millimetersPerUnit ** 3,
+        3
+      );
+    }
+  );
 });
