@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.13.4",
-    "@openzcad/cloudflare-adapters": "workspace:*",
     "@openzcad/ai-contracts": "workspace:*",
+    "@openzcad/cloudflare-adapters": "workspace:*",
     "@openzcad/command-system": "workspace:*",
     "@openzcad/document-core": "workspace:*",
     "@openzcad/geometry": "workspace:*",
@@ -26,6 +26,7 @@
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@vitejs/plugin-react": "^4.3.4",
+    "jose": "^6.2.3",
     "lucide-react": "^1.18.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

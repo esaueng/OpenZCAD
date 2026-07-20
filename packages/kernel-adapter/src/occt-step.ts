@@ -19,6 +19,7 @@ import {
 import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
+  UNIT_TO_MM,
   featureColor,
   nowIso,
   type BodyId,
@@ -38,6 +39,10 @@ const TESSELLATION_ANGLE = 0.35;
 const GEOMETRY_EPSILON = 1e-9;
 const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
+
+function uniformScaleTransform(factor: number): number[] {
+  return [factor, 0, 0, 0, 0, factor, 0, 0, 0, 0, factor, 0];
+}
 
 interface OcctBuildResult {
   shapes: Map<BodyId, ShapeHandle>;
@@ -649,7 +654,19 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             break;
           case 'imported-step':
             if (feature.bodyId) {
-              const shape = this.kernel.importStep(feature.data.stepText);
+              const imported = this.kernel.importStep(feature.data.stepText);
+              // OCCT normalizes STEP length units to millimetres. The
+              // canonical document stores coordinates in document units, so
+              // convert once at the import boundary and reverse the conversion
+              // only when an export is serialized.
+              const scaleToDocumentUnits = 1 / UNIT_TO_MM[document.units];
+              const shape =
+                scaleToDocumentUnits === 1
+                  ? imported
+                  : this.kernel.transform(
+                      imported,
+                      uniformScaleTransform(scaleToDocumentUnits)
+                    );
               if (this.kernel.getSubShapes(shape, 'solid').length === 0) {
                 throw new Error('STEP file contains no solids.');
               }
@@ -996,7 +1013,15 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     if (shapes.length === 0) {
       throw new Error('Select at least one body to export.');
     }
-    return shapes.length === 1 ? shapes[0]! : this.kernel.makeCompound(shapes);
+    const combined =
+      shapes.length === 1 ? shapes[0]! : this.kernel.makeCompound(shapes);
+    const millimeterScale = UNIT_TO_MM[document.units];
+    return millimeterScale === 1
+      ? combined
+      : this.kernel.transform(
+          combined,
+          uniformScaleTransform(millimeterScale)
+        );
   }
 
   async exportStep(
