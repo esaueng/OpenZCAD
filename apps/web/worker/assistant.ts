@@ -3,6 +3,10 @@ import {
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import type {
+  AssistantProvider,
+  AssistantReasoningEffort
+} from '@openzcad/shared';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-terra';
@@ -154,11 +158,27 @@ export interface AssistantStatus {
   reasoningEffort: string;
 }
 
+export interface AssistantRuntimeConfig {
+  provider: AssistantProvider;
+  apiKey: string;
+  baseUrl?: string;
+  model: string;
+  reasoningEffort: AssistantReasoningEffort;
+  maxOutputTokens: number;
+  timeoutMs: number;
+  customInstructions: string;
+}
+
 function providerFor(env: CloudflareEnv) {
   const genericKey = env.AI_API_KEY?.trim();
   const openAiKey = env.OPENAI_API_KEY?.trim();
   const openRouterKey = env.OPENROUTER_API_KEY?.trim();
-  if (env.AI_PROVIDER === 'openai' && !genericKey && !openAiKey && openRouterKey) {
+  if (
+    env.AI_PROVIDER === 'openai' &&
+    !genericKey &&
+    !openAiKey &&
+    openRouterKey
+  ) {
     return 'openrouter';
   }
   if (
@@ -244,14 +264,36 @@ function upstreamUrlFor(env: CloudflareEnv, provider: string) {
   return undefined;
 }
 
+function upstreamUrlForRuntime(
+  env: CloudflareEnv,
+  runtime: AssistantRuntimeConfig | undefined,
+  provider: string
+): string | undefined {
+  return runtime?.baseUrl ?? upstreamUrlFor(env, provider);
+}
+
+function requestInstructions(runtime: AssistantRuntimeConfig | undefined) {
+  const custom = runtime?.customInstructions.trim();
+  return custom
+    ? `${CAD_ASSISTANT_INSTRUCTIONS}\n\n# User modeling preferences\n${custom}`
+    : CAD_ASSISTANT_INSTRUCTIONS;
+}
+
+function reasoningRequest(effort: string): {
+  reasoning?: { effort: string };
+} {
+  return effort === 'provider-default' || effort === 'off'
+    ? {}
+    : { reasoning: { effort } };
+}
+
 export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
   const provider = providerFor(env);
   return {
     configured: Boolean(apiKeyFor(env, provider)),
     provider,
     model: modelFor(env, provider),
-    reasoningEffort:
-      env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
+    reasoningEffort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
   };
 }
 
@@ -295,13 +337,13 @@ async function readProviderErrorDetails(
       ? metadata.raw
       : undefined;
   const rawPayload = raw
-    ? ((() => {
+    ? (() => {
         try {
           return JSON.parse(raw) as Record<string, unknown>;
         } catch {
           return null;
         }
-      })())
+      })()
     : null;
   const rawError =
     rawPayload?.error && typeof rawPayload.error === 'object'
@@ -324,10 +366,11 @@ async function readProviderErrorDetails(
 export async function streamAssistantProposal(
   input: ProposalInput,
   env: CloudflareEnv,
-  safetyIdentifier?: string
+  safetyIdentifier?: string,
+  runtime?: AssistantRuntimeConfig
 ): Promise<Response> {
-  const provider = providerFor(env);
-  const apiKey = apiKeyFor(env, provider);
+  const provider = runtime?.provider ?? providerFor(env);
+  const apiKey = runtime?.apiKey ?? apiKeyFor(env, provider);
   if (!apiKey) {
     return jsonError(
       'AI is not configured for this environment.',
@@ -336,7 +379,7 @@ export async function streamAssistantProposal(
     );
   }
 
-  const upstreamUrl = upstreamUrlFor(env, provider);
+  const upstreamUrl = upstreamUrlForRuntime(env, runtime, provider);
   if (!upstreamUrl) {
     return jsonError(
       'AI_BASE_URL is required for a Responses-compatible provider.',
@@ -361,10 +404,10 @@ export async function streamAssistantProposal(
     upstream = await fetch(upstreamUrl, {
       method: 'POST',
       headers,
-      signal: AbortSignal.timeout(timeoutFor(env)),
+      signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
-        model: modelFor(env, provider),
-        instructions: CAD_ASSISTANT_INSTRUCTIONS,
+        model: runtime?.model ?? modelFor(env, provider),
+        instructions: requestInstructions(runtime),
         input: [
           {
             role: 'user',
@@ -376,9 +419,11 @@ export async function streamAssistantProposal(
             ]
           }
         ],
-        reasoning: {
-          effort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
-        },
+        ...reasoningRequest(
+          runtime?.reasoningEffort ??
+            env.AI_REASONING_EFFORT ??
+            DEFAULT_AI_REASONING_EFFORT
+        ),
         text: {
           format: {
             type: 'json_schema',
@@ -387,7 +432,7 @@ export async function streamAssistantProposal(
             schema: CAD_PATCH_JSON_SCHEMA
           }
         },
-        max_output_tokens: maxOutputTokensFor(env),
+        max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
@@ -433,3 +478,54 @@ export async function streamAssistantProposal(
     }
   });
 }
+
+export async function testAssistantConnection(
+  runtime: AssistantRuntimeConfig,
+  env: CloudflareEnv
+): Promise<{ ok: true; latencyMs: number }> {
+  const upstreamUrl = upstreamUrlForRuntime(env, runtime, runtime.provider);
+  if (!upstreamUrl) {
+    throw new HttpAssistantConfigurationError(
+      'An AI endpoint is required for this provider.'
+    );
+  }
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(upstreamUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${runtime.apiKey}`,
+        'content-type': 'application/json',
+        ...(runtime.provider === 'openrouter'
+          ? {
+              'X-Title': env.AI_APP_NAME ?? 'OpenZCAD',
+              ...(env.AI_SITE_URL ? { 'HTTP-Referer': env.AI_SITE_URL } : {})
+            }
+          : {})
+      },
+      signal: AbortSignal.timeout(Math.min(runtime.timeoutMs, 30_000)),
+      body: JSON.stringify({
+        model: runtime.model,
+        input: 'Reply with OK.',
+        max_output_tokens: 16,
+        store: false,
+        ...reasoningRequest(runtime.reasoningEffort)
+      })
+    });
+  } catch {
+    throw new HttpAssistantConfigurationError(
+      'The AI provider could not be reached.'
+    );
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new HttpAssistantConfigurationError(
+      `The AI provider rejected the connection test (${response.status}).`
+    );
+  }
+  await response.body?.cancel();
+  return { ok: true, latencyMs: Date.now() - startedAt };
+}
+
+export class HttpAssistantConfigurationError extends Error {}

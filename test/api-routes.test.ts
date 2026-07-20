@@ -18,10 +18,7 @@ function post(path: string, body: unknown): Request {
 }
 
 async function createProject(name: string): Promise<CreateProjectResponse> {
-  const response = await worker.fetch(
-    post('/api/projects', { name }),
-    env
-  );
+  const response = await worker.fetch(post('/api/projects', { name }), env);
   expect(response.status).toBe(201);
   return (await response.json()) as CreateProjectResponse;
 }
@@ -62,6 +59,40 @@ describe('worker api routes', () => {
       userId: 'user_beta_dev',
       mode: 'development'
     });
+  });
+
+  it('returns device-safe settings defaults when account storage is unavailable', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/settings'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      revision: 0,
+      synced: false,
+      settings: {
+        general: { defaultUnits: 'mm' },
+        assistant: { credentialSource: 'deployment' }
+      },
+      credential: { stored: false, storageAvailable: false }
+    });
+    expect(JSON.stringify(payload)).not.toMatch(/API_KEY|secret-test-value/);
+  });
+
+  it('rejects cross-origin settings mutations', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/settings', {
+        method: 'PATCH',
+        headers: {
+          origin: 'https://attacker.example',
+          'content-type': 'application/json'
+        },
+        body: '{}'
+      }),
+      env
+    );
+    expect(response.status).toBe(403);
   });
 
   it('reports assistant configuration without exposing secrets', async () => {
@@ -243,10 +274,7 @@ describe('worker api routes', () => {
   });
 
   it('rejects project creation without a name', async () => {
-    const response = await worker.fetch(
-      post('/api/projects', {}),
-      env
-    );
+    const response = await worker.fetch(post('/api/projects', {}), env);
     expect(response.status).toBe(400);
 
     const blankResponse = await worker.fetch(
@@ -347,10 +375,10 @@ describe('worker api routes', () => {
 
     const response = await worker.fetch(
       post(`/api/projects/${ghostId}/revisions`, {
-      projectId: ghostId,
-      reason: 'Manual save',
-      expectedVersion: document.version,
-      document
+        projectId: ghostId,
+        reason: 'Manual save',
+        expectedVersion: document.version,
+        document
       }),
       env
     );

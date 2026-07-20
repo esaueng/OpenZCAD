@@ -27,6 +27,7 @@ interface SketchPoint {
 interface SketchWorkspaceProps {
   sketchNumber: number;
   units: string;
+  snapStep: number | null;
   onCancel(): void;
   onFinish(value: SketchFormValue): void;
 }
@@ -153,6 +154,7 @@ function drawProfile(
 export function SketchWorkspace({
   sketchNumber,
   units,
+  snapStep,
   onCancel,
   onFinish
 }: SketchWorkspaceProps) {
@@ -287,10 +289,11 @@ export function SketchWorkspace({
 
   function pointFromPointer(event: React.PointerEvent<HTMLCanvasElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
-    return snapSketchPoint({
+    const point = {
       x: (event.clientX - rect.left - rect.width / 2) / scale,
       y: -(event.clientY - rect.top - rect.height / 2) / scale
-    });
+    };
+    return snapStep === null ? point : snapSketchPoint(point, snapStep);
   }
 
   function finish() {
