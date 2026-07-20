@@ -17,6 +17,7 @@ import {
   type AxisId,
   type BooleanOperation,
   type DocumentNode,
+  type DirectEditOperation,
   type EntityId,
   type FeatureData,
   type FeatureId,
@@ -156,6 +157,13 @@ export interface TransformInput {
   targetBodyId: BodyId;
   translation: ParametricVector3;
   rotationDeg?: ParametricVector3;
+  ids?: FeatureOnlyIds;
+}
+
+export interface DirectEditInput {
+  name: string;
+  targetBodyId: BodyId;
+  operation: DirectEditOperation;
   ids?: FeatureOnlyIds;
 }
 
@@ -702,6 +710,39 @@ export function transformBody(
         translation: input.translation,
         rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 }
       }
+    }
+  };
+
+  next.featureOrder.push(featureId);
+  attachToPart(next, featureNodeId);
+  next.version += 1;
+  return { document: next, bodyId: input.targetBodyId };
+}
+
+/**
+ * Append an in-place exact-topology edit. Like a transform, this keeps the
+ * target BodyId stable while preserving the imported STEP source earlier in
+ * history for deterministic rebuild, undo, and collaboration replay.
+ */
+export function directEditBody(
+  document: ProjectDocument,
+  input: DirectEditInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    featureKind: 'direct-edit',
+    data: {
+      featureKind: 'direct-edit',
+      targetBodyId: input.targetBodyId,
+      operation: input.operation
     }
   };
 

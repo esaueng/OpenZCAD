@@ -635,6 +635,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             break;
           case 'imported-mesh':
             throw new Error('Legacy mesh bodies use the compatibility kernel.');
+          case 'direct-edit':
+            throw new Error(
+              'Direct B-rep edits require the OpenCascade kernel.'
+            );
           case 'imported-step': {
             if (feature.bodyId) {
               const solids = Array.from(

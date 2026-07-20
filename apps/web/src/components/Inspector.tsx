@@ -1,9 +1,11 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Trash2, X } from 'lucide-react';
+import { coerceParamValue } from '@openzcad/document-core';
 import type {
   BodyId,
   BodyRepresentation,
   BooleanOperation,
+  FaceGeometry,
   FeatureNode,
   ParamValue,
   PrimitiveKind,
@@ -30,7 +32,13 @@ import {
   type TransformFormValue
 } from './forms/FeatureForms';
 import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
-import { FEATURE_KIND_LABELS, formatNumber } from '../lib/model';
+import {
+  evalParamValue,
+  FEATURE_KIND_LABELS,
+  formatNumber,
+  previewExpression
+} from '../lib/model';
+import { ExprInput } from './ExprInput';
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
@@ -93,6 +101,15 @@ export interface InspectorCallbacks {
     value: EdgeModifierFormValue
   ): void;
   onApplyPattern(feature: FeatureNode, value: PatternFormValue): void;
+  onResizeThroughHole(
+    selection: TopologySelection,
+    geometry: FaceGeometry,
+    diameter: ParamValue
+  ): void;
+  onRemoveFaceFeature(
+    selection: TopologySelection,
+    geometry: FaceGeometry
+  ): void;
   onDeleteFeature(feature: FeatureNode): void;
 }
 
@@ -147,6 +164,132 @@ function BodyStats({
         <span>{body.consumed ? 'consumed by boolean' : 'live'}</span>
       </div>
     </>
+  );
+}
+
+const SURFACE_LABELS: Record<string, string> = {
+  plane: 'Planar face',
+  cylinder: 'Cylindrical face',
+  cone: 'Conical face',
+  sphere: 'Spherical face',
+  torus: 'Toroidal face',
+  bspline: 'B-spline face',
+  bezier: 'Bezier face'
+};
+
+function FaceDirectEdit({
+  body,
+  selection,
+  scope,
+  units,
+  onResizeThroughHole,
+  onRemoveFaceFeature
+}: {
+  body: BodyRepresentation;
+  selection: TopologySelection;
+  scope: Record<string, number>;
+  units: string;
+  onResizeThroughHole: InspectorCallbacks['onResizeThroughHole'];
+  onRemoveFaceFeature: InspectorCallbacks['onRemoveFaceFeature'];
+}) {
+  const face = body.topology?.faces.find(
+    (candidate) => candidate.hash === selection.hash
+  );
+  const geometry = face?.geometry;
+  const [diameter, setDiameter] = useState(() =>
+    geometry?.diameter === undefined ? '' : formatNumber(geometry.diameter)
+  );
+  if (!geometry) {
+    return (
+      <p className="muted">
+        Exact surface measurements are unavailable for this face.
+      </p>
+    );
+  }
+
+  const diameterValue = coerceParamValue(diameter);
+  const evaluatedDiameter = evalParamValue(diameterValue, scope);
+  const diameterPreview = previewExpression(diameter, scope);
+  const canResize =
+    geometry.featureType === 'through-hole' &&
+    geometry.diameter !== undefined &&
+    diameterPreview.ok &&
+    evaluatedDiameter !== null &&
+    evaluatedDiameter > 1e-6 &&
+    Math.abs(evaluatedDiameter - geometry.diameter) >
+      Math.max(1e-6, geometry.diameter * 1e-6);
+  const surfaceLabel =
+    geometry.featureType === 'through-hole'
+      ? 'Through hole'
+      : (SURFACE_LABELS[geometry.surfaceType] ??
+        `${geometry.surfaceType} face`);
+
+  return (
+    <section
+      className="direct-face-editor"
+      aria-label="Selected face properties"
+    >
+      <h3 className="section-title">Selected feature</h3>
+      <div className="selection-summary direct-face-summary">
+        <strong>{surfaceLabel}</strong>
+        <span className="mono">{selection.topologyId}</span>
+      </div>
+      <div className="kv-grid">
+        <b>surface</b>
+        <span>{geometry.surfaceType}</span>
+        <b>area</b>
+        <span>
+          {formatNumber(geometry.area)} {units}²
+        </span>
+        {geometry.axialLength !== undefined && (
+          <>
+            <b>length</b>
+            <span>
+              {formatNumber(geometry.axialLength)} {units}
+            </span>
+          </>
+        )}
+      </div>
+
+      {geometry.featureType === 'through-hole' &&
+        geometry.diameter !== undefined && (
+          <form
+            className="feature-form direct-diameter-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (canResize) {
+                onResizeThroughHole(selection, geometry, diameterValue);
+              }
+            }}
+          >
+            <ExprInput
+              label={`Diameter (${units})`}
+              value={diameter}
+              scope={scope}
+              onChange={setDiameter}
+            />
+            <div className="form-actions">
+              <button type="submit" className="primary" disabled={!canResize}>
+                Apply diameter
+              </button>
+            </div>
+          </form>
+        )}
+
+      <button
+        type="button"
+        className="secondary remove-face-feature"
+        onClick={() => onRemoveFaceFeature(selection, geometry)}
+      >
+        <Trash2 size={13} aria-hidden="true" />
+        Remove selected feature
+      </button>
+      <p className="muted direct-edit-note">
+        STEP stores faces, not the original feature history. OpenZCAD only
+        applies edits the exact kernel can validate; unsupported face
+        combinations remain unchanged.
+      </p>
+    </section>
   );
 }
 
@@ -447,6 +590,25 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
+    } else if (data.featureKind === 'direct-edit') {
+      form = (
+        <div className="kv-grid">
+          <b>operation</b>
+          <span>
+            {data.operation.kind === 'resize-through-hole'
+              ? 'resize through hole'
+              : 'remove face feature'}
+          </span>
+          <b>source face</b>
+          <span>face:{data.operation.faceHash}</span>
+          {data.operation.kind === 'resize-through-hole' && (
+            <>
+              <b>diameter</b>
+              <span>{String(data.operation.diameter)}</span>
+            </>
+          )}
+        </div>
+      );
     } else if (data.featureKind === 'imported-mesh') {
       form = (
         <div className="kv-grid">
@@ -488,6 +650,18 @@ export function Inspector(props: InspectorProps) {
           </>
         )}
         {form}
+        {selectedTopology?.kind === 'face' &&
+          selectedBody?.source === 'imported-step' && (
+            <FaceDirectEdit
+              key={`${selectedBody.bodyId}:${selectedTopology.hash ?? selectedTopology.topologyId}`}
+              body={selectedBody}
+              selection={selectedTopology}
+              scope={scope}
+              units={units}
+              onResizeThroughHole={props.onResizeThroughHole}
+              onRemoveFaceFeature={props.onRemoveFaceFeature}
+            />
+          )}
         {selectedBody && <BodyStats body={selectedBody} units={units} />}
         {selectedTopology?.kind !== 'body' && selectedTopology && (
           <div className="topology-selection">
@@ -503,7 +677,9 @@ export function Inspector(props: InspectorProps) {
             onClick={() => props.onDeleteFeature(selectedFeature)}
           >
             <Trash2 size={13} aria-hidden="true" />
-            Delete feature
+            {selectedFeature.data.featureKind === 'imported-step'
+              ? 'Delete imported body'
+              : 'Delete feature'}
           </button>
         </div>
       </>

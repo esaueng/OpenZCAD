@@ -24,7 +24,9 @@ import {
   type BodyId,
   type BodyRepresentation,
   type BodyTopology,
+  type DirectEditOperation,
   type DerivedState,
+  type FaceGeometry,
   type FeatureNode,
   type ProjectDocument,
   type SketchObjectData
@@ -34,11 +36,355 @@ import type { ExactKernelAdapter } from './exact';
 const TESSELLATION_DEFLECTION = 0.08;
 const TESSELLATION_ANGLE = 0.35;
 const GEOMETRY_EPSILON = 1e-9;
+const DIRECT_EDIT_TOLERANCE = 1e-6;
+const FULL_REVOLUTION = Math.PI * 2;
 
 interface OcctBuildResult {
   shapes: Map<BodyId, ShapeHandle>;
   consumed: Set<BodyId>;
   warnings: string[];
+}
+
+interface ThroughHoleGeometry extends FaceGeometry {
+  radius: number;
+  diameter: number;
+  axisStart: Vec3;
+  axisEnd: Vec3;
+  axialLength: number;
+  featureType: 'through-hole';
+  editableDimension: 'diameter';
+}
+
+function subtract(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z
+  };
+}
+
+function add(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.x + right.x,
+    y: left.y + right.y,
+    z: left.z + right.z
+  };
+}
+
+function scale(vector: Vec3, factor: number): Vec3 {
+  return {
+    x: vector.x * factor,
+    y: vector.y * factor,
+    z: vector.z * factor
+  };
+}
+
+function length(vector: Vec3): number {
+  return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function normalized(vector: Vec3): Vec3 | null {
+  const magnitude = length(vector);
+  return magnitude > GEOMETRY_EPSILON ? scale(vector, 1 / magnitude) : null;
+}
+
+function cross(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x
+  };
+}
+
+function midpoint(left: Vec3, right: Vec3): Vec3 {
+  return scale(add(left, right), 0.5);
+}
+
+function cylinderFrame(origin: Vec3, zAxis: Vec3): number[] {
+  const reference =
+    Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const xAxis = normalized(cross(reference, zAxis));
+  if (!xAxis) {
+    throw new Error('Could not construct a cylindrical feature frame.');
+  }
+  const yAxis = cross(zAxis, xAxis);
+  return [
+    xAxis.x,
+    yAxis.x,
+    zAxis.x,
+    origin.x,
+    xAxis.y,
+    yAxis.y,
+    zAxis.y,
+    origin.y,
+    xAxis.z,
+    yAxis.z,
+    zAxis.z,
+    origin.z
+  ];
+}
+
+/** Measure a face without inferring editable feature semantics from a mesh. */
+function faceGeometry(
+  kernel: OcctKernel,
+  owner: ShapeHandle,
+  face: ShapeHandle
+): FaceGeometry {
+  const surfaceType = kernel.surfaceType(face);
+  const geometry: FaceGeometry = {
+    surfaceType,
+    area: kernel.getSurfaceArea(face),
+    center: kernel.getSurfaceCenterOfMass(face)
+  };
+  if (surfaceType !== 'cylinder') {
+    return geometry;
+  }
+
+  const cylinder = kernel.getFaceCylinderData(face);
+  if (!cylinder || cylinder.radius <= GEOMETRY_EPSILON) {
+    return geometry;
+  }
+  geometry.radius = cylinder.radius;
+  geometry.diameter = cylinder.radius * 2;
+
+  const bounds = kernel.uvBounds(face);
+  const uSpan = Math.abs(bounds.uMax - bounds.uMin);
+  if (Math.abs(uSpan - FULL_REVOLUTION) > 1e-5) {
+    return geometry;
+  }
+
+  // Opposite points on a complete cylindrical section average to its axis.
+  // This is independent of the face orientation (inside hole vs outside boss).
+  const oppositeU = bounds.uMin + Math.PI;
+  const axisStart = midpoint(
+    kernel.pointOnSurface(face, bounds.uMin, bounds.vMin),
+    kernel.pointOnSurface(face, oppositeU, bounds.vMin)
+  );
+  const axisEnd = midpoint(
+    kernel.pointOnSurface(face, bounds.uMin, bounds.vMax),
+    kernel.pointOnSurface(face, oppositeU, bounds.vMax)
+  );
+  const axisVector = subtract(axisEnd, axisStart);
+  const axis = normalized(axisVector);
+  const axialLength = length(axisVector);
+  if (!axis || axialLength <= GEOMETRY_EPSILON) {
+    return geometry;
+  }
+  geometry.axisStart = axisStart;
+  geometry.axisEnd = axisEnd;
+  geometry.axialLength = axialLength;
+
+  const center = midpoint(axisStart, axisEnd);
+  const probe = Math.max(
+    DIRECT_EDIT_TOLERANCE * 10,
+    cylinder.radius * 0.02,
+    axialLength * 0.01
+  );
+  const centerIsVoid = !kernel.containsPoint(
+    owner,
+    center,
+    DIRECT_EDIT_TOLERANCE
+  );
+  const opensBefore = !kernel.containsPoint(
+    owner,
+    subtract(axisStart, scale(axis, probe)),
+    DIRECT_EDIT_TOLERANCE
+  );
+  const opensAfter = !kernel.containsPoint(
+    owner,
+    add(axisEnd, scale(axis, probe)),
+    DIRECT_EDIT_TOLERANCE
+  );
+  // A hollow body's outer cylinder shares the same void axis and open ends.
+  // Face orientation distinguishes that exterior wall (forward) from the
+  // material-facing wall of the actual bore (reversed).
+  const facesMaterialIntoAxis = kernel.shapeOrientation(face) === 'reversed';
+  if (facesMaterialIntoAxis && centerIsVoid && opensBefore && opensAfter) {
+    geometry.featureType = 'through-hole';
+    geometry.editableDimension = 'diameter';
+  }
+  return geometry;
+}
+
+function requireThroughHole(
+  kernel: OcctKernel,
+  owner: ShapeHandle,
+  face: ShapeHandle,
+  sourceDiameter?: number,
+  sourceAxisStart?: Vec3,
+  sourceAxisEnd?: Vec3
+): ThroughHoleGeometry {
+  const geometry = faceGeometry(kernel, owner, face);
+  if (
+    geometry.featureType !== 'through-hole' ||
+    geometry.editableDimension !== 'diameter' ||
+    geometry.radius === undefined ||
+    geometry.diameter === undefined ||
+    !geometry.axisStart ||
+    !geometry.axisEnd ||
+    geometry.axialLength === undefined
+  ) {
+    throw new Error('Selected face is not a complete through-hole cylinder.');
+  }
+  if (
+    sourceDiameter !== undefined &&
+    Math.abs(geometry.diameter - sourceDiameter) >
+      Math.max(DIRECT_EDIT_TOLERANCE, sourceDiameter * 1e-6)
+  ) {
+    throw new Error(
+      'Selected face no longer matches its recorded source diameter.'
+    );
+  }
+  if (sourceAxisStart && sourceAxisEnd) {
+    const axisTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      geometry.axialLength * 1e-6,
+      geometry.radius * 1e-6
+    );
+    const sameDirection =
+      length(subtract(geometry.axisStart, sourceAxisStart)) <= axisTolerance &&
+      length(subtract(geometry.axisEnd, sourceAxisEnd)) <= axisTolerance;
+    const reversedDirection =
+      length(subtract(geometry.axisStart, sourceAxisEnd)) <= axisTolerance &&
+      length(subtract(geometry.axisEnd, sourceAxisStart)) <= axisTolerance;
+    if (!sameDirection && !reversedDirection) {
+      throw new Error(
+        'Selected face no longer matches its recorded hole axis.'
+      );
+    }
+  }
+  return geometry as ThroughHoleGeometry;
+}
+
+function cylinderAlongAxis(
+  kernel: OcctKernel,
+  start: Vec3,
+  end: Vec3,
+  radius: number,
+  extension = 0
+): ShapeHandle {
+  const vector = subtract(end, start);
+  const axis = normalized(vector);
+  const axialLength = length(vector);
+  if (!axis || axialLength <= GEOMETRY_EPSILON) {
+    throw new Error('Cylindrical feature has a degenerate axis.');
+  }
+  const origin = subtract(start, scale(axis, extension));
+  const local = kernel.makeCylinder(radius, axialLength + extension * 2);
+  return kernel.transform(local, cylinderFrame(origin, axis));
+}
+
+/** Close exactly the selected through-hole span without changing outer faces. */
+function fillThroughHole(
+  kernel: OcctKernel,
+  owner: ShapeHandle,
+  geometry: ThroughHoleGeometry
+): ShapeHandle {
+  const filler = cylinderAlongAxis(
+    kernel,
+    geometry.axisStart,
+    geometry.axisEnd,
+    geometry.radius
+  );
+  return kernel.unifySameDomain(kernel.fuse(owner, filler));
+}
+
+function validateDirectEditResult(
+  kernel: OcctKernel,
+  shape: ShapeHandle
+): void {
+  if (kernel.subShapeCount(shape, 'solid') === 0 || !kernel.isValid(shape)) {
+    throw new Error('Direct edit did not produce a valid solid.');
+  }
+}
+
+function applyDirectEdit(
+  kernel: OcctKernel,
+  owner: ShapeHandle,
+  operation: DirectEditOperation,
+  scope: Record<string, number>
+): ShapeHandle {
+  if (!Number.isInteger(operation.faceHash) || operation.faceHash < 1) {
+    throw new Error('Selected face reference is invalid.');
+  }
+  const faces = kernel.getSubShapes(owner, 'face');
+  const face = faces[operation.faceHash - 1];
+  if (!face) {
+    throw new Error('Selected face no longer exists.');
+  }
+
+  let output: ShapeHandle;
+  if (operation.kind === 'resize-through-hole') {
+    const geometry = requireThroughHole(
+      kernel,
+      owner,
+      face,
+      operation.sourceDiameter,
+      operation.sourceAxisStart,
+      operation.sourceAxisEnd
+    );
+    const diameter = resolveParamValue(
+      operation.diameter,
+      scope,
+      'through-hole diameter'
+    );
+    if (diameter <= DIRECT_EDIT_TOLERANCE) {
+      throw new Error('Through-hole diameter must be greater than zero.');
+    }
+    const closed = fillThroughHole(kernel, owner, geometry);
+    const extension = Math.max(
+      DIRECT_EDIT_TOLERANCE * 10,
+      geometry.axialLength * 0.02,
+      diameter * 0.01
+    );
+    const cutter = cylinderAlongAxis(
+      kernel,
+      geometry.axisStart,
+      geometry.axisEnd,
+      diameter / 2,
+      extension
+    );
+    output = kernel.unifySameDomain(kernel.cut(closed, cutter));
+  } else {
+    const geometry = faceGeometry(kernel, owner, face);
+    if (geometry.surfaceType !== operation.sourceSurfaceType) {
+      throw new Error('Selected face no longer matches its recorded surface.');
+    }
+    const areaTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      operation.sourceArea * 1e-6
+    );
+    const centerTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      Math.sqrt(Math.max(operation.sourceArea, 1)) * 1e-6
+    );
+    if (
+      Math.abs(geometry.area - operation.sourceArea) > areaTolerance ||
+      length(subtract(geometry.center, operation.sourceCenter)) >
+        centerTolerance
+    ) {
+      throw new Error('Selected face no longer matches its recorded geometry.');
+    }
+    output =
+      geometry.featureType === 'through-hole'
+        ? fillThroughHole(
+            kernel,
+            owner,
+            requireThroughHole(
+              kernel,
+              owner,
+              face,
+              operation.sourceDiameter,
+              operation.sourceAxisStart,
+              operation.sourceAxisEnd
+            )
+          )
+        : kernel.defeature(owner, [face], DIRECT_EDIT_TOLERANCE);
+    output = kernel.unifySameDomain(output);
+  }
+
+  validateDirectEditResult(kernel, output);
+  return output;
 }
 
 function pointOnPlane(basis: PlaneBasis, point: Vec2, offset: number): Vec3 {
@@ -345,6 +691,22 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             );
             break;
           }
+          case 'direct-edit': {
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Direct-edit target is unavailable.');
+            }
+            result.shapes.set(
+              feature.data.targetBodyId,
+              applyDirectEdit(
+                this.kernel,
+                target,
+                feature.data.operation,
+                scope
+              )
+            );
+            break;
+          }
           case 'boolean': {
             if (!feature.bodyId || feature.data.targetBodyIds.length < 2) {
               throw new Error('Boolean requires at least two bodies.');
@@ -508,6 +870,7 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       angularDeflection: TESSELLATION_ANGLE
     });
     const faces: BodyTopology['faces'] = [];
+    const faceShapes = this.kernel.getSubShapes(shape, 'face');
     const faceGroups = mesh.faceGroups ?? new Int32Array();
     // OCCT HashCode values include process-local topology identity and change
     // when the source is rebuilt. Traversal order is deterministic for the
@@ -520,7 +883,10 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
         topologyId: `face:${hash}`,
         hash,
         triangleStart: indexStart / 3,
-        triangleCount: indexCount / 3
+        triangleCount: indexCount / 3,
+        geometry: faceShapes[index / 3]
+          ? faceGeometry(this.kernel, shape, faceShapes[index / 3]!)
+          : undefined
       });
     }
 

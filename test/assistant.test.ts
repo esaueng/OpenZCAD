@@ -13,7 +13,7 @@ import { readAssistantEvent } from '../apps/web/src/lib/assistantStream';
 const input = {
   prompt: 'Make the bracket wider',
   digest: {
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectId: 'proj_ai',
     name: 'Bracket',
     units: 'mm',
@@ -94,7 +94,10 @@ describe('assistant integration', () => {
     vi.stubGlobal('fetch', fetchMock);
     await streamAssistantProposal(
       input,
-      { AI_API_KEY: 'key', AI_BASE_URL: 'https://models.example.test/v1/responses' },
+      {
+        AI_API_KEY: 'key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses'
+      },
       'user_test'
     );
     const budgeted = JSON.parse(
@@ -107,7 +110,7 @@ describe('assistant integration', () => {
     expect(budgeted.instructions).toContain('CORNER AT THE ORIGIN');
     expect(budgeted.instructions).toContain('localId');
     expect(budgeted.instructions).toContain(
-      'copy every selected edge\'s numeric `hash`'
+      "copy every selected edge's numeric `hash`"
     );
     expect(budgeted.instructions).toContain(
       'ONE LIVE BODY for each physical part'
@@ -224,9 +227,7 @@ describe('assistant integration', () => {
     const headers = new Headers(init?.headers);
     expect(headers.get('authorization')).toBe('Bearer openrouter-test-key');
     expect(headers.get('x-title')).toBe('OpenZCAD Beta');
-    expect(headers.get('http-referer')).toBe(
-      'https://beta.openzcad.example'
-    );
+    expect(headers.get('http-referer')).toBe('https://beta.openzcad.example');
     const request = JSON.parse(init?.body as string) as {
       model: string;
       reasoning: { effort: string };
@@ -280,17 +281,14 @@ describe('assistant integration', () => {
       error: 'The modeling assistant could not generate a patch.',
       code: 'AI_UPSTREAM_ERROR'
     });
-    expect(consoleError).toHaveBeenCalledWith(
-      'AI Responses provider failed:',
-      {
-        provider: 'openrouter',
-        status: 400,
-        code: 'invalid_json_schema',
-        errorType: 'invalid_request_error',
-        message: longMessage.slice(0, 500),
-        providerName: 'OpenAI'
-      }
-    );
+    expect(consoleError).toHaveBeenCalledWith('AI Responses provider failed:', {
+      provider: 'openrouter',
+      status: 400,
+      code: 'invalid_json_schema',
+      errorType: 'invalid_request_error',
+      message: longMessage.slice(0, 500),
+      providerName: 'OpenAI'
+    });
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain('secret-key');
   });
 });

@@ -197,6 +197,40 @@ describe('command-system', () => {
     if (feature?.data.featureKind === 'imported-step') {
       expect(feature.data.stepText).toContain('ISO-10303-21');
     }
+
+    const importedBodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Resize through hole',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'resize-through-hole',
+          faceHash: 7,
+          sourceDiameter: 8,
+          sourceAxisStart: { x: 1, y: 2, z: 3 },
+          sourceAxisEnd: { x: 1, y: 2, z: 13 },
+          diameter: 'hole_diameter'
+        }
+      })
+    );
+    const replayedEdit = replayCommands(base, manager.document.commandLog);
+    const directEdit = Object.values(replayedEdit.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'direct-edit'
+    );
+    expect(directEdit?.data).toEqual({
+      featureKind: 'direct-edit',
+      targetBodyId: importedBodyId,
+      operation: {
+        kind: 'resize-through-hole',
+        faceHash: 7,
+        sourceDiameter: 8,
+        sourceAxisStart: { x: 1, y: 2, z: 3 },
+        sourceAxisEnd: { x: 1, y: 2, z: 13 },
+        diameter: 'hole_diameter'
+      }
+    });
+    expect(replayedEdit.bodyOrder).toEqual(manager.document.bodyOrder);
   });
 
   it('validates command preconditions before applying', () => {
@@ -665,9 +699,7 @@ describe('command-system', () => {
         proposalId: 'proposal_bad_expression',
         summary: 'Set a broken parameter.',
         assumptions: [],
-        operations: [
-          { kind: 'set_parameter', name: 'wall', expression: '2 +' }
-        ]
+        operations: [{ kind: 'set_parameter', name: 'wall', expression: '2 +' }]
       })
     ).toThrow(/invalid expression/);
   });
@@ -681,7 +713,11 @@ describe('command-system', () => {
       summary: 'Derive the cavity from the shell.',
       assumptions: [],
       operations: [
-        { kind: 'set_parameter', name: 'cavity_len', expression: 'box_len - 2*wall' },
+        {
+          kind: 'set_parameter',
+          name: 'cavity_len',
+          expression: 'box_len - 2*wall'
+        },
         { kind: 'set_parameter', name: 'box_len', expression: '120' },
         { kind: 'set_parameter', name: 'wall', expression: '2.4' }
       ]
