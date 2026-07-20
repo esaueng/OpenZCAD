@@ -59,6 +59,9 @@ export interface CloudflareEnv {
    * must stay well clear of a full multi-part patch or the model truncates.
    */
   AI_MAX_OUTPUT_TOKENS?: string;
+  AI_TIMEOUT_MS?: string;
+  AI_RATE_LIMIT_REQUESTS?: string;
+  AI_RATE_LIMIT_WINDOW_SECONDS?: string;
   DB?: D1Database;
   ARTIFACTS?: R2Bucket;
 }

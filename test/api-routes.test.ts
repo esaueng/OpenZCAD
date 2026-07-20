@@ -162,6 +162,30 @@ describe('worker api routes', () => {
     expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
   });
 
+  it('rejects oversized assistant digests before provider dispatch', async () => {
+    const response = await worker.fetch(
+      post('/api/assistant/proposals', {
+        prompt: 'Inspect this model',
+        digest: {
+          schemaVersion: 3,
+          projectId: 'proj_large',
+          name: 'Large model',
+          units: 'mm',
+          version: 1,
+          parameters: [],
+          features: Array.from({ length: 1_001 }, (_, index) => ({ index })),
+          bodies: [],
+          warnings: []
+        }
+      }),
+      env as never
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: '"digest.features" has too many items.'
+    });
+  });
+
   it('rejects malformed JSON bodies with 400', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects', {
