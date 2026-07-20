@@ -89,6 +89,23 @@ describe('worker api routes', () => {
     expect(JSON.stringify(status)).not.toContain('secret-test-value');
   });
 
+  it('exposes assistant status without a Cloudflare Access session', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status'),
+      {
+        ...env,
+        AUTH_MODE: 'cloudflare-access',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: true,
+      provider: 'openrouter'
+    });
+  });
+
   it('requires Cloudflare Access identity when configured', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects'),
@@ -158,6 +175,32 @@ describe('worker api routes', () => {
       }),
       env
     );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
+  });
+
+  it('accepts a rate-limited public assistant request without Access', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/proposals', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': '203.0.113.42' },
+        body: JSON.stringify({
+          prompt: 'Make it wider',
+          digest: {
+            schemaVersion: 3,
+            projectId: 'proj_ai_public',
+            name: 'Bracket',
+            units: 'mm',
+            version: 1,
+            parameters: [],
+            features: [],
+            warnings: []
+          }
+        })
+      }),
+      { ...env, AUTH_MODE: 'cloudflare-access' } as never
+    );
+
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
   });
