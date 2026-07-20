@@ -3,7 +3,8 @@ import worker from '../apps/web/worker/index';
 import type { CreateProjectResponse, ProjectDocument } from '@openzcad/shared';
 
 const env = {
-  ENVIRONMENT: 'beta' as const,
+  ENVIRONMENT: 'development' as const,
+  AUTH_MODE: 'development' as const,
   EXPORT_WORKFLOW: {
     create: vi.fn(async () => undefined)
   },

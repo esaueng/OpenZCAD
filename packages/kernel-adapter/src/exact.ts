@@ -17,6 +17,7 @@ import {
 } from '@openzcad/geometry';
 import {
   DEFAULT_BODY_COLOR,
+  UNIT_TO_MM,
   featureColor,
   nowIso,
   type BodyId,
@@ -415,6 +416,27 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
     cb * sa,
     cb * ca,
     translation.z,
+    0,
+    0,
+    0,
+    1
+  ]);
+}
+
+function uniformScaleMatrix(factor: number): Float64Array {
+  return new Float64Array([
+    factor,
+    0,
+    0,
+    0,
+    0,
+    factor,
+    0,
+    0,
+    0,
+    0,
+    factor,
+    0,
     0,
     0,
     0,
@@ -1058,10 +1080,20 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       if (solids.length === 0) {
         throw new Error('Select at least one body to export.');
       }
+      const millimeterScale = UNIT_TO_MM[document.units];
+      const exportSolids =
+        millimeterScale === 1
+          ? solids
+          : solids.map((solid) =>
+              kernel.copyAndTransformSolid(
+                solid,
+                uniformScaleMatrix(millimeterScale)
+              )
+            );
       const exportSolid =
-        solids.length === 1
-          ? solids[0]!
-          : kernel.fuseAll(Uint32Array.from(solids));
+        exportSolids.length === 1
+          ? exportSolids[0]!
+          : kernel.fuseAll(Uint32Array.from(exportSolids));
       return decodeText(kernel.exportStep(exportSolid));
     } finally {
       kernel.free();
@@ -1085,7 +1117,17 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       if (solids.length === 0) {
         throw new Error('Select at least one body to export.');
       }
-      return solids
+      const millimeterScale = UNIT_TO_MM[document.units];
+      const exportSolids =
+        millimeterScale === 1
+          ? solids
+          : solids.map((solid) =>
+              kernel.copyAndTransformSolid(
+                solid,
+                uniformScaleMatrix(millimeterScale)
+              )
+            );
+      return exportSolids
         .map((solid) =>
           decodeText(kernel.exportStlAscii(solid, TESSELLATION_DEFLECTION))
         )
