@@ -17,6 +17,7 @@ import {
   parseSaveRevisionRequest
 } from './validation';
 import { getAssistantStatus, streamAssistantProposal } from './assistant';
+import { consumeAssistantQuota } from './assistantRateLimit';
 import { authenticateRequest, AuthenticationError } from './auth';
 
 type Env = CloudflareEnv & {
@@ -86,6 +87,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
+    const quota = await consumeAssistantQuota(userId, env);
+    if (!quota.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: 'The modeling assistant request limit has been reached.',
+          code: 'AI_RATE_LIMITED',
+          retryAfterSeconds: quota.retryAfterSeconds
+        }),
+        {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'retry-after': String(quota.retryAfterSeconds),
+            'x-ratelimit-limit': String(quota.limit),
+            'x-ratelimit-remaining': String(quota.remaining)
+          }
+        }
+      );
+    }
     return streamAssistantProposal(payload, env, userId);
   }
 

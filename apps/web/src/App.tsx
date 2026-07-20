@@ -89,6 +89,7 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { Sidebar } from './components/Sidebar';
@@ -2455,7 +2456,11 @@ export function App() {
         />
       }
       viewer={
-        <ViewerShell
+        <ErrorBoundary
+          label="3D viewer"
+          resetKey={`${doc.projectId}:${doc.version}`}
+        >
+          <ViewerShell
           projectId={doc.projectId}
           bodies={viewerBodies}
           sketches={sketchOverlays}
@@ -2567,11 +2572,16 @@ export function App() {
           onView={requestView}
           onCycleDisplayMode={cycleDisplayMode}
           onToggleProjection={toggleProjection}
-        />
+          />
+        </ErrorBoundary>
       }
       inspector={
         inspectorActive ? (
-          <Inspector
+          <ErrorBoundary
+            label="Inspector"
+            resetKey={`${doc.projectId}:${doc.version}`}
+          >
+            <Inspector
             tool={tool}
             selectedFeature={selectedFeature}
             selectedSketch={selectedSketch}
@@ -2785,7 +2795,8 @@ export function App() {
             onDeleteFeature={(feature) =>
               handleDeleteFeature(feature.featureId, feature.name)
             }
-          />
+            />
+          </ErrorBoundary>
         ) : null
       }
       assistant={
