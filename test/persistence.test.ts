@@ -36,7 +36,7 @@ describe('in-memory persistence', () => {
       created.document.projectId
     );
     expect(loaded?.name).toBe('Round Trip');
-    expect(loaded?.schemaVersion).toBe(2);
+    expect(loaded?.schemaVersion).toBe(3);
   });
 
   it('sanitizes file names in upload object keys', async () => {

@@ -69,7 +69,11 @@ describe('worker api routes', () => {
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
-      { ...env, AI_API_KEY: 'secret-test-value', AI_MODEL: 'model-test' } as never
+      {
+        ...env,
+        AI_API_KEY: 'secret-test-value',
+        AI_MODEL: 'model-test'
+      } as never
     );
     expect(response.status).toBe(200);
     const status = (await response.json()) as {
@@ -144,7 +148,7 @@ describe('worker api routes', () => {
       post('/api/assistant/proposals', {
         prompt: 'Make it wider',
         digest: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           projectId: 'proj_ai',
           name: 'Bracket',
           units: 'mm',

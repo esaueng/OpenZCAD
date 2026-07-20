@@ -190,6 +190,10 @@ export class OpenZCADKernel implements KernelAdapter {
             throw new GeometryError(
               'editable STEP solids require the exact BrepKit kernel.'
             );
+          case 'direct-edit':
+            throw new GeometryError(
+              'direct B-rep edits require the exact OpenCascade kernel.'
+            );
           case 'fillet':
           case 'chamfer':
           case 'pattern':

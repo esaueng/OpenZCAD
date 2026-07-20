@@ -13,7 +13,7 @@ export type JobId = Brand<string, 'JobId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 3 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -30,6 +30,7 @@ export type FeatureKind =
   | 'fillet'
   | 'chamfer'
   | 'pattern'
+  | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind = 'rectangle' | 'circle' | 'polygon';
@@ -66,6 +67,32 @@ export interface ParametricTransform3D {
   translation: ParametricVector3;
   rotationDeg: ParametricVector3;
 }
+
+/**
+ * History-backed edits applied directly to exact B-Rep topology. The source
+ * dimension is a geometric fingerprint: rebuilding fails closed if the face
+ * ordinal now resolves to different geometry instead of editing the wrong
+ * feature.
+ */
+export type DirectEditOperation =
+  | {
+      kind: 'resize-through-hole';
+      faceHash: number;
+      sourceDiameter: number;
+      sourceAxisStart: Vector3;
+      sourceAxisEnd: Vector3;
+      diameter: ParamValue;
+    }
+  | {
+      kind: 'remove-face-feature';
+      faceHash: number;
+      sourceSurfaceType: string;
+      sourceArea: number;
+      sourceCenter: Vector3;
+      sourceDiameter?: number;
+      sourceAxisStart?: Vector3;
+      sourceAxisEnd?: Vector3;
+    };
 
 export interface BaseNode {
   id: EntityId;
@@ -196,6 +223,11 @@ export type FeatureData =
       angleDeg: ParamValue;
     }
   | {
+      featureKind: 'direct-edit';
+      targetBodyId: BodyId;
+      operation: DirectEditOperation;
+    }
+  | {
       featureKind: 'imported-mesh';
       artifactId: ArtifactId;
       sourceName: string;
@@ -256,6 +288,27 @@ export interface FaceTopology {
   hash: number;
   triangleStart: number;
   triangleCount: number;
+  /** Exact surface measurements supplied by the browser geometry kernel. */
+  geometry?: FaceGeometry;
+}
+
+export interface FaceGeometry {
+  /** Underlying OCCT surface class (plane, cylinder, cone, B-spline, ...). */
+  surfaceType: string;
+  area: number;
+  /** Exact surface center of mass, used as a topology fingerprint. */
+  center: Vector3;
+  /** Present for exact cylindrical surfaces. */
+  radius?: number;
+  diameter?: number;
+  /** Axis endpoints of the trimmed cylindrical face in world coordinates. */
+  axisStart?: Vector3;
+  axisEnd?: Vector3;
+  axialLength?: number;
+  /** Set only when the kernel proves that both axial ends open outside. */
+  featureType?: 'through-hole';
+  /** Dimension currently supported by a deterministic direct edit. */
+  editableDimension?: 'diameter';
 }
 
 export interface EdgeTopology {
@@ -552,6 +605,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   fillet: '#f59e0b',
   chamfer: '#fb7185',
   pattern: '#38bdf8',
+  'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff'
 };

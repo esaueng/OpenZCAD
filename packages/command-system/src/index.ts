@@ -18,6 +18,7 @@ import {
   createParameterIds,
   createSketchFeatureIds,
   deleteFeature,
+  directEditBody,
   deleteParameter,
   evaluateExpression,
   extrudeSketch,
@@ -38,6 +39,7 @@ import {
   updateFeature,
   updateSketch,
   type BooleanInput,
+  type DirectEditInput,
   type ExtrudeInput,
   type EdgeModifierInput,
   type FeatureDeleteInput,
@@ -69,6 +71,7 @@ export type CommandKind =
   | 'feature.revolve'
   | 'feature.boolean'
   | 'feature.transform'
+  | 'feature.direct-edit'
   | 'feature.fillet'
   | 'feature.chamfer'
   | 'feature.pattern'
@@ -105,6 +108,7 @@ export type AnyCommand =
   | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
+  | CommandDefinition<DirectEditInput>
   | CommandDefinition<EdgeModifierInput>
   | CommandDefinition<PatternInput>
   | CommandDefinition<FeatureUpdateInput>
@@ -249,6 +253,16 @@ export const commandFactories = {
           );
         }
       }
+    );
+  },
+  directEditBody(payload: DirectEditInput): CommandDefinition<DirectEditInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.direct-edit',
+      payload.name,
+      withIds,
+      (document) => directEditBody(document, withIds).document,
+      (document) => validateBodyTarget(document, payload.targetBodyId)
     );
   },
   filletEdges(
@@ -402,7 +416,9 @@ function projectedParameterScope(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): Record<string, number> {
-  const scope: Record<string, number> = { ...getParameterScope(document).scope };
+  const scope: Record<string, number> = {
+    ...getParameterScope(document).scope
+  };
   const pending = new Map<string, string>();
   for (const operation of proposal.operations) {
     if (operation.kind === 'set_parameter') {
@@ -514,10 +530,18 @@ function assertOperationExpressions(
       vector(`${operation.name} rotationDeg`, operation.rotationDeg);
       break;
     case 'add_edge_modifier':
-      assertEvaluableExpression(scope, `${operation.name} size`, operation.size);
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} size`,
+        operation.size
+      );
       break;
     case 'add_pattern':
-      assertEvaluableExpression(scope, `${operation.name} count`, operation.count);
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} count`,
+        operation.count
+      );
       assertEvaluableExpression(
         scope,
         `${operation.name} spacing`,
@@ -981,6 +1005,12 @@ export function replayCommands(
         break;
       case 'feature.transform':
         next = transformBody(next, command.payload as TransformInput).document;
+        break;
+      case 'feature.direct-edit':
+        next = directEditBody(
+          next,
+          command.payload as DirectEditInput
+        ).document;
         break;
       case 'feature.fillet':
         next = filletEdges(next, command.payload as EdgeModifierInput).document;
