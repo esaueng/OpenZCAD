@@ -61,6 +61,7 @@ export function useCollaboration({
   const remoteHandlerRef = useRef(onRemoteDocument);
   const conflictHandlerRef = useRef(onConflict);
   const lastSentVersionRef = useRef<number | null>(null);
+  const serverVersionRef = useRef<number | null>(null);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
   conflictHandlerRef.current = onConflict;
@@ -92,10 +93,44 @@ export function useCollaboration({
         type,
         clientId: id,
         displayName,
+        baseVersion: serverVersionRef.current,
         document: collaborationDocument(current)
       });
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
+        void fetch(`/api/projects/${projectId}/collaboration`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            clientId: id,
+            baseVersion: serverVersionRef.current,
+            document: collaborationDocument(current)
+          })
+        })
+          .then(async (response) => {
+            const message = (await response.json()) as CollaborationServerMessage;
+            if (!response.ok || message.type === 'conflict') {
+              if (message.type === 'conflict') {
+                conflictHandlerRef.current(message.document);
+              }
+              setStatus('conflict');
+              return;
+            }
+            lastSentVersionRef.current = current.version;
+            if (type === 'hello' && socket.readyState === WebSocket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: 'hello',
+                  clientId: id,
+                  displayName,
+                  baseVersion: serverVersionRef.current,
+                  document: null
+                })
+              );
+            }
+            setStatus('live');
+          })
+          .catch(() => setStatus('offline'));
         return false;
       }
       socket.send(payload);
@@ -139,17 +174,27 @@ export function useCollaboration({
           setMembers(message.members);
           if (message.document) {
             lastSentVersionRef.current = message.document.version;
+            serverVersionRef.current = message.document.version;
             remoteHandlerRef.current(message.document);
           }
           return;
         }
         if (message.type === 'document') {
           lastSentVersionRef.current = message.document.version;
+          serverVersionRef.current = message.document.version;
           remoteHandlerRef.current(message.document);
           return;
         }
-        setStatus('conflict');
-        conflictHandlerRef.current(message.document);
+        if (message.type === 'ack') {
+          lastSentVersionRef.current = message.version;
+          serverVersionRef.current = message.version;
+          setStatus('live');
+          return;
+        }
+        if (message.type === 'conflict') {
+          setStatus('conflict');
+          conflictHandlerRef.current(message.document);
+        }
       });
       socket.addEventListener('close', () => {
         if (socketRef.current === socket) {
@@ -192,10 +237,33 @@ export function useCollaboration({
       const payload = JSON.stringify({
         type: 'document',
         clientId: clientId(),
+        baseVersion: serverVersionRef.current,
         document: collaborationDocument(document)
       });
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
+        void fetch(`/api/projects/${document.projectId}/collaboration`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            clientId: clientId(),
+            baseVersion: serverVersionRef.current,
+            document: collaborationDocument(document)
+          })
+        })
+          .then(async (response) => {
+            const message = (await response.json()) as CollaborationServerMessage;
+            if (!response.ok || message.type === 'conflict') {
+              if (message.type === 'conflict') {
+                conflictHandlerRef.current(message.document);
+              }
+              setStatus('conflict');
+              return;
+            }
+            lastSentVersionRef.current = document.version;
+            setStatus('live');
+          })
+          .catch(() => setStatus('offline'));
         return;
       }
       socket.send(payload);

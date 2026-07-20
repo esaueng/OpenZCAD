@@ -501,6 +501,14 @@ export function createPersistenceService(
 }
 
 export class ProjectCollaborationRoom extends DurableObject {
+  private readonly roomContext: {
+    storage: {
+      get<T>(key: string): Promise<T | undefined>;
+      put<T>(key: string, value: T): Promise<void>;
+    };
+    blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+  };
+  private readonly ready: Promise<void>;
   private presence = new Map<string, string>();
   private locks = new Map<string, string>();
   private sockets = new Map<
@@ -508,9 +516,31 @@ export class ProjectCollaborationRoom extends DurableObject {
     { clientId: string; userId: UserId; displayName: string }
   >();
   private latestDocument: ProjectDocument | null = null;
+  private documentHistory = new Map<number, ProjectDocument>();
   private projectId: string | null = null;
 
+  constructor(ctx: unknown, env: unknown) {
+    super(ctx, env);
+    this.roomContext = ctx as typeof this.roomContext;
+    this.ready = this.roomContext.blockConcurrencyWhile(async () => {
+      const stored = await this.roomContext.storage.get<{
+        projectId: string | null;
+        latestDocument: ProjectDocument | null;
+        history?: ProjectDocument[];
+      }>('room-state');
+      this.projectId = stored?.projectId ?? null;
+      this.latestDocument = stored?.latestDocument ?? null;
+      this.documentHistory = new Map(
+        (stored?.history ?? []).map((document) => [document.version, document])
+      );
+    });
+  }
+
   async fetch(request: Request): Promise<Response> {
+    await this.ready;
+    if (request.method === 'POST') {
+      return this.acceptHttpSnapshot(request);
+    }
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('WebSocket upgrade required.', { status: 426 });
     }
@@ -524,6 +554,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       return new Response('Room project mismatch.', { status: 409 });
     }
     this.projectId = projectId;
+    await this.persistRoomState();
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -532,7 +563,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     server.addEventListener(
       'message',
       (event: MessageEvent<string | ArrayBuffer>) => {
-        this.handleSocketMessage(
+        void this.handleSocketMessage(
           server,
           event.data,
           userId as UserId,
@@ -546,12 +577,12 @@ export class ProjectCollaborationRoom extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private handleSocketMessage(
+  private async handleSocketMessage(
     socket: WebSocket,
     raw: string | ArrayBuffer,
     userId: UserId,
     displayName: string
-  ): void {
+  ): Promise<void> {
     if (typeof raw !== 'string' || raw.length > 950_000) {
       socket.close(1009, 'Collaboration message is too large.');
       return;
@@ -574,7 +605,15 @@ export class ProjectCollaborationRoom extends DurableObject {
         displayName
       });
       this.presence.set(message.clientId, 'active');
-      this.acceptDocument(socket, message.clientId, message.document, false);
+      if (message.document) {
+        await this.acceptDocument(
+          socket,
+          message.clientId,
+          message.document,
+          message.baseVersion,
+          false
+        );
+      }
       this.send(socket, {
         type: 'state',
         members: this.members(),
@@ -594,25 +633,40 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
     if (message.type === 'document') {
-      this.acceptDocument(socket, message.clientId, message.document, true);
+      await this.acceptDocument(
+        socket,
+        message.clientId,
+        message.document,
+        message.baseVersion,
+        true
+      );
     }
   }
 
-  private acceptDocument(
+  private async acceptDocument(
     socket: WebSocket,
     clientId: string,
     rawDocument: ProjectDocument,
+    baseVersion: number | null,
     broadcast: boolean
-  ): void {
+  ): Promise<void> {
     const document = normalizeDocument(rawDocument);
     if (document.projectId !== this.projectId) {
       socket.close(1008, 'Document project does not match this room.');
       return;
     }
     const latest = this.latestDocument;
-    const resolution = resolveCollaborationDocument(latest, document);
+    const base =
+      baseVersion === null ? undefined : this.documentHistory.get(baseVersion);
+    const resolution = resolveCollaborationDocument(latest, document, base);
     if (resolution.kind === 'accept') {
+      if (latest) {
+        this.documentHistory.set(latest.version, latest);
+      }
       this.latestDocument = resolution.document;
+      this.documentHistory.set(resolution.document.version, resolution.document);
+      await this.persistRoomState();
+      this.send(socket, { type: 'ack', version: resolution.document.version });
       if (broadcast) {
         this.broadcast(
           { type: 'document', clientId, document: resolution.document },
@@ -624,6 +678,75 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (resolution.kind === 'conflict') {
       this.send(socket, { type: 'conflict', document: resolution.document });
     }
+  }
+
+  private async acceptHttpSnapshot(request: Request): Promise<Response> {
+    const userId = request.headers.get('x-openzcad-user-id');
+    const displayName = request.headers.get('x-openzcad-display-name');
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (!userId || !displayName || !projectId) {
+      return new Response('Missing collaboration identity.', { status: 400 });
+    }
+    const contentLength = Number(request.headers.get('content-length') ?? '0');
+    if (Number.isFinite(contentLength) && contentLength > 10_000_000) {
+      return new Response('Collaboration snapshot is too large.', { status: 413 });
+    }
+    const payload = (await request.json()) as {
+      clientId?: string;
+      baseVersion?: number | null;
+      document?: ProjectDocument;
+    };
+    if (!payload.clientId || !payload.document) {
+      return new Response('Invalid collaboration snapshot.', { status: 400 });
+    }
+    if (this.projectId && this.projectId !== projectId) {
+      return new Response('Room project mismatch.', { status: 409 });
+    }
+    this.projectId = projectId;
+    const document = normalizeDocument(payload.document);
+    if (document.projectId !== projectId) {
+      return new Response('Document project mismatch.', { status: 400 });
+    }
+    const resolution = resolveCollaborationDocument(
+      this.latestDocument,
+      document,
+      payload.baseVersion === null || payload.baseVersion === undefined
+        ? undefined
+        : this.documentHistory.get(payload.baseVersion)
+    );
+    if (resolution.kind === 'conflict') {
+      return Response.json(
+        { type: 'conflict', document: resolution.document },
+        { status: 409 }
+      );
+    }
+    if (resolution.kind === 'accept') {
+      if (this.latestDocument) {
+        this.documentHistory.set(
+          this.latestDocument.version,
+          this.latestDocument
+        );
+      }
+      this.latestDocument = resolution.document;
+      this.documentHistory.set(resolution.document.version, resolution.document);
+      await this.persistRoomState();
+      this.broadcast({
+        type: 'document',
+        clientId: payload.clientId,
+        document: resolution.document
+      });
+    }
+    return Response.json({ type: 'ack', version: resolution.document.version });
+  }
+
+  private persistRoomState(): Promise<void> {
+    return this.roomContext.storage.put('room-state', {
+      projectId: this.projectId,
+      latestDocument: this.latestDocument,
+      history: Array.from(this.documentHistory.values())
+        .sort((left, right) => left.version - right.version)
+        .slice(-20)
+    });
   }
 
   private members(): CollaborationMember[] {
@@ -691,12 +814,28 @@ export class ProjectCollaborationRoom extends DurableObject {
 
 export function resolveCollaborationDocument(
   latest: ProjectDocument | null,
-  incoming: ProjectDocument
+  incoming: ProjectDocument,
+  base?: ProjectDocument
 ):
   | { kind: 'accept'; document: ProjectDocument }
   | { kind: 'same'; document: ProjectDocument }
   | { kind: 'conflict'; document: ProjectDocument } {
-  if (!latest || incoming.version > latest.version) {
+  if (!latest) {
+    return { kind: 'accept', document: incoming };
+  }
+  if (
+    base &&
+    base.projectId === latest.projectId &&
+    base.projectId === incoming.projectId &&
+    base.version < latest.version &&
+    base.version < incoming.version
+  ) {
+    const merged = mergeCollaborationDocuments(base, latest, incoming);
+    if (merged) {
+      return { kind: 'accept', document: merged };
+    }
+  }
+  if (incoming.version > latest.version) {
     return { kind: 'accept', document: incoming };
   }
   const sameHistory =
@@ -720,4 +859,105 @@ export function resolveCollaborationDocument(
   return sameHistory
     ? { kind: 'same', document: latest }
     : { kind: 'conflict', document: latest };
+}
+
+const MERGE_CONFLICT = Symbol('collaboration-merge-conflict');
+type JsonMergeValue =
+  | null
+  | boolean
+  | number
+  | string
+  | undefined
+  | JsonMergeValue[]
+  | { [key: string]: JsonMergeValue };
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasJsonPrefix(values: unknown[], prefix: unknown[]): boolean {
+  return (
+    values.length >= prefix.length &&
+    prefix.every((value, index) => sameJson(value, values[index]))
+  );
+}
+
+function mergeJsonValue(
+  base: unknown,
+  latest: unknown,
+  incoming: unknown
+): JsonMergeValue | typeof MERGE_CONFLICT {
+  if (sameJson(latest, incoming)) {
+    return structuredClone(latest) as JsonMergeValue;
+  }
+  if (sameJson(base, latest)) {
+    return structuredClone(incoming) as JsonMergeValue;
+  }
+  if (sameJson(base, incoming)) {
+    return structuredClone(latest) as JsonMergeValue;
+  }
+  if (Array.isArray(base) && Array.isArray(latest) && Array.isArray(incoming)) {
+    if (!hasJsonPrefix(latest, base) || !hasJsonPrefix(incoming, base)) {
+      return MERGE_CONFLICT;
+    }
+    const merged = structuredClone(latest) as JsonMergeValue[];
+    for (const value of incoming.slice(base.length)) {
+      if (!merged.some((candidate) => sameJson(candidate, value))) {
+        merged.push(structuredClone(value) as JsonMergeValue);
+      }
+    }
+    return merged;
+  }
+  if (isRecord(base) && isRecord(latest) && isRecord(incoming)) {
+    const merged: { [key: string]: JsonMergeValue } = {};
+    const keys = new Set([
+      ...Object.keys(base),
+      ...Object.keys(latest),
+      ...Object.keys(incoming)
+    ]);
+    for (const key of keys) {
+      const value = mergeJsonValue(base[key], latest[key], incoming[key]);
+      if (value === MERGE_CONFLICT) {
+        return MERGE_CONFLICT;
+      }
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+    return merged;
+  }
+  return MERGE_CONFLICT;
+}
+
+export function mergeCollaborationDocuments(
+  base: ProjectDocument,
+  latest: ProjectDocument,
+  incoming: ProjectDocument
+): ProjectDocument | null {
+  const withoutVolatileState = (document: ProjectDocument) => {
+    const { version: _version, derived: _derived, ...stable } = document;
+    return stable;
+  };
+  const merged = mergeJsonValue(
+    withoutVolatileState(base),
+    withoutVolatileState(latest),
+    withoutVolatileState(incoming)
+  );
+  if (merged === MERGE_CONFLICT || !isRecord(merged)) {
+    return null;
+  }
+  return normalizeDocument({
+    ...merged,
+    version: Math.max(latest.version, incoming.version) + 1,
+    derived: {
+      bodyRepresentations: {},
+      exportableBodyIds: [],
+      warnings: [],
+      updatedAt: nowIso()
+    }
+  } as unknown as ProjectDocument);
 }
