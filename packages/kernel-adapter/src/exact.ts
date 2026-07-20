@@ -8,6 +8,7 @@ import {
 } from '@openzcad/document-core';
 import {
   PLANE_BASES,
+  GEOMETRY_LINEAR_TOLERANCE,
   circleProfile,
   polygonProfile,
   rectangleProfile,
@@ -444,6 +445,54 @@ function uniformScaleMatrix(factor: number): Float64Array {
   ]);
 }
 
+function quantizeEdgeCoordinate(value: number): number {
+  return Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
+}
+
+function edgeFingerprint(kernel: BrepKernel, edge: number): number {
+  const vertices = Array.from(kernel.getEdgeVertices(edge));
+  const endpoints = [vertices.slice(0, 3), vertices.slice(3, 6)].sort((a, b) => {
+    for (let index = 0; index < 3; index += 1) {
+      const difference = (a[index] ?? 0) - (b[index] ?? 0);
+      if (difference !== 0) {
+        return difference;
+      }
+    }
+    return 0;
+  });
+  const domain = Array.from(kernel.getEdgeCurveParameters(edge));
+  const midpoint = Array.from(
+    kernel.evaluateEdgeCurve(edge, ((domain[0] ?? 0) + (domain[1] ?? 1)) / 2)
+  );
+  const signature = [
+    kernel.getEdgeCurveType(edge),
+    quantizeEdgeCoordinate(kernel.edgeLength(edge)),
+    ...endpoints.flat().map(quantizeEdgeCoordinate),
+    ...midpoint.map(quantizeEdgeCoordinate)
+  ].join(':');
+  let hash = 2166136261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const unsigned = hash >>> 0;
+  return unsigned === 0 ? 1 : unsigned;
+}
+
+function edgeHandlesByFingerprint(
+  kernel: BrepKernel,
+  solid: number
+): Map<number, number[]> {
+  const result = new Map<number, number[]>();
+  for (const edge of kernel.getSolidEdges(solid)) {
+    const hash = edgeFingerprint(kernel, edge);
+    const handles = result.get(hash) ?? [];
+    handles.push(edge);
+    result.set(hash, handles);
+  }
+  return result;
+}
+
 function copyShape(
   kernel: BrepKernel,
   shape: ExactShape,
@@ -768,14 +817,18 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             }
             const target = collapseShape(kernel, storedTarget);
             const requested = new Set(feature.data.edgeHashes);
-            const edges = Array.from(kernel.getSolidEdges(target));
-            const selected = edges.filter((_, index) =>
-              requested.has(index + 1)
-            );
-            if (selected.length !== requested.size) {
-              throw new Error(
-                `${requested.size - selected.length} selected edge(s) no longer exist.`
-              );
+            const edgesByHash = edgeHandlesByFingerprint(kernel, target);
+            const selected: number[] = [];
+            for (const hash of requested) {
+              const matches = edgesByHash.get(hash) ?? [];
+              if (matches.length !== 1) {
+                throw new Error(
+                  matches.length === 0
+                    ? 'A selected edge no longer exists.'
+                    : 'A selected edge is geometrically ambiguous.'
+                );
+              }
+              selected.push(matches[0]!);
             }
             const size = resolveParamValue(
               feature.data.featureKind === 'fillet'
@@ -946,26 +999,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         mesh.free();
       }
 
-      const edgeLines = kernel.meshEdgesAll(
-        solid,
-        TESSELLATION_DEFLECTION,
-        TESSELLATION_ANGLE
-      );
-      try {
-        const points = Array.from(edgeLines.positions);
-        const offsets = Array.from(edgeLines.offsets);
-        for (let index = 0; index < offsets.length; index += 1) {
-          const start = offsets[index]!;
-          const end = offsets[index + 1] ?? points.length;
-          const hash = topology.edges.length + 1;
-          topology.edges.push({
-            topologyId: `edge:${hash}`,
-            hash,
-            points: points.slice(start, end)
-          });
-        }
-      } finally {
-        edgeLines.free();
+      for (const edge of kernel.getSolidEdges(solid)) {
+        const hash = edgeFingerprint(kernel, edge);
+        topology.edges.push({
+          topologyId: `edge:${hash}`,
+          hash,
+          points: Array.from(kernel.tessellateEdge(edge, CURVE_SEGMENTS))
+        });
       }
 
       const bounds = kernel.boundingBox(solid);

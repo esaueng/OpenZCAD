@@ -1423,7 +1423,9 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    const numberMatch = /^(?:\d+\.?\d*|\.\d+)/.exec(expression.slice(index));
+    const numberMatch = /^(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/.exec(
+      expression.slice(index)
+    );
     if (numberMatch) {
       tokens.push({ type: 'number', value: Number(numberMatch[0]) });
       index += numberMatch[0].length;
@@ -1516,13 +1518,6 @@ export function evaluateExpression(
       }
       return value;
     }
-    if (
-      token.type === 'operator' &&
-      (token.value === '-' || token.value === '+')
-    ) {
-      const operand = parsePrimary();
-      return token.value === '-' ? -operand : operand;
-    }
     if (token.type === 'paren' && token.value === '(') {
       const value = parseAdditive();
       const closing = next();
@@ -1540,13 +1535,26 @@ export function evaluateExpression(
     if (token?.type === 'operator' && token.value === '^') {
       position += 1;
       // Right-associative: 2^3^2 = 2^(3^2).
-      return Math.pow(base, parsePower());
+      return Math.pow(base, parseUnary());
     }
     return base;
   }
 
+  function parseUnary(): number {
+    const token = peek();
+    if (
+      token?.type === 'operator' &&
+      (token.value === '-' || token.value === '+')
+    ) {
+      position += 1;
+      const operand = parseUnary();
+      return token.value === '-' ? -operand : operand;
+    }
+    return parsePower();
+  }
+
   function parseMultiplicative(): number {
-    let value = parsePower();
+    let value = parseUnary();
     for (;;) {
       const token = peek();
       if (
@@ -1556,7 +1564,7 @@ export function evaluateExpression(
         return value;
       }
       position += 1;
-      const right = parsePower();
+      const right = parseUnary();
       value = token.value === '*' ? value * right : value / right;
     }
   }

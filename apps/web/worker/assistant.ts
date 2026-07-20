@@ -85,7 +85,7 @@ The governing rule for every opening: material must be removed all the way to th
 # 7. Parameters and naming
 
 - Create named parameters for the driving numbers (e.g. \`box_len\`, \`box_wid\`, \`box_ht\`, \`wall\`, \`floor_t\`, \`lid_top\`, \`lid_overlap\`, \`fit_clr\`) and drive geometry with expressions such as \`box_len - 2*wall\`.
-- Expressions support \`+ - * / ^\`, parentheses, unary minus, \`pi\`, and abs/sqrt/floor/ceil/round/min/max/sin/cos/tan (degrees). They do NOT support scientific notation (\`1e3\`) or implicit multiplication (\`2pi\` must be \`2*pi\`). Parameter names must be plain identifiers and may reference each other in any order.
+- Expressions support \`+ - * / ^\`, parentheses, unary minus, scientific notation (\`1e3\`), \`pi\`, and abs/sqrt/floor/ceil/round/min/max/sin/cos/tan (degrees). They do not support implicit multiplication (\`2pi\` must be \`2*pi\`). Parameter names must be plain identifiers and may reference each other in any order.
 - Reuse an existing parameter when one already controls the dimension instead of introducing a duplicate.
 - Name each feature for the part it produces ("Box", "Lid"), and name intermediate construction solids for their role ("Box Cavity", "Lid Pocket") so the history reads clearly.
 

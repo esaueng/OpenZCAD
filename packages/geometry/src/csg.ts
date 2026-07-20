@@ -1,3 +1,5 @@
+import { geometryTolerance, isNearlyZero } from './tolerance';
+
 /**
  * Constructive solid geometry on convex polygon soups using BSP trees.
  *
@@ -13,8 +15,6 @@ export interface CsgVec {
   y: number;
   z: number;
 }
-
-const EPSILON = 1e-5;
 
 const COPLANAR = 0;
 const FRONT = 1;
@@ -47,7 +47,7 @@ function lerp(a: CsgVec, b: CsgVec, t: number): CsgVec {
 
 function normalize(v: CsgVec): CsgVec {
   const length = Math.hypot(v.x, v.y, v.z);
-  if (length === 0) {
+  if (isNearlyZero(length)) {
     return { x: 0, y: 0, z: 0 };
   }
   return { x: v.x / length, y: v.y / length, z: v.z / length };
@@ -61,7 +61,11 @@ class CsgPlane {
 
   static fromPoints(a: CsgVec, b: CsgVec, c: CsgVec): CsgPlane | null {
     const normal = normalize(cross(sub(b, a), sub(c, a)));
-    if (normal.x === 0 && normal.y === 0 && normal.z === 0) {
+    if (
+      isNearlyZero(normal.x) &&
+      isNearlyZero(normal.y) &&
+      isNearlyZero(normal.z)
+    ) {
       return null;
     }
     return new CsgPlane(normal, dot(normal, a));
@@ -88,7 +92,10 @@ class CsgPlane {
 
     for (const vertex of polygon.vertices) {
       const t = dot(this.normal, vertex) - this.w;
-      const type = t < -EPSILON ? BACK : t > EPSILON ? FRONT : COPLANAR;
+      const epsilon = geometryTolerance(
+        Math.max(Math.abs(this.w), Math.abs(dot(this.normal, vertex)))
+      );
+      const type = t < -epsilon ? BACK : t > epsilon ? FRONT : COPLANAR;
       polygonType |= type;
       types.push(type);
     }

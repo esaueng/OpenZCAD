@@ -5,6 +5,18 @@ import {
   csgUnion,
   type CsgVec
 } from './csg';
+import {
+  GEOMETRY_LINEAR_TOLERANCE,
+  geometryTolerance,
+  isNearlyZero
+} from './tolerance';
+
+export {
+  GEOMETRY_LINEAR_TOLERANCE,
+  GEOMETRY_RELATIVE_TOLERANCE,
+  geometryTolerance,
+  isNearlyZero
+} from './tolerance';
 
 export type Vec3 = CsgVec;
 
@@ -37,8 +49,7 @@ export const SPHERE_RINGS = 16;
 export const TORUS_TUBE_SEGMENTS = 24;
 export const REVOLVE_SEGMENTS = 48;
 
-const WELD_DECIMALS = 6;
-const AXIS_EPSILON = 1e-6;
+const AXIS_EPSILON = GEOMETRY_LINEAR_TOLERANCE;
 
 export class GeometryError extends Error {
   constructor(message: string) {
@@ -565,10 +576,8 @@ function solidToPolygons(solid: Solid): CsgPolygon[] {
 }
 
 function weldKey(p: Vec3): string {
-  const f = (value: number) => {
-    const rounded = value.toFixed(WELD_DECIMALS);
-    return rounded === `-0.${'0'.repeat(WELD_DECIMALS)}` ? `0.${'0'.repeat(WELD_DECIMALS)}` : rounded;
-  };
+  const f = (value: number) =>
+    String(Math.round(value / GEOMETRY_LINEAR_TOLERANCE));
   return `${f(p.x)},${f(p.y)},${f(p.z)}`;
 }
 
@@ -621,7 +630,7 @@ export function booleanSolids(
 // ---------------------------------------------------------------------------
 
 const HEAL_VERTEX_LIMIT = 20000;
-const ON_EDGE_TOLERANCE = 1e-5;
+const ON_EDGE_TOLERANCE = GEOMETRY_LINEAR_TOLERANCE;
 
 /**
  * BSP clipping can leave T-junctions: a vertex of one face lying in the
@@ -643,7 +652,7 @@ export function healTJunctions(solid: Solid): Solid {
       const b = vertices[bIndex]!;
       const ab = subtract(b, a);
       const lengthSq = dotProduct(ab, ab);
-      if (lengthSq < AXIS_EPSILON * AXIS_EPSILON) {
+      if (isNearlyZero(Math.sqrt(lengthSq))) {
         continue;
       }
 
@@ -666,7 +675,8 @@ export function healTJunctions(solid: Solid): Solid {
         }
         const ap = subtract(p, a);
         const t = dotProduct(ap, ab) / lengthSq;
-        if (t <= 1e-4 || t >= 1 - 1e-4) {
+        const parameterTolerance = geometryTolerance(1);
+        if (t <= parameterTolerance || t >= 1 - parameterTolerance) {
           continue;
         }
         const closest = vec(a.x + ab.x * t, a.y + ab.y * t, a.z + ab.z * t);

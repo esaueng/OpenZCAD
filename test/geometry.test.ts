@@ -4,6 +4,7 @@ import {
   booleanSolids,
   circleProfile,
   extrudeProfile,
+  healTJunctions,
   makeBox,
   makeCone,
   makeCylinder,
@@ -219,6 +220,35 @@ describe('booleans', () => {
     });
     const result = booleanSolids('intersect', boxA(), far);
     expect(result.faces).toHaveLength(0);
+  });
+
+  it('handles coplanar contact without producing an open solid', () => {
+    const touching = transformSolid(makeBox(10, 10, 10), {
+      translation: { x: 10, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    });
+    const result = booleanSolids('union', boxA(), touching);
+    expectClosed(result);
+    expect(solidVolume(result)).toBeCloseTo(2000, 4);
+  });
+});
+
+describe('topology healing', () => {
+  it('splits an edge when another face contributes a T-junction vertex', () => {
+    const solid: Solid = {
+      vertices: [
+        { x: 0, y: 0, z: 0 },
+        { x: 2, y: 0, z: 0 },
+        { x: 2, y: 1, z: 0 },
+        { x: 0, y: 1, z: 0 },
+        { x: 1, y: 0, z: 0 }
+      ],
+      faces: [
+        [0, 1, 2, 3],
+        [0, 4, 3]
+      ]
+    };
+    expect(healTJunctions(solid).faces[0]).toEqual([0, 4, 1, 2, 3]);
   });
 });
 
