@@ -16,13 +16,28 @@ import {
   parseFinalizeImportRequest,
   parseSaveRevisionRequest
 } from './validation';
-import { getAssistantStatus, streamAssistantProposal } from './assistant';
+import {
+  getAssistantStatus,
+  HttpAssistantConfigurationError,
+  streamAssistantProposal,
+  testAssistantConnection
+} from './assistant';
 import { consumeAssistantQuota } from './assistantRateLimit';
 import {
   authenticateRequest,
   AuthenticationError,
   identifyAssistantRequest
 } from './auth';
+import {
+  deleteAssistantCredential,
+  getAppSettings,
+  markAssistantCredentialValidated,
+  parseAssistantCredential,
+  parseUpdateAppSettingsRequest,
+  resolveUserAssistant,
+  saveAssistantCredential,
+  updateAppSettings
+} from './settings';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -39,6 +54,13 @@ const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
+
+function assertSameOrigin(request: Request): void {
+  const origin = request.headers.get('origin');
+  if (origin && origin !== new URL(request.url).origin) {
+    throw new HttpError(403, 'Cross-origin settings changes are not allowed.');
+  }
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -75,12 +97,34 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'GET' && pathname === '/api/assistant/status') {
-    return json(getAssistantStatus(env));
+    try {
+      const userId = await identifyAssistantRequest(request, env);
+      const settings = await getAppSettings(userId, env);
+      return json({
+        ...settings.effectiveAssistant,
+        credential: settings.credential
+      });
+    } catch (error) {
+      if (error instanceof AuthenticationError) {
+        return json({ ...getAssistantStatus(env), source: 'deployment' });
+      }
+      throw error;
+    }
   }
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const userId = await identifyAssistantRequest(request, env);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
+    const assistant = await resolveUserAssistant(userId, env);
+    if (!assistant.effective.configured) {
+      return json(
+        {
+          error: 'AI is disabled or not configured for this user.',
+          code: 'AI_NOT_CONFIGURED'
+        },
+        503
+      );
+    }
     const quota = await consumeAssistantQuota(userId, env);
     if (!quota.allowed) {
       return new Response(
@@ -100,7 +144,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         }
       );
     }
-    return streamAssistantProposal(payload, env, userId);
+    return streamAssistantProposal(
+      payload,
+      env,
+      userId,
+      assistant.runtime ?? undefined
+    );
   }
 
   const session = await authenticateRequest(request, env);
@@ -108,6 +157,47 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'GET' && pathname === '/api/session') {
     return json(session);
+  }
+
+  if (request.method === 'GET' && pathname === '/api/settings') {
+    return json(await getAppSettings(userId, env));
+  }
+
+  if (request.method === 'PATCH' && pathname === '/api/settings') {
+    assertSameOrigin(request);
+    const payload = parseUpdateAppSettingsRequest(
+      await readJsonBody(request),
+      env.ENVIRONMENT
+    );
+    return json(await updateAppSettings(userId, payload, env));
+  }
+
+  if (pathname === '/api/settings/assistant-credential') {
+    assertSameOrigin(request);
+    if (request.method === 'PUT') {
+      const token = parseAssistantCredential(await readJsonBody(request));
+      return json(await saveAssistantCredential(userId, token, env));
+    }
+    if (request.method === 'DELETE') {
+      return json(await deleteAssistantCredential(userId, env));
+    }
+  }
+
+  if (
+    request.method === 'POST' &&
+    pathname === '/api/settings/assistant/test'
+  ) {
+    assertSameOrigin(request);
+    const assistant = await resolveUserAssistant(userId, env);
+    if (!assistant.runtime) {
+      throw new HttpError(
+        400,
+        'Save and select a personal AI credential before testing it.'
+      );
+    }
+    const result = await testAssistantConnection(assistant.runtime, env);
+    await markAssistantCredentialValidated(userId, env);
+    return json(result);
   }
 
   if (request.method === 'GET' && pathname === '/api/projects') {
@@ -265,6 +355,9 @@ export default {
           },
           409
         );
+      }
+      if (error instanceof HttpAssistantConfigurationError) {
+        return json({ error: error.message }, 502);
       }
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
