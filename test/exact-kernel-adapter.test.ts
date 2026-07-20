@@ -224,6 +224,193 @@ describe('exact hybrid kernel adapter', () => {
     expect(manager.document.commandLog[0]?.kind).toBe('import.step');
   });
 
+  it('measures and resizes an imported exact through hole in both directions', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Through-hole source', toUserId('user_exact')),
+      {
+        name: 'Outer cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 15, height: 10 }
+      }
+    );
+    const outerId = withOuter.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withOuter, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 4, height: 20 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Pass tool through part',
+      targetBodyId: toolId,
+      translation: { x: 0, y: 0, z: -5 }
+    }).document;
+    const sourceManager = new CommandManager(positioned);
+    const source = sourceManager.execute(
+      commandFactories.booleanBodies({
+        name: 'Tube',
+        operation: 'subtract',
+        targetBodyIds: [outerId, toolId]
+      })
+    );
+    const sourceBodyId = source.bodyOrder.at(-1)!;
+    const step = await adapter.exportStep(source, [sourceBodyId]);
+
+    const base = createProjectDocument('Direct edit', toUserId('user_exact'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Imported tube',
+        artifactId: 'artifact_through_hole',
+        sourceName: 'tube.step',
+        stepText: step
+      })
+    );
+    const importedBodyId = manager.document.bodyOrder[0]!;
+    const imported = await adapter.syncDocument(manager.document);
+    const recognizedHoles = imported.bodyRepresentations[
+      importedBodyId
+    ]?.topology?.faces.filter(
+      (face) => face.geometry?.featureType === 'through-hole'
+    );
+    const hole = imported.bodyRepresentations[
+      importedBodyId
+    ]?.topology?.faces.find(
+      (face) => face.geometry?.featureType === 'through-hole'
+    );
+
+    expect(recognizedHoles).toHaveLength(1);
+    expect(hole?.geometry).toMatchObject({
+      surfaceType: 'cylinder',
+      radius: 4,
+      diameter: 8,
+      axialLength: 10,
+      editableDimension: 'diameter'
+    });
+    expect(hole?.geometry?.area).toBeCloseTo(Math.PI * 8 * 10, 4);
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Resize through hole',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'resize-through-hole',
+          faceHash: hole!.hash,
+          sourceDiameter: 8,
+          sourceAxisStart: hole!.geometry!.axisStart!,
+          sourceAxisEnd: hole!.geometry!.axisEnd!,
+          diameter: 12
+        }
+      })
+    );
+    const enlarged = await adapter.syncDocument(manager.document);
+    const enlargedBody = enlarged.bodyRepresentations[importedBodyId]!;
+    const enlargedHole = enlargedBody.topology?.faces.find(
+      (face) => face.geometry?.featureType === 'through-hole'
+    );
+    expect(enlarged.warnings).toEqual([]);
+    expect(enlargedHole?.geometry?.diameter).toBeCloseTo(12, 6);
+    expect(enlargedBody.volume).toBeCloseTo(
+      Math.PI * (15 ** 2 - 6 ** 2) * 10,
+      4
+    );
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Shrink through hole',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'resize-through-hole',
+          faceHash: enlargedHole!.hash,
+          sourceDiameter: 12,
+          sourceAxisStart: enlargedHole!.geometry!.axisStart!,
+          sourceAxisEnd: enlargedHole!.geometry!.axisEnd!,
+          diameter: 4
+        }
+      })
+    );
+    const shrunk = await adapter.syncDocument(manager.document);
+    const shrunkBody = shrunk.bodyRepresentations[importedBodyId]!;
+    const shrunkHole = shrunkBody.topology?.faces.find(
+      (face) => face.geometry?.featureType === 'through-hole'
+    );
+    expect(shrunk.warnings).toEqual([]);
+    expect(shrunkHole?.geometry?.diameter).toBeCloseTo(4, 6);
+    expect(shrunkBody.volume).toBeCloseTo(Math.PI * (15 ** 2 - 2 ** 2) * 10, 4);
+
+    const editedStep = await adapter.exportStep(manager.document, [
+      importedBodyId
+    ]);
+    await expect(adapter.inspectStep(editedStep)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Remove imported feature',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'remove-face-feature',
+          faceHash: shrunkHole!.hash,
+          sourceSurfaceType: 'cylinder',
+          sourceArea: shrunkHole!.geometry!.area,
+          sourceCenter: shrunkHole!.geometry!.center,
+          sourceDiameter: 4,
+          sourceAxisStart: shrunkHole!.geometry!.axisStart,
+          sourceAxisEnd: shrunkHole!.geometry!.axisEnd
+        }
+      })
+    );
+    const removed = await adapter.syncDocument(manager.document);
+    const removedBody = removed.bodyRepresentations[importedBodyId]!;
+    expect(removed.warnings).toEqual([]);
+    expect(removedBody.volume).toBeCloseTo(Math.PI * 15 ** 2 * 10, 4);
+    expect(removedBody.faceCount).toBe(3);
+    expect(
+      removedBody.topology?.faces.some(
+        (face) => face.geometry?.featureType === 'through-hole'
+      )
+    ).toBe(false);
+
+    manager.undo();
+    const restored = await adapter.syncDocument(manager.document);
+    expect(
+      restored.bodyRepresentations[importedBodyId]?.topology?.faces.find(
+        (face) => face.geometry?.featureType === 'through-hole'
+      )?.geometry?.diameter
+    ).toBeCloseTo(4, 6);
+    expect(
+      manager.document.commandLog.slice(-2).map((entry) => entry.kind)
+    ).toEqual(['feature.direct-edit', 'feature.direct-edit']);
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Mismatched topology edit',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'resize-through-hole',
+          faceHash: shrunkHole!.hash,
+          sourceDiameter: 4,
+          sourceAxisStart: {
+            ...shrunkHole!.geometry!.axisStart!,
+            x: shrunkHole!.geometry!.axisStart!.x + 1
+          },
+          sourceAxisEnd: shrunkHole!.geometry!.axisEnd!,
+          diameter: 6
+        }
+      })
+    );
+    const mismatched = await adapter.syncDocument(manager.document);
+    expect(mismatched.warnings).toContain(
+      'Feature "Mismatched topology edit": Selected face no longer matches its recorded hole axis.'
+    );
+    expect(mismatched.bodyRepresentations[importedBodyId]?.volume).toBeCloseTo(
+      Math.PI * (15 ** 2 - 2 ** 2) * 10,
+      4
+    );
+  });
+
   it('builds selected-edge fillet and chamfer features', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Edge modifiers', toUserId('user_exact')),

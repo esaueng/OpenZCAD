@@ -59,6 +59,8 @@ import type {
   BodyRepresentation,
   FeatureId,
   FeatureNode,
+  FaceGeometry,
+  ParamValue,
   ProjectDocument,
   ProjectSummary,
   SketchId,
@@ -217,8 +219,9 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [projection, setProjection] = useState<ProjectionMode>('perspective');
-  const [initialView, setInitialView] =
-    useState<ViewportCameraState | null>(null);
+  const [initialView, setInitialView] = useState<ViewportCameraState | null>(
+    null
+  );
   const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
     new Set()
   );
@@ -246,6 +249,7 @@ export function App() {
     >()
   );
   const lastSyncedKeyRef = useRef<string | null>(null);
+  const directEditInFlightRef = useRef(false);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const viewportCameraRef = useRef<ViewportCameraState | null>(null);
@@ -588,7 +592,10 @@ export function App() {
   }, [doc, selectedBody]);
 
   // Bottom-center selection summary: what is picked plus a quick measurement.
-  const selectionChip = useMemo<{ label: string; detail?: string } | null>(() => {
+  const selectionChip = useMemo<{
+    label: string;
+    detail?: string;
+  } | null>(() => {
     if (!doc || tool === 'sketch') {
       return null;
     }
@@ -605,9 +612,24 @@ export function App() {
     }
     if (selectedTopology?.kind === 'face') {
       const body = representations[selectedTopology.bodyId];
+      const face = body?.topology?.faces.find(
+        (candidate) => candidate.hash === selectedTopology.hash
+      );
+      const geometry = face?.geometry;
+      if (
+        geometry?.featureType === 'through-hole' &&
+        geometry.diameter !== undefined
+      ) {
+        return {
+          label: 'Through hole',
+          detail: `Ø ${round(geometry.diameter)} ${units}`
+        };
+      }
       return {
         label: '1 face',
-        detail: body ? `${body.name} · ${selectedTopology.topologyId}` : selectedTopology.topologyId
+        detail: body
+          ? `${body.name} · ${selectedTopology.topologyId}`
+          : selectedTopology.topologyId
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -630,7 +652,14 @@ export function App() {
       };
     }
     return null;
-  }, [doc, tool, selectedEdges, selectedTopology, selectedBodyIds, representations]);
+  }, [
+    doc,
+    tool,
+    selectedEdges,
+    selectedTopology,
+    selectedBodyIds,
+    representations
+  ]);
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -1092,9 +1121,7 @@ export function App() {
           updatedAt: document.derived.updatedAt,
           revisionCount: document.checkpoints.length
         },
-        ...current.filter(
-          (project) => project.projectId !== document.projectId
-        )
+        ...current.filter((project) => project.projectId !== document.projectId)
       ]);
       setStatus(
         `${definition.name} ready — three revisions in the feature history.`
@@ -1572,6 +1599,112 @@ export function App() {
     setSelectedTopology(bodyId ? { bodyId, kind: 'body' } : null);
     setSelectedBodyIds(bodyId ? [bodyId] : []);
     setStatus('Edge selection cleared.');
+  }
+
+  async function executeValidatedDirectEdit(
+    command: AnyCommand,
+    targetBodyId: BodyId,
+    successMessage: string
+  ): Promise<void> {
+    const manager = managerRef.current;
+    if (!manager || directEditInFlightRef.current) {
+      return;
+    }
+    directEditInFlightRef.current = true;
+    const current = manager.document;
+    setBusy(true);
+    setStatus('Validating direct edit with the exact geometry kernel…');
+    try {
+      command.validate(current);
+      const preview = command.apply(current);
+      const derived = await requestExactSync(preview);
+      const directEditWarning = derived.warnings.find((warning) =>
+        warning.startsWith(`Feature "${command.label}":`)
+      );
+      if (directEditWarning) {
+        throw new Error(directEditWarning.replace(/^Feature "[^"]+":\s*/, ''));
+      }
+      if (!derived.bodyRepresentations[targetBodyId]) {
+        throw new Error('Direct edit did not produce the selected body.');
+      }
+      if (
+        managerRef.current !== manager ||
+        manager.document.projectId !== current.projectId ||
+        manager.document.version !== current.version
+      ) {
+        throw new Error('The document changed while the edit was validating.');
+      }
+      if (!executeCommand(command)) {
+        return;
+      }
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([targetBodyId]);
+      setSelectedFeatureNodeId(featureNodeIdForBody(targetBodyId));
+      setStatus(successMessage);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Direct edit was not applied.'));
+    } finally {
+      directEditInFlightRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  function handleResizeThroughHole(
+    selection: TopologySelection,
+    geometry: FaceGeometry,
+    diameter: ParamValue
+  ) {
+    if (
+      geometry.diameter === undefined ||
+      !geometry.axisStart ||
+      !geometry.axisEnd
+    ) {
+      setStatus('Exact through-hole dimensions are unavailable.');
+      return;
+    }
+    const label = 'Resize through hole';
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: label,
+        targetBodyId: selection.bodyId,
+        operation: {
+          kind: 'resize-through-hole',
+          faceHash: selection.hash ?? -1,
+          sourceDiameter: geometry.diameter,
+          sourceAxisStart: geometry.axisStart,
+          sourceAxisEnd: geometry.axisEnd,
+          diameter
+        }
+      }),
+      selection.bodyId,
+      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`
+    );
+  }
+
+  function handleRemoveFaceFeature(
+    selection: TopologySelection,
+    geometry: FaceGeometry
+  ) {
+    const label = 'Remove imported feature';
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: label,
+        targetBodyId: selection.bodyId,
+        operation: {
+          kind: 'remove-face-feature',
+          faceHash: selection.hash ?? -1,
+          sourceSurfaceType: geometry.surfaceType,
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceDiameter: geometry.diameter,
+          sourceAxisStart: geometry.axisStart,
+          sourceAxisEnd: geometry.axisEnd
+        }
+      }),
+      selection.bodyId,
+      'Removed the selected imported feature.'
+    );
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
@@ -2576,6 +2709,8 @@ export function App() {
                 )
               )
             }
+            onResizeThroughHole={handleResizeThroughHole}
+            onRemoveFaceFeature={handleRemoveFaceFeature}
             onDeleteFeature={(feature) =>
               handleDeleteFeature(feature.featureId, feature.name)
             }

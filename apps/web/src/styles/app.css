@@ -1979,6 +1979,46 @@
   text-overflow: ellipsis;
 }
 
+.direct-face-editor {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: var(--border-thin);
+}
+
+.direct-face-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.direct-face-summary strong {
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.direct-face-summary span {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.direct-diameter-form {
+  margin-top: 12px;
+}
+
+.remove-face-feature {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.direct-edit-note {
+  margin-top: 8px;
+}
+
 /* ── StatusBar ───────────────────────────────────────────── */
 
 .status-bar {
@@ -2085,7 +2125,11 @@
       42px,
     linear-gradient(90deg, rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 /
       42px 42px;
-  -webkit-mask-image: radial-gradient(70% 65% at 50% 45%, #000, transparent 80%);
+  -webkit-mask-image: radial-gradient(
+    70% 65% at 50% 45%,
+    #000,
+    transparent 80%
+  );
   mask-image: radial-gradient(70% 65% at 50% 45%, #000, transparent 80%);
 }
 
