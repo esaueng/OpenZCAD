@@ -62,6 +62,8 @@ export interface CloudflareEnv {
   AI_TIMEOUT_MS?: string;
   AI_RATE_LIMIT_REQUESTS?: string;
   AI_RATE_LIMIT_WINDOW_SECONDS?: string;
+  /** Base64-encoded 32-byte AES key for owner-scoped AI credentials. */
+  SETTINGS_ENCRYPTION_KEY?: string;
   DB?: D1Database;
   ARTIFACTS?: R2Bucket;
 }
@@ -189,12 +191,12 @@ export class D1R2PersistenceService implements PersistenceService {
       this.env.DB.prepare(
         `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at) SELECT ?, ?, ?, ?, ? WHERE changes() > 0`
       ).bind(
-          latestRevision.revisionId,
-          request.projectId,
-          request.reason,
-          documentJson,
-          latestRevision.createdAt
-        )
+        latestRevision.revisionId,
+        request.projectId,
+        request.reason,
+        documentJson,
+        latestRevision.createdAt
+      )
     ]);
     if (results[0]?.meta?.changes === 0) {
       const current = await this.env.DB.prepare(
@@ -262,7 +264,9 @@ export class D1R2PersistenceService implements PersistenceService {
         expires_at: string;
       }>();
     if (!upload || Date.parse(upload.expires_at) < Date.now()) {
-      throw new ArtifactStorageError('Upload session was not found or expired.');
+      throw new ArtifactStorageError(
+        'Upload session was not found or expired.'
+      );
     }
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
@@ -393,9 +397,7 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError();
     }
     const stored = await this.env.ARTIFACTS.get(artifact.objectKey);
-    return stored
-      ? { artifact, body: await stored.arrayBuffer() }
-      : null;
+    return stored ? { artifact, body: await stored.arrayBuffer() } : null;
   }
 
   private async assertProjectOwner(
@@ -429,9 +431,9 @@ export class D1R2PersistenceService implements PersistenceService {
     );
     await this.env.DB.batch(
       rows.map((row) =>
-        this.env.DB!.prepare(`DELETE FROM upload_sessions WHERE id = ?`).bind(
-          row.id
-        )
+        this.env
+          .DB!.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
+          .bind(row.id)
       )
     );
   }
@@ -664,7 +666,10 @@ export class ProjectCollaborationRoom extends DurableObject {
         this.documentHistory.set(latest.version, latest);
       }
       this.latestDocument = resolution.document;
-      this.documentHistory.set(resolution.document.version, resolution.document);
+      this.documentHistory.set(
+        resolution.document.version,
+        resolution.document
+      );
       await this.persistRoomState();
       this.send(socket, { type: 'ack', version: resolution.document.version });
       if (broadcast) {
@@ -689,7 +694,9 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     const contentLength = Number(request.headers.get('content-length') ?? '0');
     if (Number.isFinite(contentLength) && contentLength > 10_000_000) {
-      return new Response('Collaboration snapshot is too large.', { status: 413 });
+      return new Response('Collaboration snapshot is too large.', {
+        status: 413
+      });
     }
     const payload = (await request.json()) as {
       clientId?: string;
@@ -728,7 +735,10 @@ export class ProjectCollaborationRoom extends DurableObject {
         );
       }
       this.latestDocument = resolution.document;
-      this.documentHistory.set(resolution.document.version, resolution.document);
+      this.documentHistory.set(
+        resolution.document.version,
+        resolution.document
+      );
       await this.persistRoomState();
       this.broadcast({
         type: 'document',

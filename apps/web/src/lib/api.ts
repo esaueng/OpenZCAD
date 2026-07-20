@@ -1,4 +1,5 @@
 import type {
+  AppSettingsResponse,
   AuthSession,
   ArtifactMetadataResponse,
   CreateProjectRequest,
@@ -10,7 +11,9 @@ import type {
   ListProjectsResponse,
   ProjectDocument,
   ListArtifactsResponse,
-  SaveRevisionRequest
+  SaveAssistantCredentialRequest,
+  SaveRevisionRequest,
+  UpdateAppSettingsRequest
 } from '@openzcad/shared';
 
 async function requestJson<T>(
@@ -27,7 +30,16 @@ async function requestJson<T>(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `${response.status} ${response.statusText}`);
+    let message = text;
+    try {
+      const payload = JSON.parse(text) as { error?: unknown };
+      if (typeof payload.error === 'string') {
+        message = payload.error;
+      }
+    } catch {
+      // Plain-text responses remain useful as-is.
+    }
+    throw new Error(message || `${response.status} ${response.statusText}`);
   }
 
   return (await response.json()) as T;
@@ -36,6 +48,26 @@ async function requestJson<T>(
 export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
   session: () => requestJson<AuthSession>('/api/session'),
+  getSettings: () => requestJson<AppSettingsResponse>('/api/settings'),
+  updateSettings: (payload: UpdateAppSettingsRequest) =>
+    requestJson<AppSettingsResponse>('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  saveAssistantCredential: (payload: SaveAssistantCredentialRequest) =>
+    requestJson<AppSettingsResponse>('/api/settings/assistant-credential', {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  deleteAssistantCredential: () =>
+    requestJson<AppSettingsResponse>('/api/settings/assistant-credential', {
+      method: 'DELETE'
+    }),
+  testAssistantConnection: () =>
+    requestJson<{ ok: true; latencyMs: number }>(
+      '/api/settings/assistant/test',
+      { method: 'POST', body: '{}' }
+    ),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {
@@ -64,7 +96,9 @@ export const api = {
       body
     });
     if (!response.ok) {
-      throw new Error((await response.text()) || `Upload failed (${response.status}).`);
+      throw new Error(
+        (await response.text()) || `Upload failed (${response.status}).`
+      );
     }
   },
   finalizeArtifact: (payload: FinalizeArtifactRequest) =>
