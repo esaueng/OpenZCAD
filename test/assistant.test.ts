@@ -54,11 +54,12 @@ describe('assistant integration', () => {
     expect(parseAssistantEventData('{not-json')).toBeNull();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          'data: {not-json}\n\ndata: {"type":"response.output_text.delta","delta":"{}"}\n\n',
-          { headers: { 'content-type': 'text/event-stream' } }
-        )
+      vi.fn(
+        async () =>
+          new Response(
+            'data: {not-json}\n\ndata: {"type":"response.output_text.delta","delta":"{}"}\n\n',
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
       )
     );
 
@@ -71,20 +72,21 @@ describe('assistant integration', () => {
     const encoder = new TextEncoder();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(
-                encoder.encode(
-                  'data: {"type":"response.output_text.delta","delta":"{"}\n\n'
-                )
-              );
-              controller.error(new Error('socket reset'));
-            }
-          }),
-          { headers: { 'content-type': 'text/event-stream' } }
-        )
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(
+                  encoder.encode(
+                    'data: {"type":"response.output_text.delta","delta":"{"}\n\n'
+                  )
+                );
+                controller.error(new Error('socket reset'));
+              }
+            }),
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
       )
     );
 
@@ -99,11 +101,17 @@ describe('assistant integration', () => {
       AI_RATE_LIMIT_WINDOW_SECONDS: '60'
     };
     const userId = toUserId('user_quota');
-    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(true);
-    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(true);
+    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(
+      true
+    );
+    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(
+      true
+    );
     const limited = await consumeAssistantQuota(userId, env, 1_000);
     expect(limited).toMatchObject({ allowed: false, limit: 2, remaining: 0 });
-    expect((await consumeAssistantQuota(userId, env, 61_000)).allowed).toBe(true);
+    expect((await consumeAssistantQuota(userId, env, 61_000)).allowed).toBe(
+      true
+    );
   });
 
   it('requests a strict streamed response from the configured model', async () => {
@@ -145,6 +153,45 @@ describe('assistant integration', () => {
       text: {
         format: { type: 'json_schema', name: 'openzcad_patch', strict: true }
       }
+    });
+  });
+
+  it('uses one owner-scoped runtime configuration without leaking it into app defaults', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamAssistantProposal(input, {}, 'user_personal', {
+      provider: 'responses-compatible',
+      apiKey: 'personal-key',
+      baseUrl: 'https://models.example.test/v1/responses',
+      model: 'owner-model',
+      reasoningEffort: 'off',
+      maxOutputTokens: 24_000,
+      timeoutMs: 30_000,
+      customInstructions: 'Prefer 0.4 mm sliding clearances.'
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://models.example.test/v1/responses');
+    expect(new Headers(init?.headers).get('authorization')).toBe(
+      'Bearer personal-key'
+    );
+    const request = JSON.parse(init?.body as string) as Record<string, unknown>;
+    expect(request).toMatchObject({
+      model: 'owner-model',
+      max_output_tokens: 24_000,
+      safety_identifier: 'user_personal'
+    });
+    expect(request).not.toHaveProperty('reasoning');
+    expect(request.instructions).toContain('Prefer 0.4 mm sliding clearances.');
+    expect(getAssistantStatus({})).toMatchObject({
+      provider: 'openrouter',
+      model: DEFAULT_OPENROUTER_MODEL
     });
   });
 
