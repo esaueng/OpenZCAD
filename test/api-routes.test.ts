@@ -18,10 +18,7 @@ function post(path: string, body: unknown): Request {
 }
 
 async function createProject(name: string): Promise<CreateProjectResponse> {
-  const response = await worker.fetch(
-    post('/api/projects', { name }),
-    env
-  );
+  const response = await worker.fetch(post('/api/projects', { name }), env);
   expect(response.status).toBe(201);
   return (await response.json()) as CreateProjectResponse;
 }
@@ -64,6 +61,40 @@ describe('worker api routes', () => {
     });
   });
 
+  it('returns device-safe settings defaults when account storage is unavailable', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/settings'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      revision: 0,
+      synced: false,
+      settings: {
+        general: { defaultUnits: 'mm' },
+        assistant: { credentialSource: 'deployment' }
+      },
+      credential: { stored: false, storageAvailable: false }
+    });
+    expect(JSON.stringify(payload)).not.toMatch(/API_KEY|secret-test-value/);
+  });
+
+  it('rejects cross-origin settings mutations', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/settings', {
+        method: 'PATCH',
+        headers: {
+          origin: 'https://attacker.example',
+          'content-type': 'application/json'
+        },
+        body: '{}'
+      }),
+      env
+    );
+    expect(response.status).toBe(403);
+  });
+
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
@@ -87,6 +118,23 @@ describe('worker api routes', () => {
       reasoningEffort: 'high'
     });
     expect(JSON.stringify(status)).not.toContain('secret-test-value');
+  });
+
+  it('exposes assistant status without a Cloudflare Access session', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status'),
+      {
+        ...env,
+        AUTH_MODE: 'cloudflare-access',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: true,
+      provider: 'openrouter'
+    });
   });
 
   it('requires Cloudflare Access identity when configured', async () => {
@@ -162,6 +210,32 @@ describe('worker api routes', () => {
     expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
   });
 
+  it('accepts a rate-limited public assistant request without Access', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/proposals', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': '203.0.113.42' },
+        body: JSON.stringify({
+          prompt: 'Make it wider',
+          digest: {
+            schemaVersion: 3,
+            projectId: 'proj_ai_public',
+            name: 'Bracket',
+            units: 'mm',
+            version: 1,
+            parameters: [],
+            features: [],
+            warnings: []
+          }
+        })
+      }),
+      { ...env, AUTH_MODE: 'cloudflare-access' } as never
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
+  });
+
   it('rejects oversized assistant digests before provider dispatch', async () => {
     const response = await worker.fetch(
       post('/api/assistant/proposals', {
@@ -200,10 +274,7 @@ describe('worker api routes', () => {
   });
 
   it('rejects project creation without a name', async () => {
-    const response = await worker.fetch(
-      post('/api/projects', {}),
-      env
-    );
+    const response = await worker.fetch(post('/api/projects', {}), env);
     expect(response.status).toBe(400);
 
     const blankResponse = await worker.fetch(
@@ -304,10 +375,10 @@ describe('worker api routes', () => {
 
     const response = await worker.fetch(
       post(`/api/projects/${ghostId}/revisions`, {
-      projectId: ghostId,
-      reason: 'Manual save',
-      expectedVersion: document.version,
-      document
+        projectId: ghostId,
+        reason: 'Manual save',
+        expectedVersion: document.version,
+        document
       }),
       env
     );

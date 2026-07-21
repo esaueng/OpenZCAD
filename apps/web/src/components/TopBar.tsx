@@ -7,15 +7,12 @@ import {
   LoaderCircle,
   Pencil,
   Redo2,
+  Settings as SettingsIcon,
   Undo2,
   Upload,
   Users
 } from 'lucide-react';
-import type {
-  ArtifactRecord,
-  AuthSession,
-  UnitSystem
-} from '@openzcad/shared';
+import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 
@@ -39,6 +36,7 @@ interface TopBarProps {
   onExport(format: 'step' | 'stl'): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
+  onOpenSettings(): void;
 }
 
 export function TopBar({
@@ -59,7 +57,8 @@ export function TopBar({
   onImportFile,
   onExport,
   onRenameProject,
-  onGoHome
+  onGoHome,
+  onOpenSettings
 }: TopBarProps) {
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
@@ -262,6 +261,15 @@ export function TopBar({
           {session.displayName}
         </span>
       )}
+      <button
+        className="icon-button"
+        type="button"
+        title="Settings (Ctrl+,)"
+        aria-label="Open settings"
+        onClick={onOpenSettings}
+      >
+        <SettingsIcon size={15} aria-hidden="true" />
+      </button>
       <span
         className={`collaboration-state ${collaborationStatus}`}
         title={`Collaboration: ${collaborationStatus}`}

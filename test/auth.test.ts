@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { authenticateRequest } from '../apps/web/worker/auth';
+import {
+  authenticateRequest,
+  identifyAssistantRequest
+} from '../apps/web/worker/auth';
 
 describe('worker authentication', () => {
   it('allows explicit development authentication only in development', async () => {
@@ -74,6 +77,37 @@ describe('worker authentication', () => {
         },
         verify
       )
+    ).rejects.toThrow('Authentication required.');
+  });
+});
+
+describe('assistant request identity', () => {
+  it('uses a stable opaque identity for public Cloudflare requests', async () => {
+    const env = { AUTH_MODE: 'cloudflare-access' as const };
+    const request = new Request('https://example.com/api/assistant/proposals', {
+      headers: { 'cf-connecting-ip': '203.0.113.42' }
+    });
+
+    const first = await identifyAssistantRequest(request, env);
+    const second = await identifyAssistantRequest(request, env);
+
+    expect(first).toBe(second);
+    expect(first).toMatch(/^user_anon_[a-f0-9]{24}$/);
+    expect(first).not.toContain('203.0.113.42');
+  });
+
+  it('does not downgrade an invalid Access assertion to public identity', async () => {
+    const request = new Request('https://example.com/api/assistant/proposals', {
+      headers: {
+        'cf-access-jwt-assertion': 'invalid',
+        'cf-connecting-ip': '203.0.113.42'
+      }
+    });
+
+    await expect(
+      identifyAssistantRequest(request, {
+        AUTH_MODE: 'cloudflare-access'
+      })
     ).rejects.toThrow('Authentication required.');
   });
 });

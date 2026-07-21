@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { FolderOpen, GraduationCap, Plus } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FolderOpen, GraduationCap, Plus, Settings } from 'lucide-react';
 import type { ProjectSummary, UnitSystem } from '@openzcad/shared';
 import type { DemoDefinition } from '../lib/demos';
 import { BrandMark } from './BrandMark';
@@ -9,9 +9,11 @@ interface StartScreenProps {
   status: string;
   busy: boolean;
   demos: DemoDefinition[];
+  defaultUnits: UnitSystem;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
+  onOpenSettings(): void;
 }
 
 export function StartScreen({
@@ -19,12 +21,19 @@ export function StartScreen({
   status,
   busy,
   demos,
+  defaultUnits,
   onCreate,
   onOpen,
-  onOpenDemo
+  onOpenDemo,
+  onOpenSettings
 }: StartScreenProps) {
   const [name, setName] = useState('New Part');
-  const [units, setUnits] = useState<UnitSystem>('mm');
+  const [units, setUnits] = useState<UnitSystem>(defaultUnits);
+
+  useEffect(() => {
+    setUnits(defaultUnits);
+  }, [defaultUnits]);
+
   const demoIds = new Set(demos.map((demo) => demo.projectId));
   const userProjects = projects.filter(
     (project) => !demoIds.has(project.projectId)
@@ -32,6 +41,15 @@ export function StartScreen({
 
   return (
     <div className="start-screen">
+      <button
+        className="start-settings-button icon-button"
+        type="button"
+        aria-label="Open settings"
+        title="Settings (Ctrl+,)"
+        onClick={onOpenSettings}
+      >
+        <Settings size={16} aria-hidden="true" />
+      </button>
       <div className="start-card">
         <div className="start-brand">
           <BrandMark />
@@ -77,7 +95,10 @@ export function StartScreen({
           }}
           onKeyDown={(event) => {
             // Enter creates from any field, including the units select.
-            if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+            if (
+              event.key === 'Enter' &&
+              !(event.target instanceof HTMLButtonElement)
+            ) {
               event.preventDefault();
               if (!busy && name.trim().length > 0) {
                 onCreate(name.trim(), units);
