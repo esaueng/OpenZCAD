@@ -19,6 +19,7 @@ import {
   PenLine,
   Move3d,
   Save,
+  Settings as SettingsIcon,
   Scissors,
   Spline,
   Trash2,
@@ -71,7 +72,11 @@ import type {
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
-import type { AuthSession } from '@openzcad/shared';
+import type {
+  AppSettings,
+  AppSettingsResponse,
+  AuthSession
+} from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
 import {
@@ -97,6 +102,7 @@ import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
+import { SettingsPage } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AiCommandRail } from './components/AiCommandRail';
@@ -146,15 +152,15 @@ import {
   saveProjectView,
   type ViewportCameraState
 } from './lib/workspaceSession';
+import {
+  defaultAppSettings,
+  loadLocalAppSettings,
+  saveLocalAppSettings
+} from './lib/appSettings';
 
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
-const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
-  showGrid: true,
-  displayMode: 'shaded-edges'
-};
-
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -182,6 +188,16 @@ function mergeProjectSummaries(
 }
 
 export function App() {
+  const [appSettings, setAppSettings] = useState<AppSettings>(() =>
+    loadLocalAppSettings()
+  );
+  const [accountSettings, setAccountSettings] =
+    useState<AppSettingsResponse | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState(
+    'Changes save on this device immediately.'
+  );
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
@@ -206,9 +222,10 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(
-    DEFAULT_VIEWER_SETTINGS
-  );
+  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(() => ({
+    showGrid: appSettings.viewport.showGrid,
+    displayMode: appSettings.viewport.displayMode
+  }));
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
     'saving'
@@ -222,7 +239,9 @@ export function App() {
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [projection, setProjection] = useState<ProjectionMode>('perspective');
+  const [projection, setProjection] = useState<ProjectionMode>(
+    appSettings.viewport.defaultProjection
+  );
   const [initialView, setInitialView] = useState<ViewportCameraState | null>(
     null
   );
@@ -285,6 +304,16 @@ export function App() {
       );
     }
   });
+
+  useEffect(() => {
+    saveLocalAppSettings(appSettings);
+    globalThis.document.documentElement.dataset.density =
+      appSettings.appearance.density;
+    globalThis.document.documentElement.dataset.reducedMotion = appSettings
+      .appearance.reducedMotion
+      ? 'true'
+      : 'false';
+  }, [appSettings]);
 
   useEffect(() => {
     const worker = new Worker(
@@ -356,8 +385,10 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      const activeProjectId = loadActiveProjectId();
-      const [local, remote, rememberedLocal, rememberedRemote] =
+      const activeProjectId = appSettings.general.reopenLastProject
+        ? loadActiveProjectId()
+        : null;
+      const [local, remote, rememberedLocal, rememberedRemote, remoteSettings] =
         await Promise.all([
           listLocalProjects().catch(() => []),
           Promise.all([api.health(), api.session(), api.listProjects()]).catch(
@@ -368,7 +399,8 @@ export function App() {
             : Promise.resolve(null),
           activeProjectId
             ? api.loadProject(activeProjectId).catch(() => null)
-            : Promise.resolve(null)
+            : Promise.resolve(null),
+          api.getSettings().catch(() => null)
         ]);
       const remoteProjects = remote?.[2].projects ?? [];
       const merged = mergeProjectSummaries(local, remoteProjects);
@@ -386,6 +418,11 @@ export function App() {
       setProjects(merged);
       setCloudAvailable(canUseCloud);
       setSession(remote?.[1] ?? null);
+      if (remoteSettings) {
+        setAccountSettings(remoteSettings);
+        setAppSettings(remoteSettings.settings);
+        saveLocalAppSettings(remoteSettings.settings);
+      }
       setSaveState(canUseCloud ? 'saved' : 'offline');
       if (activeProjectId && restoredDocument) {
         hydrateDocument(restoredDocument);
@@ -401,6 +438,8 @@ export function App() {
           : `Offline workspace · ${merged.length} local project(s)`
       );
     })();
+    // Startup settings are intentionally read once. Later settings changes
+    // should not re-run project discovery or reopen a different document.
   }, []);
 
   useEffect(() => {
@@ -790,8 +829,15 @@ export function App() {
       const camera = savedView?.camera ?? null;
       viewportCameraRef.current = camera;
       setInitialView(camera);
-      setProjection(savedView?.projection ?? 'perspective');
-      setViewerSettings(savedView?.settings ?? DEFAULT_VIEWER_SETTINGS);
+      setProjection(
+        savedView?.projection ?? appSettings.viewport.defaultProjection
+      );
+      setViewerSettings(
+        savedView?.settings ?? {
+          showGrid: appSettings.viewport.showGrid,
+          displayMode: appSettings.viewport.displayMode
+        }
+      );
       setHiddenBodyIds(new Set(savedView?.hiddenBodyIds ?? []));
     }
     if (rememberProject) {
@@ -1076,6 +1122,135 @@ export function App() {
   function showAllBodies() {
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
+  }
+
+  function handleAppSettingsChange(next: AppSettings) {
+    setAppSettings(next);
+    setSettingsMessage('Saved on this device.');
+  }
+
+  function openSettings() {
+    setSettingsOpen(true);
+    setPaletteOpen(false);
+    setSettingsMessage('Changes save on this device immediately.');
+    void api
+      .getSettings()
+      .then(setAccountSettings)
+      .catch(() => {
+        setSettingsMessage(
+          'Account sync unavailable · device settings active.'
+        );
+      });
+  }
+
+  async function handleSaveAppSettings() {
+    if (!accountSettings?.synced) {
+      setSettingsMessage('Account sync unavailable · device settings active.');
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsMessage('Saving account settings…');
+    try {
+      const response = await api.updateSettings({
+        settings: appSettings,
+        expectedRevision: accountSettings.revision
+      });
+      setAccountSettings(response);
+      setSettingsMessage('Saved to this device and account.');
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Account settings save failed.'));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function syncSettingsBeforeAssistantAction() {
+    if (!accountSettings?.synced) {
+      throw new Error('Account settings storage is unavailable.');
+    }
+    const response = await api.updateSettings({
+      settings: appSettings,
+      expectedRevision: accountSettings.revision
+    });
+    setAccountSettings(response);
+    return response;
+  }
+
+  async function handleSaveAssistantCredential(token: string) {
+    setSettingsBusy(true);
+    setSettingsMessage('Encrypting and saving personal credential…');
+    try {
+      await syncSettingsBeforeAssistantAction();
+      const response = await api.saveAssistantCredential({ token });
+      setAccountSettings(response);
+      setSettingsMessage(
+        `Personal credential saved as ${response.credential.hint}.`
+      );
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Credential save failed.'));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleDeleteAssistantCredential() {
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm('Remove the saved personal AI credential?')
+    ) {
+      return;
+    }
+    setSettingsBusy(true);
+    setSettingsMessage('Removing personal credential…');
+    try {
+      const response = await api.deleteAssistantCredential();
+      setAccountSettings(response);
+      setSettingsMessage('Personal credential removed.');
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Credential removal failed.'));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleTestAssistantConnection() {
+    setSettingsBusy(true);
+    setSettingsMessage('Testing the configured provider…');
+    try {
+      await syncSettingsBeforeAssistantAction();
+      const result = await api.testAssistantConnection();
+      const response = await api.getSettings();
+      setAccountSettings(response);
+      setSettingsMessage(`Connection ready · ${result.latencyMs} ms.`);
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Connection test failed.'));
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  function handleResetAppSettings() {
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        'Reset application settings on this device? Projects are not deleted.'
+      )
+    ) {
+      return;
+    }
+    const defaults = defaultAppSettings();
+    setAppSettings(defaults);
+    saveLocalAppSettings(defaults);
+    setSettingsMessage('Application settings reset on this device.');
+  }
+
+  function applyViewportDefaults() {
+    setProjection(appSettings.viewport.defaultProjection);
+    setViewerSettings({
+      showGrid: appSettings.viewport.showGrid,
+      displayMode: appSettings.viewport.displayMode
+    });
+    setSettingsMessage('Viewport defaults applied to the current view.');
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
@@ -1372,7 +1547,8 @@ export function App() {
       setArtifacts((current) => [
         artifact,
         ...current.filter(
-          (currentArtifact) => currentArtifact.artifactId !== artifact.artifactId
+          (currentArtifact) =>
+            currentArtifact.artifactId !== artifact.artifactId
         )
       ]);
     }
@@ -2046,6 +2222,14 @@ export function App() {
   // Workspace keyboard map (ignored while typing in a field).
   useLayoutEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      const meta = event.ctrlKey || event.metaKey;
+
+      if (meta && event.key === ',') {
+        event.preventDefault();
+        openSettings();
+        return;
+      }
+
       if (!doc) {
         return;
       }
@@ -2055,8 +2239,6 @@ export function App() {
         (target.tagName === 'INPUT' ||
           target.tagName === 'SELECT' ||
           target.tagName === 'TEXTAREA');
-      const meta = event.ctrlKey || event.metaKey;
-
       if (meta && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setShortcutsOpen(false);
@@ -2195,6 +2377,26 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 
+  if (settingsOpen) {
+    return (
+      <SettingsPage
+        settings={appSettings}
+        accountState={accountSettings}
+        session={session}
+        busy={settingsBusy}
+        message={settingsMessage}
+        onChange={handleAppSettingsChange}
+        onSave={() => void handleSaveAppSettings()}
+        onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
+        onDeleteCredential={() => void handleDeleteAssistantCredential()}
+        onTestAssistant={() => void handleTestAssistantConnection()}
+        onReset={handleResetAppSettings}
+        onApplyViewportDefaults={applyViewportDefaults}
+        onClose={() => setSettingsOpen(false)}
+      />
+    );
+  }
+
   if (!doc) {
     return (
       <StartScreen
@@ -2202,9 +2404,11 @@ export function App() {
         status={status}
         busy={busy}
         demos={DEMO_DEFINITIONS}
+        defaultUnits={appSettings.general.defaultUnits}
         onCreate={(name, units) => void handleCreateProject(name, units)}
         onOpen={(projectId) => void handleOpenProject(projectId)}
         onOpenDemo={(definition) => void handleOpenDemo(definition)}
+        onOpenSettings={openSettings}
       />
     );
   }
@@ -2363,6 +2567,14 @@ export function App() {
       group: 'File',
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
+    },
+    {
+      id: 'app-settings',
+      label: 'Open settings',
+      group: 'General',
+      shortcut: 'Ctrl+,',
+      icon: <SettingsIcon size={16} aria-hidden="true" />,
+      run: openSettings
     }
   ];
 
@@ -2405,6 +2617,7 @@ export function App() {
             )
           }
           onGoHome={() => void handleGoHome()}
+          onOpenSettings={openSettings}
         />
       }
       toolBar={
@@ -2461,117 +2674,122 @@ export function App() {
           resetKey={`${doc.projectId}:${doc.version}`}
         >
           <ViewerShell
-          projectId={doc.projectId}
-          bodies={viewerBodies}
-          sketches={sketchOverlays}
-          selectedBodyIds={selectedBodyIds}
-          selectedTopology={selectedTopology}
-          selectedEdges={selectedEdges}
-          settings={viewerSettings}
-          fitSignal={fitSignal}
-          viewRequest={viewRequest}
-          units={doc.units}
-          editableBodyIds={directEditableBodyIds}
-          extrudePreview={extrudePreview}
-          movePreview={movePreview}
-          hideViewerToolbar={tool === 'sketch'}
-          selectionChip={selectionChip}
-          onClearSelection={clearSelection}
-          initialView={initialView}
-          onViewChange={handleViewportChange}
-          onMovePreviewChange={(translation, rotationDeg, snap) => {
-            setMoveSnap(snap);
-            setMovePreview((current) =>
-              current ? { ...current, translation, rotationDeg } : current
-            );
-          }}
-          modeOverlay={
-            movePreview ? (
-              <MoveOverlay
-                bodyName={
-                  representations[movePreview.bodyId as BodyId]?.name ??
-                  'Selected body'
-                }
-                values={{
-                  translation: movePreview.translation,
-                  rotationDeg: movePreview.rotationDeg
-                }}
-                units={doc.units}
-                snap={moveSnap}
-                onChange={(values) =>
-                  setMovePreview((current) =>
-                    current
-                      ? {
-                          ...current,
-                          translation: values.translation,
-                          rotationDeg: values.rotationDeg
-                        }
-                      : current
-                  )
-                }
-                onConfirm={confirmMove}
-                onCancel={cancelPanel}
-              />
-            ) : tool === 'sketch' ? (
-              <SketchWorkspace
-                sketchNumber={sketchOptions.length + 1}
-                units={doc.units}
-                onCancel={cancelPanel}
-                onFinish={finishSketch}
-              />
-            ) : extrudePreview && selectedSketchProfileName ? (
-              <ExtrudeOverlay
-                profileName={selectedSketchProfileName}
-                distance={extrudePreview.distance}
-                units={doc.units}
-                onDistanceChange={(distance) =>
-                  Number.isFinite(distance) &&
-                  setExtrudePreview((current) =>
-                    current ? { ...current, distance } : current
-                  )
-                }
-                onConfirm={confirmExtrude}
-                onCancel={cancelPanel}
-              />
-            ) : tool === 'extrude' ? (
-              <div className="profile-pick-prompt" role="status">
-                <Layers3 size={18} aria-hidden="true" />
-                <span>
-                  <strong>Select a closed profile</strong>
-                  <small>
-                    Click a shaded sketch region to begin extruding.
-                  </small>
-                </span>
-              </div>
-            ) : selectedSketchProfileId && selectedSketchProfileName ? (
-              <ProfileQuickAction
-                profileName={selectedSketchProfileName}
-                onExtrude={() => startExtrude(selectedSketchProfileId)}
-                onDismiss={() => setSelectedSketchProfileId(null)}
-              />
-            ) : null
-          }
-          projection={projection}
-          orientationRef={orientationRef}
-          onSelectTopology={handleSelectTopologyFromViewer}
-          onSelectSketchProfile={handleSelectSketchProfile}
-          onResizePrimitiveFace={handleResizePrimitiveFace}
-          onExtrudeDistanceChange={(distance) =>
-            setExtrudePreview((current) =>
-              current ? { ...current, distance } : current
-            )
-          }
-          onContextMenu={handleViewportContextMenu}
-          onToggleGrid={() =>
-            setViewerSettings((current) => ({
-              ...current,
-              showGrid: !current.showGrid
-            }))
-          }
-          onFit={() => setFitSignal((value) => value + 1)}
-          onView={requestView}
-          onCycleDisplayMode={cycleDisplayMode}
-          onToggleProjection={toggleProjection}
+            projectId={doc.projectId}
+            bodies={viewerBodies}
+            sketches={sketchOverlays}
+            selectedBodyIds={selectedBodyIds}
+            selectedTopology={selectedTopology}
+            selectedEdges={selectedEdges}
+            settings={viewerSettings}
+            fitSignal={fitSignal}
+            viewRequest={viewRequest}
+            units={doc.units}
+            editableBodyIds={directEditableBodyIds}
+            extrudePreview={extrudePreview}
+            movePreview={movePreview}
+            hideViewerToolbar={tool === 'sketch'}
+            selectionChip={selectionChip}
+            onClearSelection={clearSelection}
+            initialView={initialView}
+            onViewChange={handleViewportChange}
+            onMovePreviewChange={(translation, rotationDeg, snap) => {
+              setMoveSnap(snap);
+              setMovePreview((current) =>
+                current ? { ...current, translation, rotationDeg } : current
+              );
+            }}
+            modeOverlay={
+              movePreview ? (
+                <MoveOverlay
+                  bodyName={
+                    representations[movePreview.bodyId as BodyId]?.name ??
+                    'Selected body'
+                  }
+                  values={{
+                    translation: movePreview.translation,
+                    rotationDeg: movePreview.rotationDeg
+                  }}
+                  units={doc.units}
+                  snap={moveSnap}
+                  onChange={(values) =>
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            translation: values.translation,
+                            rotationDeg: values.rotationDeg
+                          }
+                        : current
+                    )
+                  }
+                  onConfirm={confirmMove}
+                  onCancel={cancelPanel}
+                />
+              ) : tool === 'sketch' ? (
+                <SketchWorkspace
+                  sketchNumber={sketchOptions.length + 1}
+                  units={doc.units}
+                  snapStep={
+                    appSettings.sketching.snapEnabled
+                      ? appSettings.sketching.linearSnap
+                      : null
+                  }
+                  onCancel={cancelPanel}
+                  onFinish={finishSketch}
+                />
+              ) : extrudePreview && selectedSketchProfileName ? (
+                <ExtrudeOverlay
+                  profileName={selectedSketchProfileName}
+                  distance={extrudePreview.distance}
+                  units={doc.units}
+                  onDistanceChange={(distance) =>
+                    Number.isFinite(distance) &&
+                    setExtrudePreview((current) =>
+                      current ? { ...current, distance } : current
+                    )
+                  }
+                  onConfirm={confirmExtrude}
+                  onCancel={cancelPanel}
+                />
+              ) : tool === 'extrude' ? (
+                <div className="profile-pick-prompt" role="status">
+                  <Layers3 size={18} aria-hidden="true" />
+                  <span>
+                    <strong>Select a closed profile</strong>
+                    <small>
+                      Click a shaded sketch region to begin extruding.
+                    </small>
+                  </span>
+                </div>
+              ) : selectedSketchProfileId && selectedSketchProfileName ? (
+                <ProfileQuickAction
+                  profileName={selectedSketchProfileName}
+                  onExtrude={() => startExtrude(selectedSketchProfileId)}
+                  onDismiss={() => setSelectedSketchProfileId(null)}
+                />
+              ) : null
+            }
+            projection={projection}
+            orientationRef={orientationRef}
+            onSelectTopology={handleSelectTopologyFromViewer}
+            onSelectSketchProfile={handleSelectSketchProfile}
+            onResizePrimitiveFace={handleResizePrimitiveFace}
+            onExtrudeDistanceChange={(distance) =>
+              setExtrudePreview((current) =>
+                current ? { ...current, distance } : current
+              )
+            }
+            onContextMenu={handleViewportContextMenu}
+            onToggleGrid={() =>
+              setViewerSettings((current) => ({
+                ...current,
+                showGrid: !current.showGrid
+              }))
+            }
+            onFit={() => setFitSignal((value) => value + 1)}
+            onView={requestView}
+            onCycleDisplayMode={cycleDisplayMode}
+            onToggleProjection={toggleProjection}
           />
         </ErrorBoundary>
       }
@@ -2582,219 +2800,223 @@ export function App() {
             resetKey={`${doc.projectId}:${doc.version}`}
           >
             <Inspector
-            tool={tool}
-            selectedFeature={selectedFeature}
-            selectedSketch={selectedSketch}
-            selectedSketchObject={selectedSketchObject}
-            selectedBody={selectedBody}
-            selectedTopology={selectedTopology}
-            selectedEdges={selectedEdges}
-            edgeModifierBody={edgeModifierBody}
-            scope={parameterScope.scope}
-            sketches={sketchOptions}
-            bodies={bodyOptions}
-            units={doc.units}
-            selectedBodyIds={selectedBodyIds}
-            preferredSketchId={selectedSketch?.sketchId ?? null}
-            onLaunchTool={launchTool}
-            onCancel={cancelPanel}
-            onSelectAllEdges={handleSelectAllEdges}
-            onClearSelectedEdges={handleClearSelectedEdges}
-            onCreatePrimitive={(kind, name, dimensions) =>
-              createFeature(
-                commandFactories.addPrimitive({
-                  name,
-                  primitiveKind: kind,
-                  dimensions
-                })
-              )
-            }
-            onCreateSketch={(value) =>
-              createFeature(commandFactories.addSketch(value))
-            }
-            onCreateExtrude={(value) =>
-              createFeature(commandFactories.extrudeSketch(value))
-            }
-            onCreateRevolve={(value) =>
-              createFeature(commandFactories.revolveSketch(value))
-            }
-            onCreateBoolean={(value) =>
-              createFeature(commandFactories.booleanBodies(value))
-            }
-            onCreateTransform={(value) =>
-              createFeature(
-                commandFactories.transformBody({
-                  name: value.name,
-                  targetBodyId: value.targetBodyId,
-                  translation: value.translation,
-                  rotationDeg: value.rotationDeg
-                })
-              )
-            }
-            onCreateEdgeModifier={(kind, value) =>
-              createFeature(
-                kind === 'fillet'
-                  ? commandFactories.filletEdges(value)
-                  : commandFactories.chamferEdges(value)
-              )
-            }
-            onCreatePattern={(value) =>
-              createFeature(commandFactories.patternBody(value))
-            }
-            onApplyPrimitive={(feature, name, dimensions) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  { featureId: feature.featureId, name, data: { dimensions } },
-                  `Edit ${name}`
-                )
-              )
-            }
-            onApplySketch={(feature, value) => {
-              if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
-                return;
-              }
-              const commands: AnyCommand[] = [
-                commandFactories.updateSketch(
-                  {
-                    sketchId: feature.data.sketchId,
-                    plane: value.plane,
-                    offset: value.offset,
-                    object: value.object
-                  },
-                  `Edit ${value.name}`
-                )
-              ];
-              if (value.name !== feature.name) {
-                commands.push(
-                  commandFactories.renameNode({
-                    nodeId: feature.id,
-                    name: value.name
-                  }),
-                  commandFactories.renameNode({
-                    nodeId: selectedSketch.id,
-                    name: value.name
+              tool={tool}
+              selectedFeature={selectedFeature}
+              selectedSketch={selectedSketch}
+              selectedSketchObject={selectedSketchObject}
+              selectedBody={selectedBody}
+              selectedTopology={selectedTopology}
+              selectedEdges={selectedEdges}
+              edgeModifierBody={edgeModifierBody}
+              scope={parameterScope.scope}
+              sketches={sketchOptions}
+              bodies={bodyOptions}
+              units={doc.units}
+              selectedBodyIds={selectedBodyIds}
+              preferredSketchId={selectedSketch?.sketchId ?? null}
+              onLaunchTool={launchTool}
+              onCancel={cancelPanel}
+              onSelectAllEdges={handleSelectAllEdges}
+              onClearSelectedEdges={handleClearSelectedEdges}
+              onCreatePrimitive={(kind, name, dimensions) =>
+                createFeature(
+                  commandFactories.addPrimitive({
+                    name,
+                    primitiveKind: kind,
+                    dimensions
                   })
-                );
+                )
               }
-              executeTransaction(`Edit ${value.name}`, commands);
-            }}
-            onApplyExtrude={(feature, value) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
+              onCreateSketch={(value) =>
+                createFeature(commandFactories.addSketch(value))
+              }
+              onCreateExtrude={(value) =>
+                createFeature(commandFactories.extrudeSketch(value))
+              }
+              onCreateRevolve={(value) =>
+                createFeature(commandFactories.revolveSketch(value))
+              }
+              onCreateBoolean={(value) =>
+                createFeature(commandFactories.booleanBodies(value))
+              }
+              onCreateTransform={(value) =>
+                createFeature(
+                  commandFactories.transformBody({
                     name: value.name,
-                    data: {
-                      featureKind: 'extrude',
-                      sketchId: value.sketchId,
-                      distance: value.distance
-                    }
-                  },
-                  `Edit ${value.name}`
+                    targetBodyId: value.targetBodyId,
+                    translation: value.translation,
+                    rotationDeg: value.rotationDeg
+                  })
                 )
-              )
-            }
-            onApplyRevolve={(feature, value) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
-                    name: value.name,
-                    data: {
-                      featureKind: 'revolve',
-                      sketchId: value.sketchId,
-                      axis: value.axis
-                    }
-                  },
-                  `Edit ${value.name}`
+              }
+              onCreateEdgeModifier={(kind, value) =>
+                createFeature(
+                  kind === 'fillet'
+                    ? commandFactories.filletEdges(value)
+                    : commandFactories.chamferEdges(value)
                 )
-              )
-            }
-            onApplyBoolean={(feature, value) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
-                    name: value.name,
-                    data: {
-                      featureKind: 'boolean',
-                      operation: value.operation,
-                      targetBodyIds: value.targetBodyIds
-                    }
-                  },
-                  `Edit ${value.name}`
+              }
+              onCreatePattern={(value) =>
+                createFeature(commandFactories.patternBody(value))
+              }
+              onApplyPrimitive={(feature, name, dimensions) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name,
+                      data: { dimensions }
+                    },
+                    `Edit ${name}`
+                  )
                 )
-              )
-            }
-            onApplyTransform={(feature, value) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
-                    name: value.name,
-                    data: {
-                      featureKind: 'transform',
-                      targetBodyId: value.targetBodyId,
-                      transform: {
-                        translation: value.translation,
-                        rotationDeg: value.rotationDeg
+              }
+              onApplySketch={(feature, value) => {
+                if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
+                  return;
+                }
+                const commands: AnyCommand[] = [
+                  commandFactories.updateSketch(
+                    {
+                      sketchId: feature.data.sketchId,
+                      plane: value.plane,
+                      offset: value.offset,
+                      object: value.object
+                    },
+                    `Edit ${value.name}`
+                  )
+                ];
+                if (value.name !== feature.name) {
+                  commands.push(
+                    commandFactories.renameNode({
+                      nodeId: feature.id,
+                      name: value.name
+                    }),
+                    commandFactories.renameNode({
+                      nodeId: selectedSketch.id,
+                      name: value.name
+                    })
+                  );
+                }
+                executeTransaction(`Edit ${value.name}`, commands);
+              }}
+              onApplyExtrude={(feature, value) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name: value.name,
+                      data: {
+                        featureKind: 'extrude',
+                        sketchId: value.sketchId,
+                        distance: value.distance
                       }
-                    }
-                  },
-                  `Edit ${value.name}`
+                    },
+                    `Edit ${value.name}`
+                  )
                 )
-              )
-            }
-            onApplyEdgeModifier={(feature, kind, value) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
-                    name: value.name,
-                    data:
-                      kind === 'fillet'
-                        ? {
-                            featureKind: 'fillet',
-                            targetBodyId: value.targetBodyId,
-                            edgeHashes: value.edgeHashes,
-                            radius: value.size
-                          }
-                        : {
-                            featureKind: 'chamfer',
-                            targetBodyId: value.targetBodyId,
-                            edgeHashes: value.edgeHashes,
-                            distance: value.size
-                          }
-                  },
-                  `Edit ${value.name}`
+              }
+              onApplyRevolve={(feature, value) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name: value.name,
+                      data: {
+                        featureKind: 'revolve',
+                        sketchId: value.sketchId,
+                        axis: value.axis
+                      }
+                    },
+                    `Edit ${value.name}`
+                  )
                 )
-              )
-            }
-            onApplyPattern={(feature, value) =>
-              executeCommand(
-                commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
-                    name: value.name,
-                    data: {
-                      featureKind: 'pattern',
-                      targetBodyId: value.targetBodyId,
-                      patternKind: value.patternKind,
-                      count: value.count,
-                      axis: value.axis,
-                      spacing: value.spacing,
-                      angleDeg: value.angleDeg
-                    }
-                  },
-                  `Edit ${value.name}`
+              }
+              onApplyBoolean={(feature, value) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name: value.name,
+                      data: {
+                        featureKind: 'boolean',
+                        operation: value.operation,
+                        targetBodyIds: value.targetBodyIds
+                      }
+                    },
+                    `Edit ${value.name}`
+                  )
                 )
-              )
-            }
-            onResizeThroughHole={handleResizeThroughHole}
-            onRemoveFaceFeature={handleRemoveFaceFeature}
-            onDeleteFeature={(feature) =>
-              handleDeleteFeature(feature.featureId, feature.name)
-            }
+              }
+              onApplyTransform={(feature, value) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name: value.name,
+                      data: {
+                        featureKind: 'transform',
+                        targetBodyId: value.targetBodyId,
+                        transform: {
+                          translation: value.translation,
+                          rotationDeg: value.rotationDeg
+                        }
+                      }
+                    },
+                    `Edit ${value.name}`
+                  )
+                )
+              }
+              onApplyEdgeModifier={(feature, kind, value) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name: value.name,
+                      data:
+                        kind === 'fillet'
+                          ? {
+                              featureKind: 'fillet',
+                              targetBodyId: value.targetBodyId,
+                              edgeHashes: value.edgeHashes,
+                              radius: value.size
+                            }
+                          : {
+                              featureKind: 'chamfer',
+                              targetBodyId: value.targetBodyId,
+                              edgeHashes: value.edgeHashes,
+                              distance: value.size
+                            }
+                    },
+                    `Edit ${value.name}`
+                  )
+                )
+              }
+              onApplyPattern={(feature, value) =>
+                executeCommand(
+                  commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name: value.name,
+                      data: {
+                        featureKind: 'pattern',
+                        targetBodyId: value.targetBodyId,
+                        patternKind: value.patternKind,
+                        count: value.count,
+                        axis: value.axis,
+                        spacing: value.spacing,
+                        angleDeg: value.angleDeg
+                      }
+                    },
+                    `Edit ${value.name}`
+                  )
+                )
+              }
+              onResizeThroughHole={handleResizeThroughHole}
+              onRemoveFaceFeature={handleRemoveFaceFeature}
+              onDeleteFeature={(feature) =>
+                handleDeleteFeature(feature.featureId, feature.name)
+              }
             />
           </ErrorBoundary>
         ) : null

@@ -59,6 +59,7 @@ The digest reports every body's liveness (`consumed`), placement (`bbox`), and v
 - Workflows/Queues: export/import orchestration scaffolding.
 - Worker secret: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or provider-neutral `AI_API_KEY`; never shipped to the browser.
 - `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_REASONING_EFFORT`, `AI_SITE_URL`, and `AI_APP_NAME` select and attribute a Responses-compatible provider/model without code changes.
+- D1 stores versioned owner-scoped application preferences separately from canonical project documents. Optional personal AI tokens are stored in a separate table as AES-GCM ciphertext bound to the authenticated user; `SETTINGS_ENCRYPTION_KEY` remains a Worker secret and plaintext tokens are used only inside the provider request.
 
 ## API and errors
 
@@ -66,4 +67,4 @@ All JSON POST bodies are validated. Oversized bodies return `413`, malformed dat
 
 ## Security posture
 
-This remains beta-only. Beta requests require Cloudflare Access identity and all project, revision, artifact, import/export, and collaboration operations are owner-scoped. Development mode supplies an isolated local identity and must not be used on a public route. Cloudflare Access must be configured at the route boundary; the Worker intentionally trusts Access's injected assertion and email headers. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.
+This remains beta-only. Project, revision, artifact, import/export, and collaboration requests require Cloudflare Access identity and are owner-scoped. Assistant status and proposal routes also work in a local-only workspace: authenticated requests use the Access user ID, while public requests use a one-way hash of Cloudflare's connecting IP for the D1 quota and provider safety identifier. The raw address is never stored or sent upstream. Development mode supplies an isolated local identity and must not be used on a public route. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.

@@ -57,12 +57,19 @@ async function verifyAccessToken(
 }
 
 async function stableUserId(email: string): Promise<AuthSession['userId']> {
-  const bytes = new TextEncoder().encode(email.toLowerCase());
+  return hashedUserId('user', email.toLowerCase());
+}
+
+async function hashedUserId(
+  prefix: 'user' | 'user_anon',
+  identity: string
+): Promise<AuthSession['userId']> {
+  const bytes = new TextEncoder().encode(identity);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const suffix = Array.from(new Uint8Array(digest).slice(0, 12), (byte) =>
     byte.toString(16).padStart(2, '0')
   ).join('');
-  return toUserId(`user_${suffix}`);
+  return toUserId(`${prefix}_${suffix}`);
 }
 
 export async function authenticateRequest(
@@ -123,4 +130,37 @@ export async function authenticateRequest(
     email,
     mode
   };
+}
+
+/**
+ * The modeling assistant is available to local-first users even when project
+ * persistence is unavailable. Authenticated users retain their account-scoped
+ * quota; public users receive a one-way, IP-derived identifier so the existing
+ * D1 quota and provider safety identifier never store or transmit the raw IP.
+ */
+export async function identifyAssistantRequest(
+  request: Request,
+  env: CloudflareEnv,
+  verify: AccessTokenVerifier = verifyAccessToken
+): Promise<AuthSession['userId']> {
+  if (env.AUTH_MODE !== 'cloudflare-access') {
+    return (await authenticateRequest(request, env, verify)).userId;
+  }
+
+  try {
+    return (await authenticateRequest(request, env, verify)).userId;
+  } catch (error) {
+    if (
+      !(error instanceof AuthenticationError) ||
+      request.headers.has('cf-access-jwt-assertion')
+    ) {
+      throw error;
+    }
+  }
+
+  const connectingIp = request.headers.get('cf-connecting-ip')?.trim();
+  if (!connectingIp) {
+    throw new AuthenticationError();
+  }
+  return hashedUserId('user_anon', connectingIp);
 }
