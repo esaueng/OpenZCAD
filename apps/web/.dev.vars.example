@@ -3,6 +3,10 @@ AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=
 AI_MODEL=openai/gpt-5.6-terra
 
+# Required only for encrypted per-user API tokens in Settings. Generate a
+# base64-encoded 32-byte key, keep it secret, and use the same key after restarts.
+# SETTINGS_ENCRYPTION_KEY=
+
 # Generic secret alternative: AI_API_KEY=
 # Optional attribution: AI_SITE_URL=http://localhost:5173
 # Optional attribution: AI_APP_NAME=OpenZCAD
