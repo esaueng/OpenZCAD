@@ -523,6 +523,126 @@ export interface AuthSession {
   mode: 'development' | 'cloudflare-access';
 }
 
+export const APP_SETTINGS_SCHEMA_VERSION = 1 as const;
+
+export type AppTheme = 'system' | 'dark';
+export type AppDensity = 'compact' | 'comfortable';
+export type SettingsProjectionMode = 'perspective' | 'orthographic';
+export type SettingsDisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
+export type AssistantProvider =
+  'openrouter' | 'openai' | 'responses-compatible';
+export type AssistantCredentialSource = 'deployment' | 'personal';
+export type AssistantReasoningEffort =
+  'provider-default' | 'off' | 'low' | 'medium' | 'high' | 'xhigh';
+
+/**
+ * Global user preferences. These never belong to ProjectDocument: project
+ * geometry/history stays portable and collaboration-safe when preferences
+ * change on one device.
+ */
+export interface AppSettings {
+  schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
+  general: {
+    reopenLastProject: boolean;
+    defaultUnits: UnitSystem;
+    confirmDestructiveActions: boolean;
+  };
+  appearance: {
+    theme: AppTheme;
+    density: AppDensity;
+    reducedMotion: boolean;
+  };
+  viewport: {
+    defaultProjection: SettingsProjectionMode;
+    showGrid: boolean;
+    displayMode: SettingsDisplayMode;
+  };
+  sketching: {
+    snapEnabled: boolean;
+    linearSnap: number;
+    angleSnap: number;
+  };
+  assistant: {
+    enabled: boolean;
+    credentialSource: AssistantCredentialSource;
+    provider: AssistantProvider;
+    baseUrl: string;
+    model: string;
+    reasoningEffort: AssistantReasoningEffort;
+    maxOutputTokens: number;
+    timeoutMs: number;
+    customInstructions: string;
+  };
+}
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
+  general: {
+    reopenLastProject: true,
+    defaultUnits: 'mm',
+    confirmDestructiveActions: true
+  },
+  appearance: {
+    theme: 'system',
+    density: 'compact',
+    reducedMotion: false
+  },
+  viewport: {
+    defaultProjection: 'perspective',
+    showGrid: true,
+    displayMode: 'shaded-edges'
+  },
+  sketching: {
+    snapEnabled: true,
+    linearSnap: 1,
+    angleSnap: 15
+  },
+  assistant: {
+    enabled: true,
+    credentialSource: 'deployment',
+    provider: 'openrouter',
+    baseUrl: '',
+    model: 'openai/gpt-5.6-terra',
+    reasoningEffort: 'high',
+    maxOutputTokens: 32_000,
+    timeoutMs: 120_000,
+    customInstructions: ''
+  }
+};
+
+export interface AssistantCredentialMetadata {
+  stored: boolean;
+  hint?: string;
+  updatedAt?: string;
+  lastValidatedAt?: string;
+  storageAvailable: boolean;
+}
+
+export interface EffectiveAssistantSettings {
+  configured: boolean;
+  source: AssistantCredentialSource;
+  provider: AssistantProvider;
+  model: string;
+  reasoningEffort: string;
+}
+
+export interface AppSettingsResponse {
+  settings: AppSettings;
+  revision: number;
+  synced: boolean;
+  credential: AssistantCredentialMetadata;
+  effectiveAssistant: EffectiveAssistantSettings;
+}
+
+export interface UpdateAppSettingsRequest {
+  settings: AppSettings;
+  expectedRevision: number;
+}
+
+export interface SaveAssistantCredentialRequest {
+  token: string;
+}
+
 export interface CollaborationMember {
   clientId: string;
   userId: UserId;

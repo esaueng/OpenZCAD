@@ -11,9 +11,10 @@ OpenZCAD is a browser-first parametric CAD workspace for people who want to turn
 - Editable STEP import stored in replayable document history. Selecting an exact imported face shows its surface type and area; complete through-hole cylinders expose a measured diameter that can be changed parametrically, and validated face features can be removed. STEP and STL downloads come from the same browser worker that rebuilds viewport geometry.
 - A dense model/viewport/inspector workspace with exact face/edge selection, contextual finishing actions, measurements, diagnostics, and responsive compact states.
 - Local-first IndexedDB autosave. When local and beta-cloud copies differ, OpenZCAD opens the newer document version instead of discarding local work.
-- Cloudflare Access identity in beta, owner-scoped project/artifact routes, and a development-only local identity mode. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
+- Cloudflare Access identity in beta, owner-scoped project/artifact routes, and a development-only local identity mode. The assistant remains available in a local-only workspace through an IP-scoped quota that never stores the raw address. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
 - Live per-project collaboration over a Durable Object WebSocket room, with presence, version-aware document sync, and conflict preservation.
 - Streamed AI proposals through the OpenAI Responses API. The assistant receives compact feature history plus the active topology selection and can propose parameter/dimension edits, primitives, sweeps, booleans, transforms, fillets/chamfers, and patterns. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
+- A global Settings workspace for device, viewport, sketching, account, privacy, and AI preferences. Non-secret preferences work locally and can sync by authenticated user; personal AI tokens are encrypted by the Worker and never enter project documents or browser storage.
 - Beta Worker endpoints for project persistence, revisions/checkpoints, upload coordination, artifact metadata, exports, and AI proposal streaming.
 
 ## Architecture
@@ -77,7 +78,22 @@ For the beta Worker, store the key as a Cloudflare secret instead of a file:
 pnpm --filter @openzcad/web exec wrangler secret put OPENROUTER_API_KEY --env beta
 ```
 
-The assistant checks `GET /api/assistant/status` on startup and reports the configured model/reasoning tier without exposing the secret. `.dev.vars` files are ignored by Git.
+To allow authenticated users to save personal provider tokens, apply D1
+migration `0004_user_settings.sql` and configure a base64-encoded 32-byte
+encryption key. This key encrypts credentials with AES-GCM and must remain
+stable across deployments:
+
+```bash
+openssl rand -base64 32
+pnpm --filter @openzcad/web exec wrangler secret put SETTINGS_ENCRYPTION_KEY --env beta
+```
+
+The Settings page is available from the start screen, workspace gear,
+command palette, or `Ctrl/Cmd+,`. Deployment credentials remain the fallback;
+selecting Personal token switches proposal generation to the authenticated
+user's provider, endpoint, model, reasoning level, output budget, and timeout.
+
+The assistant checks public `GET /api/assistant/status` on startup and reports the configured model/reasoning tier without exposing the secret. `POST /api/assistant/proposals` also supports local-only users: Access sessions use their account identity, while public requests use a one-way hash of Cloudflare's connecting IP for the existing D1 quota and provider safety identifier. Project, artifact, and collaboration routes still require Access. `.dev.vars` files are ignored by Git.
 
 The recommended default is `openai/gpt-5.6-terra`: it is the balanced GPT-5.6 tier for reliable structured CAD planning. Use `openai/gpt-5.6-sol` when maximum quality matters more than cost/latency, or `openai/gpt-5.6-luna` for inexpensive, latency-sensitive edits.
 
@@ -111,6 +127,9 @@ The BrepKit WASM bundle is about 4.7 MB uncompressed (about 1.7 MB gzip). It is 
 - `GET /api/health`
 - `GET /api/session`
 - `GET /api/assistant/status`
+- `GET|PATCH /api/settings`
+- `PUT|DELETE /api/settings/assistant-credential`
+- `POST /api/settings/assistant/test`
 - `GET|POST /api/projects`
 - `GET /api/projects/:id`
 - `POST /api/projects/:id/revisions`
@@ -128,7 +147,7 @@ Project and revision routes remain schema compatible. The legacy finalize-withou
 
 ## Beta limitations and risks
 
-- The beta route must be protected by Cloudflare Access. Local development identity mode is intentionally unsuitable for a public deployment.
+- Project, artifact, and collaboration APIs must be protected by Cloudflare Access. Local development identity mode is intentionally unsuitable for a public deployment. Public assistant requests remain bounded by the configured per-identity quota; edge abuse controls should remain enabled on the public route.
 - D1/R2 IDs in the checked-in Wrangler configuration are beta placeholders until real beta resources are provisioned.
 - Editable STEP sources are embedded in the canonical document for deterministic offline replay and capped at 12 MB. This preserves editability but can make large documents expensive to save and sync.
 - Imported STL remains a mesh body and uses the compatibility path; native parametric reconstruction is not attempted.
