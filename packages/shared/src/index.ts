@@ -683,6 +683,13 @@ export type CollaborationServerMessage =
   | { type: 'ack'; version: number; document?: ProjectDocument }
   | { type: 'conflict'; document: ProjectDocument };
 
+/**
+ * Longest accepted project name, measured after trimming. Shared so the client
+ * can block an over-long name before submitting it rather than discovering the
+ * limit from a rejected request.
+ */
+export const MAX_PROJECT_NAME_LENGTH = 200;
+
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 }

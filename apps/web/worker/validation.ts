@@ -1,4 +1,5 @@
 import {
+  MAX_PROJECT_NAME_LENGTH,
   toArtifactId,
   toProjectId,
   toUploadSessionId,
@@ -31,7 +32,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'snapshot',
   'thumbnail'
 ];
-const MAX_NAME_LENGTH = 200;
+const MAX_NAME_LENGTH = MAX_PROJECT_NAME_LENGTH;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_REASON_LENGTH = 500;

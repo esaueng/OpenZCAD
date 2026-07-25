@@ -78,7 +78,7 @@ import type {
   AuthSession
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
-import { api } from './lib/api';
+import { ApiError, api } from './lib/api';
 import {
   downloadText,
   evalParamValue,
@@ -1266,6 +1266,14 @@ export function App() {
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
+      // A refused request is not an unreachable one. Falling back to local mode
+      // on a validation failure would persist exactly the project the server
+      // just rejected, so surface it and let the user correct the input.
+      if (error instanceof ApiError && error.isClientError) {
+        setCloudAvailable(true);
+        setStatus(errorMessage(error, 'Could not create the project.'));
+        return;
+      }
       const localDocument = createProjectDocument(
         name,
         session?.userId ?? localUserId,
