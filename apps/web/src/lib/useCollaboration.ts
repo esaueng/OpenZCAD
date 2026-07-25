@@ -116,7 +116,15 @@ export function useCollaboration({
               setStatus('conflict');
               return;
             }
-            lastSentVersionRef.current = current.version;
+            if (message.type === 'ack') {
+              lastSentVersionRef.current = message.version;
+              serverVersionRef.current = message.version;
+              if (message.document) {
+                remoteHandlerRef.current(message.document);
+              }
+            } else {
+              lastSentVersionRef.current = current.version;
+            }
             if (type === 'hello' && socket.readyState === WebSocket.OPEN) {
               socket.send(
                 JSON.stringify({
@@ -189,6 +197,11 @@ export function useCollaboration({
           lastSentVersionRef.current = message.version;
           serverVersionRef.current = message.version;
           setStatus('live');
+          // Present only when the server merged our submission into something
+          // else; adopting it is what keeps this client from diverging.
+          if (message.document) {
+            remoteHandlerRef.current(message.document);
+          }
           return;
         }
         if (message.type === 'conflict') {
@@ -260,7 +273,15 @@ export function useCollaboration({
               setStatus('conflict');
               return;
             }
-            lastSentVersionRef.current = document.version;
+            if (message.type === 'ack') {
+              lastSentVersionRef.current = message.version;
+              serverVersionRef.current = message.version;
+              if (message.document) {
+                remoteHandlerRef.current(message.document);
+              }
+            } else {
+              lastSentVersionRef.current = document.version;
+            }
             setStatus('live');
           })
           .catch(() => setStatus('offline'));
