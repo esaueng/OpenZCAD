@@ -2,7 +2,8 @@
 
 Findings from investigating the QA report's P-01, P-02, and P-03. The headline
 conclusion is that **the slow startup phases are not application JavaScript**,
-so the obvious optimisations would have moved nothing.
+so the obvious optimisations would have moved nothing. One separate finding did
+come out of it and has been fixed: a render-blocking web font, at the end.
 
 Reproduce with:
 
@@ -79,12 +80,32 @@ CSS (59 kB): ~289 kB gzipped. The kernels are already correctly lazy; the
 remaining work is delivery (immutable caching, compression), not code
 splitting.
 
-## Actionable finding: render-blocking web font
+## Fixed: render-blocking web font
 
-`apps/web/index.html` loads Google Fonts as a render-blocking stylesheet in
-`<head>`. It consistently takes **179–220 ms** and starts at ~11 ms, against a
-first contentful paint of 236–288 ms — so it is on the critical path for every
-cold visit, on real hardware as much as in CI.
+`apps/web/index.html` used to load Google Fonts as a render-blocking stylesheet
+in `<head>`. It consistently took **179–220 ms**, starting at ~11 ms against a
+first contentful paint of 236–288 ms — so it sat on the critical path for every
+cold visit, on real hardware as much as in CI. Unlike the GPU warm-up above,
+this was unambiguously worth fixing.
 
-Unlike the GPU warm-up, this one is unambiguously worth fixing: self-host the
-two families, or load them non-blocking and accept a font swap.
+The fonts are now self-hosted (PR #26, a separate branch from this one), which
+removes the blocking request rather than relocating it: the `@font-face` rules
+ride in the CSS bundle the page already loads. Latin subsets only, at the two
+weights the tokens use.
+
+Confirmed by a controlled A/B — the change stashed and re-measured on the same
+machine and harness, three cold loads each. The absolute numbers run a little
+higher than the figures above because this harness waits for the paint entry
+rather than sampling it opportunistically; compare the rows, not the runs:
+
+| | FCP | DOMContentLoaded | Third-party hosts |
+|---|---:|---:|---:|
+| Before | 216 / 220 / 436 ms | 187–403 ms | 2 |
+| After | 56 / 60 / 64 ms | 29–33 ms | 0 |
+
+`font-display: swap` behaviour is unchanged — text still paints immediately in
+the fallback stack — but the swap now resolves in ~14 ms from same-origin
+assets instead of over a third-party connection.
+
+This is the only finding here that has been acted on. Everything above remains
+measurement only.
