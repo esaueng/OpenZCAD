@@ -3113,9 +3113,12 @@ textarea {
 }
 
 .settings-topbar-title {
+  /* An h1 for document structure; sized to the topbar, not to browser default. */
+  margin: 0;
   padding-left: var(--sp-3);
   border-left: var(--border-thin);
   color: var(--color-text-muted);
+  font-size: var(--fs-base);
   font-weight: var(--fw-medium);
 }
 
@@ -3232,6 +3235,13 @@ textarea {
 
 .settings-nav nav button > svg {
   color: var(--color-accent);
+}
+
+.settings-nav-empty {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
 }
 
 .settings-nav nav button span,
