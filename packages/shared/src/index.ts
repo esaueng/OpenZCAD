@@ -674,7 +674,13 @@ export type CollaborationServerMessage =
     }
   | { type: 'presence'; members: CollaborationMember[] }
   | { type: 'document'; clientId: string; document: ProjectDocument }
-  | { type: 'ack'; version: number }
+  /**
+   * Acknowledges an accepted submission. `document` is present only when the
+   * resolved document differs from what the sender submitted (a server-side
+   * merge), because the merged state is broadcast to every *other* socket and
+   * would otherwise never reach the sender.
+   */
+  | { type: 'ack'; version: number; document?: ProjectDocument }
   | { type: 'conflict'; document: ProjectDocument };
 
 export const identityTransform = (): Transform3D => ({

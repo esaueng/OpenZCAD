@@ -72,6 +72,20 @@ function ParameterRow({
   onDelete
 }: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
+  const [editing, setEditing] = useState(false);
+  const [syncedExpression, setSyncedExpression] = useState(
+    parameter.expression
+  );
+
+  // Undo/redo, document hydration and collaborator edits all replace the
+  // canonical expression underneath us. Adopt it, but never yank the field out
+  // from under someone who is actively typing in it.
+  if (parameter.expression !== syncedExpression) {
+    setSyncedExpression(parameter.expression);
+    if (!editing) {
+      setExpression(parameter.expression);
+    }
+  }
 
   function commit() {
     const trimmed = expression.trim();
@@ -94,7 +108,11 @@ function ParameterRow({
         spellCheck={false}
         aria-label={`Expression for ${parameter.name}`}
         onChange={(event) => setExpression(event.target.value)}
-        onBlur={commit}
+        onFocus={() => setEditing(true)}
+        onBlur={() => {
+          setEditing(false);
+          commit();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.currentTarget.blur();

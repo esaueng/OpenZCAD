@@ -671,7 +671,10 @@ export class ProjectCollaborationRoom extends DurableObject {
         resolution.document
       );
       await this.persistRoomState();
-      this.send(socket, { type: 'ack', version: resolution.document.version });
+      // A merge produces a document the sender never had. The broadcast below
+      // skips the sender, so the merged state has to ride along on the ack or
+      // the sender stays silently divergent while reporting itself synced.
+      this.send(socket, ackFor(resolution.document, document));
       if (broadcast) {
         this.broadcast(
           { type: 'document', clientId, document: resolution.document },
@@ -746,7 +749,7 @@ export class ProjectCollaborationRoom extends DurableObject {
         document: resolution.document
       });
     }
-    return Response.json({ type: 'ack', version: resolution.document.version });
+    return Response.json(ackFor(resolution.document, document));
   }
 
   private persistRoomState(): Promise<void> {
@@ -820,6 +823,25 @@ export class ProjectCollaborationRoom extends DurableObject {
       locks: Array.from(this.locks.entries())
     };
   }
+}
+
+/**
+ * Builds the acknowledgement for an accepted submission.
+ *
+ * The resolved document only reaches other clients through a broadcast that
+ * skips the sender, so whenever resolution produced something other than what
+ * the sender submitted it has to travel back on the ack. A differing version is
+ * exactly that signal: `accept` hands back the submitted document unchanged,
+ * `same` hands back a content-identical document at the same version, and only
+ * a merge mints a new version.
+ */
+function ackFor(
+  resolved: ProjectDocument,
+  submitted: ProjectDocument
+): CollaborationServerMessage {
+  return resolved.version === submitted.version
+    ? { type: 'ack', version: resolved.version }
+    : { type: 'ack', version: resolved.version, document: resolved };
 }
 
 export function resolveCollaborationDocument(
