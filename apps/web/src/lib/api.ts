@@ -16,6 +16,26 @@ import type {
   UpdateAppSettingsRequest
 } from '@openzcad/shared';
 
+/**
+ * An API call that reached the server and came back refused. Callers need the
+ * status to tell a rejected request apart from an unreachable backend: the
+ * former is the user's problem to fix, the latter is what offline mode is for.
+ */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+
+  /** True when the server rejected the request itself, e.g. failed validation. */
+  get isClientError(): boolean {
+    return this.status >= 400 && this.status < 500;
+  }
+}
+
 async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit
@@ -39,7 +59,10 @@ async function requestJson<T>(
     } catch {
       // Plain-text responses remain useful as-is.
     }
-    throw new Error(message || `${response.status} ${response.statusText}`);
+    throw new ApiError(
+      response.status,
+      message || `${response.status} ${response.statusText}`
+    );
   }
 
   return (await response.json()) as T;

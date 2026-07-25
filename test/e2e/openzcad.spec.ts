@@ -448,6 +448,44 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(paramInput).toHaveValue('30');
 });
 
+test('refuses an invalid project name instead of working locally', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+
+  // The form itself blocks an over-long name and explains the limit.
+  await page.getByLabel('Project name').fill('n'.repeat(201));
+  await expect(page.getByRole('alert')).toContainText(
+    'at most 200 characters'
+  );
+  await expect(
+    page.getByRole('button', { name: 'Create project' })
+  ).toBeDisabled();
+
+  // A server-side rejection must surface too. It used to be swallowed into
+  // local mode, persisting the very project the API had just refused.
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 400,
+          json: { error: '"name" must be at most 200 characters.' }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await page.getByLabel('Project name').fill('Rejected Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await expect(page.locator('.start-status')).toContainText(
+    'at most 200 characters'
+  );
+  // Still on the start screen: no workspace, and nothing persisted locally.
+  await expect(page.getByLabel('Project name')).toBeVisible();
+  await expect(page.locator('.start-status')).not.toContainText(
+    'Working locally'
+  );
+});
+
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
   page
 }) => {

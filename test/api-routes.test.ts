@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
-import type { CreateProjectResponse, ProjectDocument } from '@openzcad/shared';
+import {
+  MAX_PROJECT_NAME_LENGTH,
+  type CreateProjectResponse,
+  type ProjectDocument
+} from '@openzcad/shared';
 
 const env = {
   ENVIRONMENT: 'development' as const,
@@ -282,6 +286,20 @@ describe('worker api routes', () => {
       env
     );
     expect(blankResponse.status).toBe(400);
+  });
+
+  it('rejects a project name longer than the shared limit', async () => {
+    const atLimit = await worker.fetch(
+      post('/api/projects', { name: 'n'.repeat(MAX_PROJECT_NAME_LENGTH) }),
+      env
+    );
+    expect(atLimit.status).toBe(201);
+
+    const overLimit = await worker.fetch(
+      post('/api/projects', { name: 'n'.repeat(MAX_PROJECT_NAME_LENGTH + 1) }),
+      env
+    );
+    expect(overLimit.status).toBe(400);
   });
 
   it('rejects invalid units', async () => {
