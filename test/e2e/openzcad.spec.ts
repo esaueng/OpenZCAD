@@ -439,6 +439,13 @@ test('models a parametric part and exports a true STEP file', async ({
   await paramInput.press('Enter');
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
   await expect(page.locator('.panel-body')).toContainText('34560');
+
+  // Undo must roll the visible expression back too. The input used to keep the
+  // committed draft ("40") while the document had reverted to 30, so blurring
+  // the stale field would silently recommit the undone value.
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.param-row')).toHaveAttribute('title', 'w = 30');
+  await expect(paramInput).toHaveValue('30');
 });
 
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
