@@ -79,6 +79,7 @@ import type {
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
+import { timed } from './lib/perf';
 import {
   downloadText,
   evalParamValue,
@@ -316,11 +317,12 @@ export function App() {
   }, [appSettings]);
 
   useEffect(() => {
-    const worker = new Worker(
-      new URL('./worker/geometryWorker.ts', import.meta.url),
-      {
-        type: 'module'
-      }
+    const worker = timed(
+      'worker.create',
+      () =>
+        new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
+          type: 'module'
+        })
     );
     geometryWorkerRef.current = worker;
     worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
@@ -818,6 +820,15 @@ export function App() {
   };
 
   function hydrateDocument(
+    nextDocument: ProjectDocument,
+    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+  ) {
+    return timed('document.hydrate', () =>
+      hydrateDocumentInner(nextDocument, options)
+    );
+  }
+
+  function hydrateDocumentInner(
     nextDocument: ProjectDocument,
     options: { restoreView?: boolean; rememberProject?: boolean } = {}
   ) {
