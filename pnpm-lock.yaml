@@ -156,6 +156,9 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
+      '@openzcad/geometry':
+        specifier: workspace:*
+        version: link:../geometry
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared

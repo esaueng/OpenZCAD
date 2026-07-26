@@ -287,3 +287,99 @@ describe('AI-generated box with a lid', () => {
     ).toEqual(volumes);
   });
 });
+
+describe('AI-generated sketch regions', () => {
+  let adapter: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  });
+
+  afterAll(() => {
+    adapter.dispose();
+  });
+
+  function ringProposal(): CadPatchProposal {
+    return parseCadPatchProposal({
+      proposalId: 'ring-test',
+      summary: 'Ring wall from two concentric circles',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'Ring profile',
+          localId: '$ring_sketch',
+          plane: 'XY',
+          offset: 0,
+          objects: [
+            { objectKind: 'circle', radius: 30, centerX: 0, centerY: 0 },
+            { objectKind: 'circle', radius: 24, centerX: 0, centerY: 0 }
+          ]
+        },
+        {
+          kind: 'add_extrude',
+          name: 'Ring wall',
+          localId: '$ring',
+          sketchId: '$ring_sketch',
+          distance: 12,
+          samplePoint: { x: 27, y: 0 }
+        }
+      ]
+    });
+  }
+
+  it('parses the sketch-and-region vocabulary', () => {
+    expect(() => ringProposal()).not.toThrow();
+  });
+
+  it('builds a ring wall through the real kernel', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI ring', toUserId('user_ai'))
+    );
+    const commands = commandsForCadPatch(manager.document, ringProposal());
+    expect(commands).toHaveLength(2);
+    const document = manager.runTransaction('Apply AI ring', commands);
+
+    const extrude = listFeaturesInOrder(document).find(
+      (feature) => feature.data.featureKind === 'extrude'
+    );
+    expect(
+      extrude?.data.featureKind === 'extrude' && extrude.data.profile
+    ).toBeTruthy();
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const body = Object.values(derived.bodyRepresentations).find(
+      (candidate) => !candidate.consumed
+    );
+    const expected = Math.PI * (30 ** 2 - 24 ** 2) * 12;
+    expect(
+      Math.abs((body?.volume ?? 0) - expected) / expected
+    ).toBeLessThan(0.005);
+  });
+
+  it('rejects a samplePoint outside every region', () => {
+    const proposal = ringProposal();
+    const bad = proposal.operations[1];
+    if (bad?.kind === 'add_extrude') {
+      bad.samplePoint = { x: 500, y: 500 };
+    }
+    const manager = new CommandManager(
+      createProjectDocument('AI ring bad', toUserId('user_ai'))
+    );
+    expect(() => commandsForCadPatch(manager.document, proposal)).toThrow(
+      /not inside any closed region/
+    );
+  });
+
+  it('rejects an undeclared sketch alias', () => {
+    const proposal = ringProposal();
+    proposal.operations.shift();
+    const manager = new CommandManager(
+      createProjectDocument('AI ring alias', toUserId('user_ai'))
+    );
+    expect(() => commandsForCadPatch(manager.document, proposal)).toThrow(
+      /not declared by an earlier add_sketch/
+    );
+  });
+});
