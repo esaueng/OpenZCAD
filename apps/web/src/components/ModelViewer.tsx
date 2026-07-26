@@ -35,6 +35,22 @@ import {
   type EdgeHandleRig,
   type OffsetHandleRig
 } from './viewer/handles';
+import {
+  buildSketchModeRig,
+  type SketchModeRig
+} from './viewer/sketchModeController';
+import {
+  axisLockPoint,
+  dimensionForInProgress,
+  lineObjectFromPoints,
+  screenRayToPlanePoint,
+  sketchEntryPose,
+  sketchObjectFromDrag,
+  snapSketchPoint,
+  type SketchPoint
+} from '../lib/sketch/session';
+import type { PlaneBasis } from '@openzcad/geometry';
+import type { SketchObjectData } from '@openzcad/shared';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
@@ -145,6 +161,17 @@ export interface OffsetHandleTarget {
   topologyId: string;
   point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
+}
+
+/** Active in-viewport sketch session, derived from the interaction machine. */
+export interface SketchModeState {
+  basis: PlaneBasis;
+  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+  snapStep: number | null;
+  /** True while a line chain (or drag) is in flight; cleared by Escape. */
+  drawing: boolean;
+  /** Committed objects of the session's sketch, rendered in blue. */
+  objects: SketchObjectData[];
 }
 
 /** An armed edge fillet/chamfer handle over the current edge selection. */
@@ -318,6 +345,12 @@ interface ModelViewerProps {
   onEdgeCommit(size: number): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): void;
+  /** In-viewport sketch session; null when not sketching. */
+  sketchMode: SketchModeState | null;
+  /** A drawing gesture completed an entity. */
+  onSketchCommit(object: SketchObjectData): void;
+  /** Mirrors chain/drag liveness into the interaction machine. */
+  onSketchDrawingChange(drawing: boolean): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -974,6 +1007,9 @@ export function ModelViewer({
   onEdgeRadiusPreview,
   onEdgeCommit,
   onOpenEdgeKeypad,
+  sketchMode,
+  onSketchCommit,
+  onSketchDrawingChange,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -1029,6 +1065,27 @@ export function ModelViewer({
   /** Live edge-radius rig; owned by the edgeHandle effect below. */
   const edgeRigRef = useRef<EdgeHandleRig | null>(null);
   const edgeDragActiveRef = useRef(false);
+  const sketchModeRef = useRef(sketchMode);
+  sketchModeRef.current = sketchMode;
+  const onSketchCommitRef = useRef(onSketchCommit);
+  onSketchCommitRef.current = onSketchCommit;
+  const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
+  onSketchDrawingChangeRef.current = onSketchDrawingChange;
+  /** Live sketch rig + local gesture state (imperative, no re-renders). */
+  const sketchRigRef = useRef<SketchModeRig | null>(null);
+  const sketchGestureRef = useRef<{
+    chainAnchor: SketchPoint | null;
+    dragStart: SketchPoint | null;
+    pointerId: number | null;
+    moved: boolean;
+  }>({ chainAnchor: null, dragStart: null, pointerId: null, moved: false });
+  const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
+  /** Camera pose + projection to restore when leaving sketch mode. */
+  const sketchReturnRef = useRef<{
+    position: THREE.Vector3;
+    target: THREE.Vector3;
+    projection: ProjectionMode;
+  } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<OffsetHandleRig | null>(null);
   const offsetDragActiveRef = useRef(false);
@@ -1473,6 +1530,13 @@ export function ModelViewer({
     offsetChip.addEventListener('click', handleChipClick);
     host.appendChild(offsetChip);
     offsetChipRef.current = offsetChip;
+
+    // Cursor-following dimension readout for in-viewport sketching.
+    const sketchDimLabel = document.createElement('div');
+    sketchDimLabel.className = 'sketch-dim-label';
+    sketchDimLabel.hidden = true;
+    host.appendChild(sketchDimLabel);
+    sketchDimLabelRef.current = sketchDimLabel;
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -1980,7 +2044,107 @@ export function ModelViewer({
       }
     }
 
+    /** Sketch-local point under the cursor, snapped to the grid. */
+    function sketchPointAt(event: PointerEvent): SketchPoint | null {
+      const mode = sketchModeRef.current;
+      if (!mode) {
+        return null;
+      }
+      setRayFromEvent(event);
+      const point = screenRayToPlanePoint(
+        context.raycaster.ray.origin,
+        context.raycaster.ray.direction,
+        mode.basis
+      );
+      if (!point) {
+        return null;
+      }
+      return mode.snapStep ? snapSketchPoint(point, mode.snapStep) : point;
+    }
+
+    function positionSketchDimLabel(event: PointerEvent, text: string) {
+      const label = sketchDimLabelRef.current;
+      const hostRect = hostRef.current?.getBoundingClientRect();
+      if (!label || !hostRect) {
+        return;
+      }
+      label.textContent = `${text} ${unitsRef.current}`;
+      label.style.left = `${event.clientX - hostRect.left + 16}px`;
+      label.style.top = `${event.clientY - hostRect.top - 28}px`;
+      label.hidden = false;
+    }
+
+    function hideSketchDimLabel() {
+      const label = sketchDimLabelRef.current;
+      if (label) {
+        label.hidden = true;
+      }
+    }
+
+    function updateSketchInProgress(event: PointerEvent) {
+      const mode = sketchModeRef.current;
+      const rig = sketchRigRef.current;
+      const gesture = sketchGestureRef.current;
+      if (!mode || !rig) {
+        return;
+      }
+      const point = sketchPointAt(event);
+      if (!point) {
+        return;
+      }
+      if (gesture.dragStart && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
+        if (mode.tool === 'circle') {
+          const radius = Math.hypot(
+            point.x - gesture.dragStart.x,
+            point.y - gesture.dragStart.y
+          );
+          const samples: SketchPoint[] = [];
+          for (let index = 0; index < 64; index += 1) {
+            const angle = (index / 64) * Math.PI * 2;
+            samples.push({
+              x: gesture.dragStart.x + Math.cos(angle) * radius,
+              y: gesture.dragStart.y + Math.sin(angle) * radius
+            });
+          }
+          rig.setInProgress(samples, true);
+        } else {
+          rig.setInProgress(
+            [
+              gesture.dragStart,
+              { x: point.x, y: gesture.dragStart.y },
+              point,
+              { x: gesture.dragStart.x, y: point.y }
+            ],
+            true
+          );
+        }
+        positionSketchDimLabel(
+          event,
+          dimensionForInProgress(mode.tool, gesture.dragStart, point)
+        );
+        requestRender();
+        return;
+      }
+      if (mode.tool === 'line' && gesture.chainAnchor) {
+        const locked = axisLockPoint(gesture.chainAnchor, point);
+        rig.setInProgress([gesture.chainAnchor, locked.point], false);
+        positionSketchDimLabel(
+          event,
+          dimensionForInProgress('line', gesture.chainAnchor, locked.point)
+        );
+        requestRender();
+      }
+    }
+
     const handlePointerMove = (event: PointerEvent) => {
+      if (sketchModeRef.current) {
+        if (event.buttons === 0 || event.buttons === 1) {
+          updateSketchInProgress(event);
+        }
+        if (event.buttons !== 2 && event.buttons !== 4) {
+          return;
+        }
+      }
       rightClickGesture.move(event.pointerId, event.clientX, event.clientY);
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         event.preventDefault();
@@ -2246,6 +2410,26 @@ export function ModelViewer({
         event.preventDefault();
         return;
       }
+      if (sketchModeRef.current && event.button === 0) {
+        const mode = sketchModeRef.current;
+        const gesture = sketchGestureRef.current;
+        const point = sketchPointAt(event);
+        if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
+          gesture.dragStart = point;
+          gesture.pointerId = event.pointerId;
+          gesture.moved = false;
+          controls.enabled = false;
+          renderer.domElement.setPointerCapture(event.pointerId);
+          onSketchDrawingChangeRef.current(true);
+          event.preventDefault();
+        } else if (point && mode.tool === 'line') {
+          gesture.pointerId = event.pointerId;
+          gesture.moved = false;
+          event.preventDefault();
+        }
+        downPosition = { x: event.clientX, y: event.clientY };
+        return;
+      }
       const armedRig = offsetRigRef.current;
       if (armedRig) {
         setRayFromEvent(event);
@@ -2481,6 +2665,59 @@ export function ModelViewer({
           renderer.domElement.style.cursor = '';
         }
         downPosition = null;
+        return;
+      }
+      if (sketchModeRef.current && event.button === 0) {
+        const mode = sketchModeRef.current;
+        const rig = sketchRigRef.current;
+        const gesture = sketchGestureRef.current;
+        const point = sketchPointAt(event);
+        const moved = downPosition
+          ? Math.hypot(
+              event.clientX - downPosition.x,
+              event.clientY - downPosition.y
+            ) >= 5
+          : false;
+        downPosition = null;
+        if (gesture.dragStart) {
+          if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+            renderer.domElement.releasePointerCapture(event.pointerId);
+          }
+          controls.enabled = true;
+          if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
+            const object = sketchObjectFromDrag(
+              mode.tool,
+              gesture.dragStart,
+              point
+            );
+            if (object) {
+              onSketchCommitRef.current(object);
+            }
+          }
+          gesture.dragStart = null;
+          rig?.setInProgress(null, false);
+          hideSketchDimLabel();
+          onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'line' && point && !moved) {
+          if (!gesture.chainAnchor) {
+            gesture.chainAnchor = point;
+            onSketchDrawingChangeRef.current(true);
+          } else {
+            const locked = axisLockPoint(gesture.chainAnchor, point);
+            const object = lineObjectFromPoints(
+              gesture.chainAnchor,
+              locked.point
+            );
+            if (object) {
+              onSketchCommitRef.current(object);
+              gesture.chainAnchor = locked.point;
+            }
+          }
+          requestRender();
+        }
         return;
       }
       if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
@@ -2838,6 +3075,8 @@ export function ModelViewer({
       offsetChip.removeEventListener('click', handleChipClick);
       host.removeChild(offsetChip);
       offsetChipRef.current = null;
+      host.removeChild(sketchDimLabel);
+      sketchDimLabelRef.current = null;
       offsetSetterRef.current = null;
       moveGizmoHudRef.current = null;
       contextRef.current = null;
@@ -3486,6 +3725,144 @@ export function ModelViewer({
       }
     };
   }, [edgeHandle, bodies]);
+
+  // In-viewport sketch mode lifecycle: build the plane rig, glide the camera
+  // head-on, and recede the solids; restore everything on exit. Keyed on the
+  // basis object identity so drawing/object updates do not re-enter.
+  const sketchBasis = sketchMode?.basis ?? null;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !sketchBasis) {
+      return;
+    }
+    const rig = buildSketchModeRig(sketchBasis);
+    context.scene.add(rig.group);
+    sketchRigRef.current = rig;
+    sketchGestureRef.current = {
+      chainAnchor: null,
+      dragStart: null,
+      pointerId: null,
+      moved: false
+    };
+    // Save the pose to restore, then glide head-on to the plane.
+    const returnPose = {
+      position: context.camera.position.clone(),
+      target: context.controls.target.clone(),
+      projection: context.projection
+    };
+    sketchReturnRef.current = returnPose;
+    const origin = new THREE.Vector3(
+      sketchBasis.origin.x,
+      sketchBasis.origin.y,
+      sketchBasis.origin.z
+    );
+    const distance = Math.max(context.camera.position.distanceTo(origin), 40);
+    const pose = sketchEntryPose(sketchBasis, distance);
+    context.controls.enableRotate = false;
+    context.startCameraTween(
+      {
+        position: new THREE.Vector3(
+          pose.position.x,
+          pose.position.y,
+          pose.position.z
+        ),
+        target: new THREE.Vector3(pose.target.x, pose.target.y, pose.target.z),
+        near: context.camera.near,
+        far: context.camera.far
+      },
+      () => {
+        context.applyProjection('orthographic');
+        context.syncOrthographic(true);
+      }
+    );
+    context.requestRender();
+    return () => {
+      rig.dispose();
+      if (sketchRigRef.current === rig) {
+        sketchRigRef.current = null;
+      }
+      const label = sketchDimLabelRef.current;
+      if (label) {
+        label.hidden = true;
+      }
+      context.controls.enableRotate = true;
+      const saved = sketchReturnRef.current;
+      sketchReturnRef.current = null;
+      if (saved) {
+        context.applyProjection(saved.projection);
+        context.startCameraTween({
+          position: saved.position,
+          target: saved.target,
+          near: context.camera.near,
+          far: context.camera.far
+        });
+      }
+      context.requestRender();
+    };
+  }, [sketchBasis]);
+
+  // Solids recede while sketching so the plane reads as the work surface.
+  // Re-applied after every body rebuild (each entity commit resyncs).
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) {
+      return;
+    }
+    const active = sketchMode !== null;
+    context.bodyGroup.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) {
+        return;
+      }
+      const material = child.material as THREE.MeshStandardMaterial;
+      const stored = child.userData as {
+        sketchRecede?: { opacity: number; transparent: boolean };
+      };
+      if (active) {
+        if (!stored.sketchRecede) {
+          stored.sketchRecede = {
+            opacity: material.opacity,
+            transparent: material.transparent
+          };
+        }
+        material.transparent = true;
+        material.opacity = 0.35;
+      } else if (stored.sketchRecede) {
+        material.opacity = stored.sketchRecede.opacity;
+        material.transparent = stored.sketchRecede.transparent;
+        delete stored.sketchRecede;
+      }
+    });
+    context.requestRender();
+  }, [sketchMode, bodies]);
+
+  // Committed sketch entities re-render after every entity commit.
+  useEffect(() => {
+    const context = contextRef.current;
+    const rig = sketchRigRef.current;
+    if (!context || !rig || !sketchMode) {
+      return;
+    }
+    rig.setObjects(sketchMode.objects, (value) =>
+      typeof value === 'number' ? value : Number(value)
+    );
+    context.requestRender();
+  }, [sketchMode]);
+
+  // Escape ends the line chain: clear the local anchor when the machine says
+  // drawing stopped.
+  useEffect(() => {
+    if (sketchMode && !sketchMode.drawing) {
+      const gesture = sketchGestureRef.current;
+      gesture.chainAnchor = null;
+      gesture.dragStart = null;
+      sketchRigRef.current?.setInProgress(null, false);
+      const label = sketchDimLabelRef.current;
+      if (label) {
+        label.hidden = true;
+      }
+      contextRef.current?.requestRender();
+    }
+  }, [sketchMode]);
 
   // Sketch profiles render as line loops on their planes so upcoming
   // extrudes/revolves are visible before they exist.
