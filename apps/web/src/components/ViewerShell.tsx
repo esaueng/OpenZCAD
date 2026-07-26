@@ -4,8 +4,11 @@ import {
   type ExtrudePreview,
   type AxisProjection,
   type FaceResizeCommit,
+  type EdgeHandleTarget,
   type MovePreview,
   type MoveSnap,
+  type OffsetHandleTarget,
+  type PickDetail,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -42,8 +45,20 @@ interface ViewerShellProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
-    additive: boolean
+    additive: boolean,
+    detail?: PickDetail
   ): void;
+  offsetHandle: OffsetHandleTarget | null;
+  onOffsetCommit(offset: number): void;
+  onOpenOffsetKeypad(currentOffset: number): void;
+  keypadAnchorRef: MutableRefObject<
+    ((point: { x: number; y: number } | null) => void) | null
+  >;
+  offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  edgeHandle: EdgeHandleTarget | null;
+  onEdgeRadiusPreview(size: number): void;
+  onEdgeCommit(size: number): void;
+  onOpenEdgeKeypad(currentSize: number): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -87,6 +102,15 @@ export function ViewerShell({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  offsetHandle,
+  onOffsetCommit,
+  onOpenOffsetKeypad,
+  keypadAnchorRef,
+  offsetSetterRef,
+  edgeHandle,
+  onEdgeRadiusPreview,
+  onEdgeCommit,
+  onOpenEdgeKeypad,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -119,6 +143,15 @@ export function ViewerShell({
         onViewChange={onViewChange}
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
+        offsetHandle={offsetHandle}
+        onOffsetCommit={onOffsetCommit}
+        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        keypadAnchorRef={keypadAnchorRef}
+        offsetSetterRef={offsetSetterRef}
+        edgeHandle={edgeHandle}
+        onEdgeRadiusPreview={onEdgeRadiusPreview}
+        onEdgeCommit={onEdgeCommit}
+        onOpenEdgeKeypad={onOpenEdgeKeypad}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}

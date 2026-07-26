@@ -8,8 +8,8 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import {
-  PLANE_BASES,
   circleProfile,
+  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -350,6 +350,12 @@ function applyDirectEdit(
       extension
     );
     output = kernel.unifySameDomain(kernel.cut(closed, cutter));
+  } else if (operation.kind !== 'remove-face-feature') {
+    // offset-face / resize-cylindrical-face are implemented natively on the
+    // BrepKit adapter; the OCCT fallback path does not support them.
+    throw new Error(
+      `Direct edit "${operation.kind}" is not supported by the OpenCascade fallback kernel.`
+    );
   } else {
     const geometry = faceGeometry(kernel, owner, face);
     if (geometry.surfaceType !== operation.sourceSurfaceType) {
@@ -436,6 +442,13 @@ function profilePoints(
         resolveParamValue(data.radius, scope, 'radius'),
         resolveParamValue(data.centerX, scope, 'center X'),
         resolveParamValue(data.centerY, scope, 'center Y')
+      );
+    case 'line':
+    case 'arc':
+      // Open curves cannot be swept directly; they participate in sketches
+      // through detected closed regions instead.
+      throw new Error(
+        `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
   }
 }
@@ -593,9 +606,10 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     if (!sketch || !object || object.kind !== 'sketch-object') {
       throw new Error('Referenced sketch has no profile.');
     }
-    const basis = PLANE_BASES[sketch.plane];
-    const offset = resolveParamValue(sketch.offset, scope, 'sketch offset');
-    const face = this.makeProfileFace(object.data, basis, offset, scope);
+    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
+      resolveParamValue(value, scope, 'sketch offset')
+    );
+    const face = this.makeProfileFace(object.data, basis, 0, scope);
 
     if (feature.data.featureKind === 'extrude') {
       const distance = resolveParamValue(
@@ -615,7 +629,7 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     return this.kernel.revolve(
       face,
       {
-        point: pointOnPlane(basis, { x: 0, y: 0 }, offset),
+        point: pointOnPlane(basis, { x: 0, y: 0 }, 0),
         direction
       },
       Math.PI * 2

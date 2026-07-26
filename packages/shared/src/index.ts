@@ -12,7 +12,7 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 3 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 4 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -32,7 +32,12 @@ export type FeatureKind =
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh';
-export type SketchObjectKind = 'rectangle' | 'circle' | 'polygon';
+export type SketchObjectKind =
+  | 'rectangle'
+  | 'circle'
+  | 'polygon'
+  | 'line'
+  | 'arc';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
 export type PatternKind = 'linear' | 'circular';
 export type AxisId = 'x' | 'y' | 'z';
@@ -91,6 +96,27 @@ export type DirectEditOperation =
       sourceDiameter?: number;
       sourceAxisStart?: Vector3;
       sourceAxisEnd?: Vector3;
+    }
+  | {
+      kind: 'offset-face';
+      faceHash: number;
+      sourceSurfaceType: 'plane';
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** Outward unit normal the offset moves along. */
+      sourceNormal: Vector3;
+      /** Signed distance along sourceNormal; positive adds material. */
+      offset: ParamValue;
+    }
+  | {
+      kind: 'resize-cylindrical-face';
+      faceHash: number;
+      sourceRadius: number;
+      sourceAxisStart: Vector3;
+      sourceAxisEnd: Vector3;
+      /** Whether the wall faces material inward (hole) or outward (boss). */
+      concavity: 'hole' | 'boss';
+      radius: ParamValue;
     };
 
 export interface BaseNode {
@@ -130,12 +156,47 @@ export interface ParameterNode extends BaseNode {
   value: number;
 }
 
+/**
+ * An orthonormal right-handed frame (xAxis × yAxis = zAxis) positioning a
+ * sketch plane in model space. Axes are unit vectors; `zAxis` is the plane
+ * normal profiles extrude along.
+ */
+export interface SketchPlaneFrame {
+  origin: Vector3;
+  xAxis: Vector3;
+  yAxis: Vector3;
+  zAxis: Vector3;
+}
+
+/**
+ * Where a sketch plane lives. `canonical` is the classic principal plane +
+ * normal offset. `frame` is an arbitrary placed plane. `face` records that the
+ * plane was taken from a body face: the embedded `frame` snapshot is
+ * authoritative for rebuilds (sketch geometry stays well-defined even if the
+ * source face is later edited away), while the fingerprint fields let the app
+ * re-derive the frame — and warn — when the face still resolves.
+ */
+export type SketchPlaneRef =
+  | { type: 'canonical'; plane: PlaneId; offset: ParamValue }
+  | { type: 'frame'; frame: SketchPlaneFrame }
+  | {
+      type: 'face';
+      bodyId: BodyId;
+      faceHash: number;
+      sourceArea: number;
+      sourceCenter: Vector3;
+      sourceNormal: Vector3;
+      frame: SketchPlaneFrame;
+    };
+
 export interface SketchNode extends BaseNode {
   kind: 'sketch';
   sketchId: SketchId;
-  plane: PlaneId;
-  /** Offset of the sketch plane along its normal. */
-  offset: ParamValue;
+  planeRef: SketchPlaneRef;
+  /** @deprecated Schema v3 field; superseded by `planeRef`. Kept so legacy documents parse. */
+  plane?: PlaneId;
+  /** @deprecated Schema v3 field; superseded by `planeRef`. Kept so legacy documents parse. */
+  offset?: ParamValue;
   objectIds: EntityId[];
 }
 
@@ -159,6 +220,22 @@ export type SketchObjectData =
       radius: ParamValue;
       centerX: ParamValue;
       centerY: ParamValue;
+    }
+  | {
+      objectKind: 'line';
+      x1: ParamValue;
+      y1: ParamValue;
+      x2: ParamValue;
+      y2: ParamValue;
+    }
+  | {
+      objectKind: 'arc';
+      centerX: ParamValue;
+      centerY: ParamValue;
+      radius: ParamValue;
+      /** Counter-clockwise sweep from start to end, in degrees. */
+      startAngleDeg: ParamValue;
+      endAngleDeg: ParamValue;
     };
 
 export interface SketchObjectNode extends BaseNode {
@@ -184,6 +261,17 @@ export type FeatureData =
       featureKind: 'extrude';
       sketchId: SketchId;
       distance: ParamValue;
+      /**
+       * When present, extrudes one detected closed region of the sketch
+       * instead of the whole profile. Resolution fails closed: if neither the
+       * fingerprint nor the sample point + area match a current region, the
+       * rebuild reports a warning rather than guessing.
+       */
+      profile?: {
+        regionFingerprint: number;
+        samplePoint: { x: number; y: number };
+        sourceArea: number;
+      };
     }
   | {
       featureKind: 'revolve';
@@ -297,6 +385,8 @@ export interface FaceGeometry {
   area: number;
   /** Exact surface center of mass, used as a topology fingerprint. */
   center: Vector3;
+  /** Outward unit normal; present for exact planar surfaces. */
+  normal?: Vector3;
   /** Present for exact cylindrical surfaces. */
   radius?: number;
   diameter?: number;
@@ -573,6 +663,10 @@ export interface AppSettings {
     timeoutMs: number;
     customInstructions: string;
   };
+  experiments: {
+    /** Selection-first direct manipulation: click geometry, drag handles. */
+    directManipulation: boolean;
+  };
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -607,6 +701,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     maxOutputTokens: 32_000,
     timeoutMs: 120_000,
     customInstructions: ''
+  },
+  experiments: {
+    directManipulation: false
   }
 };
 

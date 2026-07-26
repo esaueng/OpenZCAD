@@ -26,6 +26,15 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import {
+  buildEdgeRadiusHandle,
+  buildOffsetFaceHandle,
+  edgeHandlePlacement,
+  offsetChipAnchor,
+  offsetHandlePlacement,
+  type EdgeHandleRig,
+  type OffsetHandleRig
+} from './viewer/handles';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
@@ -118,6 +127,33 @@ export function directEditDirectionFromNormal(
 export interface ViewerSettings {
   showGrid: boolean;
   displayMode: DisplayMode;
+}
+
+/**
+ * Where a selection click landed: the world-space hit point and, for faces,
+ * the outward normal. Selection-first editing anchors its drag handle here so
+ * the affordance appears under the cursor rather than at the face center.
+ */
+export interface PickDetail {
+  point: { x: number; y: number; z: number };
+  normal?: { x: number; y: number; z: number };
+}
+
+/** An armed face-offset handle: where it sits and which face it edits. */
+export interface OffsetHandleTarget {
+  bodyId: string;
+  topologyId: string;
+  point: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+}
+
+/** An armed edge fillet/chamfer handle over the current edge selection. */
+export interface EdgeHandleTarget {
+  bodyId: string;
+  /** The last-picked edge anchors the handle; all edges round together. */
+  topologyId: string;
+  op: 'fillet' | 'chamfer';
+  edgeCount: number;
 }
 
 /** Sketch profile polyline, already lifted onto its 3D plane. */
@@ -259,8 +295,29 @@ interface ModelViewerProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
-    additive: boolean
+    additive: boolean,
+    detail?: PickDetail
   ): void;
+  /** Armed face-offset handle (selection-first direct manipulation). */
+  offsetHandle: OffsetHandleTarget | null;
+  /** Fired when an offset-handle drag releases with a non-zero offset. */
+  onOffsetCommit(offset: number): void;
+  /** Value chip tapped: open exact entry prefilled with the current offset. */
+  onOpenOffsetKeypad(currentOffset: number): void;
+  /** Imperative sink receiving the chip anchor in host pixels each frame. */
+  keypadAnchorRef: MutableRefObject<
+    ((point: { x: number; y: number } | null) => void) | null
+  >;
+  /** Imperative setter letting exact entry drive the handle preview. */
+  offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
+  edgeHandle: EdgeHandleTarget | null;
+  /** Streamed while an edge-radius drag is in flight (throttled by App). */
+  onEdgeRadiusPreview(size: number): void;
+  /** Fired when the radius drag releases (or exact entry commits). */
+  onEdgeCommit(size: number): void;
+  /** Edge value chip tapped: open exact entry for the radius/distance. */
+  onOpenEdgeKeypad(currentSize: number): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -290,7 +347,11 @@ interface CameraTween {
   onComplete?: () => void;
 }
 
-interface SceneContext {
+/**
+ * The imperative state bag shared by the viewport's interaction code. New
+ * handle/gizmo modules receive this rather than reaching into React state.
+ */
+export interface SceneContext {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   orthographic: THREE.OrthographicCamera;
@@ -425,6 +486,8 @@ interface PickResult {
 interface FaceDragState {
   pointerId: number;
   selection: TopologySelection;
+  /** Pick detail captured at drag start, forwarded on click-through. */
+  detail: PickDetail;
   object: THREE.Object3D;
   axis: DirectEditAxis;
   side: -1 | 1;
@@ -902,6 +965,15 @@ export function ModelViewer({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  offsetHandle,
+  onOffsetCommit,
+  onOpenOffsetKeypad,
+  keypadAnchorRef,
+  offsetSetterRef,
+  edgeHandle,
+  onEdgeRadiusPreview,
+  onEdgeCommit,
+  onOpenEdgeKeypad,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -943,6 +1015,24 @@ export function ModelViewer({
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
+  const onOffsetCommitRef = useRef(onOffsetCommit);
+  onOffsetCommitRef.current = onOffsetCommit;
+  const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
+  onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
+  const onEdgeRadiusPreviewRef = useRef(onEdgeRadiusPreview);
+  onEdgeRadiusPreviewRef.current = onEdgeRadiusPreview;
+  const onEdgeCommitRef = useRef(onEdgeCommit);
+  onEdgeCommitRef.current = onEdgeCommit;
+  const onOpenEdgeKeypadRef = useRef(onOpenEdgeKeypad);
+  onOpenEdgeKeypadRef.current = onOpenEdgeKeypad;
+  const edgeHandleOpRef = useRef<'fillet' | 'chamfer'>('fillet');
+  /** Live edge-radius rig; owned by the edgeHandle effect below. */
+  const edgeRigRef = useRef<EdgeHandleRig | null>(null);
+  const edgeDragActiveRef = useRef(false);
+  /** Live offset-handle rig; owned by the offsetHandle effect below. */
+  const offsetRigRef = useRef<OffsetHandleRig | null>(null);
+  const offsetDragActiveRef = useRef(false);
+  const offsetChipRef = useRef<HTMLDivElement | null>(null);
 
   // Scene, renderers, controls, and the render loop live for the component's
   // lifetime; only the body/sketch/overlay groups rebuild on data changes.
@@ -1338,10 +1428,61 @@ export function ModelViewer({
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
+    /** Screen-projected drag along the offset handle's normal. */
+    let offsetDrag: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      directionX: number;
+      directionY: number;
+      pixelsPerUnit: number;
+      initialOffset: number;
+    } | null = null;
+    /** Screen-projected drag growing the edge blend radius. */
+    let edgeDrag: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      directionX: number;
+      directionY: number;
+      pixelsPerUnit: number;
+      initialValue: number;
+      lastPreviewAt: number;
+    } | null = null;
     const dragHud = document.createElement('div');
     dragHud.className = 'direct-edit-hud';
     dragHud.hidden = true;
     host.appendChild(dragHud);
+
+    // Value chip for the offset handle: tracks the arrow tip every frame.
+    // Tapping it opens exact numeric entry, per the drag-or-type contract.
+    const offsetChip = document.createElement('div');
+    offsetChip.className = 'handle-value-chip';
+    offsetChip.hidden = true;
+    const handleChipClick = () => {
+      const offsetRig = offsetRigRef.current;
+      if (offsetRig) {
+        onOpenOffsetKeypadRef.current(offsetRig.offset());
+        return;
+      }
+      const edgeRig = edgeRigRef.current;
+      if (edgeRig) {
+        onOpenEdgeKeypadRef.current(edgeRig.value());
+      }
+    };
+    offsetChip.addEventListener('click', handleChipClick);
+    host.appendChild(offsetChip);
+    offsetChipRef.current = offsetChip;
+
+    // Exact entry drives the same preview the drag does.
+    offsetSetterRef.current = (value: number) => {
+      if (offsetRigRef.current) {
+        offsetRigRef.current.setOffset(value);
+      } else {
+        edgeRigRef.current?.setValue(value);
+      }
+      requestRender();
+    };
     const moveGizmoHud = document.createElement('div');
     moveGizmoHud.className = 'move-gizmo-hud';
     moveGizmoHud.hidden = true;
@@ -1685,6 +1826,106 @@ export function ModelViewer({
       });
     }
 
+    /**
+     * Projects a world direction at a world point into screen space: the unit
+     * screen direction a drag should follow and how many pixels one world
+     * unit spans. Falls back to screen-vertical when the direction is nearly
+     * head-on (same recipe as the box face drag).
+     */
+    function screenDirectionFor(
+      point: THREE.Vector3,
+      direction: THREE.Vector3
+    ): {
+      directionX: number;
+      directionY: number;
+      pixelsPerUnit: number;
+      fallbackPixelsPerUnit: number;
+    } {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const projectedStart = point.clone().project(context.activeCamera);
+      const projectedEnd = point
+        .clone()
+        .add(direction)
+        .project(context.activeCamera);
+      const projectedX = ((projectedEnd.x - projectedStart.x) * rect.width) / 2;
+      const projectedY =
+        (-(projectedEnd.y - projectedStart.y) * rect.height) / 2;
+      const projectedLength = Math.hypot(projectedX, projectedY);
+      const distance = Math.max(camera.position.distanceTo(point), 1);
+      const fallbackPixelsPerUnit =
+        context.projection === 'orthographic'
+          ? (rect.height * orthographic.zoom) /
+            Math.max(orthographic.top - orthographic.bottom, 0.0001)
+          : rect.height /
+            (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance);
+      const usable = projectedLength >= fallbackPixelsPerUnit * 0.15;
+      return {
+        directionX: usable ? projectedX / projectedLength : 0,
+        directionY: usable ? projectedY / projectedLength : -1,
+        // A foreshortened direction must not make tiny pixel motions huge
+        // values: never drop below 60% of the head-on scale.
+        pixelsPerUnit: Math.max(
+          usable ? projectedLength : fallbackPixelsPerUnit,
+          fallbackPixelsPerUnit * 0.6,
+          0.1
+        ),
+        fallbackPixelsPerUnit
+      };
+    }
+
+    function updateOffsetChip() {
+      const chip = offsetChipRef.current;
+      if (!chip) {
+        return;
+      }
+      const offsetRig = offsetRigRef.current;
+      const edgeRig = edgeRigRef.current;
+      let anchor: { x: number; y: number; z: number } | null = null;
+      let text = '';
+      if (offsetRig) {
+        const scale =
+          (offsetRig.group.userData.gizmoScale as number | undefined) ?? 1;
+        anchor = offsetChipAnchor(
+          offsetRig.origin,
+          offsetRig.direction,
+          offsetRig.offset(),
+          scale
+        );
+        const offset = offsetRig.offset();
+        text = `${offset >= 0 ? '+' : ''}${Math.round(offset * 100) / 100} ${unitsRef.current}`;
+      } else if (edgeRig) {
+        anchor = {
+          x: edgeRig.origin.x,
+          y: edgeRig.origin.y,
+          z: edgeRig.origin.z
+        };
+        const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
+        text = `${prefix} ${Math.round(edgeRig.value() * 100) / 100} ${unitsRef.current}`;
+      }
+      if (!anchor) {
+        chip.hidden = true;
+        keypadAnchorRef.current?.(null);
+        return;
+      }
+      const projected = new THREE.Vector3(anchor.x, anchor.y, anchor.z).project(
+        context.activeCamera
+      );
+      if (projected.z > 1) {
+        chip.hidden = true;
+        keypadAnchorRef.current?.(null);
+        return;
+      }
+      const width = renderer.domElement.clientWidth;
+      const height = renderer.domElement.clientHeight;
+      const left = ((projected.x + 1) / 2) * width;
+      const top = ((1 - projected.y) / 2) * height;
+      chip.style.left = `${left}px`;
+      chip.style.top = `${top}px`;
+      chip.textContent = text;
+      chip.hidden = false;
+      keypadAnchorRef.current?.({ x: left, y: top });
+    }
+
     function positionDragHud(
       event: PointerEvent,
       value: number,
@@ -1816,6 +2057,58 @@ export function ModelViewer({
         positionMoveGizmoHud(event, focus, true, value);
         renderer.domElement.style.cursor = 'grabbing';
         requestRender();
+        return;
+      }
+      if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
+        event.preventDefault();
+        const rig = edgeRigRef.current;
+        if (rig) {
+          const dx = event.clientX - edgeDrag.startX;
+          const dy = event.clientY - edgeDrag.startY;
+          const projected =
+            dx * edgeDrag.directionX + dy * edgeDrag.directionY;
+          const raw = Math.max(
+            0,
+            edgeDrag.initialValue + projected / edgeDrag.pixelsPerUnit
+          );
+          // Blends want finer steps than moves; tenths feel right.
+          const value = event.shiftKey
+            ? Math.round(raw * 100) / 100
+            : Math.round(raw * 10) / 10;
+          if (value !== rig.value()) {
+            rig.setValue(value);
+            // Kernel previews are expensive; stream at a bounded cadence and
+            // let App coalesce.
+            const now = performance.now();
+            if (now - edgeDrag.lastPreviewAt > 150 && value > 0) {
+              edgeDrag.lastPreviewAt = now;
+              onEdgeRadiusPreviewRef.current(value);
+            }
+            requestRender();
+          }
+          renderer.domElement.style.cursor = 'grabbing';
+        }
+        return;
+      }
+      if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
+        event.preventDefault();
+        const rig = offsetRigRef.current;
+        if (rig) {
+          const dx = event.clientX - offsetDrag.startX;
+          const dy = event.clientY - offsetDrag.startY;
+          const projected =
+            dx * offsetDrag.directionX + dy * offsetDrag.directionY;
+          const raw =
+            offsetDrag.initialOffset + projected / offsetDrag.pixelsPerUnit;
+          // Zoom-adaptive snapping, matching the move gizmo; Shift = free.
+          const snap = chooseMoveSnapStep(1 / offsetDrag.pixelsPerUnit);
+          const value = event.shiftKey
+            ? Math.round(raw * 100) / 100
+            : Math.round(raw / snap) * snap;
+          rig.setOffset(value);
+          renderer.domElement.style.cursor = 'grabbing';
+          requestRender();
+        }
         return;
       }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
@@ -1953,6 +2246,67 @@ export function ModelViewer({
         event.preventDefault();
         return;
       }
+      const armedRig = offsetRigRef.current;
+      if (armedRig) {
+        setRayFromEvent(event);
+        const handleHits = context.raycaster
+          .intersectObjects(armedRig.group.children, true)
+          .filter((hit) => hit.object.userData.directHandle === true);
+        if (handleHits.length > 0) {
+          const screen = screenDirectionFor(
+            armedRig.origin
+              .clone()
+              .addScaledVector(armedRig.direction, armedRig.offset()),
+            armedRig.direction
+          );
+          offsetDrag = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            directionX: screen.directionX,
+            directionY: screen.directionY,
+            pixelsPerUnit: screen.pixelsPerUnit,
+            initialOffset: armedRig.offset()
+          };
+          offsetDragActiveRef.current = true;
+          controls.enabled = false;
+          renderer.domElement.setPointerCapture(event.pointerId);
+          renderer.domElement.style.cursor = 'grabbing';
+          event.preventDefault();
+          return;
+        }
+      }
+      const armedEdgeRig = edgeRigRef.current;
+      if (armedEdgeRig) {
+        setRayFromEvent(event);
+        const edgeHits = context.raycaster
+          .intersectObjects(armedEdgeRig.group.children, true)
+          .filter((hit) => hit.object.userData.directHandle === true);
+        if (edgeHits.length > 0) {
+          const screen = screenDirectionFor(
+            armedEdgeRig.origin,
+            armedEdgeRig.direction
+          );
+          edgeDrag = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            directionX: screen.directionX,
+            directionY: screen.directionY,
+            // The radial direction only signs the drag; the head-on scale
+            // keeps radius sensitivity predictable at every view angle.
+            pixelsPerUnit: screen.fallbackPixelsPerUnit,
+            initialValue: armedEdgeRig.value(),
+            lastPreviewAt: 0
+          };
+          edgeDragActiveRef.current = true;
+          controls.enabled = false;
+          renderer.domElement.setPointerCapture(event.pointerId);
+          renderer.domElement.style.cursor = 'grabbing';
+          event.preventDefault();
+          return;
+        }
+      }
       const activeExtrude = extrudePreviewRef.current;
       if (activeExtrude && pickExtrudeGizmo(event)) {
         const sketch = sketchesRef.current.find(
@@ -1992,6 +2346,11 @@ export function ModelViewer({
           event.preventDefault();
           return;
         }
+      }
+      // While any direct-manipulation handle is armed, the handles own
+      // dragging — the legacy box resize would fight the gesture.
+      if (offsetRigRef.current || edgeRigRef.current) {
+        return;
       }
       const result = pick(event);
       if (
@@ -2042,6 +2401,20 @@ export function ModelViewer({
       faceDrag = {
         pointerId: event.pointerId,
         selection: result.selection,
+        detail: {
+          point: {
+            x: result.hit.point.x,
+            y: result.hit.point.y,
+            z: result.hit.point.z
+          },
+          normal: result.faceNormal
+            ? {
+                x: result.faceNormal.x,
+                y: result.faceNormal.y,
+                z: result.faceNormal.z
+              }
+            : undefined
+        },
         object,
         axis: direction.axis,
         side: direction.side,
@@ -2110,6 +2483,48 @@ export function ModelViewer({
         downPosition = null;
         return;
       }
+      if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
+        const completed = edgeDrag;
+        edgeDrag = null;
+        edgeDragActiveRef.current = false;
+        controls.enabled = true;
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId);
+        }
+        renderer.domElement.style.cursor = 'grab';
+        downPosition = null;
+        const rig = edgeRigRef.current;
+        const finalValue = rig?.value() ?? 0;
+        if (
+          rig &&
+          finalValue > 1e-9 &&
+          Math.abs(finalValue - completed.initialValue) > 1e-9
+        ) {
+          onEdgeCommitRef.current(finalValue);
+        }
+        return;
+      }
+      if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
+        const completed = offsetDrag;
+        offsetDrag = null;
+        offsetDragActiveRef.current = false;
+        controls.enabled = true;
+        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+          renderer.domElement.releasePointerCapture(event.pointerId);
+        }
+        renderer.domElement.style.cursor = 'grab';
+        downPosition = null;
+        const rig = offsetRigRef.current;
+        const finalOffset = rig?.offset() ?? 0;
+        if (
+          rig &&
+          Math.abs(finalOffset - completed.initialOffset) > 1e-9 &&
+          Math.abs(finalOffset) > 1e-9
+        ) {
+          onOffsetCommitRef.current(finalOffset);
+        }
+        return;
+      }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
         extrudeDrag = null;
@@ -2125,7 +2540,7 @@ export function ModelViewer({
         restoreFaceDrag();
         faceDrag = null;
         downPosition = null;
-        onSelectTopologyRef.current(completed.selection, false);
+        onSelectTopologyRef.current(completed.selection, false, completed.detail);
         if (moved >= 4 && completed.latestValue !== completed.initialValue) {
           onResizePrimitiveFaceRef.current({
             bodyId: completed.selection.bodyId,
@@ -2151,14 +2566,45 @@ export function ModelViewer({
         if (result?.sketchId) {
           onSelectSketchProfileRef.current(result.sketchId);
         } else {
+          const detail: PickDetail | undefined = result
+            ? {
+                point: {
+                  x: result.hit.point.x,
+                  y: result.hit.point.y,
+                  z: result.hit.point.z
+                },
+                normal: result.faceNormal
+                  ? {
+                      x: result.faceNormal.x,
+                      y: result.faceNormal.y,
+                      z: result.faceNormal.z
+                    }
+                  : undefined
+              }
+            : undefined;
           onSelectTopologyRef.current(
             result?.selection ?? null,
-            event.shiftKey
+            event.shiftKey,
+            detail
           );
         }
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
+        edgeDrag = null;
+        edgeDragActiveRef.current = false;
+        controls.enabled = true;
+        edgeRigRef.current?.setValue(0);
+        requestRender();
+      }
+      if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
+        offsetDrag = null;
+        offsetDragActiveRef.current = false;
+        controls.enabled = true;
+        offsetRigRef.current?.setOffset(0);
+        requestRender();
+      }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
@@ -2278,6 +2724,22 @@ export function ModelViewer({
         moveGizmoGroup.scale.setScalar(gizmoScale / baseScale);
         moveGizmoGroup.userData.gizmoScale = gizmoScale;
       }
+      const offsetRig = offsetRigRef.current;
+      if (offsetRig) {
+        // Screen-constant arrow, ~0.55× the move gizmo's reach.
+        const rigScale =
+          moveGizmoWorldScale(worldPerPixelAt(offsetRig.group.position)) * 0.55;
+        offsetRig.group.scale.setScalar(rigScale);
+        offsetRig.group.userData.gizmoScale = rigScale;
+      }
+      const edgeRig = edgeRigRef.current;
+      if (edgeRig) {
+        const rigScale =
+          moveGizmoWorldScale(worldPerPixelAt(edgeRig.group.position)) * 0.4;
+        edgeRig.group.scale.setScalar(rigScale);
+        edgeRig.group.userData.gizmoScale = rigScale;
+      }
+      updateOffsetChip();
       renderer.render(scene, context.activeCamera);
       updateDimensionLabels(
         context,
@@ -2373,6 +2835,10 @@ export function ModelViewer({
       host.removeChild(labelRenderer.domElement);
       host.removeChild(dragHud);
       host.removeChild(moveGizmoHud);
+      offsetChip.removeEventListener('click', handleChipClick);
+      host.removeChild(offsetChip);
+      offsetChipRef.current = null;
+      offsetSetterRef.current = null;
       moveGizmoHudRef.current = null;
       contextRef.current = null;
     };
@@ -2903,6 +3369,123 @@ export function ModelViewer({
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
   }, [projection]);
+
+  // Offset-face handle: built when a face is armed, torn down on deselect or
+  // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || offsetDragActiveRef.current) {
+      return;
+    }
+    offsetRigRef.current?.dispose();
+    offsetRigRef.current = null;
+    if (offsetChipRef.current) {
+      offsetChipRef.current.hidden = true;
+    }
+    if (!offsetHandle) {
+      context.requestRender();
+      return;
+    }
+    // Ghost geometry: the face's world-space triangle range.
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === offsetHandle.bodyId
+    );
+    const face = body?.topology?.faces.find(
+      (candidate) => candidate.topologyId === offsetHandle.topologyId
+    );
+    let ghostGeometry: THREE.BufferGeometry | null = null;
+    if (body && face) {
+      ghostGeometry = new THREE.BufferGeometry();
+      ghostGeometry.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
+      );
+      ghostGeometry.setIndex(
+        body.mesh.indices.slice(
+          face.triangleStart * 3,
+          (face.triangleStart + face.triangleCount) * 3
+        )
+      );
+    }
+    const rig = buildOffsetFaceHandle({
+      ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
+      ghostGeometry
+    });
+    // Fat-line materials need the viewport resolution for correct widths.
+    const rigLineMaterials: LineMaterial[] = [];
+    rig.worldGroup.traverse((child) => {
+      if (child instanceof Line2) {
+        const material = child.material;
+        material.resolution.set(
+          context.renderer.domElement.clientWidth,
+          context.renderer.domElement.clientHeight
+        );
+        context.edgeMaterials.add(material);
+        rigLineMaterials.push(material);
+      }
+    });
+    context.scene.add(rig.group);
+    context.scene.add(rig.worldGroup);
+    offsetRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      for (const material of rigLineMaterials) {
+        context.edgeMaterials.delete(material);
+      }
+      if (!offsetDragActiveRef.current) {
+        rig.dispose();
+        if (offsetRigRef.current === rig) {
+          offsetRigRef.current = null;
+        }
+      }
+    };
+  }, [offsetHandle, bodies]);
+
+  // Edge-radius handle: built when edges arm fillet/chamfer, torn down on
+  // deselect or commit. Never rebuilt mid-drag.
+  useEffect(() => {
+    const context = contextRef.current;
+    edgeHandleOpRef.current = edgeHandle?.op ?? 'fillet';
+    if (!context || edgeDragActiveRef.current) {
+      return;
+    }
+    edgeRigRef.current?.dispose();
+    edgeRigRef.current = null;
+    if (!edgeHandle) {
+      context.requestRender();
+      return;
+    }
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === edgeHandle.bodyId
+    );
+    const edge = body?.topology?.edges.find(
+      (candidate) => candidate.topologyId === edgeHandle.topologyId
+    );
+    if (!body || !edge) {
+      return;
+    }
+    const center = {
+      x: (body.bbox.min.x + body.bbox.max.x) / 2,
+      y: (body.bbox.min.y + body.bbox.max.y) / 2,
+      z: (body.bbox.min.z + body.bbox.max.z) / 2
+    };
+    const placement = edgeHandlePlacement(edge.points, center);
+    if (!placement) {
+      return;
+    }
+    const rig = buildEdgeRadiusHandle(placement);
+    context.scene.add(rig.group);
+    edgeRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      if (!edgeDragActiveRef.current) {
+        rig.dispose();
+        if (edgeRigRef.current === rig) {
+          edgeRigRef.current = null;
+        }
+      }
+    };
+  }, [edgeHandle, bodies]);
 
   // Sketch profiles render as line loops on their planes so upcoming
   // extrudes/revolves are visible before they exist.

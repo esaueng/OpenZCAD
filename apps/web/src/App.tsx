@@ -2,6 +2,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ChangeEvent
@@ -46,8 +47,8 @@ import {
   normalizeDocument
 } from '@openzcad/document-core';
 import {
-  PLANE_BASES,
   circleProfile,
+  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
   type Vec2
@@ -114,6 +115,17 @@ import {
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from './components/ModelViewer';
 import type { SketchFormValue } from './components/forms/FeatureForms';
+import { ToolCard } from './components/ToolCard';
+import {
+  NumericKeypad,
+  type KeypadRequest
+} from './components/NumericKeypad';
+import {
+  IDLE,
+  interactionReducer,
+  toolCardFor,
+  type FaceTarget
+} from './lib/interaction/machine';
 import {
   CommandPalette,
   type PaletteCommand
@@ -128,6 +140,7 @@ import type {
   FaceResizeCommit,
   MovePreview,
   MoveSnap,
+  PickDetail,
   ProjectionMode,
   SketchOverlay,
   StandardView,
@@ -250,6 +263,20 @@ export function App() {
   );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
+  /** Click point + normal of the latest topology pick (drag-handle anchor). */
+  const lastPickDetailRef = useRef<PickDetail | null>(null);
+  /** Selection-first direct-manipulation mode machine (behind experiment flag). */
+  const [interaction, dispatchInteraction] = useReducer(
+    interactionReducer,
+    IDLE
+  );
+  /** Open exact-value entry (anchored keypad) for the armed handle. */
+  const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const keypadAnchorRef = useRef<
+    ((point: { x: number; y: number } | null) => void) | null
+  >(null);
+  /** Lets keypad typing drive the viewport's offset-handle preview. */
+  const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
@@ -748,7 +775,13 @@ export function App() {
         return [];
       }
       const data = objectNode.data;
-      const offset = evalParamValue(sketch.offset, scope) ?? 0;
+      if (
+        data.objectKind === 'line' ||
+        data.objectKind === 'arc'
+      ) {
+        // Open curves have no fill; region overlays render them separately.
+        return [];
+      }
       const centerX = evalParamValue(data.centerX, scope);
       const centerY = evalParamValue(data.centerY, scope);
       if (centerX === null || centerY === null) {
@@ -780,11 +813,14 @@ export function App() {
       } catch {
         return [];
       }
-      const basis = PLANE_BASES[sketch.plane];
+      const basis = frameForPlaneRef(
+        sketch.planeRef,
+        (value) => evalParamValue(value, scope) ?? 0
+      );
       const points = profile.map((point) => ({
-        x: basis.u.x * point.x + basis.v.x * point.y + basis.normal.x * offset,
-        y: basis.u.y * point.x + basis.v.y * point.y + basis.normal.y * offset,
-        z: basis.u.z * point.x + basis.v.z * point.y + basis.normal.z * offset
+        x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+        y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+        z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
       }));
       return [
         {
@@ -1084,6 +1120,9 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
   }
 
   function requestView(view: StandardView) {
@@ -1757,11 +1796,15 @@ export function App() {
 
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
-    additive: boolean
+    additive: boolean,
+    detail?: PickDetail
   ) {
     if (!doc) {
       return;
     }
+    // The pick detail (click point + normal) anchors selection-first drag
+    // handles; stashed for the direct-manipulation flow.
+    lastPickDetailRef.current = detail ?? null;
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
     if (!selection) {
@@ -1770,10 +1813,49 @@ export function App() {
       }
       return;
     }
+    // Selection-first direct manipulation: a face click arms its drag handle.
+    if (
+      appSettings.experiments.directManipulation &&
+      selection.kind === 'face' &&
+      selection.topologyId &&
+      detail?.normal
+    ) {
+      const faceTopology = representations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === selection.topologyId
+      );
+      const surface = faceTopology?.geometry?.surfaceType;
+      const target: FaceTarget = {
+        bodyId: selection.bodyId,
+        topologyId: selection.topologyId,
+        hash: selection.hash,
+        point: [detail.point.x, detail.point.y, detail.point.z],
+        normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+        surfaceType:
+          surface === 'plane'
+            ? 'planar'
+            : surface === 'cylinder'
+              ? 'cylindrical'
+              : 'other',
+        diameter: faceTopology?.geometry?.diameter
+      };
+      dispatchInteraction({ type: 'select-face', target });
+    } else if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
     if (selection.kind === 'edge') {
       const sameBody = selectedEdges.every(
         (edge) => edge.bodyId === selection.bodyId
       );
+      if (appSettings.experiments.directManipulation) {
+        // Selection-first: picking edges arms the fillet/chamfer handle.
+        dispatchInteraction({
+          type: 'select-edge',
+          selection,
+          additive: additive && sameBody
+        });
+      }
       const alreadySelected = selectedEdges.some(
         (edge) => edge.topologyId === selection.topologyId
       );
@@ -1895,6 +1977,268 @@ export function App() {
       directEditInFlightRef.current = false;
       setBusy(false);
     }
+  }
+
+  /**
+   * Armed face-offset handle for the viewport. Memoized so the drag rig is
+   * built once per selection instead of on every App render — rebuilding it
+   * mid-hover would reset its screen-constant scale and drop pointer picks.
+   */
+  // The keypad's lifetime mirrors the machine's keypadOpen flag: Escape,
+  // deselection, and commits all close it through the reducer.
+  useEffect(() => {
+    const open =
+      interaction.mode !== 'idle' &&
+      'keypadOpen' in interaction &&
+      interaction.keypadOpen;
+    if (!open) {
+      setKeypad(null);
+    }
+  }, [interaction]);
+
+  // Leaving edges mode abandons any in-flight preview document.
+  useEffect(() => {
+    if (interaction.mode !== 'edges') {
+      clearEdgePreview();
+    }
+  }, [interaction.mode]);
+
+  /** Armed edge handle; memoized for the same rig-stability reason as faces. */
+  const edgeHandleTarget = useMemo(() => {
+    if (interaction.mode !== 'edges' || interaction.edges.length === 0) {
+      return null;
+    }
+    const last = interaction.edges.at(-1)!;
+    return {
+      bodyId: last.bodyId,
+      topologyId: last.topologyId ?? '',
+      op: interaction.op,
+      edgeCount: interaction.edges.length
+    };
+  }, [interaction]);
+
+  const offsetHandleTarget = useMemo(() => {
+    if (
+      interaction.mode !== 'face' ||
+      interaction.op !== 'offset-face' ||
+      interaction.target.surfaceType !== 'planar'
+    ) {
+      return null;
+    }
+    return {
+      bodyId: interaction.target.bodyId,
+      topologyId: interaction.target.topologyId,
+      point: {
+        x: interaction.target.point[0],
+        y: interaction.target.point[1],
+        z: interaction.target.point[2]
+      },
+      normal: {
+        x: interaction.target.normal[0],
+        y: interaction.target.normal[1],
+        z: interaction.target.normal[2]
+      }
+    };
+  }, [interaction]);
+
+  /**
+   * Throttled kernel previews for edge-radius drags. One sync in flight,
+   * latest value wins; a slow document (>400ms per preview) degrades to the
+   * chip readout only, and the drag still commits exactly on release.
+   */
+  const edgePreviewRef = useRef({
+    token: 0,
+    inFlight: false,
+    pending: null as number | null,
+    slow: false,
+    active: false
+  });
+
+  function buildEdgeModifierCommand(size: ParamValue) {
+    if (interaction.mode !== 'edges') {
+      return null;
+    }
+    const edges = interaction.edges;
+    const bodyId = edges[0]?.bodyId;
+    const edgeHashes = edges
+      .map((edge) => edge.hash)
+      .filter((hash): hash is number => hash !== undefined);
+    if (!bodyId || edgeHashes.length === 0) {
+      return null;
+    }
+    const payload = {
+      name: interaction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
+      targetBodyId: bodyId,
+      edgeHashes,
+      size
+    };
+    return interaction.op === 'fillet'
+      ? commandFactories.filletEdges(payload)
+      : commandFactories.chamferEdges(payload);
+  }
+
+  function requestEdgePreview(size: number) {
+    const state = edgePreviewRef.current;
+    if (state.slow || size <= 0) {
+      return;
+    }
+    state.pending = size;
+    state.active = true;
+    if (!state.inFlight) {
+      void runEdgePreviews();
+    }
+  }
+
+  async function runEdgePreviews() {
+    const state = edgePreviewRef.current;
+    state.inFlight = true;
+    try {
+      while (state.pending !== null) {
+        const size = state.pending;
+        state.pending = null;
+        const token = ++state.token;
+        const command = buildEdgeModifierCommand(size);
+        if (!command) {
+          break;
+        }
+        const base = managerRef.current?.document;
+        if (!base) {
+          break;
+        }
+        const started = performance.now();
+        try {
+          const preview = command.apply(base);
+          const derived = await requestExactSync(preview);
+          if (token !== state.token || !state.active) {
+            continue;
+          }
+          setPreviewDoc({ ...preview, derived });
+        } catch {
+          // Invalid radii simply skip the preview frame.
+        }
+        if (performance.now() - started > 400) {
+          state.slow = true;
+          break;
+        }
+      }
+    } finally {
+      state.inFlight = false;
+    }
+  }
+
+  function clearEdgePreview() {
+    const state = edgePreviewRef.current;
+    state.token += 1;
+    state.pending = null;
+    state.slow = false;
+    if (state.active) {
+      state.active = false;
+      setPreviewDoc(null);
+    }
+  }
+
+  /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
+  function handleEdgeCommit(size: number, exact?: ParamValue) {
+    if (interaction.mode !== 'edges') {
+      return;
+    }
+    clearEdgePreview();
+    const rounded = Math.round(size * 1000) / 1000;
+    const command = buildEdgeModifierCommand(exact ?? rounded);
+    if (!command || rounded <= 0) {
+      return;
+    }
+    const op = interaction.op;
+    dispatchInteraction({ type: 'commit-complete' });
+    const resultBodyId =
+      command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    void executeValidatedDirectEdit(
+      command,
+      resultBodyId,
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`
+    );
+  }
+
+  /** Edge chip tapped: exact entry for the blend radius/distance. */
+  function handleOpenEdgeKeypad(currentSize: number) {
+    if (interaction.mode !== 'edges') {
+      return;
+    }
+    dispatchInteraction({ type: 'keypad-open' });
+    setKeypad({
+      kind: 'edge',
+      label: interaction.op === 'fillet' ? 'Radius' : 'Distance',
+      initial:
+        currentSize > 0 ? String(Math.round(currentSize * 100) / 100) : '',
+      unitKind: 'length'
+    });
+  }
+
+  /** Chip tapped: open the anchored keypad prefilled with the drag value. */
+  function handleOpenOffsetKeypad(currentOffset: number) {
+    if (interaction.mode !== 'face') {
+      return;
+    }
+    dispatchInteraction({ type: 'keypad-open' });
+    setKeypad({
+      kind: 'offset',
+      label: 'Offset',
+      initial:
+        currentOffset !== 0
+          ? String(Math.round(currentOffset * 100) / 100)
+          : '',
+      unitKind: 'length'
+    });
+  }
+
+  /**
+   * Face-offset commit as a validated direct edit. `exact` preserves a typed
+   * expression as the stored parametric value; plain drags store the number.
+   */
+  function handleOffsetCommit(offset: number, exact?: ParamValue) {
+    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
+      return;
+    }
+    const target = interaction.target;
+    const bodyId = target.bodyId as BodyId;
+    const faceTopology = representations[bodyId]?.topology?.faces.find(
+      (face) => face.topologyId === target.topologyId
+    );
+    const geometry = faceTopology?.geometry;
+    if (
+      !faceTopology ||
+      geometry?.surfaceType !== 'plane' ||
+      target.hash === undefined
+    ) {
+      setStatus('Exact face measurements are unavailable for this offset.');
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    dispatchInteraction({ type: 'commit-complete' });
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: 'Offset face',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: target.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          // The drag was measured along the picked (outward-facing) normal,
+          // so it defines the offset's sign; the kernel only verifies that
+          // the face's plane still matches this orientation up to sign.
+          sourceNormal: {
+            x: target.normal[0],
+            y: target.normal[1],
+            z: target.normal[2]
+          },
+          offset: exact ?? Math.round(offset * 1000) / 1000
+        }
+      }),
+      bodyId,
+      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`
+    );
   }
 
   function handleResizeThroughHole(
@@ -2307,7 +2651,9 @@ export function App() {
 
       switch (event.key) {
         case 'Escape':
-          if (tool || selectedFeatureNodeId) {
+          if (interaction.mode !== 'idle') {
+            dispatchInteraction({ type: 'escape' });
+          } else if (tool || selectedFeatureNodeId) {
             cancelPanel();
           } else {
             clearSelection();
@@ -2698,8 +3044,63 @@ export function App() {
                 current ? { ...current, translation, rotationDeg } : current
               );
             }}
+            offsetHandle={offsetHandleTarget}
+            onOffsetCommit={handleOffsetCommit}
+            onOpenOffsetKeypad={handleOpenOffsetKeypad}
+            keypadAnchorRef={keypadAnchorRef}
+            offsetSetterRef={offsetSetterRef}
+            edgeHandle={edgeHandleTarget}
+            onEdgeRadiusPreview={requestEdgePreview}
+            onEdgeCommit={handleEdgeCommit}
+            onOpenEdgeKeypad={handleOpenEdgeKeypad}
             modeOverlay={
-              movePreview ? (
+              toolCardFor(interaction) ? (
+                <>
+                  <ToolCard
+                    model={toolCardFor(interaction)!}
+                    onSubMode={() =>
+                      dispatchInteraction({ type: 'toggle-edge-op' })
+                    }
+                    onClose={() => dispatchInteraction({ type: 'escape' })}
+                  />
+                  {keypad && (
+                    <NumericKeypad
+                      request={keypad}
+                      units={doc.units}
+                      scope={parameterScope.scope}
+                      anchorRef={keypadAnchorRef}
+                      onPreview={(value) => {
+                        offsetSetterRef.current?.(value);
+                        if (keypad.kind === 'edge') {
+                          requestEdgePreview(value);
+                        }
+                      }}
+                      onCommit={(value, raw) => {
+                        setKeypad(null);
+                        dispatchInteraction({ type: 'keypad-close' });
+                        // Expressions stay parametric in the stored feature.
+                        const isExpression = !Number.isFinite(Number(raw));
+                        if (keypad.kind === 'edge') {
+                          handleEdgeCommit(value, isExpression ? raw : undefined);
+                        } else {
+                          handleOffsetCommit(
+                            value,
+                            isExpression ? raw : undefined
+                          );
+                        }
+                      }}
+                      onCancel={() => {
+                        offsetSetterRef.current?.(0);
+                        if (keypad.kind === 'edge') {
+                          clearEdgePreview();
+                        }
+                        dispatchInteraction({ type: 'keypad-close' });
+                        setKeypad(null);
+                      }}
+                    />
+                  )}
+                </>
+              ) : movePreview ? (
                 <MoveOverlay
                   bodyName={
                     representations[movePreview.bodyId as BodyId]?.name ??
