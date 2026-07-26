@@ -40,6 +40,13 @@ import {
   type SketchModeRig
 } from './viewer/sketchModeController';
 import {
+  REGION_HOVER_OPACITY,
+  REGION_SELECTED_OPACITY,
+  buildRegionMesh,
+  triangulateRegionGeometry,
+  type RegionPickData
+} from './viewer/regionOverlay';
+import {
   axisLockPoint,
   dimensionForInProgress,
   lineObjectFromPoints,
@@ -172,6 +179,28 @@ export interface SketchModeState {
   drawing: boolean;
   /** Committed objects of the session's sketch, rendered in blue. */
   objects: SketchObjectData[];
+}
+
+/** Sketch curves + detected regions, rendered when direct manipulation is on. */
+export interface SketchViewData {
+  sketchId: string;
+  basis: PlaneBasis;
+  curves: { points: { x: number; y: number }[]; closed: boolean }[];
+  regions: {
+    regionFingerprint: number;
+    samplePoint: { x: number; y: number };
+    area: number;
+    outer: { x: number; y: number }[];
+    holes: { x: number; y: number }[][];
+  }[];
+}
+
+/** An armed region-extrude handle (drag a detected region into a solid). */
+export interface RegionHandleTarget {
+  sketchId: string;
+  regionFingerprint: number;
+  samplePoint: { x: number; y: number };
+  area: number;
 }
 
 /** An armed edge fillet/chamfer handle over the current edge selection. */
@@ -345,6 +374,12 @@ interface ModelViewerProps {
   onEdgeCommit(size: number): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): void;
+  /** Region-detected sketch rendering (curves + orange hover fills). */
+  sketchViews: SketchViewData[];
+  /** A detected region was clicked: arm the extrude handle. */
+  onSelectRegion(region: RegionPickData): void;
+  /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
+  regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
   /** A drawing gesture completed an entity. */
@@ -512,6 +547,7 @@ function captureViewportCamera(context: SceneContext): ViewportCameraState {
 interface PickResult {
   selection: TopologySelection | null;
   sketchId?: string;
+  region?: RegionPickData;
   hit: THREE.Intersection<THREE.Object3D>;
   faceNormal?: THREE.Vector3;
 }
@@ -1007,6 +1043,9 @@ export function ModelViewer({
   onEdgeRadiusPreview,
   onEdgeCommit,
   onOpenEdgeKeypad,
+  sketchViews,
+  onSelectRegion,
+  regionHandle,
   sketchMode,
   onSketchCommit,
   onSketchDrawingChange,
@@ -1067,6 +1106,10 @@ export function ModelViewer({
   const edgeDragActiveRef = useRef(false);
   const sketchModeRef = useRef(sketchMode);
   sketchModeRef.current = sketchMode;
+  const onSelectRegionRef = useRef(onSelectRegion);
+  onSelectRegionRef.current = onSelectRegion;
+  /** Group holding region-detected sketch rendering (curves + fills). */
+  const regionGroupRef = useRef<THREE.Group | null>(null);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -1186,6 +1229,10 @@ export function ModelViewer({
 
     const sketchGroup = new THREE.Group();
     sketchGroup.name = 'sketches';
+    const regionGroup = new THREE.Group();
+    regionGroup.name = 'sketch-views';
+    scene.add(regionGroup);
+    regionGroupRef.current = regionGroup;
     scene.add(sketchGroup);
 
     const overlayGroup = new THREE.Group();
@@ -1698,6 +1745,20 @@ export function ModelViewer({
 
     function pick(event: PointerEvent | MouseEvent): PickResult | null {
       setRayFromEvent(event);
+      const regionHits = context.raycaster.intersectObjects(
+        regionGroup.children,
+        true
+      );
+      const regionHit = regionHits.find(
+        (hit) => hit.object.userData.region !== undefined
+      );
+      if (regionHit) {
+        return {
+          selection: null,
+          region: regionHit.object.userData.region as RegionPickData,
+          hit: regionHit
+        };
+      }
       const sketchHits = context.raycaster.intersectObjects(
         sketchGroup.children,
         true
@@ -1852,7 +1913,36 @@ export function ModelViewer({
       requestRender();
     }
 
+    let hoveredRegionMesh: THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshBasicMaterial
+    > | null = null;
+
+    function setRegionHover(next: THREE.Object3D | null) {
+      const mesh =
+        next instanceof THREE.Mesh && next.userData.region !== undefined
+          ? (next as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>)
+          : null;
+      if (hoveredRegionMesh === mesh) {
+        return;
+      }
+      if (
+        hoveredRegionMesh &&
+        hoveredRegionMesh.userData.regionSelected !== true
+      ) {
+        hoveredRegionMesh.material.userData.targetOpacity = 0;
+        context.fadeIns.add(hoveredRegionMesh.material);
+      }
+      hoveredRegionMesh = mesh;
+      if (mesh && mesh.userData.regionSelected !== true) {
+        mesh.material.userData.targetOpacity = REGION_HOVER_OPACITY;
+        context.fadeIns.add(mesh.material);
+      }
+      requestRender();
+    }
+
     function applyHover(result: PickResult | null) {
+      setRegionHover(result?.region ? result.hit.object : null);
       const bodyId = result?.selection?.bodyId ?? null;
       const canDragFace =
         result?.selection?.kind === 'face' &&
@@ -1867,7 +1957,7 @@ export function ModelViewer({
         ? 'grab'
         : canDragFace
           ? 'grab'
-          : bodyId || result?.sketchId
+          : bodyId || result?.sketchId || result?.region
             ? 'pointer'
             : '';
       // Only body-kind picks (mesh bodies without exact face topology) lift
@@ -2800,7 +2890,9 @@ export function ModelViewer({
       downPosition = null;
       if (moved < 5) {
         const result = pick(event);
-        if (result?.sketchId) {
+        if (result?.region) {
+          onSelectRegionRef.current(result.region);
+        } else if (result?.sketchId) {
           onSelectSketchProfileRef.current(result.sketchId);
         } else {
           const detail: PickDetail | undefined = result
@@ -3725,6 +3817,145 @@ export function ModelViewer({
       }
     };
   }, [edgeHandle, bodies]);
+
+  // Region-detected sketch rendering: blue curves for every object plus an
+  // invisible-until-hovered orange fill per detected region.
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = regionGroupRef.current;
+    if (!context || !group) {
+      return;
+    }
+    for (const child of [...group.children]) {
+      group.remove(child);
+      child.traverse((node) => {
+        if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
+          (node.geometry as THREE.BufferGeometry).dispose();
+          (node.material as THREE.Material).dispose();
+        }
+      });
+    }
+    for (const view of sketchViews) {
+      const basis = view.basis;
+      for (const curve of view.curves) {
+        if (curve.points.length < 2) {
+          continue;
+        }
+        const vertices = curve.points.map(
+          (point) =>
+            new THREE.Vector3(
+              basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+              basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+              basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+            )
+        );
+        const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
+        const material = new THREE.LineBasicMaterial({
+          color: 0x4da3ff,
+          transparent: true,
+          opacity: 0.9
+        });
+        const line = curve.closed
+          ? new THREE.LineLoop(geometry, material)
+          : new THREE.Line(geometry, material);
+        line.renderOrder = 10;
+        group.add(line);
+      }
+      for (const region of view.regions) {
+        group.add(
+          buildRegionMesh(region.outer, region.holes, basis, {
+            sketchId: view.sketchId,
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.samplePoint,
+            area: region.area
+          })
+        );
+      }
+    }
+    context.requestRender();
+  }, [sketchViews]);
+
+  // Armed region: keep its fill lit and share the offset arrow rig for the
+  // extrude drag (the drag/chip/keypad machinery is rig-agnostic).
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = regionGroupRef.current;
+    if (!context || !group || offsetDragActiveRef.current) {
+      return;
+    }
+    if (!regionHandle) {
+      return;
+    }
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === regionHandle.sketchId
+    );
+    const region = view?.regions.find(
+      (candidate) =>
+        candidate.regionFingerprint === regionHandle.regionFingerprint
+    );
+    if (!view || !region) {
+      return;
+    }
+    const basis = view.basis;
+    const mesh = group.children.find(
+      (child) =>
+        (child.userData.region as RegionPickData | undefined)
+          ?.regionFingerprint === regionHandle.regionFingerprint
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> | undefined;
+    if (mesh) {
+      mesh.userData.regionSelected = true;
+      mesh.material.userData.targetOpacity = REGION_SELECTED_OPACITY;
+      context.fadeIns.add(mesh.material);
+    }
+    const { positions, indices } = triangulateRegionGeometry(
+      region.outer,
+      region.holes,
+      basis
+    );
+    const ghostGeometry = new THREE.BufferGeometry();
+    ghostGeometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(positions, 3)
+    );
+    ghostGeometry.setIndex(indices);
+    const origin = {
+      x:
+        basis.origin.x +
+        basis.u.x * regionHandle.samplePoint.x +
+        basis.v.x * regionHandle.samplePoint.y,
+      y:
+        basis.origin.y +
+        basis.u.y * regionHandle.samplePoint.x +
+        basis.v.y * regionHandle.samplePoint.y,
+      z:
+        basis.origin.z +
+        basis.u.z * regionHandle.samplePoint.x +
+        basis.v.z * regionHandle.samplePoint.y
+    };
+    const rig = buildOffsetFaceHandle({
+      origin,
+      direction: basis.normal,
+      ghostGeometry
+    });
+    context.scene.add(rig.group);
+    context.scene.add(rig.worldGroup);
+    offsetRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      if (mesh) {
+        mesh.userData.regionSelected = false;
+        mesh.material.userData.targetOpacity = 0;
+        context.fadeIns.add(mesh.material);
+      }
+      if (!offsetDragActiveRef.current) {
+        rig.dispose();
+        if (offsetRigRef.current === rig) {
+          offsetRigRef.current = null;
+        }
+      }
+      context.requestRender();
+    };
+  }, [regionHandle, sketchViews]);
 
   // In-viewport sketch mode lifecycle: build the plane rig, glide the camera
   // head-on, and recede the solids; restore everything on exit. Keyed on the
