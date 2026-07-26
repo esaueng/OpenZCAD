@@ -6,7 +6,9 @@ import {
   type FaceResizeCommit,
   type EdgeHandleTarget,
   type MovePreview,
+  type RegionHandleTarget,
   type SketchModeState,
+  type SketchViewData,
   type MoveSnap,
   type OffsetHandleTarget,
   type PickDetail,
@@ -24,6 +26,7 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { RegionPickData } from './viewer/regionOverlay';
 
 interface ViewerShellProps {
   projectId: string;
@@ -67,6 +70,9 @@ interface ViewerShellProps {
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onSketchDrawingChange(drawing: boolean): void;
+  sketchViews: SketchViewData[];
+  onSelectRegion(region: RegionPickData): void;
+  regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -122,6 +128,9 @@ export function ViewerShell({
   sketchMode,
   onSketchCommit,
   onSketchDrawingChange,
+  sketchViews,
+  onSelectRegion,
+  regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -166,6 +175,9 @@ export function ViewerShell({
         sketchMode={sketchMode}
         onSketchCommit={onSketchCommit}
         onSketchDrawingChange={onSketchDrawingChange}
+        sketchViews={sketchViews}
+        onSelectRegion={onSelectRegion}
+        regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}

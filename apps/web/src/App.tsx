@@ -129,6 +129,10 @@ import {
 } from './lib/interaction/machine';
 import { frameFromFace } from './lib/sketch/session';
 import { SketchToolRail } from './components/SketchToolRail';
+import { objectPolyline } from './components/viewer/sketchModeController';
+import type { RegionPickData } from './components/viewer/regionOverlay';
+import { computeSketchRegions } from '@openzcad/geometry';
+import { Undo2 } from 'lucide-react';
 import {
   CommandPalette,
   type PaletteCommand
@@ -2134,6 +2138,140 @@ export function App() {
     );
   }
 
+  /**
+   * Region-detected sketch rendering data: every sketch's curves plus its
+   * detected closed regions, lifted by the shared plane resolution. The
+   * sketch being edited in-session is skipped (its rig renders live).
+   */
+  const sketchViews = useMemo(() => {
+    if (!doc || !appSettings.experiments.directManipulation) {
+      return [];
+    }
+    const scope = parameterScope.scope;
+    const resolve = (value: unknown): number =>
+      evalParamValue(value as ParamValue, scope) ?? 0;
+    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+      if (
+        interaction.mode === 'sketch' &&
+        interaction.session.sketchId === sketch.sketchId
+      ) {
+        return [];
+      }
+      const objects = sketch.objectIds.flatMap((objectId) => {
+        const node = doc.nodes[objectId];
+        return node?.kind === 'sketch-object'
+          ? [{ id: objectId, data: node.data }]
+          : [];
+      });
+      if (objects.length === 0) {
+        return [];
+      }
+      const basis = frameForPlaneRef(sketch.planeRef, resolve);
+      const curves = objects.flatMap((object) => {
+        try {
+          const polyline = objectPolyline(object.data, resolve);
+          return polyline ? [polyline] : [];
+        } catch {
+          return [];
+        }
+      });
+      let regions: {
+        regionFingerprint: number;
+        samplePoint: { x: number; y: number };
+        area: number;
+        outer: { x: number; y: number }[];
+        holes: { x: number; y: number }[][];
+      }[] = [];
+      try {
+        regions = computeSketchRegions(objects, (value) => resolve(value)).map(
+          (region) => ({
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.samplePoint,
+            area: region.area,
+            outer: region.outer.polyline,
+            holes: region.holes.map((hole) => hole.polyline)
+          })
+        );
+      } catch {
+        // Unresolvable sketches simply render without pickable regions.
+      }
+      return [{ sketchId: sketch.sketchId, basis, curves, regions }];
+    });
+  }, [doc, parameterScope, appSettings.experiments.directManipulation, interaction]);
+
+  /** After a region extrude, offer a one-click return to its sketch. */
+  const [revertPill, setRevertPill] = useState<{ sketchId: SketchId } | null>(
+    null
+  );
+  useEffect(() => {
+    if (interaction.mode !== 'idle') {
+      setRevertPill(null);
+    }
+  }, [interaction.mode]);
+
+  /** A detected region was clicked: arm the extrude handle. */
+  function handleSelectRegion(region: RegionPickData) {
+    if (!appSettings.experiments.directManipulation) {
+      return;
+    }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+    dispatchInteraction({
+      type: 'select-region',
+      target: {
+        sketchId: region.sketchId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        area: region.area
+      }
+    });
+    setStatus('Drag the arrow to extrude the region, or tap the value.');
+  }
+
+  /** Armed region handle for the viewport. */
+  const regionHandleTarget = useMemo(() => {
+    if (interaction.mode !== 'region') {
+      return null;
+    }
+    return {
+      sketchId: interaction.target.sketchId,
+      regionFingerprint: interaction.target.regionFingerprint,
+      samplePoint: interaction.target.samplePoint,
+      area: interaction.target.area
+    };
+  }, [interaction]);
+
+  /** Region-extrude drag released (or exact entry): commit the feature. */
+  function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
+    if (interaction.mode !== 'region') {
+      return;
+    }
+    const target = interaction.target;
+    const rounded = Math.round(distance * 1000) / 1000;
+    if (rounded === 0) {
+      return;
+    }
+    dispatchInteraction({ type: 'commit-complete' });
+    const command = commandFactories.extrudeSketch({
+      name: 'Extrude',
+      sketchId: target.sketchId as SketchId,
+      distance: exact ?? rounded,
+      profile: {
+        regionFingerprint: target.regionFingerprint,
+        samplePoint: target.samplePoint,
+        sourceArea: target.area
+      }
+    });
+    const resultBodyId =
+      command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
+    setRevertPill({ sketchId: target.sketchId as SketchId });
+    void executeValidatedDirectEdit(
+      command,
+      resultBodyId,
+      `Extruded region by ${rounded} ${doc?.units ?? ''}.`
+    );
+  }
+
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
   const edgeHandleTarget = useMemo(() => {
     if (interaction.mode !== 'edges' || interaction.edges.length === 0) {
@@ -2307,13 +2445,13 @@ export function App() {
 
   /** Chip tapped: open the anchored keypad prefilled with the drag value. */
   function handleOpenOffsetKeypad(currentOffset: number) {
-    if (interaction.mode !== 'face') {
+    if (interaction.mode !== 'face' && interaction.mode !== 'region') {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
     setKeypad({
       kind: 'offset',
-      label: 'Offset',
+      label: interaction.mode === 'region' ? 'Height' : 'Offset',
       initial:
         currentOffset !== 0
           ? String(Math.round(currentOffset * 100) / 100)
@@ -2327,6 +2465,11 @@ export function App() {
    * expression as the stored parametric value; plain drags store the number.
    */
   function handleOffsetCommit(offset: number, exact?: ParamValue) {
+    // The arrow rig is shared: in region mode its drag is an extrude height.
+    if (interaction.mode === 'region') {
+      handleRegionExtrudeCommit(offset, exact);
+      return;
+    }
     if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
       return;
     }
@@ -3206,6 +3349,9 @@ export function App() {
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
+            sketchViews={sketchViews}
+            onSelectRegion={handleSelectRegion}
+            regionHandle={regionHandleTarget}
             modeOverlay={
               toolCardFor(interaction) ? (
                 <>
@@ -3267,6 +3413,30 @@ export function App() {
                     />
                   )}
                 </>
+              ) : revertPill ? (
+                <button
+                  type="button"
+                  className="revert-sketch-pill"
+                  onClick={() => {
+                    const sketch = doc
+                      ? listNodesByKind(doc, 'sketch').find(
+                          (candidate) =>
+                            candidate.sketchId === revertPill.sketchId
+                        )
+                      : undefined;
+                    setRevertPill(null);
+                    if (sketch) {
+                      dispatchInteraction({
+                        type: 'enter-sketch',
+                        plane: sketch.planeRef,
+                        sketchId: sketch.sketchId
+                      });
+                    }
+                  }}
+                >
+                  <Undo2 size={14} aria-hidden="true" />
+                  Revert to Sketch
+                </button>
               ) : movePreview ? (
                 <MoveOverlay
                   bodyName={
