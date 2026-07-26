@@ -10,6 +10,7 @@ import {
   geometryTolerance,
   isNearlyZero
 } from './tolerance';
+import type { ParamValue, SketchPlaneRef } from '@openzcad/shared';
 
 export {
   GEOMETRY_LINEAR_TOLERANCE,
@@ -17,6 +18,16 @@ export {
   geometryTolerance,
   isNearlyZero
 } from './tolerance';
+export {
+  computeSketchRegions,
+  regionAtPoint,
+  regionFingerprintOf,
+  type RegionCurve,
+  type RegionLoop,
+  type SketchRegion,
+  type SketchRegionObject,
+  type Vec2Like
+} from './regions';
 
 export type Vec3 = CsgVec;
 
@@ -324,6 +335,40 @@ export const PLANE_BASES: Record<'XY' | 'XZ' | 'YZ', PlaneBasis> = {
     normal: vec(1, 0, 0)
   }
 };
+
+/**
+ * Resolves a sketch plane reference to a concrete basis. This is the single
+ * shared resolution path — the kernel adapters, the compat kernel, and the
+ * viewport must all agree on where a sketch plane sits. Canonical refs carry a
+ * parametric offset, so the caller supplies the evaluator; frame and face refs
+ * embed a fully resolved frame snapshot.
+ */
+export function frameForPlaneRef(
+  ref: SketchPlaneRef,
+  resolveOffset: (value: ParamValue) => number
+): PlaneBasis {
+  if (ref.type === 'canonical') {
+    const base = PLANE_BASES[ref.plane];
+    const offset = resolveOffset(ref.offset);
+    return {
+      origin: vec(
+        base.origin.x + base.normal.x * offset,
+        base.origin.y + base.normal.y * offset,
+        base.origin.z + base.normal.z * offset
+      ),
+      u: base.u,
+      v: base.v,
+      normal: base.normal
+    };
+  }
+  const frame = ref.frame;
+  return {
+    origin: vec(frame.origin.x, frame.origin.y, frame.origin.z),
+    u: vec(frame.xAxis.x, frame.xAxis.y, frame.xAxis.z),
+    v: vec(frame.yAxis.x, frame.yAxis.y, frame.yAxis.z),
+    normal: vec(frame.zAxis.x, frame.zAxis.y, frame.zAxis.z)
+  };
+}
 
 export function rectangleProfile(
   width: number,

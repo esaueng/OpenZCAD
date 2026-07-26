@@ -85,6 +85,7 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   const viewport = record(root.viewport);
   const sketching = record(root.sketching);
   const assistant = record(root.assistant);
+  const experiments = record(root.experiments);
   return {
     schemaVersion: 1,
     general: {
@@ -190,6 +191,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         typeof assistant.customInstructions === 'string'
           ? assistant.customInstructions.slice(0, 4_000)
           : defaults.assistant.customInstructions
+    },
+    experiments: {
+      directManipulation: boolean(
+        experiments.directManipulation,
+        defaults.experiments.directManipulation
+      )
     }
   };
 }
