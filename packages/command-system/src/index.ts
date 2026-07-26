@@ -1,6 +1,8 @@
 import {
+  createId,
   deepClone,
   nowIso,
+  toEntityId,
   type BodyId,
   type ParamValue,
   type ProjectDocument,
@@ -9,6 +11,10 @@ import {
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  addSketchObjects,
+  deleteSketchObject,
+  resolveSketchInput,
+  updateSketchObject,
   appendRevision,
   attachDerivedState,
   booleanBodies,
@@ -54,6 +60,9 @@ import {
   type PrimitiveInput,
   type RevolveInput,
   type SketchInput,
+  type SketchObjectAddInput,
+  type SketchObjectDeleteInput,
+  type SketchObjectUpdateInput,
   type SketchUpdateInput,
   type TransformInput
 } from '@openzcad/document-core';
@@ -67,6 +76,9 @@ export type CommandKind =
   | 'primitive.add'
   | 'sketch.add'
   | 'sketch.update'
+  | 'sketch.object.add'
+  | 'sketch.object.update'
+  | 'sketch.object.delete'
   | 'feature.extrude'
   | 'feature.revolve'
   | 'feature.boolean'
@@ -104,6 +116,9 @@ export type AnyCommand =
   | CommandDefinition<PrimitiveInput>
   | CommandDefinition<SketchInput>
   | CommandDefinition<SketchUpdateInput>
+  | CommandDefinition<SketchObjectAddInput>
+  | CommandDefinition<SketchObjectUpdateInput>
+  | CommandDefinition<SketchObjectDeleteInput>
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
@@ -167,15 +182,74 @@ export const commandFactories = {
     );
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
+    const { objects } = resolveSketchInput(payload);
     const withIds = {
       ...payload,
-      ids: payload.ids ?? createSketchFeatureIds()
+      ids: payload.ids ?? createSketchFeatureIds(Math.max(objects.length, 1))
     };
+    const label =
+      objects.length === 1
+        ? `Add ${objects[0]!.objectKind} sketch`
+        : 'Add sketch';
     return makeCommand(
       'sketch.add',
-      `Add ${payload.object.objectKind} sketch`,
+      label,
       withIds,
       (document) => addSketchFeature(document, withIds).document
+    );
+  },
+  addSketchObjects(
+    payload: SketchObjectAddInput,
+    label = 'Add sketch geometry'
+  ): CommandDefinition<SketchObjectAddInput> {
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? {
+        objectNodeIds: payload.objects.map(() => toEntityId(createId('ent')))
+      }
+    };
+    return makeCommand(
+      'sketch.object.add',
+      label,
+      withIds,
+      (document) => addSketchObjects(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  updateSketchObject(
+    payload: SketchObjectUpdateInput,
+    label = 'Edit sketch geometry'
+  ): CommandDefinition<SketchObjectUpdateInput> {
+    return makeCommand(
+      'sketch.object.update',
+      label,
+      payload,
+      (document) => updateSketchObject(document, payload),
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  deleteSketchObject(
+    payload: SketchObjectDeleteInput,
+    label = 'Delete sketch geometry'
+  ): CommandDefinition<SketchObjectDeleteInput> {
+    return makeCommand(
+      'sketch.object.delete',
+      label,
+      payload,
+      (document) => deleteSketchObject(document, payload),
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
     );
   },
   updateSketch(
@@ -994,6 +1068,24 @@ export function replayCommands(
         break;
       case 'sketch.update':
         next = updateSketch(next, command.payload as SketchUpdateInput);
+        break;
+      case 'sketch.object.add':
+        next = addSketchObjects(
+          next,
+          command.payload as SketchObjectAddInput
+        ).document;
+        break;
+      case 'sketch.object.update':
+        next = updateSketchObject(
+          next,
+          command.payload as SketchObjectUpdateInput
+        );
+        break;
+      case 'sketch.object.delete':
+        next = deleteSketchObject(
+          next,
+          command.payload as SketchObjectDeleteInput
+        );
         break;
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;

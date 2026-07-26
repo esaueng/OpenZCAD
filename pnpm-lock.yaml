@@ -166,7 +166,11 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  packages/geometry: {}
+  packages/geometry:
+    dependencies:
+      '@openzcad/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/io-step:
     dependencies:

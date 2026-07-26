@@ -474,8 +474,16 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initial={{
             name: selectedFeature.name,
-            plane: selectedSketch.plane,
-            offset: selectedSketch.offset,
+            // The legacy form only understands canonical planes; frame/face
+            // sketches are edited in the viewport sketch mode instead.
+            plane:
+              selectedSketch.planeRef.type === 'canonical'
+                ? selectedSketch.planeRef.plane
+                : 'XY',
+            offset:
+              selectedSketch.planeRef.type === 'canonical'
+                ? selectedSketch.planeRef.offset
+                : 0,
             object: selectedSketchObject
           }}
           submitLabel="Apply"

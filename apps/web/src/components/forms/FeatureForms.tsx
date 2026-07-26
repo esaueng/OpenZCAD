@@ -217,7 +217,13 @@ interface SketchFormProps {
   onCancel?: () => void;
 }
 
-const SHAPE_LABELS: Record<SketchObjectKind, string> = {
+/** The form only offers closed one-object profiles; open curves (line/arc) are drawn in the viewport sketch mode. */
+type ClosedShapeKind = Extract<
+  SketchObjectKind,
+  'rectangle' | 'circle' | 'polygon'
+>;
+
+const SHAPE_LABELS: Record<ClosedShapeKind, string> = {
   rectangle: 'Rectangle',
   circle: 'Circle',
   polygon: 'Polygon'
@@ -233,10 +239,15 @@ export function SketchForm({
   const [name, setName] = useState(initial?.name ?? 'Sketch');
   const [plane, setPlane] = useState<PlaneId>(initial?.plane ?? 'XZ');
   const [offset, setOffset] = useState(paramValueText(initial?.offset ?? 0));
-  const [shape, setShape] = useState<SketchObjectKind>(
-    initial?.object.objectKind ?? 'rectangle'
+  const initialObject =
+    initial &&
+    initial.object.objectKind !== 'line' &&
+    initial.object.objectKind !== 'arc'
+      ? initial.object
+      : undefined;
+  const [shape, setShape] = useState<ClosedShapeKind>(
+    initialObject?.objectKind ?? 'rectangle'
   );
-  const initialObject = initial?.object;
   const [values, setValues] = useState<Record<string, string>>(() => ({
     width:
       initialObject?.objectKind === 'rectangle'
@@ -336,10 +347,10 @@ export function SketchForm({
           <select
             value={shape}
             onChange={(event) =>
-              setShape(event.target.value as SketchObjectKind)
+              setShape(event.target.value as ClosedShapeKind)
             }
           >
-            {(Object.keys(SHAPE_LABELS) as SketchObjectKind[]).map((id) => (
+            {(Object.keys(SHAPE_LABELS) as ClosedShapeKind[]).map((id) => (
               <option key={id} value={id}>
                 {SHAPE_LABELS[id]}
               </option>

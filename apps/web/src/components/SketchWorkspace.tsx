@@ -10,6 +10,7 @@ import {
   X
 } from 'lucide-react';
 import type {
+  ParamValue,
   PlaneId,
   SketchObjectData,
   SketchObjectKind
@@ -17,7 +18,8 @@ import type {
 import { PLANE_LABELS } from '../lib/model';
 import type { SketchFormValue } from './forms/FeatureForms';
 
-type SketchTool = SketchObjectKind;
+/** This legacy 2D workspace only draws closed one-object profiles. */
+type SketchTool = Extract<SketchObjectKind, 'rectangle' | 'circle' | 'polygon'>;
 
 interface SketchPoint {
   x: number;
@@ -100,11 +102,14 @@ export function sketchObjectFromDrag(
   };
 }
 
-function numberValue(value: SketchObjectData[keyof SketchObjectData]): number {
+function numberValue(value: ParamValue): number {
   return typeof value === 'number' ? value : Number(value);
 }
 
 function profileSummary(object: SketchObjectData, units: string): string {
+  if (object.objectKind === 'line' || object.objectKind === 'arc') {
+    return object.objectKind;
+  }
   if (object.objectKind === 'rectangle') {
     return `${numberValue(object.width).toFixed(1)} × ${numberValue(object.height).toFixed(1)} ${units}`;
   }
@@ -120,6 +125,10 @@ function drawProfile(
   center: SketchPoint,
   scale: number
 ) {
+  if (object.objectKind === 'line' || object.objectKind === 'arc') {
+    // Open curves are never produced by this workspace's tools.
+    return;
+  }
   const x = center.x + numberValue(object.centerX) * scale;
   const y = center.y - numberValue(object.centerY) * scale;
   context.beginPath();
