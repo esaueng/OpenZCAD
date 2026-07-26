@@ -1,0 +1,23 @@
+{
+  "bracket": [
+    {
+      "name": "Mounting holes Body",
+      "volume": 47544.54973728068,
+      "faceCount": 13
+    }
+  ],
+  "heatsink": [
+    {
+      "name": "Heat Sink",
+      "volume": 63313.412896981696,
+      "faceCount": 42
+    }
+  ],
+  "boreGrid": [
+    {
+      "name": "Drill row Body",
+      "volume": 34673.60481847148,
+      "faceCount": 11
+    }
+  ]
+}
