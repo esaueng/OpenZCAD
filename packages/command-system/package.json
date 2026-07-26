@@ -7,6 +7,7 @@
   "dependencies": {
     "@openzcad/ai-contracts": "workspace:*",
     "@openzcad/document-core": "workspace:*",
-    "@openzcad/shared": "workspace:*"
+    "@openzcad/shared": "workspace:*",
+    "@openzcad/geometry": "workspace:*"
   }
 }

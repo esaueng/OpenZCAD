@@ -7,13 +7,17 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import {
-  PLANE_BASES,
   GEOMETRY_LINEAR_TOLERANCE,
   circleProfile,
+  computeSketchRegions,
+  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
+  regionAtPoint,
   type PlaneBasis,
+  type SketchRegion,
   type Vec2,
+  type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
 import {
@@ -25,9 +29,13 @@ import {
   type BodyRepresentation,
   type BodyTopology,
   type DerivedState,
+  type DirectEditOperation,
+  type FaceGeometry,
   type FeatureNode,
   type ProjectDocument,
-  type SketchObjectData
+  type SketchNode,
+  type SketchObjectData,
+  type SketchObjectNode
 } from '@openzcad/shared';
 import { OpenZCADKernel } from './index';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
@@ -387,6 +395,13 @@ function profilePoints(
         resolveParamValue(data.centerX, scope, 'center X'),
         resolveParamValue(data.centerY, scope, 'center Y')
       );
+    case 'line':
+    case 'arc':
+      // Open curves cannot be swept directly; they participate in sketches
+      // through detected closed regions instead.
+      throw new Error(
+        `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
+      );
   }
 }
 
@@ -491,6 +506,190 @@ function edgeHandlesByFingerprint(
     result.set(hash, handles);
   }
   return result;
+}
+
+function faceVertexCentroid(kernel: BrepKernel, face: number): Vec3 | null {
+  const vertices = Array.from(kernel.getFaceVertices(face));
+  if (vertices.length === 0) {
+    return null;
+  }
+  const centroid = { x: 0, y: 0, z: 0 };
+  for (const vertex of vertices) {
+    const position = kernel.getVertexPosition(vertex);
+    centroid.x += position[0]!;
+    centroid.y += position[1]!;
+    centroid.z += position[2]!;
+  }
+  return {
+    x: centroid.x / vertices.length,
+    y: centroid.y / vertices.length,
+    z: centroid.z / vertices.length
+  };
+}
+
+function analyticParamsSignature(kernel: BrepKernel, face: number): string {
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    return '';
+  }
+  if (!parameters || typeof parameters !== 'object') {
+    return '';
+  }
+  const record = parameters as Record<string, unknown>;
+  const parts: string[] = [];
+  const origin = finiteVec3(record.origin);
+  const axis = finiteVec3(record.axis);
+  if (axis) {
+    const unit = normalized(axis);
+    if (unit) {
+      // Canonical sign: a surface's axis may flip between rebuilds.
+      const flip =
+        unit.x < 0 ||
+        (unit.x === 0 && (unit.y < 0 || (unit.y === 0 && unit.z < 0)));
+      const canonical = flip
+        ? { x: -unit.x, y: -unit.y, z: -unit.z }
+        : unit;
+      parts.push(
+        `ax${quantizeEdgeCoordinate(canonical.x * 1000)}` +
+          `,${quantizeEdgeCoordinate(canonical.y * 1000)}` +
+          `,${quantizeEdgeCoordinate(canonical.z * 1000)}`
+      );
+      if (origin) {
+        // The axis foot (origin projected onto the axis-orthogonal plane
+        // through zero) is stable even when the parametric origin slides
+        // along the axis between rebuilds.
+        const along =
+          origin.x * canonical.x + origin.y * canonical.y + origin.z * canonical.z;
+        parts.push(
+          `ft${quantizeEdgeCoordinate(origin.x - along * canonical.x)}` +
+            `,${quantizeEdgeCoordinate(origin.y - along * canonical.y)}` +
+            `,${quantizeEdgeCoordinate(origin.z - along * canonical.z)}`
+        );
+      }
+    }
+  }
+  for (const key of ['radius', 'majorRadius', 'minorRadius', 'semiAngle']) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      parts.push(`${key[0]}${quantizeEdgeCoordinate(value)}`);
+    }
+  }
+  return parts.join(':');
+}
+
+/**
+ * Geometric fingerprint of a face, mirroring edgeFingerprint: surface class,
+ * quantized area, canonicalized analytic parameters, and the outer-boundary
+ * vertex centroid. Stable across identical rebuilds; any real geometry change
+ * moves it, so face-referencing features fail closed instead of editing the
+ * wrong face (the same contract ADR-008/ADR-010 establish for edges).
+ */
+function faceFingerprint(kernel: BrepKernel, face: number): number {
+  const centroid = faceVertexCentroid(kernel, face);
+  const signature = [
+    kernel.getSurfaceType(face),
+    quantizeEdgeCoordinate(
+      Math.sqrt(Math.max(kernel.faceArea(face, TESSELLATION_DEFLECTION), 0))
+    ),
+    analyticParamsSignature(kernel, face),
+    centroid
+      ? [centroid.x, centroid.y, centroid.z]
+          .map(quantizeEdgeCoordinate)
+          .join(',')
+      : 'nc'
+  ].join(':');
+  let hash = 2166136261;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash ^= signature.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const unsigned = hash >>> 0;
+  return unsigned === 0 ? 1 : unsigned;
+}
+
+function faceHandlesByFingerprint(
+  kernel: BrepKernel,
+  solid: number
+): Map<number, number[]> {
+  const result = new Map<number, number[]>();
+  for (const face of kernel.getSolidFaces(solid)) {
+    const hash = faceFingerprint(kernel, face);
+    const handles = result.get(hash) ?? [];
+    handles.push(face);
+    result.set(hash, handles);
+  }
+  return result;
+}
+
+/** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
+function measureFaceGeometry(
+  kernel: BrepKernel,
+  face: number
+): FaceGeometry | undefined {
+  const surfaceType = kernel.getSurfaceType(face);
+  const centroid = faceVertexCentroid(kernel, face);
+  const geometry: FaceGeometry = {
+    surfaceType,
+    area: kernel.faceArea(face, TESSELLATION_DEFLECTION),
+    center: centroid ?? { x: 0, y: 0, z: 0 }
+  };
+  if (surfaceType === 'plane') {
+    try {
+      const normal = kernel.getFaceNormal(face);
+      geometry.normal = {
+        x: normal[0]!,
+        y: normal[1]!,
+        z: normal[2]!
+      };
+    } catch {
+      // NURBS-backed planes have no analytic normal; leave it unset.
+    }
+    return geometry;
+  }
+  if (surfaceType !== 'cylinder') {
+    return geometry;
+  }
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    return geometry;
+  }
+  const record = (parameters ?? {}) as Record<string, unknown>;
+  const origin = finiteVec3(record.origin);
+  const rawAxis = finiteVec3(record.axis);
+  const axis = rawAxis ? normalized(rawAxis) : null;
+  const radius = record.radius;
+  if (
+    !origin ||
+    !axis ||
+    typeof radius !== 'number' ||
+    !Number.isFinite(radius) ||
+    radius <= GEOMETRY_EPSILON
+  ) {
+    return geometry;
+  }
+  geometry.radius = radius;
+  geometry.diameter = radius * 2;
+  const domain = Array.from(kernel.getSurfaceDomain(face));
+  if (domain.length === 4 && domain.every(Number.isFinite)) {
+    const axialMin = Math.min(domain[2]!, domain[3]!);
+    const axialMax = Math.max(domain[2]!, domain[3]!);
+    geometry.axisStart = {
+      x: origin.x + axis.x * axialMin,
+      y: origin.y + axis.y * axialMin,
+      z: origin.z + axis.z * axialMin
+    };
+    geometry.axisEnd = {
+      x: origin.x + axis.x * axialMax,
+      y: origin.y + axis.y * axialMax,
+      z: origin.z + axis.z * axialMax
+    };
+    geometry.axialLength = axialMax - axialMin;
+  }
+  return geometry;
 }
 
 function copyShape(
@@ -623,6 +822,165 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     return { solids: [solid] };
   }
 
+  /** Lift a sketch-local 2D point into world space on the plane basis. */
+  private static planePoint3(basis: PlaneBasis, point: Vec2Like): Vec3 {
+    return {
+      x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+      y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+      z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+    };
+  }
+
+  /**
+   * Build an exact planar face for a detected region: outer wire plus hole
+   * wires from the region's line/arc curves. No tessellation — arcs become
+   * true circular edges, so STEP export keeps analytic surfaces.
+   */
+  private makeRegionFace(
+    kernel: BrepKernel,
+    region: SketchRegion,
+    basis: PlaneBasis
+  ): number {
+    const wireFor = (loop: SketchRegion['outer']): number => {
+      const edges: number[] = [];
+      for (const curve of loop.curves) {
+        if (curve.kind === 'line') {
+          const a = BrepKitKernelAdapter.planePoint3(basis, curve.a);
+          const b = BrepKitKernelAdapter.planePoint3(basis, curve.b);
+          edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
+          continue;
+        }
+        const span = Math.abs(curve.endAngle - curve.startAngle);
+        const center = BrepKitKernelAdapter.planePoint3(basis, curve.center);
+        if (span >= Math.PI * 2 - 1e-9) {
+          // A standalone circle traces as one full-turn piece; the arc
+          // constructor degenerates at start == end, so use a circle edge.
+          edges.push(
+            kernel.makeCircleEdge(
+              center.x,
+              center.y,
+              center.z,
+              basis.normal.x,
+              basis.normal.y,
+              basis.normal.z,
+              curve.radius
+            )
+          );
+          continue;
+        }
+        // Arc pieces are subdivided to ≤ 90°: quarter arcs are unambiguous
+        // regardless of whether the arc builder honors the axis sweep or
+        // picks the minor arc, and they sidestep a kernel bug with arcs
+        // whose end parameter crosses the 0/2π seam.
+        const wrap = Math.PI * 2;
+        const forward =
+          (((curve.endAngle - curve.startAngle) % wrap) + wrap) % wrap;
+        const sweep = curve.ccw ? forward : forward - wrap;
+        const pieces = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2)));
+        const sign = curve.ccw ? 1 : -1;
+        for (let piece = 0; piece < pieces; piece += 1) {
+          const angleA = curve.startAngle + (sweep * piece) / pieces;
+          const angleB = curve.startAngle + (sweep * (piece + 1)) / pieces;
+          const start = BrepKitKernelAdapter.planePoint3(basis, {
+            x: curve.center.x + Math.cos(angleA) * curve.radius,
+            y: curve.center.y + Math.sin(angleA) * curve.radius
+          });
+          const end = BrepKitKernelAdapter.planePoint3(basis, {
+            x: curve.center.x + Math.cos(angleB) * curve.radius,
+            y: curve.center.y + Math.sin(angleB) * curve.radius
+          });
+          edges.push(
+            kernel.makeCircleArc3d(
+              start.x,
+              start.y,
+              start.z,
+              end.x,
+              end.y,
+              end.z,
+              center.x,
+              center.y,
+              center.z,
+              basis.normal.x * sign,
+              basis.normal.y * sign,
+              basis.normal.z * sign
+            )
+          );
+        }
+      }
+      return kernel.makeWire(Uint32Array.from(edges), true);
+    };
+
+    const face = kernel.makePlanarFaceFromWire(wireFor(region.outer));
+    if (region.holes.length === 0) {
+      return face;
+    }
+    return kernel.addHolesToFace(
+      face,
+      Uint32Array.from(region.holes.map(wireFor))
+    );
+  }
+
+  /**
+   * Extrude one detected closed region of a multi-object sketch. Resolution
+   * is fail-closed (ADR-010): the stored fingerprint must match a current
+   * region, with a single tolerant fallback — the stored sample point still
+   * falls inside a region whose area is within 1% — so nudging a curve keeps
+   * the feature alive while topology changes refuse to guess.
+   */
+  private buildRegionExtrude(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    sketch: SketchNode,
+    data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
+    scope: Record<string, number>
+  ): ExactShape {
+    const profile = data.profile!;
+    const objects = sketch.objectIds
+      .map((objectId) => document.nodes[objectId])
+      .filter(
+        (node): node is SketchObjectNode => node?.kind === 'sketch-object'
+      )
+      .map((node) => ({ id: node.id, data: node.data }));
+    const regions = computeSketchRegions(objects, (value) =>
+      resolveParamValue(value, scope, 'sketch dimension')
+    );
+    let region =
+      regions.find(
+        (candidate) => candidate.regionFingerprint === profile.regionFingerprint
+      ) ?? null;
+    if (!region) {
+      const candidate = regionAtPoint(regions, profile.samplePoint);
+      if (
+        candidate &&
+        Math.abs(candidate.area - profile.sourceArea) <=
+          Math.max(profile.sourceArea * 0.01, 1e-9)
+      ) {
+        region = candidate;
+      }
+    }
+    if (!region) {
+      throw new Error(
+        'The sketch region this extrude was built from no longer exists.'
+      );
+    }
+    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
+      resolveParamValue(value, scope, 'sketch offset')
+    );
+    const face = this.makeRegionFace(kernel, region, basis);
+    const distance = resolveParamValue(data.distance, scope, 'distance');
+    return {
+      solids: [
+        kernel.extrude(
+          face,
+          basis.normal.x,
+          basis.normal.y,
+          basis.normal.z,
+          distance
+        )
+      ]
+    };
+  }
+
   private buildSweep(
     kernel: BrepKernel,
     document: ProjectDocument,
@@ -635,21 +993,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     ) {
       throw new Error('Expected a sweep feature.');
     }
+    if (feature.data.featureKind === 'extrude' && feature.data.profile) {
+      const sketchNode = findSketch(document, feature.data.sketchId);
+      if (!sketchNode) {
+        throw new Error('Referenced sketch no longer exists.');
+      }
+      return this.buildRegionExtrude(
+        kernel,
+        document,
+        sketchNode,
+        feature.data,
+        scope
+      );
+    }
     const sketch = findSketch(document, feature.data.sketchId);
     const objectId = sketch?.objectIds[0];
     const object = objectId ? document.nodes[objectId] : undefined;
     if (!sketch || !object || object.kind !== 'sketch-object') {
       throw new Error('Referenced sketch has no profile.');
     }
-    const basis = PLANE_BASES[sketch.plane];
-    const offset = resolveParamValue(sketch.offset, scope, 'sketch offset');
-    const face = this.makeProfileFace(
-      kernel,
-      object.data,
-      basis,
-      offset,
-      scope
+    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
+      resolveParamValue(value, scope, 'sketch offset')
     );
+    const face = this.makeProfileFace(kernel, object.data, basis, 0, scope);
 
     if (feature.data.featureKind === 'extrude') {
       const distance = resolveParamValue(
@@ -671,7 +1037,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     }
 
     const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
-    const point = pointOnPlane(basis, { x: 0, y: 0 }, offset);
+    const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
     return {
       solids: [
         kernel.revolve(
@@ -706,10 +1072,17 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             break;
           case 'imported-mesh':
             throw new Error('Legacy mesh bodies use the compatibility kernel.');
-          case 'direct-edit':
-            throw new Error(
-              'Direct B-rep edits require the OpenCascade kernel.'
+          case 'direct-edit': {
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Direct-edit target is unavailable.');
+            }
+            result.shapes.set(
+              feature.data.targetBodyId,
+              this.applyDirectEdit(kernel, target, feature.data.operation, scope)
             );
+            break;
+          }
           case 'imported-step': {
             if (feature.bodyId) {
               const solids = Array.from(
@@ -956,6 +1329,219 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     return result;
   }
 
+  /** Resolves a fingerprint to exactly one face handle, failing closed. */
+  private resolveFaceByFingerprint(
+    kernel: BrepKernel,
+    solid: number,
+    faceHash: number
+  ): number {
+    const matches = faceHandlesByFingerprint(kernel, solid).get(faceHash) ?? [];
+    if (matches.length === 0) {
+      throw new Error('The selected face no longer exists.');
+    }
+    if (matches.length > 1) {
+      throw new Error('The selected face is geometrically ambiguous.');
+    }
+    return matches[0]!;
+  }
+
+  /**
+   * History-backed direct edits on the BrepKit path. Planar offsets and
+   * cylindrical resizes are composed from extrude/boolean primitives — there
+   * is no native push-pull in the kernel yet — with every source measurement
+   * re-validated first so a drifted rebuild fails closed instead of editing
+   * the wrong face.
+   */
+  private applyDirectEdit(
+    kernel: BrepKernel,
+    target: ExactShape,
+    operation: DirectEditOperation,
+    scope: Record<string, number>
+  ): ExactShape {
+    if (
+      operation.kind !== 'offset-face' &&
+      operation.kind !== 'resize-cylindrical-face'
+    ) {
+      // resize-through-hole / remove-face-feature remain OCCT-only.
+      throw new Error('Direct B-rep edits require the OpenCascade kernel.');
+    }
+    const solid = collapseShape(kernel, target);
+    const face = this.resolveFaceByFingerprint(kernel, solid, operation.faceHash);
+    const geometry = measureFaceGeometry(kernel, face);
+
+    if (operation.kind === 'offset-face') {
+      if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
+        throw new Error('The selected face is no longer planar.');
+      }
+      const areaTolerance = Math.max(operation.sourceArea * 1e-5, 1e-9);
+      if (Math.abs(geometry.area - operation.sourceArea) > areaTolerance) {
+        throw new Error(
+          'The selected face no longer matches its recorded measurements.'
+        );
+      }
+      const alignment =
+        geometry.normal.x * operation.sourceNormal.x +
+        geometry.normal.y * operation.sourceNormal.y +
+        geometry.normal.z * operation.sourceNormal.z;
+      if (Math.abs(alignment) < 1 - 1e-6) {
+        throw new Error(
+          'The selected face no longer matches its recorded orientation.'
+        );
+      }
+      // The stored normal is the outward direction the user dragged along;
+      // trust its sign even if the surface parameterization flipped.
+      const normal = operation.sourceNormal;
+      const offset = resolveParamValue(operation.offset, scope, 'offset');
+      if (!Number.isFinite(offset) || Math.abs(offset) <= GEOMETRY_EPSILON) {
+        throw new Error('Face offset must be a non-zero distance.');
+      }
+      const magnitude = Math.abs(offset);
+      let output: number;
+      if (offset > 0) {
+        const tool = kernel.extrude(
+          face,
+          normal.x,
+          normal.y,
+          normal.z,
+          magnitude
+        );
+        output = fuseUniformSolid(kernel, [solid, tool]);
+      } else {
+        const tool = kernel.extrude(
+          face,
+          -normal.x,
+          -normal.y,
+          -normal.z,
+          magnitude
+        );
+        output = unifyBooleanFaces(kernel, kernel.cut(solid, tool));
+      }
+      if (kernel.validateSolidRelaxed(output) !== 0) {
+        throw new Error(
+          `Offsetting the face by ${offset} does not produce a valid solid.`
+        );
+      }
+      return { solids: [output] };
+    }
+
+    // resize-cylindrical-face
+    if (
+      geometry?.surfaceType !== 'cylinder' ||
+      geometry.radius === undefined ||
+      !geometry.axisStart ||
+      !geometry.axisEnd ||
+      geometry.axialLength === undefined
+    ) {
+      throw new Error('The selected face is no longer cylindrical.');
+    }
+    const radiusTolerance = Math.max(operation.sourceRadius * 1e-5, 1e-9);
+    if (Math.abs(geometry.radius - operation.sourceRadius) > radiusTolerance) {
+      throw new Error(
+        'The selected face no longer matches its recorded radius.'
+      );
+    }
+    const axisTolerance = Math.max(
+      geometry.axialLength * 1e-5,
+      geometry.radius * 1e-5,
+      1e-6
+    );
+    const nearlyEqual = (a: Vec3, b: Vec3): boolean =>
+      Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= axisTolerance;
+    const sameAxis =
+      (nearlyEqual(geometry.axisStart, operation.sourceAxisStart) &&
+        nearlyEqual(geometry.axisEnd, operation.sourceAxisEnd)) ||
+      (nearlyEqual(geometry.axisStart, operation.sourceAxisEnd) &&
+        nearlyEqual(geometry.axisEnd, operation.sourceAxisStart));
+    if (!sameAxis) {
+      throw new Error('The selected face no longer matches its recorded axis.');
+    }
+    const newRadius = resolveParamValue(operation.radius, scope, 'radius');
+    if (!Number.isFinite(newRadius) || newRadius <= GEOMETRY_EPSILON) {
+      throw new Error('Radius must be greater than zero.');
+    }
+    const axisVector = {
+      x: geometry.axisEnd.x - geometry.axisStart.x,
+      y: geometry.axisEnd.y - geometry.axisStart.y,
+      z: geometry.axisEnd.z - geometry.axisStart.z
+    };
+    const axisDir = normalized(axisVector);
+    if (!axisDir) {
+      throw new Error('The selected face has a degenerate axis.');
+    }
+    const span = geometry.axialLength;
+    const cylinderAlong = (
+      radius: number,
+      startOffset: number,
+      length: number
+    ): number => {
+      const base = {
+        x: geometry.axisStart!.x + axisDir.x * startOffset,
+        y: geometry.axisStart!.y + axisDir.y * startOffset,
+        z: geometry.axisStart!.z + axisDir.z * startOffset
+      };
+      return kernel.copyAndTransformSolid(
+        kernel.makeCylinder(radius, length),
+        coordinateFrameMatrix(base, axisDir)
+      );
+    };
+    // Growing a bore or a boss only ever needs a plain cylinder tool against
+    // the body, which this kernel handles exactly. Moving the wall the other
+    // way needs the annular sleeve between the two radii, and every way of
+    // producing it runs into the same gap: booleans involving a second
+    // coaxial cylindrical face come back as a no-op solid, as a wall
+    // shattered into planar strips, or as a cut that reaches past the face.
+    // Composition cannot paper over this, so the operation fails closed
+    // (ADR-010) until the kernel grows a native radial push-pull.
+    if (newRadius < operation.sourceRadius) {
+      throw new Error(
+        operation.concavity === 'hole'
+          ? 'Shrinking a hole needs kernel support that is not available yet — widen it, or edit the feature that created it.'
+          : 'Shrinking a boss needs kernel support that is not available yet — widen it, or edit the feature that created it.'
+      );
+    }
+    const tool = cylinderAlong(newRadius, 0, span);
+    // The drill is flush with the caps — the same construction as a plain
+    // boolean subtract, which round-trips STEP where an overshooting tool
+    // does not.
+    const output =
+      operation.concavity === 'hole'
+        ? unifyBooleanFaces(kernel, kernel.cut(solid, tool))
+        : fuseUniformSolid(kernel, [solid, tool]);
+    if (kernel.validateSolidRelaxed(output) !== 0) {
+      throw new Error(
+        `Resizing the face to radius ${newRadius} does not produce a valid solid.`
+      );
+    }
+    // A boolean that meets a coaxial cylindrical face can come back as the
+    // untouched original — a valid solid that simply ignored the edit. Read
+    // the wall back and insist it actually moved, so a no-op surfaces as a
+    // failed feature rather than a gesture that looked like it worked.
+    const moved = Array.from(kernel.getSolidFaces(output)).some((handle) => {
+      const measured = measureFaceGeometry(kernel, handle);
+      if (
+        measured?.surfaceType !== 'cylinder' ||
+        measured.radius === undefined ||
+        !measured.axisStart
+      ) {
+        return false;
+      }
+      if (Math.abs(measured.radius - newRadius) > radiusTolerance) {
+        return false;
+      }
+      const toAxis = subtract(measured.axisStart, geometry.axisStart!);
+      const along = dot(toAxis, axisDir);
+      return (
+        length(subtract(toAxis, scale(axisDir, along))) <= axisTolerance
+      );
+    });
+    if (!moved) {
+      throw new Error(
+        `The kernel left the face at its original size instead of resizing it to radius ${newRadius}.`
+      );
+    }
+    return { solids: [output] };
+  }
+
   private measureShape(kernel: BrepKernel, shape: ExactShape): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -984,15 +1570,26 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         const indexOffset = indices.length;
         vertices.push(...localPositions);
         indices.push(...localIndices.map((index) => index + vertexOffset));
+        // Both the tessellation groups and getSolidFaces iterate the same
+        // underlying shell, so face handle i owns triangle range i. Guarded
+        // because the fingerprint hash below silently depends on it.
+        const faceHandles = Array.from(kernel.getSolidFaces(solid));
+        if (faceHandles.length !== faceOffsets.length - 1) {
+          throw new Error(
+            `Face handle count ${faceHandles.length} does not match tessellation groups ${faceOffsets.length - 1}.`
+          );
+        }
         for (let index = 0; index < faceOffsets.length - 1; index += 1) {
           const start = faceOffsets[index]!;
           const end = faceOffsets[index + 1]!;
-          const hash = topology.faces.length + 1;
+          const handle = faceHandles[index]!;
+          const hash = faceFingerprint(kernel, handle);
           topology.faces.push({
             topologyId: `face:${hash}`,
             hash,
             triangleStart: (indexOffset + start) / 3,
-            triangleCount: (end - start) / 3
+            triangleCount: (end - start) / 3,
+            geometry: measureFaceGeometry(kernel, handle)
           });
         }
       } finally {
