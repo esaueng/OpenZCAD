@@ -6,6 +6,7 @@ import {
   type FaceResizeCommit,
   type EdgeHandleTarget,
   type MovePreview,
+  type SketchModeState,
   type MoveSnap,
   type OffsetHandleTarget,
   type PickDetail,
@@ -17,7 +18,11 @@ import {
 import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
-import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  SketchObjectData,
+  TopologySelection
+} from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 
 interface ViewerShellProps {
@@ -59,6 +64,9 @@ interface ViewerShellProps {
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
   onOpenEdgeKeypad(currentSize: number): void;
+  sketchMode: SketchModeState | null;
+  onSketchCommit(object: SketchObjectData): void;
+  onSketchDrawingChange(drawing: boolean): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -111,6 +119,9 @@ export function ViewerShell({
   onEdgeRadiusPreview,
   onEdgeCommit,
   onOpenEdgeKeypad,
+  sketchMode,
+  onSketchCommit,
+  onSketchDrawingChange,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -152,6 +163,9 @@ export function ViewerShell({
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}
         onOpenEdgeKeypad={onOpenEdgeKeypad}
+        sketchMode={sketchMode}
+        onSketchCommit={onSketchCommit}
+        onSketchDrawingChange={onSketchDrawingChange}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}

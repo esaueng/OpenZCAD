@@ -34,9 +34,6 @@ interface SketchWorkspaceProps {
   onFinish(value: SketchFormValue): void;
 }
 
-const SNAP_STEP = 1;
-const MIN_PROFILE_SIZE = 0.5;
-
 const TOOL_LABELS: Record<SketchTool, string> = {
   rectangle: 'Rectangle',
   circle: 'Circle',
@@ -49,58 +46,10 @@ const TOOL_HINTS: Record<SketchTool, string> = {
   polygon: 'Place the center, then drag outward to make a hexagon.'
 };
 
-export function snapSketchPoint(
-  point: SketchPoint,
-  step = SNAP_STEP
-): SketchPoint {
-  return {
-    x: Math.round(point.x / step) * step,
-    y: Math.round(point.y / step) * step
-  };
-}
-
-export function sketchObjectFromDrag(
-  tool: SketchTool,
-  start: SketchPoint,
-  end: SketchPoint
-): SketchObjectData | null {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  if (tool === 'rectangle') {
-    const width = Math.abs(dx);
-    const height = Math.abs(dy);
-    if (width < MIN_PROFILE_SIZE || height < MIN_PROFILE_SIZE) {
-      return null;
-    }
-    return {
-      objectKind: 'rectangle',
-      width,
-      height,
-      centerX: (start.x + end.x) / 2,
-      centerY: (start.y + end.y) / 2
-    };
-  }
-
-  const radius = Math.hypot(dx, dy);
-  if (radius < MIN_PROFILE_SIZE) {
-    return null;
-  }
-  if (tool === 'circle') {
-    return {
-      objectKind: 'circle',
-      radius,
-      centerX: start.x,
-      centerY: start.y
-    };
-  }
-  return {
-    objectKind: 'polygon',
-    sides: 6,
-    radius,
-    centerX: start.x,
-    centerY: start.y
-  };
-}
+// Lifted to lib/sketch/session.ts so the in-viewport sketch mode shares the
+// exact same snapping and drag-to-shape math; re-exported for existing tests.
+import { sketchObjectFromDrag, snapSketchPoint } from '../lib/sketch/session';
+export { sketchObjectFromDrag, snapSketchPoint };
 
 function numberValue(value: ParamValue): number {
   return typeof value === 'number' ? value : Number(value);

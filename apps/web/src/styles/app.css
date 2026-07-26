@@ -3880,3 +3880,134 @@ textarea {
   opacity: 0.45;
   cursor: default;
 }
+
+/* ---------------------------------------------------------------------------
+   In-viewport sketch mode
+   --------------------------------------------------------------------------- */
+
+/* Cursor-following dimension readout while drawing. */
+.sketch-dim-label {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  padding: 3px 7px;
+  color: #ffe1b0;
+  background: rgba(30, 20, 4, 0.92);
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Sketch drawing tools, floating under the tool card. */
+.sketch-rail {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 5px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%);
+}
+
+.sketch-rail button {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 10px;
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sketch-rail button:hover {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sketch-rail button.active {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-rail button kbd {
+  padding: 0 4px;
+  color: var(--color-text-dim);
+  font-size: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
+}
+
+.sketch-rail-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--color-border-strong);
+}
+
+.sketch-rail .sketch-rail-exit {
+  color: var(--color-accent-hi);
+}
+
+/* Plane picker shown while the Sketch tool waits for a target. */
+.sketch-plane-prompt {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 9px 12px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%);
+}
+
+.sketch-plane-prompt span:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sketch-plane-prompt strong {
+  font-size: var(--fs-sm);
+}
+
+.sketch-plane-prompt small {
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+}
+
+.sketch-plane-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.sketch-plane-buttons button {
+  padding: 5px 10px;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sketch-plane-buttons button:hover {
+  background: rgba(77, 163, 255, 0.22);
+}
