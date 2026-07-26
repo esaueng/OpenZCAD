@@ -6,7 +6,9 @@ import {
   type BodyId,
   type ParamValue,
   type ProjectDocument,
-  type SerializedCommand
+  type SerializedCommand,
+  type SketchId,
+  type SketchObjectData
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
@@ -71,6 +73,7 @@ import {
   normalizeLocalId,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
+import { computeSketchRegions, regionAtPoint } from '@openzcad/geometry';
 
 export type CommandKind =
   | 'primitive.add'
@@ -593,6 +596,24 @@ function assertOperationExpressions(
         }
       }
       break;
+    case 'add_sketch':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} offset`,
+        operation.offset
+      );
+      operation.objects.forEach((object, index) => {
+        Object.entries(object).forEach(([key, value]) => {
+          if (key !== 'objectKind') {
+            assertEvaluableExpression(
+              scope,
+              `${operation.name} objects[${index}].${key}`,
+              value
+            );
+          }
+        });
+      });
+      break;
     case 'add_extrude':
       assertEvaluableExpression(
         scope,
@@ -735,6 +756,34 @@ export function commandsForCadPatch(
     return bodyId;
   };
 
+  /** Sketches created earlier in this proposal, addressable by $alias. */
+  const localSketches = new Map<
+    string,
+    { sketchId: SketchId; objects: SketchObjectData[] }
+  >();
+  const resolveSketch = (
+    reference: string
+  ): { sketchId: SketchId; objects: SketchObjectData[] } => {
+    if (isLocalBodyRef(reference)) {
+      const local = localSketches.get(normalizeLocalId(reference));
+      if (!local) {
+        throw new Error(
+          `Sketch alias ${reference} is not declared by an earlier add_sketch.`
+        );
+      }
+      return local;
+    }
+    const sketch = findSketch(document, reference as SketchId);
+    if (!sketch) {
+      throw new Error(`Sketch ${reference} not found in the document.`);
+    }
+    const objects = sketch.objectIds.flatMap((objectId) => {
+      const node = document.nodes[objectId];
+      return node?.kind === 'sketch-object' ? [node.data] : [];
+    });
+    return { sketchId: sketch.sketchId, objects };
+  };
+
   return proposal.operations.map((operation) => {
     switch (operation.kind) {
       case 'set_parameter':
@@ -771,13 +820,57 @@ export function commandsForCadPatch(
           name: operation.name
         });
       }
+      case 'add_sketch': {
+        const ids = createSketchFeatureIds(operation.objects.length);
+        if (operation.localId) {
+          localSketches.set(normalizeLocalId(operation.localId), {
+            sketchId: ids.sketchId,
+            objects: operation.objects
+          });
+        }
+        return commandFactories.addSketch({
+          name: operation.name,
+          planeRef: {
+            type: 'canonical',
+            plane: operation.plane,
+            offset: operation.offset
+          },
+          objects: operation.objects,
+          ids
+        });
+      }
       case 'add_extrude': {
+        const sketch = resolveSketch(operation.sketchId);
+        let profile: ExtrudeInput['profile'];
+        if (operation.samplePoint) {
+          // Resolve the region reference now so the direct-manipulation and
+          // AI paths store byte-identical features.
+          const regions = computeSketchRegions(
+            sketch.objects.map((data, index) => ({
+              id: `object_${index}`,
+              data
+            })),
+            (value) => resolveParamValue(value, parameterScope, 'sketch dimension')
+          );
+          const region = regionAtPoint(regions, operation.samplePoint);
+          if (!region) {
+            throw new Error(
+              `add_extrude samplePoint (${operation.samplePoint.x}, ${operation.samplePoint.y}) is not inside any closed region of the sketch.`
+            );
+          }
+          profile = {
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: operation.samplePoint,
+            sourceArea: region.area
+          };
+        }
         const ids = createBodyFeatureIds();
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
-          sketchId: operation.sketchId,
+          sketchId: sketch.sketchId,
           distance: operation.distance,
+          profile,
           ids
         });
       }
@@ -786,7 +879,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
-          sketchId: operation.sketchId,
+          sketchId: resolveSketch(operation.sketchId).sketchId,
           axis: operation.axis,
           ids
         });
