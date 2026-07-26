@@ -81,6 +81,7 @@ import type {
 import { toUserId } from '@openzcad/shared';
 import { api } from './lib/api';
 import {
+  PLANE_LABELS,
   downloadText,
   evalParamValue,
   exportFileStem,
@@ -126,6 +127,8 @@ import {
   toolCardFor,
   type FaceTarget
 } from './lib/interaction/machine';
+import { frameFromFace } from './lib/sketch/session';
+import { SketchToolRail } from './components/SketchToolRail';
 import {
   CommandPalette,
   type PaletteCommand
@@ -1813,6 +1816,48 @@ export function App() {
       }
       return;
     }
+    // Sketch entry: with the Sketch tool armed, a planar face click starts a
+    // face-attached sketch instead of arming the offset handle.
+    if (
+      appSettings.experiments.directManipulation &&
+      tool === 'sketch' &&
+      selection.kind === 'face' &&
+      selection.topologyId &&
+      detail?.normal
+    ) {
+      const faceTopology = representations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === selection.topologyId
+      );
+      const geometry = faceTopology?.geometry;
+      if (
+        geometry?.surfaceType === 'plane' &&
+        selection.hash !== undefined
+      ) {
+        const frame = frameFromFace(
+          geometry.center,
+          geometry.normal ?? detail.normal
+        );
+        dispatchInteraction({
+          type: 'enter-sketch',
+          plane: {
+            type: 'face',
+            bodyId: selection.bodyId,
+            faceHash: selection.hash,
+            sourceArea: geometry.area,
+            sourceCenter: geometry.center,
+            sourceNormal: geometry.normal ?? detail.normal,
+            frame
+          }
+        });
+        setTool(null);
+        setStatus('Sketching on the selected face. Esc exits.');
+        return;
+      }
+      setStatus('Pick a planar face to sketch on, or choose a plane.');
+      return;
+    }
     // Selection-first direct manipulation: a face click arms its drag handle.
     if (
       appSettings.experiments.directManipulation &&
@@ -2002,6 +2047,92 @@ export function App() {
       clearEdgePreview();
     }
   }, [interaction.mode]);
+
+  /**
+   * The sketch plane basis is memoized on the session's plane reference
+   * alone: it must keep its identity across entity commits, or the viewport
+   * would tear down and re-enter the mode (camera glide included) on every
+   * committed entity. The parameter scope is only consulted at entry.
+   */
+  const sketchSessionPlane =
+    interaction.mode === 'sketch' ? interaction.session.plane : null;
+  const parameterScopeRef = useRef(parameterScope);
+  parameterScopeRef.current = parameterScope;
+  const sketchBasis = useMemo(
+    () =>
+      sketchSessionPlane
+        ? frameForPlaneRef(
+            sketchSessionPlane,
+            (value) =>
+              evalParamValue(value, parameterScopeRef.current.scope) ?? 0
+          )
+        : null,
+    [sketchSessionPlane]
+  );
+
+  /** Active in-viewport sketch session for the viewport. */
+  const sketchModeState = useMemo(() => {
+    if (interaction.mode !== 'sketch' || !doc || !sketchBasis) {
+      return null;
+    }
+    const session = interaction.session;
+    const sketch = session.sketchId
+      ? listNodesByKind(doc, 'sketch').find(
+          (candidate) => candidate.sketchId === session.sketchId
+        )
+      : undefined;
+    const objects =
+      sketch?.objectIds.flatMap((objectId) => {
+        const node = doc.nodes[objectId];
+        return node?.kind === 'sketch-object' ? [node.data] : [];
+      }) ?? [];
+    return {
+      basis: sketchBasis,
+      tool: session.tool,
+      snapStep: appSettings.sketching.snapEnabled
+        ? appSettings.sketching.linearSnap
+        : null,
+      drawing: session.drawing,
+      objects
+    };
+  }, [interaction, doc, sketchBasis, appSettings.sketching]);
+
+  /** A drawing gesture finished: commit the entity as a real command. */
+  function handleSketchCommit(object: SketchObjectData) {
+    if (interaction.mode !== 'sketch') {
+      return;
+    }
+    const session = interaction.session;
+    if (!session.sketchId) {
+      const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+      if (
+        !executeCommand(
+          commandFactories.addSketch({
+            name,
+            planeRef: session.plane,
+            objects: [object]
+          })
+        )
+      ) {
+        return;
+      }
+      const sketchId = managerRef.current?.document.sketchOrder.at(-1);
+      if (sketchId) {
+        dispatchInteraction({ type: 'sketch-created', sketchId });
+      }
+      setStatus(`${name} started.`);
+      return;
+    }
+    executeCommand(
+      commandFactories.addSketchObjects(
+        {
+          sketchId: session.sketchId as SketchId,
+          objects: [object]
+        },
+        `Add ${object.objectKind}`
+      )
+    );
+  }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
   const edgeHandleTarget = useMemo(() => {
@@ -2649,6 +2780,21 @@ export function App() {
         return;
       }
 
+      if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        const sketchTool =
+          event.key.toLowerCase() === 'l'
+            ? ('line' as const)
+            : event.key.toLowerCase() === 'c'
+              ? ('circle' as const)
+              : event.key.toLowerCase() === 'r'
+                ? ('rectangle' as const)
+                : null;
+        if (sketchTool) {
+          event.preventDefault();
+          dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
+        }
+        return;
+      }
       switch (event.key) {
         case 'Escape':
           if (interaction.mode !== 'idle') {
@@ -3033,7 +3179,9 @@ export function App() {
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
-            hideViewerToolbar={tool === 'sketch'}
+            hideViewerToolbar={
+              tool === 'sketch' && !appSettings.experiments.directManipulation
+            }
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
             initialView={initialView}
@@ -3053,6 +3201,11 @@ export function App() {
             onEdgeRadiusPreview={requestEdgePreview}
             onEdgeCommit={handleEdgeCommit}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
+            sketchMode={sketchModeState}
+            onSketchCommit={handleSketchCommit}
+            onSketchDrawingChange={(drawing) =>
+              dispatchInteraction({ type: 'sketch-drawing', drawing })
+            }
             modeOverlay={
               toolCardFor(interaction) ? (
                 <>
@@ -3063,6 +3216,20 @@ export function App() {
                     }
                     onClose={() => dispatchInteraction({ type: 'escape' })}
                   />
+                  {interaction.mode === 'sketch' && (
+                    <SketchToolRail
+                      tool={interaction.session.tool}
+                      onTool={(sketchTool) =>
+                        dispatchInteraction({
+                          type: 'sketch-tool',
+                          tool: sketchTool
+                        })
+                      }
+                      onExit={() =>
+                        dispatchInteraction({ type: 'exit-sketch' })
+                      }
+                    />
+                  )}
                   {keypad && (
                     <NumericKeypad
                       request={keypad}
@@ -3126,6 +3293,37 @@ export function App() {
                   onConfirm={confirmMove}
                   onCancel={cancelPanel}
                 />
+              ) : tool === 'sketch' &&
+                appSettings.experiments.directManipulation ? (
+                <div className="sketch-plane-prompt" role="status">
+                  <span>
+                    <strong>Pick a sketch plane</strong>
+                    <small>
+                      Click a planar face on the model, or start on a
+                      principal plane.
+                    </small>
+                  </span>
+                  <span className="sketch-plane-buttons">
+                    {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                      <button
+                        key={plane}
+                        type="button"
+                        onClick={() => {
+                          dispatchInteraction({
+                            type: 'enter-sketch',
+                            plane: { type: 'canonical', plane, offset: 0 }
+                          });
+                          setTool(null);
+                          setStatus(
+                            `Sketching on the ${plane} plane. Esc exits.`
+                          );
+                        }}
+                      >
+                        {PLANE_LABELS[plane]}
+                      </button>
+                    ))}
+                  </span>
+                </div>
               ) : tool === 'sketch' ? (
                 <SketchWorkspace
                   sketchNumber={sketchOptions.length + 1}
