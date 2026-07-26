@@ -11,6 +11,7 @@
     "typecheck": "pnpm exec tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:web": "pnpm --filter @openzcad/web test",
     "test:e2e": "playwright test",
     "lint": "eslint apps packages test types --ext .ts,.tsx",
     "format": "prettier --write .",

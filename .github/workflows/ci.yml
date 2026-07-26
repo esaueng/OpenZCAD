@@ -23,6 +23,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test:coverage
+      # The web app has its own vitest project (jsdom); the root run only
+      # covers test/**, so its suites need an explicit step.
+      - run: pnpm test:web
       - run: pnpm build
       - uses: actions/upload-artifact@v7
         with:
