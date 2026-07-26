@@ -108,14 +108,12 @@ import { SettingsPage } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AiCommandRail } from './components/AiCommandRail';
-import { SketchWorkspace } from './components/SketchWorkspace';
 import {
   ExtrudeOverlay,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from './components/ModelViewer';
-import type { SketchFormValue } from './components/forms/FeatureForms';
 import { ToolCard } from './components/ToolCard';
 import {
   NumericKeypad,
@@ -968,25 +966,6 @@ export function App() {
     setStatus('Extrude: drag the arrow to either side of the sketch plane.');
   }
 
-  function finishSketch(value: SketchFormValue) {
-    if (!executeCommand(commandFactories.addSketch(value))) {
-      return;
-    }
-    const sketchId = managerRef.current?.document.sketchOrder.at(-1);
-    if (!sketchId) {
-      return;
-    }
-    setTool(null);
-    setSelectedFeatureNodeId(null);
-    setSelectedSketchProfileId(sketchId);
-    // Face the finished profile so the extrude drag is usable. Each plane is
-    // named for the axes it spans, so with Z up the ground plane is XY: mapping
-    // it to the front view would put the profile edge-on and invisible.
-    requestView(
-      value.plane === 'XY' ? 'top' : value.plane === 'XZ' ? 'front' : 'right'
-    );
-    setStatus('Closed profile created. Select Extrude or press E.');
-  }
 
   function confirmExtrude() {
     if (!extrudePreview || Math.abs(extrudePreview.distance) < 0.1) {
@@ -1823,7 +1802,6 @@ export function App() {
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
-      appSettings.experiments.directManipulation &&
       tool === 'sketch' &&
       selection.kind === 'face' &&
       selection.topologyId &&
@@ -2287,28 +2265,154 @@ export function App() {
   }, [interaction]);
 
   const offsetHandleTarget = useMemo(() => {
-    if (
-      interaction.mode !== 'face' ||
-      interaction.op !== 'offset-face' ||
-      interaction.target.surfaceType !== 'planar'
-    ) {
+    if (interaction.mode !== 'face') {
+      return null;
+    }
+    const target = interaction.target;
+    const point = {
+      x: target.point[0],
+      y: target.point[1],
+      z: target.point[2]
+    };
+    if (interaction.op === 'offset-face') {
+      if (target.surfaceType !== 'planar') {
+        return null;
+      }
+      return {
+        bodyId: target.bodyId,
+        topologyId: target.topologyId,
+        point,
+        normal: {
+          x: target.normal[0],
+          y: target.normal[1],
+          z: target.normal[2]
+        }
+      };
+    }
+    // resize-hole: the drag direction is radial — outward from the
+    // cylinder's axis through the click point.
+    const radial = cylinderRadialAt(target);
+    if (!radial) {
       return null;
     }
     return {
-      bodyId: interaction.target.bodyId,
-      topologyId: interaction.target.topologyId,
-      point: {
-        x: interaction.target.point[0],
-        y: interaction.target.point[1],
-        z: interaction.target.point[2]
-      },
-      normal: {
-        x: interaction.target.normal[0],
-        y: interaction.target.normal[1],
-        z: interaction.target.normal[2]
-      }
+      bodyId: target.bodyId,
+      topologyId: target.topologyId,
+      point,
+      normal: radial.direction
     };
   }, [interaction]);
+
+  /**
+   * Radial outward direction and concavity of a cylindrical face at a click
+   * point. Concavity comes from the picked triangle normal: a bore's surface
+   * faces the axis, a boss faces away from it.
+   */
+  function cylinderRadialAt(target: FaceTarget): {
+    direction: { x: number; y: number; z: number };
+    concavity: 'hole' | 'boss';
+  } | null {
+    const geometry = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (face) => face.topologyId === target.topologyId
+    )?.geometry;
+    if (!geometry?.axisStart || !geometry.axisEnd) {
+      return null;
+    }
+    const a = geometry.axisStart;
+    const b = geometry.axisEnd;
+    const axis = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+    const axisLength = Math.hypot(axis.x, axis.y, axis.z);
+    if (axisLength < 1e-9) {
+      return null;
+    }
+    const unit = {
+      x: axis.x / axisLength,
+      y: axis.y / axisLength,
+      z: axis.z / axisLength
+    };
+    const toPoint = {
+      x: target.point[0] - a.x,
+      y: target.point[1] - a.y,
+      z: target.point[2] - a.z
+    };
+    const along =
+      toPoint.x * unit.x + toPoint.y * unit.y + toPoint.z * unit.z;
+    const foot = {
+      x: a.x + unit.x * along,
+      y: a.y + unit.y * along,
+      z: a.z + unit.z * along
+    };
+    const radial = {
+      x: target.point[0] - foot.x,
+      y: target.point[1] - foot.y,
+      z: target.point[2] - foot.z
+    };
+    const radialLength = Math.hypot(radial.x, radial.y, radial.z);
+    if (radialLength < 1e-9) {
+      return null;
+    }
+    const direction = {
+      x: radial.x / radialLength,
+      y: radial.y / radialLength,
+      z: radial.z / radialLength
+    };
+    const facesInward =
+      target.normal[0] * direction.x +
+        target.normal[1] * direction.y +
+        target.normal[2] * direction.z <
+      0;
+    return { direction, concavity: facesInward ? 'hole' : 'boss' };
+  }
+
+  /** Commits a cylindrical-face resize; `diameter` is the absolute value. */
+  function handleResizeCylindricalCommit(diameter: number) {
+    if (interaction.mode !== 'face' || interaction.op !== 'resize-hole') {
+      return;
+    }
+    const target = interaction.target;
+    const geometry = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (face) => face.topologyId === target.topologyId
+    )?.geometry;
+    const radial = cylinderRadialAt(target);
+    if (
+      !geometry?.radius ||
+      !geometry.axisStart ||
+      !geometry.axisEnd ||
+      !radial ||
+      target.hash === undefined
+    ) {
+      setStatus('Exact cylinder measurements are unavailable.');
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    const rounded = Math.round(diameter * 1000) / 1000;
+    if (rounded <= 0) {
+      setStatus('Diameter must be greater than zero.');
+      return;
+    }
+    dispatchInteraction({ type: 'commit-complete' });
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: radial.concavity === 'hole' ? 'Resize hole' : 'Resize boss',
+        targetBodyId: target.bodyId as BodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: target.hash,
+          sourceRadius: geometry.radius,
+          sourceAxisStart: geometry.axisStart,
+          sourceAxisEnd: geometry.axisEnd,
+          concavity: radial.concavity,
+          radius: rounded / 2
+        }
+      }),
+      target.bodyId as BodyId,
+      `Resized ${radial.concavity} to ⌀ ${rounded} ${doc?.units ?? ''}.`
+    );
+  }
 
   /**
    * Throttled kernel previews for edge-radius drags. One sync in flight,
@@ -2449,6 +2553,24 @@ export function App() {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
+    if (interaction.mode === 'face' && interaction.op === 'resize-hole') {
+      const geometry = representations[
+        interaction.target.bodyId as BodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === interaction.target.topologyId
+      )?.geometry;
+      setKeypad({
+        kind: 'diameter',
+        label: '⌀',
+        initial:
+          geometry?.diameter !== undefined
+            ? String(Math.round((geometry.diameter + currentOffset) * 100) / 100)
+            : '',
+        unitKind: 'length',
+        baseline: geometry?.diameter
+      });
+      return;
+    }
     setKeypad({
       kind: 'offset',
       label: interaction.mode === 'region' ? 'Height' : 'Offset',
@@ -2468,6 +2590,18 @@ export function App() {
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
+      return;
+    }
+    if (interaction.mode === 'face' && interaction.op === 'resize-hole') {
+      // The drag reads as a diameter delta on the current bore/boss.
+      const geometry = representations[
+        interaction.target.bodyId as BodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === interaction.target.topologyId
+      )?.geometry;
+      if (geometry?.diameter !== undefined) {
+        handleResizeCylindricalCommit(geometry.diameter + offset);
+      }
       return;
     }
     if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
@@ -3311,7 +3445,11 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             bodies={viewerBodies}
-            sketches={sketchOverlays}
+            sketches={
+              // Region-based rendering (sketchViews) supersedes the legacy
+              // single-profile overlays under direct manipulation.
+              appSettings.experiments.directManipulation ? [] : sketchOverlays
+            }
             selectedBodyIds={selectedBodyIds}
             selectedTopology={selectedTopology}
             selectedEdges={selectedEdges}
@@ -3322,9 +3460,7 @@ export function App() {
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
-            hideViewerToolbar={
-              tool === 'sketch' && !appSettings.experiments.directManipulation
-            }
+            hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
             initialView={initialView}
@@ -3383,7 +3519,12 @@ export function App() {
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
                       onPreview={(value) => {
-                        offsetSetterRef.current?.(value);
+                        // The rig animates a delta; absolute kinds convert.
+                        offsetSetterRef.current?.(
+                          keypad.baseline === undefined
+                            ? value
+                            : value - keypad.baseline
+                        );
                         if (keypad.kind === 'edge') {
                           requestEdgePreview(value);
                         }
@@ -3395,6 +3536,8 @@ export function App() {
                         const isExpression = !Number.isFinite(Number(raw));
                         if (keypad.kind === 'edge') {
                           handleEdgeCommit(value, isExpression ? raw : undefined);
+                        } else if (keypad.kind === 'diameter') {
+                          handleResizeCylindricalCommit(value);
                         } else {
                           handleOffsetCommit(
                             value,
@@ -3463,8 +3606,7 @@ export function App() {
                   onConfirm={confirmMove}
                   onCancel={cancelPanel}
                 />
-              ) : tool === 'sketch' &&
-                appSettings.experiments.directManipulation ? (
+              ) : tool === 'sketch' ? (
                 <div className="sketch-plane-prompt" role="status">
                   <span>
                     <strong>Pick a sketch plane</strong>
@@ -3494,18 +3636,6 @@ export function App() {
                     ))}
                   </span>
                 </div>
-              ) : tool === 'sketch' ? (
-                <SketchWorkspace
-                  sketchNumber={sketchOptions.length + 1}
-                  units={doc.units}
-                  snapStep={
-                    appSettings.sketching.snapEnabled
-                      ? appSettings.sketching.linearSnap
-                      : null
-                  }
-                  onCancel={cancelPanel}
-                  onFinish={finishSketch}
-                />
               ) : extrudePreview && selectedSketchProfileName ? (
                 <ExtrudeOverlay
                   profileName={selectedSketchProfileName}

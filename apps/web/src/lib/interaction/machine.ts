@@ -86,7 +86,7 @@ export type InteractionEvent =
 
 export const IDLE: InteractionState = { mode: 'idle' };
 
-/** What the next Escape press should do, in Shapr-style priority order. */
+/** What the next Escape press should do, innermost state first. */
 export function escapeTarget(
   state: InteractionState
 ):

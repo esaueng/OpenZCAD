@@ -1753,11 +1753,18 @@ export function ModelViewer({
         (hit) => hit.object.userData.region !== undefined
       );
       if (regionHit) {
-        return {
-          selection: null,
-          region: regionHit.object.userData.region as RegionPickData,
-          hit: regionHit
-        };
+        // A region only wins while it is actually the frontmost thing under
+        // the cursor — a solid standing on the sketch plane occludes it.
+        const bodyBlock = context.raycaster
+          .intersectObjects(bodyGroup.children, true)
+          .find((hit) => hit.object.visible);
+        if (!bodyBlock || regionHit.distance <= bodyBlock.distance + 1e-6) {
+          return {
+            selection: null,
+            region: regionHit.object.userData.region as RegionPickData,
+            hit: regionHit
+          };
+        }
       }
       const sketchHits = context.raycaster.intersectObjects(
         sketchGroup.children,

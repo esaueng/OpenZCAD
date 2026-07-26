@@ -265,7 +265,7 @@ export function parseUpdateAppSettingsRequest(
         directManipulation:
           typeof experiments.directManipulation === 'boolean'
             ? experiments.directManipulation
-            : false
+            : true
       }
     }
   };

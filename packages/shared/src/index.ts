@@ -703,7 +703,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     customInstructions: ''
   },
   experiments: {
-    directManipulation: false
+    directManipulation: true
   }
 };
 

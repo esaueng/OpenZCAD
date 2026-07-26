@@ -1469,8 +1469,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       throw new Error('The selected face has a degenerate axis.');
     }
     const span = geometry.axialLength;
-    // Cut tools pierce past both ends; fills stay flush with the caps.
-    const overshoot = Math.max(span * 0.1, 1e-3);
     const cylinderAlong = (
       radius: number,
       startOffset: number,
@@ -1486,40 +1484,59 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         coordinateFrameMatrix(base, axisDir)
       );
     };
-    let output: number;
-    if (operation.concavity === 'hole') {
-      if (newRadius > operation.sourceRadius) {
-        // Widening only removes material: drill straight through, flush with
-        // the caps — the same construction as a primitive boolean subtract,
-        // which round-trips STEP cleanly where an overshooting tool does not.
-        const drill = cylinderAlong(newRadius, 0, span);
-        output = unifyBooleanFaces(kernel, kernel.cut(solid, drill));
-      } else {
-        // Shrinking adds the annular tube between the new and old radius.
-        // unifyFaces merges the tube wall with the surviving bore surface.
-        const tube = kernel.cut(
-          cylinderAlong(operation.sourceRadius, 0, span),
-          cylinderAlong(newRadius, -overshoot, span + overshoot * 2)
-        );
-        output = fuseUniformSolid(kernel, [solid, tube]);
-      }
-    } else if (newRadius > operation.sourceRadius) {
-      const boss = cylinderAlong(newRadius, 0, span);
-      output = fuseUniformSolid(kernel, [solid, boss]);
-    } else {
-      // Shrink a boss: carve the annulus between old and new radius.
-      const outer = cylinderAlong(
-        operation.sourceRadius + overshoot,
-        0,
-        span
+    // Growing a bore or a boss only ever needs a plain cylinder tool against
+    // the body, which this kernel handles exactly. Moving the wall the other
+    // way needs the annular sleeve between the two radii, and every way of
+    // producing it runs into the same gap: booleans involving a second
+    // coaxial cylindrical face come back as a no-op solid, as a wall
+    // shattered into planar strips, or as a cut that reaches past the face.
+    // Composition cannot paper over this, so the operation fails closed
+    // (ADR-010) until the kernel grows a native radial push-pull.
+    if (newRadius < operation.sourceRadius) {
+      throw new Error(
+        operation.concavity === 'hole'
+          ? 'Shrinking a hole needs kernel support that is not available yet — widen it, or edit the feature that created it.'
+          : 'Shrinking a boss needs kernel support that is not available yet — widen it, or edit the feature that created it.'
       );
-      const inner = cylinderAlong(newRadius, -overshoot, span + overshoot * 2);
-      const annulus = kernel.cut(outer, inner);
-      output = unifyBooleanFaces(kernel, kernel.cut(solid, annulus));
     }
+    const tool = cylinderAlong(newRadius, 0, span);
+    // The drill is flush with the caps — the same construction as a plain
+    // boolean subtract, which round-trips STEP where an overshooting tool
+    // does not.
+    const output =
+      operation.concavity === 'hole'
+        ? unifyBooleanFaces(kernel, kernel.cut(solid, tool))
+        : fuseUniformSolid(kernel, [solid, tool]);
     if (kernel.validateSolidRelaxed(output) !== 0) {
       throw new Error(
         `Resizing the face to radius ${newRadius} does not produce a valid solid.`
+      );
+    }
+    // A boolean that meets a coaxial cylindrical face can come back as the
+    // untouched original — a valid solid that simply ignored the edit. Read
+    // the wall back and insist it actually moved, so a no-op surfaces as a
+    // failed feature rather than a gesture that looked like it worked.
+    const moved = Array.from(kernel.getSolidFaces(output)).some((handle) => {
+      const measured = measureFaceGeometry(kernel, handle);
+      if (
+        measured?.surfaceType !== 'cylinder' ||
+        measured.radius === undefined ||
+        !measured.axisStart
+      ) {
+        return false;
+      }
+      if (Math.abs(measured.radius - newRadius) > radiusTolerance) {
+        return false;
+      }
+      const toAxis = subtract(measured.axisStart, geometry.axisStart!);
+      const along = dot(toAxis, axisDir);
+      return (
+        length(subtract(toAxis, scale(axisDir, along))) <= axisTolerance
+      );
+    });
+    if (!moved) {
+      throw new Error(
+        `The kernel left the face at its original size instead of resizing it to radius ${newRadius}.`
       );
     }
     return { solids: [output] };

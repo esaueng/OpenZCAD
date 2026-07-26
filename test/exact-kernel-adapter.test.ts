@@ -490,6 +490,163 @@ describe('exact hybrid kernel adapter', () => {
     // double-subtract of coaxial drills fails identically, so this predates
     // direct edits). The in-app mesh, volume, and validation are correct.
     // STEP round-trip coverage lands with the native push-pull kernel ops.
+
+    // The widened bore stays one analytic cylindrical face.
+    const widenedFaces = widened.bodyRepresentations[resultId]?.topology?.faces;
+    const widenedBore = widenedFaces?.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(widenedBore).toHaveLength(1);
+    expect(widenedBore?.[0]?.geometry?.radius).toBeCloseTo(5, 4);
+
+    // Moving the wall inward needs the annular sleeve between the two radii,
+    // and every construction for it runs through a boolean against a second
+    // coaxial cylindrical face — the kernel gap noted above. Until the native
+    // radial push-pull lands, shrinking fails closed instead of committing a
+    // silently wrong solid.
+    const shrunkDoc = directEditBody(resized, {
+      name: 'Shrink bore',
+      targetBodyId: resultId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: widenedBore![0]!.hash,
+        sourceRadius: widenedBore![0]!.geometry!.radius!,
+        sourceAxisStart: widenedBore![0]!.geometry!.axisStart!,
+        sourceAxisEnd: widenedBore![0]!.geometry!.axisEnd!,
+        concavity: 'hole',
+        radius: 4
+      }
+    }).document;
+    const shrunk = await adapter.syncDocument(shrunkDoc);
+    expect(
+      shrunk.warnings.some((warning) =>
+        warning.includes('Shrinking a hole needs kernel support')
+      )
+    ).toBe(true);
+    // The body is left exactly as the last good feature built it.
+    expect(shrunk.bodyRepresentations[resultId]?.volume).toBeCloseTo(
+      widened.bodyRepresentations[resultId]!.volume,
+      6
+    );
+  });
+
+  it('grows a free-standing boss and fails closed on the rest', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Boss resize', toUserId('user_exact')),
+      {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 12, height: 15 }
+      }
+    );
+    const bossId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const wall = derived.bodyRepresentations[bossId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(wall?.geometry?.radius).toBeCloseTo(12, 4);
+    const resize = (radius: number) =>
+      directEditBody(document, {
+        name: 'Resize boss',
+        targetBodyId: bossId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: wall!.hash,
+          sourceRadius: wall!.geometry!.radius!,
+          sourceAxisStart: wall!.geometry!.axisStart!,
+          sourceAxisEnd: wall!.geometry!.axisEnd!,
+          concavity: 'boss',
+          radius
+        }
+      }).document;
+
+    const grown = await adapter.syncDocument(resize(15));
+    expect(grown.warnings).toEqual([]);
+    const body = grown.bodyRepresentations[bossId];
+    expect(body?.volume).toBeCloseTo(Math.PI * 225 * 15, 0);
+    // The grown wall is one analytic cylinder, not a ring of boolean strips.
+    const walls = body?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(walls).toHaveLength(1);
+    expect(walls?.[0]?.geometry?.radius).toBeCloseTo(15, 4);
+
+    const shrunk = await adapter.syncDocument(resize(9));
+    expect(
+      shrunk.warnings.some((warning) =>
+        warning.includes('Shrinking a boss needs kernel support')
+      )
+    ).toBe(true);
+    expect(shrunk.bodyRepresentations[bossId]?.volume).toBeCloseTo(
+      derived.bodyRepresentations[bossId]!.volume,
+      6
+    );
+  });
+
+  it('rejects a resize the kernel silently ignores', async () => {
+    // A boss fused into a plate is the case where the union tool meets a
+    // coaxial cylindrical face and the kernel hands back the original solid.
+    // The result is valid, so only the read-back guard catches it.
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Fused boss', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 60, height: 60, depth: 8 }
+      }
+    );
+    const plateId = plate.bodyOrder.at(-1)!;
+    const withPost = addPrimitiveFeature(plate, {
+      name: 'Post',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 12, height: 15 }
+    });
+    const postId = withPost.bodyOrder.at(-1)!;
+    const placed = transformBody(withPost, {
+      name: 'Center post',
+      targetBodyId: postId,
+      translation: { x: 30, y: 30, z: 8 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(placed);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Plate with boss',
+        operation: 'union',
+        targetBodyIds: [plateId, postId]
+      })
+    );
+    const bossId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    const wall = derived.bodyRepresentations[bossId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(wall?.geometry?.radius).toBeCloseTo(12, 4);
+
+    const grownDoc = directEditBody(document, {
+      name: 'Resize boss',
+      targetBodyId: bossId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: wall!.hash,
+        sourceRadius: wall!.geometry!.radius!,
+        sourceAxisStart: wall!.geometry!.axisStart!,
+        sourceAxisEnd: wall!.geometry!.axisEnd!,
+        concavity: 'boss',
+        radius: 15
+      }
+    }).document;
+    const grown = await adapter.syncDocument(grownDoc);
+    expect(
+      grown.warnings.some((warning) =>
+        warning.includes('left the face at its original size')
+      )
+    ).toBe(true);
+    expect(grown.bodyRepresentations[bossId]?.volume).toBeCloseTo(
+      derived.bodyRepresentations[bossId]!.volume,
+      6
+    );
   });
 
   it('imports STEP through OCCT with complete exact topology', async () => {
