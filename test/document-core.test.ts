@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  addSketchObjects,
   createCheckpoint,
   createProjectDocument,
+  deleteSketchObject,
+  findSketch,
+  updateSketchObject,
   deleteFeature,
   deleteParameter,
   evaluateExpression,
@@ -86,6 +90,131 @@ describe('document-core', () => {
 
     expect(document.bodyOrder).toHaveLength(2);
     expect(getLatestBodyId(document)).toBeTruthy();
+  });
+
+  it('migrates v3 sketch nodes to planeRef without touching other nodes', () => {
+    const base = createProjectDocument('SketchMigrate', user());
+    const { document: withSketch } = addSketchFeature(base, {
+      name: 'Sketch 1',
+      plane: 'XZ',
+      offset: 5,
+      object: {
+        objectKind: 'circle',
+        radius: 10,
+        centerX: 0,
+        centerY: 0
+      }
+    });
+    // Simulate a v3 save: strip planeRef, keep the legacy fields.
+    const legacy = structuredClone(withSketch);
+    legacy.schemaVersion = 3 as typeof legacy.schemaVersion;
+    for (const node of Object.values(legacy.nodes)) {
+      if (node.kind === 'sketch') {
+        // @ts-expect-error building a v3 node shape on purpose
+        delete node.planeRef;
+        node.plane = 'XZ';
+        node.offset = 5;
+      }
+    }
+
+    const migrated = normalizeDocument(legacy);
+    const sketch = Object.values(migrated.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
+    expect(sketch?.kind).toBe('sketch');
+    expect(sketch?.kind === 'sketch' && sketch.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 5
+    });
+    expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    // Idempotent: already-migrated nodes pass through untouched.
+    const again = normalizeDocument(migrated);
+    expect(again.nodes).toEqual(migrated.nodes);
+  });
+
+  it('accepts v4 multi-object sketches and edits objects individually', () => {
+    const base = createProjectDocument('MultiObject', user());
+    const { document: withSketch, sketchId } = addSketchFeature(base, {
+      name: 'Profile',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'circle', radius: 63, centerX: 0, centerY: 0 },
+        { objectKind: 'circle', radius: 40, centerX: 0, centerY: 0 },
+        { objectKind: 'line', x1: -70, y1: 0, x2: 70, y2: 20 }
+      ]
+    });
+    let sketch = findSketch(withSketch, sketchId);
+    expect(sketch?.objectIds).toHaveLength(3);
+
+    const { document: withMore, objectNodeIds } = addSketchObjects(withSketch, {
+      sketchId,
+      objects: [
+        {
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 20,
+          startAngleDeg: 0,
+          endAngleDeg: 90
+        }
+      ]
+    });
+    sketch = findSketch(withMore, sketchId);
+    expect(sketch?.objectIds).toHaveLength(4);
+    expect(objectNodeIds).toHaveLength(1);
+
+    const updated = updateSketchObject(withMore, {
+      sketchId,
+      objectId: objectNodeIds[0]!,
+      data: {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 25,
+        startAngleDeg: 0,
+        endAngleDeg: 180
+      }
+    });
+    const arcNode = updated.nodes[objectNodeIds[0]!];
+    expect(
+      arcNode?.kind === 'sketch-object' &&
+        arcNode.data.objectKind === 'arc' &&
+        arcNode.data.radius
+    ).toBe(25);
+
+    const removed = deleteSketchObject(updated, {
+      sketchId,
+      objectId: objectNodeIds[0]!
+    });
+    expect(findSketch(removed, sketchId)?.objectIds).toHaveLength(3);
+    expect(removed.nodes[objectNodeIds[0]!]).toBeUndefined();
+  });
+
+  it('replays v3 sketch payloads to the same node graph', () => {
+    // v3 command logs carry {plane, offset, object} and a single objectNodeId.
+    const base = createProjectDocument('Replay', user());
+    const { document: next, sketchId } = addSketchFeature(base, {
+      name: 'Legacy sketch',
+      plane: 'YZ',
+      offset: 2,
+      object: {
+        objectKind: 'polygon',
+        sides: 6,
+        radius: 8,
+        centerX: 1,
+        centerY: 2
+      }
+    });
+    const sketch = findSketch(next, sketchId);
+    expect(sketch?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'YZ',
+      offset: 2
+    });
+    expect(sketch?.objectIds).toHaveLength(1);
+    const objectNode = next.nodes[sketch!.objectIds[0]!];
+    expect(objectNode?.kind).toBe('sketch-object');
   });
 
   it('does not mutate the input document', () => {
@@ -204,8 +333,11 @@ describe('feature editing', () => {
     const sketch = Object.values(document.nodes).find((node) => node.kind === 'sketch');
     expect(sketch?.kind).toBe('sketch');
     if (sketch?.kind === 'sketch') {
-      expect(sketch.plane).toBe('XZ');
-      expect(sketch.offset).toBe('lift');
+      expect(sketch.planeRef).toEqual({
+        type: 'canonical',
+        plane: 'XZ',
+        offset: 'lift'
+      });
       const objectNode = document.nodes[sketch.objectIds[0]!];
       expect(objectNode?.kind).toBe('sketch-object');
       if (objectNode?.kind === 'sketch-object') {

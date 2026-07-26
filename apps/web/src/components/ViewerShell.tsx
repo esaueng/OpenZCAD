@@ -4,8 +4,14 @@ import {
   type ExtrudePreview,
   type AxisProjection,
   type FaceResizeCommit,
+  type EdgeHandleTarget,
   type MovePreview,
+  type RegionHandleTarget,
+  type SketchModeState,
+  type SketchViewData,
   type MoveSnap,
+  type OffsetHandleTarget,
+  type PickDetail,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -14,8 +20,13 @@ import {
 import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
-import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  SketchObjectData,
+  TopologySelection
+} from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { RegionPickData } from './viewer/regionOverlay';
 
 interface ViewerShellProps {
   projectId: string;
@@ -42,8 +53,26 @@ interface ViewerShellProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
-    additive: boolean
+    additive: boolean,
+    detail?: PickDetail
   ): void;
+  offsetHandle: OffsetHandleTarget | null;
+  onOffsetCommit(offset: number): void;
+  onOpenOffsetKeypad(currentOffset: number): void;
+  keypadAnchorRef: MutableRefObject<
+    ((point: { x: number; y: number } | null) => void) | null
+  >;
+  offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  edgeHandle: EdgeHandleTarget | null;
+  onEdgeRadiusPreview(size: number): void;
+  onEdgeCommit(size: number): void;
+  onOpenEdgeKeypad(currentSize: number): void;
+  sketchMode: SketchModeState | null;
+  onSketchCommit(object: SketchObjectData): void;
+  onSketchDrawingChange(drawing: boolean): void;
+  sketchViews: SketchViewData[];
+  onSelectRegion(region: RegionPickData): void;
+  regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -87,6 +116,21 @@ export function ViewerShell({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  offsetHandle,
+  onOffsetCommit,
+  onOpenOffsetKeypad,
+  keypadAnchorRef,
+  offsetSetterRef,
+  edgeHandle,
+  onEdgeRadiusPreview,
+  onEdgeCommit,
+  onOpenEdgeKeypad,
+  sketchMode,
+  onSketchCommit,
+  onSketchDrawingChange,
+  sketchViews,
+  onSelectRegion,
+  regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -119,6 +163,21 @@ export function ViewerShell({
         onViewChange={onViewChange}
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
+        offsetHandle={offsetHandle}
+        onOffsetCommit={onOffsetCommit}
+        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        keypadAnchorRef={keypadAnchorRef}
+        offsetSetterRef={offsetSetterRef}
+        edgeHandle={edgeHandle}
+        onEdgeRadiusPreview={onEdgeRadiusPreview}
+        onEdgeCommit={onEdgeCommit}
+        onOpenEdgeKeypad={onOpenEdgeKeypad}
+        sketchMode={sketchMode}
+        onSketchCommit={onSketchCommit}
+        onSketchDrawingChange={onSketchDrawingChange}
+        sketchViews={sketchViews}
+        onSelectRegion={onSelectRegion}
+        regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}

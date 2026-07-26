@@ -1,0 +1,141 @@
+import { describe, expect, it } from 'vitest';
+import { PLANE_BASES } from '@openzcad/geometry';
+import {
+  axisLockPoint,
+  dimensionForInProgress,
+  frameFromFace,
+  lineObjectFromPoints,
+  screenRayToPlanePoint,
+  sketchEntryPose,
+  sketchObjectFromDrag,
+  snapSketchPoint
+} from './session';
+
+describe('snapSketchPoint / sketchObjectFromDrag', () => {
+  it('snaps to the grid step', () => {
+    expect(snapSketchPoint({ x: 3.4, y: -2.6 }, 1)).toEqual({ x: 3, y: -3 });
+    expect(snapSketchPoint({ x: 3.4, y: -2.6 }, 0.5)).toEqual({
+      x: 3.5,
+      y: -2.5
+    });
+  });
+
+  it('builds shapes from drags and rejects slivers', () => {
+    expect(
+      sketchObjectFromDrag('rectangle', { x: 0, y: 0 }, { x: 10, y: 6 })
+    ).toMatchObject({ objectKind: 'rectangle', width: 10, height: 6 });
+    expect(
+      sketchObjectFromDrag('circle', { x: 2, y: 1 }, { x: 5, y: 5 })
+    ).toMatchObject({ objectKind: 'circle', radius: 5 });
+    expect(
+      sketchObjectFromDrag('rectangle', { x: 0, y: 0 }, { x: 0.2, y: 9 })
+    ).toBeNull();
+  });
+
+  it('builds line objects and rejects zero-length ones', () => {
+    expect(
+      lineObjectFromPoints({ x: 0, y: 0 }, { x: 8, y: 6 })
+    ).toMatchObject({ objectKind: 'line', x2: 8, y2: 6 });
+    expect(lineObjectFromPoints({ x: 1, y: 1 }, { x: 1.1, y: 1 })).toBeNull();
+  });
+});
+
+describe('screenRayToPlanePoint', () => {
+  it('projects rays onto the XY plane in local coordinates', () => {
+    const point = screenRayToPlanePoint(
+      { x: 3, y: 4, z: 10 },
+      { x: 0, y: 0, z: -1 },
+      PLANE_BASES.XY
+    );
+    expect(point?.x).toBeCloseTo(3);
+    expect(point?.y).toBeCloseTo(4);
+  });
+
+  it('returns null for parallel or behind-origin rays', () => {
+    expect(
+      screenRayToPlanePoint(
+        { x: 0, y: 0, z: 10 },
+        { x: 1, y: 0, z: 0 },
+        PLANE_BASES.XY
+      )
+    ).toBeNull();
+    expect(
+      screenRayToPlanePoint(
+        { x: 0, y: 0, z: 10 },
+        { x: 0, y: 0, z: 1 },
+        PLANE_BASES.XY
+      )
+    ).toBeNull();
+  });
+
+  it('respects the XZ plane handedness', () => {
+    const point = screenRayToPlanePoint(
+      { x: 5, y: -10, z: 7 },
+      { x: 0, y: 1, z: 0 },
+      PLANE_BASES.XZ
+    );
+    // XZ basis: u = +X, v = -Z.
+    expect(point?.x).toBeCloseTo(5);
+    expect(point?.y).toBeCloseTo(-7);
+  });
+});
+
+describe('axisLockPoint', () => {
+  it('locks near-horizontal and near-vertical segments', () => {
+    const horizontal = axisLockPoint({ x: 0, y: 0 }, { x: 20, y: 1 });
+    expect(horizontal.lockedAxis).toBe('horizontal');
+    expect(horizontal.point).toEqual({ x: 20, y: 0 });
+    const vertical = axisLockPoint({ x: 0, y: 0 }, { x: -0.5, y: 15 });
+    expect(vertical.lockedAxis).toBe('vertical');
+    expect(vertical.point).toEqual({ x: 0, y: 15 });
+  });
+
+  it('leaves diagonal segments free', () => {
+    const diagonal = axisLockPoint({ x: 0, y: 0 }, { x: 10, y: 9 });
+    expect(diagonal.lockedAxis).toBeNull();
+    expect(diagonal.point).toEqual({ x: 10, y: 9 });
+  });
+});
+
+describe('sketchEntryPose', () => {
+  it('faces the plane head-on from the given distance', () => {
+    const pose = sketchEntryPose(PLANE_BASES.XZ, 100);
+    expect(pose.position).toEqual({ x: 0, y: 100, z: 0 });
+    expect(pose.target).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('tilts the top view a hair off +Z to keep orbit math stable', () => {
+    const pose = sketchEntryPose(PLANE_BASES.XY, 50);
+    expect(pose.position.y).toBeLessThan(0);
+    expect(pose.position.z).toBeCloseTo(50, 1);
+  });
+});
+
+describe('frameFromFace', () => {
+  it('builds right-handed orthonormal frames', () => {
+    const frame = frameFromFace({ x: 1, y: 2, z: 3 }, { x: 0, y: 0, z: 2 });
+    const dot = (a: { x: number; y: number; z: number }, b: typeof a) =>
+      a.x * b.x + a.y * b.y + a.z * b.z;
+    expect(dot(frame.xAxis, frame.yAxis)).toBeCloseTo(0);
+    expect(dot(frame.xAxis, frame.zAxis)).toBeCloseTo(0);
+    expect(dot(frame.zAxis, frame.zAxis)).toBeCloseTo(1);
+    // x × y = z (right-handed)
+    expect(
+      frame.xAxis.y * frame.yAxis.z - frame.xAxis.z * frame.yAxis.y
+    ).toBeCloseTo(frame.zAxis.x);
+  });
+});
+
+describe('dimensionForInProgress', () => {
+  it('formats per tool', () => {
+    expect(
+      dimensionForInProgress('circle', { x: 0, y: 0 }, { x: 3, y: 4 })
+    ).toBe('⌀ 10');
+    expect(
+      dimensionForInProgress('rectangle', { x: 0, y: 0 }, { x: 8, y: -6 })
+    ).toBe('8 × 6');
+    expect(
+      dimensionForInProgress('line', { x: 0, y: 0 }, { x: 3, y: 4 })
+    ).toBe('5');
+  });
+});

@@ -162,6 +162,9 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
+      '@openzcad/geometry':
+        specifier: workspace:*
+        version: link:../geometry
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
@@ -172,7 +175,11 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  packages/geometry: {}
+  packages/geometry:
+    dependencies:
+      '@openzcad/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/io-step:
     dependencies:
