@@ -36,6 +36,8 @@ import {
   type SketchId,
   type SketchNode,
   type SketchObjectData,
+  type SketchObjectNode,
+  type SketchPlaneRef,
   type UnitSystem,
   type UserId
 } from '@openzcad/shared';
@@ -63,7 +65,9 @@ export interface SketchFeatureIds {
   featureNodeId: EntityId;
   sketchId: SketchId;
   sketchNodeId: EntityId;
+  /** @deprecated Alias of `objectNodeIds[0]`, retained so v3 command logs replay. */
   objectNodeId: EntityId;
+  objectNodeIds: EntityId[];
 }
 
 export interface FeatureOnlyIds {
@@ -85,14 +89,26 @@ export function createBodyFeatureIds(): BodyFeatureIds {
   };
 }
 
-export function createSketchFeatureIds(): SketchFeatureIds {
+export function createSketchFeatureIds(objectCount = 1): SketchFeatureIds {
+  const objectNodeIds = Array.from({ length: Math.max(objectCount, 0) }, () =>
+    toEntityId(createId('ent'))
+  );
   return {
     featureId: toFeatureId(createId('feat')),
     featureNodeId: toEntityId(createId('ent')),
     sketchId: toSketchId(createId('sketch')),
     sketchNodeId: toEntityId(createId('ent')),
-    objectNodeId: toEntityId(createId('ent'))
+    objectNodeId: objectNodeIds[0] ?? toEntityId(createId('ent')),
+    objectNodeIds
   };
+}
+
+/** Fills gaps in ids from v3 command payloads, which predate `objectNodeIds`. */
+function normalizeSketchFeatureIds(ids: SketchFeatureIds): SketchFeatureIds {
+  if (ids.objectNodeIds && ids.objectNodeIds.length > 0) {
+    return { ...ids, objectNodeId: ids.objectNodeId ?? ids.objectNodeIds[0]! };
+  }
+  return { ...ids, objectNodeIds: ids.objectNodeId ? [ids.objectNodeId] : [] };
 }
 
 export function createFeatureOnlyIds(): FeatureOnlyIds {
@@ -118,23 +134,69 @@ export interface PrimitiveInput {
 
 export interface SketchInput {
   name: string;
-  plane: PlaneId;
-  offset: ParamValue;
-  object: SketchObjectData;
+  planeRef?: SketchPlaneRef;
+  objects?: SketchObjectData[];
+  /** @deprecated v3 payload field; still honored so old command logs replay. */
+  plane?: PlaneId;
+  /** @deprecated v3 payload field; still honored so old command logs replay. */
+  offset?: ParamValue;
+  /** @deprecated v3 payload field; still honored so old command logs replay. */
+  object?: SketchObjectData;
   ids?: SketchFeatureIds;
+}
+
+/** Resolves the v4/v3 dual shape of a sketch payload to its v4 form. */
+export function resolveSketchInput(input: SketchInput): {
+  planeRef: SketchPlaneRef;
+  objects: SketchObjectData[];
+} {
+  const planeRef: SketchPlaneRef = input.planeRef ?? {
+    type: 'canonical',
+    plane: input.plane ?? 'XY',
+    offset: input.offset ?? 0
+  };
+  const objects = input.objects ?? (input.object ? [input.object] : []);
+  return { planeRef, objects };
 }
 
 export interface SketchUpdateInput {
   sketchId: SketchId;
+  planeRef?: SketchPlaneRef;
+  /** @deprecated v3 payload field; rewrites the canonical planeRef on replay. */
   plane?: PlaneId;
+  /** @deprecated v3 payload field; rewrites the canonical planeRef on replay. */
   offset?: ParamValue;
+  /** @deprecated v3 payload field; replaces the first object, as v3 did. */
   object?: SketchObjectData;
+}
+
+export interface SketchObjectAddInput {
+  sketchId: SketchId;
+  objects: SketchObjectData[];
+  ids?: { objectNodeIds: EntityId[] };
+}
+
+export interface SketchObjectUpdateInput {
+  sketchId: SketchId;
+  objectId: EntityId;
+  data: SketchObjectData;
+}
+
+export interface SketchObjectDeleteInput {
+  sketchId: SketchId;
+  objectId: EntityId;
 }
 
 export interface ExtrudeInput {
   name: string;
   sketchId: SketchId;
   distance: ParamValue;
+  /** Extrude one detected region of the sketch instead of the whole profile. */
+  profile?: {
+    regionFingerprint: number;
+    samplePoint: { x: number; y: number };
+    sourceArea: number;
+  };
   ids?: BodyFeatureIds;
 }
 
@@ -335,9 +397,30 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
           }
         ]
       : []);
+  let nodes = document.nodes;
+  // Schema v3 -> v4: sketches gain planeRef; the legacy plane/offset pair
+  // becomes a canonical reference. Additive, so a missed migration degrades
+  // (old fields linger) rather than corrupts.
+  for (const [nodeId, node] of Object.entries(document.nodes)) {
+    if (node.kind !== 'sketch' || node.planeRef !== undefined) {
+      continue;
+    }
+    if (nodes === document.nodes) {
+      nodes = { ...document.nodes };
+    }
+    nodes[nodeId] = {
+      ...node,
+      planeRef: {
+        type: 'canonical',
+        plane: node.plane ?? 'XY',
+        offset: node.offset ?? 0
+      }
+    } satisfies SketchNode;
+  }
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
+    nodes,
     parameterOrder: document.parameterOrder ?? [],
     featureOrder: document.featureOrder ?? [],
     bodyOrder: document.bodyOrder ?? [],
@@ -474,8 +557,14 @@ export function addSketchFeature(
   input: SketchInput
 ): { document: ProjectDocument; sketchId: SketchId } {
   const next = cloneDocument(document);
-  const { featureId, featureNodeId, sketchId, sketchNodeId, objectNodeId } =
-    input.ids ?? createSketchFeatureIds();
+  const { planeRef, objects } = resolveSketchInput(input);
+  const ids = normalizeSketchFeatureIds(
+    input.ids ?? createSketchFeatureIds(objects.length)
+  );
+  const { featureId, featureNodeId, sketchId, sketchNodeId } = ids;
+  const objectNodeIds = objects.map(
+    (_, index) => ids.objectNodeIds[index] ?? toEntityId(createId('ent'))
+  );
 
   const sketchNode: SketchNode = {
     id: sketchNodeId,
@@ -484,20 +573,22 @@ export function addSketchFeature(
     parentId: next.activePartId,
     revisionId: null,
     sketchId,
-    plane: input.plane,
-    offset: input.offset,
-    objectIds: [objectNodeId]
+    planeRef,
+    objectIds: objectNodeIds
   };
 
-  next.nodes[objectNodeId] = {
-    id: objectNodeId,
-    kind: 'sketch-object',
-    name: `${input.object.objectKind} profile`,
-    parentId: sketchNodeId,
-    revisionId: null,
-    objectKind: input.object.objectKind,
-    data: input.object
-  };
+  objects.forEach((object, index) => {
+    const objectNodeId = objectNodeIds[index]!;
+    next.nodes[objectNodeId] = {
+      id: objectNodeId,
+      kind: 'sketch-object',
+      name: `${object.objectKind} profile`,
+      parentId: sketchNodeId,
+      revisionId: null,
+      objectKind: object.objectKind,
+      data: object
+    };
+  });
 
   next.nodes[sketchNode.id] = sketchNode;
   next.nodes[featureNodeId] = {
@@ -530,11 +621,19 @@ export function updateSketch(
   if (!sketch) {
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
-  if (input.plane !== undefined) {
-    sketch.plane = input.plane;
-  }
-  if (input.offset !== undefined) {
-    sketch.offset = input.offset;
+  if (input.planeRef !== undefined) {
+    sketch.planeRef = input.planeRef;
+  } else if (input.plane !== undefined || input.offset !== undefined) {
+    // v3 payloads patch the canonical plane fields piecemeal.
+    const previous =
+      sketch.planeRef.type === 'canonical'
+        ? sketch.planeRef
+        : { type: 'canonical' as const, plane: 'XY' as const, offset: 0 };
+    sketch.planeRef = {
+      type: 'canonical',
+      plane: input.plane ?? previous.plane,
+      offset: input.offset ?? previous.offset
+    };
   }
   if (input.object !== undefined) {
     const objectId = sketch.objectIds[0];
@@ -546,6 +645,82 @@ export function updateSketch(
     objectNode.data = input.object;
     objectNode.name = `${input.object.objectKind} profile`;
   }
+  next.version += 1;
+  return next;
+}
+
+export function addSketchObjects(
+  document: ProjectDocument,
+  input: SketchObjectAddInput
+): { document: ProjectDocument; objectNodeIds: EntityId[] } {
+  const next = cloneDocument(document);
+  const sketch = findSketch(next, input.sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${input.sketchId} not found.`);
+  }
+  const objectNodeIds = input.objects.map(
+    (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
+  );
+  input.objects.forEach((object, index) => {
+    const objectNodeId = objectNodeIds[index]!;
+    next.nodes[objectNodeId] = {
+      id: objectNodeId,
+      kind: 'sketch-object',
+      name: `${object.objectKind} profile`,
+      parentId: sketch.id,
+      revisionId: null,
+      objectKind: object.objectKind,
+      data: object
+    };
+    sketch.objectIds.push(objectNodeId);
+  });
+  next.version += 1;
+  return { document: next, objectNodeIds };
+}
+
+function requireSketchObject(
+  document: ProjectDocument,
+  sketchId: SketchId,
+  objectId: EntityId
+): { sketch: SketchNode; objectNode: SketchObjectNode } {
+  const sketch = findSketch(document, sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${sketchId} not found.`);
+  }
+  const objectNode = sketch.objectIds.includes(objectId)
+    ? document.nodes[objectId]
+    : undefined;
+  if (!objectNode || objectNode.kind !== 'sketch-object') {
+    throw new Error(`Sketch ${sketchId} has no object ${objectId}.`);
+  }
+  return { sketch, objectNode };
+}
+
+export function updateSketchObject(
+  document: ProjectDocument,
+  input: SketchObjectUpdateInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const { objectNode } = requireSketchObject(
+    next,
+    input.sketchId,
+    input.objectId
+  );
+  objectNode.objectKind = input.data.objectKind;
+  objectNode.data = input.data;
+  objectNode.name = `${input.data.objectKind} profile`;
+  next.version += 1;
+  return next;
+}
+
+export function deleteSketchObject(
+  document: ProjectDocument,
+  input: SketchObjectDeleteInput
+): ProjectDocument {
+  const next = cloneDocument(document);
+  const { sketch } = requireSketchObject(next, input.sketchId, input.objectId);
+  sketch.objectIds = sketch.objectIds.filter((id) => id !== input.objectId);
+  delete next.nodes[input.objectId];
   next.version += 1;
   return next;
 }
@@ -570,7 +745,8 @@ export function extrudeSketch(
     data: {
       featureKind: 'extrude',
       sketchId: input.sketchId,
-      distance: input.distance
+      distance: input.distance,
+      ...(input.profile ? { profile: input.profile } : {})
     }
   };
 

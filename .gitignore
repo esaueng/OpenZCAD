@@ -14,3 +14,4 @@ test-results
 !**/.dev.vars.example
 
 *.tsbuildinfo
+.worktrees/

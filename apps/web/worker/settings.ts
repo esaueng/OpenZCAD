@@ -194,6 +194,8 @@ export function parseUpdateAppSettingsRequest(
   const viewport = asRecord(settings.viewport, '"settings.viewport"');
   const sketching = asRecord(settings.sketching, '"settings.sketching"');
   const assistant = asRecord(settings.assistant, '"settings.assistant"');
+  // Experiments are optional in the payload so older clients keep saving.
+  const experiments = asRecord(settings.experiments ?? {}, '"settings.experiments"');
   const provider = requiredMember(assistant, 'provider', PROVIDERS);
   const rawBaseUrl = requiredString(assistant, 'baseUrl', 2_048, true);
   const baseUrl =
@@ -258,6 +260,12 @@ export function parseUpdateAppSettingsRequest(
           MAX_CUSTOM_INSTRUCTIONS,
           true
         )
+      },
+      experiments: {
+        directManipulation:
+          typeof experiments.directManipulation === 'boolean'
+            ? experiments.directManipulation
+            : true
       }
     }
   };

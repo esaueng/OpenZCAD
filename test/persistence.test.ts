@@ -5,7 +5,7 @@ import {
 } from '@openzcad/persistence';
 import type { RevisionConflictError } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { PROJECT_DOCUMENT_SCHEMA_VERSION, toUserId } from '@openzcad/shared';
 
 const userId = toUserId('user_test');
 
@@ -39,7 +39,7 @@ describe('in-memory persistence', () => {
       created.document.projectId
     );
     expect(loaded?.name).toBe('Round Trip');
-    expect(loaded?.schemaVersion).toBe(3);
+    expect(loaded?.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 
   it('rejects stale revision writes without replacing the newer document', async () => {
