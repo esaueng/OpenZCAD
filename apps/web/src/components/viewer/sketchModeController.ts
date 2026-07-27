@@ -13,13 +13,20 @@ import type { SketchPoint } from '../../lib/sketch/session';
 const PLANE_EXTENT = 400;
 const TINT_COLOR = 0x0d1b2e;
 const COMMITTED_COLOR = 0x4da3ff;
+const SELECTED_COLOR = 0xf59e0b;
 const IN_PROGRESS_COLOR = 0xf59e0b;
 const CIRCLE_SEGMENTS = 96;
 
 export interface SketchModeRig {
   group: THREE.Group;
   /** Rebuilds the committed (blue) polylines from the sketch's objects. */
-  setObjects(objects: SketchObjectData[], resolve: (value: unknown) => number): void;
+  setObjects(
+    objects: { id: string; data: SketchObjectData }[],
+    selectedObjectId: string | null,
+    resolve: (value: unknown) => number
+  ): void;
+  /** Returns the closest committed entity under the current ray. */
+  pickObject(raycaster: THREE.Raycaster, threshold: number): string | null;
   /** Replaces the in-progress (orange) polyline; null hides it. */
   setInProgress(points: SketchPoint[] | null, closed: boolean): void;
   dispose(): void;
@@ -87,11 +94,16 @@ export function objectPolyline(
       const cx = resolve(data.centerX);
       const cy = resolve(data.centerY);
       const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
-      let sweep = ((resolve(data.endAngleDeg) - resolve(data.startAngleDeg)) * Math.PI) / 180;
+      let sweep =
+        ((resolve(data.endAngleDeg) - resolve(data.startAngleDeg)) * Math.PI) /
+        180;
       if (sweep <= 0) {
         sweep += Math.PI * 2;
       }
-      const steps = Math.max(8, Math.ceil((sweep / (Math.PI * 2)) * CIRCLE_SEGMENTS));
+      const steps = Math.max(
+        8,
+        Math.ceil((sweep / (Math.PI * 2)) * CIRCLE_SEGMENTS)
+      );
       const points: SketchPoint[] = [];
       for (let index = 0; index <= steps; index += 1) {
         const angle = start + (sweep * index) / steps;
@@ -141,18 +153,25 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
   group.add(tint);
 
   // Grid oriented onto the plane. GridHelper spans XZ with +Y normal.
-  const grid = new THREE.GridHelper(PLANE_EXTENT, PLANE_EXTENT / 10, 0x2c3a4d, 0x1b2634);
+  const grid = new THREE.GridHelper(
+    PLANE_EXTENT,
+    PLANE_EXTENT / 10,
+    0x2c3a4d,
+    0x1b2634
+  );
   const gridMaterial = grid.material;
   gridMaterial.transparent = true;
   gridMaterial.opacity = 0.5;
   gridMaterial.depthWrite = false;
   grid.quaternion.copy(
-    quaternion.clone().multiply(
-      new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        new THREE.Vector3(0, 0, 1)
+    quaternion
+      .clone()
+      .multiply(
+        new THREE.Quaternion().setFromUnitVectors(
+          new THREE.Vector3(0, 1, 0),
+          new THREE.Vector3(0, 0, 1)
+        )
       )
-    )
   );
   grid.position.copy(origin);
   grid.renderOrder = 6;
@@ -187,12 +206,12 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
 
   return {
     group,
-    setObjects(objects, resolve) {
+    setObjects(objects, selectedObjectId, resolve) {
       disposeChildren(committedGroup);
-      for (const data of objects) {
+      for (const object of objects) {
         let polyline: { points: SketchPoint[]; closed: boolean } | null;
         try {
-          polyline = objectPolyline(data, resolve);
+          polyline = objectPolyline(object.data, resolve);
         } catch {
           continue;
         }
@@ -204,7 +223,8 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
         );
         const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
         const material = new THREE.LineBasicMaterial({
-          color: COMMITTED_COLOR,
+          color:
+            object.id === selectedObjectId ? SELECTED_COLOR : COMMITTED_COLOR,
           transparent: true,
           opacity: 0.95,
           depthTest: false
@@ -214,8 +234,20 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
           : new THREE.Line(geometry, material);
         line.renderOrder = 11;
         line.frustumCulled = false;
+        line.userData.sketchObjectId = object.id;
         committedGroup.add(line);
       }
+    },
+    pickObject(raycaster, threshold) {
+      const priorThreshold = raycaster.params.Line?.threshold;
+      raycaster.params.Line = {
+        threshold: Math.max(threshold, Number.EPSILON)
+      };
+      const hit = raycaster.intersectObjects(committedGroup.children, false)[0];
+      raycaster.params.Line = { threshold: priorThreshold ?? 1 };
+      return typeof hit?.object.userData.sketchObjectId === 'string'
+        ? hit.object.userData.sketchObjectId
+        : null;
     },
     setInProgress(points, closed) {
       if (!points || points.length < 2) {

@@ -1,4 +1,11 @@
-import { Check, Circle, Minus, Square } from 'lucide-react';
+import {
+  Check,
+  Circle,
+  MousePointer2,
+  Minus,
+  Square,
+  Waypoints
+} from 'lucide-react';
 import type { SketchToolId } from '../lib/interaction/machine';
 
 interface SketchToolRailProps {
@@ -13,7 +20,9 @@ const TOOLS: {
   keyHint: string;
   icon: typeof Minus;
 }[] = [
+  { id: 'select', label: 'Select', keyHint: 'V', icon: MousePointer2 },
   { id: 'line', label: 'Line', keyHint: 'L', icon: Minus },
+  { id: 'arc', label: 'Arc', keyHint: 'A', icon: Waypoints },
   { id: 'circle', label: 'Circle', keyHint: 'C', icon: Circle },
   { id: 'rectangle', label: 'Rectangle', keyHint: 'R', icon: Square }
 ];

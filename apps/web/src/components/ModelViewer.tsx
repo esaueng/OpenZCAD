@@ -48,6 +48,9 @@ import {
   type RegionPickData
 } from './viewer/regionOverlay';
 import {
+  arcDimension,
+  arcObjectFromPoints,
+  arcPreviewPoints,
   axisLockPoint,
   dimensionForInProgress,
   lineObjectFromPoints,
@@ -58,7 +61,8 @@ import {
   type SketchPoint
 } from '../lib/sketch/session';
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { SketchObjectData } from '@openzcad/shared';
+import type { ParamValue, SketchObjectData } from '@openzcad/shared';
+import { evalParamValue } from '../lib/model';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
@@ -109,8 +113,7 @@ export function dimensionLabelLayout(
   let angleDeg = THREE.MathUtils.radToDeg(Math.atan2(deltaY, deltaX));
 
   if (Number.isFinite(previousAngleDeg)) {
-    angleDeg +=
-      180 * Math.round((previousAngleDeg! - angleDeg) / 180);
+    angleDeg += 180 * Math.round((previousAngleDeg! - angleDeg) / 180);
   } else {
     if (angleDeg > 90) {
       angleDeg -= 180;
@@ -151,6 +154,8 @@ export function directEditDirectionFromNormal(
 export interface ViewerSettings {
   showGrid: boolean;
   displayMode: DisplayMode;
+  /** Runtime-only accessibility preference; omitted by older saved views. */
+  reducedMotion?: boolean;
 }
 
 /**
@@ -169,6 +174,8 @@ export interface OffsetHandleTarget {
   topologyId: string;
   point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
+  /** Restored after a failed exact-kernel validation. */
+  initialValue?: number;
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
@@ -179,7 +186,9 @@ export interface SketchModeState {
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
   /** Committed objects of the session's sketch, rendered in blue. */
-  objects: SketchObjectData[];
+  objects: { id: string; data: SketchObjectData }[];
+  selectedObjectId: string | null;
+  parameterScope: Record<string, number>;
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
@@ -202,6 +211,7 @@ export interface RegionHandleTarget {
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
+  initialValue?: number;
 }
 
 /** An armed edge fillet/chamfer handle over the current edge selection. */
@@ -211,6 +221,8 @@ export interface EdgeHandleTarget {
   topologyId: string;
   op: 'fillet' | 'chamfer';
   edgeCount: number;
+  /** Restored after a failed exact-kernel validation. */
+  initialValue?: number;
 }
 
 /** Sketch profile polyline, already lifted onto its 3D plane. */
@@ -375,6 +387,8 @@ interface ModelViewerProps {
   onEdgeCommit(size: number): void;
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): void;
+  /** Semantic lifecycle signal for direct-manipulation drags. */
+  onDirectManipulationChange(dragging: boolean): void;
   /** Region-detected sketch rendering (curves + orange hover fills). */
   sketchViews: SketchViewData[];
   /** A detected region was clicked: arm the extrude handle. */
@@ -387,6 +401,8 @@ interface ModelViewerProps {
   onSketchCommit(object: SketchObjectData): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
+  /** Selects a committed entity for exact-value editing. */
+  onSketchSelectObject(objectId: string | null): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -712,9 +728,7 @@ function snapTo(value: number, step: number, fine: boolean): number {
   return Math.round(value / step) * step;
 }
 
-type ViewerBodyMaterial =
-  | THREE.MeshStandardMaterial
-  | THREE.MeshPhongMaterial;
+type ViewerBodyMaterial = THREE.MeshStandardMaterial | THREE.MeshPhongMaterial;
 type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, ViewerBodyMaterial>;
 
 const SELECTION_EMISSIVE = 0x173a5e;
@@ -830,9 +844,7 @@ export function prioritizeVisibleEdgeHit<T extends TopologyHit>(hits: T[]) {
       (hit.object.userData as { topologyKind?: string }).topologyKind ===
         'edge' && hit.distance <= nearestDistance + depthTolerance
   );
-  return edgeHit
-    ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)]
-    : hits;
+  return edgeHit ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)] : hits;
 }
 
 export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
@@ -1044,12 +1056,14 @@ export function ModelViewer({
   onEdgeRadiusPreview,
   onEdgeCommit,
   onOpenEdgeKeypad,
+  onDirectManipulationChange,
   sketchViews,
   onSelectRegion,
   regionHandle,
   sketchMode,
   onSketchCommit,
   onSketchDrawingChange,
+  onSketchSelectObject,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -1088,6 +1102,8 @@ export function ModelViewer({
   unitsRef.current = units;
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
+  const reducedMotionRef = useRef(settings.reducedMotion);
+  reducedMotionRef.current = settings.reducedMotion;
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
@@ -1101,6 +1117,8 @@ export function ModelViewer({
   onEdgeCommitRef.current = onEdgeCommit;
   const onOpenEdgeKeypadRef = useRef(onOpenEdgeKeypad);
   onOpenEdgeKeypadRef.current = onOpenEdgeKeypad;
+  const onDirectManipulationChangeRef = useRef(onDirectManipulationChange);
+  onDirectManipulationChangeRef.current = onDirectManipulationChange;
   const edgeHandleOpRef = useRef<'fillet' | 'chamfer'>('fillet');
   /** Live edge-radius rig; owned by the edgeHandle effect below. */
   const edgeRigRef = useRef<EdgeHandleRig | null>(null);
@@ -1115,14 +1133,25 @@ export function ModelViewer({
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
   onSketchDrawingChangeRef.current = onSketchDrawingChange;
+  const onSketchSelectObjectRef = useRef(onSketchSelectObject);
+  onSketchSelectObjectRef.current = onSketchSelectObject;
   /** Live sketch rig + local gesture state (imperative, no re-renders). */
   const sketchRigRef = useRef<SketchModeRig | null>(null);
   const sketchGestureRef = useRef<{
     chainAnchor: SketchPoint | null;
     dragStart: SketchPoint | null;
+    arcCenter: SketchPoint | null;
+    arcStart: SketchPoint | null;
     pointerId: number | null;
     moved: boolean;
-  }>({ chainAnchor: null, dragStart: null, pointerId: null, moved: false });
+  }>({
+    chainAnchor: null,
+    dragStart: null,
+    arcCenter: null,
+    arcStart: null,
+    pointerId: null,
+    moved: false
+  });
   const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
   const sketchReturnRef = useRef<{
@@ -1394,6 +1423,22 @@ export function ModelViewer({
     function startCameraTween(pose: CameraPose, onComplete?: () => void) {
       // Consume leftover damping inertia so the glide starts from rest.
       controls.update();
+      if (reducedMotionRef.current) {
+        context.cameraTween = null;
+        camera.position.copy(pose.position);
+        controls.target.copy(pose.target);
+        camera.near = pose.near;
+        camera.far = pose.far;
+        camera.updateProjectionMatrix();
+        controls.update();
+        if (context.projection === 'orthographic') {
+          syncOrthographic(false);
+        }
+        onComplete?.();
+        emitViewChange();
+        requestRender();
+        return;
+      }
       context.cameraTween = {
         startTime: performance.now(),
         duration: CAMERA_TWEEN_MS,
@@ -1418,18 +1463,9 @@ export function ModelViewer({
         return false;
       }
       const t = Math.min((now - tween.startTime) / tween.duration, 1);
-      const eased =
-        t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-      camera.position.lerpVectors(
-        tween.fromPosition,
-        tween.toPosition,
-        eased
-      );
-      controls.target.lerpVectors(
-        tween.fromTarget,
-        tween.toTarget,
-        eased
-      );
+      const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+      controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
       if (context.projection === 'orthographic') {
         syncOrthographic(false);
       }
@@ -1724,7 +1760,8 @@ export function ModelViewer({
     /** In-plane basis for a rotation ring about `axis`. */
     function ringBasis(axis: MoveAxis): { u: THREE.Vector3; v: THREE.Vector3 } {
       const normal = MOVE_AXIS_VECTORS[axis];
-      const seed = axis === 'x' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const seed =
+        axis === 'x' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
       const u = seed
         .clone()
         .sub(normal.clone().multiplyScalar(seed.dot(normal)))
@@ -1977,8 +2014,7 @@ export function ModelViewer({
             : '';
       // Only body-kind picks (mesh bodies without exact face topology) lift
       // the whole body's emissive; faces and edges have their own overlays.
-      const emissiveBodyId =
-        result?.selection?.kind === 'body' ? bodyId : null;
+      const emissiveBodyId = result?.selection?.kind === 'body' ? bodyId : null;
       if (context.hoveredBodyId === emissiveBodyId) {
         return;
       }
@@ -2167,13 +2203,17 @@ export function ModelViewer({
       return mode.snapStep ? snapSketchPoint(point, mode.snapStep) : point;
     }
 
-    function positionSketchDimLabel(event: PointerEvent, text: string) {
+    function positionSketchDimLabel(
+      event: PointerEvent,
+      text: string,
+      appendUnits = true
+    ) {
       const label = sketchDimLabelRef.current;
       const hostRect = hostRef.current?.getBoundingClientRect();
       if (!label || !hostRect) {
         return;
       }
-      label.textContent = `${text} ${unitsRef.current}`;
+      label.textContent = appendUnits ? `${text} ${unitsRef.current}` : text;
       label.style.left = `${event.clientX - hostRect.left + 16}px`;
       label.style.top = `${event.clientY - hostRect.top - 28}px`;
       label.hidden = false;
@@ -2197,7 +2237,10 @@ export function ModelViewer({
       if (!point) {
         return;
       }
-      if (gesture.dragStart && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
+      if (
+        gesture.dragStart &&
+        (mode.tool === 'circle' || mode.tool === 'rectangle')
+      ) {
         if (mode.tool === 'circle') {
           const radius = Math.hypot(
             point.x - gesture.dragStart.x,
@@ -2237,6 +2280,39 @@ export function ModelViewer({
           event,
           dimensionForInProgress('line', gesture.chainAnchor, locked.point)
         );
+        requestRender();
+        return;
+      }
+      if (mode.tool === 'arc' && gesture.arcCenter) {
+        if (!gesture.arcStart) {
+          rig.setInProgress([gesture.arcCenter, point], false);
+          positionSketchDimLabel(
+            event,
+            `R ${
+              Math.round(
+                Math.hypot(
+                  point.x - gesture.arcCenter.x,
+                  point.y - gesture.arcCenter.y
+                ) * 10
+              ) / 10
+            }`
+          );
+        } else {
+          rig.setInProgress(
+            arcPreviewPoints(gesture.arcCenter, gesture.arcStart, point),
+            false
+          );
+          const dimension = arcDimension(
+            gesture.arcCenter,
+            gesture.arcStart,
+            point
+          );
+          positionSketchDimLabel(
+            event,
+            `R ${Math.round(dimension.radius * 10) / 10} ${unitsRef.current} · ${Math.round(dimension.sweepDeg * 10) / 10}°`,
+            false
+          );
+        }
         requestRender();
       }
     }
@@ -2334,8 +2410,7 @@ export function ModelViewer({
         if (rig) {
           const dx = event.clientX - edgeDrag.startX;
           const dy = event.clientY - edgeDrag.startY;
-          const projected =
-            dx * edgeDrag.directionX + dy * edgeDrag.directionY;
+          const projected = dx * edgeDrag.directionX + dy * edgeDrag.directionY;
           const raw = Math.max(
             0,
             edgeDrag.initialValue + projected / edgeDrag.pixelsPerUnit
@@ -2434,11 +2509,7 @@ export function ModelViewer({
     const handlePointerDown = (event: PointerEvent) => {
       cancelCameraTween();
       if (event.button === 2) {
-        rightClickGesture.begin(
-          event.pointerId,
-          event.clientX,
-          event.clientY
-        );
+        rightClickGesture.begin(event.pointerId, event.clientX, event.clientY);
         rightPanStartTarget = controls.target.clone();
         return;
       }
@@ -2458,7 +2529,8 @@ export function ModelViewer({
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
           (moveGizmoGroup.userData.gizmoScale as number | undefined) ?? 10;
-        const ringRadiusPx = (gizmoScale * 0.85) / Math.max(worldPerPixel, 1e-9);
+        const ringRadiusPx =
+          (gizmoScale * 0.85) / Math.max(worldPerPixel, 1e-9);
         const drag: MoveDragState = {
           pointerId: event.pointerId,
           kind: data.kind,
@@ -2527,7 +2599,7 @@ export function ModelViewer({
           renderer.domElement.setPointerCapture(event.pointerId);
           onSketchDrawingChangeRef.current(true);
           event.preventDefault();
-        } else if (point && mode.tool === 'line') {
+        } else if (point && (mode.tool === 'line' || mode.tool === 'arc')) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
           event.preventDefault();
@@ -2558,6 +2630,7 @@ export function ModelViewer({
             initialOffset: armedRig.offset()
           };
           offsetDragActiveRef.current = true;
+          onDirectManipulationChangeRef.current(true);
           controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
           renderer.domElement.style.cursor = 'grabbing';
@@ -2589,6 +2662,7 @@ export function ModelViewer({
             lastPreviewAt: 0
           };
           edgeDragActiveRef.current = true;
+          onDirectManipulationChangeRef.current(true);
           controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
           renderer.domElement.style.cursor = 'grabbing';
@@ -2739,11 +2813,7 @@ export function ModelViewer({
           rightClickGesture.markDragged(event.pointerId);
         }
         if (
-          rightClickGesture.end(
-            event.pointerId,
-            event.clientX,
-            event.clientY
-          )
+          rightClickGesture.end(event.pointerId, event.clientX, event.clientY)
         ) {
           onContextMenuRef.current(
             event.clientX,
@@ -2784,6 +2854,22 @@ export function ModelViewer({
             ) >= 5
           : false;
         downPosition = null;
+        if (mode.tool === 'select' && !moved) {
+          setRayFromEvent(event);
+          const pickThreshold =
+            worldPerPixelAt(
+              new THREE.Vector3(
+                mode.basis.origin.x,
+                mode.basis.origin.y,
+                mode.basis.origin.z
+              )
+            ) * 8;
+          onSketchSelectObjectRef.current(
+            rig?.pickObject(context.raycaster, pickThreshold) ?? null
+          );
+          requestRender();
+          return;
+        }
         if (gesture.dragStart) {
           if (renderer.domElement.hasPointerCapture(event.pointerId)) {
             renderer.domElement.releasePointerCapture(event.pointerId);
@@ -2823,12 +2909,43 @@ export function ModelViewer({
           }
           requestRender();
         }
+        if (mode.tool === 'arc' && point && !moved) {
+          if (!gesture.arcCenter) {
+            gesture.arcCenter = point;
+            onSketchDrawingChangeRef.current(true);
+          } else if (!gesture.arcStart) {
+            if (
+              Math.hypot(
+                point.x - gesture.arcCenter.x,
+                point.y - gesture.arcCenter.y
+              ) >= 0.5
+            ) {
+              gesture.arcStart = point;
+            }
+          } else {
+            const object = arcObjectFromPoints(
+              gesture.arcCenter,
+              gesture.arcStart,
+              point
+            );
+            if (object) {
+              onSketchCommitRef.current(object);
+              gesture.arcCenter = null;
+              gesture.arcStart = null;
+              rig?.setInProgress(null, false);
+              hideSketchDimLabel();
+              onSketchDrawingChangeRef.current(false);
+            }
+          }
+          requestRender();
+        }
         return;
       }
       if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
         const completed = edgeDrag;
         edgeDrag = null;
         edgeDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false);
         controls.enabled = true;
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId);
@@ -2850,6 +2967,7 @@ export function ModelViewer({
         const completed = offsetDrag;
         offsetDrag = null;
         offsetDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false);
         controls.enabled = true;
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId);
@@ -2882,7 +3000,11 @@ export function ModelViewer({
         restoreFaceDrag();
         faceDrag = null;
         downPosition = null;
-        onSelectTopologyRef.current(completed.selection, false, completed.detail);
+        onSelectTopologyRef.current(
+          completed.selection,
+          false,
+          completed.detail
+        );
         if (moved >= 4 && completed.latestValue !== completed.initialValue) {
           onResizePrimitiveFaceRef.current({
             bodyId: completed.selection.bodyId,
@@ -2938,6 +3060,7 @@ export function ModelViewer({
       if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
         edgeDrag = null;
         edgeDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false);
         controls.enabled = true;
         edgeRigRef.current?.setValue(0);
         requestRender();
@@ -2945,6 +3068,7 @@ export function ModelViewer({
       if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
         offsetDrag = null;
         offsetDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false);
         controls.enabled = true;
         offsetRigRef.current?.setOffset(0);
         requestRender();
@@ -3575,9 +3699,7 @@ export function ModelViewer({
       1,
       Math.max(context.renderer.domElement.clientHeight, 1)
     );
-    const scale = moveGizmoWorldScale(
-      1 / Math.max(projectedUnitSizePx, 1e-9)
-    );
+    const scale = moveGizmoWorldScale(1 / Math.max(projectedUnitSizePx, 1e-9));
     context.moveGizmoGroup.scale.setScalar(1);
     context.moveGizmoGroup.userData.baseGizmoScale = scale;
     context.moveGizmoGroup.userData.gizmoScale = scale;
@@ -3769,6 +3891,7 @@ export function ModelViewer({
       ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
       ghostGeometry
     });
+    rig.setOffset(offsetHandle.initialValue ?? 0);
     // Fat-line materials need the viewport resolution for correct widths.
     const rigLineMaterials: LineMaterial[] = [];
     rig.worldGroup.traverse((child) => {
@@ -3832,6 +3955,7 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
+    rig.setValue(edgeHandle.initialValue ?? 0);
     context.scene.add(rig.group);
     edgeRigRef.current = rig;
     context.requestRender();
@@ -3964,6 +4088,7 @@ export function ModelViewer({
       direction: basis.normal,
       ghostGeometry
     });
+    rig.setOffset(regionHandle.initialValue ?? 0);
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
@@ -3999,6 +4124,8 @@ export function ModelViewer({
     sketchGestureRef.current = {
       chainAnchor: null,
       dragStart: null,
+      arcCenter: null,
+      arcStart: null,
       pointerId: null,
       moved: false
     };
@@ -4100,8 +4227,11 @@ export function ModelViewer({
     if (!context || !rig || !sketchMode) {
       return;
     }
-    rig.setObjects(sketchMode.objects, (value) =>
-      typeof value === 'number' ? value : Number(value)
+    rig.setObjects(
+      sketchMode.objects,
+      sketchMode.selectedObjectId,
+      (value) =>
+        evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0
     );
     context.requestRender();
   }, [sketchMode]);
@@ -4113,6 +4243,8 @@ export function ModelViewer({
       const gesture = sketchGestureRef.current;
       gesture.chainAnchor = null;
       gesture.dragStart = null;
+      gesture.arcCenter = null;
+      gesture.arcStart = null;
       sketchRigRef.current?.setInProgress(null, false);
       const label = sketchDimLabelRef.current;
       if (label) {

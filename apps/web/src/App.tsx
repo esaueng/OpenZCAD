@@ -61,6 +61,7 @@ import type {
   ArtifactRecord,
   BodyId,
   BodyRepresentation,
+  EntityId,
   FeatureId,
   FeatureNode,
   FaceGeometry,
@@ -116,18 +117,17 @@ import {
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from './components/ModelViewer';
 import { ToolCard } from './components/ToolCard';
-import {
-  NumericKeypad,
-  type KeypadRequest
-} from './components/NumericKeypad';
+import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
   IDLE,
   interactionReducer,
   toolCardFor,
   type FaceTarget
 } from './lib/interaction/machine';
+import type { SelectionActionId } from './lib/interaction/capabilities';
 import { frameFromFace } from './lib/sketch/session';
 import { SketchToolRail } from './components/SketchToolRail';
+import { SketchEntityEditor } from './components/SketchEntityEditor';
 import { objectPolyline } from './components/viewer/sketchModeController';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { computeSketchRegions } from '@openzcad/geometry';
@@ -243,7 +243,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(() => ({
     showGrid: appSettings.viewport.showGrid,
-    displayMode: appSettings.viewport.displayMode
+    displayMode: appSettings.viewport.displayMode,
+    reducedMotion: appSettings.appearance.reducedMotion
   }));
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
@@ -346,6 +347,10 @@ export function App() {
       .appearance.reducedMotion
       ? 'true'
       : 'false';
+    setViewerSettings((current) => ({
+      ...current,
+      reducedMotion: appSettings.appearance.reducedMotion
+    }));
   }, [appSettings]);
 
   useEffect(() => {
@@ -782,10 +787,7 @@ export function App() {
         return [];
       }
       const data = objectNode.data;
-      if (
-        data.objectKind === 'line' ||
-        data.objectKind === 'arc'
-      ) {
+      if (data.objectKind === 'line' || data.objectKind === 'arc') {
         // Open curves have no fill; region overlays render them separately.
         return [];
       }
@@ -884,12 +886,12 @@ export function App() {
       setProjection(
         savedView?.projection ?? appSettings.viewport.defaultProjection
       );
-      setViewerSettings(
-        savedView?.settings ?? {
-          showGrid: appSettings.viewport.showGrid,
-          displayMode: appSettings.viewport.displayMode
-        }
-      );
+      setViewerSettings({
+        showGrid: appSettings.viewport.showGrid,
+        displayMode: appSettings.viewport.displayMode,
+        ...savedView?.settings,
+        reducedMotion: appSettings.appearance.reducedMotion
+      });
       setHiddenBodyIds(new Set(savedView?.hiddenBodyIds ?? []));
     }
     if (rememberProject) {
@@ -976,7 +978,6 @@ export function App() {
     requestView('iso');
     setStatus('Extrude: drag the arrow to either side of the sketch plane.');
   }
-
 
   function confirmExtrude() {
     if (!extrudePreview || Math.abs(extrudePreview.distance) < 0.1) {
@@ -1284,7 +1285,8 @@ export function App() {
     setProjection(appSettings.viewport.defaultProjection);
     setViewerSettings({
       showGrid: appSettings.viewport.showGrid,
-      displayMode: appSettings.viewport.displayMode
+      displayMode: appSettings.viewport.displayMode,
+      reducedMotion: appSettings.appearance.reducedMotion
     });
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
@@ -1791,6 +1793,47 @@ export function App() {
     setStatus(`${name}: closed profile selected · press E to extrude.`);
   }
 
+  function startSketchOnFace(target: FaceTarget): boolean {
+    const faceTopology = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
+    const geometry = faceTopology?.geometry;
+    if (geometry?.surfaceType !== 'plane' || target.hash === undefined) {
+      setStatus('Pick a planar face to sketch on, or choose a plane.');
+      return false;
+    }
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: {
+        type: 'face',
+        bodyId: target.bodyId as BodyId,
+        faceHash: target.hash,
+        sourceArea: geometry.area,
+        sourceCenter: geometry.center,
+        sourceNormal: geometry.normal ?? {
+          x: target.normal[0],
+          y: target.normal[1],
+          z: target.normal[2]
+        },
+        frame: frameFromFace(
+          geometry.center,
+          geometry.normal ?? {
+            x: target.normal[0],
+            y: target.normal[1],
+            z: target.normal[2]
+          }
+        )
+      }
+    });
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds([]);
+    setTool(null);
+    setStatus('Sketching on the selected face. Esc exits.');
+    return true;
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
@@ -1824,29 +1867,18 @@ export function App() {
         (face) => face.topologyId === selection.topologyId
       );
       const geometry = faceTopology?.geometry;
-      if (
-        geometry?.surfaceType === 'plane' &&
-        selection.hash !== undefined
-      ) {
-        const frame = frameFromFace(
-          geometry.center,
-          geometry.normal ?? detail.normal
-        );
-        dispatchInteraction({
-          type: 'enter-sketch',
-          plane: {
-            type: 'face',
-            bodyId: selection.bodyId,
-            faceHash: selection.hash,
-            sourceArea: geometry.area,
-            sourceCenter: geometry.center,
-            sourceNormal: geometry.normal ?? detail.normal,
-            frame
-          }
-        });
-        setTool(null);
-        setStatus('Sketching on the selected face. Esc exits.');
-        return;
+      if (geometry?.surfaceType === 'plane' && selection.hash !== undefined) {
+        const target: FaceTarget = {
+          bodyId: selection.bodyId,
+          topologyId: selection.topologyId,
+          hash: selection.hash,
+          point: [detail.point.x, detail.point.y, detail.point.z],
+          normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+          surfaceType: 'planar'
+        };
+        if (startSketchOnFace(target)) {
+          return;
+        }
       }
       setStatus('Pick a planar face to sketch on, or choose a plane.');
       return;
@@ -1971,13 +2003,19 @@ export function App() {
   async function executeValidatedDirectEdit(
     command: AnyCommand,
     targetBodyId: BodyId,
-    successMessage: string
-  ): Promise<void> {
+    successMessage: string,
+    submittedValue = 0,
+    onSuccess?: () => void
+  ): Promise<boolean> {
     const manager = managerRef.current;
     if (!manager || directEditInFlightRef.current) {
-      return;
+      return false;
     }
     directEditInFlightRef.current = true;
+    dispatchInteraction({
+      type: 'validation-start',
+      value: submittedValue
+    });
     const current = manager.document;
     setBusy(true);
     setStatus('Validating direct edit with the exact geometry kernel…');
@@ -2002,15 +2040,25 @@ export function App() {
         throw new Error('The document changed while the edit was validating.');
       }
       if (!executeCommand(command)) {
-        return;
+        throw new Error('The validated edit could not be committed.');
       }
+      dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
       setSelectedBodyIds([targetBodyId]);
       setSelectedFeatureNodeId(featureNodeIdForBody(targetBodyId));
+      onSuccess?.();
       setStatus(successMessage);
+      return true;
     } catch (error) {
-      setStatus(errorMessage(error, 'Direct edit was not applied.'));
+      const message = errorMessage(error, 'Direct edit was not applied.');
+      dispatchInteraction({
+        type: 'validation-failed',
+        message,
+        value: submittedValue
+      });
+      setStatus(message);
+      return false;
     } finally {
       directEditInFlightRef.current = false;
       setBusy(false);
@@ -2022,13 +2070,13 @@ export function App() {
    * built once per selection instead of on every App render — rebuilding it
    * mid-hover would reset its screen-constant scale and drop pointer picks.
    */
-  // The keypad's lifetime mirrors the machine's keypadOpen flag: Escape,
-  // deselection, and commits all close it through the reducer.
+  // The keypad's lifetime mirrors the exact-entry phase. Escape, deselection,
+  // and commits all close it through the reducer.
   useEffect(() => {
     const open =
       interaction.mode !== 'idle' &&
-      'keypadOpen' in interaction &&
-      interaction.keypadOpen;
+      interaction.mode !== 'sketch' &&
+      interaction.phase === 'exact-entry';
     if (!open) {
       setKeypad(null);
     }
@@ -2077,7 +2125,9 @@ export function App() {
     const objects =
       sketch?.objectIds.flatMap((objectId) => {
         const node = doc.nodes[objectId];
-        return node?.kind === 'sketch-object' ? [node.data] : [];
+        return node?.kind === 'sketch-object'
+          ? [{ id: objectId, data: node.data }]
+          : [];
       }) ?? [];
     return {
       basis: sketchBasis,
@@ -2086,9 +2136,29 @@ export function App() {
         ? appSettings.sketching.linearSnap
         : null,
       drawing: session.drawing,
-      objects
+      objects,
+      selectedObjectId: session.selectedObjectId,
+      parameterScope: parameterScope.scope
     };
-  }, [interaction, doc, sketchBasis, appSettings.sketching]);
+  }, [
+    interaction,
+    doc,
+    sketchBasis,
+    appSettings.sketching,
+    parameterScope.scope
+  ]);
+
+  const selectedSketchEntity = useMemo(() => {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.selectedObjectId ||
+      !doc
+    ) {
+      return null;
+    }
+    const node = doc.nodes[interaction.session.selectedObjectId as EntityId];
+    return node?.kind === 'sketch-object' ? node : null;
+  }, [interaction, doc]);
 
   /** A drawing gesture finished: commit the entity as a real command. */
   function handleSketchCommit(object: SketchObjectData) {
@@ -2125,6 +2195,54 @@ export function App() {
         `Add ${object.objectKind}`
       )
     );
+  }
+
+  function handleUpdateSketchEntity(data: SketchObjectData) {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.sketchId ||
+      !interaction.session.selectedObjectId
+    ) {
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.updateSketchObject(
+          {
+            sketchId: interaction.session.sketchId as SketchId,
+            objectId: interaction.session.selectedObjectId as EntityId,
+            data
+          },
+          `Edit ${data.objectKind}`
+        )
+      )
+    ) {
+      setStatus(`Updated ${data.objectKind} geometry.`);
+    }
+  }
+
+  function handleDeleteSketchEntity() {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.sketchId ||
+      !interaction.session.selectedObjectId
+    ) {
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.deleteSketchObject(
+          {
+            sketchId: interaction.session.sketchId as SketchId,
+            objectId: interaction.session.selectedObjectId as EntityId
+          },
+          'Delete sketch entity'
+        )
+      )
+    ) {
+      dispatchInteraction({ type: 'sketch-select-object', objectId: null });
+      setStatus('Deleted sketch entity.');
+    }
   }
 
   /**
@@ -2186,7 +2304,12 @@ export function App() {
       }
       return [{ sketchId: sketch.sketchId, basis, curves, regions }];
     });
-  }, [doc, parameterScope, appSettings.experiments.directManipulation, interaction]);
+  }, [
+    doc,
+    parameterScope,
+    appSettings.experiments.directManipulation,
+    interaction
+  ]);
 
   /** After a region extrude, offer a one-click return to its sketch. */
   const [revertPill, setRevertPill] = useState<{ sketchId: SketchId } | null>(
@@ -2219,14 +2342,15 @@ export function App() {
 
   /** Armed region handle for the viewport. */
   const regionHandleTarget = useMemo(() => {
-    if (interaction.mode !== 'region') {
+    if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
     }
     return {
       sketchId: interaction.target.sketchId,
       regionFingerprint: interaction.target.regionFingerprint,
       samplePoint: interaction.target.samplePoint,
-      area: interaction.target.area
+      area: interaction.target.area,
+      initialValue: interaction.lastValue ?? 0
     };
   }, [interaction]);
 
@@ -2240,7 +2364,6 @@ export function App() {
     if (rounded === 0) {
       return;
     }
-    dispatchInteraction({ type: 'commit-complete' });
     const command = commandFactories.extrudeSketch({
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
@@ -2253,17 +2376,22 @@ export function App() {
     });
     const resultBodyId =
       command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
-    setRevertPill({ sketchId: target.sketchId as SketchId });
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
-      `Extruded region by ${rounded} ${doc?.units ?? ''}.`
+      `Extruded region by ${rounded} ${doc?.units ?? ''}.`,
+      rounded,
+      () => setRevertPill({ sketchId: target.sketchId as SketchId })
     );
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
   const edgeHandleTarget = useMemo(() => {
-    if (interaction.mode !== 'edges' || interaction.edges.length === 0) {
+    if (
+      interaction.mode !== 'edges' ||
+      interaction.edges.length === 0 ||
+      interaction.phase === 'validating'
+    ) {
       return null;
     }
     const last = interaction.edges.at(-1)!;
@@ -2271,12 +2399,13 @@ export function App() {
       bodyId: last.bodyId,
       topologyId: last.topologyId ?? '',
       op: interaction.op,
-      edgeCount: interaction.edges.length
+      edgeCount: interaction.edges.length,
+      initialValue: interaction.lastValue ?? 0
     };
   }, [interaction]);
 
   const offsetHandleTarget = useMemo(() => {
-    if (interaction.mode !== 'face') {
+    if (interaction.mode !== 'face' || interaction.phase === 'validating') {
       return null;
     }
     const target = interaction.target;
@@ -2297,7 +2426,8 @@ export function App() {
           x: target.normal[0],
           y: target.normal[1],
           z: target.normal[2]
-        }
+        },
+        initialValue: interaction.lastValue ?? 0
       };
     }
     // resize-hole: the drag direction is radial — outward from the
@@ -2310,7 +2440,11 @@ export function App() {
       bodyId: target.bodyId,
       topologyId: target.topologyId,
       point,
-      normal: radial.direction
+      normal: radial.direction,
+      initialValue:
+        interaction.lastValue !== null && target.diameter !== undefined
+          ? interaction.lastValue - target.diameter
+          : 0
     };
   }, [interaction]);
 
@@ -2348,8 +2482,7 @@ export function App() {
       y: target.point[1] - a.y,
       z: target.point[2] - a.z
     };
-    const along =
-      toPoint.x * unit.x + toPoint.y * unit.y + toPoint.z * unit.z;
+    const along = toPoint.x * unit.x + toPoint.y * unit.y + toPoint.z * unit.z;
     const foot = {
       x: a.x + unit.x * along,
       y: a.y + unit.y * along,
@@ -2405,7 +2538,6 @@ export function App() {
       setStatus('Diameter must be greater than zero.');
       return;
     }
-    dispatchInteraction({ type: 'commit-complete' });
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
         name: radial.concavity === 'hole' ? 'Resize hole' : 'Resize boss',
@@ -2421,7 +2553,8 @@ export function App() {
         }
       }),
       target.bodyId as BodyId,
-      `Resized ${radial.concavity} to ⌀ ${rounded} ${doc?.units ?? ''}.`
+      `Resized ${radial.concavity} to ⌀ ${rounded} ${doc?.units ?? ''}.`,
+      rounded
     );
   }
 
@@ -2533,13 +2666,13 @@ export function App() {
       return;
     }
     const op = interaction.op;
-    dispatchInteraction({ type: 'commit-complete' });
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
-      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
+      rounded
     );
   }
 
@@ -2575,7 +2708,9 @@ export function App() {
         label: '⌀',
         initial:
           geometry?.diameter !== undefined
-            ? String(Math.round((geometry.diameter + currentOffset) * 100) / 100)
+            ? String(
+                Math.round((geometry.diameter + currentOffset) * 100) / 100
+              )
             : '',
         unitKind: 'length',
         baseline: geometry?.diameter
@@ -2591,6 +2726,20 @@ export function App() {
           : '',
       unitKind: 'length'
     });
+  }
+
+  function handleSelectionAction(action: SelectionActionId) {
+    if (action === 'sketch-on-face' && interaction.mode === 'face') {
+      startSketchOnFace(interaction.target);
+      return;
+    }
+    if (
+      interaction.mode === 'edges' &&
+      (action === 'fillet' || action === 'chamfer')
+    ) {
+      clearEdgePreview();
+      dispatchInteraction({ type: 'set-edge-op', op: action });
+    }
   }
 
   /**
@@ -2633,7 +2782,6 @@ export function App() {
       dispatchInteraction({ type: 'clear' });
       return;
     }
-    dispatchInteraction({ type: 'commit-complete' });
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
         name: 'Offset face',
@@ -2656,7 +2804,8 @@ export function App() {
         }
       }),
       bodyId,
-      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`
+      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`,
+      offset
     );
   }
 
@@ -2688,7 +2837,8 @@ export function App() {
         }
       }),
       selection.bodyId,
-      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`
+      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`,
+      typeof diameter === 'number' ? diameter : 0
     );
   }
 
@@ -3069,14 +3219,26 @@ export function App() {
       }
 
       if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        if (
+          (event.key === 'Delete' || event.key === 'Backspace') &&
+          interaction.session.selectedObjectId
+        ) {
+          event.preventDefault();
+          handleDeleteSketchEntity();
+          return;
+        }
         const sketchTool =
-          event.key.toLowerCase() === 'l'
-            ? ('line' as const)
-            : event.key.toLowerCase() === 'c'
-              ? ('circle' as const)
-              : event.key.toLowerCase() === 'r'
-                ? ('rectangle' as const)
-                : null;
+          event.key.toLowerCase() === 'v'
+            ? ('select' as const)
+            : event.key.toLowerCase() === 'l'
+              ? ('line' as const)
+              : event.key.toLowerCase() === 'a'
+                ? ('arc' as const)
+                : event.key.toLowerCase() === 'c'
+                  ? ('circle' as const)
+                  : event.key.toLowerCase() === 'r'
+                    ? ('rectangle' as const)
+                    : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
@@ -3362,6 +3524,7 @@ export function App() {
     tool === 'sketch' ||
     tool === 'extrude' ||
     (tool === 'transform' && movePreview !== null);
+  const contextualToolCard = toolCardFor(interaction);
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
 
@@ -3491,23 +3654,36 @@ export function App() {
             onEdgeRadiusPreview={requestEdgePreview}
             onEdgeCommit={handleEdgeCommit}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
+            onDirectManipulationChange={(dragging) =>
+              dispatchInteraction({
+                type: dragging ? 'drag-engage' : 'drag-release'
+              })
+            }
             sketchMode={sketchModeState}
             onSketchCommit={handleSketchCommit}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
+            onSketchSelectObject={(objectId) =>
+              dispatchInteraction({ type: 'sketch-select-object', objectId })
+            }
             sketchViews={sketchViews}
             onSelectRegion={handleSelectRegion}
             regionHandle={regionHandleTarget}
             modeOverlay={
-              toolCardFor(interaction) ? (
+              contextualToolCard ? (
                 <>
                   <ToolCard
-                    model={toolCardFor(interaction)!}
-                    onSubMode={() =>
-                      dispatchInteraction({ type: 'toggle-edge-op' })
+                    model={contextualToolCard}
+                    onAction={handleSelectionAction}
+                    onClose={() =>
+                      dispatchInteraction({
+                        type:
+                          interaction.mode === 'sketch'
+                            ? 'exit-sketch'
+                            : 'clear'
+                      })
                     }
-                    onClose={() => dispatchInteraction({ type: 'escape' })}
                   />
                   {interaction.mode === 'sketch' && (
                     <SketchToolRail
@@ -3520,6 +3696,21 @@ export function App() {
                       }
                       onExit={() =>
                         dispatchInteraction({ type: 'exit-sketch' })
+                      }
+                    />
+                  )}
+                  {interaction.mode === 'sketch' && selectedSketchEntity && (
+                    <SketchEntityEditor
+                      key={selectedSketchEntity.id}
+                      data={selectedSketchEntity.data}
+                      scope={parameterScope.scope}
+                      onApply={handleUpdateSketchEntity}
+                      onDelete={handleDeleteSketchEntity}
+                      onClose={() =>
+                        dispatchInteraction({
+                          type: 'sketch-select-object',
+                          objectId: null
+                        })
                       }
                     />
                   )}
@@ -3546,7 +3737,10 @@ export function App() {
                         // Expressions stay parametric in the stored feature.
                         const isExpression = !Number.isFinite(Number(raw));
                         if (keypad.kind === 'edge') {
-                          handleEdgeCommit(value, isExpression ? raw : undefined);
+                          handleEdgeCommit(
+                            value,
+                            isExpression ? raw : undefined
+                          );
                         } else if (keypad.kind === 'diameter') {
                           handleResizeCylindricalCommit(value);
                         } else {
@@ -3622,8 +3816,8 @@ export function App() {
                   <span>
                     <strong>Pick a sketch plane</strong>
                     <small>
-                      Click a planar face on the model, or start on a
-                      principal plane.
+                      Click a planar face on the model, or start on a principal
+                      plane.
                     </small>
                   </span>
                   <span className="sketch-plane-buttons">
