@@ -10,7 +10,9 @@
  *     actually built" gate;
  *  2. watertight, manifold meshes — position-welded edge-use census on every
  *     body mesh and on the exported STL (an edge used once is a hole, three+
- *     times is branching);
+ *     times is branching). A scenario may pin a known-defective count via
+ *     `expectedMeshDefects`; that count is then asserted exactly, so the pin
+ *     fails on a repair as well as on a regression;
  *  3. baseline-pinned volume and exact face count — the face count is the
  *     mesh-fallback tell: a kernel regression to a tessellated boolean
  *     multiplies it into the hundreds even while volume and validity still
@@ -38,7 +40,28 @@ import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type DerivedState, type ProjectDocument } from '@openzcad/shared';
 
 import { meshEdgeUse, parseAsciiStl } from './mesh-probe';
-import { PARITY_SCENARIOS } from './scenarios';
+import { PARITY_SCENARIOS, type MeshDefectPin } from './scenarios';
+
+/** What every mesh must be unless the scenario pins a known defect. */
+const WATERTIGHT: MeshDefectPin = { boundaryEdges: 0, nonManifoldEdges: 0 };
+
+/**
+ * A pinned count is asserted in both directions, so its failure message has
+ * to serve two readers: someone who broke a mesh further, and someone who
+ * fixed one and now has to retire the pin.
+ */
+function meshDefectLabel(
+  scenarioKey: string,
+  label: string,
+  pinned: boolean
+): string {
+  return pinned
+    ? `${label} — pinned known defect for '${scenarioKey}'. Reading 0 means ` +
+        `the kernel defect is FIXED: drop the entry from ` +
+        `EXPECTED_MESH_DEFECTS in test/parity/scenarios.ts. Any other value ` +
+        `is a regression.`
+    : label;
+}
 
 interface BodyBaseline {
   name: string;
@@ -172,13 +195,30 @@ describe('kernel parity harness', () => {
             representation.mesh.vertices,
             representation.mesh.indices
           );
+          const pin =
+            scenario.expectedMeshDefects?.bodies?.[representation.name];
+          const expected = pin ?? WATERTIGHT;
           expect.soft(report.triangles).toBeGreaterThan(0);
           expect
-            .soft(report.boundaryEdges, `${representation.name} boundary edges`)
-            .toBe(0);
+            .soft(
+              report.boundaryEdges,
+              meshDefectLabel(
+                scenario.key,
+                `${representation.name} boundary edges`,
+                pin !== undefined
+              )
+            )
+            .toBe(expected.boundaryEdges);
           expect
-            .soft(report.nonManifoldEdges, `${representation.name} non-manifold edges`)
-            .toBe(0);
+            .soft(
+              report.nonManifoldEdges,
+              meshDefectLabel(
+                scenario.key,
+                `${representation.name} non-manifold edges`,
+                pin !== undefined
+              )
+            )
+            .toBe(expected.nonManifoldEdges);
         }
       });
 
@@ -187,9 +227,21 @@ describe('kernel parity harness', () => {
         const stl = await adapter.exportStl(document, derived.exportableBodyIds);
         const parsed = parseAsciiStl(stl);
         const report = meshEdgeUse(parsed.vertices, parsed.indices);
+        const pin = scenario.expectedMeshDefects?.stl;
+        const expected = pin ?? WATERTIGHT;
         expect(report.triangles).toBeGreaterThan(0);
-        expect(report.boundaryEdges).toBe(0);
-        expect(report.nonManifoldEdges).toBe(0);
+        expect(
+          report.boundaryEdges,
+          meshDefectLabel(scenario.key, 'STL boundary edges', pin !== undefined)
+        ).toBe(expected.boundaryEdges);
+        expect(
+          report.nonManifoldEdges,
+          meshDefectLabel(
+            scenario.key,
+            'STL non-manifold edges',
+            pin !== undefined
+          )
+        ).toBe(expected.nonManifoldEdges);
       });
 
       it('matches the recorded volume and face count', () => {

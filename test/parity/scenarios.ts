@@ -26,6 +26,14 @@ import {
   type ExactSyncFn
 } from '../../apps/web/src/lib/demos';
 
+/** Edge-use census a mesh is pinned to, from `meshEdgeUse`. */
+export interface MeshDefectPin {
+  /** Edges used by exactly one triangle (holes). Watertight ⇒ 0. */
+  boundaryEdges: number;
+  /** Edges used by three or more triangles (branching). Manifold ⇒ 0. */
+  nonManifoldEdges: number;
+}
+
 export interface ParityScenario {
   key: string;
   /** Build the full document, syncing through the injected kernel. */
@@ -44,6 +52,20 @@ export interface ParityScenario {
    * harness red until the pin is removed and baselines re-recorded.
    */
   expectedWarnings?: RegExp[];
+  /**
+   * Pinned known mesh defects: `bodies` is keyed by body name, `stl` covers
+   * the exported STL (which welds every exportable body into one mesh). Any
+   * body or STL left unlisted must be perfectly watertight and manifold.
+   *
+   * This pins a count, it does not suppress an assertion — the harness
+   * asserts the number EXACTLY, so the scenario flips red both when the
+   * defect worsens and when it is fixed. A repaired mesh keeps failing until
+   * the pin is retired, the same discipline as `expectedBuildFailure`.
+   */
+  expectedMeshDefects?: {
+    bodies?: Record<string, MeshDefectPin>;
+    stl?: MeshDefectPin;
+  };
 }
 
 const HARNESS_USER = toUserId('user_parity_harness');
@@ -121,17 +143,34 @@ function buildBoreGrid(): ProjectDocument {
  * fallback carries the demo. The underlying unify-then-cut defect remains
  * tracked in brepkit; when it is fixed the flange faceCount should collapse
  * to tens of faces and the baseline must be rerecorded.
- *
- * KNOWN RED: that fallback mesh is not watertight — the flange body reports
- * ~873 boundary edges, unchanged from kernel 2.128.5 through 2.129.0, so
- * `produces watertight, manifold body meshes` and `exports a watertight STL`
- * both fail for flange, and are expected to until the analytic cut lands.
- * Every other scenario passes (22 of 24). These two are deliberately left
- * failing rather than pinned: unlike a build failure there is no expectation
- * mechanism for them, and suppressing a watertightness assertion is the kind
- * of green-looking blindfold this harness exists to prevent.
  */
 const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
+
+/**
+ * flange: the mesh-boolean fallback described above is not watertight. The
+ * body reports exactly 873 boundary edges, unchanged from kernel 2.128.5
+ * through 2.129.0, and the exported STL carries the same 873 through (the
+ * scenario has one exportable body, so the two meshes agree).
+ *
+ * This was left unpinned for a while on the reasoning that suppressing a
+ * watertightness assertion is the green-looking blindfold the harness exists
+ * to prevent. That reasoning holds against suppression — which is why this is
+ * an exact count rather than a skip. 873 is asserted in both directions: a
+ * worse mesh fails, and so does a repaired one, which is what forces the pin
+ * to be retired when the analytic cut lands. What the pin buys is the thing a
+ * standing red does not: a new watertightness break anywhere in the corpus
+ * now turns the suite red on its own, instead of hiding inside a failure
+ * count everyone has learned to expect.
+ */
+const EXPECTED_MESH_DEFECTS: Record<
+  string,
+  ParityScenario['expectedMeshDefects']
+> = {
+  flange: {
+    bodies: { 'Pipe Flange': { boundaryEdges: 873, nonManifoldEdges: 0 } },
+    stl: { boundaryEdges: 873, nonManifoldEdges: 0 }
+  }
+};
 
 /**
  * bracket: the Rev C base-corner fillet (4 vertical edges, r=3) fails in the
@@ -148,7 +187,8 @@ export const PARITY_SCENARIOS: ParityScenario[] = [
     build: (syncExact: ExactSyncFn) =>
       buildDemoDocument(definition, HARNESS_USER, syncExact),
     expectedBuildFailure: EXPECTED_BUILD_FAILURES[definition.key],
-    expectedWarnings: EXPECTED_WARNINGS[definition.key]
+    expectedWarnings: EXPECTED_WARNINGS[definition.key],
+    expectedMeshDefects: EXPECTED_MESH_DEFECTS[definition.key]
   })),
   {
     key: 'boreGrid',
