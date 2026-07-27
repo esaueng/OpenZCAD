@@ -294,6 +294,97 @@ function fillThroughHole(
   return kernel.unifySameDomain(kernel.fuse(owner, filler));
 }
 
+/**
+ * Push/pull a planar face prismatically: extrude the face along its recorded
+ * outward normal, then fuse the prism in (grow) or cut it out (shrink). A
+ * prismatic move is worth exactly `offset * area`, and the result is gated on
+ * that, so a tool that reached material it should not have — an obstruction on
+ * the way out, or the far wall on the way in — is rejected rather than
+ * returned.
+ */
+function offsetPlanarFace(
+  kernel: OcctKernel,
+  owner: ShapeHandle,
+  face: ShapeHandle,
+  operation: Extract<DirectEditOperation, { kind: 'offset-face' }>,
+  scope: Record<string, number>
+): ShapeHandle {
+  const geometry = faceGeometry(kernel, owner, face);
+  if (geometry.surfaceType !== 'plane') {
+    throw new Error('The selected face is no longer planar.');
+  }
+  const areaTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    operation.sourceArea * 1e-6
+  );
+  const centerTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    Math.sqrt(Math.max(operation.sourceArea, 1)) * 1e-6
+  );
+  if (
+    Math.abs(geometry.area - operation.sourceArea) > areaTolerance ||
+    length(subtract(geometry.center, operation.sourceCenter)) > centerTolerance
+  ) {
+    throw new Error(
+      'The selected face no longer matches its recorded measurements.'
+    );
+  }
+  const outward = normalized(operation.sourceNormal);
+  if (!outward) {
+    throw new Error('The recorded face normal is degenerate.');
+  }
+  // The stored normal came from the picked triangle and points out of the
+  // material; the surface parameterization may disagree with it by sign, so
+  // only alignment up to sign is checked and the stored direction is trusted.
+  const bounds = kernel.uvBounds(face);
+  const measured = normalized(
+    kernel.surfaceNormal(
+      face,
+      (bounds.uMin + bounds.uMax) / 2,
+      (bounds.vMin + bounds.vMax) / 2
+    )
+  );
+  if (!measured) {
+    throw new Error('The selected face has a degenerate normal.');
+  }
+  const alignment =
+    measured.x * outward.x + measured.y * outward.y + measured.z * outward.z;
+  if (Math.abs(alignment) < 1 - 1e-6) {
+    throw new Error(
+      'The selected face no longer matches its recorded orientation.'
+    );
+  }
+  const offset = resolveParamValue(operation.offset, scope, 'offset');
+  if (!Number.isFinite(offset) || Math.abs(offset) <= GEOMETRY_EPSILON) {
+    throw new Error('Face offset must be a non-zero distance.');
+  }
+  const prism = kernel.extrude(
+    face,
+    outward.x * offset,
+    outward.y * offset,
+    outward.z * offset
+  );
+  const volumeBefore = kernel.getVolume(owner);
+  const combined = offset > 0 ? kernel.fuse(owner, prism) : kernel.cut(owner, prism);
+  // Unifying merges the prism's walls into adjacent coplanar faces so a clean
+  // push/pull leaves no seam edges, but on dense imported bodies the merge of
+  // tangent spline neighbours can itself break BRepCheck validity — keep the
+  // seamed-but-valid boolean result in that case.
+  const unified = kernel.unifySameDomain(combined);
+  const output = kernel.isValid(unified) ? unified : combined;
+  const expectedVolume = volumeBefore + offset * geometry.area;
+  const volumeTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    Math.abs(offset) * geometry.area * 1e-5
+  );
+  if (Math.abs(kernel.getVolume(output) - expectedVolume) > volumeTolerance) {
+    throw new Error(
+      `Offsetting the face by ${offset} does not produce a valid solid.`
+    );
+  }
+  return output;
+}
+
 function validateDirectEditResult(
   kernel: OcctKernel,
   shape: ShapeHandle
@@ -350,9 +441,11 @@ function applyDirectEdit(
       extension
     );
     output = kernel.unifySameDomain(kernel.cut(closed, cutter));
+  } else if (operation.kind === 'offset-face') {
+    output = offsetPlanarFace(kernel, owner, face, operation, scope);
   } else if (operation.kind !== 'remove-face-feature') {
-    // offset-face / resize-cylindrical-face are implemented natively on the
-    // BrepKit adapter; the OCCT fallback path does not support them.
+    // resize-cylindrical-face is implemented natively on the BrepKit
+    // adapter; the OCCT fallback path does not support it.
     throw new Error(
       `Direct edit "${operation.kind}" is not supported by the OpenCascade fallback kernel.`
     );

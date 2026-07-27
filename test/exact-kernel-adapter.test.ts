@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -938,6 +940,182 @@ describe('exact hybrid kernel adapter', () => {
     expect(mismatched.bodyRepresentations[importedBodyId]?.volume).toBeCloseTo(
       Math.PI * (15 ** 2 - 2 ** 2) * 10,
       4
+    );
+  });
+
+  it('offsets a planar face of an imported STEP body in both directions', async () => {
+    const source = addPrimitiveFeature(
+      createProjectDocument('Offset source', toUserId('user_exact')),
+      {
+        name: 'Beam',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const step = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+
+    const base = createProjectDocument('Imported offset', toUserId('user_exact'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Imported beam',
+        artifactId: 'artifact_offset_face',
+        sourceName: 'beam.step',
+        stepText: step
+      })
+    );
+    const importedBodyId = manager.document.bodyOrder[0]!;
+    const imported = await adapter.syncDocument(manager.document);
+    const importedBody = imported.bodyRepresentations[importedBodyId];
+    expect(importedBody?.volume).toBeCloseTo(6000, 4);
+    // The box is corner-origin, so the top face's center sits at z = depth.
+    const topFace = importedBody?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 30) < 1e-6
+    );
+    expect(topFace).toBeTruthy();
+    expect(topFace?.geometry?.area).toBeCloseTo(200, 4);
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Raise imported top face',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: topFace!.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: topFace!.geometry!.area,
+          sourceCenter: topFace!.geometry!.center,
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: 5
+        }
+      })
+    );
+    const raised = await adapter.syncDocument(manager.document);
+    const raisedBody = raised.bodyRepresentations[importedBodyId];
+    expect(raised.warnings).toEqual([]);
+    expect(raisedBody?.volume).toBeCloseTo(10 * 20 * 35, 4);
+    // A clean offset keeps the box a box.
+    expect(raisedBody?.faceCount).toBe(6);
+    const raisedTop = raisedBody?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 35) < 1e-6
+    );
+    expect(raisedTop).toBeTruthy();
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Sink imported top face',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: raisedTop!.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: raisedTop!.geometry!.area,
+          sourceCenter: raisedTop!.geometry!.center,
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: -10
+        }
+      })
+    );
+    const sunk = await adapter.syncDocument(manager.document);
+    expect(sunk.warnings).toEqual([]);
+    expect(sunk.bodyRepresentations[importedBodyId]?.volume).toBeCloseTo(
+      10 * 20 * 25,
+      4
+    );
+
+    const editedStep = await adapter.exportStep(manager.document, [
+      importedBodyId
+    ]);
+    await expect(adapter.inspectStep(editedStep)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+
+    // Cutting deeper than the body is tall would leave nothing; the volume
+    // gate fails closed and the body keeps building at its prior size.
+    const sunkTop = sunk.bodyRepresentations[importedBodyId]?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 25) < 1e-6
+    );
+    expect(sunkTop).toBeTruthy();
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Sink past the floor',
+        targetBodyId: importedBodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: sunkTop!.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: sunkTop!.geometry!.area,
+          sourceCenter: sunkTop!.geometry!.center,
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: -40
+        }
+      })
+    );
+    const overcut = await adapter.syncDocument(manager.document);
+    expect(
+      overcut.warnings.some((warning) =>
+        warning.includes('does not produce a valid solid')
+      )
+    ).toBe(true);
+    expect(overcut.bodyRepresentations[importedBodyId]?.volume).toBeCloseTo(
+      10 * 20 * 25,
+      4
+    );
+  });
+
+  it('offsets a planar face on the dense sample bracket without unify breakage', async () => {
+    // Regression: on this 821-face import, unifySameDomain after the prism
+    // fuse produces a shape BRepCheck rejects; the offset must fall back to
+    // the seamed-but-valid boolean result instead of failing the feature.
+    const step = readFileSync(resolve('samples/parametric-bracket.step'), 'utf8');
+    const base = createProjectDocument('Bracket offset', toUserId('user_exact'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Bracket',
+        artifactId: 'artifact_bracket_offset',
+        sourceName: 'parametric-bracket.step',
+        stepText: step
+      })
+    );
+    const bodyId = manager.document.bodyOrder[0]!;
+    const imported = await adapter.syncDocument(manager.document);
+    const body = imported.bodyRepresentations[bodyId];
+    const volumeBefore = body?.volume ?? 0;
+    const target = body?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs((face.geometry.area ?? 0) - 540) < 1
+    );
+    expect(target).toBeTruthy();
+
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Offset bracket face',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: target!.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: target!.geometry!.area,
+          sourceCenter: target!.geometry!.center,
+          sourceNormal: { x: 0, y: -1, z: 0 },
+          offset: 3
+        }
+      })
+    );
+    const edited = await adapter.syncDocument(manager.document);
+    expect(edited.warnings).toEqual([]);
+    expect(edited.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      volumeBefore + 3 * target!.geometry!.area,
+      3
     );
   });
 
