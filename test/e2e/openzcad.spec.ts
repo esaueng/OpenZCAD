@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createProjectDocument } from '@openzcad/document-core';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
 /**
  * The preview server hosts the static SPA without the Worker API, so the
@@ -253,6 +254,94 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByText('OpenZCAD')).toBeVisible();
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
+});
+
+test('restores a remembered local project without flashing the launcher', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Boot Restore Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+
+  await page.addInitScript(() => {
+    const browserWindow = window as typeof window & {
+      __openZcadBootStates: string[];
+    };
+    browserWindow.__openZcadBootStates = [];
+    let previous = '';
+    const capture = () => {
+      const state = document.querySelector('.startup-screen')
+        ? 'restoring'
+        : document.querySelector('.start-screen')
+          ? 'launcher'
+          : document.querySelector('.app-shell')
+            ? 'workspace'
+            : 'shell';
+      if (state !== previous) {
+        browserWindow.__openZcadBootStates.push(state);
+        previous = state;
+      }
+    };
+    new MutationObserver(capture).observe(document, {
+      childList: true,
+      subtree: true
+    });
+  });
+  await page.unroute('**/api/session');
+  await page.route('**/api/session', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    });
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(
+    page.getByRole('status', { name: 'Restoring workspace' })
+  ).toBeVisible();
+  await page.waitForTimeout(200);
+  await expect(page.locator('.start-screen')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  await expect(page.locator('.startup-screen')).toHaveCount(0);
+
+  const bootStates = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __openZcadBootStates: string[];
+        }
+      ).__openZcadBootStates
+  );
+  expect(bootStates).toContain('restoring');
+  expect(bootStates).not.toContain('launcher');
+  expect(bootStates.at(-1)).toBe('workspace');
+});
+
+test('leaves the restore screen when a remembered project is missing', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.addInitScript((storageKey) => {
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        activeProjectId: 'missing-project',
+        views: {}
+      })
+    );
+  }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(
+    page.getByRole('status', { name: 'Restoring workspace' })
+  ).toBeVisible();
+  await expect(page.getByLabel('Project name')).toBeVisible();
+  await expect(page.locator('.startup-screen')).toHaveCount(0);
+  await expect(page.locator('.start-status')).toContainText('Local workspace');
 });
 
 test('keeps anonymous CAD creation local without calling cloud projects', async ({

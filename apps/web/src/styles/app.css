@@ -2174,6 +2174,40 @@
 
 /* ── StartScreen ─────────────────────────────────────────── */
 
+.startup-screen {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-start-screen);
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+}
+
+.startup-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.startup-card svg {
+  width: 34px;
+  height: 34px;
+  color: var(--color-accent);
+}
+
+.startup-card strong {
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
 .start-screen {
   position: absolute;
   inset: 0;
