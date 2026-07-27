@@ -58,7 +58,17 @@ Open the local URL printed by Vite. The CAD workspace works without an AI key; t
 
 Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity. Beta deployment uses `AUTH_MODE=cloudflare-access` and must sit behind a Cloudflare Access policy. Set `AUTH_LEGACY_OWNER_EMAIL` as a Worker secret or variable to the Access email that should inherit historical `user_beta_dev` projects.
 
-OpenRouter is the default AI provider. Configure secrets only in `apps/web/.dev.vars` or with `wrangler secret`:
+OpenRouter is the default AI provider. Local Vite development declares
+`OPENROUTER_API_KEY` as a required Worker secret, so it can be provided by the
+launching shell without writing it to disk:
+
+```bash
+export OPENROUTER_API_KEY=your_key_here
+pnpm dev:web
+```
+
+Alternatively, configure the secret in `apps/web/.dev.vars` or with
+`wrangler secret`:
 
 ```dotenv
 AI_PROVIDER=openrouter
