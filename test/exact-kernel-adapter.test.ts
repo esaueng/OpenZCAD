@@ -584,10 +584,13 @@ describe('exact hybrid kernel adapter', () => {
     );
   });
 
-  it('rejects a resize the kernel silently ignores', async () => {
-    // A boss fused into a plate is the case where the union tool meets a
-    // coaxial cylindrical face and the kernel hands back the original solid.
-    // The result is valid, so only the read-back guard catches it.
+  it('grows a boss fused into a plate', async () => {
+    // A boss fused into a plate puts the union tool against a coaxial
+    // cylindrical face. The kernel used to hand back the original solid —
+    // valid, but unchanged — and only the adapter's read-back guard caught
+    // it. brepkit 2.129.0 grows the wall natively, so the edit now lands.
+    // The guard itself still matters and is exercised by the shrink cases
+    // above, which continue to fail closed.
     const plate = addPrimitiveFeature(
       createProjectDocument('Fused boss', toUserId('user_exact')),
       {
@@ -638,15 +641,34 @@ describe('exact hybrid kernel adapter', () => {
       }
     }).document;
     const grown = await adapter.syncDocument(grownDoc);
-    expect(
-      grown.warnings.some((warning) =>
-        warning.includes('left the face at its original size')
-      )
-    ).toBe(true);
-    expect(grown.bodyRepresentations[bossId]?.volume).toBeCloseTo(
-      derived.bodyRepresentations[bossId]!.volume,
-      6
+    expect(grown.warnings).toEqual([]);
+
+    // The post stands on the plate rather than inside it, so the body is the
+    // plate plus a full cylinder: 60*60*8 + pi*r^2*15. Growing r from 12 to
+    // 15 takes it from ~35586 to ~39403. Volume is measured from the
+    // tessellation, whose inscribed mesh under-reports a cylinder, so compare
+    // against the exact figure with a relative tolerance rather than a fixed
+    // number of digits — the absolute error scales with the cylinder.
+    const plateVolume = 60 * 60 * 8;
+    const nearExactly = (actual: number | undefined, exact: number): void => {
+      expect(actual).toBeDefined();
+      expect(Math.abs(actual! - exact) / exact).toBeLessThan(1e-3);
+    };
+    nearExactly(
+      derived.bodyRepresentations[bossId]?.volume,
+      plateVolume + Math.PI * 12 * 12 * 15
     );
+    nearExactly(
+      grown.bodyRepresentations[bossId]?.volume,
+      plateVolume + Math.PI * 15 * 15 * 15
+    );
+
+    // The wall itself must read back at the new radius, not merely enclose
+    // more volume.
+    const grownWall = grown.bodyRepresentations[bossId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(grownWall?.geometry?.radius).toBeCloseTo(15, 4);
   });
 
   it('imports STEP through OCCT with complete exact topology', async () => {
@@ -1211,10 +1233,7 @@ describe('exact hybrid kernel adapter', () => {
       const step = await adapter.exportStep(document, [document.bodyOrder[0]!]);
       const inspection = await adapter.inspectStep(step);
       expect(inspection).toMatchObject({ solid: true, valid: true });
-      expect(inspection.volume).toBeCloseTo(
-        24 * millimetersPerUnit ** 3,
-        3
-      );
+      expect(inspection.volume).toBeCloseTo(24 * millimetersPerUnit ** 3, 3);
     }
   );
 });
