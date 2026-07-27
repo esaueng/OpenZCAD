@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Search } from 'lucide-react';
+import { useModalFocus } from '../lib/useModalFocus';
+
+const LIST_ID = 'command-palette-list';
+const optionId = (index: number) => `command-palette-option-${index}`;
 
 export interface PaletteCommand {
   id: string;
@@ -35,6 +39,10 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // The input carries autoFocus, so the hook only traps and restores focus.
+  useModalFocus(dialogRef);
 
   const visible = useMemo(() => commands.filter((command) => matches(command, query)), [
     commands,
@@ -68,7 +76,13 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
         }
       }}
     >
-      <div className="palette" role="dialog" aria-label="Command palette">
+      <div
+        className="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        ref={dialogRef}
+      >
         <div className="palette-input-row">
           <Search size={14} aria-hidden="true" />
           <input
@@ -77,6 +91,10 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
             placeholder="Type a command… (box, extrude, front view, export)"
             spellCheck={false}
             aria-label="Search commands"
+            aria-controls={LIST_ID}
+            aria-activedescendant={
+              visible.length > 0 ? optionId(clampedIndex) : undefined
+            }
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'ArrowDown') {
@@ -95,12 +113,19 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
             }}
           />
         </div>
-        <div className="palette-list" ref={listRef}>
+        <div className="palette-list" id={LIST_ID} role="listbox" ref={listRef}>
           {visible.length === 0 && <p className="palette-empty">No matching command.</p>}
           {visible.map((command, index) => (
             <button
               key={command.id}
               type="button"
+              id={optionId(index)}
+              role="option"
+              aria-selected={index === clampedIndex}
+              aria-disabled={command.disabledReason ? true : undefined}
+              // Focus stays in the input; the rows are described through
+              // aria-activedescendant instead.
+              tabIndex={-1}
               className={`palette-row ${index === clampedIndex ? 'active' : ''} ${
                 command.disabledReason ? 'disabled' : ''
               }`}
