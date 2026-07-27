@@ -22,6 +22,16 @@ const workspaceAliases = Object.fromEntries(
   ])
 );
 
+/**
+ * Kernel overlay for the parity harness: point BREPKIT_WASM_PKG at a local
+ * brepkit `crates/wasm/pkg` build to run every kernel test against it
+ * without touching package.json or the lockfile. `exact.ts` is the sole
+ * `brepkit-wasm` import site, so one alias swaps the kernel completely.
+ */
+const brepkitOverlay = process.env.BREPKIT_WASM_PKG
+  ? { 'brepkit-wasm': `${process.env.BREPKIT_WASM_PKG}/brepkit_wasm.js` }
+  : {};
+
 export default defineConfig({
   test: {
     environment: 'node',
@@ -40,6 +50,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      ...brepkitOverlay,
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('./packages/kernel-adapter/src/exact.ts', import.meta.url)
       ),

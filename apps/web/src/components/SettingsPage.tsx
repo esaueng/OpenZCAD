@@ -109,7 +109,8 @@ const SECTIONS: Array<{
     settings: [
       'Snap sketch input',
       'Linear snap',
-      'Angular snap'
+      'Angular snap',
+      'Direct manipulation (experimental)'
     ]
   },
   {
@@ -702,6 +703,21 @@ export function SettingsPage({
                   />
                   <span>°</span>
                 </div>
+              </SettingRow>
+              <SettingRow
+                title="Direct manipulation (experimental)"
+                description="Selection-first editing: click a face to arm an offset handle and drag it on the model."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.experiments.directManipulation}
+                  label="Direct manipulation"
+                  onChange={(directManipulation) =>
+                    patch({
+                      experiments: { ...settings.experiments, directManipulation }
+                    })
+                  }
+                />
               </SettingRow>
             </Section>
           )}

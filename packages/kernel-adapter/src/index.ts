@@ -7,10 +7,10 @@ import {
 } from '@openzcad/document-core';
 import {
   GeometryError,
-  PLANE_BASES,
   booleanSolids,
   circleProfile,
   extrudeProfile,
+  frameForPlaneRef,
   makeBox,
   makeCone,
   makeCylinder,
@@ -87,6 +87,13 @@ function profileFromSketchObject(
         resolveParamValue(data.centerX, scope, 'center X'),
         resolveParamValue(data.centerY, scope, 'center Y')
       );
+    case 'line':
+    case 'arc':
+      // Open curves cannot be swept directly; they participate in sketches
+      // through detected closed regions instead.
+      throw new GeometryError(
+        `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
+      );
   }
 }
 
@@ -131,8 +138,9 @@ function buildSketchSolid(
     throw new GeometryError(`sketch "${sketch.name}" has no profile.`);
   }
   const profile = profileFromSketchObject(objectNode.data, scope);
-  const basis = PLANE_BASES[sketch.plane];
-  const offset = resolveParamValue(sketch.offset, scope, 'sketch offset');
+  const basis = frameForPlaneRef(sketch.planeRef, (value) =>
+    resolveParamValue(value, scope, 'sketch offset')
+  );
 
   if (feature.data.featureKind === 'extrude') {
     const distance = resolveParamValue(
@@ -140,9 +148,9 @@ function buildSketchSolid(
       scope,
       'distance'
     );
-    return extrudeProfile(profile, basis, distance, offset);
+    return extrudeProfile(profile, basis, distance, 0);
   }
-  return revolveProfile(profile, basis, feature.data.axis, offset);
+  return revolveProfile(profile, basis, feature.data.axis, 0);
 }
 
 export class OpenZCADKernel implements KernelAdapter {

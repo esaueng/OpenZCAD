@@ -2,6 +2,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ChangeEvent
@@ -46,8 +47,8 @@ import {
   normalizeDocument
 } from '@openzcad/document-core';
 import {
-  PLANE_BASES,
   circleProfile,
+  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
   type Vec2
@@ -60,6 +61,7 @@ import type {
   ArtifactRecord,
   BodyId,
   BodyRepresentation,
+  EntityId,
   FeatureId,
   FeatureNode,
   FaceGeometry,
@@ -79,7 +81,9 @@ import type {
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
+import { timed } from './lib/perf';
 import {
+  PLANE_LABELS,
   downloadText,
   evalParamValue,
   exportFileStem,
@@ -106,14 +110,28 @@ import { SettingsPage } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AiCommandRail } from './components/AiCommandRail';
-import { SketchWorkspace } from './components/SketchWorkspace';
 import {
   ExtrudeOverlay,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from './components/ModelViewer';
-import type { SketchFormValue } from './components/forms/FeatureForms';
+import { ToolCard } from './components/ToolCard';
+import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
+import {
+  IDLE,
+  interactionReducer,
+  toolCardFor,
+  type FaceTarget
+} from './lib/interaction/machine';
+import type { SelectionActionId } from './lib/interaction/capabilities';
+import { frameFromFace } from './lib/sketch/session';
+import { SketchToolRail } from './components/SketchToolRail';
+import { SketchEntityEditor } from './components/SketchEntityEditor';
+import { objectPolyline } from './components/viewer/sketchModeController';
+import type { RegionPickData } from './components/viewer/regionOverlay';
+import { computeSketchRegions } from '@openzcad/geometry';
+import { Undo2 } from 'lucide-react';
 import {
   CommandPalette,
   type PaletteCommand
@@ -128,6 +146,7 @@ import type {
   FaceResizeCommit,
   MovePreview,
   MoveSnap,
+  PickDetail,
   ProjectionMode,
   SketchOverlay,
   StandardView,
@@ -224,7 +243,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(() => ({
     showGrid: appSettings.viewport.showGrid,
-    displayMode: appSettings.viewport.displayMode
+    displayMode: appSettings.viewport.displayMode,
+    reducedMotion: appSettings.appearance.reducedMotion
   }));
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
@@ -250,6 +270,20 @@ export function App() {
   );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
+  /** Click point + normal of the latest topology pick (drag-handle anchor). */
+  const lastPickDetailRef = useRef<PickDetail | null>(null);
+  /** Selection-first direct-manipulation mode machine (behind experiment flag). */
+  const [interaction, dispatchInteraction] = useReducer(
+    interactionReducer,
+    IDLE
+  );
+  /** Open exact-value entry (anchored keypad) for the armed handle. */
+  const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const keypadAnchorRef = useRef<
+    ((point: { x: number; y: number } | null) => void) | null
+  >(null);
+  /** Lets keypad typing drive the viewport's offset-handle preview. */
+  const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const geometryWorkerRef = useRef<Worker | null>(null);
@@ -313,14 +347,19 @@ export function App() {
       .appearance.reducedMotion
       ? 'true'
       : 'false';
+    setViewerSettings((current) => ({
+      ...current,
+      reducedMotion: appSettings.appearance.reducedMotion
+    }));
   }, [appSettings]);
 
   useEffect(() => {
-    const worker = new Worker(
-      new URL('./worker/geometryWorker.ts', import.meta.url),
-      {
-        type: 'module'
-      }
+    const worker = timed(
+      'worker.create',
+      () =>
+        new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
+          type: 'module'
+        })
     );
     geometryWorkerRef.current = worker;
     worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
@@ -748,7 +787,10 @@ export function App() {
         return [];
       }
       const data = objectNode.data;
-      const offset = evalParamValue(sketch.offset, scope) ?? 0;
+      if (data.objectKind === 'line' || data.objectKind === 'arc') {
+        // Open curves have no fill; region overlays render them separately.
+        return [];
+      }
       const centerX = evalParamValue(data.centerX, scope);
       const centerY = evalParamValue(data.centerY, scope);
       if (centerX === null || centerY === null) {
@@ -780,11 +822,14 @@ export function App() {
       } catch {
         return [];
       }
-      const basis = PLANE_BASES[sketch.plane];
+      const basis = frameForPlaneRef(
+        sketch.planeRef,
+        (value) => evalParamValue(value, scope) ?? 0
+      );
       const points = profile.map((point) => ({
-        x: basis.u.x * point.x + basis.v.x * point.y + basis.normal.x * offset,
-        y: basis.u.y * point.x + basis.v.y * point.y + basis.normal.y * offset,
-        z: basis.u.z * point.x + basis.v.z * point.y + basis.normal.z * offset
+        x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+        y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+        z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
       }));
       return [
         {
@@ -821,6 +866,15 @@ export function App() {
     nextDocument: ProjectDocument,
     options: { restoreView?: boolean; rememberProject?: boolean } = {}
   ) {
+    return timed('document.hydrate', () =>
+      hydrateDocumentInner(nextDocument, options)
+    );
+  }
+
+  function hydrateDocumentInner(
+    nextDocument: ProjectDocument,
+    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+  ) {
     const normalized = normalizeDocument(nextDocument);
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
@@ -832,12 +886,12 @@ export function App() {
       setProjection(
         savedView?.projection ?? appSettings.viewport.defaultProjection
       );
-      setViewerSettings(
-        savedView?.settings ?? {
-          showGrid: appSettings.viewport.showGrid,
-          displayMode: appSettings.viewport.displayMode
-        }
-      );
+      setViewerSettings({
+        showGrid: appSettings.viewport.showGrid,
+        displayMode: appSettings.viewport.displayMode,
+        ...savedView?.settings,
+        reducedMotion: appSettings.appearance.reducedMotion
+      });
       setHiddenBodyIds(new Set(savedView?.hiddenBodyIds ?? []));
     }
     if (rememberProject) {
@@ -923,26 +977,6 @@ export function App() {
     setTool('extrude');
     requestView('iso');
     setStatus('Extrude: drag the arrow to either side of the sketch plane.');
-  }
-
-  function finishSketch(value: SketchFormValue) {
-    if (!executeCommand(commandFactories.addSketch(value))) {
-      return;
-    }
-    const sketchId = managerRef.current?.document.sketchOrder.at(-1);
-    if (!sketchId) {
-      return;
-    }
-    setTool(null);
-    setSelectedFeatureNodeId(null);
-    setSelectedSketchProfileId(sketchId);
-    // Face the finished profile so the extrude drag is usable. Each plane is
-    // named for the axes it spans, so with Z up the ground plane is XY: mapping
-    // it to the front view would put the profile edge-on and invisible.
-    requestView(
-      value.plane === 'XY' ? 'top' : value.plane === 'XZ' ? 'front' : 'right'
-    );
-    setStatus('Closed profile created. Select Extrude or press E.');
   }
 
   function confirmExtrude() {
@@ -1084,6 +1118,9 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
   }
 
   function requestView(view: StandardView) {
@@ -1248,7 +1285,8 @@ export function App() {
     setProjection(appSettings.viewport.defaultProjection);
     setViewerSettings({
       showGrid: appSettings.viewport.showGrid,
-      displayMode: appSettings.viewport.displayMode
+      displayMode: appSettings.viewport.displayMode,
+      reducedMotion: appSettings.appearance.reducedMotion
     });
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
@@ -1763,13 +1801,58 @@ export function App() {
     setStatus(`${name}: closed profile selected · press E to extrude.`);
   }
 
+  function startSketchOnFace(target: FaceTarget): boolean {
+    const faceTopology = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
+    const geometry = faceTopology?.geometry;
+    if (geometry?.surfaceType !== 'plane' || target.hash === undefined) {
+      setStatus('Pick a planar face to sketch on, or choose a plane.');
+      return false;
+    }
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: {
+        type: 'face',
+        bodyId: target.bodyId as BodyId,
+        faceHash: target.hash,
+        sourceArea: geometry.area,
+        sourceCenter: geometry.center,
+        sourceNormal: geometry.normal ?? {
+          x: target.normal[0],
+          y: target.normal[1],
+          z: target.normal[2]
+        },
+        frame: frameFromFace(
+          geometry.center,
+          geometry.normal ?? {
+            x: target.normal[0],
+            y: target.normal[1],
+            z: target.normal[2]
+          }
+        )
+      }
+    });
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds([]);
+    setTool(null);
+    setStatus('Sketching on the selected face. Esc exits.');
+    return true;
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
-    additive: boolean
+    additive: boolean,
+    detail?: PickDetail
   ) {
     if (!doc) {
       return;
     }
+    // The pick detail (click point + normal) anchors selection-first drag
+    // handles; stashed for the direct-manipulation flow.
+    lastPickDetailRef.current = detail ?? null;
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
     if (!selection) {
@@ -1778,10 +1861,79 @@ export function App() {
       }
       return;
     }
+    // Sketch entry: with the Sketch tool armed, a planar face click starts a
+    // face-attached sketch instead of arming the offset handle.
+    if (
+      tool === 'sketch' &&
+      selection.kind === 'face' &&
+      selection.topologyId &&
+      detail?.normal
+    ) {
+      const faceTopology = representations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === selection.topologyId
+      );
+      const geometry = faceTopology?.geometry;
+      if (geometry?.surfaceType === 'plane' && selection.hash !== undefined) {
+        const target: FaceTarget = {
+          bodyId: selection.bodyId,
+          topologyId: selection.topologyId,
+          hash: selection.hash,
+          point: [detail.point.x, detail.point.y, detail.point.z],
+          normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+          surfaceType: 'planar'
+        };
+        if (startSketchOnFace(target)) {
+          return;
+        }
+      }
+      setStatus('Pick a planar face to sketch on, or choose a plane.');
+      return;
+    }
+    // Selection-first direct manipulation: a face click arms its drag handle.
+    if (
+      appSettings.experiments.directManipulation &&
+      selection.kind === 'face' &&
+      selection.topologyId &&
+      detail?.normal
+    ) {
+      const faceTopology = representations[
+        selection.bodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === selection.topologyId
+      );
+      const surface = faceTopology?.geometry?.surfaceType;
+      const target: FaceTarget = {
+        bodyId: selection.bodyId,
+        topologyId: selection.topologyId,
+        hash: selection.hash,
+        point: [detail.point.x, detail.point.y, detail.point.z],
+        normal: [detail.normal.x, detail.normal.y, detail.normal.z],
+        surfaceType:
+          surface === 'plane'
+            ? 'planar'
+            : surface === 'cylinder'
+              ? 'cylindrical'
+              : 'other',
+        diameter: faceTopology?.geometry?.diameter
+      };
+      dispatchInteraction({ type: 'select-face', target });
+    } else if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
     if (selection.kind === 'edge') {
       const sameBody = selectedEdges.every(
         (edge) => edge.bodyId === selection.bodyId
       );
+      if (appSettings.experiments.directManipulation) {
+        // Selection-first: picking edges arms the fillet/chamfer handle.
+        dispatchInteraction({
+          type: 'select-edge',
+          selection,
+          additive: additive && sameBody
+        });
+      }
       const alreadySelected = selectedEdges.some(
         (edge) => edge.topologyId === selection.topologyId
       );
@@ -1859,13 +2011,19 @@ export function App() {
   async function executeValidatedDirectEdit(
     command: AnyCommand,
     targetBodyId: BodyId,
-    successMessage: string
-  ): Promise<void> {
+    successMessage: string,
+    submittedValue = 0,
+    onSuccess?: () => void
+  ): Promise<boolean> {
     const manager = managerRef.current;
     if (!manager || directEditInFlightRef.current) {
-      return;
+      return false;
     }
     directEditInFlightRef.current = true;
+    dispatchInteraction({
+      type: 'validation-start',
+      value: submittedValue
+    });
     const current = manager.document;
     setBusy(true);
     setStatus('Validating direct edit with the exact geometry kernel…');
@@ -1890,19 +2048,773 @@ export function App() {
         throw new Error('The document changed while the edit was validating.');
       }
       if (!executeCommand(command)) {
-        return;
+        throw new Error('The validated edit could not be committed.');
       }
+      dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
       setSelectedBodyIds([targetBodyId]);
       setSelectedFeatureNodeId(featureNodeIdForBody(targetBodyId));
+      onSuccess?.();
       setStatus(successMessage);
+      return true;
     } catch (error) {
-      setStatus(errorMessage(error, 'Direct edit was not applied.'));
+      const message = errorMessage(error, 'Direct edit was not applied.');
+      dispatchInteraction({
+        type: 'validation-failed',
+        message,
+        value: submittedValue
+      });
+      setStatus(message);
+      return false;
     } finally {
       directEditInFlightRef.current = false;
       setBusy(false);
     }
+  }
+
+  /**
+   * Armed face-offset handle for the viewport. Memoized so the drag rig is
+   * built once per selection instead of on every App render — rebuilding it
+   * mid-hover would reset its screen-constant scale and drop pointer picks.
+   */
+  // The keypad's lifetime mirrors the exact-entry phase. Escape, deselection,
+  // and commits all close it through the reducer.
+  useEffect(() => {
+    const open =
+      interaction.mode !== 'idle' &&
+      interaction.mode !== 'sketch' &&
+      interaction.phase === 'exact-entry';
+    if (!open) {
+      setKeypad(null);
+    }
+  }, [interaction]);
+
+  // Leaving edges mode abandons any in-flight preview document.
+  useEffect(() => {
+    if (interaction.mode !== 'edges') {
+      clearEdgePreview();
+    }
+  }, [interaction.mode]);
+
+  /**
+   * The sketch plane basis is memoized on the session's plane reference
+   * alone: it must keep its identity across entity commits, or the viewport
+   * would tear down and re-enter the mode (camera glide included) on every
+   * committed entity. The parameter scope is only consulted at entry.
+   */
+  const sketchSessionPlane =
+    interaction.mode === 'sketch' ? interaction.session.plane : null;
+  const parameterScopeRef = useRef(parameterScope);
+  parameterScopeRef.current = parameterScope;
+  const sketchBasis = useMemo(
+    () =>
+      sketchSessionPlane
+        ? frameForPlaneRef(
+            sketchSessionPlane,
+            (value) =>
+              evalParamValue(value, parameterScopeRef.current.scope) ?? 0
+          )
+        : null,
+    [sketchSessionPlane]
+  );
+
+  /** Active in-viewport sketch session for the viewport. */
+  const sketchModeState = useMemo(() => {
+    if (interaction.mode !== 'sketch' || !doc || !sketchBasis) {
+      return null;
+    }
+    const session = interaction.session;
+    const sketch = session.sketchId
+      ? listNodesByKind(doc, 'sketch').find(
+          (candidate) => candidate.sketchId === session.sketchId
+        )
+      : undefined;
+    const objects =
+      sketch?.objectIds.flatMap((objectId) => {
+        const node = doc.nodes[objectId];
+        return node?.kind === 'sketch-object'
+          ? [{ id: objectId, data: node.data }]
+          : [];
+      }) ?? [];
+    return {
+      basis: sketchBasis,
+      tool: session.tool,
+      snapStep: appSettings.sketching.snapEnabled
+        ? appSettings.sketching.linearSnap
+        : null,
+      drawing: session.drawing,
+      objects,
+      selectedObjectId: session.selectedObjectId,
+      parameterScope: parameterScope.scope
+    };
+  }, [
+    interaction,
+    doc,
+    sketchBasis,
+    appSettings.sketching,
+    parameterScope.scope
+  ]);
+
+  const selectedSketchEntity = useMemo(() => {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.selectedObjectId ||
+      !doc
+    ) {
+      return null;
+    }
+    const node = doc.nodes[interaction.session.selectedObjectId as EntityId];
+    return node?.kind === 'sketch-object' ? node : null;
+  }, [interaction, doc]);
+
+  /** A drawing gesture finished: commit the entity as a real command. */
+  function handleSketchCommit(object: SketchObjectData) {
+    if (interaction.mode !== 'sketch') {
+      return;
+    }
+    const session = interaction.session;
+    if (!session.sketchId) {
+      const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+      if (
+        !executeCommand(
+          commandFactories.addSketch({
+            name,
+            planeRef: session.plane,
+            objects: [object]
+          })
+        )
+      ) {
+        return;
+      }
+      const sketchId = managerRef.current?.document.sketchOrder.at(-1);
+      if (sketchId) {
+        dispatchInteraction({ type: 'sketch-created', sketchId });
+      }
+      setStatus(`${name} started.`);
+      return;
+    }
+    executeCommand(
+      commandFactories.addSketchObjects(
+        {
+          sketchId: session.sketchId as SketchId,
+          objects: [object]
+        },
+        `Add ${object.objectKind}`
+      )
+    );
+  }
+
+  function handleUpdateSketchEntity(data: SketchObjectData) {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.sketchId ||
+      !interaction.session.selectedObjectId
+    ) {
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.updateSketchObject(
+          {
+            sketchId: interaction.session.sketchId as SketchId,
+            objectId: interaction.session.selectedObjectId as EntityId,
+            data
+          },
+          `Edit ${data.objectKind}`
+        )
+      )
+    ) {
+      setStatus(`Updated ${data.objectKind} geometry.`);
+    }
+  }
+
+  function handleDeleteSketchEntity() {
+    if (
+      interaction.mode !== 'sketch' ||
+      !interaction.session.sketchId ||
+      !interaction.session.selectedObjectId
+    ) {
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.deleteSketchObject(
+          {
+            sketchId: interaction.session.sketchId as SketchId,
+            objectId: interaction.session.selectedObjectId as EntityId
+          },
+          'Delete sketch entity'
+        )
+      )
+    ) {
+      dispatchInteraction({ type: 'sketch-select-object', objectId: null });
+      setStatus('Deleted sketch entity.');
+    }
+  }
+
+  /**
+   * Region-detected sketch rendering data: every sketch's curves plus its
+   * detected closed regions, lifted by the shared plane resolution. The
+   * sketch being edited in-session is skipped (its rig renders live).
+   */
+  const sketchViews = useMemo(() => {
+    if (!doc || !appSettings.experiments.directManipulation) {
+      return [];
+    }
+    const scope = parameterScope.scope;
+    const resolve = (value: unknown): number =>
+      evalParamValue(value as ParamValue, scope) ?? 0;
+    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+      if (
+        interaction.mode === 'sketch' &&
+        interaction.session.sketchId === sketch.sketchId
+      ) {
+        return [];
+      }
+      const objects = sketch.objectIds.flatMap((objectId) => {
+        const node = doc.nodes[objectId];
+        return node?.kind === 'sketch-object'
+          ? [{ id: objectId, data: node.data }]
+          : [];
+      });
+      if (objects.length === 0) {
+        return [];
+      }
+      const basis = frameForPlaneRef(sketch.planeRef, resolve);
+      const curves = objects.flatMap((object) => {
+        try {
+          const polyline = objectPolyline(object.data, resolve);
+          return polyline ? [polyline] : [];
+        } catch {
+          return [];
+        }
+      });
+      let regions: {
+        regionFingerprint: number;
+        samplePoint: { x: number; y: number };
+        area: number;
+        outer: { x: number; y: number }[];
+        holes: { x: number; y: number }[][];
+      }[] = [];
+      try {
+        regions = computeSketchRegions(objects, (value) => resolve(value)).map(
+          (region) => ({
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.samplePoint,
+            area: region.area,
+            outer: region.outer.polyline,
+            holes: region.holes.map((hole) => hole.polyline)
+          })
+        );
+      } catch {
+        // Unresolvable sketches simply render without pickable regions.
+      }
+      return [{ sketchId: sketch.sketchId, basis, curves, regions }];
+    });
+  }, [
+    doc,
+    parameterScope,
+    appSettings.experiments.directManipulation,
+    interaction
+  ]);
+
+  /** After a region extrude, offer a one-click return to its sketch. */
+  const [revertPill, setRevertPill] = useState<{ sketchId: SketchId } | null>(
+    null
+  );
+  useEffect(() => {
+    if (interaction.mode !== 'idle') {
+      setRevertPill(null);
+    }
+  }, [interaction.mode]);
+
+  /** A detected region was clicked: arm the extrude handle. */
+  function handleSelectRegion(region: RegionPickData) {
+    if (!appSettings.experiments.directManipulation) {
+      return;
+    }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+    dispatchInteraction({
+      type: 'select-region',
+      target: {
+        sketchId: region.sketchId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        area: region.area
+      }
+    });
+    setStatus('Drag the arrow to extrude the region, or tap the value.');
+  }
+
+  /** Armed region handle for the viewport. */
+  const regionHandleTarget = useMemo(() => {
+    if (interaction.mode !== 'region' || interaction.phase === 'validating') {
+      return null;
+    }
+    return {
+      sketchId: interaction.target.sketchId,
+      regionFingerprint: interaction.target.regionFingerprint,
+      samplePoint: interaction.target.samplePoint,
+      area: interaction.target.area,
+      initialValue: interaction.lastValue ?? 0
+    };
+  }, [interaction]);
+
+  /** Region-extrude drag released (or exact entry): commit the feature. */
+  function handleRegionExtrudeCommit(distance: number, exact?: ParamValue) {
+    if (interaction.mode !== 'region') {
+      return;
+    }
+    const target = interaction.target;
+    const rounded = Math.round(distance * 1000) / 1000;
+    if (rounded === 0) {
+      return;
+    }
+    const command = commandFactories.extrudeSketch({
+      name: 'Extrude',
+      sketchId: target.sketchId as SketchId,
+      distance: exact ?? rounded,
+      profile: {
+        regionFingerprint: target.regionFingerprint,
+        samplePoint: target.samplePoint,
+        sourceArea: target.area
+      }
+    });
+    const resultBodyId =
+      command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
+    void executeValidatedDirectEdit(
+      command,
+      resultBodyId,
+      `Extruded region by ${rounded} ${doc?.units ?? ''}.`,
+      rounded,
+      () => setRevertPill({ sketchId: target.sketchId as SketchId })
+    );
+  }
+
+  /** Armed edge handle; memoized for the same rig-stability reason as faces. */
+  const edgeHandleTarget = useMemo(() => {
+    if (
+      interaction.mode !== 'edges' ||
+      interaction.edges.length === 0 ||
+      interaction.phase === 'validating'
+    ) {
+      return null;
+    }
+    const last = interaction.edges.at(-1)!;
+    return {
+      bodyId: last.bodyId,
+      topologyId: last.topologyId ?? '',
+      op: interaction.op,
+      edgeCount: interaction.edges.length,
+      initialValue: interaction.lastValue ?? 0
+    };
+  }, [interaction]);
+
+  const offsetHandleTarget = useMemo(() => {
+    if (interaction.mode !== 'face' || interaction.phase === 'validating') {
+      return null;
+    }
+    const target = interaction.target;
+    const point = {
+      x: target.point[0],
+      y: target.point[1],
+      z: target.point[2]
+    };
+    if (interaction.op === 'offset-face') {
+      if (target.surfaceType !== 'planar') {
+        return null;
+      }
+      return {
+        bodyId: target.bodyId,
+        topologyId: target.topologyId,
+        point,
+        normal: {
+          x: target.normal[0],
+          y: target.normal[1],
+          z: target.normal[2]
+        },
+        initialValue: interaction.lastValue ?? 0
+      };
+    }
+    // resize-hole: the drag direction is radial — outward from the
+    // cylinder's axis through the click point.
+    const radial = cylinderRadialAt(target);
+    if (!radial) {
+      return null;
+    }
+    return {
+      bodyId: target.bodyId,
+      topologyId: target.topologyId,
+      point,
+      normal: radial.direction,
+      initialValue:
+        interaction.lastValue !== null && target.diameter !== undefined
+          ? interaction.lastValue - target.diameter
+          : 0
+    };
+  }, [interaction]);
+
+  /**
+   * Radial outward direction and concavity of a cylindrical face at a click
+   * point. Concavity comes from the picked triangle normal: a bore's surface
+   * faces the axis, a boss faces away from it.
+   */
+  function cylinderRadialAt(target: FaceTarget): {
+    direction: { x: number; y: number; z: number };
+    concavity: 'hole' | 'boss';
+  } | null {
+    const geometry = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (face) => face.topologyId === target.topologyId
+    )?.geometry;
+    if (!geometry?.axisStart || !geometry.axisEnd) {
+      return null;
+    }
+    const a = geometry.axisStart;
+    const b = geometry.axisEnd;
+    const axis = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+    const axisLength = Math.hypot(axis.x, axis.y, axis.z);
+    if (axisLength < 1e-9) {
+      return null;
+    }
+    const unit = {
+      x: axis.x / axisLength,
+      y: axis.y / axisLength,
+      z: axis.z / axisLength
+    };
+    const toPoint = {
+      x: target.point[0] - a.x,
+      y: target.point[1] - a.y,
+      z: target.point[2] - a.z
+    };
+    const along = toPoint.x * unit.x + toPoint.y * unit.y + toPoint.z * unit.z;
+    const foot = {
+      x: a.x + unit.x * along,
+      y: a.y + unit.y * along,
+      z: a.z + unit.z * along
+    };
+    const radial = {
+      x: target.point[0] - foot.x,
+      y: target.point[1] - foot.y,
+      z: target.point[2] - foot.z
+    };
+    const radialLength = Math.hypot(radial.x, radial.y, radial.z);
+    if (radialLength < 1e-9) {
+      return null;
+    }
+    const direction = {
+      x: radial.x / radialLength,
+      y: radial.y / radialLength,
+      z: radial.z / radialLength
+    };
+    const facesInward =
+      target.normal[0] * direction.x +
+        target.normal[1] * direction.y +
+        target.normal[2] * direction.z <
+      0;
+    return { direction, concavity: facesInward ? 'hole' : 'boss' };
+  }
+
+  /** Commits a cylindrical-face resize; `diameter` is the absolute value. */
+  function handleResizeCylindricalCommit(diameter: number) {
+    if (interaction.mode !== 'face' || interaction.op !== 'resize-hole') {
+      return;
+    }
+    const target = interaction.target;
+    const geometry = representations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
+      (face) => face.topologyId === target.topologyId
+    )?.geometry;
+    const radial = cylinderRadialAt(target);
+    if (
+      !geometry?.radius ||
+      !geometry.axisStart ||
+      !geometry.axisEnd ||
+      !radial ||
+      target.hash === undefined
+    ) {
+      setStatus('Exact cylinder measurements are unavailable.');
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    const rounded = Math.round(diameter * 1000) / 1000;
+    if (rounded <= 0) {
+      setStatus('Diameter must be greater than zero.');
+      return;
+    }
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: radial.concavity === 'hole' ? 'Resize hole' : 'Resize boss',
+        targetBodyId: target.bodyId as BodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: target.hash,
+          sourceRadius: geometry.radius,
+          sourceAxisStart: geometry.axisStart,
+          sourceAxisEnd: geometry.axisEnd,
+          concavity: radial.concavity,
+          radius: rounded / 2
+        }
+      }),
+      target.bodyId as BodyId,
+      `Resized ${radial.concavity} to ⌀ ${rounded} ${doc?.units ?? ''}.`,
+      rounded
+    );
+  }
+
+  /**
+   * Throttled kernel previews for edge-radius drags. One sync in flight,
+   * latest value wins; a slow document (>400ms per preview) degrades to the
+   * chip readout only, and the drag still commits exactly on release.
+   */
+  const edgePreviewRef = useRef({
+    token: 0,
+    inFlight: false,
+    pending: null as number | null,
+    slow: false,
+    active: false
+  });
+
+  function buildEdgeModifierCommand(size: ParamValue) {
+    if (interaction.mode !== 'edges') {
+      return null;
+    }
+    const edges = interaction.edges;
+    const bodyId = edges[0]?.bodyId;
+    const edgeHashes = edges
+      .map((edge) => edge.hash)
+      .filter((hash): hash is number => hash !== undefined);
+    if (!bodyId || edgeHashes.length === 0) {
+      return null;
+    }
+    const payload = {
+      name: interaction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
+      targetBodyId: bodyId,
+      edgeHashes,
+      size
+    };
+    return interaction.op === 'fillet'
+      ? commandFactories.filletEdges(payload)
+      : commandFactories.chamferEdges(payload);
+  }
+
+  function requestEdgePreview(size: number) {
+    const state = edgePreviewRef.current;
+    if (state.slow || size <= 0) {
+      return;
+    }
+    state.pending = size;
+    state.active = true;
+    if (!state.inFlight) {
+      void runEdgePreviews();
+    }
+  }
+
+  async function runEdgePreviews() {
+    const state = edgePreviewRef.current;
+    state.inFlight = true;
+    try {
+      while (state.pending !== null) {
+        const size = state.pending;
+        state.pending = null;
+        const token = ++state.token;
+        const command = buildEdgeModifierCommand(size);
+        if (!command) {
+          break;
+        }
+        const base = managerRef.current?.document;
+        if (!base) {
+          break;
+        }
+        const started = performance.now();
+        try {
+          const preview = command.apply(base);
+          const derived = await requestExactSync(preview);
+          if (token !== state.token || !state.active) {
+            continue;
+          }
+          setPreviewDoc({ ...preview, derived });
+        } catch {
+          // Invalid radii simply skip the preview frame.
+        }
+        if (performance.now() - started > 400) {
+          state.slow = true;
+          break;
+        }
+      }
+    } finally {
+      state.inFlight = false;
+    }
+  }
+
+  function clearEdgePreview() {
+    const state = edgePreviewRef.current;
+    state.token += 1;
+    state.pending = null;
+    state.slow = false;
+    if (state.active) {
+      state.active = false;
+      setPreviewDoc(null);
+    }
+  }
+
+  /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
+  function handleEdgeCommit(size: number, exact?: ParamValue) {
+    if (interaction.mode !== 'edges') {
+      return;
+    }
+    clearEdgePreview();
+    const rounded = Math.round(size * 1000) / 1000;
+    const command = buildEdgeModifierCommand(exact ?? rounded);
+    if (!command || rounded <= 0) {
+      return;
+    }
+    const op = interaction.op;
+    const resultBodyId =
+      command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    void executeValidatedDirectEdit(
+      command,
+      resultBodyId,
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
+      rounded
+    );
+  }
+
+  /** Edge chip tapped: exact entry for the blend radius/distance. */
+  function handleOpenEdgeKeypad(currentSize: number) {
+    if (interaction.mode !== 'edges') {
+      return;
+    }
+    dispatchInteraction({ type: 'keypad-open' });
+    setKeypad({
+      kind: 'edge',
+      label: interaction.op === 'fillet' ? 'Radius' : 'Distance',
+      initial:
+        currentSize > 0 ? String(Math.round(currentSize * 100) / 100) : '',
+      unitKind: 'length'
+    });
+  }
+
+  /** Chip tapped: open the anchored keypad prefilled with the drag value. */
+  function handleOpenOffsetKeypad(currentOffset: number) {
+    if (interaction.mode !== 'face' && interaction.mode !== 'region') {
+      return;
+    }
+    dispatchInteraction({ type: 'keypad-open' });
+    if (interaction.mode === 'face' && interaction.op === 'resize-hole') {
+      const geometry = representations[
+        interaction.target.bodyId as BodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === interaction.target.topologyId
+      )?.geometry;
+      setKeypad({
+        kind: 'diameter',
+        label: '⌀',
+        initial:
+          geometry?.diameter !== undefined
+            ? String(
+                Math.round((geometry.diameter + currentOffset) * 100) / 100
+              )
+            : '',
+        unitKind: 'length',
+        baseline: geometry?.diameter
+      });
+      return;
+    }
+    setKeypad({
+      kind: 'offset',
+      label: interaction.mode === 'region' ? 'Height' : 'Offset',
+      initial:
+        currentOffset !== 0
+          ? String(Math.round(currentOffset * 100) / 100)
+          : '',
+      unitKind: 'length'
+    });
+  }
+
+  function handleSelectionAction(action: SelectionActionId) {
+    if (action === 'sketch-on-face' && interaction.mode === 'face') {
+      startSketchOnFace(interaction.target);
+      return;
+    }
+    if (
+      interaction.mode === 'edges' &&
+      (action === 'fillet' || action === 'chamfer')
+    ) {
+      clearEdgePreview();
+      dispatchInteraction({ type: 'set-edge-op', op: action });
+    }
+  }
+
+  /**
+   * Face-offset commit as a validated direct edit. `exact` preserves a typed
+   * expression as the stored parametric value; plain drags store the number.
+   */
+  function handleOffsetCommit(offset: number, exact?: ParamValue) {
+    // The arrow rig is shared: in region mode its drag is an extrude height.
+    if (interaction.mode === 'region') {
+      handleRegionExtrudeCommit(offset, exact);
+      return;
+    }
+    if (interaction.mode === 'face' && interaction.op === 'resize-hole') {
+      // The drag reads as a diameter delta on the current bore/boss.
+      const geometry = representations[
+        interaction.target.bodyId as BodyId
+      ]?.topology?.faces.find(
+        (face) => face.topologyId === interaction.target.topologyId
+      )?.geometry;
+      if (geometry?.diameter !== undefined) {
+        handleResizeCylindricalCommit(geometry.diameter + offset);
+      }
+      return;
+    }
+    if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
+      return;
+    }
+    const target = interaction.target;
+    const bodyId = target.bodyId as BodyId;
+    const faceTopology = representations[bodyId]?.topology?.faces.find(
+      (face) => face.topologyId === target.topologyId
+    );
+    const geometry = faceTopology?.geometry;
+    if (
+      !faceTopology ||
+      geometry?.surfaceType !== 'plane' ||
+      target.hash === undefined
+    ) {
+      setStatus('Exact face measurements are unavailable for this offset.');
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    void executeValidatedDirectEdit(
+      commandFactories.directEditBody({
+        name: 'Offset face',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: target.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          // The drag was measured along the picked (outward-facing) normal,
+          // so it defines the offset's sign; the kernel only verifies that
+          // the face's plane still matches this orientation up to sign.
+          sourceNormal: {
+            x: target.normal[0],
+            y: target.normal[1],
+            z: target.normal[2]
+          },
+          offset: exact ?? Math.round(offset * 1000) / 1000
+        }
+      }),
+      bodyId,
+      `Offset face by ${Math.round(offset * 100) / 100} ${doc?.units ?? ''}.`,
+      offset
+    );
   }
 
   function handleResizeThroughHole(
@@ -1933,7 +2845,8 @@ export function App() {
         }
       }),
       selection.bodyId,
-      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`
+      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`,
+      typeof diameter === 'number' ? diameter : 0
     );
   }
 
@@ -2313,9 +3226,38 @@ export function App() {
         return;
       }
 
+      if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        if (
+          (event.key === 'Delete' || event.key === 'Backspace') &&
+          interaction.session.selectedObjectId
+        ) {
+          event.preventDefault();
+          handleDeleteSketchEntity();
+          return;
+        }
+        const sketchTool =
+          event.key.toLowerCase() === 'v'
+            ? ('select' as const)
+            : event.key.toLowerCase() === 'l'
+              ? ('line' as const)
+              : event.key.toLowerCase() === 'a'
+                ? ('arc' as const)
+                : event.key.toLowerCase() === 'c'
+                  ? ('circle' as const)
+                  : event.key.toLowerCase() === 'r'
+                    ? ('rectangle' as const)
+                    : null;
+        if (sketchTool) {
+          event.preventDefault();
+          dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
+        }
+        return;
+      }
       switch (event.key) {
         case 'Escape':
-          if (tool || selectedFeatureNodeId) {
+          if (interaction.mode !== 'idle') {
+            dispatchInteraction({ type: 'escape' });
+          } else if (tool || selectedFeatureNodeId) {
             cancelPanel();
           } else {
             clearSelection();
@@ -2590,6 +3532,7 @@ export function App() {
     tool === 'sketch' ||
     tool === 'extrude' ||
     (tool === 'transform' && movePreview !== null);
+  const contextualToolCard = toolCardFor(interaction);
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
 
@@ -2684,7 +3627,11 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             bodies={viewerBodies}
-            sketches={sketchOverlays}
+            sketches={
+              // Region-based rendering (sketchViews) supersedes the legacy
+              // single-profile overlays under direct manipulation.
+              appSettings.experiments.directManipulation ? [] : sketchOverlays
+            }
             selectedBodyIds={selectedBodyIds}
             selectedTopology={selectedTopology}
             selectedEdges={selectedEdges}
@@ -2695,7 +3642,7 @@ export function App() {
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
-            hideViewerToolbar={tool === 'sketch'}
+            hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
             initialView={initialView}
@@ -2706,8 +3653,147 @@ export function App() {
                 current ? { ...current, translation, rotationDeg } : current
               );
             }}
+            offsetHandle={offsetHandleTarget}
+            onOffsetCommit={handleOffsetCommit}
+            onOpenOffsetKeypad={handleOpenOffsetKeypad}
+            keypadAnchorRef={keypadAnchorRef}
+            offsetSetterRef={offsetSetterRef}
+            edgeHandle={edgeHandleTarget}
+            onEdgeRadiusPreview={requestEdgePreview}
+            onEdgeCommit={handleEdgeCommit}
+            onOpenEdgeKeypad={handleOpenEdgeKeypad}
+            onDirectManipulationChange={(dragging) =>
+              dispatchInteraction({
+                type: dragging ? 'drag-engage' : 'drag-release'
+              })
+            }
+            sketchMode={sketchModeState}
+            onSketchCommit={handleSketchCommit}
+            onSketchDrawingChange={(drawing) =>
+              dispatchInteraction({ type: 'sketch-drawing', drawing })
+            }
+            onSketchSelectObject={(objectId) =>
+              dispatchInteraction({ type: 'sketch-select-object', objectId })
+            }
+            sketchViews={sketchViews}
+            onSelectRegion={handleSelectRegion}
+            regionHandle={regionHandleTarget}
             modeOverlay={
-              movePreview ? (
+              contextualToolCard ? (
+                <>
+                  <ToolCard
+                    model={contextualToolCard}
+                    onAction={handleSelectionAction}
+                    onClose={() =>
+                      dispatchInteraction({
+                        type:
+                          interaction.mode === 'sketch'
+                            ? 'exit-sketch'
+                            : 'clear'
+                      })
+                    }
+                  />
+                  {interaction.mode === 'sketch' && (
+                    <SketchToolRail
+                      tool={interaction.session.tool}
+                      onTool={(sketchTool) =>
+                        dispatchInteraction({
+                          type: 'sketch-tool',
+                          tool: sketchTool
+                        })
+                      }
+                      onExit={() =>
+                        dispatchInteraction({ type: 'exit-sketch' })
+                      }
+                    />
+                  )}
+                  {interaction.mode === 'sketch' && selectedSketchEntity && (
+                    <SketchEntityEditor
+                      key={selectedSketchEntity.id}
+                      data={selectedSketchEntity.data}
+                      scope={parameterScope.scope}
+                      onApply={handleUpdateSketchEntity}
+                      onDelete={handleDeleteSketchEntity}
+                      onClose={() =>
+                        dispatchInteraction({
+                          type: 'sketch-select-object',
+                          objectId: null
+                        })
+                      }
+                    />
+                  )}
+                  {keypad && (
+                    <NumericKeypad
+                      request={keypad}
+                      units={doc.units}
+                      scope={parameterScope.scope}
+                      anchorRef={keypadAnchorRef}
+                      onPreview={(value) => {
+                        // The rig animates a delta; absolute kinds convert.
+                        offsetSetterRef.current?.(
+                          keypad.baseline === undefined
+                            ? value
+                            : value - keypad.baseline
+                        );
+                        if (keypad.kind === 'edge') {
+                          requestEdgePreview(value);
+                        }
+                      }}
+                      onCommit={(value, raw) => {
+                        setKeypad(null);
+                        dispatchInteraction({ type: 'keypad-close' });
+                        // Expressions stay parametric in the stored feature.
+                        const isExpression = !Number.isFinite(Number(raw));
+                        if (keypad.kind === 'edge') {
+                          handleEdgeCommit(
+                            value,
+                            isExpression ? raw : undefined
+                          );
+                        } else if (keypad.kind === 'diameter') {
+                          handleResizeCylindricalCommit(value);
+                        } else {
+                          handleOffsetCommit(
+                            value,
+                            isExpression ? raw : undefined
+                          );
+                        }
+                      }}
+                      onCancel={() => {
+                        offsetSetterRef.current?.(0);
+                        if (keypad.kind === 'edge') {
+                          clearEdgePreview();
+                        }
+                        dispatchInteraction({ type: 'keypad-close' });
+                        setKeypad(null);
+                      }}
+                    />
+                  )}
+                </>
+              ) : revertPill ? (
+                <button
+                  type="button"
+                  className="revert-sketch-pill"
+                  onClick={() => {
+                    const sketch = doc
+                      ? listNodesByKind(doc, 'sketch').find(
+                          (candidate) =>
+                            candidate.sketchId === revertPill.sketchId
+                        )
+                      : undefined;
+                    setRevertPill(null);
+                    if (sketch) {
+                      dispatchInteraction({
+                        type: 'enter-sketch',
+                        plane: sketch.planeRef,
+                        sketchId: sketch.sketchId
+                      });
+                    }
+                  }}
+                >
+                  <Undo2 size={14} aria-hidden="true" />
+                  Revert to Sketch
+                </button>
+              ) : movePreview ? (
                 <MoveOverlay
                   bodyName={
                     representations[movePreview.bodyId as BodyId]?.name ??
@@ -2734,17 +3820,35 @@ export function App() {
                   onCancel={cancelPanel}
                 />
               ) : tool === 'sketch' ? (
-                <SketchWorkspace
-                  sketchNumber={sketchOptions.length + 1}
-                  units={doc.units}
-                  snapStep={
-                    appSettings.sketching.snapEnabled
-                      ? appSettings.sketching.linearSnap
-                      : null
-                  }
-                  onCancel={cancelPanel}
-                  onFinish={finishSketch}
-                />
+                <div className="sketch-plane-prompt" role="status">
+                  <span>
+                    <strong>Pick a sketch plane</strong>
+                    <small>
+                      Click a planar face on the model, or start on a principal
+                      plane.
+                    </small>
+                  </span>
+                  <span className="sketch-plane-buttons">
+                    {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                      <button
+                        key={plane}
+                        type="button"
+                        onClick={() => {
+                          dispatchInteraction({
+                            type: 'enter-sketch',
+                            plane: { type: 'canonical', plane, offset: 0 }
+                          });
+                          setTool(null);
+                          setStatus(
+                            `Sketching on the ${plane} plane. Esc exits.`
+                          );
+                        }}
+                      >
+                        {PLANE_LABELS[plane]}
+                      </button>
+                    ))}
+                  </span>
+                </div>
               ) : extrudePreview && selectedSketchProfileName ? (
                 <ExtrudeOverlay
                   profileName={selectedSketchProfileName}

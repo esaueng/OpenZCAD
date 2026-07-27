@@ -1,0 +1,30 @@
+{
+  "bracket": [
+    {
+      "name": "Mounting Bracket",
+      "volume": 47359.86643659094,
+      "faceCount": 17
+    }
+  ],
+  "flange": [
+    {
+      "name": "Pipe Flange",
+      "volume": 78314.20649420349,
+      "faceCount": 15
+    }
+  ],
+  "heatsink": [
+    {
+      "name": "Heat Sink",
+      "volume": 63313.412896981696,
+      "faceCount": 42
+    }
+  ],
+  "boreGrid": [
+    {
+      "name": "Drill row Body",
+      "volume": 34673.60481847148,
+      "faceCount": 11
+    }
+  ]
+}
