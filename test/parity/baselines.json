@@ -1,16 +1,16 @@
 {
   "bracket": [
     {
-      "name": "Mounting holes Body",
-      "volume": 47544.54973728068,
-      "faceCount": 13
+      "name": "Mounting Bracket",
+      "volume": 47359.86643659094,
+      "faceCount": 17
     }
   ],
   "flange": [
     {
-      "name": "Pipe Flange",
-      "volume": 90411.82742259275,
-      "faceCount": 2789
+      "name": "Drill bolt circle Body",
+      "volume": 79108.9927838028,
+      "faceCount": 12
     }
   ],
   "heatsink": [

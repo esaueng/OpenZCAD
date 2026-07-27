@@ -136,80 +136,83 @@ function buildBoreGrid(): ProjectDocument {
 }
 
 /**
- * Known kernel defects, keyed by scenario (currently none pinned as build
-/**
- * Known kernel defects, keyed by scenario (currently none pinned as build
- * failures). The flange bolt-circle pin was removed when the kernel bump made
- * the scenario build, but its baseline faceCount (~2789) is still the
- * mesh-fallback signature — the demo is carried by the mesh boolean, not the
- * analytic path, and `EXPECTED_MESH_DEFECTS` below pins the 873 boundary
- * edges that fallback leaves.
+ * Known kernel defects pinned as build failures — currently none. Every
+ * scenario builds.
  *
- * WHERE THE ANALYTIC PATH DIES. Traced 2026-07-26 by replaying the app's own
- * operands against different kernel builds. It is NOT the cut, as this note
- * previously said. It is the rim u hub FUSE: the two revolved annuli share
- * the r24 cylinder, and the same-domain key hashed the two instances of that
- * closed circle apart, so the coincident pair was never detected and the blank
- * collapsed to ~1031 planar faces. Everything downstream inherits the mesh.
- * Identical operands give 1031 faces on the kernel we pin and 7 on a build
- * carrying the fix. Trace it with arena snapshots, not STEP — a STEP
- * round-trip normalises the defect away and the fuse comes out analytic.
+ * HISTORY, because the flange's analytic path took three kernel fixes to
+ * recover and the trail is worth keeping. The rim u hub FUSE was the origin:
+ * the two revolved annuli share the r24 cylinder, the same-domain key hashed
+ * the two instances of that closed circle apart, the coincident pair was never
+ * detected, and the blank collapsed to ~1031 planar faces. Everything
+ * downstream inherited the mesh. Trace this class of thing with arena
+ * snapshots, not STEP — a STEP round-trip normalises it away and the fuse
+ * comes out analytic.
  *
- * Two brepkit fixes are involved, and only the first has merged:
  *   1. `fix(algo): canonical same-domain key for closed edges` (brepkit #21,
- *      1dc4541, ON MAIN) — closed edges key on the centroid over the whole
- *      period instead of a midpoint sampled in stored order. This is the one
- *      that makes the blank analytic. We pin 65a6b01, which predates it.
+ *      1dc4541) — closed edges key on the centroid over the whole period
+ *      instead of a midpoint sampled in stored order. Makes the blank analytic.
  *   2. `fix(algo): split plane faces carrying several closed section loops`
- *      (NOT YET MERGED) — with the blank analytic the bolt-circle cut then
- *      fails with NonManifoldResult, because the six patterned bolts are fused
- *      into one tool and cut in a single operation, putting six closed section
- *      loops on the flange's plane faces.
+ *      (brepkit #24, 9ce6cce) — with the blank analytic the bolt-circle cut
+ *      then failed with NonManifoldResult. `split_face_2d` routed a plane face
+ *      to its internal-loops path only for exactly ONE closed section, so the
+ *      six patterned bolts (fused into one tool, cut in one operation) left the
+ *      cap and bottom unsplit and their bore walls stranded.
+ *   3. `fix(algo): respect face holes in the EF containment test` (brepkit #25,
+ *      d108788) — the drilled body was then analytic but still meshed OPEN.
+ *      Phase EF built its planar containment polygon from the outer wire alone,
+ *      so the rim's z=10 cap (an annulus r24..45) accepted a crossing at
+ *      (12, 0, 10) — 12mm inside its own hole — and paved a vertex there,
+ *      splitting the bore seam. Every B-Rep gate passed; only the mesh leaked.
  *
- * Bumping the kernel needs BOTH, and will not turn the flange green on its
- * own: with an analytic blank the Rev C chamfer stops seeding ("Demo seeding
- * found no exact edges for rim + hub lip"), because it selects edges by
- * position and was tuned against the tessellated body. Landing it is three
- * steps — bump past fix 2, re-seed the chamfer edges, then rerecord baselines
- * and drop the `EXPECTED_MESH_DEFECTS` entry (faceCount should collapse from
- * ~2789 to tens; the drilled body measures 12 faces, nine cylindrical walls,
- * in a kernel carrying both fixes).
+ * All three are on brepkit main and this lock now carries them. The flange
+ * drilled body measures 12 faces, nine cylindrical walls, and is watertight.
+ *
+ * One prediction in the previous version of this note turned out wrong and is
+ * corrected here: an analytic blank was expected to stop the Rev C chamfer
+ * SEEDING ("found no exact edges for rim + hub lip"), because the picker
+ * selects by position and was tuned against the tessellated body. It does not.
+ * The picker finds its edges on the analytic body — the chamfer OPERATION is
+ * what fails. See EXPECTED_WARNINGS below.
  */
 const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
 
 /**
- * flange: the mesh-boolean fallback described above is not watertight. The
- * body reports exactly 873 boundary edges, unchanged from kernel 2.128.5
- * through 2.129.0, and the exported STL carries the same 873 through (the
- * scenario has one exportable body, so the two meshes agree).
+ * No mesh defects are pinned. The flange's 873 boundary edges — the
+ * mesh-fallback signature — are gone as of brepkit #25; the body and its STL
+ * both read 0.
  *
- * This was left unpinned for a while on the reasoning that suppressing a
- * watertightness assertion is the green-looking blindfold the harness exists
- * to prevent. That reasoning holds against suppression — which is why this is
- * an exact count rather than a skip. 873 is asserted in both directions: a
- * worse mesh fails, and so does a repaired one, which is what forces the pin
- * to be retired when the analytic cut lands. What the pin buys is the thing a
- * standing red does not: a new watertightness break anywhere in the corpus
- * now turns the suite red on its own, instead of hiding inside a failure
+ * The reasoning that put that pin here still stands for the next one: pin an
+ * EXACT count rather than skipping the assertion, so it fails in both
+ * directions. A worse mesh fails, and so does a repaired one, which is what
+ * forces the pin to be retired instead of outliving the defect. What a pin
+ * buys over a standing red is that a new watertightness break anywhere in the
+ * corpus turns the suite red on its own, instead of hiding inside a failure
  * count everyone has learned to expect.
  */
 const EXPECTED_MESH_DEFECTS: Record<
   string,
   ParityScenario['expectedMeshDefects']
-> = {
-  flange: {
-    bodies: { 'Pipe Flange': { boundaryEdges: 873, nonManifoldEdges: 0 } },
-    stl: { boundaryEdges: 873, nonManifoldEdges: 0 }
-  }
-};
+> = {};
 
 /**
- * bracket: the Rev C base-corner fillet (4 vertical edges, r=3) fails in the
- * kernel's fillet path and is swallowed into a warning — the demo currently
- * renders without its fillet. Tracked as a brepkit fillet defect.
+ * flange: the Rev C rim chamfer (4 edges, d=1.5) fails in the kernel's chamfer
+ * path and is swallowed into a warning — the demo renders undrilled at the rim
+ * lip, and the final body is `Drill bolt circle Body` rather than
+ * `Pipe Flange`. This became visible only once fixes #21/#24/#25 let the demo
+ * reach Rev C at all; it is not a regression from them.
+ *
+ * Tracked in brepkit as a chamfer defect on closed circular edges: any
+ * cylinder rim errors "cannot normalize zero vector". Long-standing, exposed
+ * once the booleans went analytic and started handing the chamfer real
+ * circles. When it lands, drop this entry and rerecord — the body name,
+ * faceCount and volume all change.
+ *
+ * bracket's 4-corner fillet pin was retired here: brepkit #23 (638d141,
+ * G1 ridgeline spine propagation) fixed it, the warning no longer fires, and
+ * its baseline is rerecorded in this change (13 -> 17 faces).
  */
 const EXPECTED_WARNINGS: Record<string, RegExp[]> = {
-  bracket: [/Base corner fillets.*Fillet could not be created on 4 selected edges/]
+  flange: [/Rim chamfer.*Chamfer could not be created on 4 selected edges/]
 };
 
 export const PARITY_SCENARIOS: ParityScenario[] = [
