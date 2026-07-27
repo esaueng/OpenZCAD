@@ -195,11 +195,17 @@ const EXPECTED_MESH_DEFECTS: Record<
 > = {};
 
 /**
- * flange: the Rev C rim chamfer (4 edges, d=1.5) fails in the kernel's chamfer
+ * flange: the Rev C rim chamfer (3 edges, d=1.5) fails in the kernel's chamfer
  * path and is swallowed into a warning — the demo renders undrilled at the rim
  * lip, and the final body is `Drill bolt circle Body` rather than
  * `Pipe Flange`. This became visible only once fixes #21/#24/#25 let the demo
  * reach Rev C at all; it is not a regression from them.
+ *
+ * Three edges, not the four this pin used to name: the picker had also been
+ * matching the r=45 cylinder's vertical seam, which shares the rim's radius
+ * but is not a design edge. Fixed in `demos.ts` by constraining the pick to
+ * edges flat in Z — see the note there. The chamfer fails either way, so this
+ * changes the pinned count and nothing else.
  *
  * Tracked in brepkit as a chamfer defect on closed circular edges: any
  * cylinder rim errors "cannot normalize zero vector". Long-standing, exposed
@@ -212,7 +218,7 @@ const EXPECTED_MESH_DEFECTS: Record<
  * its baseline is rerecorded in this change (13 -> 17 faces).
  */
 const EXPECTED_WARNINGS: Record<string, RegExp[]> = {
-  flange: [/Rim chamfer.*Chamfer could not be created on 4 selected edges/]
+  flange: [/Rim chamfer.*Chamfer could not be created on 3 selected edges/]
 };
 
 export const PARITY_SCENARIOS: ParityScenario[] = [
