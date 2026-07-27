@@ -107,6 +107,7 @@ import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
+import { StartupScreen } from './components/StartupScreen';
 import { SettingsPage } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
@@ -211,6 +212,15 @@ function mergeProjectSummaries(
 export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(() =>
     loadLocalAppSettings()
+  );
+  // The active-project pointer is synchronous knowledge. Reading it lazily
+  // lets the first render choose a stable restore surface instead of mounting
+  // the launcher while IndexedDB and the optional cloud copy are still loading.
+  const [startupProjectId] = useState<string | null>(() =>
+    appSettings.general.reopenLastProject ? loadActiveProjectId() : null
+  );
+  const [startupState, setStartupState] = useState<'restoring' | 'ready'>(() =>
+    startupProjectId ? 'restoring' : 'ready'
   );
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
@@ -429,73 +439,88 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
-      const activeProjectId = appSettings.general.reopenLastProject
-        ? loadActiveProjectId()
-        : null;
-      const [local, health, rememberedLocal, currentAuthConfig] =
-        await Promise.all([
-          listLocalProjects().catch(() => []),
-          api.health().catch(() => null),
-          activeProjectId
-            ? loadLocalProject(activeProjectId).catch(() => null)
-            : Promise.resolve(null),
-          api.authConfig().catch(() => null)
-        ]);
-      const activeSession = await api.session().catch(() => null);
-      const [remote, rememberedRemote, remoteSettings] = activeSession
-        ? await Promise.all([
-            api.listProjects().catch(() => null),
-            activeProjectId
-              ? api.loadProject(activeProjectId).catch(() => null)
+      try {
+        const [local, health, rememberedLocal, currentAuthConfig] =
+          await Promise.all([
+            listLocalProjects().catch(() => []),
+            api.health().catch(() => null),
+            startupProjectId
+              ? loadLocalProject(startupProjectId).catch(() => null)
               : Promise.resolve(null),
-            api.getSettings().catch(() => null)
-          ])
-        : [null, null, null];
-      const remoteProjects = remote?.projects ?? [];
-      const merged = mergeProjectSummaries(local, remoteProjects);
-      const restoredDocument = selectProjectDocument(
-        rememberedLocal,
-        rememberedRemote
-      );
-      const canUseCloud = Boolean(activeSession && rememberedRemote);
-      if (rememberedRemote) {
-        remoteVersionsRef.current.set(
-          rememberedRemote.projectId,
-          rememberedRemote.version
+            api.authConfig().catch(() => null)
+          ]);
+        const activeSession = await api.session().catch(() => null);
+        const [remote, rememberedRemote, remoteSettings] = activeSession
+          ? await Promise.all([
+              api.listProjects().catch(() => null),
+              startupProjectId
+                ? api.loadProject(startupProjectId).catch(() => null)
+                : Promise.resolve(null),
+              api.getSettings().catch(() => null)
+            ])
+          : [null, null, null];
+        if (cancelled) {
+          return;
+        }
+        const remoteProjects = remote?.projects ?? [];
+        const merged = mergeProjectSummaries(local, remoteProjects);
+        const restoredDocument = selectProjectDocument(
+          rememberedLocal,
+          rememberedRemote
         );
-      }
-      setProjects(merged);
-      setCloudAvailable(canUseCloud);
-      setSession(activeSession);
-      setAuthConfig(currentAuthConfig);
-      if (remoteSettings) {
-        setAccountSettings(remoteSettings);
-        if (remoteSettings.synced) {
-          setAppSettings(remoteSettings.settings);
-          saveLocalAppSettings(remoteSettings.settings);
+        const canUseCloud = Boolean(activeSession && rememberedRemote);
+        if (rememberedRemote) {
+          remoteVersionsRef.current.set(
+            rememberedRemote.projectId,
+            rememberedRemote.version
+          );
+        }
+        setProjects(merged);
+        setCloudAvailable(canUseCloud);
+        setSession(activeSession);
+        setAuthConfig(currentAuthConfig);
+        if (remoteSettings) {
+          setAccountSettings(remoteSettings);
+          if (remoteSettings.synced) {
+            setAppSettings(remoteSettings.settings);
+            saveLocalAppSettings(remoteSettings.settings);
+          }
+        }
+        setSaveState(canUseCloud ? 'saved' : 'offline');
+        if (startupProjectId && restoredDocument) {
+          hydrateDocument(restoredDocument);
+          setStatus(`Reopened ${restoredDocument.name}.`);
+          return;
+        }
+        if (startupProjectId) {
+          clearActiveProject();
+        }
+        setStatus(
+          activeSession && remote
+            ? `Cloud profile ready · ${merged.length} project(s)`
+            : health
+              ? `Local workspace · ${merged.length} local project(s)`
+              : `Offline workspace · ${merged.length} local project(s)`
+        );
+      } catch (error) {
+        if (!cancelled) {
+          clearActiveProject();
+          setStatus(errorMessage(error, 'Could not restore the workspace.'));
+        }
+      } finally {
+        if (!cancelled) {
+          setStartupState('ready');
         }
       }
-      setSaveState(canUseCloud ? 'saved' : 'offline');
-      if (activeProjectId && restoredDocument) {
-        hydrateDocument(restoredDocument);
-        setStatus(`Reopened ${restoredDocument.name}.`);
-        return;
-      }
-      if (activeProjectId) {
-        clearActiveProject();
-      }
-      setStatus(
-        activeSession && remote
-          ? `Cloud profile ready · ${merged.length} project(s)`
-          : health
-            ? `Local workspace · ${merged.length} local project(s)`
-            : `Offline workspace · ${merged.length} local project(s)`
-      );
     })();
+    return () => {
+      cancelled = true;
+    };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
-  }, []);
+  }, [startupProjectId]);
 
   useEffect(() => {
     if (!doc) {
@@ -3508,6 +3533,10 @@ export function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   });
+
+  if (startupState === 'restoring') {
+    return <StartupScreen />;
+  }
 
   if (settingsOpen) {
     return (
