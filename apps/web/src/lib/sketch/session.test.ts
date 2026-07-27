@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { PLANE_BASES } from '@openzcad/geometry';
 import {
+  arcDimension,
+  arcObjectFromPoints,
+  arcPreviewPoints,
   axisLockPoint,
   dimensionForInProgress,
   frameFromFace,
@@ -33,10 +36,50 @@ describe('snapSketchPoint / sketchObjectFromDrag', () => {
   });
 
   it('builds line objects and rejects zero-length ones', () => {
-    expect(
-      lineObjectFromPoints({ x: 0, y: 0 }, { x: 8, y: 6 })
-    ).toMatchObject({ objectKind: 'line', x2: 8, y2: 6 });
+    expect(lineObjectFromPoints({ x: 0, y: 0 }, { x: 8, y: 6 })).toMatchObject({
+      objectKind: 'line',
+      x2: 8,
+      y2: 6
+    });
     expect(lineObjectFromPoints({ x: 1, y: 1 }, { x: 1.1, y: 1 })).toBeNull();
+  });
+
+  it('builds center-start-end arcs with a positive sweep', () => {
+    const arc = arcObjectFromPoints(
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 10 }
+    );
+    expect(arc).toMatchObject({
+      objectKind: 'arc',
+      radius: 10,
+      startAngleDeg: 0,
+      endAngleDeg: 90
+    });
+    const preview = arcPreviewPoints(
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 10 },
+      16
+    );
+    expect(preview[0]).toEqual({ x: 10, y: 0 });
+    expect(preview.at(-1)?.x).toBeCloseTo(0);
+    expect(preview.at(-1)?.y).toBeCloseTo(10);
+    expect(
+      arcDimension({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 10 })
+    ).toEqual({ radius: 10, sweepDeg: 90 });
+  });
+
+  it('rejects arcs whose radius is below the sketch tolerance', () => {
+    expect(
+      arcObjectFromPoints({ x: 0, y: 0 }, { x: 0.1, y: 0 }, { x: 0, y: 0.1 })
+    ).toBeNull();
+  });
+
+  it('rejects a zero-sweep arc instead of silently making a circle', () => {
+    expect(
+      arcObjectFromPoints({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 })
+    ).toBeNull();
   });
 });
 
@@ -134,8 +177,8 @@ describe('dimensionForInProgress', () => {
     expect(
       dimensionForInProgress('rectangle', { x: 0, y: 0 }, { x: 8, y: -6 })
     ).toBe('8 × 6');
-    expect(
-      dimensionForInProgress('line', { x: 0, y: 0 }, { x: 3, y: 4 })
-    ).toBe('5');
+    expect(dimensionForInProgress('line', { x: 0, y: 0 }, { x: 3, y: 4 })).toBe(
+      '5'
+    );
   });
 });

@@ -84,6 +84,81 @@ export function lineObjectFromPoints(
   return { objectKind: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
 }
 
+function positiveSweep(startAngle: number, endAngle: number): number {
+  let sweep = (endAngle - startAngle) % (Math.PI * 2);
+  if (sweep < 0) {
+    sweep += Math.PI * 2;
+  }
+  return sweep;
+}
+
+/** A center-start-end arc, swept counter-clockwise from start to end. */
+export function arcObjectFromPoints(
+  center: SketchPoint,
+  start: SketchPoint,
+  end: SketchPoint
+): SketchObjectData | null {
+  const radius = Math.hypot(start.x - center.x, start.y - center.y);
+  if (radius < MIN_PROFILE_SIZE) {
+    return null;
+  }
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const endAngle = Math.atan2(end.y - center.y, end.x - center.x);
+  const sweep = positiveSweep(startAngle, endAngle);
+  if (sweep < (Math.PI / 180) * 1) {
+    return null;
+  }
+  const startAngleDeg = (startAngle * 180) / Math.PI;
+  return {
+    objectKind: 'arc',
+    centerX: center.x,
+    centerY: center.y,
+    radius,
+    startAngleDeg,
+    endAngleDeg: startAngleDeg + (sweep * 180) / Math.PI
+  };
+}
+
+/** Sampled preview for a center-start-end arc gesture. */
+export function arcPreviewPoints(
+  center: SketchPoint,
+  start: SketchPoint,
+  end: SketchPoint,
+  segments = 64
+): SketchPoint[] {
+  const radius = Math.hypot(start.x - center.x, start.y - center.y);
+  if (radius < 1e-9) {
+    return [center, end];
+  }
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const endAngle = Math.atan2(end.y - center.y, end.x - center.x);
+  const sweep = positiveSweep(startAngle, endAngle);
+  const steps = Math.max(
+    4,
+    Math.ceil((sweep / (Math.PI * 2)) * Math.max(8, segments))
+  );
+  return Array.from({ length: steps + 1 }, (_, index) => {
+    const angle = startAngle + (sweep * index) / steps;
+    return {
+      x: center.x + Math.cos(angle) * radius,
+      y: center.y + Math.sin(angle) * radius
+    };
+  });
+}
+
+export function arcDimension(
+  center: SketchPoint,
+  start: SketchPoint,
+  end: SketchPoint
+): { radius: number; sweepDeg: number } {
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const endAngle = Math.atan2(end.y - center.y, end.x - center.x);
+  return {
+    radius: Math.hypot(start.x - center.x, start.y - center.y),
+    sweepDeg: (positiveSweep(startAngle, endAngle) * 180) / Math.PI
+  };
+}
+
 /**
  * Intersects a world-space ray with the sketch plane and returns the point in
  * sketch-local (u, v) coordinates; null when the ray is parallel or hits
