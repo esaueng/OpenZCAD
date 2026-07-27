@@ -6,6 +6,13 @@
       "faceCount": 13
     }
   ],
+  "flange": [
+    {
+      "name": "Pipe Flange",
+      "volume": 90411.82742259275,
+      "faceCount": 2789
+    }
+  ],
   "heatsink": [
     {
       "name": "Heat Sink",
