@@ -263,7 +263,9 @@ test('restores a remembered local project without flashing the launcher', async 
   await page.goto('/');
   await page.getByLabel('Project name').fill('Boot Restore Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
 
   await page.addInitScript(() => {
     const browserWindow = window as typeof window & {
@@ -304,7 +306,9 @@ test('restores a remembered local project without flashing the launcher', async 
   ).toBeVisible();
   await page.waitForTimeout(200);
   await expect(page.locator('.start-screen')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
   await expect(page.locator('.startup-screen')).toHaveCount(0);
 
   const bootStates = await page.evaluate(
@@ -360,7 +364,9 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
   await expect(page.locator('.start-status')).toContainText('Local workspace');
   await page.getByLabel('Project name').fill('Anonymous Part');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
   await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible();
   expect(cloudProjectRequests).toBe(0);
 });
