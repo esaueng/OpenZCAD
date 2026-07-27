@@ -54,15 +54,20 @@ import {
   axisLockPoint,
   dimensionForInProgress,
   lineObjectFromPoints,
+  nearestSnapTarget,
   screenRayToPlanePoint,
   sketchEntryPose,
   sketchObjectFromDrag,
   snapSketchPoint,
-  type SketchPoint
+  snapTargetsForObject,
+  type SketchPoint,
+  type SnapTarget,
+  type SnapTargetKind
 } from '../lib/sketch/session';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
+import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
@@ -1153,6 +1158,9 @@ export function ModelViewer({
     moved: false
   });
   const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
+  /** Entity-snap candidates from committed sketch objects + cursor marker. */
+  const snapTargetsRef = useRef<SnapTarget[]>([]);
+  const sketchSnapMarkerRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
   const sketchReturnRef = useRef<{
     position: THREE.Vector3;
@@ -1631,6 +1639,14 @@ export function ModelViewer({
     sketchDimLabel.hidden = true;
     host.appendChild(sketchDimLabel);
     sketchDimLabelRef.current = sketchDimLabel;
+
+    // Entity-snap glyph pinned to the cursor: endpoint □, midpoint △, center ◎.
+    const sketchSnapMarker = document.createElement('div');
+    sketchSnapMarker.className = 'sketch-snap-marker';
+    sketchSnapMarker.hidden = true;
+    sketchSnapMarker.setAttribute('aria-hidden', 'true');
+    host.appendChild(sketchSnapMarker);
+    sketchSnapMarkerRef.current = sketchSnapMarker;
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -2188,7 +2204,7 @@ export function ModelViewer({
       }
     }
 
-    /** Sketch-local point under the cursor, snapped to the grid. */
+    /** Sketch-local point under the cursor: entity snap, then grid snap. */
     function sketchPointAt(event: PointerEvent): SketchPoint | null {
       const mode = sketchModeRef.current;
       if (!mode) {
@@ -2203,7 +2219,65 @@ export function ModelViewer({
       if (!point) {
         return null;
       }
+      const target = nearestSnapTarget(
+        point,
+        snapTargetsRef.current,
+        10 * sketchWorldPerPixel(mode.basis.origin)
+      );
+      if (target) {
+        positionSketchSnapMarker(event, target.kind);
+        return { x: target.x, y: target.y };
+      }
+      hideSketchSnapMarker();
       return mode.snapStep ? snapSketchPoint(point, mode.snapStep) : point;
+    }
+
+    /** Approximate world units per CSS pixel at the sketch plane. */
+    function sketchWorldPerPixel(origin: {
+      x: number;
+      y: number;
+      z: number;
+    }): number {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const height = Math.max(rect.height, 1);
+      const camera = context.activeCamera;
+      if (camera instanceof THREE.OrthographicCamera) {
+        return Math.max(
+          (camera.top - camera.bottom) / camera.zoom / height,
+          1e-6
+        );
+      }
+      const perspective = camera as THREE.PerspectiveCamera;
+      const distance = context.camera.position.distanceTo(
+        new THREE.Vector3(origin.x, origin.y, origin.z)
+      );
+      return (
+        (2 * distance * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) /
+        height
+      );
+    }
+
+    function positionSketchSnapMarker(
+      event: PointerEvent,
+      kind: SnapTargetKind
+    ) {
+      const marker = sketchSnapMarkerRef.current;
+      const hostRect = hostRef.current?.getBoundingClientRect();
+      if (!marker || !hostRect) {
+        return;
+      }
+      marker.dataset.kind = kind;
+      marker.title = kind;
+      marker.style.left = `${event.clientX - hostRect.left}px`;
+      marker.style.top = `${event.clientY - hostRect.top}px`;
+      marker.hidden = false;
+    }
+
+    function hideSketchSnapMarker() {
+      const marker = sketchSnapMarkerRef.current;
+      if (marker) {
+        marker.hidden = true;
+      }
     }
 
     function positionSketchDimLabel(
@@ -3321,6 +3395,8 @@ export function ModelViewer({
       offsetChipRef.current = null;
       host.removeChild(sketchDimLabel);
       sketchDimLabelRef.current = null;
+      host.removeChild(sketchSnapMarker);
+      sketchSnapMarkerRef.current = null;
       offsetSetterRef.current = null;
       moveGizmoHudRef.current = null;
       contextRef.current = null;
@@ -3624,7 +3700,19 @@ export function ModelViewer({
           const suffix =
             selectedTopology?.bodyId === primaryId &&
             selectedTopology.topologyId
-              ? ` · ${selectedTopology.topologyId}`
+              ? ` · ${
+                  selectedTopology.kind === 'edge'
+                    ? edgeLabel(
+                        body,
+                        selectedTopology.hash,
+                        selectedTopology.topologyId
+                      )
+                    : faceLabel(
+                        body,
+                        selectedTopology.hash,
+                        selectedTopology.topologyId
+                      )
+                }`
               : '';
           const count =
             selectedBodyIds.length > 1 ? ` +${selectedBodyIds.length - 1}` : '';
@@ -4173,6 +4261,10 @@ export function ModelViewer({
       if (label) {
         label.hidden = true;
       }
+      const marker = sketchSnapMarkerRef.current;
+      if (marker) {
+        marker.hidden = true;
+      }
       context.controls.enableRotate = true;
       const saved = sketchReturnRef.current;
       sketchReturnRef.current = null;
@@ -4228,14 +4320,19 @@ export function ModelViewer({
     const context = contextRef.current;
     const rig = sketchRigRef.current;
     if (!context || !rig || !sketchMode) {
+      snapTargetsRef.current = [];
       return;
     }
-    rig.setObjects(
-      sketchMode.objects,
-      sketchMode.selectedObjectId,
-      (value) =>
-        evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0
-    );
+    const resolve = (value: unknown) =>
+      evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
+    rig.setObjects(sketchMode.objects, sketchMode.selectedObjectId, resolve);
+    snapTargetsRef.current = sketchMode.objects.flatMap((object) => {
+      try {
+        return snapTargetsForObject(object.data, resolve);
+      } catch {
+        return [];
+      }
+    });
     context.requestRender();
   }, [sketchMode]);
 
@@ -4252,6 +4349,10 @@ export function ModelViewer({
       const label = sketchDimLabelRef.current;
       if (label) {
         label.hidden = true;
+      }
+      const marker = sketchSnapMarkerRef.current;
+      if (marker) {
+        marker.hidden = true;
       }
       contextRef.current?.requestRender();
     }

@@ -299,3 +299,109 @@ export function dimensionForInProgress(
   }
   return `${round(Math.hypot(dx, dy))}`;
 }
+
+// ---------------------------------------------------------------------------
+// Entity snapping (endpoint / midpoint / center)
+// ---------------------------------------------------------------------------
+
+export type SnapTargetKind = 'endpoint' | 'midpoint' | 'center';
+
+export interface SnapTarget extends SketchPoint {
+  kind: SnapTargetKind;
+}
+
+/**
+ * Snap candidates for one committed sketch object. Points resolve through the
+ * same parameter scope as the renderer, so expressions snap at their evaluated
+ * positions.
+ */
+export function snapTargetsForObject(
+  data: SketchObjectData,
+  resolve: (value: unknown) => number
+): SnapTarget[] {
+  switch (data.objectKind) {
+    case 'line': {
+      const x1 = resolve(data.x1);
+      const y1 = resolve(data.y1);
+      const x2 = resolve(data.x2);
+      const y2 = resolve(data.y2);
+      return [
+        { x: x1, y: y1, kind: 'endpoint' },
+        { x: x2, y: y2, kind: 'endpoint' },
+        { x: (x1 + x2) / 2, y: (y1 + y2) / 2, kind: 'midpoint' }
+      ];
+    }
+    case 'rectangle': {
+      const halfWidth = resolve(data.width) / 2;
+      const halfHeight = resolve(data.height) / 2;
+      const cx = resolve(data.centerX);
+      const cy = resolve(data.centerY);
+      const corners: SnapTarget[] = [
+        { x: cx - halfWidth, y: cy - halfHeight, kind: 'endpoint' },
+        { x: cx + halfWidth, y: cy - halfHeight, kind: 'endpoint' },
+        { x: cx + halfWidth, y: cy + halfHeight, kind: 'endpoint' },
+        { x: cx - halfWidth, y: cy + halfHeight, kind: 'endpoint' }
+      ];
+      return [
+        ...corners,
+        { x: cx, y: cy, kind: 'center' },
+        { x: cx - halfWidth, y: cy, kind: 'midpoint' },
+        { x: cx + halfWidth, y: cy, kind: 'midpoint' },
+        { x: cx, y: cy - halfHeight, kind: 'midpoint' },
+        { x: cx, y: cy + halfHeight, kind: 'midpoint' }
+      ];
+    }
+    case 'circle':
+    case 'polygon': {
+      return [
+        { x: resolve(data.centerX), y: resolve(data.centerY), kind: 'center' }
+      ];
+    }
+    case 'arc': {
+      const radius = resolve(data.radius);
+      const cx = resolve(data.centerX);
+      const cy = resolve(data.centerY);
+      const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
+      const end = (resolve(data.endAngleDeg) * Math.PI) / 180;
+      let sweep = end - start;
+      if (sweep <= 0) {
+        sweep += Math.PI * 2;
+      }
+      const onArc = (angle: number): SketchPoint => ({
+        x: cx + Math.cos(angle) * radius,
+        y: cy + Math.sin(angle) * radius
+      });
+      const arcStart = onArc(start);
+      const arcEnd = onArc(start + sweep);
+      const arcMid = onArc(start + sweep / 2);
+      return [
+        { ...arcStart, kind: 'endpoint' },
+        { ...arcEnd, kind: 'endpoint' },
+        { ...arcMid, kind: 'midpoint' },
+        { x: cx, y: cy, kind: 'center' }
+      ];
+    }
+  }
+}
+
+/**
+ * Nearest snap target within `tolerance` (sketch units) of the pointer, or
+ * null. Ties resolve in target order, so callers should order targets
+ * endpoint-first when stacking kinds.
+ */
+export function nearestSnapTarget(
+  point: SketchPoint,
+  targets: readonly SnapTarget[],
+  tolerance: number
+): SnapTarget | null {
+  let best: SnapTarget | null = null;
+  let bestDistance = tolerance;
+  for (const target of targets) {
+    const distance = Math.hypot(point.x - target.x, point.y - target.y);
+    if (distance <= bestDistance) {
+      best = target;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
