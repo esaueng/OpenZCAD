@@ -20,5 +20,13 @@
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
     "AI_REASONING_EFFORT": "high"
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openzcad-beta",
+      "database_id": "7263c6f1-8781-40d1-a0fa-ea03ce874ef2",
+      "migrations_dir": "apps/web/migrations"
+    }
+  ]
 }
