@@ -538,6 +538,130 @@ test('models a parametric part and exports a true STEP file', async ({
   await paramInput.press('Enter');
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
   await expect(page.locator('.panel-body')).toContainText('34560');
+
+  // Undo while the untouched input is focused must not let the stale visible
+  // draft recommit over the newer canonical expression on blur. Dispatching on
+  // window keeps focus in the field while exercising the app shortcut.
+  await paramInput.focus();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'z',
+        ctrlKey: true,
+        bubbles: true
+      })
+    );
+  });
+  await expect(page.locator('.param-row')).toHaveAttribute('title', 'w = 30');
+  await paramInput.blur();
+  await expect(paramInput).toHaveValue('30');
+});
+
+test('refuses an invalid project name instead of working locally', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+
+  // The form itself blocks an over-long name and explains the limit.
+  await page.getByLabel('Project name').fill('n'.repeat(201));
+  await expect(page.getByRole('alert')).toContainText(
+    'at most 200 characters'
+  );
+  await expect(
+    page.getByRole('button', { name: 'Create project' })
+  ).toBeDisabled();
+
+  // A server-side rejection must surface too. It used to be swallowed into
+  // local mode, persisting the very project the API had just refused.
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 400,
+          json: { error: '"name" must be at most 200 characters.' }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await page.getByLabel('Project name').fill('Rejected Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await expect(page.locator('.start-status')).toContainText(
+    'at most 200 characters'
+  );
+  // Still on the start screen: no workspace, and nothing persisted locally.
+  await expect(page.getByLabel('Project name')).toBeVisible();
+  await expect(page.locator('.start-status')).not.toContainText(
+    'Working locally'
+  );
+});
+
+test('settings name their sections and search individual settings', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Settings' })
+  ).toBeVisible();
+
+  // "Default units" is a setting title, not a section label; searching it used
+  // to empty the nav while the setting stayed visible in an unchanged section.
+  await page.getByLabel('Find a setting').fill('Default units');
+  await expect(
+    page.getByRole('button', { name: 'General', exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Viewport', exact: true })
+  ).toHaveCount(0);
+
+  await page.getByLabel('Find a setting').fill('zzzz-no-match');
+  await expect(page.locator('.settings-nav-empty')).toContainText(
+    'No settings match'
+  );
+  await page.getByLabel('Find a setting').fill('');
+
+  // The search itself is desktop-only, but below 580px the nav collapses to
+  // icons whose labels are hidden; those buttons used to reach the
+  // accessibility tree with no name at all.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole('button', { name: 'General', exact: true })
+  ).toHaveAttribute('aria-current', 'page');
+  await expect(
+    page.getByRole('button', { name: 'Viewport', exact: true })
+  ).toBeVisible();
+});
+
+test('command palette and shortcut overlay behave as modal dialogs', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('A11y Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+
+  await page.keyboard.press('Control+k');
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await expect(palette).toHaveAttribute('aria-modal', 'true');
+  // The highlighted row is now exposed, not merely styled.
+  await expect(palette.locator('.palette-row.active')).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  await expect(page.getByLabel('Search commands')).toHaveAttribute(
+    'aria-activedescendant',
+    /command-palette-option-\d+/
+  );
+  await page.keyboard.press('Escape');
+
+  await page.keyboard.press('?');
+  const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect(shortcuts).toHaveAttribute('aria-modal', 'true');
+  // Focus used to stay on BODY, leaving the dialog unreachable by keyboard.
+  await expect(shortcuts.locator(':focus')).toHaveCount(1);
 });
 
 test('viewport context menu hides a body and the sidebar eye restores it', async ({

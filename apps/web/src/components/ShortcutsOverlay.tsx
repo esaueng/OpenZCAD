@@ -1,3 +1,6 @@
+import { useRef } from 'react';
+import { useModalFocus } from '../lib/useModalFocus';
+
 interface ShortcutsOverlayProps {
   onClose(): void;
 }
@@ -53,6 +56,11 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
 
 /** "?" keyboard cheat sheet. */
 export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // Opened by "?" from the workspace, so nothing inside has focus yet.
+  useModalFocus(dialogRef, { autoFocus: true });
+
   return (
     <div
       className="modal-backdrop"
@@ -62,7 +70,13 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
         }
       }}
     >
-      <div className="shortcuts-card" role="dialog" aria-label="Keyboard shortcuts">
+      <div
+        className="shortcuts-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Keyboard shortcuts"
+        ref={dialogRef}
+      >
         <div className="shortcuts-header">
           <h2>Keyboard shortcuts</h2>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
