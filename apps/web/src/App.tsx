@@ -126,6 +126,7 @@ import {
 } from './lib/interaction/machine';
 import type { SelectionActionId } from './lib/interaction/capabilities';
 import { frameFromFace } from './lib/sketch/session';
+import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
 import { SketchToolRail } from './components/SketchToolRail';
 import { SketchEntityEditor } from './components/SketchEntityEditor';
 import { objectPolyline } from './components/viewer/sketchModeController';
@@ -714,12 +715,29 @@ export function App() {
     const units = doc.units;
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
-      return { label: `${selectedEdges.length} edges` };
+      const total = selectedEdges.reduce((sum, edge) => {
+        const body = representations[edge.bodyId];
+        return sum + (edgeLength(body, edge.hash, edge.topologyId) ?? 0);
+      }, 0);
+      return {
+        label: `${selectedEdges.length} edges`,
+        detail: total > 0 ? `≈ ${round(total)} ${units}` : undefined
+      };
     }
     if (selectedEdges.length === 1 || selectedTopology?.kind === 'edge') {
+      const bodyId = selectedEdges[0]?.bodyId ?? selectedTopology?.bodyId;
+      const body = bodyId ? representations[bodyId] : undefined;
+      const hash = selectedEdges[0]?.hash ?? selectedTopology?.hash;
+      const topologyId =
+        selectedEdges[0]?.topologyId ?? selectedTopology?.topologyId;
+      const name = edgeLabel(body, hash, topologyId);
+      const length = edgeLength(body, hash, topologyId);
       return {
-        label: '1 edge',
-        detail: selectedEdges[0]?.topologyId ?? selectedTopology?.topologyId
+        label: body ? `${body.name} · ${name}` : name,
+        detail:
+          length !== null && length > 0
+            ? `${round(length)} ${units}`
+            : undefined
       };
     }
     if (selectedTopology?.kind === 'face') {
@@ -737,11 +755,13 @@ export function App() {
           detail: `Ø ${round(geometry.diameter)} ${units}`
         };
       }
+      const name = faceLabel(
+        body,
+        selectedTopology.hash,
+        selectedTopology.topologyId
+      );
       return {
-        label: '1 face',
-        detail: body
-          ? `${body.name} · ${selectedTopology.topologyId}`
-          : selectedTopology.topologyId
+        label: body ? `${body.name} · ${name}` : name
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -2936,6 +2956,31 @@ export function App() {
     );
   }
 
+  function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
+    if (interaction.mode !== 'idle') {
+      dispatchInteraction({ type: 'clear' });
+    }
+    setSelectedEdges([]);
+    setSelectedTopology(null);
+    const nextIds = additive
+      ? selectedBodyIds.includes(bodyId)
+        ? selectedBodyIds.filter((id) => id !== bodyId)
+        : [...selectedBodyIds, bodyId]
+      : [bodyId];
+    setSelectedBodyIds(nextIds);
+    if (nextIds.length === 1) {
+      setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
+      setSelectedFeatureNodeId(featureNodeIdForBody(nextIds[0]!));
+    } else {
+      setSelectedFeatureNodeId(null);
+    }
+    setStatus(
+      nextIds.length > 0
+        ? `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+        : 'Body selection cleared.'
+    );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     if (
       executeCommand(
@@ -3608,6 +3653,8 @@ export function App() {
           warnings={warnings}
           checkpoints={doc?.checkpoints ?? []}
           onSelectFeature={handleSelectFeatureFromTree}
+          onSelectBody={handleSelectBodyFromTree}
+          selectedBodyIds={selectedBodyIds}
           onToggleBodyVisibility={toggleBodyVisibility}
           onFeatureContextMenu={handleFeatureContextMenu}
           onSetParameter={(name, expression) =>

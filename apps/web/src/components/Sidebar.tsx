@@ -212,15 +212,38 @@ interface SidebarProps {
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
   selectedFeatureNodeId: string | null;
+  selectedBodyIds: string[];
   hiddenBodyIds: ReadonlySet<string>;
   warnings: string[];
   checkpoints: ProjectCheckpoint[];
   onSelectFeature(nodeId: string): void;
+  onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
   onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onDeleteFeature(featureId: FeatureId, name: string): void;
+}
+
+/** Body kind icons mirror the feature icons so the two lists read as one. */
+function bodyIcon(body: BodyRepresentation) {
+  const size = 13;
+  switch (body.source) {
+    case 'primitive':
+      return <Box size={size} aria-hidden="true" />;
+    case 'sketch':
+      return <PenLine size={size} aria-hidden="true" />;
+    case 'extrude':
+      return <Layers size={size} aria-hidden="true" />;
+    case 'revolve':
+      return <RotateCw size={size} aria-hidden="true" />;
+    case 'boolean':
+      return <Combine size={size} aria-hidden="true" />;
+    case 'transform':
+      return <Move3d size={size} aria-hidden="true" />;
+    default:
+      return <FileBox size={size} aria-hidden="true" />;
+  }
 }
 
 export function Sidebar({
@@ -229,16 +252,36 @@ export function Sidebar({
   features,
   representations,
   selectedFeatureNodeId,
+  selectedBodyIds,
   hiddenBodyIds,
   warnings,
   checkpoints,
   onSelectFeature,
+  onSelectBody,
   onToggleBodyVisibility,
   onFeatureContextMenu,
   onSetParameter,
   onDeleteParameter,
   onDeleteFeature
 }: SidebarProps) {
+  // Bodies in feature-history order so the tree matches the timeline below.
+  const bodies: BodyRepresentation[] = [];
+  const seen = new Set<string>();
+  for (const feature of features) {
+    if (feature.bodyId && !seen.has(feature.bodyId)) {
+      const body = representations[feature.bodyId];
+      if (body) {
+        seen.add(feature.bodyId);
+        bodies.push(body);
+      }
+    }
+  }
+  for (const body of Object.values(representations)) {
+    if (!seen.has(body.bodyId)) {
+      seen.add(body.bodyId);
+      bodies.push(body);
+    }
+  }
   return (
     <aside className="sidebar" aria-label="Model browser">
       <div className="sidebar-label">Model</div>
@@ -264,8 +307,63 @@ export function Sidebar({
         )}
       </section>
 
+      <section className="sidebar-section">
+        <h3 className="section-title">Bodies</h3>
+        <div className="feature-list" role="list" aria-label="Bodies">
+          {bodies.length === 0 && (
+            <p className="muted sidebar-hint">
+              No bodies yet. Create a primitive or extrude a sketch.
+            </p>
+          )}
+          {bodies.map((body) => {
+            const hidden = hiddenBodyIds.has(body.bodyId);
+            const selected = selectedBodyIds.includes(body.bodyId);
+            return (
+              <div
+                key={body.bodyId}
+                className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
+                role="listitem"
+              >
+                <button
+                  type="button"
+                  className="body-row-main"
+                  aria-pressed={selected}
+                  title={`${body.name} — click to select, ⇧click to add`}
+                  onClick={(event) =>
+                    onSelectBody(
+                      body.bodyId,
+                      event.shiftKey || event.metaKey || event.ctrlKey
+                    )
+                  }
+                >
+                  <span className="feature-icon">{bodyIcon(body)}</span>
+                  <span className="feature-name">{body.name}</span>
+                  {body.consumed && <small className="feature-flag">consumed</small>}
+                </button>
+                {!body.consumed && (
+                  <button
+                    type="button"
+                    className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
+                    title={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
+                    aria-label={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
+                    aria-pressed={hidden}
+                    onClick={() => onToggleBodyVisibility(body.bodyId)}
+                  >
+                    {hidden ? (
+                      <EyeOff size={12} aria-hidden="true" />
+                    ) : (
+                      <Eye size={12} aria-hidden="true" />
+                    )}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       <section className="sidebar-section grow">
-        <h3 className="section-title">Features</h3>
+        <h3 className="section-title">History</h3>
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">

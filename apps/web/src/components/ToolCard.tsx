@@ -1,5 +1,9 @@
 import { Circle, Layers3, MoveUpRight, PenLine, Spline, X } from 'lucide-react';
-import type { ToolCardIcon, ToolCardModel } from '../lib/interaction/machine';
+import type {
+  OperationPhase,
+  ToolCardIcon,
+  ToolCardModel
+} from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
 
 const ICONS: Record<ToolCardIcon, typeof MoveUpRight> = {
@@ -8,6 +12,14 @@ const ICONS: Record<ToolCardIcon, typeof MoveUpRight> = {
   fillet: Spline,
   extrude: Layers3,
   sketch: PenLine
+};
+
+const PHASE_LABELS: Record<OperationPhase, string> = {
+  armed: 'Ready',
+  dragging: 'Dragging',
+  'exact-entry': 'Exact entry',
+  validating: 'Validating',
+  failed: 'Failed'
 };
 
 interface ToolCardProps {
@@ -34,7 +46,14 @@ export function ToolCard({ model, onAction, onClose }: ToolCardProps) {
         <Icon size={16} aria-hidden="true" />
       </span>
       <span className="tool-card-copy">
-        <strong>{model.title}</strong>
+        <strong>
+          {model.title}
+          {model.phase ? (
+            <span className={`tool-card-phase pill-${model.phase}`}>
+              {PHASE_LABELS[model.phase]}
+            </span>
+          ) : null}
+        </strong>
         {model.error ? (
           <small className="tool-card-error" role="alert">
             {model.error}

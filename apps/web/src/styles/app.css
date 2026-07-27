@@ -647,7 +647,8 @@
   gap: 2px;
 }
 
-.feature-row {
+.feature-row,
+.body-row {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -656,18 +657,21 @@
   border-radius: var(--radius-sm);
 }
 
-.feature-row.selected {
+.feature-row.selected,
+.body-row.selected {
   background: var(--color-accent-dim);
   border-left-color: var(--color-accent);
 }
 
-.feature-row.consumed .feature-name {
+.feature-row.consumed .feature-name,
+.body-row.consumed .feature-name {
   color: var(--color-text-subtle);
   text-decoration: line-through;
   text-decoration-color: rgba(139, 148, 158, 0.5);
 }
 
-.feature-row-main {
+.feature-row-main,
+.body-row-main {
   min-height: 28px;
   min-width: 0;
   flex: 1;
@@ -682,11 +686,14 @@
 }
 
 .feature-row:hover .feature-row-main,
-.feature-row.selected .feature-row-main {
+.feature-row.selected .feature-row-main,
+.body-row:hover .body-row-main,
+.body-row.selected .body-row-main {
   color: var(--color-text);
 }
 
-.feature-row:not(.selected):hover {
+.feature-row:not(.selected):hover,
+.body-row:not(.selected):hover {
   background: var(--color-surface-hover);
 }
 
@@ -2678,6 +2685,8 @@
 
 .feature-row:hover .row-visibility,
 .feature-row.hidden-body .row-visibility,
+.body-row:hover .row-visibility,
+.body-row.hidden-body .row-visibility,
 .row-visibility:focus-visible {
   opacity: 1;
 }
@@ -2691,7 +2700,8 @@
   color: var(--color-warning);
 }
 
-.feature-row.hidden-body .feature-name {
+.feature-row.hidden-body .feature-name,
+.body-row.hidden-body .feature-name {
   color: var(--color-text-subtle);
   font-style: italic;
 }
@@ -2756,6 +2766,7 @@
 .rail-row,
 .rail-views button,
 .feature-row-main,
+.body-row-main,
 .param-add button,
 .start-project-list button,
 .callout-value,
@@ -2806,7 +2817,8 @@ textarea {
 }
 
 /* Feature/parameter rows sweep instead of snapping. */
-.feature-row {
+.feature-row,
+.body-row {
   transition:
     background-color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
@@ -3709,8 +3721,43 @@ textarea {
 }
 
 .tool-card-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: var(--fs-sm);
   font-weight: 600;
+}
+
+/* Explicit command-state pill so armed/dragging/validating/failed read at a
+   glance instead of only through hint copy. */
+.tool-card-phase {
+  padding: 1px 7px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.tool-card-phase.pill-dragging,
+.tool-card-phase.pill-exact-entry {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.tool-card-phase.pill-validating {
+  color: var(--color-preview);
+  background: rgba(88, 214, 194, 0.1);
+  border-color: rgba(88, 214, 194, 0.4);
+}
+
+.tool-card-phase.pill-failed {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.45);
 }
 
 .tool-card-copy small {
@@ -3937,6 +3984,47 @@ textarea {
   font-size: var(--fs-xs);
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* Entity-snap glyph pinned to the cursor while sketching. The marker is
+   centered on the pointer via transform so left/top track the event. */
+.sketch-snap-marker {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-success);
+  border-radius: 2px;
+  background: rgba(11, 15, 20, 0.55);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.sketch-snap-marker[data-kind='midpoint'] {
+  width: 0;
+  height: 0;
+  background: transparent;
+  border-top: 0;
+  border-right: 8px solid transparent;
+  border-bottom: 13px solid var(--color-success);
+  border-left: 8px solid transparent;
+  border-radius: 0;
+}
+
+.sketch-snap-marker[data-kind='center'] {
+  border-radius: 999px;
+}
+
+.sketch-snap-marker[data-kind='center']::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  content: '';
+  background: var(--color-success);
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
 }
 
 /* Sketch drawing tools, floating under the tool card. */
