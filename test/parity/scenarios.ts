@@ -114,15 +114,24 @@ function buildBoreGrid(): ProjectDocument {
 }
 
 /**
- * Known kernel defects, keyed by scenario. flange: the bolt-circle subtract
- * fails with "non-manifold result" because the adapter runs `unifyFaces` on
- * the coaxial rim+hub union before cutting, and the merged coplanar bottom
- * face poisons the cut (brepkit defect; minimal native repro in the tracking
- * task). The demo's edge pick then finds no rim edges and seeding throws.
+ * Known kernel defects, keyed by scenario (currently none pinned as build
+ * failures). The flange bolt-circle pin was removed when the kernel bump
+ * made the scenario build — but note its baseline faceCount (~2789) is the
+ * mesh-fallback signature: the analytic cut still fails and the mesh-boolean
+ * fallback carries the demo. The underlying unify-then-cut defect remains
+ * tracked in brepkit; when it is fixed the flange faceCount should collapse
+ * to tens of faces and the baseline must be rerecorded.
+ *
+ * KNOWN RED: that fallback mesh is not watertight — the flange body reports
+ * ~873 boundary edges on kernel 2.128.5, so `produces watertight, manifold
+ * body meshes` and `exports a watertight STL` both fail for flange, and are
+ * expected to until the analytic cut lands. Every other scenario passes
+ * (22 of 24). These two are deliberately left failing rather than pinned:
+ * unlike a build failure there is no expectation mechanism for them, and
+ * suppressing a watertightness assertion is the kind of green-looking
+ * blindfold this harness exists to prevent.
  */
-const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {
-  flange: /found no exact edges for rim \+ hub lip/
-};
+const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
 
 /**
  * bracket: the Rev C base-corner fillet (4 vertical edges, r=3) fails in the
