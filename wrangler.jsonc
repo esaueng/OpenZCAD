@@ -16,7 +16,9 @@
   },
   "vars": {
     "ENVIRONMENT": "beta",
-    "AUTH_MODE": "development",
+    "AUTH_MODE": "email-code",
+    "AUTH_EMAIL_FROM": "login@auth.esau.app",
+    "AUTH_SESSION_DAYS": "30",
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
     "AI_REASONING_EFFORT": "high"
@@ -27,6 +29,12 @@
       "database_name": "openzcad-beta",
       "database_id": "7263c6f1-8781-40d1-a0fa-ea03ce874ef2",
       "migrations_dir": "apps/web/migrations"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["login@auth.esau.app"]
     }
   ]
 }

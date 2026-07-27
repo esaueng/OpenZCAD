@@ -3513,6 +3513,63 @@ textarea {
   font-size: var(--fs-xs);
 }
 
+.settings-sign-in-warning {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-3);
+  justify-content: space-between;
+}
+
+.settings-auth-form {
+  align-items: flex-start;
+  border-bottom: var(--border-thin);
+  display: grid;
+  gap: var(--sp-4);
+  grid-template-columns: minmax(210px, 1fr) minmax(280px, 0.85fr);
+  padding: var(--sp-4);
+}
+
+.settings-auth-form > span {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.settings-auth-form > span small {
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.settings-auth-controls {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.settings-auth-controls label {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.settings-auth-controls label > span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  font-weight: 600;
+}
+
+.settings-auth-controls input {
+  min-width: 0;
+  width: 100%;
+}
+
+.settings-auth-controls > input.mono {
+  font-size: var(--fs-md);
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+.settings-turnstile {
+  min-height: 65px;
+}
+
 .settings-long-field {
   padding: var(--sp-4);
   border-bottom: var(--border-thin);
@@ -3609,7 +3666,8 @@ textarea {
   }
 
   .settings-card-action.split,
-  .settings-shortcuts {
+  .settings-shortcuts,
+  .settings-auth-form {
     grid-template-columns: 1fr;
   }
 

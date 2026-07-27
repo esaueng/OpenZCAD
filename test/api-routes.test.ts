@@ -53,6 +53,24 @@ describe('worker api routes', () => {
     expect(response.status).toBe(200);
   });
 
+  it('exposes public email-auth readiness without exposing secrets', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/auth/config'),
+      {
+        ...env,
+        AUTH_MODE: 'email-code',
+        TURNSTILE_SITE_KEY: 'public-site-key',
+        TURNSTILE_SECRET_KEY: 'secret-never-returned'
+      } as never
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      mode: 'email-code',
+      emailCodeEnabled: false,
+      turnstileSiteKey: 'public-site-key'
+    });
+  });
+
   it('exposes the authenticated beta session', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/session'),
@@ -124,12 +142,12 @@ describe('worker api routes', () => {
     expect(JSON.stringify(status)).not.toContain('secret-test-value');
   });
 
-  it('exposes assistant status without a Cloudflare Access session', async () => {
+  it('exposes assistant status without an email-code session', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
       {
         ...env,
-        AUTH_MODE: 'cloudflare-access',
+        AUTH_MODE: 'email-code',
         OPENROUTER_API_KEY: 'secret-test-value'
       } as never
     );
@@ -141,10 +159,10 @@ describe('worker api routes', () => {
     });
   });
 
-  it('requires Cloudflare Access identity when configured', async () => {
+  it('requires an email-code identity for cloud routes', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects'),
-      { ...env, AUTH_MODE: 'cloudflare-access' } as never
+      { ...env, AUTH_MODE: 'email-code' } as never
     );
     expect(response.status).toBe(401);
   });
@@ -193,6 +211,28 @@ describe('worker api routes', () => {
     expect(roomFetch).toHaveBeenCalledOnce();
   });
 
+  it('rejects cross-origin collaboration WebSocket upgrades', async () => {
+    const created = await createProject('Protected live project');
+    const roomLookupsBefore = env.PROJECT_ROOM.getByName.mock.calls.length;
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/collaboration`,
+        {
+          headers: {
+            origin: 'https://attacker.example',
+            upgrade: 'websocket'
+          }
+        }
+      ),
+      env
+    );
+
+    expect(response.status).toBe(403);
+    expect(env.PROJECT_ROOM.getByName.mock.calls).toHaveLength(
+      roomLookupsBefore
+    );
+  });
+
   it('keeps assistant generation disabled until a secret is configured', async () => {
     const response = await worker.fetch(
       post('/api/assistant/proposals', {
@@ -233,7 +273,7 @@ describe('worker api routes', () => {
           }
         })
       }),
-      { ...env, AUTH_MODE: 'cloudflare-access' } as never
+      { ...env, AUTH_MODE: 'email-code' } as never
     );
 
     expect(response.status).toBe(503);

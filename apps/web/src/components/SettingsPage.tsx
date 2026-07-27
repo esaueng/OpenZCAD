@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Accessibility,
   Bot,
@@ -12,6 +12,9 @@ import {
   Info,
   KeyRound,
   Keyboard,
+  LogIn,
+  LogOut,
+  Mail,
   Monitor,
   RefreshCcw,
   Save,
@@ -24,6 +27,7 @@ import {
 import type {
   AppSettings,
   AppSettingsResponse,
+  AuthConfigResponse,
   AuthSession
 } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
@@ -43,6 +47,7 @@ type SectionId =
 interface SettingsPageProps {
   settings: AppSettings;
   accountState: AppSettingsResponse | null;
+  authConfig: AuthConfigResponse | null;
   session: AuthSession | null;
   busy: boolean;
   message: string;
@@ -51,6 +56,12 @@ interface SettingsPageProps {
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
   onTestAssistant(): void;
+  onRequestLoginCode(
+    email: string,
+    turnstileToken: string
+  ): Promise<{ challengeId: string; expiresInSeconds: number }>;
+  onVerifyLoginCode(challengeId: string, code: string): Promise<void>;
+  onLogout(): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
   onClose(): void;
@@ -84,22 +95,14 @@ const SECTIONS: Array<{
     label: 'Appearance',
     detail: 'Density and accessibility',
     icon: <Accessibility size={15} aria-hidden="true" />,
-    settings: [
-      'Theme',
-      'Interface density',
-      'Reduce motion'
-    ]
+    settings: ['Theme', 'Interface density', 'Reduce motion']
   },
   {
     id: 'viewport',
     label: 'Viewport',
     detail: 'Projection, grid, and display',
     icon: <Monitor size={15} aria-hidden="true" />,
-    settings: [
-      'Projection',
-      'Show construction grid',
-      'Display mode'
-    ]
+    settings: ['Projection', 'Show construction grid', 'Display mode']
   },
   {
     id: 'sketching',
@@ -118,11 +121,7 @@ const SECTIONS: Array<{
     label: 'Files & autosave',
     detail: 'Recovery, imports, and exports',
     icon: <FileCog size={15} aria-hidden="true" />,
-    settings: [
-      'Local autosave',
-      'Cloud revisions',
-      'STEP and STL exports'
-    ]
+    settings: ['Local autosave', 'Cloud revisions', 'STEP and STL exports']
   },
   {
     id: 'assistant',
@@ -146,9 +145,7 @@ const SECTIONS: Array<{
     label: 'Account',
     detail: 'Identity and synchronization',
     icon: <CircleUserRound size={15} aria-hidden="true" />,
-    settings: [
-      'Preference synchronization'
-    ]
+    settings: ['Cloud profile', 'Preference synchronization']
   },
   {
     id: 'shortcuts',
@@ -162,21 +159,14 @@ const SECTIONS: Array<{
     label: 'Privacy & data',
     detail: 'Local data and reset actions',
     icon: <ShieldCheck size={15} aria-hidden="true" />,
-    settings: [
-      'Reset application settings',
-      'Project data'
-    ]
+    settings: ['Reset application settings', 'Project data']
   },
   {
     id: 'advanced',
     label: 'Advanced',
     detail: 'Architecture and diagnostics',
     icon: <Info size={15} aria-hidden="true" />,
-    settings: [
-      'Geometry kernel',
-      'Document authority',
-      'Settings schema'
-    ]
+    settings: ['Geometry kernel', 'Document authority', 'Settings schema']
   }
 ];
 
@@ -272,9 +262,103 @@ function providerDefaults(provider: AppSettings['assistant']['provider']) {
   return { model: '', baseUrl: '' };
 }
 
+type TurnstileApi = {
+  render(
+    container: HTMLElement,
+    options: {
+      sitekey: string;
+      action: string;
+      callback(token: string): void;
+      'expired-callback'(): void;
+      'error-callback'(): void;
+    }
+  ): string;
+  remove(widgetId: string): void;
+  reset(widgetId: string): void;
+};
+
+function TurnstileWidget({
+  siteKey,
+  resetSignal,
+  onToken
+}: {
+  siteKey: string;
+  resetSignal: number;
+  onToken(token: string): void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    const renderWidget = () => {
+      const turnstile = (window as typeof window & { turnstile?: TurnstileApi })
+        .turnstile;
+      if (
+        disposed ||
+        !turnstile ||
+        !containerRef.current ||
+        widgetIdRef.current
+      ) {
+        return;
+      }
+      widgetIdRef.current = turnstile.render(containerRef.current, {
+        sitekey: siteKey,
+        action: 'email-code',
+        callback: onToken,
+        'expired-callback': () => onToken(''),
+        'error-callback': () => onToken('')
+      });
+    };
+    const existing = document.querySelector<HTMLScriptElement>(
+      'script[data-openzcad-turnstile]'
+    );
+    const script =
+      existing ??
+      Object.assign(document.createElement('script'), {
+        src: 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+        async: true,
+        defer: true
+      });
+    script.dataset.openzcadTurnstile = 'true';
+    script.addEventListener('load', renderWidget);
+    if (!existing) {
+      document.head.append(script);
+    }
+    renderWidget();
+    return () => {
+      disposed = true;
+      script.removeEventListener('load', renderWidget);
+      const turnstile = (window as typeof window & { turnstile?: TurnstileApi })
+        .turnstile;
+      if (widgetIdRef.current && turnstile) {
+        turnstile.remove(widgetIdRef.current);
+        widgetIdRef.current = null;
+      }
+    };
+  }, [onToken, siteKey]);
+
+  useEffect(() => {
+    const turnstile = (window as typeof window & { turnstile?: TurnstileApi })
+      .turnstile;
+    if (resetSignal > 0 && widgetIdRef.current && turnstile) {
+      turnstile.reset(widgetIdRef.current);
+    }
+  }, [resetSignal]);
+
+  return (
+    <div
+      className="settings-turnstile"
+      data-action="turnstile-spin-v1"
+      ref={containerRef}
+    />
+  );
+}
+
 export function SettingsPage({
   settings,
   accountState,
+  authConfig,
   session,
   busy,
   message,
@@ -283,6 +367,9 @@ export function SettingsPage({
   onSaveCredential,
   onDeleteCredential,
   onTestAssistant,
+  onRequestLoginCode,
+  onVerifyLoginCode,
+  onLogout,
   onReset,
   onApplyViewportDefaults,
   onClose
@@ -291,6 +378,11 @@ export function SettingsPage({
   const [query, setQuery] = useState('');
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginCode, setLoginCode] = useState('');
+  const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileReset, setTurnstileReset] = useState(0);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -329,6 +421,14 @@ export function SettingsPage({
     );
   }, [visibleSections]);
 
+  useEffect(() => {
+    if (session) {
+      setLoginCode('');
+      setLoginChallengeId(null);
+      setTurnstileToken('');
+    }
+  }, [session]);
+
   const patch = (next: Partial<AppSettings>) =>
     onChange({ ...settings, ...next });
   const patchAssistant = (next: Partial<AppSettings['assistant']>) =>
@@ -358,12 +458,12 @@ export function SettingsPage({
         <button
           className="primary"
           type="button"
-          disabled={busy || !accountState?.synced}
+          disabled={busy || !session || !accountState}
           onClick={onSave}
           title={
-            accountState?.synced
+            session && accountState
               ? 'Save preferences to your account'
-              : 'Account synchronization is unavailable; device settings are already saved'
+              : 'Sign in to save preferences to a cloud profile; device settings are already saved'
           }
         >
           <Save size={14} aria-hidden="true" />
@@ -411,7 +511,7 @@ export function SettingsPage({
             <Database size={13} aria-hidden="true" />
             <span>
               <strong>
-                {accountState?.synced ? 'Account sync ready' : 'Device only'}
+                {session ? 'Cloud profile connected' : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
             </span>
@@ -714,7 +814,10 @@ export function SettingsPage({
                   label="Direct manipulation"
                   onChange={(directManipulation) =>
                     patch({
-                      experiments: { ...settings.experiments, directManipulation }
+                      experiments: {
+                        ...settings.experiments,
+                        directManipulation
+                      }
                     })
                   }
                 />
@@ -932,6 +1035,7 @@ export function SettingsPage({
                       <input
                         type={showToken ? 'text' : 'password'}
                         value={token}
+                        disabled={!session}
                         autoComplete="off"
                         placeholder={
                           credential?.stored ? credential.hint : 'API token'
@@ -952,6 +1056,7 @@ export function SettingsPage({
                         type="submit"
                         disabled={
                           busy ||
+                          !session ||
                           token.trim().length < 8 ||
                           !credential?.storageAvailable
                         }
@@ -960,7 +1065,22 @@ export function SettingsPage({
                       </button>
                     </form>
                   </SettingRow>
-                  {!credential?.storageAvailable ? (
+                  {!session ? (
+                    <div className="settings-warning settings-sign-in-warning">
+                      <span>
+                        Sign in to store a personal token in your encrypted
+                        cloud profile.
+                      </span>
+                      <button
+                        className="secondary"
+                        type="button"
+                        onClick={() => setActive('account')}
+                      >
+                        <LogIn size={14} aria-hidden="true" />
+                        Sign in
+                      </button>
+                    </div>
+                  ) : credential && !credential.storageAvailable ? (
                     <div className="settings-warning">
                       Personal credential storage requires the D1 migration and
                       SETTINGS_ENCRYPTION_KEY Worker secret.
@@ -974,15 +1094,17 @@ export function SettingsPage({
                           : 'settings-state warning'
                       }
                     >
-                      {effective?.configured
-                        ? `Ready · ${effective.model} · ${effective.reasoningEffort}`
-                        : 'Personal assistant is not ready'}
+                      {!session
+                        ? 'Sign in to use a personal credential'
+                        : effective?.configured
+                          ? `Ready · ${effective.model} · ${effective.reasoningEffort}`
+                          : 'Personal assistant is not ready'}
                     </span>
                     <span>
                       <button
                         className="secondary"
                         type="button"
-                        disabled={busy || !credential?.stored}
+                        disabled={busy || !session || !credential?.stored}
                         onClick={onTestAssistant}
                       >
                         <Bot size={14} aria-hidden="true" />
@@ -991,7 +1113,7 @@ export function SettingsPage({
                       <button
                         className="danger-ghost"
                         type="button"
-                        disabled={busy || !credential?.stored}
+                        disabled={busy || !session || !credential?.stored}
                         onClick={onDeleteCredential}
                       >
                         <Trash2 size={14} aria-hidden="true" />
@@ -1055,23 +1177,162 @@ export function SettingsPage({
           {active === 'account' && (
             <Section
               title="Account & collaboration"
-              intro="Identity comes from the current development session or Cloudflare Access policy."
+              intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
-              <SettingRow
-                title={session?.displayName ?? 'Offline user'}
-                description={
-                  session?.email ??
-                  session?.userId ??
-                  'No authenticated account is available.'
-                }
-                scope={
-                  session?.mode === 'cloudflare-access'
-                    ? 'Cloudflare Access'
-                    : 'Development'
-                }
-              >
-                <CircleUserRound size={18} aria-hidden="true" />
-              </SettingRow>
+              {session ? (
+                <SettingRow
+                  title={session.displayName}
+                  description={session.email ?? session.userId}
+                  scope={
+                    session.mode === 'email-code'
+                      ? 'Email profile'
+                      : 'Development'
+                  }
+                >
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void onLogout()}
+                  >
+                    <LogOut size={14} aria-hidden="true" />
+                    Sign out
+                  </button>
+                </SettingRow>
+              ) : (
+                <>
+                  <SettingRow
+                    title="Cloud profile"
+                    description="Your projects and device settings remain available locally when signed out."
+                    scope="Optional"
+                  >
+                    <CircleUserRound size={18} aria-hidden="true" />
+                  </SettingRow>
+                  {authConfig?.emailCodeEnabled &&
+                  authConfig.turnstileSiteKey ? (
+                    loginChallengeId ? (
+                      <form
+                        className="settings-auth-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void onVerifyLoginCode(
+                            loginChallengeId,
+                            loginCode.trim()
+                          );
+                        }}
+                      >
+                        <span>
+                          <strong>Enter the email code</strong>
+                          <small>
+                            We sent a six-digit code to {loginEmail}. It expires
+                            in 10 minutes.
+                          </small>
+                        </span>
+                        <div className="settings-auth-controls">
+                          <input
+                            className="mono"
+                            value={loginCode}
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            pattern="[0-9]{6}"
+                            maxLength={6}
+                            aria-label="Email sign-in code"
+                            placeholder="000000"
+                            onChange={(event) =>
+                              setLoginCode(
+                                event.target.value
+                                  .replace(/\D/g, '')
+                                  .slice(0, 6)
+                              )
+                            }
+                          />
+                          <button
+                            className="primary"
+                            type="submit"
+                            disabled={busy || loginCode.length !== 6}
+                          >
+                            <LogIn size={14} aria-hidden="true" />
+                            Sign in
+                          </button>
+                          <button
+                            className="secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => {
+                              setLoginChallengeId(null);
+                              setLoginCode('');
+                            }}
+                          >
+                            Use another email
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <form
+                        className="settings-auth-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void onRequestLoginCode(
+                            loginEmail.trim(),
+                            turnstileToken
+                          )
+                            .then((response) =>
+                              setLoginChallengeId(response.challengeId)
+                            )
+                            .catch(() => undefined)
+                            .finally(() => {
+                              setTurnstileToken('');
+                              setTurnstileReset((value) => value + 1);
+                            });
+                        }}
+                      >
+                        <span>
+                          <strong>Email sign-in</strong>
+                          <small>
+                            No password required. We will send a single-use
+                            code.
+                          </small>
+                        </span>
+                        <div className="settings-auth-controls">
+                          <label>
+                            <span>Email</span>
+                            <input
+                              type="email"
+                              value={loginEmail}
+                              autoComplete="email"
+                              aria-label="Email address"
+                              placeholder="you@example.com"
+                              onChange={(event) =>
+                                setLoginEmail(event.target.value)
+                              }
+                            />
+                          </label>
+                          <TurnstileWidget
+                            siteKey={authConfig.turnstileSiteKey}
+                            resetSignal={turnstileReset}
+                            onToken={setTurnstileToken}
+                          />
+                          <button
+                            className="primary"
+                            type="submit"
+                            disabled={
+                              busy || !loginEmail.trim() || !turnstileToken
+                            }
+                          >
+                            <Mail size={14} aria-hidden="true" />
+                            Email me a code
+                          </button>
+                        </div>
+                      </form>
+                    )
+                  ) : (
+                    <div className="settings-warning">
+                      Email sign-in is being configured. Device settings and
+                      local CAD projects remain available.
+                    </div>
+                  )}
+                </>
+              )}
               <SettingRow
                 title="Preference synchronization"
                 description="Non-secret preferences can follow this account; local persistence remains the offline fallback."
@@ -1079,12 +1340,16 @@ export function SettingsPage({
               >
                 <span
                   className={
-                    accountState?.synced
+                    session && accountState
                       ? 'settings-state good'
                       : 'settings-state warning'
                   }
                 >
-                  {accountState?.synced ? 'Available' : 'Device only'}
+                  {session && accountState?.synced
+                    ? 'Available'
+                    : session
+                      ? 'Ready to save'
+                      : 'Device only'}
                 </span>
               </SettingRow>
             </Section>

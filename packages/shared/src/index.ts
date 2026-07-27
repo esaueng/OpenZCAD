@@ -610,7 +610,28 @@ export interface AuthSession {
   userId: UserId;
   displayName: string;
   email?: string;
-  mode: 'development' | 'cloudflare-access';
+  mode: 'development' | 'email-code';
+}
+
+export interface AuthConfigResponse {
+  mode: 'development' | 'email-code' | 'unconfigured';
+  emailCodeEnabled: boolean;
+  turnstileSiteKey?: string;
+}
+
+export interface StartEmailLoginRequest {
+  email: string;
+  turnstileToken: string;
+}
+
+export interface StartEmailLoginResponse {
+  challengeId: string;
+  expiresInSeconds: number;
+}
+
+export interface VerifyEmailLoginRequest {
+  challengeId: string;
+  code: string;
 }
 
 export const APP_SETTINGS_SCHEMA_VERSION = 1 as const;
