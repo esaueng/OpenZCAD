@@ -8,9 +8,9 @@
   ],
   "flange": [
     {
-      "name": "Drill bolt circle Body",
-      "volume": 79108.9927838028,
-      "faceCount": 12
+      "name": "Pipe Flange",
+      "volume": 78314.20649420349,
+      "faceCount": 15
     }
   ],
   "heatsink": [

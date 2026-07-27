@@ -164,15 +164,25 @@ function buildBoreGrid(): ProjectDocument {
  *      (12, 0, 10) — 12mm inside its own hole — and paved a vertex there,
  *      splitting the bore seam. Every B-Rep gate passed; only the mesh leaked.
  *
- * All three are on brepkit main and this lock now carries them. The flange
- * drilled body measures 12 faces, nine cylindrical walls, and is watertight.
+ * All four are on brepkit main and this lock now carries them. The flange
+ * builds through Rev C: `Pipe Flange`, 15 faces (nine cylindrical bore/body
+ * walls plus three conical chamfer bands), watertight, no warnings.
  *
- * One prediction in the previous version of this note turned out wrong and is
+ *   4. `feat(blend): chamfer closed circular rims` (brepkit #27, 3d0c11c) and
+ *      `fix(blend): rim chamfer on a cap that carries holes` (#28, 9117219) —
+ *      with the body finally analytic and watertight, Rev C's rim chamfer was
+ *      the last thing failing. No engine could chamfer a closed circular edge:
+ *      the v2 builder refused them outright and the v1 flat-bevel engine, being
+ *      planar-only, reported "cannot normalize zero vector". #27 ported the
+ *      annular rim rebuild the FILLET builder already had; #28 let it keep a
+ *      cap's holes, which the flange rim cap needs.
+ *
+ * One prediction in an earlier version of this note turned out wrong and is
  * corrected here: an analytic blank was expected to stop the Rev C chamfer
  * SEEDING ("found no exact edges for rim + hub lip"), because the picker
  * selects by position and was tuned against the tessellated body. It does not.
- * The picker finds its edges on the analytic body — the chamfer OPERATION is
- * what fails. See EXPECTED_WARNINGS below.
+ * The picker found its edges on the analytic body; the chamfer OPERATION was
+ * what failed.
  */
 const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
 
@@ -195,31 +205,27 @@ const EXPECTED_MESH_DEFECTS: Record<
 > = {};
 
 /**
- * flange: the Rev C rim chamfer (3 edges, d=1.5) fails in the kernel's chamfer
- * path and is swallowed into a warning — the demo renders undrilled at the rim
- * lip, and the final body is `Drill bolt circle Body` rather than
- * `Pipe Flange`. This became visible only once fixes #21/#24/#25 let the demo
- * reach Rev C at all; it is not a regression from them.
+ * No warnings are pinned. Every demo now rebuilds clean.
  *
- * Three edges, not the four this pin used to name: the picker had also been
- * matching the r=45 cylinder's vertical seam, which shares the rim's radius
- * but is not a design edge. Fixed in `demos.ts` by constraining the pick to
- * edges flat in Z — see the note there. The chamfer fails either way, so this
- * changes the pinned count and nothing else.
+ * Both entries that lived here have been retired by kernel fixes:
  *
- * Tracked in brepkit as a chamfer defect on closed circular edges: any
- * cylinder rim errors "cannot normalize zero vector". Long-standing, exposed
- * once the booleans went analytic and started handing the chamfer real
- * circles. When it lands, drop this entry and rerecord — the body name,
- * faceCount and volume all change.
+ *   - bracket's 4-corner fillet, by brepkit #23 (638d141, G1 ridgeline spine
+ *     propagation).
+ *   - flange's Rev C rim chamfer, by brepkit #27 (3d0c11c) and #28 (9117219).
+ *     #27 taught the chamfer builder the annular rim rebuild the fillet
+ *     builder already had — a cone band with a straight ruled seam, rather
+ *     than a torus with a minor arc — replacing a guard that had refused every
+ *     closed edge outright. #28 then let that rebuild keep a cap's HOLES: the
+ *     flange rim cap is an annulus with a central opening and six bolt holes,
+ *     and the first cut of the fix only handled a bare disc, so all three
+ *     picked rims still failed with "trimming failure".
  *
- * bracket's 4-corner fillet pin was retired here: brepkit #23 (638d141,
- * G1 ridgeline spine propagation) fixed it, the warning no longer fires, and
- * its baseline is rerecorded in this change (13 -> 17 faces).
+ * Keep the pinning discipline for the next defect: pin an EXACT value rather
+ * than skipping the assertion, so it fails in both directions and cannot
+ * outlive the defect it describes. Both of these were retired precisely
+ * because their pins started failing once the kernel was fixed.
  */
-const EXPECTED_WARNINGS: Record<string, RegExp[]> = {
-  flange: [/Rim chamfer.*Chamfer could not be created on 3 selected edges/]
-};
+const EXPECTED_WARNINGS: Record<string, RegExp[]> = {};
 
 export const PARITY_SCENARIOS: ParityScenario[] = [
   ...DEMO_DEFINITIONS.map((definition) => ({
