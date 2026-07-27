@@ -77,6 +77,7 @@ import type {
 import type {
   AppSettings,
   AppSettingsResponse,
+  AuthConfigResponse,
   AuthSession
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
@@ -213,6 +214,7 @@ export function App() {
   );
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
+  const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
@@ -315,7 +317,10 @@ export function App() {
 
   const collaboration = useCollaboration({
     document: doc,
-    session,
+    // A signed-in user can still be editing a device-only project. Only attach
+    // account cookies to a collaboration room after this exact project has
+    // been resolved as a cloud-backed document.
+    session: cloudAvailable ? session : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -428,27 +433,32 @@ export function App() {
       const activeProjectId = appSettings.general.reopenLastProject
         ? loadActiveProjectId()
         : null;
-      const [local, remote, rememberedLocal, rememberedRemote, remoteSettings] =
+      const [local, health, rememberedLocal, currentAuthConfig] =
         await Promise.all([
           listLocalProjects().catch(() => []),
-          Promise.all([api.health(), api.session(), api.listProjects()]).catch(
-            () => null
-          ),
+          api.health().catch(() => null),
           activeProjectId
             ? loadLocalProject(activeProjectId).catch(() => null)
             : Promise.resolve(null),
-          activeProjectId
-            ? api.loadProject(activeProjectId).catch(() => null)
-            : Promise.resolve(null),
-          api.getSettings().catch(() => null)
+          api.authConfig().catch(() => null)
         ]);
-      const remoteProjects = remote?.[2].projects ?? [];
+      const activeSession = await api.session().catch(() => null);
+      const [remote, rememberedRemote, remoteSettings] = activeSession
+        ? await Promise.all([
+            api.listProjects().catch(() => null),
+            activeProjectId
+              ? api.loadProject(activeProjectId).catch(() => null)
+              : Promise.resolve(null),
+            api.getSettings().catch(() => null)
+          ])
+        : [null, null, null];
+      const remoteProjects = remote?.projects ?? [];
       const merged = mergeProjectSummaries(local, remoteProjects);
       const restoredDocument = selectProjectDocument(
         rememberedLocal,
         rememberedRemote
       );
-      const canUseCloud = Boolean(remote || rememberedRemote);
+      const canUseCloud = Boolean(activeSession && rememberedRemote);
       if (rememberedRemote) {
         remoteVersionsRef.current.set(
           rememberedRemote.projectId,
@@ -457,11 +467,14 @@ export function App() {
       }
       setProjects(merged);
       setCloudAvailable(canUseCloud);
-      setSession(remote?.[1] ?? null);
+      setSession(activeSession);
+      setAuthConfig(currentAuthConfig);
       if (remoteSettings) {
         setAccountSettings(remoteSettings);
-        setAppSettings(remoteSettings.settings);
-        saveLocalAppSettings(remoteSettings.settings);
+        if (remoteSettings.synced) {
+          setAppSettings(remoteSettings.settings);
+          saveLocalAppSettings(remoteSettings.settings);
+        }
       }
       setSaveState(canUseCloud ? 'saved' : 'offline');
       if (activeProjectId && restoredDocument) {
@@ -473,9 +486,11 @@ export function App() {
         clearActiveProject();
       }
       setStatus(
-        remote
-          ? `Beta API ready · ${merged.length} project(s)`
-          : `Offline workspace · ${merged.length} local project(s)`
+        activeSession && remote
+          ? `Cloud profile ready · ${merged.length} project(s)`
+          : health
+            ? `Local workspace · ${merged.length} local project(s)`
+            : `Offline workspace · ${merged.length} local project(s)`
       );
     })();
     // Startup settings are intentionally read once. Later settings changes
@@ -1190,18 +1205,30 @@ export function App() {
     setSettingsOpen(true);
     setPaletteOpen(false);
     setSettingsMessage('Changes save on this device immediately.');
-    void api
-      .getSettings()
-      .then(setAccountSettings)
-      .catch(() => {
+    void Promise.all([
+      api.authConfig().catch(() => null),
+      api.session().catch(() => null)
+    ]).then(async ([nextAuthConfig, activeSession]) => {
+      setAuthConfig(nextAuthConfig);
+      setSession(activeSession);
+      if (!activeSession) {
+        setAccountSettings(null);
+        setSettingsMessage('Device settings active · sign in for cloud sync.');
+        return;
+      }
+      try {
+        setAccountSettings(await api.getSettings());
+        setSettingsMessage('Cloud profile connected.');
+      } catch {
         setSettingsMessage(
-          'Account sync unavailable · device settings active.'
+          'Cloud profile unavailable · device settings remain active.'
         );
-      });
+      }
+    });
   }
 
   async function handleSaveAppSettings() {
-    if (!accountSettings?.synced) {
+    if (!session || !accountSettings) {
       setSettingsMessage('Account sync unavailable · device settings active.');
       return;
     }
@@ -1222,7 +1249,7 @@ export function App() {
   }
 
   async function syncSettingsBeforeAssistantAction() {
-    if (!accountSettings?.synced) {
+    if (!session || !accountSettings) {
       throw new Error('Account settings storage is unavailable.');
     }
     const response = await api.updateSettings({
@@ -1286,6 +1313,80 @@ export function App() {
     }
   }
 
+  async function handleRequestLoginCode(email: string, turnstileToken: string) {
+    setSettingsBusy(true);
+    setSettingsMessage('Sending a sign-in code…');
+    try {
+      const response = await api.startEmailLogin({ email, turnstileToken });
+      setSettingsMessage('Code sent. Check your email.');
+      return response;
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Could not send a sign-in code.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleVerifyLoginCode(challengeId: string, code: string) {
+    setSettingsBusy(true);
+    setSettingsMessage('Verifying sign-in code…');
+    try {
+      const activeSession = await api.verifyEmailLogin({
+        challengeId,
+        code
+      });
+      const [remoteSettings, localProjects, remoteProjects] = await Promise.all(
+        [
+          api.getSettings(),
+          listLocalProjects().catch(() => []),
+          api.listProjects().catch(() => ({ projects: [] }))
+        ]
+      );
+      setSession(activeSession);
+      setAccountSettings(remoteSettings);
+      setProjects(
+        mergeProjectSummaries(localProjects, remoteProjects.projects)
+      );
+      const activeProjectIsCloud = Boolean(
+        doc && remoteVersionsRef.current.has(doc.projectId)
+      );
+      setCloudAvailable(activeProjectIsCloud);
+      if (doc) {
+        setSaveState(activeProjectIsCloud ? 'saved' : 'offline');
+      }
+      setSettingsMessage(
+        `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+      );
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Sign-in failed.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    setSettingsBusy(true);
+    setSettingsMessage('Signing out…');
+    try {
+      await api.logout();
+      const localProjects = await listLocalProjects().catch(() => []);
+      remoteVersionsRef.current.clear();
+      setSession(null);
+      setAccountSettings(null);
+      setCloudAvailable(false);
+      setProjects(localProjects);
+      setSaveState('offline');
+      setSettingsMessage('Signed out · device settings remain active.');
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   function handleResetAppSettings() {
     if (
       appSettings.general.confirmDestructiveActions &&
@@ -1314,6 +1415,24 @@ export function App() {
   async function handleCreateProject(name: string, units: UnitSystem) {
     setBusy(true);
     try {
+      if (!session) {
+        const localDocument = createProjectDocument(name, localUserId, units);
+        await saveLocalProject(localDocument);
+        hydrateDocument(localDocument);
+        setProjects((current) => [
+          {
+            projectId: localDocument.projectId,
+            name: localDocument.name,
+            updatedAt: localDocument.derived.updatedAt,
+            revisionCount: localDocument.checkpoints.length
+          },
+          ...current
+        ]);
+        setCloudAvailable(false);
+        setSaveState('offline');
+        setStatus(`Created ${localDocument.name} locally.`);
+        return;
+      }
       const response = await api.createProject({ name, units });
       remoteVersionsRef.current.set(
         response.document.projectId,
@@ -1327,14 +1446,24 @@ export function App() {
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
-      if (error instanceof ApiError && error.isClientError) {
+      if (
+        error instanceof ApiError &&
+        error.isClientError &&
+        error.status !== 401
+      ) {
         setCloudAvailable(true);
         setStatus(errorMessage(error, 'Could not create the project.'));
         return;
       }
+      const sessionExpired = error instanceof ApiError && error.status === 401;
+      if (sessionExpired) {
+        remoteVersionsRef.current.clear();
+        setSession(null);
+        setAccountSettings(null);
+      }
       const localDocument = createProjectDocument(
         name,
-        session?.userId ?? localUserId,
+        sessionExpired ? localUserId : (session?.userId ?? localUserId),
         units
       );
       await saveLocalProject(localDocument);
@@ -1417,7 +1546,9 @@ export function App() {
     try {
       const [localDocument, remoteDocument] = await Promise.all([
         loadLocalProject(projectId),
-        api.loadProject(projectId).catch(() => null)
+        session
+          ? api.loadProject(projectId).catch(() => null)
+          : Promise.resolve(null)
       ]);
       const loaded = selectProjectDocument(localDocument, remoteDocument);
       if (!loaded) {
@@ -1460,7 +1591,7 @@ export function App() {
     try {
       const [local, remote] = await Promise.all([
         listLocalProjects(),
-        api.listProjects().catch(() => null)
+        session ? api.listProjects().catch(() => null) : Promise.resolve(null)
       ]);
       const merged = mergeProjectSummaries(local, remote?.projects ?? []);
       setProjects(merged);
@@ -1500,11 +1631,12 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
-      let expectedVersion = remoteVersionsRef.current.get(doc.projectId);
-      if (expectedVersion === undefined) {
-        const remote = await api.loadProject(doc.projectId);
-        expectedVersion = remote.version;
-        remoteVersionsRef.current.set(doc.projectId, expectedVersion);
+      const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
+      if (!session || expectedVersion === undefined) {
+        setCloudAvailable(false);
+        setSaveState('offline');
+        setStatus('Saved locally.');
+        return;
       }
       const saved = await api.saveRevision({
         projectId: doc.projectId,
@@ -1521,6 +1653,11 @@ export function App() {
       setSaveState('saved');
       setStatus('Saved revision.');
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        remoteVersionsRef.current.clear();
+        setSession(null);
+        setAccountSettings(null);
+      }
       setCloudAvailable(false);
       setSaveState('offline');
       setStatus(`${errorMessage(error, 'Cloud save failed')} Saved locally.`);
@@ -3377,6 +3514,7 @@ export function App() {
       <SettingsPage
         settings={appSettings}
         accountState={accountSettings}
+        authConfig={authConfig}
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
@@ -3385,6 +3523,9 @@ export function App() {
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
         onTestAssistant={() => void handleTestAssistantConnection()}
+        onRequestLoginCode={handleRequestLoginCode}
+        onVerifyLoginCode={handleVerifyLoginCode}
+        onLogout={handleLogout}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}
         onClose={() => setSettingsOpen(false)}

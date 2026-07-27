@@ -37,10 +37,14 @@ import {
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'development' | 'beta';
-  AUTH_MODE?: 'development' | 'cloudflare-access';
+  AUTH_MODE?: 'development' | 'email-code';
   AUTH_LEGACY_OWNER_EMAIL?: string;
-  CF_ACCESS_TEAM_DOMAIN?: string;
-  CF_ACCESS_AUD?: string;
+  AUTH_OTP_PEPPER?: string;
+  AUTH_EMAIL_FROM?: string;
+  AUTH_SESSION_DAYS?: string;
+  TURNSTILE_SITE_KEY?: string;
+  TURNSTILE_SECRET_KEY?: string;
+  EMAIL?: SendEmail;
   AI_PROVIDER?: 'openai' | 'openrouter' | 'responses-compatible';
   AI_BASE_URL?: string;
   AI_API_KEY?: string;
