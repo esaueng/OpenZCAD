@@ -479,15 +479,25 @@ async function buildFlange(
   ]);
 
   const revBDerived = await syncExact(builder.document);
+  // The three edges wanted here are all circles lying flat in a Z plane: the
+  // rim's top and bottom rims (r=45) and the hub lip (r=24, z=26). The radial
+  // predicate alone also matches the r=45 cylinder's vertical SEAM, which runs
+  // z=0→10 at the same radius and is not a design edge at all. Pinning the Z
+  // span to zero is what separates them — and it only started mattering once
+  // the kernel returned an analytic blank, because a tessellated rim has no
+  // seam edge to pick up.
   const rimHashes = requireHashes(
-    pickEdgeHashes(revBDerived, drilled.bodyId, (p) => {
-      const radial = Math.hypot(p.x, p.y);
-      return (
-        near(radial, 45) || (near(radial, 24) && p.z >= 25.5)
-      );
-    }),
+    pickEdgeHashes(
+      revBDerived,
+      drilled.bodyId,
+      (p) => {
+        const radial = Math.hypot(p.x, p.y);
+        return near(radial, 45) || (near(radial, 24) && p.z >= 25.5);
+      },
+      (span) => span.z <= 0.5
+    ),
     'rim + hub lip',
-    { min: 2 }
+    { count: 3 }
   );
 
   const chamfer = createBodyFeatureIds();
