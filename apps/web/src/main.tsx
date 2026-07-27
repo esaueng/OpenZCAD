@@ -10,8 +10,11 @@ import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
+import { mark } from './lib/perf';
 import './theme/tokens.css';
 import './styles/app.css';
+
+mark('bundle.evaluated');
 
 const rootElement = document.getElementById('root');
 
