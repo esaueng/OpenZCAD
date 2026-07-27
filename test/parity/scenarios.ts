@@ -123,13 +123,13 @@ function buildBoreGrid(): ProjectDocument {
  * to tens of faces and the baseline must be rerecorded.
  *
  * KNOWN RED: that fallback mesh is not watertight — the flange body reports
- * ~873 boundary edges on kernel 2.128.5, so `produces watertight, manifold
- * body meshes` and `exports a watertight STL` both fail for flange, and are
- * expected to until the analytic cut lands. Every other scenario passes
- * (22 of 24). These two are deliberately left failing rather than pinned:
- * unlike a build failure there is no expectation mechanism for them, and
- * suppressing a watertightness assertion is the kind of green-looking
- * blindfold this harness exists to prevent.
+ * ~873 boundary edges, unchanged from kernel 2.128.5 through 2.129.0, so
+ * `produces watertight, manifold body meshes` and `exports a watertight STL`
+ * both fail for flange, and are expected to until the analytic cut lands.
+ * Every other scenario passes (22 of 24). These two are deliberately left
+ * failing rather than pinned: unlike a build failure there is no expectation
+ * mechanism for them, and suppressing a watertightness assertion is the kind
+ * of green-looking blindfold this harness exists to prevent.
  */
 const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
 
