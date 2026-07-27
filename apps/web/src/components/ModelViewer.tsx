@@ -1,5 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
+import { mark, timed } from '../lib/perf';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
@@ -1142,6 +1143,8 @@ export function ModelViewer({
       return;
     }
 
+    mark('viewer.init:begin');
+    let firstFrame = true;
     const scene = new THREE.Scene();
     const gradientBackground = createGradientBackground();
     scene.background = gradientBackground;
@@ -1168,7 +1171,10 @@ export function ModelViewer({
     orthographic.up.copy(camera.up);
     orthographic.position.copy(camera.position);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = timed(
+      'viewer.renderer',
+      () => new THREE.WebGLRenderer({ antialias: true })
+    );
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1180,7 +1186,9 @@ export function ModelViewer({
 
     // Studio environment rig: soft IBL reflections do the heavy lifting for
     // "real CAD" shading, so the analytic lights stay gentle.
-    const environment = createStudioEnvironment(renderer);
+    const environment = timed('viewer.environment', () =>
+      createStudioEnvironment(renderer)
+    );
     scene.environment = environment;
     scene.environmentIntensity = 0.4;
 
@@ -3076,7 +3084,16 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       updateOffsetChip();
-      renderer.render(scene, context.activeCamera);
+      // The first draw compiles every material's shaders and uploads the
+      // environment map, so it costs far more than steady-state frames.
+      if (firstFrame) {
+        firstFrame = false;
+        timed('viewer.firstFrame', () =>
+          renderer.render(scene, context.activeCamera)
+        );
+      } else {
+        renderer.render(scene, context.activeCamera);
+      }
       updateDimensionLabels(
         context,
         renderer.domElement.clientWidth,
@@ -3113,6 +3130,7 @@ export function ModelViewer({
       }
     }
     requestRender();
+    performance.measure?.('oz:viewer.init', 'oz:viewer.init:begin');
 
     return () => {
       if (animationFrame !== null) {
@@ -3189,6 +3207,7 @@ export function ModelViewer({
       return;
     }
 
+    mark('viewer.bodies:begin');
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
@@ -3506,6 +3525,7 @@ export function ModelViewer({
       onViewChangeRef.current(captureViewportCamera(context));
     }
     context.requestRender();
+    performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
   }, [
     bodies,
     editableBodyIds,
