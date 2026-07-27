@@ -137,12 +137,43 @@ function buildBoreGrid(): ProjectDocument {
 
 /**
  * Known kernel defects, keyed by scenario (currently none pinned as build
- * failures). The flange bolt-circle pin was removed when the kernel bump
- * made the scenario build — but note its baseline faceCount (~2789) is the
- * mesh-fallback signature: the analytic cut still fails and the mesh-boolean
- * fallback carries the demo. The underlying unify-then-cut defect remains
- * tracked in brepkit; when it is fixed the flange faceCount should collapse
- * to tens of faces and the baseline must be rerecorded.
+/**
+ * Known kernel defects, keyed by scenario (currently none pinned as build
+ * failures). The flange bolt-circle pin was removed when the kernel bump made
+ * the scenario build, but its baseline faceCount (~2789) is still the
+ * mesh-fallback signature — the demo is carried by the mesh boolean, not the
+ * analytic path, and `EXPECTED_MESH_DEFECTS` below pins the 873 boundary
+ * edges that fallback leaves.
+ *
+ * WHERE THE ANALYTIC PATH DIES. Traced 2026-07-26 by replaying the app's own
+ * operands against different kernel builds. It is NOT the cut, as this note
+ * previously said. It is the rim u hub FUSE: the two revolved annuli share
+ * the r24 cylinder, and the same-domain key hashed the two instances of that
+ * closed circle apart, so the coincident pair was never detected and the blank
+ * collapsed to ~1031 planar faces. Everything downstream inherits the mesh.
+ * Identical operands give 1031 faces on the kernel we pin and 7 on a build
+ * carrying the fix. Trace it with arena snapshots, not STEP — a STEP
+ * round-trip normalises the defect away and the fuse comes out analytic.
+ *
+ * Two brepkit fixes are involved, and only the first has merged:
+ *   1. `fix(algo): canonical same-domain key for closed edges` (brepkit #21,
+ *      1dc4541, ON MAIN) — closed edges key on the centroid over the whole
+ *      period instead of a midpoint sampled in stored order. This is the one
+ *      that makes the blank analytic. We pin 65a6b01, which predates it.
+ *   2. `fix(algo): split plane faces carrying several closed section loops`
+ *      (NOT YET MERGED) — with the blank analytic the bolt-circle cut then
+ *      fails with NonManifoldResult, because the six patterned bolts are fused
+ *      into one tool and cut in a single operation, putting six closed section
+ *      loops on the flange's plane faces.
+ *
+ * Bumping the kernel needs BOTH, and will not turn the flange green on its
+ * own: with an analytic blank the Rev C chamfer stops seeding ("Demo seeding
+ * found no exact edges for rim + hub lip"), because it selects edges by
+ * position and was tuned against the tessellated body. Landing it is three
+ * steps — bump past fix 2, re-seed the chamfer edges, then rerecord baselines
+ * and drop the `EXPECTED_MESH_DEFECTS` entry (faceCount should collapse from
+ * ~2789 to tens; the drilled body measures 12 faces, nine cylindrical walls,
+ * in a kernel carrying both fixes).
  */
 const EXPECTED_BUILD_FAILURES: Record<string, RegExp> = {};
 
