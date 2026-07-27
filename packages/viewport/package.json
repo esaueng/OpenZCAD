@@ -6,6 +6,6 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@openzcad/shared": "workspace:*",
-    "three": "^0.176.0"
+    "three": "^0.185.1"
   }
 }
