@@ -38,7 +38,7 @@ const region: RegionTarget = {
 const plane: SketchPlaneRef = { type: 'canonical', plane: 'XY', offset: 0 };
 
 describe('interactionReducer', () => {
-  it('arms offset-face for planar faces and resize-hole for bores', () => {
+  it('arms offset-face for planar faces and resize-hole for measured cylinders', () => {
     const planar = interactionReducer(IDLE, {
       type: 'select-face',
       target: face()
@@ -52,12 +52,12 @@ describe('interactionReducer', () => {
     });
     expect(bore.mode === 'face' && bore.op).toBe('resize-hole');
 
-    // Cylindrical without a measurable diameter stays a plain offset.
+    // Cylindrical without a measurable diameter has no safe direct action.
     const boss = interactionReducer(IDLE, {
       type: 'select-face',
       target: face({ surfaceType: 'cylindrical' })
     });
-    expect(boss.mode === 'face' && boss.op).toBe('offset-face');
+    expect(boss).toEqual(IDLE);
   });
 
   it('accumulates edges additively and toggles them off when re-picked', () => {
@@ -120,15 +120,28 @@ describe('interactionReducer', () => {
     expect(state.mode === 'edges' && state.op).toBe('chamfer');
   });
 
-  it('runs the drag lifecycle and clears after commit', () => {
+  it('runs the semantic lifecycle and clears only after successful commit', () => {
     let state = interactionReducer(IDLE, {
       type: 'select-face',
       target: face()
     });
     state = interactionReducer(state, { type: 'drag-engage' });
-    expect(state.mode === 'face' && state.engaged).toBe(true);
+    expect(state.mode === 'face' && state.phase).toBe('dragging');
     state = interactionReducer(state, { type: 'drag-release' });
-    expect(state.mode === 'face' && state.engaged).toBe(false);
+    expect(state.mode === 'face' && state.phase).toBe('armed');
+    state = interactionReducer(state, {
+      type: 'validation-start',
+      value: 8
+    });
+    expect(state.mode === 'face' && state.phase).toBe('validating');
+    state = interactionReducer(state, {
+      type: 'validation-failed',
+      message: 'Face would self-intersect.'
+    });
+    expect(state.mode === 'face' && state.phase).toBe('failed');
+    expect(state.mode === 'face' && state.lastValue).toBe(8);
+    state = interactionReducer(state, { type: 'recover' });
+    expect(state.mode === 'face' && state.phase).toBe('armed');
     state = interactionReducer(state, { type: 'commit-complete' });
     expect(state).toEqual(IDLE);
   });
@@ -166,7 +179,7 @@ describe('interactionReducer', () => {
 });
 
 describe('escape chain', () => {
-  it('closes the keypad before cancelling the drag before clearing', () => {
+  it('closes exact entry before clearing the selection', () => {
     let state: InteractionState = interactionReducer(IDLE, {
       type: 'select-face',
       target: face()
@@ -176,11 +189,7 @@ describe('escape chain', () => {
 
     expect(escapeTarget(state)).toBe('close-keypad');
     state = interactionReducer(state, { type: 'escape' });
-    expect(state.mode === 'face' && state.keypadOpen).toBe(false);
-
-    expect(escapeTarget(state)).toBe('cancel-drag');
-    state = interactionReducer(state, { type: 'escape' });
-    expect(state.mode === 'face' && state.engaged).toBe(false);
+    expect(state.mode === 'face' && state.phase).toBe('armed');
 
     expect(escapeTarget(state)).toBe('clear-selection');
     state = interactionReducer(state, { type: 'escape' });
@@ -201,6 +210,41 @@ describe('escape chain', () => {
     state = interactionReducer(state, { type: 'escape' });
     expect(state).toEqual(IDLE);
   });
+
+  it('clears an entity selection before exiting sketch mode', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'entity_1'
+    });
+    expect(escapeTarget(state)).toBe('clear-sketch-selection');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(
+      state.mode === 'sketch' && state.session.selectedObjectId
+    ).toBeNull();
+    expect(escapeTarget(state)).toBe('exit-sketch');
+  });
+
+  it('keeps validating operations locked and recovers failed values first', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'validation-start',
+      value: 24
+    });
+    expect(escapeTarget(state)).toBe('none');
+    expect(interactionReducer(state, { type: 'escape' })).toBe(state);
+    state = interactionReducer(state, {
+      type: 'validation-failed',
+      message: 'Self-intersection.'
+    });
+    expect(escapeTarget(state)).toBe('recover-failure');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(state.mode === 'region' && state.phase).toBe('armed');
+    expect(state.mode === 'region' && state.lastValue).toBe(24);
+  });
 });
 
 describe('toolCardFor', () => {
@@ -210,6 +254,10 @@ describe('toolCardFor', () => {
       interactionReducer(IDLE, { type: 'select-face', target: face() })
     );
     expect(faceCard?.title).toBe('Offset Face');
+    expect(faceCard?.actions?.map((action) => action.label)).toEqual([
+      'Offset Face',
+      'Sketch'
+    ]);
     const holeCard = toolCardFor(
       interactionReducer(IDLE, {
         type: 'select-face',
@@ -222,12 +270,15 @@ describe('toolCardFor', () => {
       selection: edge(1),
       additive: false
     });
-    expect(toolCardFor(edges)?.subMode?.active).toBe(0);
+    expect(
+      toolCardFor(edges)?.actions?.find((action) => action.active)?.id
+    ).toBe('fillet');
     edges = interactionReducer(edges, { type: 'toggle-edge-op' });
     expect(toolCardFor(edges)?.title).toBe('Chamfer');
     expect(
-      toolCardFor(interactionReducer(IDLE, { type: 'select-region', target: region }))
-        ?.title
+      toolCardFor(
+        interactionReducer(IDLE, { type: 'select-region', target: region })
+      )?.title
     ).toBe('Extrude');
   });
 });

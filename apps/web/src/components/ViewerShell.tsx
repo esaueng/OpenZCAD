@@ -67,9 +67,11 @@ interface ViewerShellProps {
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
   onOpenEdgeKeypad(currentSize: number): void;
+  onDirectManipulationChange(dragging: boolean): void;
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onSketchDrawingChange(drawing: boolean): void;
+  onSketchSelectObject(objectId: string | null): void;
   sketchViews: SketchViewData[];
   onSelectRegion(region: RegionPickData): void;
   regionHandle: RegionHandleTarget | null;
@@ -125,9 +127,11 @@ export function ViewerShell({
   onEdgeRadiusPreview,
   onEdgeCommit,
   onOpenEdgeKeypad,
+  onDirectManipulationChange,
   sketchMode,
   onSketchCommit,
   onSketchDrawingChange,
+  onSketchSelectObject,
   sketchViews,
   onSelectRegion,
   regionHandle,
@@ -172,9 +176,11 @@ export function ViewerShell({
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}
         onOpenEdgeKeypad={onOpenEdgeKeypad}
+        onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
         onSketchCommit={onSketchCommit}
         onSketchDrawingChange={onSketchDrawingChange}
+        onSketchSelectObject={onSketchSelectObject}
         sketchViews={sketchViews}
         onSelectRegion={onSelectRegion}
         regionHandle={regionHandle}
@@ -203,8 +209,8 @@ export function ViewerShell({
           <div>
             <strong>No geometry yet</strong>
             <small>
-              Pick a tool from the palette on the left — try <b>Box</b> (B) —
-              or sketch a profile and extrude it.
+              Pick a tool from the palette on the left — try <b>Box</b> (B) — or
+              sketch a profile and extrude it.
             </small>
             <small className="viewer-notice-keys">
               <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands · <kbd>?</kbd> shortcuts
@@ -245,8 +251,7 @@ export function ViewerShell({
         </span>
         {sketches.length > 0 && (
           <span className="vp-chip">
-            {sketches.length}{' '}
-            {sketches.length === 1 ? 'sketch' : 'sketches'}
+            {sketches.length} {sketches.length === 1 ? 'sketch' : 'sketches'}
           </span>
         )}
       </div>

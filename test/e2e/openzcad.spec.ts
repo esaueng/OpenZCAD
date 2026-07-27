@@ -179,6 +179,104 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   expect(dimensions).not.toEqual(['40', '18', '24']);
 });
 
+test('switches a planar-face selection into an editable arc sketch', async ({
+  page
+}) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Context Sketch Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: bounds!.x + bounds!.width * xRatio,
+        y: bounds!.y + bounds!.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
+
+  const offsetCard = page.getByRole('region', {
+    name: 'Offset Face operation'
+  });
+  await expect(offsetCard).toBeVisible();
+  await expect(
+    offsetCard.getByRole('tab', { name: 'Offset Face' })
+  ).toHaveAttribute('aria-selected', 'true');
+  await offsetCard.getByRole('tab', { name: 'Sketch' }).click();
+
+  await expect(
+    page.getByRole('region', { name: 'Sketch operation' })
+  ).toBeVisible();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Arc/ }).click();
+  const sketchBounds = await canvas.boundingBox();
+  expect(sketchBounds).not.toBeNull();
+  const center = {
+    x: sketchBounds!.x + sketchBounds!.width / 2,
+    y: sketchBounds!.y + sketchBounds!.height / 2
+  };
+  await page.mouse.click(center.x, center.y);
+  await page.mouse.click(center.x + 80, center.y);
+  await page.mouse.click(center.x, center.y - 80);
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch' })
+  ).toBeVisible();
+  await sketchTools.getByRole('button', { name: /^Select/ }).click();
+  await page.mouse.click(center.x + 56, center.y - 56);
+  const editor = page.getByRole('form', { name: 'Edit arc' });
+  await expect(editor).toBeVisible();
+  const radiusInput = editor.getByLabel('Radius');
+  await expect(radiusInput).not.toHaveValue('');
+  const radius = await radiusInput.inputValue();
+  await radiusInput.fill('-1');
+  await expect(editor.getByRole('alert')).toContainText(
+    'Lengths and radii must be greater than zero.'
+  );
+  await expect(editor.getByRole('button', { name: 'Apply' })).toBeDisabled();
+  await radiusInput.fill(radius);
+  await editor.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Updated arc geometry'
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const editorBounds = await editor.boundingBox();
+  expect(editorBounds).not.toBeNull();
+  expect(editorBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(editorBounds!.x + editorBounds!.width).toBeLessThanOrEqual(390.5);
+  expect(editorBounds!.y + editorBounds!.height).toBeLessThanOrEqual(844.5);
+  expect(consoleErrors).toEqual([]);
+});
+
 test('fillets all twelve edges of a box in one exact feature', async ({
   page
 }) => {
@@ -220,7 +318,9 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   expect(consoleErrors).toEqual([]);
 });
 
-test('grounds an AI fillet request onto every selected edge', async ({ page }) => {
+test('grounds an AI fillet request onto every selected edge', async ({
+  page
+}) => {
   await stubApi(page);
   type AssistantRequest = {
     digest?: {
@@ -250,8 +350,7 @@ test('grounds an AI fillet request onto every selected edge', async ({ page }) =
     })
   );
   await page.route('**/api/assistant/proposals', (route) => {
-    const assistantRequest =
-      route.request().postDataJSON() as AssistantRequest;
+    const assistantRequest = route.request().postDataJSON() as AssistantRequest;
     resolveAssistantRequest(assistantRequest);
     const selection = assistantRequest?.digest?.selection;
     const firstEdge = selection?.topologies?.find(
@@ -408,9 +507,9 @@ test('models a parametric part and exports a true STEP file', async ({
     page.locator('.feature-row', { hasText: 'Subtract' })
   ).toBeVisible();
   await expect(
-    page.locator('.feature-row', { hasText: 'Subtract' }).getByTitle(
-      'Feature failed to build'
-    )
+    page
+      .locator('.feature-row', { hasText: 'Subtract' })
+      .getByTitle('Feature failed to build')
   ).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 

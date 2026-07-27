@@ -3643,7 +3643,7 @@ textarea {
   position: absolute;
   top: 14px;
   left: 50%;
-  z-index: calc(var(--z-viewer-overlay) + 2);
+  z-index: calc(var(--z-inspector-float) + 1);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3666,6 +3666,14 @@ textarea {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
   }
+}
+
+[data-reduced-motion='true'] .tool-card {
+  animation: none;
+}
+
+[data-reduced-motion='true'] .tool-card[aria-busy='true'] .tool-card-icon svg {
+  animation: none;
 }
 
 .tool-card-icon {
@@ -3693,6 +3701,22 @@ textarea {
 .tool-card-copy small {
   color: var(--color-text-dim);
   font-size: var(--fs-xs);
+}
+
+.tool-card-copy .tool-card-error {
+  max-width: 360px;
+  color: var(--color-error);
+  white-space: normal;
+}
+
+.tool-card[aria-busy='true'] .tool-card-icon svg {
+  animation: tool-card-validating 900ms linear infinite;
+}
+
+@keyframes tool-card-validating {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tool-card-submode {
@@ -3905,7 +3929,7 @@ textarea {
   position: absolute;
   top: 72px;
   left: 50%;
-  z-index: calc(var(--z-viewer-overlay) + 2);
+  z-index: calc(var(--z-inspector-float) + 1);
   display: flex;
   gap: 4px;
   align-items: center;
@@ -3958,6 +3982,78 @@ textarea {
 
 .sketch-rail .sketch-rail-exit {
   color: var(--color-accent-hi);
+}
+
+.sketch-entity-editor {
+  position: absolute;
+  top: 124px;
+  right: 14px;
+  z-index: calc(var(--z-inspector-float) + 1);
+  width: min(290px, calc(100% - 28px));
+  padding: 12px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.sketch-entity-editor header,
+.sketch-entity-editor footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sketch-entity-editor header {
+  margin-bottom: 10px;
+}
+
+.sketch-entity-editor header > div {
+  display: grid;
+  gap: 2px;
+  text-transform: capitalize;
+}
+
+.sketch-entity-editor .eyebrow {
+  color: var(--color-text-dim);
+  font-size: var(--fs-mini);
+  text-transform: uppercase;
+}
+
+.sketch-entity-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 8px;
+}
+
+.sketch-entity-editor .field input {
+  width: 100%;
+  min-width: 0;
+}
+
+.sketch-entity-editor .form-error {
+  margin: 0 0 10px;
+  color: var(--color-error);
+  font-size: var(--fs-mini);
+}
+
+@media (max-width: 760px) {
+  .sketch-rail {
+    max-width: calc(100% - 20px);
+    overflow-x: auto;
+  }
+
+  .sketch-entity-editor {
+    top: auto;
+    right: 10px;
+    bottom: 54px;
+    left: 10px;
+    width: auto;
+    max-height: 44vh;
+    overflow-y: auto;
+  }
 }
 
 /* Plane picker shown while the Sketch tool waits for a target. */

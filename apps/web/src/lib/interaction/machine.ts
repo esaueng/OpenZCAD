@@ -1,26 +1,26 @@
 import type { SketchPlaneRef, TopologySelection } from '@openzcad/shared';
+import {
+  preferredCapability,
+  selectionCapabilities,
+  type FaceCapabilityTarget,
+  type SelectionActionId
+} from './capabilities';
 
 /**
  * The selection-first interaction machine.
  *
- * Clicking geometry infers the operation: a face arms Offset Face (or hole
- * resize when the face is a cylindrical bore), edges arm Chamfer/Fillet, a
- * sketch region arms Extrude, and entering a sketch nests a drawing session.
- * The reducer only handles these coarse transitions — per-frame drag values
- * stay in the viewport's imperative layer and never pass through React.
+ * Per-frame drag values stay in the viewport's imperative layer. The reducer
+ * owns semantic lifecycle only, including exact validation and recoverable
+ * failure.
  */
 
-export interface FaceTarget {
+export interface FaceTarget extends FaceCapabilityTarget {
   bodyId: string;
   topologyId: string;
-  hash?: number;
   /** World-space click point captured at selection. */
   point: [number, number, number];
   /** Outward face normal at the click point. */
   normal: [number, number, number];
-  surfaceType: 'planar' | 'cylindrical' | 'other';
-  /** Present for cylindrical bores with an editable diameter. */
-  diameter?: number;
 }
 
 export interface RegionTarget {
@@ -37,34 +37,40 @@ export interface SketchSessionState {
   sketchId: string | null;
   plane: SketchPlaneRef;
   tool: SketchToolId;
-  /** True while a drawing gesture (drag or line chain) is in flight. */
+  /** True while a drawing gesture (drag or line/arc chain) is in flight. */
   drawing: boolean;
+  /** Stable document id of the entity selected for editing. */
+  selectedObjectId: string | null;
+}
+
+export type OperationPhase =
+  'armed' | 'dragging' | 'exact-entry' | 'validating' | 'failed';
+
+interface OperationLifecycle {
+  phase: OperationPhase;
+  /** Last submitted value, retained when exact validation fails. */
+  lastValue: number | null;
+  /** Exact-kernel failure; only present in the failed phase. */
+  error: string | null;
 }
 
 export type InteractionState =
   | { mode: 'idle' }
-  | {
+  | ({
       mode: 'face';
       target: FaceTarget;
       op: 'offset-face' | 'resize-hole';
-      /** True while the handle drag is in flight. */
-      engaged: boolean;
-      keypadOpen: boolean;
-    }
-  | {
+    } & OperationLifecycle)
+  | ({
       mode: 'edges';
       edges: TopologySelection[];
       op: 'fillet' | 'chamfer';
-      engaged: boolean;
-      keypadOpen: boolean;
-    }
-  | {
+    } & OperationLifecycle)
+  | ({
       mode: 'region';
       target: RegionTarget;
-      engaged: boolean;
-      keypadOpen: boolean;
-    }
-  | { mode: 'sketch'; session: SketchSessionState; keypadOpen: boolean };
+    } & OperationLifecycle)
+  | { mode: 'sketch'; session: SketchSessionState };
 
 export type InteractionEvent =
   | { type: 'select-face'; target: FaceTarget }
@@ -72,13 +78,18 @@ export type InteractionEvent =
   | { type: 'select-region'; target: RegionTarget }
   | { type: 'drag-engage' }
   | { type: 'drag-release' }
+  | { type: 'set-edge-op'; op: 'fillet' | 'chamfer' }
   | { type: 'toggle-edge-op' }
   | { type: 'keypad-open' }
   | { type: 'keypad-close' }
+  | { type: 'validation-start'; value: number }
+  | { type: 'validation-failed'; message: string; value?: number }
+  | { type: 'recover' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | { type: 'sketch-tool'; tool: SketchToolId }
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
+  | { type: 'sketch-select-object'; objectId: string | null }
   | { type: 'exit-sketch' }
   | { type: 'escape' }
   | { type: 'clear' }
@@ -86,27 +97,52 @@ export type InteractionEvent =
 
 export const IDLE: InteractionState = { mode: 'idle' };
 
+const ARMED: OperationLifecycle = {
+  phase: 'armed',
+  lastValue: null,
+  error: null
+};
+
+function isOperationState(
+  state: InteractionState
+): state is Exclude<InteractionState, { mode: 'idle' } | { mode: 'sketch' }> {
+  return state.mode !== 'idle' && state.mode !== 'sketch';
+}
+
 /** What the next Escape press should do, innermost state first. */
 export function escapeTarget(
   state: InteractionState
 ):
   | 'close-keypad'
   | 'cancel-drag'
+  | 'recover-failure'
   | 'end-drawing'
+  | 'clear-sketch-selection'
   | 'clear-selection'
   | 'exit-sketch'
   | 'none' {
   if (state.mode === 'idle') {
     return 'none';
   }
-  if (state.keypadOpen) {
+  if (state.mode === 'sketch') {
+    if (state.session.drawing) {
+      return 'end-drawing';
+    }
+    return state.session.selectedObjectId
+      ? 'clear-sketch-selection'
+      : 'exit-sketch';
+  }
+  if (state.phase === 'validating') {
+    return 'none';
+  }
+  if (state.phase === 'exact-entry') {
     return 'close-keypad';
   }
-  if (state.mode === 'sketch') {
-    return state.session.drawing ? 'end-drawing' : 'exit-sketch';
-  }
-  if (state.engaged) {
+  if (state.phase === 'dragging') {
     return 'cancel-drag';
+  }
+  if (state.phase === 'failed') {
+    return 'recover-failure';
   }
   return 'clear-selection';
 }
@@ -120,16 +156,20 @@ export function interactionReducer(
       if (state.mode === 'sketch') {
         return state;
       }
+      const preferred = preferredCapability(
+        selectionCapabilities({ kind: 'face', target: event.target })
+      );
+      if (!preferred) {
+        return IDLE;
+      }
       return {
         mode: 'face',
         target: event.target,
         op:
-          event.target.surfaceType === 'cylindrical' &&
-          event.target.diameter !== undefined
+          preferred.action === 'resize-radial-face'
             ? 'resize-hole'
             : 'offset-face',
-        engaged: false,
-        keypadOpen: false
+        ...ARMED
       };
     }
     case 'select-edge': {
@@ -147,108 +187,159 @@ export function interactionReducer(
       if (edges.length === 0) {
         return IDLE;
       }
+      const sameBody = edges.every((edge) => edge.bodyId === edges[0]?.bodyId);
+      if (
+        selectionCapabilities({
+          kind: 'edges',
+          count: edges.length,
+          sameBody
+        }).length === 0
+      ) {
+        return IDLE;
+      }
       return {
         mode: 'edges',
         edges,
         op: state.mode === 'edges' ? state.op : 'fillet',
-        engaged: false,
-        keypadOpen: false
+        ...ARMED
       };
     }
     case 'select-region': {
       if (state.mode === 'sketch') {
         return state;
       }
+      if (
+        selectionCapabilities({ kind: 'region', area: event.target.area })
+          .length === 0
+      ) {
+        return IDLE;
+      }
       return {
         mode: 'region',
         target: event.target,
-        engaged: false,
-        keypadOpen: false
+        ...ARMED
       };
     }
-    case 'drag-engage': {
-      if (state.mode === 'idle' || state.mode === 'sketch') {
-        return state;
-      }
-      return { ...state, engaged: true, keypadOpen: false };
-    }
-    case 'drag-release': {
-      if (state.mode === 'idle' || state.mode === 'sketch') {
-        return state;
-      }
-      return { ...state, engaged: false };
-    }
-    case 'toggle-edge-op': {
-      if (state.mode !== 'edges') {
-        return state;
-      }
-      return { ...state, op: state.op === 'fillet' ? 'chamfer' : 'fillet' };
-    }
-    case 'keypad-open': {
-      if (state.mode === 'idle') {
-        return state;
-      }
-      return { ...state, keypadOpen: true };
-    }
-    case 'keypad-close': {
-      if (state.mode === 'idle') {
-        return state;
-      }
-      return { ...state, keypadOpen: false };
-    }
-    case 'enter-sketch': {
+    case 'drag-engage':
+      return isOperationState(state) && state.phase !== 'validating'
+        ? { ...state, phase: 'dragging', error: null }
+        : state;
+    case 'drag-release':
+      return isOperationState(state) && state.phase === 'dragging'
+        ? { ...state, phase: 'armed' }
+        : state;
+    case 'set-edge-op':
+      return state.mode === 'edges'
+        ? { ...state, op: event.op, ...ARMED }
+        : state;
+    case 'toggle-edge-op':
+      return state.mode === 'edges'
+        ? {
+            ...state,
+            op: state.op === 'fillet' ? 'chamfer' : 'fillet',
+            ...ARMED
+          }
+        : state;
+    case 'keypad-open':
+      return isOperationState(state) && state.phase !== 'validating'
+        ? { ...state, phase: 'exact-entry', error: null }
+        : state;
+    case 'keypad-close':
+      return isOperationState(state) && state.phase === 'exact-entry'
+        ? { ...state, phase: 'armed' }
+        : state;
+    case 'validation-start':
+      return isOperationState(state)
+        ? {
+            ...state,
+            phase: 'validating',
+            lastValue: event.value,
+            error: null
+          }
+        : state;
+    case 'validation-failed':
+      return isOperationState(state)
+        ? {
+            ...state,
+            phase: 'failed',
+            lastValue: event.value ?? state.lastValue,
+            error: event.message
+          }
+        : state;
+    case 'recover':
+      return isOperationState(state) && state.phase === 'failed'
+        ? { ...state, phase: 'armed', error: null }
+        : state;
+    case 'enter-sketch':
       return {
         mode: 'sketch',
         session: {
           sketchId: event.sketchId ?? null,
           plane: event.plane,
           tool: 'line',
-          drawing: false
-        },
-        keypadOpen: false
+          drawing: false,
+          selectedObjectId: null
+        }
       };
-    }
-    case 'sketch-tool': {
+    case 'sketch-tool':
       if (state.mode !== 'sketch') {
         return state;
       }
       return {
         ...state,
-        session: { ...state.session, tool: event.tool, drawing: false }
+        session: {
+          ...state.session,
+          tool: event.tool,
+          drawing: false,
+          selectedObjectId:
+            event.tool === 'select' ? state.session.selectedObjectId : null
+        }
       };
-    }
-    case 'sketch-created': {
-      if (state.mode !== 'sketch') {
-        return state;
-      }
-      return {
-        ...state,
-        session: { ...state.session, sketchId: event.sketchId }
-      };
-    }
-    case 'sketch-drawing': {
-      if (state.mode !== 'sketch') {
-        return state;
-      }
-      return {
-        ...state,
-        session: { ...state.session, drawing: event.drawing },
-        keypadOpen: event.drawing ? state.keypadOpen : false
-      };
-    }
-    case 'exit-sketch': {
+    case 'sketch-created':
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: { ...state.session, sketchId: event.sketchId }
+          }
+        : state;
+    case 'sketch-drawing':
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: { ...state.session, drawing: event.drawing }
+          }
+        : state;
+    case 'sketch-select-object':
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              tool: 'select',
+              drawing: false,
+              selectedObjectId: event.objectId
+            }
+          }
+        : state;
+    case 'exit-sketch':
       return state.mode === 'sketch' ? IDLE : state;
-    }
     case 'escape': {
       switch (escapeTarget(state)) {
         case 'close-keypad':
           return interactionReducer(state, { type: 'keypad-close' });
         case 'cancel-drag':
           return interactionReducer(state, { type: 'drag-release' });
+        case 'recover-failure':
+          return interactionReducer(state, { type: 'recover' });
         case 'end-drawing':
           return interactionReducer(state, {
             type: 'sketch-drawing',
             drawing: false
+          });
+        case 'clear-sketch-selection':
+          return interactionReducer(state, {
+            type: 'sketch-select-object',
+            objectId: null
           });
         case 'clear-selection':
         case 'exit-sketch':
@@ -259,11 +350,9 @@ export function interactionReducer(
       return state;
     }
     case 'clear':
-    case 'commit-complete': {
-      // Committing an operation returns to a clean slate; the tool card
-      // disappears and geometry is deselected, matching the reference flow.
       return state.mode === 'sketch' ? state : IDLE;
-    }
+    case 'commit-complete':
+      return state.mode === 'sketch' ? state : IDLE;
   }
 }
 
@@ -272,60 +361,118 @@ export function interactionReducer(
 // ---------------------------------------------------------------------------
 
 export type ToolCardIcon =
-  | 'offset-face'
-  | 'resize-hole'
-  | 'fillet'
-  | 'extrude'
-  | 'sketch';
+  'offset-face' | 'resize-hole' | 'fillet' | 'extrude' | 'sketch';
+
+export interface ToolCardAction {
+  id: SelectionActionId;
+  label: string;
+  active: boolean;
+}
 
 export interface ToolCardModel {
   icon: ToolCardIcon;
   title: string;
-  /** Two-option sub-mode toggle (e.g. Fillet ↔ Chamfer). */
-  subMode?: { options: [string, string]; active: 0 | 1 };
+  actions?: ToolCardAction[];
   hint: string;
+  phase?: OperationPhase;
+  error?: string;
+}
+
+function lifecycleHint(
+  state: Extract<InteractionState, { mode: 'face' | 'edges' | 'region' }>,
+  armedHint: string
+): Pick<ToolCardModel, 'hint' | 'phase' | 'error'> {
+  if (state.phase === 'validating') {
+    return {
+      phase: state.phase,
+      hint: 'Validating with the exact geometry kernel…'
+    };
+  }
+  if (state.phase === 'failed') {
+    return {
+      phase: state.phase,
+      hint: 'Adjust the value and try again.',
+      error: state.error ?? 'The exact operation was rejected.'
+    };
+  }
+  return { phase: state.phase, hint: armedHint };
 }
 
 export function toolCardFor(state: InteractionState): ToolCardModel | null {
   switch (state.mode) {
     case 'idle':
       return null;
-    case 'face':
+    case 'face': {
+      const capabilities = selectionCapabilities({
+        kind: 'face',
+        target: state.target
+      });
+      const actions = capabilities.map((capability) => ({
+        id: capability.action,
+        label: capability.label,
+        active:
+          (state.op === 'offset-face' && capability.action === 'offset-face') ||
+          (state.op === 'resize-hole' &&
+            capability.action === 'resize-radial-face')
+      }));
       return state.op === 'resize-hole'
         ? {
             icon: 'resize-hole',
             title: 'Resize Hole',
-            hint: 'Drag the arrow or tap the value to set the diameter.'
+            ...(actions.length > 1 ? { actions } : {}),
+            ...lifecycleHint(
+              state,
+              'Drag the arrow or tap the value to set the diameter.'
+            )
           }
         : {
             icon: 'offset-face',
             title: 'Offset Face',
-            hint: 'Drag the arrow to offset the face, or tap the value to type.'
+            ...(actions.length > 1 ? { actions } : {}),
+            ...lifecycleHint(
+              state,
+              'Drag the arrow to offset the face, or tap the value to type.'
+            )
           };
-    case 'edges':
+    }
+    case 'edges': {
+      const actions = selectionCapabilities({
+        kind: 'edges',
+        count: state.edges.length,
+        sameBody: state.edges.every(
+          (edge) => edge.bodyId === state.edges[0]?.bodyId
+        )
+      }).map((capability) => ({
+        id: capability.action,
+        label: capability.label,
+        active: capability.action === state.op
+      }));
       return {
         icon: 'fillet',
         title: state.op === 'fillet' ? 'Fillet' : 'Chamfer',
-        subMode: {
-          options: ['Fillet', 'Chamfer'],
-          active: state.op === 'fillet' ? 0 : 1
-        },
-        hint:
+        actions,
+        ...lifecycleHint(
+          state,
           state.edges.length > 1
-            ? `Drag to round ${state.edges.length} edges together.`
-            : 'Drag the handle to round the edge, or tap the value to type.'
+            ? `Drag to finish ${state.edges.length} edges together.`
+            : 'Drag the handle, or tap the value to type.'
+        )
       };
+    }
     case 'region':
       return {
         icon: 'extrude',
         title: 'Extrude',
-        hint: 'Drag the region to pull it into a solid.'
+        ...lifecycleHint(state, 'Drag the region to pull it into a solid.')
       };
     case 'sketch':
       return {
         icon: 'sketch',
         title: 'Sketch',
-        hint: 'Draw with Line, Arc, Circle, or Rectangle. Esc ends a chain.'
+        hint:
+          state.session.tool === 'select'
+            ? 'Select an entity to edit its exact values.'
+            : 'Draw with Line, Arc, Circle, or Rectangle. Esc ends a chain.'
       };
   }
 }
