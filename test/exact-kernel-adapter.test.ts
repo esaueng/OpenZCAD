@@ -485,12 +485,6 @@ describe('exact hybrid kernel adapter', () => {
       widened.bodyRepresentations[resultId]!.volume,
       6
     );
-    // Known kernel gap: BrepKit booleans that replace a coaxial cylindrical
-    // face produce solids whose STEP export fails OCCT inspection (a plain
-    // double-subtract of coaxial drills fails identically, so this predates
-    // direct edits). The in-app mesh, volume, and validation are correct.
-    // STEP round-trip coverage lands with the native push-pull kernel ops.
-
     // The widened bore stays one analytic cylindrical face.
     const widenedFaces = widened.bodyRepresentations[resultId]?.topology?.faces;
     const widenedBore = widenedFaces?.filter(
@@ -499,11 +493,9 @@ describe('exact hybrid kernel adapter', () => {
     expect(widenedBore).toHaveLength(1);
     expect(widenedBore?.[0]?.geometry?.radius).toBeCloseTo(5, 4);
 
-    // Moving the wall inward needs the annular sleeve between the two radii,
-    // and every construction for it runs through a boolean against a second
-    // coaxial cylindrical face — the kernel gap noted above. Until the native
-    // radial push-pull lands, shrinking fails closed instead of committing a
-    // silently wrong solid.
+    // Moving the wall back inward sweeps the annular sleeve between the two
+    // radii through material that is already there. The kernel builds that
+    // tube itself, so shrinking goes through the same call as growing.
     const shrunkDoc = directEditBody(resized, {
       name: 'Shrink bore',
       targetBodyId: resultId,
@@ -518,19 +510,32 @@ describe('exact hybrid kernel adapter', () => {
       }
     }).document;
     const shrunk = await adapter.syncDocument(shrunkDoc);
-    expect(
-      shrunk.warnings.some((warning) =>
-        warning.includes('Shrinking a hole needs kernel support')
-      )
-    ).toBe(true);
-    // The body is left exactly as the last good feature built it.
+    expect(shrunk.warnings).toEqual([]);
     expect(shrunk.bodyRepresentations[resultId]?.volume).toBeCloseTo(
-      widened.bodyRepresentations[resultId]!.volume,
-      6
+      40 * 40 * 10 - Math.PI * 16 * 10,
+      0
     );
+    // The narrowed wall is one analytic cylinder at the new radius, not the
+    // old wall left in place and not a ring of planar strips.
+    const shrunkBore = shrunk.bodyRepresentations[
+      resultId
+    ]?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(shrunkBore).toHaveLength(1);
+    expect(shrunkBore?.[0]?.geometry?.radius).toBeCloseTo(4, 4);
+
+    // Composing the resize from booleans used to leave a solid that OCCT
+    // rejected on import, so this body could only be checked in-app. The
+    // native op's own closed-shell gate makes it exportable.
+    const step = await adapter.exportStep(shrunkDoc, [resultId]);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
   });
 
-  it('grows a free-standing boss and fails closed on the rest', async () => {
+  it('grows and shrinks a free-standing boss', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Boss resize', toUserId('user_exact')),
       {
@@ -573,12 +578,25 @@ describe('exact hybrid kernel adapter', () => {
     expect(walls?.[0]?.geometry?.radius).toBeCloseTo(15, 4);
 
     const shrunk = await adapter.syncDocument(resize(9));
+    expect(shrunk.warnings).toEqual([]);
+    const shrunkBody = shrunk.bodyRepresentations[bossId];
+    expect(shrunkBody?.volume).toBeCloseTo(Math.PI * 81 * 15, 0);
+    const shrunkWalls = shrunkBody?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(shrunkWalls).toHaveLength(1);
+    expect(shrunkWalls?.[0]?.geometry?.radius).toBeCloseTo(9, 4);
+
+    // Resizing to the radius the wall is already at leaves no sleeve to
+    // sweep, so it is rejected rather than kept as a feature that does
+    // nothing.
+    const unchanged = await adapter.syncDocument(resize(12));
     expect(
-      shrunk.warnings.some((warning) =>
-        warning.includes('Shrinking a boss needs kernel support')
+      unchanged.warnings.some((warning) =>
+        warning.includes('Radius must differ from the current radius')
       )
     ).toBe(true);
-    expect(shrunk.bodyRepresentations[bossId]?.volume).toBeCloseTo(
+    expect(unchanged.bodyRepresentations[bossId]?.volume).toBeCloseTo(
       derived.bodyRepresentations[bossId]!.volume,
       6
     );
