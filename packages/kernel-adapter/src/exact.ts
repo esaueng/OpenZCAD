@@ -1347,10 +1347,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   /**
    * History-backed direct edits on the BrepKit path. Planar offsets and
-   * cylindrical resizes are composed from extrude/boolean primitives — there
-   * is no native push-pull in the kernel yet — with every source measurement
-   * re-validated first so a drifted rebuild fails closed instead of editing
-   * the wrong face.
+   * cylindrical resizes are the kernel's own `pushPullFace` and
+   * `resizeCylindricalFace`: each derives its tool from the selected face's
+   * geometry, merges the seams the boolean leaves behind, and refuses any
+   * result whose shell is not closed or whose volume is not the one the edit
+   * is defined to produce. Every source measurement is re-validated against
+   * the rebuilt body first, so a drifted rebuild fails closed instead of
+   * editing the wrong face.
    */
   private applyDirectEdit(
     kernel: BrepKernel,
@@ -1388,34 +1391,18 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           'The selected face no longer matches its recorded orientation.'
         );
       }
-      // The stored normal is the outward direction the user dragged along;
-      // trust its sign even if the surface parameterization flipped.
-      const normal = operation.sourceNormal;
       const offset = resolveParamValue(operation.offset, scope, 'offset');
       if (!Number.isFinite(offset) || Math.abs(offset) <= GEOMETRY_EPSILON) {
         throw new Error('Face offset must be a non-zero distance.');
       }
-      const magnitude = Math.abs(offset);
-      let output: number;
-      if (offset > 0) {
-        const tool = kernel.extrude(
-          face,
-          normal.x,
-          normal.y,
-          normal.z,
-          magnitude
-        );
-        output = fuseUniformSolid(kernel, [solid, tool]);
-      } else {
-        const tool = kernel.extrude(
-          face,
-          -normal.x,
-          -normal.y,
-          -normal.z,
-          magnitude
-        );
-        output = unifyBooleanFaces(kernel, kernel.cut(solid, tool));
-      }
+      // `pushPullFace` walks the face along the solid's own outward normal,
+      // which is the direction the stored normal holds too — it came from the
+      // picked triangle, not from the surface parameterization, so the sign
+      // carries through unchanged even where the two disagree. A prismatic
+      // move is worth exactly `offset * area`, and the kernel gates the result
+      // on that, so a tool that reached material it should not have is
+      // rejected rather than returned.
+      const output = kernel.pushPullFace(solid, face, offset);
       if (kernel.validateSolidRelaxed(output) !== 0) {
         throw new Error(
           `Offsetting the face by ${offset} does not produce a valid solid.`
@@ -1459,6 +1446,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     if (!Number.isFinite(newRadius) || newRadius <= GEOMETRY_EPSILON) {
       throw new Error('Radius must be greater than zero.');
     }
+    if (Math.abs(newRadius - geometry.radius) <= radiusTolerance) {
+      throw new Error('Radius must differ from the current radius.');
+    }
     const axisVector = {
       x: geometry.axisEnd.x - geometry.axisStart.x,
       y: geometry.axisEnd.y - geometry.axisStart.y,
@@ -1468,75 +1458,52 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     if (!axisDir) {
       throw new Error('The selected face has a degenerate axis.');
     }
-    const span = geometry.axialLength;
-    const cylinderAlong = (
-      radius: number,
-      startOffset: number,
-      length: number
-    ): number => {
-      const base = {
-        x: geometry.axisStart!.x + axisDir.x * startOffset,
-        y: geometry.axisStart!.y + axisDir.y * startOffset,
-        z: geometry.axisStart!.z + axisDir.z * startOffset
-      };
-      return kernel.copyAndTransformSolid(
-        kernel.makeCylinder(radius, length),
-        coordinateFrameMatrix(base, axisDir)
-      );
-    };
-    // Growing a bore or a boss only ever needs a plain cylinder tool against
-    // the body, which this kernel handles exactly. Moving the wall the other
-    // way needs the annular sleeve between the two radii, and every way of
-    // producing it runs into the same gap: booleans involving a second
-    // coaxial cylindrical face come back as a no-op solid, as a wall
-    // shattered into planar strips, or as a cut that reaches past the face.
-    // Composition cannot paper over this, so the operation fails closed
-    // (ADR-010) until the kernel grows a native radial push-pull.
-    if (newRadius < operation.sourceRadius) {
-      throw new Error(
-        operation.concavity === 'hole'
-          ? 'Shrinking a hole needs kernel support that is not available yet — widen it, or edit the feature that created it.'
-          : 'Shrinking a boss needs kernel support that is not available yet — widen it, or edit the feature that created it.'
-      );
-    }
-    const tool = cylinderAlong(newRadius, 0, span);
-    // The drill is flush with the caps — the same construction as a plain
-    // boolean subtract, which round-trips STEP where an overshooting tool
-    // does not.
-    const output =
-      operation.concavity === 'hole'
-        ? unifyBooleanFaces(kernel, kernel.cut(solid, tool))
-        : fuseUniformSolid(kernel, [solid, tool]);
+    // `resizeCylindricalFace` reads the concavity off the face's own
+    // orientation and builds the sleeve between the two radii itself — a
+    // plain cylinder when the wall sweeps outward, an annular tube when it
+    // sweeps back through material — so growing and shrinking are the same
+    // call. The recorded `concavity` is now only a record of what the gesture
+    // meant, and shrinking no longer has to fail closed.
+    const output = kernel.resizeCylindricalFace(solid, face, newRadius);
     if (kernel.validateSolidRelaxed(output) !== 0) {
       throw new Error(
         `Resizing the face to radius ${newRadius} does not produce a valid solid.`
       );
     }
-    // A boolean that meets a coaxial cylindrical face can come back as the
-    // untouched original — a valid solid that simply ignored the edit. Read
-    // the wall back and insist it actually moved, so a no-op surfaces as a
-    // failed feature rather than a gesture that looked like it worked.
-    const moved = Array.from(kernel.getSolidFaces(output)).some((handle) => {
-      const measured = measureFaceGeometry(kernel, handle);
-      if (
-        measured?.surfaceType !== 'cylinder' ||
-        measured.radius === undefined ||
-        !measured.axisStart
-      ) {
-        return false;
+    // The kernel gates on a closed shell and on the volume the resize is
+    // defined to produce, and a degraded result can still clear both: a
+    // boolean that meets a coaxial cylindrical face may hand back the
+    // untouched original, and a mesh-boolean fallback encloses the right
+    // space with a wall of triangles instead of a cylinder. Read the wall
+    // back and insist it is an analytic cylinder at the new radius, so either
+    // failure surfaces as a failed feature rather than a gesture that looked
+    // like it worked.
+    const coaxialRadii = Array.from(kernel.getSolidFaces(output)).flatMap(
+      (handle) => {
+        const measured = measureFaceGeometry(kernel, handle);
+        if (
+          measured?.surfaceType !== 'cylinder' ||
+          measured.radius === undefined ||
+          !measured.axisStart
+        ) {
+          return [];
+        }
+        const toAxis = subtract(measured.axisStart, geometry.axisStart!);
+        const along = dot(toAxis, axisDir);
+        return length(subtract(toAxis, scale(axisDir, along))) <= axisTolerance
+          ? [measured.radius]
+          : [];
       }
-      if (Math.abs(measured.radius - newRadius) > radiusTolerance) {
-        return false;
-      }
-      const toAxis = subtract(measured.axisStart, geometry.axisStart!);
-      const along = dot(toAxis, axisDir);
-      return (
-        length(subtract(toAxis, scale(axisDir, along))) <= axisTolerance
+    );
+    const atRadius = (radius: number): boolean =>
+      coaxialRadii.some(
+        (candidate) => Math.abs(candidate - radius) <= radiusTolerance
       );
-    });
-    if (!moved) {
+    if (!atRadius(newRadius)) {
       throw new Error(
-        `The kernel left the face at its original size instead of resizing it to radius ${newRadius}.`
+        atRadius(geometry.radius)
+          ? `The kernel left the face at its original size instead of resizing it to radius ${newRadius}.`
+          : `The kernel returned no analytic cylinder at radius ${newRadius} — the wall came back as a mesh approximation.`
       );
     }
     return { solids: [output] };
