@@ -49,6 +49,31 @@ declare interface Queue<T = unknown> {
   send(message: T): Promise<void>;
 }
 
+// Minimal declarations copied from `wrangler types` for the native Email
+// Service binding. Regenerate them when the Wrangler runtime version changes.
+declare interface EmailAddress {
+  name: string;
+  email: string;
+}
+
+declare interface EmailSendResult {
+  messageId: string;
+}
+
+declare interface EmailMessageBuilder {
+  to: string | EmailAddress | (string | EmailAddress)[];
+  from: string | EmailAddress;
+  subject: string;
+  replyTo?: string | EmailAddress;
+  headers?: Record<string, string>;
+  text?: string;
+  html?: string;
+}
+
+declare interface SendEmail {
+  send(message: EmailMessageBuilder): Promise<EmailSendResult>;
+}
+
 declare interface WebSocket {
   accept(): void;
 }

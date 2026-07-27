@@ -107,9 +107,6 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.4
         version: 6.0.4(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1))
-      jose:
-        specifier: ^6.2.4
-        version: 6.2.4
       lucide-react:
         specifier: ^1.27.0
         version: 1.27.0(react@19.2.8)
@@ -211,7 +208,7 @@ importers:
         version: link:../shared
       brepkit-wasm:
         specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/brepkit/tar.gz/15aac407aec95211d1ed839250972e25e20a5a72#path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/brepkit/tar.gz/c5dc0dc2980edb4fb06a77a1e7517f2e97165395#path:/crates/wasm/pkg
       occt-wasm:
         specifier: 3.8.0
         version: 3.8.0
@@ -1057,8 +1054,8 @@ packages:
     resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
     engines: {node: 20 || >=22}
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/15aac407aec95211d1ed839250972e25e20a5a72#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/15aac407aec95211d1ed839250972e25e20a5a72}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/c5dc0dc2980edb4fb06a77a1e7517f2e97165395#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/c5dc0dc2980edb4fb06a77a1e7517f2e97165395}
     version: 2.129.0
 
   chai@6.2.2:
@@ -1259,9 +1256,6 @@ packages:
   istanbul-reports@3.2.0:
     resolution: {integrity: sha512-HGYWWS/ehqTV3xN10i23tkPkpH46MLCIMFNCaaKNavAXTF1RkqxawEPtnjnGZ6XKSInBKkiOA5BKS+aZiY3AvA==}
     engines: {node: '>=8'}
-
-  jose@6.2.4:
-    resolution: {integrity: sha512-N8acGzVsQy6M/fjFcxtysNc4Q379TcM5dM/qKkNtsHFji88yANnXTr7BLeP75iPnFwBfQzM/jg2BZ9+HZrHCZA==}
 
   js-tokens@10.0.0:
     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
@@ -2399,7 +2393,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/15aac407aec95211d1ed839250972e25e20a5a72#path:/crates/wasm/pkg: {}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/c5dc0dc2980edb4fb06a77a1e7517f2e97165395#path:/crates/wasm/pkg: {}
 
   chai@6.2.2: {}
 
@@ -2606,8 +2600,6 @@ snapshots:
     dependencies:
       html-escaper: 2.0.2
       istanbul-lib-report: 3.0.1
-
-  jose@6.2.4: {}
 
   js-tokens@10.0.0: {}
 

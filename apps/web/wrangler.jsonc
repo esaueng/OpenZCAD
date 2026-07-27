@@ -51,39 +51,5 @@
       "tag": "v1",
       "new_sqlite_classes": ["ProjectCollaborationRoom"]
     }
-  ],
-  "env": {
-    "beta": {
-      "name": "openzcad-beta",
-      "vars": {
-        "ENVIRONMENT": "beta",
-        "AUTH_MODE": "cloudflare-access",
-        "AI_PROVIDER": "openrouter",
-        "AI_MODEL": "openai/gpt-5.6-terra",
-        "AI_REASONING_EFFORT": "high"
-      },
-      "d1_databases": [
-        {
-          "binding": "DB",
-          "database_name": "openzcad-beta",
-          "database_id": "7263c6f1-8781-40d1-a0fa-ea03ce874ef2",
-          "migrations_dir": "migrations"
-        }
-      ],
-      "r2_buckets": [
-        {
-          "binding": "ARTIFACTS",
-          "bucket_name": "openzcad-beta-artifacts"
-        }
-      ],
-      "durable_objects": {
-        "bindings": [
-          {
-            "name": "PROJECT_ROOM",
-            "class_name": "ProjectCollaborationRoom"
-          }
-        ]
-      }
-    }
-  }
+  ]
 }

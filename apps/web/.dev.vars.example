@@ -15,6 +15,11 @@ AI_MODEL=openai/gpt-5.6-terra
 # Direct OpenAI alternative: AI_PROVIDER=openai and OPENAI_API_KEY=
 # For another Responses-compatible provider, set AI_PROVIDER=responses-compatible
 # plus AI_BASE_URL and either AI_API_KEY or OPENAI_API_KEY.
-# Local Wrangler uses AUTH_MODE=development from wrangler.jsonc.
-# Beta uses Cloudflare Access; optionally set AUTH_LEGACY_OWNER_EMAIL there to
-# the Access email that should inherit historical user_beta_dev projects.
+# Local Wrangler uses AUTH_MODE=development from wrangler.jsonc, so email-code
+# secrets are not needed for normal local CAD development.
+#
+# Beta email-code authentication requires Worker secrets AUTH_OTP_PEPPER and
+# TURNSTILE_SECRET_KEY plus TURNSTILE_SITE_KEY, AUTH_EMAIL_FROM, a D1 binding,
+# and an EMAIL sending binding in the deployed Wrangler configuration.
+# AUTH_LEGACY_OWNER_EMAIL can map historical user_beta_dev projects to one
+# verified owner email without rewriting document ownership.
