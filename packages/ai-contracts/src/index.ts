@@ -1,5 +1,6 @@
 import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
 import type {
+  SketchObjectData,
   AxisId,
   BooleanOperation,
   FeatureId,
@@ -73,11 +74,26 @@ export type CadPatchOperation =
       name: string;
     }
   | {
+      kind: 'add_sketch';
+      name: string;
+      /** \$alias other operations may use to reference this sketch. */
+      localId?: LocalBodyId;
+      plane: 'XY' | 'XZ' | 'YZ';
+      offset: ParamValue;
+      objects: SketchObjectData[];
+    }
+  | {
       kind: 'add_extrude';
       name: string;
       localId?: LocalBodyId;
       sketchId: SketchId;
       distance: ParamValue;
+      /**
+       * When set, extrudes only the detected closed region containing this
+       * sketch-local point (resolved when the proposal is applied) instead of
+       * the whole profile. Null extrudes the full profile.
+       */
+      samplePoint: { x: number; y: number } | null;
     }
   | {
       kind: 'add_revolve';
@@ -425,6 +441,78 @@ const vectorSchema = {
 } as const;
 // Strict structured output requires every property to appear in `required`, so
 // an "omit this" field has to be expressed as an explicit null instead.
+const sketchObjectSchema = {
+  anyOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'rectangle' },
+        width: scalarSchema,
+        height: scalarSchema,
+        centerX: scalarSchema,
+        centerY: scalarSchema
+      },
+      required: ['objectKind', 'width', 'height', 'centerX', 'centerY']
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'circle' },
+        radius: scalarSchema,
+        centerX: scalarSchema,
+        centerY: scalarSchema
+      },
+      required: ['objectKind', 'radius', 'centerX', 'centerY']
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'polygon' },
+        sides: scalarSchema,
+        radius: scalarSchema,
+        centerX: scalarSchema,
+        centerY: scalarSchema
+      },
+      required: ['objectKind', 'sides', 'radius', 'centerX', 'centerY']
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'line' },
+        x1: scalarSchema,
+        y1: scalarSchema,
+        x2: scalarSchema,
+        y2: scalarSchema
+      },
+      required: ['objectKind', 'x1', 'y1', 'x2', 'y2']
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'arc' },
+        centerX: scalarSchema,
+        centerY: scalarSchema,
+        radius: scalarSchema,
+        startAngleDeg: scalarSchema,
+        endAngleDeg: scalarSchema
+      },
+      required: [
+        'objectKind',
+        'centerX',
+        'centerY',
+        'radius',
+        'startAngleDeg',
+        'endAngleDeg'
+      ]
+    }
+  ]
+} as const;
+
 const localIdSchema = {
   anyOf: [{ type: 'string' }, { type: 'null' }],
   description:
@@ -538,13 +626,52 @@ export const CAD_PATCH_JSON_SCHEMA = {
             type: 'object',
             additionalProperties: false,
             properties: {
+              kind: { type: 'string', const: 'add_sketch' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              plane: { type: 'string', enum: ['XY', 'XZ', 'YZ'] },
+              offset: scalarSchema,
+              objects: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 24,
+                items: sketchObjectSchema
+              }
+            },
+            required: ['kind', 'name', 'localId', 'plane', 'offset', 'objects']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
               kind: { type: 'string', const: 'add_extrude' },
               name: { type: 'string' },
               localId: localIdSchema,
               sketchId: { type: 'string' },
-              distance: scalarSchema
+              distance: scalarSchema,
+              samplePoint: {
+                anyOf: [
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      x: { type: 'number' },
+                      y: { type: 'number' }
+                    },
+                    required: ['x', 'y']
+                  },
+                  { type: 'null' }
+                ]
+              }
             },
-            required: ['kind', 'name', 'localId', 'sketchId', 'distance']
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'sketchId',
+              'distance',
+              'samplePoint'
+            ]
           },
           {
             type: 'object',
@@ -789,11 +916,77 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
           throw new Error('Invalid rename_feature operation.');
         }
         break;
+      case 'add_sketch': {
+        const validObjects =
+          Array.isArray(operation.objects) &&
+          operation.objects.length > 0 &&
+          operation.objects.every((candidate: unknown) => {
+            if (!candidate || typeof candidate !== 'object') {
+              return false;
+            }
+            const object = candidate as Record<string, unknown> & {
+              objectKind?: unknown;
+            };
+            const fields = Object.entries(object).filter(
+              (entry) => entry[0] !== 'objectKind'
+            );
+            switch (object.objectKind) {
+              case 'rectangle':
+                return (
+                  fields.length === 4 &&
+                  ['width', 'height', 'centerX', 'centerY'].every((key) =>
+                    isScalar(object[key])
+                  )
+                );
+              case 'circle':
+                return ['radius', 'centerX', 'centerY'].every((key) =>
+                  isScalar(object[key])
+                );
+              case 'polygon':
+                return ['sides', 'radius', 'centerX', 'centerY'].every((key) =>
+                  isScalar(object[key])
+                );
+              case 'line':
+                return ['x1', 'y1', 'x2', 'y2'].every((key) =>
+                  isScalar(object[key])
+                );
+              case 'arc':
+                return [
+                  'centerX',
+                  'centerY',
+                  'radius',
+                  'startAngleDeg',
+                  'endAngleDeg'
+                ].every((key) =>
+                  isScalar(object[key])
+                );
+              default:
+                return false;
+            }
+          });
+        if (
+          typeof operation.name !== 'string' ||
+          !['XY', 'XZ', 'YZ'].includes(String(operation.plane)) ||
+          !isScalar(operation.offset) ||
+          !validObjects
+        ) {
+          throw new Error('Invalid add_sketch operation.');
+        }
+        declareLocalId(operation, declared);
+        break;
+      }
       case 'add_extrude':
         if (
           typeof operation.name !== 'string' ||
           typeof operation.sketchId !== 'string' ||
-          !isScalar(operation.distance)
+          !isScalar(operation.distance) ||
+          (operation.samplePoint !== null &&
+            operation.samplePoint !== undefined &&
+            (typeof operation.samplePoint !== 'object' ||
+              typeof (operation.samplePoint as { x?: unknown }).x !==
+                'number' ||
+              typeof (operation.samplePoint as { y?: unknown }).y !==
+                'number'))
         ) {
           throw new Error('Invalid add_extrude operation.');
         }

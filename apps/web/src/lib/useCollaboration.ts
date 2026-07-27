@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type {
-  AuthSession,
-  CollaborationMember,
-  CollaborationServerMessage,
-  ProjectDocument
+import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  type AuthSession,
+  type CollaborationMember,
+  type CollaborationServerMessage,
+  type ProjectDocument
 } from '@openzcad/shared';
 
 export type CollaborationStatus =
@@ -11,7 +12,8 @@ export type CollaborationStatus =
   | 'live'
   | 'offline'
   | 'conflict'
-  | 'oversize';
+  | 'oversize'
+  | 'update-required';
 
 interface CollaborationOptions {
   document: ProjectDocument | null;
@@ -80,6 +82,17 @@ export function useCollaboration({
     let reconnectTimer: number | undefined;
     let reconnectAttempt = 0;
     const id = clientId();
+
+    // A collaborator on a newer app version may share a document whose schema
+    // this client cannot faithfully edit. Refuse it rather than silently
+    // stripping fields the normalizer does not know about.
+    const rejectsNewerSchema = (incoming: ProjectDocument): boolean => {
+      if ((incoming.schemaVersion ?? 0) <= PROJECT_DOCUMENT_SCHEMA_VERSION) {
+        return false;
+      }
+      setStatus('update-required');
+      return true;
+    };
 
     const sendDocument = (
       socket: WebSocket,
@@ -181,6 +194,9 @@ export function useCollaboration({
         if (message.type === 'state') {
           setMembers(message.members);
           if (message.document) {
+            if (rejectsNewerSchema(message.document)) {
+              return;
+            }
             lastSentVersionRef.current = message.document.version;
             serverVersionRef.current = message.document.version;
             remoteHandlerRef.current(message.document);
@@ -188,6 +204,9 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'document') {
+          if (rejectsNewerSchema(message.document)) {
+            return;
+          }
           lastSentVersionRef.current = message.document.version;
           serverVersionRef.current = message.document.version;
           remoteHandlerRef.current(message.document);
@@ -205,6 +224,9 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'conflict') {
+          if (rejectsNewerSchema(message.document)) {
+            return;
+          }
           setStatus('conflict');
           conflictHandlerRef.current(message.document);
         }

@@ -4,8 +4,14 @@ import {
   type ExtrudePreview,
   type AxisProjection,
   type FaceResizeCommit,
+  type EdgeHandleTarget,
   type MovePreview,
+  type RegionHandleTarget,
+  type SketchModeState,
+  type SketchViewData,
   type MoveSnap,
+  type OffsetHandleTarget,
+  type PickDetail,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -14,8 +20,13 @@ import {
 import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
-import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  SketchObjectData,
+  TopologySelection
+} from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { RegionPickData } from './viewer/regionOverlay';
 
 interface ViewerShellProps {
   projectId: string;
@@ -42,8 +53,28 @@ interface ViewerShellProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectTopology(
     selection: TopologySelection | null,
-    additive: boolean
+    additive: boolean,
+    detail?: PickDetail
   ): void;
+  offsetHandle: OffsetHandleTarget | null;
+  onOffsetCommit(offset: number): void;
+  onOpenOffsetKeypad(currentOffset: number): void;
+  keypadAnchorRef: MutableRefObject<
+    ((point: { x: number; y: number } | null) => void) | null
+  >;
+  offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  edgeHandle: EdgeHandleTarget | null;
+  onEdgeRadiusPreview(size: number): void;
+  onEdgeCommit(size: number): void;
+  onOpenEdgeKeypad(currentSize: number): void;
+  onDirectManipulationChange(dragging: boolean): void;
+  sketchMode: SketchModeState | null;
+  onSketchCommit(object: SketchObjectData): void;
+  onSketchDrawingChange(drawing: boolean): void;
+  onSketchSelectObject(objectId: string | null): void;
+  sketchViews: SketchViewData[];
+  onSelectRegion(region: RegionPickData): void;
+  regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onExtrudeDistanceChange(distance: number): void;
@@ -87,6 +118,23 @@ export function ViewerShell({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  offsetHandle,
+  onOffsetCommit,
+  onOpenOffsetKeypad,
+  keypadAnchorRef,
+  offsetSetterRef,
+  edgeHandle,
+  onEdgeRadiusPreview,
+  onEdgeCommit,
+  onOpenEdgeKeypad,
+  onDirectManipulationChange,
+  sketchMode,
+  onSketchCommit,
+  onSketchDrawingChange,
+  onSketchSelectObject,
+  sketchViews,
+  onSelectRegion,
+  regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onExtrudeDistanceChange,
@@ -119,6 +167,23 @@ export function ViewerShell({
         onViewChange={onViewChange}
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
+        offsetHandle={offsetHandle}
+        onOffsetCommit={onOffsetCommit}
+        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        keypadAnchorRef={keypadAnchorRef}
+        offsetSetterRef={offsetSetterRef}
+        edgeHandle={edgeHandle}
+        onEdgeRadiusPreview={onEdgeRadiusPreview}
+        onEdgeCommit={onEdgeCommit}
+        onOpenEdgeKeypad={onOpenEdgeKeypad}
+        onDirectManipulationChange={onDirectManipulationChange}
+        sketchMode={sketchMode}
+        onSketchCommit={onSketchCommit}
+        onSketchDrawingChange={onSketchDrawingChange}
+        onSketchSelectObject={onSketchSelectObject}
+        sketchViews={sketchViews}
+        onSelectRegion={onSelectRegion}
+        regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onExtrudeDistanceChange={onExtrudeDistanceChange}
@@ -144,8 +209,8 @@ export function ViewerShell({
           <div>
             <strong>No geometry yet</strong>
             <small>
-              Pick a tool from the palette on the left — try <b>Box</b> (B) —
-              or sketch a profile and extrude it.
+              Pick a tool from the palette on the left — try <b>Box</b> (B) — or
+              sketch a profile and extrude it.
             </small>
             <small className="viewer-notice-keys">
               <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands · <kbd>?</kbd> shortcuts
@@ -186,8 +251,7 @@ export function ViewerShell({
         </span>
         {sketches.length > 0 && (
           <span className="vp-chip">
-            {sketches.length}{' '}
-            {sketches.length === 1 ? 'sketch' : 'sketches'}
+            {sketches.length} {sketches.length === 1 ? 'sketch' : 'sketches'}
           </span>
         )}
       </div>

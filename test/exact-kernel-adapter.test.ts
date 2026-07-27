@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchFeature,
   chamferEdges,
   createProjectDocument,
+  directEditBody,
+  extrudeSketch,
   filletEdges,
+  findSketch,
   patternBody,
   transformBody
 } from '@openzcad/document-core';
@@ -11,7 +15,8 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type ParamValue } from '@openzcad/shared';
+import { computeSketchRegions } from '@openzcad/geometry';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 
 describe('exact hybrid kernel adapter', () => {
@@ -46,9 +51,29 @@ describe('exact hybrid kernel adapter', () => {
     expect(body?.topology?.edges.every((edge) => edge.points.length >= 6)).toBe(
       true
     );
-    expect(body?.topology?.faces.map((face) => face.hash)).toEqual([
-      1, 2, 3, 4, 5, 6
-    ]);
+    // Face hashes are geometric fingerprints: unique per face, positive, and
+    // stable across identical rebuilds (they are NOT ordinals).
+    const faceHashes = body?.topology?.faces.map((face) => face.hash) ?? [];
+    expect(new Set(faceHashes).size).toBe(6);
+    expect(faceHashes.every((hash) => Number.isInteger(hash) && hash > 0)).toBe(
+      true
+    );
+    expect(faceHashes).not.toEqual([1, 2, 3, 4, 5, 6]);
+    const resynced = await adapter.syncDocument(document);
+    const resyncedBody = Object.values(resynced.bodyRepresentations)[0];
+    expect(resyncedBody?.topology?.faces.map((face) => face.hash)).toEqual(
+      faceHashes
+    );
+    // Every face carries measured geometry for drag affordances.
+    expect(
+      body?.topology?.faces.every(
+        (face) =>
+          face.geometry &&
+          face.geometry.surfaceType === 'plane' &&
+          face.geometry.area > 0 &&
+          face.geometry.normal !== undefined
+      )
+    ).toBe(true);
     const edgeHashes = body?.topology?.edges.map((edge) => edge.hash) ?? [];
     expect(new Set(edgeHashes).size).toBe(12);
     expect(edgeHashes.every((hash) => Number.isInteger(hash) && hash > 0)).toBe(
@@ -160,6 +185,508 @@ describe('exact hybrid kernel adapter', () => {
       solid: true,
       valid: true
     });
+  });
+
+  it('extrudes a detected ring region with its hole as exact geometry', async () => {
+    const resolve = (value: ParamValue): number =>
+      typeof value === 'number' ? value : Number(value);
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Ring sketch', toUserId('user_exact')),
+      {
+        name: 'Ring profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'circle', radius: 63, centerX: 0, centerY: 0 },
+          { objectKind: 'circle', radius: 40, centerX: 0, centerY: 0 }
+        ]
+      }
+    );
+    const sketch = findSketch(withSketch, sketchId)!;
+    const objects = sketch.objectIds.flatMap((id) => {
+      const node = withSketch.nodes[id];
+      return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+    });
+    const regions = computeSketchRegions(objects, resolve);
+    const ring = regions.find((region) => region.holes.length === 1)!;
+    expect(ring).toBeTruthy();
+
+    const { document, bodyId } = extrudeSketch(withSketch, {
+      name: 'Ring extrude',
+      sketchId,
+      distance: 10,
+      profile: {
+        regionFingerprint: ring.regionFingerprint,
+        samplePoint: ring.samplePoint,
+        sourceArea: ring.area
+      }
+    });
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[bodyId];
+    // Tessellated volume of a curved ring carries deflection error; assert
+    // within 0.5% of the analytic value.
+    const expectedVolume = Math.PI * (63 ** 2 - 40 ** 2) * 10;
+    expect(
+      Math.abs((body?.volume ?? 0) - expectedVolume) / expectedVolume
+    ).toBeLessThan(0.005);
+    // Two cylindrical walls + two annular caps.
+    expect(body?.faceCount).toBe(4);
+
+    const step = await adapter.exportStep(document, [bodyId]);
+    expect(step.match(/CYLINDRICAL_SURFACE/g)).toHaveLength(2);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
+  it('extrudes a chord-split region and resolves by fallback when the fingerprint drifts', async () => {
+    const resolve = (value: ParamValue): number =>
+      typeof value === 'number' ? value : Number(value);
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Split disk', toUserId('user_exact')),
+      {
+        name: 'Split profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'circle', radius: 20, centerX: 0, centerY: 0 },
+          { objectKind: 'line', x1: -30, y1: 5, x2: 30, y2: 5 }
+        ]
+      }
+    );
+    const sketch = findSketch(withSketch, sketchId)!;
+    const objects = sketch.objectIds.flatMap((id) => {
+      const node = withSketch.nodes[id];
+      return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+    });
+    const regions = computeSketchRegions(objects, resolve);
+    expect(regions).toHaveLength(2);
+    const major = regions[0]!; // sorted largest-first
+
+    const { document, bodyId } = extrudeSketch(withSketch, {
+      name: 'Major piece',
+      sketchId,
+      distance: 8,
+      profile: {
+        // Deliberately wrong fingerprint: the fallback (sample point inside
+        // + area within 1%) must resolve it.
+        regionFingerprint: major.regionFingerprint + 1,
+        samplePoint: major.samplePoint,
+        sourceArea: major.area
+      }
+    });
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[bodyId];
+    const expectedVolume = major.area * 8;
+    expect(
+      Math.abs((body?.volume ?? 0) - expectedVolume) / expectedVolume
+    ).toBeLessThan(0.005);
+
+    const step = await adapter.exportStep(document, [bodyId]);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
+  it('fails closed when a referenced region no longer exists', async () => {
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Ghost region', toUserId('user_exact')),
+      {
+        name: 'Disk profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }]
+      }
+    );
+    const { document, bodyId } = extrudeSketch(withSketch, {
+      name: 'Ghost extrude',
+      sketchId,
+      distance: 5,
+      profile: {
+        regionFingerprint: 123456789,
+        samplePoint: { x: 500, y: 500 },
+        sourceArea: 42
+      }
+    });
+    const derived = await adapter.syncDocument(document);
+    expect(
+      derived.warnings.some((warning) =>
+        warning.includes('no longer exists')
+      )
+    ).toBe(true);
+    expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+  });
+
+  it('offsets a planar face outward and inward as a direct edit', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Offset target', toUserId('user_exact')),
+      {
+        name: 'Beam',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(base);
+    const body = Object.values(derived.bodyRepresentations)[0];
+    const topFace = body?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        (face.geometry.normal?.z ?? 0) > 0.99
+    );
+    expect(topFace).toBeTruthy();
+
+    const outward = directEditBody(base, {
+      name: 'Raise top face',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: topFace!.hash,
+        sourceSurfaceType: 'plane',
+        sourceArea: topFace!.geometry!.area,
+        sourceCenter: topFace!.geometry!.center,
+        sourceNormal: topFace!.geometry!.normal!,
+        offset: 5
+      }
+    }).document;
+    const raised = await adapter.syncDocument(outward);
+    expect(raised.warnings).toEqual([]);
+    const raisedBody = raised.bodyRepresentations[bodyId];
+    expect(raisedBody?.volume).toBeCloseTo(10 * 20 * 35, 4);
+    // A clean offset keeps the box a box.
+    expect(raisedBody?.faceCount).toBe(6);
+
+    const inward = directEditBody(base, {
+      name: 'Sink top face',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: topFace!.hash,
+        sourceSurfaceType: 'plane',
+        sourceArea: topFace!.geometry!.area,
+        sourceCenter: topFace!.geometry!.center,
+        sourceNormal: topFace!.geometry!.normal!,
+        offset: -5
+      }
+    }).document;
+    const sunk = await adapter.syncDocument(inward);
+    expect(sunk.warnings).toEqual([]);
+    expect(sunk.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      10 * 20 * 25,
+      4
+    );
+
+    const step = await adapter.exportStep(outward, [bodyId]);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
+  it('fails closed when the offset face fingerprint no longer resolves', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Stale face', toUserId('user_exact')),
+      {
+        name: 'Beam',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    const stale = directEditBody(base, {
+      name: 'Offset a ghost face',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: 987654321,
+        sourceSurfaceType: 'plane',
+        sourceArea: 300,
+        sourceCenter: { x: 0, y: 0, z: 0 },
+        sourceNormal: { x: 0, y: 0, z: 1 },
+        offset: 5
+      }
+    }).document;
+    const derived = await adapter.syncDocument(stale);
+    expect(
+      derived.warnings.some((warning) =>
+        warning.includes('no longer exists')
+      )
+    ).toBe(true);
+    // The target body still builds at its original size.
+    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(6000, 4);
+  });
+
+  it('resizes a cylindrical bore as a direct edit', async () => {
+    const withBlock = addPrimitiveFeature(
+      createProjectDocument('Bore resize', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 10 }
+      }
+    );
+    const blockId = withBlock.bodyOrder.at(-1)!;
+    const withDrill = addPrimitiveFeature(withBlock, {
+      name: 'Drill',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 3, height: 10 }
+    });
+    const drillId = withDrill.bodyOrder.at(-1)!;
+    const positioned = transformBody(withDrill, {
+      name: 'Center drill',
+      targetBodyId: drillId,
+      translation: { x: 20, y: 20, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Drilled block',
+        operation: 'subtract',
+        targetBodyIds: [blockId, drillId]
+      })
+    );
+    const resultId = document.bodyOrder.at(-1)!;
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[resultId];
+    const bore = body?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(bore?.geometry?.radius).toBeCloseTo(3, 4);
+    expect(bore?.geometry?.axisStart).toBeTruthy();
+
+    const resized = directEditBody(document, {
+      name: 'Widen bore',
+      targetBodyId: resultId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: bore!.hash,
+        sourceRadius: bore!.geometry!.radius!,
+        sourceAxisStart: bore!.geometry!.axisStart!,
+        sourceAxisEnd: bore!.geometry!.axisEnd!,
+        concavity: 'hole',
+        radius: 5
+      }
+    }).document;
+    const widened = await adapter.syncDocument(resized);
+    expect(widened.warnings).toEqual([]);
+    // Volume is measured from the tessellation, so allow its deflection error.
+    expect(widened.bodyRepresentations[resultId]?.volume).toBeCloseTo(
+      40 * 40 * 10 - Math.PI * 25 * 10,
+      0
+    );
+    // Rebuilds resolve the widened bore deterministically.
+    const again = await adapter.syncDocument(resized);
+    expect(again.warnings).toEqual([]);
+    expect(again.bodyRepresentations[resultId]?.volume).toBeCloseTo(
+      widened.bodyRepresentations[resultId]!.volume,
+      6
+    );
+    // The widened bore stays one analytic cylindrical face.
+    const widenedFaces = widened.bodyRepresentations[resultId]?.topology?.faces;
+    const widenedBore = widenedFaces?.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(widenedBore).toHaveLength(1);
+    expect(widenedBore?.[0]?.geometry?.radius).toBeCloseTo(5, 4);
+
+    // Moving the wall back inward sweeps the annular sleeve between the two
+    // radii through material that is already there. The kernel builds that
+    // tube itself, so shrinking goes through the same call as growing.
+    const shrunkDoc = directEditBody(resized, {
+      name: 'Shrink bore',
+      targetBodyId: resultId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: widenedBore![0]!.hash,
+        sourceRadius: widenedBore![0]!.geometry!.radius!,
+        sourceAxisStart: widenedBore![0]!.geometry!.axisStart!,
+        sourceAxisEnd: widenedBore![0]!.geometry!.axisEnd!,
+        concavity: 'hole',
+        radius: 4
+      }
+    }).document;
+    const shrunk = await adapter.syncDocument(shrunkDoc);
+    expect(shrunk.warnings).toEqual([]);
+    expect(shrunk.bodyRepresentations[resultId]?.volume).toBeCloseTo(
+      40 * 40 * 10 - Math.PI * 16 * 10,
+      0
+    );
+    // The narrowed wall is one analytic cylinder at the new radius, not the
+    // old wall left in place and not a ring of planar strips.
+    const shrunkBore = shrunk.bodyRepresentations[
+      resultId
+    ]?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(shrunkBore).toHaveLength(1);
+    expect(shrunkBore?.[0]?.geometry?.radius).toBeCloseTo(4, 4);
+
+    // Composing the resize from booleans used to leave a solid that OCCT
+    // rejected on import, so this body could only be checked in-app. The
+    // native op's own closed-shell gate makes it exportable.
+    const step = await adapter.exportStep(shrunkDoc, [resultId]);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
+  it('grows and shrinks a free-standing boss', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Boss resize', toUserId('user_exact')),
+      {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 12, height: 15 }
+      }
+    );
+    const bossId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const wall = derived.bodyRepresentations[bossId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(wall?.geometry?.radius).toBeCloseTo(12, 4);
+    const resize = (radius: number) =>
+      directEditBody(document, {
+        name: 'Resize boss',
+        targetBodyId: bossId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: wall!.hash,
+          sourceRadius: wall!.geometry!.radius!,
+          sourceAxisStart: wall!.geometry!.axisStart!,
+          sourceAxisEnd: wall!.geometry!.axisEnd!,
+          concavity: 'boss',
+          radius
+        }
+      }).document;
+
+    const grown = await adapter.syncDocument(resize(15));
+    expect(grown.warnings).toEqual([]);
+    const body = grown.bodyRepresentations[bossId];
+    expect(body?.volume).toBeCloseTo(Math.PI * 225 * 15, 0);
+    // The grown wall is one analytic cylinder, not a ring of boolean strips.
+    const walls = body?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(walls).toHaveLength(1);
+    expect(walls?.[0]?.geometry?.radius).toBeCloseTo(15, 4);
+
+    const shrunk = await adapter.syncDocument(resize(9));
+    expect(shrunk.warnings).toEqual([]);
+    const shrunkBody = shrunk.bodyRepresentations[bossId];
+    expect(shrunkBody?.volume).toBeCloseTo(Math.PI * 81 * 15, 0);
+    const shrunkWalls = shrunkBody?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(shrunkWalls).toHaveLength(1);
+    expect(shrunkWalls?.[0]?.geometry?.radius).toBeCloseTo(9, 4);
+
+    // Resizing to the radius the wall is already at leaves no sleeve to
+    // sweep, so it is rejected rather than kept as a feature that does
+    // nothing.
+    const unchanged = await adapter.syncDocument(resize(12));
+    expect(
+      unchanged.warnings.some((warning) =>
+        warning.includes('Radius must differ from the current radius')
+      )
+    ).toBe(true);
+    expect(unchanged.bodyRepresentations[bossId]?.volume).toBeCloseTo(
+      derived.bodyRepresentations[bossId]!.volume,
+      6
+    );
+  });
+
+  it('grows a boss fused into a plate', async () => {
+    // A boss fused into a plate puts the union tool against a coaxial
+    // cylindrical face. The kernel used to hand back the original solid —
+    // valid, but unchanged — and only the adapter's read-back guard caught
+    // it. brepkit 2.129.0 grows the wall natively, so the edit now lands.
+    // The guard itself still matters and is exercised by the shrink cases
+    // above, which continue to fail closed.
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Fused boss', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 60, height: 60, depth: 8 }
+      }
+    );
+    const plateId = plate.bodyOrder.at(-1)!;
+    const withPost = addPrimitiveFeature(plate, {
+      name: 'Post',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 12, height: 15 }
+    });
+    const postId = withPost.bodyOrder.at(-1)!;
+    const placed = transformBody(withPost, {
+      name: 'Center post',
+      targetBodyId: postId,
+      translation: { x: 30, y: 30, z: 8 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(placed);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Plate with boss',
+        operation: 'union',
+        targetBodyIds: [plateId, postId]
+      })
+    );
+    const bossId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    const wall = derived.bodyRepresentations[bossId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(wall?.geometry?.radius).toBeCloseTo(12, 4);
+
+    const grownDoc = directEditBody(document, {
+      name: 'Resize boss',
+      targetBodyId: bossId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: wall!.hash,
+        sourceRadius: wall!.geometry!.radius!,
+        sourceAxisStart: wall!.geometry!.axisStart!,
+        sourceAxisEnd: wall!.geometry!.axisEnd!,
+        concavity: 'boss',
+        radius: 15
+      }
+    }).document;
+    const grown = await adapter.syncDocument(grownDoc);
+    expect(grown.warnings).toEqual([]);
+
+    // The post stands on the plate rather than inside it, so the body is the
+    // plate plus a full cylinder: 60*60*8 + pi*r^2*15. Growing r from 12 to
+    // 15 takes it from ~35586 to ~39403. Volume is measured from the
+    // tessellation, whose inscribed mesh under-reports a cylinder, so compare
+    // against the exact figure with a relative tolerance rather than a fixed
+    // number of digits — the absolute error scales with the cylinder.
+    const plateVolume = 60 * 60 * 8;
+    const nearExactly = (actual: number | undefined, exact: number): void => {
+      expect(actual).toBeDefined();
+      expect(Math.abs(actual! - exact) / exact).toBeLessThan(1e-3);
+    };
+    nearExactly(
+      derived.bodyRepresentations[bossId]?.volume,
+      plateVolume + Math.PI * 12 * 12 * 15
+    );
+    nearExactly(
+      grown.bodyRepresentations[bossId]?.volume,
+      plateVolume + Math.PI * 15 * 15 * 15
+    );
+
+    // The wall itself must read back at the new radius, not merely enclose
+    // more volume.
+    const grownWall = grown.bodyRepresentations[bossId]?.topology?.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(grownWall?.geometry?.radius).toBeCloseTo(15, 4);
   });
 
   it('imports STEP through OCCT with complete exact topology', async () => {
@@ -724,10 +1251,7 @@ describe('exact hybrid kernel adapter', () => {
       const step = await adapter.exportStep(document, [document.bodyOrder[0]!]);
       const inspection = await adapter.inspectStep(step);
       expect(inspection).toMatchObject({ solid: true, valid: true });
-      expect(inspection.volume).toBeCloseTo(
-        24 * millimetersPerUnit ** 3,
-        3
-      );
+      expect(inspection.volume).toBeCloseTo(24 * millimetersPerUnit ** 3, 3);
     }
   );
 });

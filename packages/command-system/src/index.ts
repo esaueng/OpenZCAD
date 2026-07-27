@@ -1,14 +1,22 @@
 import {
+  createId,
   deepClone,
   nowIso,
+  toEntityId,
   type BodyId,
   type ParamValue,
   type ProjectDocument,
-  type SerializedCommand
+  type SerializedCommand,
+  type SketchId,
+  type SketchObjectData
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  addSketchObjects,
+  deleteSketchObject,
+  resolveSketchInput,
+  updateSketchObject,
   appendRevision,
   attachDerivedState,
   booleanBodies,
@@ -54,6 +62,9 @@ import {
   type PrimitiveInput,
   type RevolveInput,
   type SketchInput,
+  type SketchObjectAddInput,
+  type SketchObjectDeleteInput,
+  type SketchObjectUpdateInput,
   type SketchUpdateInput,
   type TransformInput
 } from '@openzcad/document-core';
@@ -62,11 +73,15 @@ import {
   normalizeLocalId,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
+import { computeSketchRegions, regionAtPoint } from '@openzcad/geometry';
 
 export type CommandKind =
   | 'primitive.add'
   | 'sketch.add'
   | 'sketch.update'
+  | 'sketch.object.add'
+  | 'sketch.object.update'
+  | 'sketch.object.delete'
   | 'feature.extrude'
   | 'feature.revolve'
   | 'feature.boolean'
@@ -104,6 +119,9 @@ export type AnyCommand =
   | CommandDefinition<PrimitiveInput>
   | CommandDefinition<SketchInput>
   | CommandDefinition<SketchUpdateInput>
+  | CommandDefinition<SketchObjectAddInput>
+  | CommandDefinition<SketchObjectUpdateInput>
+  | CommandDefinition<SketchObjectDeleteInput>
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
@@ -167,15 +185,74 @@ export const commandFactories = {
     );
   },
   addSketch(payload: SketchInput): CommandDefinition<SketchInput> {
+    const { objects } = resolveSketchInput(payload);
     const withIds = {
       ...payload,
-      ids: payload.ids ?? createSketchFeatureIds()
+      ids: payload.ids ?? createSketchFeatureIds(Math.max(objects.length, 1))
     };
+    const label =
+      objects.length === 1
+        ? `Add ${objects[0]!.objectKind} sketch`
+        : 'Add sketch';
     return makeCommand(
       'sketch.add',
-      `Add ${payload.object.objectKind} sketch`,
+      label,
       withIds,
       (document) => addSketchFeature(document, withIds).document
+    );
+  },
+  addSketchObjects(
+    payload: SketchObjectAddInput,
+    label = 'Add sketch geometry'
+  ): CommandDefinition<SketchObjectAddInput> {
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? {
+        objectNodeIds: payload.objects.map(() => toEntityId(createId('ent')))
+      }
+    };
+    return makeCommand(
+      'sketch.object.add',
+      label,
+      withIds,
+      (document) => addSketchObjects(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  updateSketchObject(
+    payload: SketchObjectUpdateInput,
+    label = 'Edit sketch geometry'
+  ): CommandDefinition<SketchObjectUpdateInput> {
+    return makeCommand(
+      'sketch.object.update',
+      label,
+      payload,
+      (document) => updateSketchObject(document, payload),
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  deleteSketchObject(
+    payload: SketchObjectDeleteInput,
+    label = 'Delete sketch geometry'
+  ): CommandDefinition<SketchObjectDeleteInput> {
+    return makeCommand(
+      'sketch.object.delete',
+      label,
+      payload,
+      (document) => deleteSketchObject(document, payload),
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
     );
   },
   updateSketch(
@@ -519,6 +596,24 @@ function assertOperationExpressions(
         }
       }
       break;
+    case 'add_sketch':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} offset`,
+        operation.offset
+      );
+      operation.objects.forEach((object, index) => {
+        Object.entries(object).forEach(([key, value]) => {
+          if (key !== 'objectKind') {
+            assertEvaluableExpression(
+              scope,
+              `${operation.name} objects[${index}].${key}`,
+              value
+            );
+          }
+        });
+      });
+      break;
     case 'add_extrude':
       assertEvaluableExpression(
         scope,
@@ -661,6 +756,34 @@ export function commandsForCadPatch(
     return bodyId;
   };
 
+  /** Sketches created earlier in this proposal, addressable by $alias. */
+  const localSketches = new Map<
+    string,
+    { sketchId: SketchId; objects: SketchObjectData[] }
+  >();
+  const resolveSketch = (
+    reference: string
+  ): { sketchId: SketchId; objects: SketchObjectData[] } => {
+    if (isLocalBodyRef(reference)) {
+      const local = localSketches.get(normalizeLocalId(reference));
+      if (!local) {
+        throw new Error(
+          `Sketch alias ${reference} is not declared by an earlier add_sketch.`
+        );
+      }
+      return local;
+    }
+    const sketch = findSketch(document, reference as SketchId);
+    if (!sketch) {
+      throw new Error(`Sketch ${reference} not found in the document.`);
+    }
+    const objects = sketch.objectIds.flatMap((objectId) => {
+      const node = document.nodes[objectId];
+      return node?.kind === 'sketch-object' ? [node.data] : [];
+    });
+    return { sketchId: sketch.sketchId, objects };
+  };
+
   return proposal.operations.map((operation) => {
     switch (operation.kind) {
       case 'set_parameter':
@@ -697,13 +820,57 @@ export function commandsForCadPatch(
           name: operation.name
         });
       }
+      case 'add_sketch': {
+        const ids = createSketchFeatureIds(operation.objects.length);
+        if (operation.localId) {
+          localSketches.set(normalizeLocalId(operation.localId), {
+            sketchId: ids.sketchId,
+            objects: operation.objects
+          });
+        }
+        return commandFactories.addSketch({
+          name: operation.name,
+          planeRef: {
+            type: 'canonical',
+            plane: operation.plane,
+            offset: operation.offset
+          },
+          objects: operation.objects,
+          ids
+        });
+      }
       case 'add_extrude': {
+        const sketch = resolveSketch(operation.sketchId);
+        let profile: ExtrudeInput['profile'];
+        if (operation.samplePoint) {
+          // Resolve the region reference now so the direct-manipulation and
+          // AI paths store byte-identical features.
+          const regions = computeSketchRegions(
+            sketch.objects.map((data, index) => ({
+              id: `object_${index}`,
+              data
+            })),
+            (value) => resolveParamValue(value, parameterScope, 'sketch dimension')
+          );
+          const region = regionAtPoint(regions, operation.samplePoint);
+          if (!region) {
+            throw new Error(
+              `add_extrude samplePoint (${operation.samplePoint.x}, ${operation.samplePoint.y}) is not inside any closed region of the sketch.`
+            );
+          }
+          profile = {
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: operation.samplePoint,
+            sourceArea: region.area
+          };
+        }
         const ids = createBodyFeatureIds();
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
-          sketchId: operation.sketchId,
+          sketchId: sketch.sketchId,
           distance: operation.distance,
+          profile,
           ids
         });
       }
@@ -712,7 +879,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
-          sketchId: operation.sketchId,
+          sketchId: resolveSketch(operation.sketchId).sketchId,
           axis: operation.axis,
           ids
         });
@@ -994,6 +1161,24 @@ export function replayCommands(
         break;
       case 'sketch.update':
         next = updateSketch(next, command.payload as SketchUpdateInput);
+        break;
+      case 'sketch.object.add':
+        next = addSketchObjects(
+          next,
+          command.payload as SketchObjectAddInput
+        ).document;
+        break;
+      case 'sketch.object.update':
+        next = updateSketchObject(
+          next,
+          command.payload as SketchObjectUpdateInput
+        );
+        break;
+      case 'sketch.object.delete':
+        next = deleteSketchObject(
+          next,
+          command.payload as SketchObjectDeleteInput
+        );
         break;
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;
