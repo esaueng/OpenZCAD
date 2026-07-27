@@ -450,7 +450,7 @@ export interface SceneContext {
   syncOrthographic(resetZoom: boolean): void;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
-  controls: OrbitControls;
+  controls: OrbitControls<THREE.Camera>;
   bodyGroup: THREE.Group;
   sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
@@ -1228,7 +1228,10 @@ export function ModelViewer({
     labelRenderer.domElement.style.pointerEvents = 'none';
     host.appendChild(labelRenderer.domElement);
 
-    let controls = new OrbitControls(camera, renderer.domElement);
+    let controls: OrbitControls<THREE.Camera> = new OrbitControls(
+      camera,
+      renderer.domElement
+    );
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
 
