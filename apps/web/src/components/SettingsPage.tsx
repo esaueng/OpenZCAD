@@ -61,66 +61,122 @@ const SECTIONS: Array<{
   label: string;
   detail: string;
   icon: ReactNode;
+  /**
+   * Titles of the individual settings this section renders, so "Find a setting"
+   * can match what the user actually sees rather than only section headings.
+   * Kept in step with the rendered SettingRow titles by a test.
+   */
+  settings: string[];
 }> = [
   {
     id: 'general',
     label: 'General',
     detail: 'Startup and project defaults',
-    icon: <SlidersHorizontal size={15} aria-hidden="true" />
+    icon: <SlidersHorizontal size={15} aria-hidden="true" />,
+    settings: [
+      'Reopen the last project',
+      'Default units',
+      'Confirm destructive actions'
+    ]
   },
   {
     id: 'appearance',
     label: 'Appearance',
     detail: 'Density and accessibility',
-    icon: <Accessibility size={15} aria-hidden="true" />
+    icon: <Accessibility size={15} aria-hidden="true" />,
+    settings: [
+      'Theme',
+      'Interface density',
+      'Reduce motion'
+    ]
   },
   {
     id: 'viewport',
     label: 'Viewport',
     detail: 'Projection, grid, and display',
-    icon: <Monitor size={15} aria-hidden="true" />
+    icon: <Monitor size={15} aria-hidden="true" />,
+    settings: [
+      'Projection',
+      'Show construction grid',
+      'Display mode'
+    ]
   },
   {
     id: 'sketching',
     label: 'Sketching',
     detail: 'Linear and angular snapping',
-    icon: <Grid3x3 size={15} aria-hidden="true" />
+    icon: <Grid3x3 size={15} aria-hidden="true" />,
+    settings: [
+      'Snap sketch input',
+      'Linear snap',
+      'Angular snap',
+      'Direct manipulation (experimental)'
+    ]
   },
   {
     id: 'files',
     label: 'Files & autosave',
     detail: 'Recovery, imports, and exports',
-    icon: <FileCog size={15} aria-hidden="true" />
+    icon: <FileCog size={15} aria-hidden="true" />,
+    settings: [
+      'Local autosave',
+      'Cloud revisions',
+      'STEP and STL exports'
+    ]
   },
   {
     id: 'assistant',
     label: 'AI Assistant',
     detail: 'Provider, model, and credential',
-    icon: <Sparkles size={15} aria-hidden="true" />
+    icon: <Sparkles size={15} aria-hidden="true" />,
+    settings: [
+      'Enable assistant',
+      'Credential source',
+      'Provider',
+      'API endpoint',
+      'Model',
+      'Reasoning level',
+      'Output budget',
+      'Request timeout',
+      'Personal API token'
+    ]
   },
   {
     id: 'account',
     label: 'Account',
     detail: 'Identity and synchronization',
-    icon: <CircleUserRound size={15} aria-hidden="true" />
+    icon: <CircleUserRound size={15} aria-hidden="true" />,
+    settings: [
+      'Preference synchronization'
+    ]
   },
   {
     id: 'shortcuts',
     label: 'Shortcuts',
     detail: 'Keyboard controls',
-    icon: <Keyboard size={15} aria-hidden="true" />
+    icon: <Keyboard size={15} aria-hidden="true" />,
+    settings: []
   },
   {
     id: 'privacy',
     label: 'Privacy & data',
     detail: 'Local data and reset actions',
-    icon: <ShieldCheck size={15} aria-hidden="true" />
+    icon: <ShieldCheck size={15} aria-hidden="true" />,
+    settings: [
+      'Reset application settings',
+      'Project data'
+    ]
   },
   {
     id: 'advanced',
     label: 'Advanced',
     detail: 'Architecture and diagnostics',
-    icon: <Info size={15} aria-hidden="true" />
+    icon: <Info size={15} aria-hidden="true" />,
+    settings: [
+      'Geometry kernel',
+      'Document authority',
+      'Settings schema'
+    ]
   }
 ];
 
@@ -246,16 +302,32 @@ export function SettingsPage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const visibleSections = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return normalized
-      ? SECTIONS.filter((section) =>
-          `${section.label} ${section.detail}`
-            .toLowerCase()
-            .includes(normalized)
-        )
-      : SECTIONS;
-  }, [query]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleSections = useMemo(
+    () =>
+      normalizedQuery
+        ? SECTIONS.filter((section) =>
+            `${section.label} ${section.detail} ${section.settings.join(' ')}`
+              .toLowerCase()
+              .includes(normalizedQuery)
+          )
+        : SECTIONS,
+    [normalizedQuery]
+  );
+
+  // A search that matches somewhere other than the open section should take the
+  // user there, otherwise the match stays invisible behind the current section.
+  useEffect(() => {
+    const first = visibleSections[0];
+    if (!first) {
+      return;
+    }
+    setActive((current) =>
+      visibleSections.some((section) => section.id === current)
+        ? current
+        : first.id
+    );
+  }, [visibleSections]);
 
   const patch = (next: Partial<AppSettings>) =>
     onChange({ ...settings, ...next });
@@ -275,7 +347,7 @@ export function SettingsPage({
           <BrandMark compact />
           OpenZCAD <span className="beta-tag">Beta</span>
         </button>
-        <span className="settings-topbar-title">Settings</span>
+        <h1 className="settings-topbar-title">Settings</h1>
         <span className="settings-save-message" aria-live="polite">
           {message}
         </span>
@@ -316,6 +388,10 @@ export function SettingsPage({
                 key={section.id}
                 type="button"
                 className={active === section.id ? 'active' : ''}
+                // Below 580px the label text is hidden and the icon is
+                // decorative, which would otherwise leave the button unnamed.
+                aria-label={section.label}
+                aria-current={active === section.id ? 'page' : undefined}
                 onClick={() => setActive(section.id)}
               >
                 {section.icon}
@@ -325,6 +401,11 @@ export function SettingsPage({
                 </span>
               </button>
             ))}
+            {visibleSections.length === 0 && (
+              <p className="settings-nav-empty" role="status">
+                No settings match “{query.trim()}”.
+              </p>
+            )}
           </nav>
           <div className="settings-nav-status">
             <Database size={13} aria-hidden="true" />

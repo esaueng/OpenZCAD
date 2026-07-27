@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import { FolderOpen, GraduationCap, Plus, Settings } from 'lucide-react';
-import type { ProjectSummary, UnitSystem } from '@openzcad/shared';
+import {
+  MAX_PROJECT_NAME_LENGTH,
+  type ProjectSummary,
+  type UnitSystem
+} from '@openzcad/shared';
 import type { DemoDefinition } from '../lib/demos';
 import { BrandMark } from './BrandMark';
 
@@ -29,6 +33,12 @@ export function StartScreen({
 }: StartScreenProps) {
   const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
+
+  // The server measures the trimmed name, so the form has to agree exactly or
+  // it would block names the API accepts (or vice versa).
+  const trimmedName = name.trim();
+  const nameTooLong = trimmedName.length > MAX_PROJECT_NAME_LENGTH;
+  const canCreate = !busy && trimmedName.length > 0 && !nameTooLong;
 
   useEffect(() => {
     setUnits(defaultUnits);
@@ -89,8 +99,8 @@ export function StartScreen({
           className="start-section"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!busy && name.trim().length > 0) {
-              onCreate(name.trim(), units);
+            if (canCreate) {
+              onCreate(trimmedName, units);
             }
           }}
           onKeyDown={(event) => {
@@ -100,8 +110,8 @@ export function StartScreen({
               !(event.target instanceof HTMLButtonElement)
             ) {
               event.preventDefault();
-              if (!busy && name.trim().length > 0) {
-                onCreate(name.trim(), units);
+              if (canCreate) {
+                onCreate(trimmedName, units);
               }
             }
           }}
@@ -113,9 +123,17 @@ export function StartScreen({
               value={name}
               aria-label="Project name"
               autoFocus
+              aria-invalid={nameTooLong || undefined}
+              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
               onFocus={(event) => event.currentTarget.select()}
               onChange={(event) => setName(event.target.value)}
             />
+            {nameTooLong && (
+              <small id="project-name-error" className="field-error" role="alert">
+                Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
+                characters.
+              </small>
+            )}
           </div>
           <div className="field">
             <span>Units</span>
@@ -133,7 +151,7 @@ export function StartScreen({
           <button
             type="submit"
             className="primary wide"
-            disabled={busy || name.trim().length === 0}
+            disabled={!canCreate}
           >
             <Plus size={15} aria-hidden="true" />
             Create project

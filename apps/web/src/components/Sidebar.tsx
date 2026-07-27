@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   AlertTriangle,
   Box,
@@ -72,8 +72,29 @@ function ParameterRow({
   onDelete
 }: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
+  const [editing, setEditing] = useState(false);
+  const [syncedExpression, setSyncedExpression] = useState(
+    parameter.expression
+  );
+  const changedByUser = useRef(false);
+
+  // Undo/redo, document hydration and collaborator edits all replace the
+  // canonical expression underneath us. Adopt it, but never yank the field out
+  // from under someone who is actively typing in it.
+  if (parameter.expression !== syncedExpression) {
+    setSyncedExpression(parameter.expression);
+    if (!editing) {
+      setExpression(parameter.expression);
+      changedByUser.current = false;
+    }
+  }
 
   function commit() {
+    if (!changedByUser.current) {
+      setExpression(parameter.expression);
+      return;
+    }
+    changedByUser.current = false;
     const trimmed = expression.trim();
     if (trimmed.length > 0 && trimmed !== parameter.expression) {
       onSet(parameter.name, trimmed);
@@ -93,13 +114,24 @@ function ParameterRow({
         value={expression}
         spellCheck={false}
         aria-label={`Expression for ${parameter.name}`}
-        onChange={(event) => setExpression(event.target.value)}
-        onBlur={commit}
+        onChange={(event) => {
+          changedByUser.current = true;
+          setExpression(event.target.value);
+        }}
+        onFocus={() => {
+          changedByUser.current = false;
+          setEditing(true);
+        }}
+        onBlur={() => {
+          setEditing(false);
+          commit();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.currentTarget.blur();
           }
           if (event.key === 'Escape') {
+            changedByUser.current = false;
             setExpression(parameter.expression);
           }
         }}
