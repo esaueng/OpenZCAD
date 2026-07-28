@@ -312,6 +312,44 @@
   border-right-width: 1px;
 }
 
+/* Snap glyph: a marker on the point a drag locked onto, with the kind named
+   beside it. The name is the part that matters — a marker says something
+   happened, the word says the position is exact rather than merely close. */
+.snap-glyph {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  transform: translate(10px, -50%);
+  padding: 1px 6px;
+  color: #f3f8ff;
+  background: rgba(8, 18, 30, 0.94);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The marker itself sits on the point, left of the label. */
+.snap-glyph::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--color-accent);
+}
+
+/* A centre is a ring, matching how sketch mode already draws one. */
+.snap-glyph[data-kind='center']::before {
+  transform: translate(-50%, -50%);
+  background: none;
+  border: 2px solid var(--color-accent);
+  border-radius: 999px;
+}
+
 /* Shift-drag rubber band. Solid for window select, dashed for crossing —
    the same shorthand mechanical CAD has used for decades, so the rule in
    force is readable while the drag is still happening. */
