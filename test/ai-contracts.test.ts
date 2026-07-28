@@ -408,6 +408,144 @@ describe('AI patch contracts', () => {
     });
   });
 
+  it('grounds all edges onto the complete topology of the sole live body', () => {
+    const document = createProjectDocument('Cylinder', toUserId('user_ai'));
+    const digest = {
+      ...createCadDocumentDigest(document),
+      bodies: [
+        {
+          bodyId: 'body_cylinder',
+          name: 'Cylinder Body',
+          consumed: false,
+          sourceFeatureKind: 'primitive',
+          volume: 6_283.1853,
+          bbox: {
+            min: { x: -10, y: -10, z: 0 },
+            max: { x: 10, y: 10, z: 20 }
+          },
+          topology: {
+            faceCount: 3,
+            edgeCount: 2,
+            modifierEdgeCount: 2,
+            faceInventoryComplete: true,
+            edgeInventoryComplete: true,
+            faces: [],
+            edges: [
+              {
+                topologyId: 'edge:101',
+                hash: 101,
+                modelingRole: 'rim' as const,
+                modifierCandidate: true,
+                closed: true
+              },
+              {
+                topologyId: 'edge:202',
+                hash: 202,
+                modelingRole: 'rim' as const,
+                modifierCandidate: true,
+                closed: true
+              }
+            ]
+          }
+        }
+      ]
+    };
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_all_edges',
+      summary: 'Fillet all cylinder edges.',
+      assumptions: ['2 mm default fillet radius.'],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'All edge fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_hallucinated',
+          edgeHashes: [999],
+          size: 2
+        }
+      ]
+    });
+
+    expect(
+      groundCadPatchProposalToSelection(
+        'Add a fillet to all the edges',
+        digest,
+        proposal
+      ).operations[0]
+    ).toMatchObject({
+      targetBodyId: 'body_cylinder',
+      edgeHashes: [101, 202],
+      size: 2
+    });
+  });
+
+  it('does not mistake a negated all-edges phrase for the target set', () => {
+    const document = createProjectDocument('Cylinder', toUserId('user_ai'));
+    const digest = {
+      ...createCadDocumentDigest(document),
+      bodies: [
+        {
+          bodyId: 'body_cylinder',
+          name: 'Cylinder Body',
+          consumed: false,
+          sourceFeatureKind: 'primitive',
+          volume: 1,
+          bbox: {
+            min: { x: -1, y: -1, z: 0 },
+            max: { x: 1, y: 1, z: 1 }
+          },
+          topology: {
+            faceCount: 3,
+            edgeCount: 2,
+            modifierEdgeCount: 2,
+            faceInventoryComplete: true,
+            edgeInventoryComplete: true,
+            faces: [],
+            edges: [
+              {
+                topologyId: 'edge:101',
+                hash: 101,
+                modelingRole: 'rim' as const,
+                modifierCandidate: true
+              },
+              {
+                topologyId: 'edge:202',
+                hash: 202,
+                modelingRole: 'rim' as const,
+                modifierCandidate: true
+              }
+            ]
+          }
+        }
+      ]
+    };
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_one_edge',
+      summary: 'Fillet one edge.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'One edge fillet',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_cylinder',
+          edgeHashes: [101],
+          size: 1
+        }
+      ]
+    });
+
+    expect(
+      groundCadPatchProposalToSelection(
+        "Don't fillet all edges; only fillet the top edge",
+        digest,
+        proposal
+      )
+    ).toBe(proposal);
+  });
+
   it('does not retarget an edge modifier without an explicit selection reference', () => {
     const document = createProjectDocument('Selected edges', toUserId('user_ai'));
     const bodyId = toBodyId('body_selected');
