@@ -201,7 +201,10 @@ export function ViewerShell({
       />
       {!hideViewerToolbar && (
         <div className="viewer-rail-stack">
-          <OrientationWidget orientationRef={orientationRef} />
+          <OrientationWidget
+            orientationRef={orientationRef}
+            onSelectView={onView}
+          />
           <ViewerToolbar
             settings={settings}
             projection={projection}

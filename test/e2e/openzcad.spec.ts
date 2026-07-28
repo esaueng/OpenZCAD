@@ -1495,3 +1495,58 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
   );
   expect(pivotTravel).toBeGreaterThan(0.1);
 });
+
+test('the orientation widget snaps to a view the rail cannot reach', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Orientation Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const widget = page.getByRole('group', { name: 'View orientation' });
+  await expect(widget).toBeVisible();
+
+  const cameraPosition = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<string, { camera: { position: number[] } }>;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera.position : null;
+    });
+
+  // Bottom has no toolbar shortcut; before this widget it was unreachable.
+  await widget.getByRole('button', { name: 'Bottom view' }).click();
+  await page.waitForTimeout(900);
+  const bottom = await cameraPosition();
+  expect(bottom).not.toBeNull();
+  // Looking up at the part puts the camera below it.
+  expect(bottom![2]!).toBeLessThan(0);
+
+  await widget.getByRole('button', { name: 'Left view' }).click();
+  await page.waitForTimeout(900);
+  const left = await cameraPosition();
+  expect(left![0]!).toBeLessThan(0);
+
+  // The hub returns to isometric, which sits above and to the right.
+  await widget.getByRole('button', { name: 'Isometric view' }).click();
+  await page.waitForTimeout(900);
+  const iso = await cameraPosition();
+  expect(iso![0]!).toBeGreaterThan(0);
+  expect(iso![2]!).toBeGreaterThan(0);
+});
