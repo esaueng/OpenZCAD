@@ -2089,10 +2089,27 @@ test('the status bar names the rung of the Esc ladder you are on', async ({
 
   // Selecting a face arms push-pull, and the hint should say so and say what
   // Escape will do about it — not the generic "Esc cancels" it used to.
-  await page.mouse.click(
-    area.x + area.width * 0.45,
-    area.y + area.height * 0.55
-  );
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: area.x + area.width * xRatio,
+        y: area.y + area.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-chip')).toBeVisible();
   await expect(status).toContainText('push or pull');
   // Selecting the face also opened the edit panel, which takes Escape itself.
