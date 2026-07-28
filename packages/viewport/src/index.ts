@@ -28,7 +28,8 @@ export * from './selection/SelectionManager';
 // Gizmos: the move/rotate handle geometry, snapping, and focus.
 export * from './gizmo/move';
 
-// Input: pointer gesture classification.
+// Input: pointer gesture classification and drag-session bookkeeping.
+export * from './input/GestureRouter';
 export * from './input/RightClickGestureTracker';
 
 // Scene graph: disposal, labels, display modes, and preview geometry.
