@@ -54,8 +54,54 @@
   padding-left: var(--sp-3);
 }
 
-.status-groups {
+/* The filter sits between the hint and the readouts: it is the one part of
+   the bar you act on, so it gets the margin that pushes the rest right. */
+.status-filters {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.status-filters b {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
+  margin-right: 4px;
+}
+
+.status-filter {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.status-filter:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.status-filter.active {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  background: var(--color-surface-2);
+}
+
+/* A filter the tool chose reads as inherited rather than committed, so it is
+   outlined instead of filled — the user can still see it is not their doing. */
+.status-filter.active.automatic {
+  border-style: dashed;
+  color: var(--color-text-muted);
+}
+
+.status-groups {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-3);

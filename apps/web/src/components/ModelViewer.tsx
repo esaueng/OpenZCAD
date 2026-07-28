@@ -22,7 +22,17 @@ import {
   CameraController,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
+  bodiesInBox,
+  boxSelectMode,
   cycleDepthPick,
+  resolveSnap,
+  translationToSnap,
+  snapsFromEdges,
+  SNAP_LABELS,
+  SNAP_RADIUS_PX,
+  isBoxSelectDrag,
+  rectFromDrag,
+  edgeRunFrom,
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
@@ -77,6 +87,9 @@ import {
   type MoveSnap,
   type PickCandidate,
   type PickDetail,
+  type SelectionFilter,
+  type SnapCandidate,
+  type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -218,6 +231,18 @@ interface ModelViewerProps {
     additive: boolean,
     detail?: PickDetail
   ): void;
+  /** What the pointer is allowed to select. */
+  selectionFilter: SelectionFilter;
+  /** Bodies swept by a shift-drag rectangle; empty clears the selection. */
+  onBoxSelect(bodyIds: string[]): void;
+  /**
+   * A whole smooth run of edges at once, from double-clicking one of them.
+   *
+   * Separate from `onSelectTopology` because the edges have to land in one
+   * update: replaying them additively would read the same stale selection
+   * each time and keep only the last.
+   */
+  onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
@@ -474,6 +499,9 @@ export function ModelViewer({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  onSelectEdgeChain,
+  selectionFilter,
+  onBoxSelect,
   offsetHandle,
   onOffsetCommit,
   onOpenOffsetKeypad,
@@ -501,6 +529,14 @@ export function ModelViewer({
   const contextRef = useRef<SceneContext | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
+  onSelectEdgeChainRef.current = onSelectEdgeChain;
+  // Read per pick rather than rebuilding the scene: changing the filter must
+  // not dispose the drag rigs mid-gesture.
+  const selectionFilterRef = useRef(selectionFilter);
+  selectionFilterRef.current = selectionFilter;
+  const onBoxSelectRef = useRef(onBoxSelect);
+  onBoxSelectRef.current = onBoxSelect;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
   const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
@@ -745,7 +781,8 @@ export function ModelViewer({
       camera: () => cameraRig.activeCamera,
       regionGroup,
       sketchGroup,
-      bodyGroup
+      bodyGroup,
+      filter: () => selectionFilterRef.current
     });
 
     function applyMovePreview(
@@ -863,9 +900,22 @@ export function ModelViewer({
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
+    /** Shift-drag rubber band over empty space, for selecting several bodies. */
+    let boxSelect: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+    } | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
+    /**
+     * Snap candidates for the body being moved, gathered once when the drag
+     * starts. Only other bodies contribute — a body cannot be positioned
+     * against its own corners — and rebuilding them per frame would walk
+     * every edge of the model on every pointer move.
+     */
+    let moveSnaps: SnapCandidate[] = [];
     /** Screen-projected drag along the offset handle's normal. */
     let offsetDrag: {
       pointerId: number;
@@ -889,6 +939,59 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    const selectionBand = hud.create('selection-band', { ariaHidden: true });
+    const snapGlyph = hud.create('snap-glyph', { ariaHidden: true });
+
+    /**
+     * Marks the point a drag has locked onto, and names the kind.
+     *
+     * Naming it matters more than marking it: a glyph alone says something
+     * happened, and "Endpoint" says the position is now exact rather than
+     * merely close.
+     */
+    function showSnapGlyph(resolved: SnapResolution) {
+      snapGlyph.textContent = SNAP_LABELS[resolved.candidate.kind];
+      snapGlyph.dataset.kind = resolved.candidate.kind;
+      // `resolved.screen` is already host-local: it was projected against the
+      // canvas size, which is what the overlay is positioned within.
+      hud.showAt(snapGlyph, resolved.screen.x, resolved.screen.y);
+    }
+
+    /** Snap candidates from every body except the one being moved. */
+    function collectMoveSnaps(movingBodyId: string | null): SnapCandidate[] {
+      return bodiesRef.current
+        .filter((body) => !body.consumed && body.bodyId !== movingBodyId)
+        .flatMap((body) =>
+          body.topology
+            ? snapsFromEdges(body.topology.edges, { label: body.name })
+            : []
+        );
+    }
+
+    /**
+     * Draws the rubber band, and dresses it by drag direction so the rule in
+     * force is visible while it is still being chosen rather than explained
+     * afterwards by what got selected.
+     */
+    function drawSelectionBand(
+      startX: number,
+      startY: number,
+      event: PointerEvent
+    ) {
+      const from = hud.toLocal(startX, startY);
+      const to = hud.toLocal(event.clientX, event.clientY);
+      if (!from || !to) {
+        return;
+      }
+      const rect = rectFromDrag(from.x, from.y, to.x, to.y);
+      selectionBand.classList.toggle(
+        'crossing',
+        boxSelectMode(startX, event.clientX) === 'crossing'
+      );
+      selectionBand.style.width = `${rect.right - rect.left}px`;
+      selectionBand.style.height = `${rect.bottom - rect.top}px`;
+      hud.showAt(selectionBand, rect.left, rect.top);
+    }
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
@@ -1418,6 +1521,10 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        drawSelectionBand(boxSelect.startX, boxSelect.startY, event);
+        return;
+      }
       if (sketchModeRef.current) {
         if (event.buttons === 0 || event.buttons === 1) {
           updateSketchInProgress(event);
@@ -1470,21 +1577,59 @@ export function ModelViewer({
             .clone()
             .multiplyScalar(dx * drag.worldPerPixel)
             .addScaledVector(drag.cameraUp, -dy * drag.worldPerPixel);
-          translation.x = snapTo(
-            drag.startTranslation.x + world.x,
-            drag.snapMove,
-            fine
-          );
-          translation.y = snapTo(
-            drag.startTranslation.y + world.y,
-            drag.snapMove,
-            fine
-          );
-          translation.z = snapTo(
-            drag.startTranslation.z + world.z,
-            drag.snapMove,
-            fine
-          );
+          // Geometry outranks the grid: a corner is a place someone meant,
+          // and rounding it to the nearest whole step would land beside it.
+          // Shift turns both off together, which is what it already means.
+          const host = renderer.domElement;
+          // Candidate projections are host-local pixels. Pointer events are
+          // window-relative, so convert them before comparing distances; the
+          // viewport normally sits below the top bar and beside the model tree.
+          const pointer = hud.toLocal(event.clientX, event.clientY);
+          const snapped =
+            fine || !pointer
+              ? null
+              : resolveSnap(
+                  moveSnaps,
+                  pointer,
+                  (point) =>
+                    projectToScreen(
+                      new THREE.Vector3(point.x, point.y, point.z),
+                      context.activeCamera,
+                      host.clientWidth,
+                      host.clientHeight
+                    ),
+                  SNAP_RADIUS_PX
+                );
+          if (snapped) {
+            // Land the handle itself on the point, so what the glyph marks is
+            // exactly where the body ends up.
+            const landed = translationToSnap(
+              drag.startTranslation,
+              drag.pivot,
+              snapped.candidate.point
+            );
+            translation.x = landed.x;
+            translation.y = landed.y;
+            translation.z = landed.z;
+            showSnapGlyph(snapped);
+          } else {
+            hud.hide(snapGlyph);
+            translation.x = snapTo(
+              drag.startTranslation.x + world.x,
+              drag.snapMove,
+              fine
+            );
+            translation.y = snapTo(
+              drag.startTranslation.y + world.y,
+              drag.snapMove,
+              fine
+            );
+            translation.z = snapTo(
+              drag.startTranslation.z + world.z,
+              drag.snapMove,
+              fine
+            );
+          }
         }
         context.applyMovePreview(translation, rotation);
         onMovePreviewChangeRef.current(translation, rotation, {
@@ -1617,6 +1762,19 @@ export function ModelViewer({
         return;
       }
       gestures.begin(event);
+      // Shift-drag sweeps a rectangle over the model. It takes precedence over
+      // every handle below because no handle uses Shift, and a shift-click
+      // that never becomes a drag still falls through to additive selection
+      // on release.
+      if (event.shiftKey && !sketchModeRef.current) {
+        boxSelect = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY
+        };
+        gestures.capture(event, 'crosshair');
+        return;
+      }
       const moveHit = pickMoveGizmo(event);
       if (moveHit && movePreviewRef.current) {
         const activeMove = movePreviewRef.current;
@@ -1625,6 +1783,7 @@ export function ModelViewer({
           axis?: MoveAxis;
         };
         const axis = data.axis ?? 'x';
+        moveSnaps = collectMoveSnaps(activeMove.bodyId);
         const pivot = moveGizmoGroup.position.clone();
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
@@ -1890,6 +2049,43 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        const started = boxSelect;
+        boxSelect = null;
+        hud.hide(selectionBand);
+        gestures.release(event, null);
+        const from = hud.toLocal(started.startX, started.startY);
+        const to = hud.toLocal(event.clientX, event.clientY);
+        const rect = from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
+        if (!rect || !isBoxSelectDrag(rect)) {
+          // A shift-click that never travelled is still a shift-click.
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
+        const host = renderer.domElement;
+        onBoxSelectRef.current(
+          bodiesInBox(
+            bodiesRef.current
+              .filter((body) => !body.consumed)
+              .map((body) => ({
+                bodyId: body.bodyId,
+                // Kernel meshes are already world-space, so no placement is
+                // applied here either — see createObjectForBody.
+                positions: body.mesh.vertices,
+                indices: body.mesh.indices
+              })),
+            rect,
+            boxSelectMode(started.startX, event.clientX),
+            {
+              camera: cameraRig.activeCamera,
+              width: host.clientWidth,
+              height: host.clientHeight
+            }
+          )
+        );
+        return;
+      }
       if (event.button === 2) {
         const panStartTarget = rightPanStartTarget;
         rightPanStartTarget = null;
@@ -1915,6 +2111,8 @@ export function ModelViewer({
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
+        moveSnaps = [];
+        hud.hide(snapGlyph);
         moveDragActiveRef.current = false;
         gestures.release(event, null);
         const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
@@ -2130,6 +2328,11 @@ export function ModelViewer({
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        boxSelect = null;
+        hud.hide(selectionBand);
+        gestures.release(event, null);
+      }
       if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
         edgeDrag = null;
         edgeDragActiveRef.current = false;
@@ -2148,6 +2351,8 @@ export function ModelViewer({
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
+        moveSnaps = [];
+        hud.hide(snapGlyph);
         moveDragActiveRef.current = false;
         gestures.release(event);
         clearMoveGizmoHover();
@@ -2171,8 +2376,35 @@ export function ModelViewer({
       clearMoveGizmoHover();
       applyHover(null);
     };
-    const handleDoubleClick = () => {
+    const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
+      // Double-clicking an edge takes the whole smooth run it belongs to.
+      // Rounding a lip means selecting every edge around it, and a filleted
+      // rim is a run of lines and arcs rather than one edge.
+      const picked = picker.pick(event);
+      if (picked?.selection?.kind === 'edge' && picked.selection.topologyId) {
+        const body = bodiesRef.current.find(
+          (candidate) => candidate.bodyId === picked.selection?.bodyId
+        );
+        const edges = body?.topology?.edges;
+        if (edges) {
+          const chain = edgeRunFrom(edges, picked.selection.topologyId);
+          if (chain.length > 1) {
+            const byId = new Map(
+              edges.map((edgeTopology) => [edgeTopology.topologyId, edgeTopology])
+            );
+            onSelectEdgeChainRef.current(
+              chain.map((topologyId) => ({
+                bodyId: picked.selection!.bodyId,
+                kind: 'edge' as const,
+                topologyId,
+                hash: byId.get(topologyId)?.hash
+              }))
+            );
+            return;
+          }
+        }
+      }
       if (bodyGroup.children.length === 0) {
         return;
       }

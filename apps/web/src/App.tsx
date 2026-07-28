@@ -117,7 +117,9 @@ import {
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform } from '@openzcad/viewport';
+import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
+import { effectiveSelectionFilter } from './lib/selectionFilter';
+import { commandPromptText } from './lib/interaction/prompt';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -142,11 +144,13 @@ import {
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import { MarkingMenu } from './components/MarkingMenu';
 import type {
   ExtrudePreview,
   FaceResizeCommit
 } from './components/ModelViewer';
 import type {
+  SelectionFilter,
   AxisProjection,
   DisplayMode,
   MovePreview,
@@ -267,6 +271,9 @@ export function App() {
   // Viewport-only edge picks for one fillet/chamfer feature. The document
   // remains the source of truth once the command is committed.
   const [selectedEdges, setSelectedEdges] = useState<TopologySelection[]>([]);
+  /** Null means the active tool decides what picking is narrowed to. */
+  const [manualSelectionFilter, setManualSelectionFilter] =
+    useState<SelectionFilter | null>(null);
   // Viewport body selection in pick order; drives boolean/move pre-fills.
   const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
@@ -277,6 +284,11 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
+  /**
+   * What picking is narrowed to right now. A manual choice outranks the tool's
+   * so that arming Fillet does not silently undo a filter set on purpose.
+   */
+  const selectionFilter = effectiveSelectionFilter(manualSelectionFilter, tool);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
   const {
@@ -2145,6 +2157,76 @@ export function App() {
     setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
   }
 
+  /**
+   * A whole smooth run of edges, from double-clicking one of them.
+   *
+   * Set in one update rather than replayed through
+   * `handleSelectTopologyFromViewer`: that reads `selectedEdges` from its
+   * closure, so N calls in a row would each append to the same stale list and
+   * only the last would survive. The reducer does accumulate, so the fillet
+   * handle is still armed edge by edge.
+   */
+  function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
+    const first = selections[0];
+    if (!doc || !first) {
+      return;
+    }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+    if (appSettings.experiments.directManipulation) {
+      selections.forEach((selection, index) => {
+        dispatchInteraction({
+          type: 'select-edge',
+          selection,
+          additive: index > 0
+        });
+      });
+    }
+    setSelectedEdges(selections);
+    setSelectedBodyIds([first.bodyId]);
+    setSelectedTopology(selections.at(-1) ?? first);
+    setSelectedFeatureNodeId(featureNodeIdForBody(first.bodyId));
+    setStatus(
+      `Selected a run of ${selections.length} connected edges. Fillet or chamfer applies to all of them.`
+    );
+  }
+
+  /**
+   * Bodies swept by a shift-drag rectangle.
+   *
+   * Replaces the selection rather than adding to it, even though the gesture
+   * is on Shift: the rectangle is the statement of what the user wants, and
+   * accumulating across sweeps would make a second attempt at aiming
+   * impossible to distinguish from a deliberate addition.
+   */
+  function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (!doc) {
+      return;
+    }
+    // A box selection replaces the active topology selection. Any direct-
+    // manipulation target belongs to that old face or edge, so retaining it
+    // would leave a handle capable of editing geometry that is no longer
+    // selected.
+    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds(bodyIds as BodyId[]);
+    setSelectedTopology(
+      bodyIds.length === 1 ? { bodyId: bodyIds[0] as BodyId, kind: 'body' } : null
+    );
+    setSelectedFeatureNodeId(
+      bodyIds.length === 1 ? featureNodeIdForBody(bodyIds[0] as BodyId) : null
+    );
+    setStatus(
+      bodyIds.length === 0
+        ? 'Nothing in the box. Selection cleared.'
+        : `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected.`
+    );
+  }
+
   function handleClearSelectedEdges() {
     setSelectedEdges([]);
     const bodyId = edgeModifierBody?.bodyId;
@@ -3006,12 +3088,18 @@ export function App() {
   function openContextMenu(
     x: number,
     y: number,
-    entries: { item: ContextMenuState['items'][number]; run(): void }[]
+    entries: { item: ContextMenuState['items'][number]; run(): void }[],
+    origin: 'viewport' | 'list' = 'list'
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
     );
-    setContextMenu({ x, y, items: entries.map((entry) => entry.item) });
+    setContextMenu({
+      x,
+      y,
+      origin,
+      items: entries.map((entry) => entry.item)
+    });
   }
 
   function handleViewportContextMenu(
@@ -3064,7 +3152,7 @@ export function App() {
           },
           run: showAllBodies
         }
-      ]);
+      ], 'viewport');
       return;
     }
     // Adopt the clicked geometry as the selection so actions target it.
@@ -3157,7 +3245,7 @@ export function App() {
             }
           ]
         : [])
-    ]);
+    ], 'viewport');
   }
 
   function handleFeatureContextMenu(
@@ -3279,7 +3367,12 @@ export function App() {
         return;
       }
 
-      if (typing || meta || event.altKey) {
+      // Escape is exempt from the typing guard. Every other shortcut must
+      // yield to a focused field, but a panel that autofocuses an input is
+      // exactly the situation someone presses Escape to get out of, and
+      // swallowing it there breaks the one key the workspace promises is
+      // always a way back.
+      if ((typing && event.key !== 'Escape') || meta || event.altKey) {
         return;
       }
 
@@ -3372,6 +3465,16 @@ export function App() {
         toggleProjection();
         return;
       }
+      if (key === 'q') {
+        // Advances from the filter in force, not from the manual one: with a
+        // tool choosing the filter those differ, and stepping from the manual
+        // slot would make the first press appear to do nothing.
+        const at = SELECTION_FILTERS.indexOf(selectionFilter);
+        setManualSelectionFilter(
+          SELECTION_FILTERS[(at + 1) % SELECTION_FILTERS.length] ?? 'any'
+        );
+        return;
+      }
       const shortcutTool = SHORTCUT_TO_TOOL[key];
       if (shortcutTool) {
         // Without this the same keystroke would type into the form field
@@ -3433,8 +3536,12 @@ export function App() {
   const tone: 'ready' | 'warning' | 'running' =
     /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
 
+  // An operation in flight outranks the tool hint: it knows which rung of
+  // the Escape ladder you are on, which is the one thing a generic
+  // "Esc cancels" can never tell you.
   const hint =
-    tool === 'sketch'
+    commandPromptText(interaction, tool !== null || selectedFeatureNodeId !== null) ??
+    (tool === 'sketch'
       ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
       : tool === 'extrude'
         ? extrudePreview
@@ -3454,7 +3561,7 @@ export function App() {
                   ? 'Edit in the panel · Del deletes · Esc closes'
                   : viewerBodies.length > 0
                     ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                    : 'Ctrl+K commands · ? shortcuts';
+                    : 'Ctrl+K commands · ? shortcuts');
 
   const paletteCommands: PaletteCommand[] = [
     ...TOOL_GROUPS.flatMap((group) =>
@@ -3974,6 +4081,9 @@ export function App() {
             projection={projection}
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
+            onSelectEdgeChain={handleSelectEdgeChainFromViewer}
+            selectionFilter={selectionFilter}
+            onBoxSelect={handleBoxSelectFromViewer}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
             onExtrudeDistanceChange={(distance) =>
@@ -4249,6 +4359,9 @@ export function App() {
           warningCount={warnings.length}
           documentVersion={doc.version}
           units={doc.units}
+          selectionFilter={selectionFilter}
+          selectionFilterIsAutomatic={manualSelectionFilter === null}
+          onSelectionFilter={setManualSelectionFilter}
         />
       }
       overlays={
@@ -4275,13 +4388,22 @@ export function App() {
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
           )}
-          {contextMenu && (
-            <ContextMenu
-              menu={contextMenu}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
-              onClose={() => setContextMenu(null)}
-            />
-          )}
+          {contextMenu &&
+            (contextMenu.origin === 'viewport' ? (
+              <MarkingMenu
+                x={contextMenu.x}
+                y={contextMenu.y}
+                items={contextMenu.items}
+                onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+                onClose={() => setContextMenu(null)}
+              />
+            ) : (
+              <ContextMenu
+                menu={contextMenu}
+                onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+                onClose={() => setContextMenu(null)}
+              />
+            ))}
         </>
       }
     />
