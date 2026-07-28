@@ -21,6 +21,52 @@ import { toUserId, type ParamValue } from '@openzcad/shared';
 import { computeSketchRegions } from '@openzcad/geometry';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 
+const NORMAL_PROJECTED_RADIUS_PX = 240;
+const CLOSE_PROJECTED_RADIUS_PX = 1200;
+const MAX_PROJECTED_CHORD_ERROR_PX = 0.5;
+
+function projectedChordError(
+  points: number[],
+  radius: number,
+  projectedRadius: number
+): number {
+  let maximum = 0;
+  for (let index = 0; index + 5 < points.length; index += 3) {
+    const midpointRadius = Math.hypot(
+      (points[index]! + points[index + 3]!) / 2,
+      (points[index + 1]! + points[index + 4]!) / 2
+    );
+    maximum = Math.max(maximum, (radius - midpointRadius) / radius);
+  }
+  return maximum * projectedRadius;
+}
+
+function circularMeshRing(
+  vertices: number[],
+  radius: number,
+  z: number
+): number[] {
+  const tolerance = Math.max(radius * 1e-5, 1e-6);
+  const points = new Map<string, [number, number, number]>();
+  for (let index = 0; index + 2 < vertices.length; index += 3) {
+    const x = vertices[index]!;
+    const y = vertices[index + 1]!;
+    const pointZ = vertices[index + 2]!;
+    if (
+      Math.abs(pointZ - z) <= tolerance &&
+      Math.abs(Math.hypot(x, y) - radius) <= tolerance
+    ) {
+      const angle = Math.atan2(y, x);
+      points.set(angle.toFixed(8), [x, y, pointZ]);
+    }
+  }
+  const ordered = [...points.values()].sort(
+    (left, right) =>
+      Math.atan2(left[1], left[0]) - Math.atan2(right[1], right[0])
+  );
+  return [...ordered, ordered[0]!].flat();
+}
+
 describe('exact hybrid kernel adapter', () => {
   let adapter: ExactKernelAdapter;
 
@@ -83,6 +129,80 @@ describe('exact hybrid kernel adapter', () => {
     );
     expect(edgeHashes).not.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(derived.warnings).toEqual([]);
+  });
+
+  it('keeps cylinder surfaces and exact edge outlines smooth across scale and zoom', async () => {
+    for (const radius of [0.5, 10, 1000]) {
+      const document = addPrimitiveFeature(
+        createProjectDocument(
+          `Cylinder ${radius * 2}`,
+          toUserId(`user_cylinder_${radius}`)
+        ),
+        {
+          name: `Cylinder ${radius * 2}`,
+          primitiveKind: 'cylinder',
+          dimensions: { radius, height: radius * 2 }
+        }
+      );
+
+      const derived = await adapter.syncDocument(document);
+      const bodyId = document.bodyOrder[0]!;
+      const body = derived.bodyRepresentations[bodyId]!;
+      const cylindricalFace = body.topology?.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      );
+      const circularEdges =
+        body.topology?.edges.filter((edge) => edge.points.length > 6) ?? [];
+
+      // The authored/exported solid remains analytic; only its disposable
+      // viewport representation is tessellated.
+      expect(cylindricalFace?.geometry?.radius).toBeCloseTo(radius, 7);
+      expect(circularEdges).toHaveLength(2);
+
+      // Shared display tolerances give the shaded rim and exact edge overlay
+      // compatible resolution at every model scale. Full circles repeat their
+      // first point so Line2 also draws the closing segment.
+      const surfaceRing = circularMeshRing(
+        body.mesh.vertices,
+        radius,
+        radius * 2
+      );
+      expect(surfaceRing.length / 3 - 1).toBeGreaterThanOrEqual(100);
+      expect(surfaceRing.length / 3 - 1).toBeLessThan(160);
+      expect(body.mesh.indices.length / 3).toBeLessThan(600);
+
+      for (const edge of circularEdges) {
+        expect(
+          Math.hypot(
+            edge.points.at(-3)! - edge.points[0]!,
+            edge.points.at(-2)! - edge.points[1]!,
+            edge.points.at(-1)! - edge.points[2]!
+          )
+        ).toBeLessThan(Math.max(radius * 1e-12, 1e-12));
+        expect(edge.points.length / 3 - 1).toBeGreaterThanOrEqual(100);
+        expect(edge.points.length / 3 - 1).toBeLessThan(160);
+        for (const projectedRadius of [
+          NORMAL_PROJECTED_RADIUS_PX,
+          CLOSE_PROJECTED_RADIUS_PX
+        ]) {
+          expect(
+            projectedChordError(edge.points, radius, projectedRadius)
+          ).toBeLessThanOrEqual(MAX_PROJECTED_CHORD_ERROR_PX);
+        }
+      }
+
+      for (const projectedRadius of [
+        NORMAL_PROJECTED_RADIUS_PX,
+        CLOSE_PROJECTED_RADIUS_PX
+      ]) {
+        expect(
+          projectedChordError(surfaceRing, radius, projectedRadius)
+        ).toBeLessThanOrEqual(MAX_PROJECTED_CHORD_ERROR_PX);
+      }
+
+      const step = await adapter.exportStep(document, [bodyId]);
+      expect(step).toContain('CYLINDRICAL_SURFACE');
+    }
   });
 
   it('removes boolean seams from a unioned physical part', async () => {
