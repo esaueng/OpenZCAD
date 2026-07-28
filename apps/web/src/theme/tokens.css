@@ -78,6 +78,8 @@
   --statusbar-h: 30px;
   --sidebar-w: 252px;
   --context-w: 330px;
+  /* Wide enough for a question card's chips and a dimension audit table. */
+  --assistant-w: 360px;
 
   /* ── Motion ───────────────────────────────────────────── */
   --dur-fast: 100ms;

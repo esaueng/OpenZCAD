@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ASSISTANT_REPLY_JSON_SCHEMA,
   CAD_PATCH_JSON_SCHEMA,
   createCadDocumentDigest,
   groundCadPatchProposalToSelection,
+  parseAssistantReply,
   parseCadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
@@ -31,6 +33,7 @@ describe('AI patch contracts', () => {
     };
 
     visit(CAD_PATCH_JSON_SCHEMA);
+    visit(ASSISTANT_REPLY_JSON_SCHEMA);
   });
 
   it('accepts a structured patch proposal', () => {
@@ -454,5 +457,219 @@ describe('AI patch contracts', () => {
       featureKind: 'imported-step',
       sourceName: 'large.step'
     });
+  });
+});
+
+describe('assistant reply contract', () => {
+  const patchReply = {
+    replyKind: 'patch',
+    proposal: {
+      proposalId: 'proposal_1',
+      summary: 'Add a plate.',
+      assumptions: ['2.4 mm wall'],
+      operations: [
+        { kind: 'set_parameter', name: 'plate_t', expression: '6' }
+      ]
+    },
+    questions: null,
+    message: null,
+    readings: null
+  };
+
+  it('routes a patch reply through the unchanged patch parser', () => {
+    const reply = parseAssistantReply(patchReply);
+    expect(reply.kind).toBe('patch');
+    if (reply.kind !== 'patch') {
+      throw new Error('expected a patch reply');
+    }
+    expect(reply.proposal.operations).toHaveLength(1);
+    expect(reply.readings).toEqual([]);
+
+    // A malformed patch must fail exactly as it did before replies had kinds.
+    expect(() =>
+      parseAssistantReply({
+        ...patchReply,
+        proposal: { ...patchReply.proposal, operations: [] }
+      })
+    ).toThrow('missing required fields');
+    expect(() =>
+      parseAssistantReply({
+        ...patchReply,
+        proposal: {
+          ...patchReply.proposal,
+          operations: [{ kind: 'execute_code', source: 'rm -rf' }]
+        }
+      })
+    ).toThrow(/Unsupported CAD patch operation/);
+  });
+
+  it('accepts a questions reply and keeps every question answerable', () => {
+    const reply = parseAssistantReply({
+      replyKind: 'questions',
+      proposal: null,
+      message: '  Two dimensions are missing.  ',
+      readings: null,
+      questions: [
+        {
+          id: 'plate_thickness',
+          prompt: 'How thick is the plate?',
+          options: [
+            { label: '6 mm (recommended)', value: '6 mm' },
+            { label: '10 mm', value: '10 mm' }
+          ],
+          allowFreeText: true,
+          unit: 'mm'
+        },
+        {
+          id: 'bore',
+          prompt: 'What bore diameter?',
+          options: [],
+          allowFreeText: true,
+          unit: ' '
+        }
+      ]
+    });
+
+    expect(reply).toEqual({
+      kind: 'questions',
+      preamble: 'Two dimensions are missing.',
+      questions: [
+        {
+          id: 'plate_thickness',
+          prompt: 'How thick is the plate?',
+          options: [
+            { label: '6 mm (recommended)', value: '6 mm' },
+            { label: '10 mm', value: '10 mm' }
+          ],
+          allowFreeText: true,
+          unit: 'mm'
+        },
+        {
+          id: 'bore',
+          prompt: 'What bore diameter?',
+          options: [],
+          allowFreeText: true,
+          unit: null
+        }
+      ]
+    });
+  });
+
+  it('rejects questions that would strand the conversation', () => {
+    const question = {
+      id: 'q1',
+      prompt: 'Which fit?',
+      options: [{ label: 'Sliding', value: 'sliding' }],
+      allowFreeText: false,
+      unit: null
+    };
+    const base = {
+      replyKind: 'questions',
+      proposal: null,
+      message: '',
+      readings: null
+    };
+
+    // No chips and no text field means there is no way to answer at all.
+    expect(() =>
+      parseAssistantReply({
+        ...base,
+        questions: [{ ...question, options: [], allowFreeText: false }]
+      })
+    ).toThrow('cannot be answered');
+    expect(() =>
+      parseAssistantReply({ ...base, questions: [] })
+    ).toThrow(/1 to 6 questions/);
+    expect(() =>
+      parseAssistantReply({
+        ...base,
+        questions: [question, { ...question, prompt: 'Which tolerance?' }]
+      })
+    ).toThrow('Duplicate question id');
+    expect(() =>
+      parseAssistantReply({ ...base, questions: [{ ...question, prompt: '  ' }] })
+    ).toThrow('prompt must be a non-empty string');
+    expect(() =>
+      parseAssistantReply({
+        ...base,
+        questions: [{ ...question, allowFreeText: 'yes' }]
+      })
+    ).toThrow('allowFreeText must be a boolean');
+  });
+
+  it('accepts a message reply and rejects an empty one', () => {
+    expect(
+      parseAssistantReply({
+        replyKind: 'message',
+        proposal: null,
+        questions: null,
+        readings: null,
+        message: 'There is no shell operation for that wall.'
+      })
+    ).toEqual({
+      kind: 'message',
+      message: 'There is no shell operation for that wall.'
+    });
+
+    expect(() =>
+      parseAssistantReply({
+        replyKind: 'message',
+        proposal: null,
+        questions: null,
+        readings: null,
+        message: '   '
+      })
+    ).toThrow('message must be a non-empty string');
+  });
+
+  it('keeps drawing readings as an audit trail without failing a good patch', () => {
+    const reply = parseAssistantReply({
+      ...patchReply,
+      readings: [
+        {
+          label: '⌀12 H7 bore',
+          value: '12 mm',
+          source: 'front view',
+          confidence: 'read'
+        },
+        {
+          label: 'plate thickness',
+          value: '6 mm',
+          source: 'section A-A',
+          confidence: 'guessed'
+        },
+        { label: 'fillet', value: '', source: 'detail', confidence: 'read' },
+        'not a reading'
+      ]
+    });
+    if (reply.kind !== 'patch') {
+      throw new Error('expected a patch reply');
+    }
+    // Readings explain a patch rather than drive it, so unusable entries are
+    // dropped and an unknown confidence degrades instead of rejecting.
+    expect(reply.readings).toEqual([
+      {
+        label: '⌀12 H7 bore',
+        value: '12 mm',
+        source: 'front view',
+        confidence: 'read'
+      },
+      {
+        label: 'plate thickness',
+        value: '6 mm',
+        source: 'section A-A',
+        confidence: 'inferred'
+      }
+    ]);
+  });
+
+  it('rejects an unknown or missing reply kind', () => {
+    expect(() => parseAssistantReply({ replyKind: 'apply' })).toThrow(
+      'Unsupported assistant replyKind: apply'
+    );
+    expect(() => parseAssistantReply({})).toThrow(
+      'Unsupported assistant replyKind: undefined'
+    );
+    expect(() => parseAssistantReply(null)).toThrow('must be an object');
   });
 });

@@ -109,7 +109,7 @@ import { StartScreen } from './components/StartScreen';
 import { SettingsPage } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
-import { AiCommandRail } from './components/AiCommandRail';
+import { AssistantPanel } from './components/assistant/AssistantPanel';
 import {
   ExtrudeOverlay,
   MoveOverlay,
@@ -173,9 +173,17 @@ import {
 } from './lib/workspaceSession';
 import {
   defaultAppSettings,
-  loadLocalAppSettings,
-  saveLocalAppSettings
+  loadLocalAppSettingsRecord,
+  saveLocalAppSettings,
+  shouldAdoptAccountSettings
 } from './lib/appSettings';
+import {
+  loadPanelState,
+  savePanelState,
+  toggleSidebarSection,
+  type PanelState,
+  type SidebarSectionId
+} from './lib/panelState';
 
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
@@ -207,11 +215,31 @@ function mergeProjectSummaries(
 }
 
 export function App() {
-  const [appSettings, setAppSettings] = useState<AppSettings>(() =>
-    loadLocalAppSettings()
+  /**
+   * What was on this device at mount, read once. The account fetch resolves
+   * long after the settings-persistence effect has already written to storage,
+   * so re-reading it there would always look locally-edited.
+   */
+  const bootSettingsRef = useRef(loadLocalAppSettingsRecord());
+  const [appSettings, setAppSettings] = useState<AppSettings>(
+    () => bootSettingsRef.current?.settings ?? defaultAppSettings()
+  );
+  /**
+   * The account revision `appSettings` is in step with, or null once edited
+   * here without being saved. Persisted with the settings so a reload can tell
+   * an unsaved local change from a stale cache of the account copy.
+   */
+  const syncedRevisionRef = useRef<number | null>(
+    bootSettingsRef.current?.syncedRevision ?? null
   );
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
+  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
+  /** Bumped to move focus into the assistant prompt, like `viewRequest`. */
+  const [assistantFocusNonce, setAssistantFocusNonce] = useState(0);
+  const [panelState, setPanelState] = useState<PanelState>(() =>
+    loadPanelState()
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
@@ -340,7 +368,11 @@ export function App() {
   });
 
   useEffect(() => {
-    saveLocalAppSettings(appSettings);
+    savePanelState(panelState);
+  }, [panelState]);
+
+  useEffect(() => {
+    saveLocalAppSettings(appSettings, syncedRevisionRef.current);
     globalThis.document.documentElement.dataset.density =
       appSettings.appearance.density;
     globalThis.document.documentElement.dataset.reducedMotion = appSettings
@@ -459,8 +491,21 @@ export function App() {
       setSession(remote?.[1] ?? null);
       if (remoteSettings) {
         setAccountSettings(remoteSettings);
-        setAppSettings(remoteSettings.settings);
-        saveLocalAppSettings(remoteSettings.settings);
+        // Adopting the account copy over an unsaved local change would revert
+        // it silently — for the assistant switch, that looks like the switch
+        // not working at all.
+        if (shouldAdoptAccountSettings(bootSettingsRef.current)) {
+          syncedRevisionRef.current = remoteSettings.revision;
+          setAppSettings(remoteSettings.settings);
+          saveLocalAppSettings(
+            remoteSettings.settings,
+            remoteSettings.revision
+          );
+        } else {
+          setSettingsMessage(
+            'This device has settings that are not saved to your account yet.'
+          );
+        }
       }
       setSaveState(canUseCloud ? 'saved' : 'offline');
       if (activeProjectId && restoredDocument) {
@@ -1162,8 +1207,17 @@ export function App() {
   }
 
   function handleAppSettingsChange(next: AppSettings) {
+    syncedRevisionRef.current = null;
     setAppSettings(next);
-    setSettingsMessage('Saved on this device.');
+    setSettingsMessage(
+      accountSettings?.synced
+        ? 'Saved on this device · not yet saved to your account.'
+        : 'Saved on this device.'
+    );
+  }
+
+  function focusAssistantPrompt() {
+    setAssistantFocusNonce((nonce) => nonce + 1);
   }
 
   function openSettings() {
@@ -1193,6 +1247,8 @@ export function App() {
         expectedRevision: accountSettings.revision
       });
       setAccountSettings(response);
+      syncedRevisionRef.current = response.revision;
+      saveLocalAppSettings(appSettings, response.revision);
       setSettingsMessage('Saved to this device and account.');
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Account settings save failed.'));
@@ -1210,6 +1266,8 @@ export function App() {
       expectedRevision: accountSettings.revision
     });
     setAccountSettings(response);
+    syncedRevisionRef.current = response.revision;
+    saveLocalAppSettings(appSettings, response.revision);
     return response;
   }
 
@@ -1276,8 +1334,11 @@ export function App() {
       return;
     }
     const defaults = defaultAppSettings();
+    // A reset is a local edit like any other: it must survive the next boot
+    // rather than being undone by the account copy.
+    syncedRevisionRef.current = null;
     setAppSettings(defaults);
-    saveLocalAppSettings(defaults);
+    saveLocalAppSettings(defaults, null);
     setSettingsMessage('Application settings reset on this device.');
   }
 
@@ -3532,6 +3593,10 @@ export function App() {
     tool === 'sketch' ||
     tool === 'extrude' ||
     (tool === 'transform' && movePreview !== null);
+  // The setting is the only gate on the assistant's presence: rendering nothing
+  // also means no /api/assistant/status probe, since that fetch lives in the
+  // rail's mount effect. A direct-manipulation mode hides it temporarily.
+  const assistantAvailable = appSettings.assistant.enabled && !directMode;
   const contextualToolCard = toolCardFor(interaction);
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
@@ -3594,6 +3659,10 @@ export function App() {
             availability={availability}
             onLaunchTool={launchTool}
             onOpenSearch={() => setPaletteOpen(true)}
+            open={panelState.toolPaletteOpen}
+            onOpenChange={(toolPaletteOpen) =>
+              setPanelState((current) => ({ ...current, toolPaletteOpen }))
+            }
           />
         )
       }
@@ -3617,6 +3686,10 @@ export function App() {
             executeCommand(commandFactories.deleteParameter({ name }))
           }
           onDeleteFeature={handleDeleteFeature}
+          panelState={panelState}
+          onToggleSection={(id: SidebarSectionId) =>
+            setPanelState((current) => toggleSidebarSection(current, id))
+          }
         />
       }
       viewer={
@@ -3645,6 +3718,15 @@ export function App() {
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
+            onStartPrimitive={launchTool}
+            onAskAssistant={
+              assistantAvailable
+                ? () => {
+                    setAssistantCollapsed(false);
+                    focusAssistantPrompt();
+                  }
+                : null
+            }
             initialView={initialView}
             onViewChange={handleViewportChange}
             onMovePreviewChange={(translation, rotationDeg, snap) => {
@@ -4134,14 +4216,19 @@ export function App() {
         ) : null
       }
       assistant={
-        directMode ? null : (
-          <AiCommandRail
-            document={doc}
-            selection={assistantSelection}
-            onApply={handleApplyPatch}
-            onPreview={handlePreviewPatch}
-          />
-        )
+        assistantAvailable ? (
+          <ErrorBoundary label="Assistant">
+            <AssistantPanel
+              document={doc}
+              selection={assistantSelection}
+              onApply={handleApplyPatch}
+              onPreview={handlePreviewPatch}
+              collapsed={assistantCollapsed}
+              onCollapsedChange={setAssistantCollapsed}
+              focusNonce={assistantFocusNonce}
+            />
+          </ErrorBoundary>
+        ) : null
       }
       statusBar={
         <StatusBar

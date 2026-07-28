@@ -1,6 +1,13 @@
+import { createReadStream } from 'node:fs';
+import { cp, mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type PluginOption } from 'vite';
 import wasm from 'vite-plugin-wasm';
+import {
+  PDFJS_ASSET_BASE,
+  PDFJS_ASSET_DIRS
+} from './src/lib/assistant/pdfjsAssets';
 
 if (typeof globalThis.File === 'undefined') {
   // Node 18 lacks the global File constructor that some dependencies expect.
@@ -42,10 +49,65 @@ const workspaceAliases = Object.fromEntries(
   ])
 );
 
+/**
+ * Serves the pdf.js runtime data directories in dev and copies them into the
+ * build. They are plain data, not importable modules, so pdf.js is given a URL
+ * prefix instead — see `pdfjsAssets.ts` for why each one is needed.
+ */
+function pdfjsAssets(): PluginOption {
+  const sourceRoot = fileURLToPath(
+    new URL('./node_modules/pdfjs-dist/', import.meta.url)
+  );
+  let outDir = 'dist';
+  return {
+    name: 'openzcad-pdfjs-assets',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    // Dev: serve straight from node_modules instead of copying on every boot.
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const url = request.url ?? '';
+        if (!url.startsWith(PDFJS_ASSET_BASE)) {
+          next();
+          return;
+        }
+        const relative = url.slice(PDFJS_ASSET_BASE.length).split('?')[0] ?? '';
+        // Anything outside the three known directories, or containing a
+        // traversal segment, would expose the workspace over the dev server.
+        if (
+          !PDFJS_ASSET_DIRS.some((dir) => relative.startsWith(`${dir}/`)) ||
+          relative.split('/').includes('..')
+        ) {
+          next();
+          return;
+        }
+        const stream = createReadStream(`${sourceRoot}${relative}`);
+        stream.on('error', () => next());
+        stream.on('open', () =>
+          response.setHeader('content-type', 'application/octet-stream')
+        );
+        stream.pipe(response);
+      });
+    },
+    // Copied into the build output rather than into `public/`, so a build never
+    // leaves 4 MB of vendored data behind in the source tree.
+    async writeBundle() {
+      const target = join(outDir, PDFJS_ASSET_BASE.replace(/^\/|\/$/g, ''));
+      await mkdir(target, { recursive: true });
+      for (const dir of PDFJS_ASSET_DIRS) {
+        await cp(`${sourceRoot}${dir}`, join(target, dir), {
+          recursive: true
+        });
+      }
+    }
+  };
+}
+
 export default defineConfig(async ({ command, isPreview }) => {
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
-  plugins.push(react(), wasm());
+  plugins.push(react(), wasm(), pdfjsAssets());
 
   const nodeMajor = Number.parseInt(
     process.versions.node.split('.')[0] ?? '0',
