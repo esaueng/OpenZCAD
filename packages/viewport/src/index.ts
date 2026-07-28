@@ -25,7 +25,10 @@ export * from './pick/edges';
 // Selection: hover/preselect state and its overlays.
 export * from './selection/SelectionManager';
 
-// Gizmos: the move/rotate handle geometry, snapping, and focus.
+// Gizmos: the shared drag-rig contract, the selection-first handles built
+// on it, and the move/rotate handle geometry, snapping, and focus.
+export * from './gizmo/DragRig';
+export * from './gizmo/rigs';
 export * from './gizmo/move';
 
 // Input: pointer gesture classification and drag-session bookkeeping.
