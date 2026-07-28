@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { BodyTopology, TopologySelection } from '@openzcad/shared';
-import type { RegionPickData } from '../types';
+import type { RegionPickData, SelectionFilter } from '../types';
 import { configureEdgeRaycasting, prioritizeVisibleEdgeHit } from './edges';
 import { findBodyId } from './meshes';
 
@@ -46,6 +46,8 @@ export interface PickServiceOptions {
   sketchGroup: THREE.Object3D;
   /** Solid bodies and their exact topology overlays. */
   bodyGroup: THREE.Object3D;
+  /** Read per call, like the camera: the filter changes with the tool. */
+  filter?(): SelectionFilter;
 }
 
 interface TopologyUserData {
@@ -90,20 +92,65 @@ export class PickService {
     return this.raycaster.intersectObjects(objects, recursive);
   }
 
+  private get filter(): SelectionFilter {
+    return this.options.filter?.() ?? 'any';
+  }
+
+  /**
+   * Narrows the solid candidates to the kind the filter asks for.
+   *
+   * `body` resolves rather than rejects: clicking a face while filtering to
+   * bodies selects the body that face belongs to, which is what the filter is
+   * for. The other kinds reject, so anything of the wrong kind is passed
+   * through to whatever sits behind it.
+   */
+  private applyFilter(candidates: PickCandidate[]): PickCandidate[] {
+    const filter = this.filter;
+    if (filter === 'any') {
+      return candidates;
+    }
+    if (filter === 'sketch') {
+      return [];
+    }
+    if (filter === 'body') {
+      return candidates.map((candidate) =>
+        candidate.kind === 'body'
+          ? candidate
+          : {
+              kind: 'body' as const,
+              distance: candidate.distance,
+              hit: candidate.hit,
+              selection: candidate.selection
+                ? { bodyId: candidate.selection.bodyId, kind: 'body' as const }
+                : null
+            }
+      );
+    }
+    return candidates.filter((candidate) => candidate.kind === filter);
+  }
+
   private regionCandidate(): PickCandidate | null {
+    if (this.filter !== 'any' && this.filter !== 'sketch') {
+      return null;
+    }
     const regionHit = this.raycaster
       .intersectObjects(this.options.regionGroup.children, true)
       .find((hit) => hit.object.userData.region !== undefined);
     if (!regionHit) {
       return null;
     }
-    // A region only wins while it is actually the frontmost thing under the
-    // cursor — a solid standing on the sketch plane occludes it.
-    const bodyBlock = this.raycaster
-      .intersectObjects(this.options.bodyGroup.children, true)
-      .find((hit) => hit.object.visible);
-    if (bodyBlock && regionHit.distance > bodyBlock.distance + 1e-6) {
-      return null;
+    // With nothing filtered out, a region only wins while it is genuinely the
+    // frontmost thing under the cursor — a solid standing on the sketch plane
+    // occludes it. Under a sketch filter the solids are not competing for the
+    // click at all, so letting one block the region would leave a sketch
+    // behind a solid unreachable, which is the case the filter exists for.
+    if (this.filter === 'any') {
+      const bodyBlock = this.raycaster
+        .intersectObjects(this.options.bodyGroup.children, true)
+        .find((hit) => hit.object.visible);
+      if (bodyBlock && regionHit.distance > bodyBlock.distance + 1e-6) {
+        return null;
+      }
     }
     return {
       kind: 'region',
@@ -115,6 +162,9 @@ export class PickService {
   }
 
   private sketchCandidate(): PickCandidate | null {
+    if (this.filter !== 'any' && this.filter !== 'sketch') {
+      return null;
+    }
     const sketchHit = this.raycaster
       .intersectObjects(this.options.sketchGroup.children, true)
       .find((hit) => typeof hit.object.userData.sketchId === 'string');
@@ -195,9 +245,11 @@ export class PickService {
     const hits = this.raycaster
       .intersectObjects(this.options.bodyGroup.children, true)
       .filter((hit) => hit.object.visible);
-    return prioritizeVisibleEdgeHit(hits)
-      .map((hit) => this.topologyCandidate(hit))
-      .filter((candidate): candidate is PickCandidate => candidate !== null);
+    return this.applyFilter(
+      prioritizeVisibleEdgeHit(hits)
+        .map((hit) => this.topologyCandidate(hit))
+        .filter((candidate): candidate is PickCandidate => candidate !== null)
+    );
   }
 
   /**

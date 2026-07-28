@@ -117,7 +117,10 @@ import {
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform } from '@openzcad/viewport';
+import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
+import {
+  effectiveSelectionFilter
+} from './lib/selectionFilter';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -147,6 +150,7 @@ import type {
   FaceResizeCommit
 } from './components/ModelViewer';
 import type {
+  SelectionFilter,
   AxisProjection,
   DisplayMode,
   MovePreview,
@@ -267,6 +271,9 @@ export function App() {
   // Viewport-only edge picks for one fillet/chamfer feature. The document
   // remains the source of truth once the command is committed.
   const [selectedEdges, setSelectedEdges] = useState<TopologySelection[]>([]);
+  /** Null means the active tool decides what picking is narrowed to. */
+  const [manualSelectionFilter, setManualSelectionFilter] =
+    useState<SelectionFilter | null>(null);
   // Viewport body selection in pick order; drives boolean/move pre-fills.
   const [selectedBodyIds, setSelectedBodyIds] = useState<BodyId[]>([]);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
@@ -277,6 +284,11 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
+  /**
+   * What picking is narrowed to right now. A manual choice outranks the tool's
+   * so that arming Fillet does not silently undo a filter set on purpose.
+   */
+  const selectionFilter = effectiveSelectionFilter(manualSelectionFilter, tool);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
   const {
@@ -3406,6 +3418,16 @@ export function App() {
         toggleProjection();
         return;
       }
+      if (key === 'q') {
+        // Advances from the filter in force, not from the manual one: with a
+        // tool choosing the filter those differ, and stepping from the manual
+        // slot would make the first press appear to do nothing.
+        const at = SELECTION_FILTERS.indexOf(selectionFilter);
+        setManualSelectionFilter(
+          SELECTION_FILTERS[(at + 1) % SELECTION_FILTERS.length] ?? 'any'
+        );
+        return;
+      }
       const shortcutTool = SHORTCUT_TO_TOOL[key];
       if (shortcutTool) {
         // Without this the same keystroke would type into the form field
@@ -4009,6 +4031,7 @@ export function App() {
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
+            selectionFilter={selectionFilter}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
             onExtrudeDistanceChange={(distance) =>
@@ -4284,6 +4307,9 @@ export function App() {
           warningCount={warnings.length}
           documentVersion={doc.version}
           units={doc.units}
+          selectionFilter={selectionFilter}
+          selectionFilterIsAutomatic={manualSelectionFilter === null}
+          onSelectionFilter={setManualSelectionFilter}
         />
       }
       overlays={

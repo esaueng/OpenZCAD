@@ -16,6 +16,7 @@ import type {
   MoveSnap,
   PickDetail,
   ProjectionMode,
+  SelectionFilter,
   SketchOverlay,
   StandardView,
   ViewerSettings
@@ -58,6 +59,7 @@ interface ViewerShellProps {
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  selectionFilter: SelectionFilter;
   onSelectEdgeChain(selections: TopologySelection[]): void;
   onSelectTopology(
     selection: TopologySelection | null,
@@ -129,6 +131,7 @@ export function ViewerShell({
   orientationRef,
   onSelectTopology,
   onSelectEdgeChain,
+  selectionFilter,
   offsetHandle,
   onOffsetCommit,
   onOpenOffsetKeypad,
@@ -179,6 +182,7 @@ export function ViewerShell({
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
+        selectionFilter={selectionFilter}
         offsetHandle={offsetHandle}
         onOffsetCommit={onOffsetCommit}
         onOpenOffsetKeypad={onOpenOffsetKeypad}
