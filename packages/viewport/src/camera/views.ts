@@ -102,3 +102,43 @@ export function orbitPivotForPoint(
   }
   return cameraPosition.clone().addScaledVector(forward, depth);
 }
+
+/** A glide short enough to feel instant for a nudge. */
+export const MIN_TWEEN_MS = 170;
+/** A glide long enough to stay readable across a full reorientation. */
+export const MAX_TWEEN_MS = 520;
+/** Duration for a move of roughly one orbit radius — the common view change. */
+const REFERENCE_TWEEN_MS = 400;
+
+/**
+ * How long a camera glide should take, given how far it actually travels.
+ *
+ * A fixed duration makes every move feel wrong at one end: nudging to an
+ * adjacent view drags, and flipping to the opposite side of a large part
+ * whips past too fast to follow. Scaling by the distance travelled — measured
+ * against the orbit radius, so it holds at any model scale — keeps short
+ * moves snappy and long ones legible.
+ */
+export function tweenDurationFor(
+  fromPosition: THREE.Vector3,
+  toPosition: THREE.Vector3,
+  fromTarget: THREE.Vector3,
+  toTarget: THREE.Vector3
+): number {
+  const travel = Math.max(
+    fromPosition.distanceTo(toPosition),
+    fromTarget.distanceTo(toTarget)
+  );
+  // The orbit radius stands in for scene scale: the same travel means
+  // something quite different on a bracket and on a building.
+  const radius = Math.max(fromPosition.distanceTo(fromTarget), 1e-6);
+  const ratio = travel / radius;
+  if (!Number.isFinite(ratio)) {
+    return REFERENCE_TWEEN_MS;
+  }
+  return THREE.MathUtils.clamp(
+    REFERENCE_TWEEN_MS * Math.sqrt(ratio),
+    MIN_TWEEN_MS,
+    MAX_TWEEN_MS
+  );
+}
