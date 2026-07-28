@@ -487,7 +487,8 @@ export interface SceneContext {
   hoverFaceKey: string | null;
   /** Selection overlays fading in toward their resting opacity. */
   fadeIns: Set<THREE.MeshBasicMaterial>;
-  clock: THREE.Clock;
+  /** Frame timing for the overlay eases; `update()` once per frame, then read. */
+  timer: THREE.Timer;
 }
 
 interface DimensionLabelBinding {
@@ -1218,7 +1219,9 @@ export function ModelViewer({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCF is the soft one now: its sampler spreads five Vogel-disk taps over
+    // `light.shadow.radius`, which is what PCFSoft used to be needed for.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     host.appendChild(renderer.domElement);
 
     // Studio environment rig: soft IBL reflections do the heavy lifting for
@@ -1525,7 +1528,7 @@ export function ModelViewer({
       hoverFaceTarget: 0,
       hoverFaceKey: null,
       fadeIns: new Set(),
-      clock: new THREE.Clock()
+      timer: new THREE.Timer()
     };
     contextRef.current = context;
     controls.addEventListener('end', emitViewChange);
@@ -3234,7 +3237,9 @@ export function ModelViewer({
       }
 
       // Preselection and selection overlays ease toward their targets.
-      const dt = Math.min(context.clock.getDelta(), 0.05);
+      // Timer separates advancing time from reading it, so update once here.
+      context.timer.update(now);
+      const dt = Math.min(context.timer.getDelta(), 0.05);
       const ease = 1 - Math.exp(-dt * 16);
       const hoverMaterial = context.hoverFaceMesh.material;
       const hoverNext =
