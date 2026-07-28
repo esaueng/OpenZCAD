@@ -1219,7 +1219,9 @@ export function ModelViewer({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCF is the soft one now: its sampler spreads five Vogel-disk taps over
+    // `light.shadow.radius`, which is what PCFSoft used to be needed for.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     host.appendChild(renderer.domElement);
 
     // Studio environment rig: soft IBL reflections do the heavy lifting for
