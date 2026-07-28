@@ -10,8 +10,6 @@ import {
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
-  EDGE_HOVER_COLOR,
-  EDGE_HOVER_WIDTH,
   EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
   EDGE_IDLE_WIDTH,
@@ -24,6 +22,7 @@ import {
   applyDisplayMode,
   CameraController,
   PickService,
+  SelectionManager,
   applyMoveGizmoFocus,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
@@ -40,7 +39,6 @@ import {
   createStudioHemisphereLight,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
-  findBodyId,
   fitCameraToObjects,
   forEachMesh,
   isSameMoveGizmoFocus,
@@ -88,7 +86,6 @@ import {
   type SketchModeRig
 } from './viewer/sketchModeController';
 import {
-  REGION_HOVER_OPACITY,
   REGION_SELECTED_OPACITY,
   buildRegionMesh,
   triangulateRegionGeometry,
@@ -311,17 +308,23 @@ export interface SceneContext {
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
-  hoveredBodyId: string | null;
-  hoveredEdge: Line2 | null;
   /** Fat-line materials that need their resolution refreshed on resize. */
   edgeMaterials: Set<LineMaterial>;
   dimensionLabels: Set<DimensionLabelBinding>;
+  /*
+   * Hover and preselection are owned by the SelectionManager. The fields
+   * below read through to it so existing call sites keep working.
+   */
+  readonly selection: SelectionManager;
+  readonly hoveredBodyId: string | null;
+  readonly hoveredEdge: Line2 | null;
   /** Single reusable preselection overlay for the face under the pointer. */
-  hoverFaceMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-  hoverFaceTarget: number;
-  hoverFaceKey: string | null;
+  readonly hoverFaceMesh: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.MeshBasicMaterial
+  >;
   /** Selection overlays fading in toward their resting opacity. */
-  fadeIns: Set<THREE.MeshBasicMaterial>;
+  readonly fadeIns: Set<THREE.MeshBasicMaterial>;
   clock: THREE.Clock;
 }
 
@@ -426,9 +429,6 @@ interface MoveDragState {
 
 
 const SELECTION_EMISSIVE = 0x173a5e;
-const HOVER_EMISSIVE = 0x101d2c;
-const HOVER_FACE_COLOR = 0x8fc8ff;
-const HOVER_FACE_OPACITY = 0.3;
 const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
 const SKETCH_COLOR = 0x4da3ff;
@@ -686,6 +686,18 @@ export function ModelViewer({
 
     // Raycasting and topology resolution. The active camera is read per call
     // because the projection toggle swaps it.
+    const objectsByBodyId = new Map<string, THREE.Object3D>();
+
+    const selection = new SelectionManager({
+      bodyGroup,
+      objectsByBodyId,
+      domElement: renderer.domElement,
+      requestRender: () => requestRender(),
+      bodies: () => bodiesRef.current,
+      isEditableBody: (bodyId: string) => editableBodyIdsRef.current.has(bodyId),
+      extrudeArmed: () => extrudePreviewRef.current !== null
+    });
+
     const picker = new PickService({
       domElement: renderer.domElement,
       camera: () => cameraRig.activeCamera,
@@ -693,27 +705,6 @@ export function ModelViewer({
       sketchGroup,
       bodyGroup
     });
-
-    // Reusable preselection overlay: the face under the pointer gets a cool
-    // blue film that fades in and out, instead of a hard emissive snap.
-    // toneMapped:false keeps the tint saturated over brightly lit faces —
-    // ACES would otherwise wash the blue out to gray on hot caps.
-    const hoverFaceMesh = new THREE.Mesh(
-      new THREE.BufferGeometry(),
-      new THREE.MeshBasicMaterial({
-        color: HOVER_FACE_COLOR,
-        toneMapped: false,
-        transparent: true,
-        opacity: 0,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -2
-      })
-    );
-    hoverFaceMesh.visible = false;
-    hoverFaceMesh.renderOrder = 15;
-    hoverFaceMesh.raycast = () => undefined;
 
     function applyMovePreview(
       translation: MovePreview['translation'],
@@ -783,16 +774,23 @@ export function ModelViewer({
       shadowCatcher,
       keyLight,
       raycaster: picker.raycaster,
-      objectsByBodyId: new Map(),
+      objectsByBodyId,
       hasFitCamera: false,
-      hoveredBodyId: null,
-      hoveredEdge: null,
+      get hoveredBodyId() {
+        return selection.hoveredBodyId;
+      },
+      get hoveredEdge() {
+        return selection.hoveredEdge;
+      },
       edgeMaterials: new Set(),
       dimensionLabels: new Set(),
-      hoverFaceMesh,
-      hoverFaceTarget: 0,
-      hoverFaceKey: null,
-      fadeIns: new Set(),
+      get hoverFaceMesh() {
+        return selection.hoverFaceMesh;
+      },
+      get fadeIns() {
+        return selection.fadeIns;
+      },
+      selection,
       clock: new THREE.Clock()
     };
     contextRef.current = context;
@@ -1040,146 +1038,8 @@ export function ModelViewer({
       return Math.atan2(offset.dot(v), offset.dot(u));
     }
 
-    function setEdgeHover(next: Line2 | null) {
-      if (context.hoveredEdge === next) {
-        return;
-      }
-      const restore = context.hoveredEdge;
-      if (restore) {
-        const material = restore.material;
-        const state = restore.userData as EdgeVisualState;
-        material.color.setHex(
-          state.selected ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR
-        );
-        material.linewidth = state.selected
-          ? EDGE_SELECTED_WIDTH
-          : EDGE_IDLE_WIDTH;
-        material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
-      }
-      context.hoveredEdge = next;
-      if (next && !(next.userData as EdgeVisualState).selected) {
-        const material = next.material;
-        material.color.setHex(EDGE_HOVER_COLOR);
-        material.linewidth = EDGE_HOVER_WIDTH;
-        material.opacity = 1;
-      }
-      requestRender();
-    }
-
-    /**
-     * Preselection feedback: the face under the pointer gets a fading blue
-     * film (real-CAD style), topology edges brighten via setEdgeHover, and
-     * only whole-body picks (imported meshes without face topology) fall back
-     * to a body-wide emissive lift.
-     */
-    function setHoverFace(selection: TopologySelection | null) {
-      const key =
-        selection?.kind === 'face' && selection.topologyId
-          ? `${selection.bodyId}:${selection.topologyId}`
-          : null;
-      if (context.hoverFaceKey === key) {
-        return;
-      }
-      context.hoverFaceKey = key;
-      context.hoverFaceTarget = 0;
-      requestRender();
-      if (!key || selection?.kind !== 'face') {
-        return;
-      }
-      const body = bodiesRef.current.find(
-        (candidate) => candidate.bodyId === selection.bodyId
-      );
-      const face = body?.topology?.faces.find(
-        (candidate) => candidate.topologyId === selection.topologyId
-      );
-      const object = context.objectsByBodyId.get(selection.bodyId);
-      if (!body || !face || !object) {
-        return;
-      }
-      const oldGeometry = context.hoverFaceMesh.geometry;
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        'position',
-        new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
-      );
-      geometry.setIndex(
-        body.mesh.indices.slice(
-          face.triangleStart * 3,
-          (face.triangleStart + face.triangleCount) * 3
-        )
-      );
-      context.hoverFaceMesh.geometry = geometry;
-      oldGeometry.dispose();
-      object.add(context.hoverFaceMesh);
-      context.hoverFaceMesh.visible = true;
-      context.hoverFaceTarget = HOVER_FACE_OPACITY;
-      requestRender();
-    }
-
-    let hoveredRegionMesh: THREE.Mesh<
-      THREE.BufferGeometry,
-      THREE.MeshBasicMaterial
-    > | null = null;
-
-    function setRegionHover(next: THREE.Object3D | null) {
-      const mesh =
-        next instanceof THREE.Mesh && next.userData.region !== undefined
-          ? (next as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>)
-          : null;
-      if (hoveredRegionMesh === mesh) {
-        return;
-      }
-      if (
-        hoveredRegionMesh &&
-        hoveredRegionMesh.userData.regionSelected !== true
-      ) {
-        hoveredRegionMesh.material.userData.targetOpacity = 0;
-        context.fadeIns.add(hoveredRegionMesh.material);
-      }
-      hoveredRegionMesh = mesh;
-      if (mesh && mesh.userData.regionSelected !== true) {
-        mesh.material.userData.targetOpacity = REGION_HOVER_OPACITY;
-        context.fadeIns.add(mesh.material);
-      }
-      requestRender();
-    }
-
     function applyHover(result: PickCandidate | null) {
-      setRegionHover(result?.region ? result.hit.object : null);
-      const bodyId = result?.selection?.bodyId ?? null;
-      const canDragFace =
-        result?.selection?.kind === 'face' &&
-        editableBodyIdsRef.current.has(result.selection.bodyId);
-      const hoveredEdge =
-        result?.selection?.kind === 'edge'
-          ? ((result.hit.object.userData as { visual?: Line2 }).visual ?? null)
-          : null;
-      setEdgeHover(hoveredEdge);
-      setHoverFace(result?.selection ?? null);
-      renderer.domElement.style.cursor = extrudePreviewRef.current
-        ? 'grab'
-        : canDragFace
-          ? 'grab'
-          : bodyId || result?.sketchId || result?.region
-            ? 'pointer'
-            : '';
-      // Only body-kind picks (mesh bodies without exact face topology) lift
-      // the whole body's emissive; faces and edges have their own overlays.
-      const emissiveBodyId = result?.selection?.kind === 'body' ? bodyId : null;
-      if (context.hoveredBodyId === emissiveBodyId) {
-        return;
-      }
-      context.hoveredBodyId = emissiveBodyId;
-      forEachMesh(bodyGroup, (mesh) => {
-        const meshBodyId = findBodyId(mesh);
-        const base =
-          (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
-        mesh.material.emissive.setHex(
-          emissiveBodyId && meshBodyId === emissiveBodyId && base === 0
-            ? HOVER_EMISSIVE
-            : base
-        );
-      });
+      selection.applyHover(result);
     }
 
     /**
@@ -2368,18 +2228,7 @@ export function ModelViewer({
       // Preselection and selection overlays ease toward their targets.
       const dt = Math.min(context.clock.getDelta(), 0.05);
       const ease = 1 - Math.exp(-dt * 16);
-      const hoverMaterial = context.hoverFaceMesh.material;
-      const hoverNext =
-        hoverMaterial.opacity +
-        (context.hoverFaceTarget - hoverMaterial.opacity) * ease;
-      hoverMaterial.opacity = hoverNext;
-      if (
-        context.hoverFaceTarget === 0 &&
-        hoverNext < 0.004 &&
-        context.hoverFaceMesh.visible
-      ) {
-        context.hoverFaceMesh.visible = false;
-      }
+      selection.step(dt);
       for (const material of context.fadeIns) {
         const target =
           (material.userData.targetOpacity as number | undefined) ?? 0.34;
@@ -2451,8 +2300,7 @@ export function ModelViewer({
           });
         }
       }
-      const hoverAnimating =
-        Math.abs(context.hoverFaceTarget - hoverMaterial.opacity) >= 0.004;
+      const hoverAnimating = selection.isSettling;
       if (
         tweening ||
         controlsChanged ||
@@ -2506,8 +2354,7 @@ export function ModelViewer({
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
-      hoverFaceMesh.geometry.dispose();
-      hoverFaceMesh.material.dispose();
+      selection.dispose();
       environment.dispose();
       gradientBackground.dispose();
       axes.dispose();
@@ -2541,14 +2388,9 @@ export function ModelViewer({
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
-    context.hoveredBodyId = null;
-    context.hoveredEdge = null;
+    context.selection.resetForRebuild();
     context.edgeMaterials.clear();
     context.objectsByBodyId.clear();
-    context.fadeIns.clear();
-    context.hoverFaceKey = null;
-    context.hoverFaceTarget = 0;
-    context.hoverFaceMesh.visible = false;
     const edgeResolution = {
       width: context.renderer.domElement.clientWidth || 1,
       height: context.renderer.domElement.clientHeight || 1
