@@ -56,3 +56,33 @@ export function projectToScreen(
     y: ((1 - projected.y) / 2) * height
   };
 }
+
+/**
+ * The orbit pivot that puts a picked point at the centre of rotation without
+ * reframing the view.
+ *
+ * A look-at camera cannot take an arbitrary off-axis pivot for free: moving
+ * the target sideways either rotates the camera (if its position is held) or
+ * pans it (if its orientation is). Either way the view jumps, which is worse
+ * than the problem being solved. Projecting the point onto the view axis
+ * keeps the camera's position *and* orientation exactly, and still fixes the
+ * thing that actually hurts — orbiting a detail far from the model origin
+ * swings it out of frame, because the pivot was never near what you were
+ * looking at.
+ *
+ * Returns null when the point sits behind the camera or on its plane, where
+ * there is no sensible pivot distance.
+ */
+export function orbitPivotForPoint(
+  cameraPosition: THREE.Vector3,
+  viewDirection: THREE.Vector3,
+  point: THREE.Vector3,
+  minDepth = 1e-3
+): THREE.Vector3 | null {
+  const forward = viewDirection.clone().normalize();
+  const depth = point.clone().sub(cameraPosition).dot(forward);
+  if (!Number.isFinite(depth) || depth <= minDepth) {
+    return null;
+  }
+  return cameraPosition.clone().addScaledVector(forward, depth);
+}
