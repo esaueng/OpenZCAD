@@ -4185,6 +4185,34 @@ textarea {
   min-height: 65px;
 }
 
+.settings-turnstile-shell {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.settings-challenge-state {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: var(--fs-mini);
+  gap: var(--sp-2);
+  justify-content: space-between;
+  min-height: 24px;
+}
+
+.settings-challenge-state.verified {
+  color: var(--color-success);
+}
+
+.settings-challenge-state.expired,
+.settings-challenge-state.error {
+  color: var(--color-warning);
+}
+
+.settings-challenge-state .secondary {
+  flex: 0 0 auto;
+}
+
 .settings-long-field {
   padding: var(--sp-4);
   border-bottom: var(--border-thin);

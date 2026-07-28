@@ -108,7 +108,7 @@ import { Inspector } from './components/Inspector';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
-import { SettingsPage } from './components/SettingsPage';
+import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AssistantPanel } from './components/assistant/AssistantPanel';
@@ -247,6 +247,8 @@ export function App() {
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
+  const [authConfigStatus, setAuthConfigStatus] =
+    useState<AuthConfigStatus>('loading');
   const [assistantCollapsed, setAssistantCollapsed] = useState(false);
   /** Bumped to move focus into the assistant prompt, like `viewRequest`. */
   const [assistantFocusNonce, setAssistantFocusNonce] = useState(0);
@@ -474,15 +476,25 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const [local, health, rememberedLocal, currentAuthConfig] =
-          await Promise.all([
+        const [local, health, rememberedLocal, currentAuth] = await Promise.all(
+          [
             listLocalProjects().catch(() => []),
             api.health().catch(() => null),
             startupProjectId
               ? loadLocalProject(startupProjectId).catch(() => null)
               : Promise.resolve(null),
-            api.authConfig().catch(() => null)
-          ]);
+            api
+              .authConfig()
+              .then((config) => ({
+                config,
+                status: 'ready' as const
+              }))
+              .catch(() => ({
+                config: null,
+                status: 'unavailable' as const
+              }))
+          ]
+        );
         const activeSession = await api.session().catch(() => null);
         const [remote, rememberedRemote, remoteSettings] = activeSession
           ? await Promise.all([
@@ -512,7 +524,8 @@ export function App() {
         setProjects(merged);
         setCloudAvailable(canUseCloud);
         setSession(activeSession);
-        setAuthConfig(currentAuthConfig);
+        setAuthConfig(currentAuth.config);
+        setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
@@ -1285,15 +1298,24 @@ export function App() {
     setSettingsOpen(true);
     setPaletteOpen(false);
     setSettingsMessage('Changes save on this device immediately.');
+    setAuthConfigStatus('loading');
     void Promise.all([
-      api.authConfig().catch(() => null),
+      api
+        .authConfig()
+        .then((config) => ({ config, status: 'ready' as const }))
+        .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
-    ]).then(async ([nextAuthConfig, activeSession]) => {
-      setAuthConfig(nextAuthConfig);
+    ]).then(async ([nextAuth, activeSession]) => {
+      setAuthConfig(nextAuth.config);
+      setAuthConfigStatus(nextAuth.status);
       setSession(activeSession);
       if (!activeSession) {
         setAccountSettings(null);
-        setSettingsMessage('Device settings active · sign in for cloud sync.');
+        setSettingsMessage(
+          nextAuth.status === 'ready'
+            ? 'Device settings active · sign in for cloud sync.'
+            : 'Beta sign-in unavailable · device settings remain active.'
+        );
         return;
       }
       try {
@@ -1305,6 +1327,27 @@ export function App() {
         );
       }
     });
+  }
+
+  async function handleRefreshAuthConfig() {
+    setAuthConfigStatus('loading');
+    setSettingsMessage('Checking beta sign-in readiness…');
+    try {
+      const nextAuthConfig = await api.authConfig();
+      setAuthConfig(nextAuthConfig);
+      setAuthConfigStatus('ready');
+      setSettingsMessage(
+        nextAuthConfig.emailCodeEnabled
+          ? 'Email sign-in ready.'
+          : 'Email sign-in is not configured · device settings remain active.'
+      );
+    } catch {
+      setAuthConfig(null);
+      setAuthConfigStatus('unavailable');
+      setSettingsMessage(
+        'Beta sign-in configuration unavailable · device settings remain active.'
+      );
+    }
   }
 
   async function handleSaveAppSettings() {
@@ -3606,6 +3649,7 @@ export function App() {
         settings={appSettings}
         accountState={accountSettings}
         authConfig={authConfig}
+        authConfigStatus={authConfigStatus}
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
@@ -3616,6 +3660,7 @@ export function App() {
         onTestAssistant={() => void handleTestAssistantConnection()}
         onRequestLoginCode={handleRequestLoginCode}
         onVerifyLoginCode={handleVerifyLoginCode}
+        onRefreshAuthConfig={handleRefreshAuthConfig}
         onLogout={handleLogout}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}
