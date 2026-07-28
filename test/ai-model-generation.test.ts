@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandsForCadPatch } from '@openzcad/command-system';
-import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import {
   createCadDocumentDigest,
+  groundCadPatchProposalToSelection,
+  type CadPatchProposal,
   parseCadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
+  addPrimitiveFeature,
   createProjectDocument,
   listFeaturesInOrder
 } from '@openzcad/document-core';
@@ -407,6 +409,91 @@ describe('AI-generated cylindrical features', () => {
   const PLATE_WID = 60;
   const PLATE_T = 6;
   const BORE_DIA = 12;
+
+  it('exposes both cylinder rims and grounds an all-edges fillet to them', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Cylinder', toUserId('user_ai')),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 10, height: 20 }
+      }
+    );
+    const bodyId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    const digest = createCadDocumentDigest({
+      ...document,
+      derived
+    });
+    const body = digest.bodies?.find(
+      (candidate) => candidate.bodyId === bodyId
+    );
+
+    expect(body?.topology).toMatchObject({
+      edgeCount: 3,
+      modifierEdgeCount: 2,
+      edgeInventoryComplete: true
+    });
+    expect(body?.topology?.edges).toHaveLength(3);
+    const rims =
+      body?.topology?.edges.filter((edge) => edge.modifierCandidate) ?? [];
+    expect(rims).toHaveLength(2);
+    expect(
+      rims.every((edge) => edge.closed && edge.modelingRole === 'rim')
+    ).toBe(true);
+    expect(
+      rims
+        .map((edge) => edge.center?.z)
+        .sort((left, right) => (left ?? 0) - (right ?? 0))
+    ).toEqual([0, 20]);
+
+    const proposal = parseCadPatchProposal({
+      proposalId: 'fillet_cylinder_rims',
+      summary: 'Will fillet both cylinder rims.',
+      assumptions: ['2 mm default fillet radius.'],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Cylinder rim fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: String(bodyId),
+          edgeHashes: [999],
+          size: 2
+        }
+      ]
+    });
+    const grounded = groundCadPatchProposalToSelection(
+      'Add a fillet to all edges',
+      digest,
+      proposal
+    );
+
+    expect(grounded.operations[0]).toMatchObject({
+      targetBodyId: String(bodyId),
+      edgeHashes: rims.map((edge) => edge.hash)
+    });
+
+    const manager = new CommandManager(document);
+    const filleted = manager.runTransaction(
+      'Apply AI cylinder fillet',
+      commandsForCadPatch(manager.document, grounded)
+    );
+    const filletedDerived = await adapter.syncDocument(filleted);
+    expect(filletedDerived.warnings).toEqual([]);
+    const filletFeature = listFeaturesInOrder(filleted).at(-1);
+    expect(filletFeature?.data).toMatchObject({
+      featureKind: 'fillet',
+      targetBodyId: bodyId,
+      edgeHashes: rims.map((edge) => edge.hash),
+      radius: 2
+    });
+    expect(
+      Object.values(filletedDerived.bodyRepresentations).filter(
+        (candidate) => !candidate.consumed
+      )
+    ).toHaveLength(1);
+  });
 
   function boredPlateProposal(): CadPatchProposal {
     return parseCadPatchProposal({

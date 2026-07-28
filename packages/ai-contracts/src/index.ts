@@ -2,6 +2,8 @@ import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
 import type {
   SketchObjectData,
   AxisId,
+  BodyId,
+  BodyTopology,
   BooleanOperation,
   FeatureId,
   PatternKind,
@@ -10,7 +12,8 @@ import type {
   ProjectDocument,
   RevolveAxis,
   SketchId,
-  TopologySelection
+  TopologySelection,
+  Vector3
 } from '@openzcad/shared';
 
 /**
@@ -167,6 +170,54 @@ export interface CadDigestSelection {
   }>;
 }
 
+export interface CadDigestBodyTopology {
+  faceCount: number;
+  edgeCount: number;
+  /**
+   * Included edges that represent a real modeling boundary rather than a
+   * smooth seam. It is the total only when edgeInventoryComplete is true.
+   */
+  modifierEdgeCount: number;
+  /**
+   * False when the compact digest hit its global context budget. An assistant
+   * must never interpret a partial inventory as "all" of a body's topology.
+   */
+  faceInventoryComplete: boolean;
+  edgeInventoryComplete: boolean;
+  faces: Array<{
+    topologyId: string;
+    hash: number;
+    surfaceType?: string;
+    area?: number;
+    center?: Vector3;
+    normal?: Vector3;
+    radius?: number;
+    diameter?: number;
+    axisStart?: Vector3;
+    axisEnd?: Vector3;
+    axialLength?: number;
+    featureType?: 'through-hole';
+  }>;
+  edges: Array<{
+    topologyId: string;
+    hash: number;
+    modelingRole: 'edge' | 'rim' | 'seam';
+    modifierCandidate: boolean;
+    /**
+     * Compact spatial facts derived from the exact edge's display polyline.
+     * They let the assistant distinguish, for example, the top and bottom
+     * closed rims of a cylinder without sending viewport meshes.
+     */
+    closed?: boolean;
+    length?: number;
+    center?: Vector3;
+    bbox?: {
+      min: Vector3;
+      max: Vector3;
+    };
+  }>;
+}
+
 export interface CadDocumentDigest {
   schemaVersion: number;
   projectId: string;
@@ -194,11 +245,17 @@ export interface CadDocumentDigest {
     name: string;
     /** True when a later feature consumed this body; do not target it. */
     consumed: boolean;
+    sourceFeatureKind?: string;
     volume: number;
     bbox: {
       min: { x: number; y: number; z: number };
       max: { x: number; y: number; z: number };
     };
+    /**
+     * Exact, compact topology for current live bodies. Optional for backwards
+     * compatibility with older clients and legacy mesh-only representations.
+     */
+    topology?: CadDigestBodyTopology;
   }>;
   selection?: CadDigestSelection;
   warnings: string[];
@@ -212,6 +269,139 @@ export interface CadDocumentDigest {
 function round(value: number): number {
   return Number.isFinite(value) ? Number(value.toFixed(4)) : 0;
 }
+
+function roundVector(vector: Vector3): Vector3 {
+  return {
+    x: round(vector.x),
+    y: round(vector.y),
+    z: round(vector.z)
+  };
+}
+
+function compactEdge(
+  edge: BodyTopology['edges'][number],
+  primitiveKind?: PrimitiveKind
+): CadDigestBodyTopology['edges'][number] {
+  const points: Vector3[] = [];
+  for (let index = 0; index + 2 < edge.points.length; index += 3) {
+    const point = {
+      x: edge.points[index]!,
+      y: edge.points[index + 1]!,
+      z: edge.points[index + 2]!
+    };
+    if (
+      Number.isFinite(point.x) &&
+      Number.isFinite(point.y) &&
+      Number.isFinite(point.z)
+    ) {
+      points.push(point);
+    }
+  }
+  const base = {
+    topologyId: edge.topologyId,
+    hash: edge.hash,
+    modelingRole: 'edge' as const,
+    modifierCandidate: true
+  };
+  if (points.length < 2) {
+    return base;
+  }
+
+  const bbox = points.reduce(
+    (bounds, point) => ({
+      min: {
+        x: Math.min(bounds.min.x, point.x),
+        y: Math.min(bounds.min.y, point.y),
+        z: Math.min(bounds.min.z, point.z)
+      },
+      max: {
+        x: Math.max(bounds.max.x, point.x),
+        y: Math.max(bounds.max.y, point.y),
+        z: Math.max(bounds.max.z, point.z)
+      }
+    }),
+    {
+      min: { x: Infinity, y: Infinity, z: Infinity },
+      max: { x: -Infinity, y: -Infinity, z: -Infinity }
+    }
+  );
+  const distance = (left: Vector3, right: Vector3) =>
+    Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
+  let length = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    length += distance(points[index - 1]!, points[index]!);
+  }
+  const diagonal = distance(bbox.min, bbox.max);
+  const closureTolerance = Math.max(diagonal, length, 1) * 1e-6;
+
+  const closed =
+    points.length > 2 &&
+    distance(points[0]!, points[points.length - 1]!) <= closureTolerance;
+  const smoothPrimitive =
+    primitiveKind === 'sphere' || primitiveKind === 'torus';
+  const seamOnAxialPrimitive =
+    (primitiveKind === 'cylinder' || primitiveKind === 'cone') && !closed;
+  const seam = smoothPrimitive || seamOnAxialPrimitive;
+
+  return {
+    ...base,
+    modelingRole: seam
+      ? 'seam'
+      : primitiveKind === 'cylinder' || primitiveKind === 'cone'
+        ? 'rim'
+        : 'edge',
+    modifierCandidate: !seam,
+    closed,
+    length: round(length),
+    center: roundVector({
+      x: (bbox.min.x + bbox.max.x) / 2,
+      y: (bbox.min.y + bbox.max.y) / 2,
+      z: (bbox.min.z + bbox.max.z) / 2
+    }),
+    bbox: {
+      min: roundVector(bbox.min),
+      max: roundVector(bbox.max)
+    }
+  };
+}
+
+function compactFace(
+  face: BodyTopology['faces'][number]
+): CadDigestBodyTopology['faces'][number] {
+  const geometry = face.geometry;
+  return {
+    topologyId: face.topologyId,
+    hash: face.hash,
+    ...(geometry
+      ? {
+          surfaceType: geometry.surfaceType,
+          area: round(geometry.area),
+          center: roundVector(geometry.center),
+          ...(geometry.normal ? { normal: roundVector(geometry.normal) } : {}),
+          ...(geometry.radius !== undefined
+            ? { radius: round(geometry.radius) }
+            : {}),
+          ...(geometry.diameter !== undefined
+            ? { diameter: round(geometry.diameter) }
+            : {}),
+          ...(geometry.axisStart
+            ? { axisStart: roundVector(geometry.axisStart) }
+            : {}),
+          ...(geometry.axisEnd
+            ? { axisEnd: roundVector(geometry.axisEnd) }
+            : {}),
+          ...(geometry.axialLength !== undefined
+            ? { axialLength: round(geometry.axialLength) }
+            : {}),
+          ...(geometry.featureType ? { featureType: geometry.featureType } : {})
+        }
+      : {})
+  };
+}
+
+const MAX_DIGEST_EDGES = 128;
+const MAX_DIGEST_FACES = 128;
+const MAX_DIGEST_TOPOLOGY_PER_BODY = 64;
 
 function compactFeatureData(data: unknown): unknown {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
@@ -258,6 +448,49 @@ export function createCadDocumentDigest(
     }
   }
 
+  const orderedFeatures = listFeaturesInOrder(document);
+  const primitiveKindByBodyId = new Map(
+    orderedFeatures.flatMap((feature) =>
+      feature.bodyId && feature.data.featureKind === 'primitive'
+        ? [[String(feature.bodyId), feature.data.primitiveKind] as const]
+        : []
+    )
+  );
+
+  // Spend the bounded topology context on what the user selected first, then
+  // on the remaining live bodies. The body list itself keeps document order.
+  const topologyByBodyId = new Map<string, CadDigestBodyTopology>();
+  const topologyPriority = [
+    ...bodyIds,
+    ...document.bodyOrder.map(String)
+  ].filter((bodyId, index, values) => values.indexOf(bodyId) === index);
+  let remainingEdges = MAX_DIGEST_EDGES;
+  let remainingFaces = MAX_DIGEST_FACES;
+  for (const bodyId of topologyPriority) {
+    const body = document.derived.bodyRepresentations[bodyId as BodyId];
+    if (!body?.topology || body.consumed) {
+      continue;
+    }
+    const edgeLimit = Math.min(MAX_DIGEST_TOPOLOGY_PER_BODY, remainingEdges);
+    const faceLimit = Math.min(MAX_DIGEST_TOPOLOGY_PER_BODY, remainingFaces);
+    const primitiveKind = primitiveKindByBodyId.get(bodyId);
+    const edges = body.topology.edges
+      .slice(0, edgeLimit)
+      .map((edge) => compactEdge(edge, primitiveKind));
+    const faces = body.topology.faces.slice(0, faceLimit).map(compactFace);
+    remainingEdges -= edges.length;
+    remainingFaces -= faces.length;
+    topologyByBodyId.set(bodyId, {
+      faceCount: body.topology.faces.length,
+      edgeCount: body.topology.edges.length,
+      modifierEdgeCount: edges.filter((edge) => edge.modifierCandidate).length,
+      faceInventoryComplete: faces.length === body.topology.faces.length,
+      edgeInventoryComplete: edges.length === body.topology.edges.length,
+      faces,
+      edges
+    });
+  }
+
   return {
     schemaVersion: document.schemaVersion,
     projectId: document.projectId,
@@ -269,7 +502,7 @@ export function createCadDocumentDigest(
       expression: parameter.expression,
       value: parameter.value
     })),
-    features: listFeaturesInOrder(document).map((feature) => ({
+    features: orderedFeatures.map((feature) => ({
       featureId: feature.featureId,
       name: feature.name,
       featureKind: feature.featureKind,
@@ -286,6 +519,7 @@ export function createCadDocumentDigest(
               bodyId: String(bodyId),
               name: body.name,
               consumed: body.consumed,
+              sourceFeatureKind: body.source,
               volume: round(body.volume),
               bbox: {
                 min: {
@@ -298,7 +532,10 @@ export function createCadDocumentDigest(
                   y: round(body.bbox.max.y),
                   z: round(body.bbox.max.z)
                 }
-              }
+              },
+              ...(topologyByBodyId.has(String(bodyId))
+                ? { topology: topologyByBodyId.get(String(bodyId))! }
+                : {})
             }
           ]
         : [];
@@ -324,6 +561,10 @@ const SELECTED_FEATURE_PATTERN =
   /\b(?:selected|this|that|these|those)\s+features?\b/i;
 const SELECTED_BODY_PATTERN =
   /\b(?:selected|this|that|these|those)\s+(?:body|bodies|part|parts|solid|solids|feature|features)\b/i;
+const ALL_EDGES_PATTERN =
+  /\b(?:all|every|each)\s+(?:of\s+)?(?:the\s+)?(?:[\w'-]+\s+){0,3}edges?\b/i;
+const NEGATED_ALL_EDGES_PATTERN =
+  /\b(?:do\s+not|don't|not)\s+(?:[\w'-]+\s+){0,4}(?:all|every|each)\s+(?:of\s+)?(?:the\s+)?(?:[\w'-]+\s+){0,3}edges?\b/i;
 
 function sameStrings(left: readonly string[], right: readonly string[]) {
   return (
@@ -366,9 +607,64 @@ export function groundCadPatchProposalToSelection(
   const referencesSelectedEdges = SELECTED_EDGES_PATTERN.test(prompt);
   const referencesSelectedFeature = SELECTED_FEATURE_PATTERN.test(prompt);
   const referencesSelectedBody = SELECTED_BODY_PATTERN.test(prompt);
+  const referencesAllEdges =
+    ALL_EDGES_PATTERN.test(prompt) && !NEGATED_ALL_EDGES_PATTERN.test(prompt);
+  const liveBodies = (digest.bodies ?? []).filter((body) => !body.consumed);
   let changed = false;
 
   const operations = proposal.operations.map((operation): CadPatchOperation => {
+    if (operation.kind === 'add_edge_modifier' && referencesAllEdges) {
+      const selectedBodyIds = [...new Set(selection.bodyIds)].filter((bodyId) =>
+        liveBodies.some((body) => body.bodyId === bodyId)
+      );
+      const selectedBody =
+        selectedBodyIds.length === 1
+          ? liveBodies.find(
+              (candidate) => candidate.bodyId === selectedBodyIds[0]
+            )
+          : undefined;
+      const proposedBody = liveBodies.find(
+        (candidate) => candidate.bodyId === operation.targetBodyId
+      );
+      const soleLiveBody = liveBodies.length === 1 ? liveBodies[0] : undefined;
+      const body =
+        (referencesSelectedBody || referencesSelectedEdges
+          ? (selectedBody ?? proposedBody)
+          : (proposedBody ?? selectedBody)) ?? soleLiveBody;
+      if (!body) {
+        throw new Error(
+          'The assistant could not resolve which body "all edges" refers to.'
+        );
+      }
+      if (!body.topology?.edgeInventoryComplete) {
+        throw new Error(
+          `The complete edge inventory for ${body.name} is not available in the assistant context. Select the intended edges explicitly.`
+        );
+      }
+      const edgeHashes = [
+        ...new Set(
+          body.topology.edges
+            .filter((edge) => edge.modifierCandidate)
+            .map((edge) => edge.hash)
+        )
+      ];
+      if (edgeHashes.length === 0) {
+        throw new Error(`${body.name} has no exact edges to modify.`);
+      }
+      if (
+        operation.targetBodyId === body.bodyId &&
+        sameStrings(operation.edgeHashes.map(String), edgeHashes.map(String))
+      ) {
+        return operation;
+      }
+      changed = true;
+      return {
+        ...operation,
+        targetBodyId: body.bodyId,
+        edgeHashes
+      };
+    }
+
     if (
       operation.kind === 'add_edge_modifier' &&
       referencesSelectedEdges &&
