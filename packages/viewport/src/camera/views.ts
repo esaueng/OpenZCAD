@@ -8,8 +8,24 @@ export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
   // screen-up on +Y rather than an arbitrary diagonal.
   iso: new THREE.Vector3(1, -1, 0.9).normalize(),
   front: new THREE.Vector3(0, -1, 0),
+  back: new THREE.Vector3(0, 1, 0),
   top: new THREE.Vector3(0, -0.0001, 1).normalize(),
-  right: new THREE.Vector3(1, 0, 0)
+  // Bottom needs the same nudge off the up axis, in the same direction, so
+  // that looking up and looking down agree about which way is screen-up.
+  bottom: new THREE.Vector3(0, -0.0001, -1).normalize(),
+  right: new THREE.Vector3(1, 0, 0),
+  left: new THREE.Vector3(-1, 0, 0)
+};
+
+/** What each standard view is called in the interface. */
+export const VIEW_LABELS: Record<StandardView, string> = {
+  iso: 'Isometric',
+  front: 'Front',
+  back: 'Back',
+  top: 'Top',
+  bottom: 'Bottom',
+  right: 'Right',
+  left: 'Left'
 };
 
 /**
