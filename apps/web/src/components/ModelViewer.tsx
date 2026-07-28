@@ -21,6 +21,10 @@ import {
   VIEW_DIRECTIONS,
   applyDisplayMode,
   CameraController,
+  buildEdgeRadiusHandle,
+  buildOffsetFaceHandle,
+  edgeHandlePlacement,
+  offsetHandlePlacement,
   GestureRouter,
   PickService,
   SelectionManager,
@@ -60,6 +64,7 @@ import {
   type MoveGizmoFocus,
   type MoveHandleKind,
   type MovePreview,
+  type DragRig,
   type MoveSnap,
   type PickCandidate,
   type PickDetail,
@@ -73,15 +78,6 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
-import {
-  buildEdgeRadiusHandle,
-  buildOffsetFaceHandle,
-  edgeHandlePlacement,
-  offsetChipAnchor,
-  offsetHandlePlacement,
-  type EdgeHandleRig,
-  type OffsetHandleRig
-} from './viewer/handles';
 import {
   buildSketchModeRig,
   type SketchModeRig
@@ -532,7 +528,7 @@ export function ModelViewer({
   onDirectManipulationChangeRef.current = onDirectManipulationChange;
   const edgeHandleOpRef = useRef<'fillet' | 'chamfer'>('fillet');
   /** Live edge-radius rig; owned by the edgeHandle effect below. */
-  const edgeRigRef = useRef<EdgeHandleRig | null>(null);
+  const edgeRigRef = useRef<DragRig | null>(null);
   const edgeDragActiveRef = useRef(false);
   const sketchModeRef = useRef(sketchMode);
   sketchModeRef.current = sketchMode;
@@ -574,7 +570,7 @@ export function ModelViewer({
     projection: ProjectionMode;
   } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
-  const offsetRigRef = useRef<OffsetHandleRig | null>(null);
+  const offsetRigRef = useRef<DragRig | null>(null);
   const offsetDragActiveRef = useRef(false);
   const offsetChipRef = useRef<HTMLDivElement | null>(null);
 
@@ -862,7 +858,7 @@ export function ModelViewer({
     const handleChipClick = () => {
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
-        onOpenOffsetKeypadRef.current(offsetRig.offset());
+        onOpenOffsetKeypadRef.current(offsetRig.value());
         return;
       }
       const edgeRig = edgeRigRef.current;
@@ -892,7 +888,7 @@ export function ModelViewer({
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
       if (offsetRigRef.current) {
-        offsetRigRef.current.setOffset(value);
+        offsetRigRef.current.setValue(value);
       } else {
         edgeRigRef.current?.setValue(value);
       }
@@ -1103,38 +1099,27 @@ export function ModelViewer({
       if (!chip) {
         return;
       }
-      const offsetRig = offsetRigRef.current;
-      const edgeRig = edgeRigRef.current;
-      let anchor: { x: number; y: number; z: number } | null = null;
+      // Either rig answers the same two questions; only the label differs.
+      const rig = offsetRigRef.current ?? edgeRigRef.current;
+      let anchor: THREE.Vector3 | null = null;
       let text = '';
-      if (offsetRig) {
-        const scale =
-          (offsetRig.group.userData.gizmoScale as number | undefined) ?? 1;
-        anchor = offsetChipAnchor(
-          offsetRig.origin,
-          offsetRig.direction,
-          offsetRig.offset(),
-          scale
-        );
-        const offset = offsetRig.offset();
-        text = `${offset >= 0 ? '+' : ''}${Math.round(offset * 100) / 100} ${unitsRef.current}`;
-      } else if (edgeRig) {
-        anchor = {
-          x: edgeRig.origin.x,
-          y: edgeRig.origin.y,
-          z: edgeRig.origin.z
-        };
-        const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
-        text = `${prefix} ${Math.round(edgeRig.value() * 100) / 100} ${unitsRef.current}`;
+      if (rig) {
+        const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        anchor = rig.chipAnchor(scale);
+        const value = Math.round(rig.value() * 100) / 100;
+        if (rig.kind === 'edge-radius') {
+          const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
+          text = `${prefix} ${value} ${unitsRef.current}`;
+        } else {
+          text = `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
+        }
       }
       if (!anchor) {
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
-      const projected = new THREE.Vector3(anchor.x, anchor.y, anchor.z).project(
-        context.activeCamera
-      );
+      const projected = anchor.clone().project(context.activeCamera);
       if (projected.z > 1) {
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
@@ -1519,7 +1504,7 @@ export function ModelViewer({
           const value = event.shiftKey
             ? Math.round(raw * 100) / 100
             : Math.round(raw / snap) * snap;
-          rig.setOffset(value);
+          rig.setValue(value);
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
         }
@@ -1684,7 +1669,7 @@ export function ModelViewer({
           const screen = screenDirectionFor(
             armedRig.origin
               .clone()
-              .addScaledVector(armedRig.direction, armedRig.offset()),
+              .addScaledVector(armedRig.direction, armedRig.value()),
             armedRig.direction
           );
           offsetDrag = {
@@ -1694,7 +1679,7 @@ export function ModelViewer({
             directionX: screen.directionX,
             directionY: screen.directionY,
             pixelsPerUnit: screen.pixelsPerUnit,
-            initialOffset: armedRig.offset()
+            initialOffset: armedRig.value()
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
@@ -2013,7 +1998,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event, 'grab');
         const rig = offsetRigRef.current;
-        const finalOffset = rig?.offset() ?? 0;
+        const finalOffset = rig?.value() ?? 0;
         if (
           rig &&
           Math.abs(finalOffset - completed.initialOffset) > 1e-9 &&
@@ -2104,7 +2089,7 @@ export function ModelViewer({
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
-        offsetRigRef.current?.setOffset(0);
+        offsetRigRef.current?.setValue(0);
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
@@ -2916,7 +2901,7 @@ export function ModelViewer({
       ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
       ghostGeometry
     });
-    rig.setOffset(offsetHandle.initialValue ?? 0);
+    rig.setValue(offsetHandle.initialValue ?? 0);
     // Fat-line materials need the viewport resolution for correct widths.
     const rigLineMaterials: LineMaterial[] = [];
     rig.worldGroup.traverse((child) => {
@@ -3113,7 +3098,7 @@ export function ModelViewer({
       direction: basis.normal,
       ghostGeometry
     });
-    rig.setOffset(regionHandle.initialValue ?? 0);
+    rig.setValue(regionHandle.initialValue ?? 0);
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
