@@ -21,6 +21,13 @@ export interface ContextMenuState {
   x: number;
   y: number;
   items: ContextMenuItem[];
+  /**
+   * Where the menu was summoned from. The viewport gets the radial layout,
+   * because a right-click there is already a pointer gesture and direction
+   * is what a hand can learn. A row in the sidebar tree is a list, and a
+   * list's actions belong in a list.
+   */
+  origin?: 'viewport' | 'list';
 }
 
 interface ContextMenuProps {

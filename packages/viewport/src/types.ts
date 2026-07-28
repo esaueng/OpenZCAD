@@ -19,6 +19,32 @@ export type StandardView =
 
 export type ProjectionMode = 'perspective' | 'orthographic';
 
+/**
+ * What the pointer is allowed to select.
+ *
+ * A filter is how you reach an edge on a crowded model without fighting the
+ * face in front of it. `any` is the default and picks whatever is nearest;
+ * every other value narrows to one kind, so anything else under the pointer
+ * is passed straight through rather than competing for the click.
+ */
+export type SelectionFilter = 'any' | 'body' | 'face' | 'edge' | 'sketch';
+
+export const SELECTION_FILTERS: SelectionFilter[] = [
+  'any',
+  'body',
+  'face',
+  'edge',
+  'sketch'
+];
+
+export const SELECTION_FILTER_LABELS: Record<SelectionFilter, string> = {
+  any: 'Any',
+  body: 'Body',
+  face: 'Face',
+  edge: 'Edge',
+  sketch: 'Sketch'
+};
+
 /** Screen-space projections of the world axes, for the orientation widget. */
 export interface AxisProjection {
   x: { x: number; y: number };
