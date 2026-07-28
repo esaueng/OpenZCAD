@@ -226,7 +226,13 @@ export function parseUpdateAppSettingsRequest(
           PROJECTIONS
         ),
         showGrid: requiredBoolean(viewport, 'showGrid'),
-        displayMode: requiredMember(viewport, 'displayMode', DISPLAY_MODES)
+        displayMode: requiredMember(viewport, 'displayMode', DISPLAY_MODES),
+        // Optional in the payload so a client from before this preference
+        // existed keeps saving instead of being rejected.
+        zoomToCursor:
+          typeof viewport.zoomToCursor === 'boolean'
+            ? viewport.zoomToCursor
+            : true
       },
       sketching: {
         snapEnabled: requiredBoolean(sketching, 'snapEnabled'),
