@@ -876,6 +876,137 @@ test('grounds an AI fillet request onto every selected edge', async ({
   );
 });
 
+test('grounds all cylinder edges onto its two visible rims', async ({
+  page
+}) => {
+  await stubApi(page);
+  type AssistantBody = {
+    bodyId: string;
+    bbox?: {
+      min: { z: number };
+      max: { z: number };
+    };
+    topology?: {
+      edgeCount: number;
+      modifierEdgeCount: number;
+      edgeInventoryComplete: boolean;
+      edges: Array<{
+        hash: number;
+        modelingRole: string;
+        modifierCandidate: boolean;
+        center?: { z: number };
+      }>;
+    };
+  };
+  type AssistantRequest = {
+    digest?: {
+      bodies?: AssistantBody[];
+      selection?: { topologies?: unknown[] };
+    };
+  };
+  let resolveAssistantRequest!: (request: AssistantRequest) => void;
+  const assistantRequestPromise = new Promise<AssistantRequest>((resolve) => {
+    resolveAssistantRequest = resolve;
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'topology-aware-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    const assistantRequest = route.request().postDataJSON() as AssistantRequest;
+    resolveAssistantRequest(assistantRequest);
+    const body = assistantRequest.digest?.bodies?.find(
+      (candidate) => candidate.topology?.modifierEdgeCount === 2
+    );
+    const proposal = {
+      proposalId: 'proposal_cylinder_rims_e2e',
+      summary: 'Fillet the cylinder top and bottom rims by 1 mm.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'AI cylinder rim fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: body?.bodyId ?? 'body_hallucinated',
+          // Deliberately wrong: client grounding must replace it with the two
+          // modifier candidates and must not include the periodic seam.
+          edgeHashes: [999],
+          size: 1
+        }
+      ]
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal,
+          questions: null,
+          message: null,
+          readings: null
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Cylinder Rims');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page
+    .getByLabel('CAD change request')
+    .fill('Add a 1 mm fillet to all the edges');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Fillet the cylinder top and bottom rims by 1 mm.'
+  );
+  const assistantRequest = await assistantRequestPromise;
+  expect(assistantRequest.digest?.selection?.topologies).toHaveLength(0);
+  const body = assistantRequest.digest?.bodies?.find(
+    (candidate) => candidate.topology?.modifierEdgeCount === 2
+  );
+  expect(body?.topology).toMatchObject({
+    edgeCount: 3,
+    modifierEdgeCount: 2,
+    edgeInventoryComplete: true
+  });
+  expect(
+    body?.topology?.edges.filter((edge) => edge.modifierCandidate)
+  ).toHaveLength(2);
+  expect(
+    body?.topology?.edges.filter((edge) => edge.modelingRole === 'seam')
+  ).toHaveLength(1);
+  expect(
+    body?.topology?.edges
+      .filter((edge) => edge.modifierCandidate)
+      .map((edge) => edge.center?.z)
+      .sort((left, right) => (left ?? 0) - (right ?? 0))
+  ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
+
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  const fillet = page.locator('.feature-row', {
+    hasText: 'AI cylinder rim fillets'
+  });
+  await expect(fillet).toBeVisible();
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
 test('models a parametric part and exports a true STEP file', async ({
   page
 }) => {
