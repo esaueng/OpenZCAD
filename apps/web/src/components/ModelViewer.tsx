@@ -1,7 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { mark, timed } from '../lib/perf';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -22,6 +22,7 @@ import {
   RightClickGestureTracker,
   VIEW_DIRECTIONS,
   applyDisplayMode,
+  CameraController,
   applyMoveGizmoFocus,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
@@ -267,37 +268,34 @@ interface ModelViewerProps {
   ): void;
 }
 
-interface CameraTween {
-  startTime: number;
-  duration: number;
-  fromPosition: THREE.Vector3;
-  toPosition: THREE.Vector3;
-  fromTarget: THREE.Vector3;
-  toTarget: THREE.Vector3;
-  near: number;
-  far: number;
-  onComplete?: () => void;
-}
-
 /**
  * The imperative state bag shared by the viewport's interaction code. New
  * handle/gizmo modules receive this rather than reaching into React state.
  */
 export interface SceneContext {
   scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  orthographic: THREE.OrthographicCamera;
-  activeCamera: THREE.Camera;
-  projection: ProjectionMode;
+  /*
+   * Camera state is owned by the `CameraController` and read through here.
+   * These are getters, not copies: the orbit controls are rebuilt on every
+   * projection change, so a captured reference goes stale.
+   */
+  readonly camera: THREE.PerspectiveCamera;
+  readonly orthographic: THREE.OrthographicCamera;
+  readonly activeCamera: THREE.Camera;
+  readonly projection: ProjectionMode;
+  readonly controls: OrbitControls<THREE.Camera>;
   /** Switches projection, rebinding controls and syncing camera poses. */
   applyProjection(mode: ProjectionMode): void;
-  /** Invalidates the viewport and schedules a render if it is idle. */
-  requestRender(): void;
   /** Mirrors the perspective pose onto the ortho camera and its frustum. */
   syncOrthographic(resetZoom: boolean): void;
+  /** Starts a glide toward a new pose; user input cancels it. */
+  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
+  /** The durable pose to persist for this project. */
+  captureView(): ViewportCameraState;
+  /** Invalidates the viewport and schedules a render if it is idle. */
+  requestRender(): void;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
-  controls: OrbitControls<THREE.Camera>;
   bodyGroup: THREE.Group;
   sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
@@ -319,10 +317,6 @@ export interface SceneContext {
   /** Fat-line materials that need their resolution refreshed on resize. */
   edgeMaterials: Set<LineMaterial>;
   dimensionLabels: Set<DimensionLabelBinding>;
-  /** Active camera glide, driven by the render loop until it settles. */
-  cameraTween: CameraTween | null;
-  /** Starts a glide toward a new pose; user input cancels it. */
-  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
   /** Single reusable preselection overlay for the face under the pointer. */
   hoverFaceMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   hoverFaceTarget: number;
@@ -377,17 +371,6 @@ function updateDimensionLabels(
       layout.scale.toFixed(3)
     );
   }
-}
-
-function captureViewportCamera(context: SceneContext): ViewportCameraState {
-  const position = context.activeCamera.position;
-  const target = context.controls.target;
-  return {
-    position: [position.x, position.y, position.z],
-    target: [target.x, target.y, target.z],
-    orthographicZoom: context.orthographic.zoom,
-    orthographicHalfHeight: Math.abs(context.orthographic.top)
-  };
 }
 
 interface PickResult {
@@ -459,7 +442,6 @@ const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
-const CAMERA_TWEEN_MS = 420;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
 interface EdgeVisualState {
@@ -618,28 +600,6 @@ export function ModelViewer({
     const gradientBackground = createGradientBackground();
     scene.background = gradientBackground;
 
-    const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-    const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
-    // Z-up, matching the solid kernel: a part's vertical size is its `depth`,
-    // and cylinders extrude along +Z. This must be set before OrbitControls is
-    // constructed below — OrbitControls snapshots `object.up` into a quaternion
-    // in its constructor and never refreshes it, so assigning `up` afterwards
-    // leaves the orbit axis on +Y while `camera.up` reads (0,0,1).
-    camera.up.set(0, 0, 1);
-    camera.position.set(90, -90, 80);
-    const orthographic = new THREE.OrthographicCamera(
-      -90,
-      90,
-      90 / aspect,
-      -90 / aspect,
-      -2000,
-      4000
-    );
-    // syncOrthographic copies position and quaternion but never `up`, and
-    // rebindControls can hand this camera to a fresh OrbitControls.
-    orthographic.up.copy(camera.up);
-    orthographic.position.copy(camera.position);
-
     const renderer = timed(
       'viewer.renderer',
       () => new THREE.WebGLRenderer({ antialias: true })
@@ -668,12 +628,18 @@ export function ModelViewer({
     labelRenderer.domElement.style.pointerEvents = 'none';
     host.appendChild(labelRenderer.domElement);
 
-    let controls: OrbitControls<THREE.Camera> = new OrbitControls(
-      camera,
-      renderer.domElement
-    );
-    controls.enableDamping = true;
-    controls.target.set(0, 0, 0);
+    // The camera rig owns both cameras, the orbit controls, the projection
+    // mode, and view glides. `requestRender` is passed as a thunk because it
+    // is a hoisted function declaration further down this effect.
+    const cameraRig = new CameraController({
+      host,
+      domElement: renderer.domElement,
+      requestRender: () => requestRender(),
+      onViewChange: (view) => onViewChangeRef.current(view),
+      reducedMotion: () => reducedMotionRef.current === true
+    });
+    const camera = cameraRig.perspective;
+    const orthographic = cameraRig.orthographic;
 
     // Z-up sky plus cool floor bounce keeps undersides readable without
     // weakening the directional key that defines face orientation.
@@ -770,24 +736,6 @@ export function ModelViewer({
       );
     }
 
-    function syncOrthographic(resetZoom: boolean) {
-      orthographic.position.copy(camera.position);
-      orthographic.quaternion.copy(camera.quaternion);
-      if (resetZoom) {
-        orthographic.zoom = 1;
-      }
-      const distance = camera.position.distanceTo(controls.target);
-      const halfHeight =
-        distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-      const currentAspect = host!.clientWidth / Math.max(host!.clientHeight, 1);
-      orthographic.left = -halfHeight * currentAspect;
-      orthographic.right = halfHeight * currentAspect;
-      orthographic.top = halfHeight;
-      orthographic.bottom = -halfHeight;
-      orthographic.updateProjectionMatrix();
-    }
-
-    let viewChangeTimeout: number | null = null;
     let animationFrame: number | null = null;
 
     function requestRender() {
@@ -796,145 +744,34 @@ export function ModelViewer({
       }
     }
 
-    function emitViewChange() {
-      onViewChangeRef.current(captureViewportCamera(context));
-    }
-
-    function scheduleSettledViewChange() {
-      requestRender();
-      if (viewChangeTimeout !== null) {
-        window.clearTimeout(viewChangeTimeout);
-      }
-      // OrbitControls keeps easing after its `end` event when damping is on.
-      // Persist once the change stream settles so reload matches the final
-      // visible frame, while avoiding localStorage writes on every render.
-      viewChangeTimeout = window.setTimeout(() => {
-        viewChangeTimeout = null;
-        emitViewChange();
-      }, 120);
-    }
-
-    function rebindControls(nextCamera: THREE.Camera) {
-      const target = controls.target.clone();
-      controls.removeEventListener('end', emitViewChange);
-      controls.removeEventListener('change', scheduleSettledViewChange);
-      controls.dispose();
-      controls = new OrbitControls(nextCamera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.target.copy(target);
-      controls.addEventListener('end', emitViewChange);
-      controls.addEventListener('change', scheduleSettledViewChange);
-      context.controls = controls;
-    }
-
-    function applyProjection(mode: ProjectionMode) {
-      if (context.projection === mode) {
-        return;
-      }
-      context.projection = mode;
-      if (mode === 'orthographic') {
-        syncOrthographic(true);
-        context.activeCamera = orthographic;
-      } else {
-        // Bake the ortho dolly zoom back into a perspective distance so the
-        // framing survives the switch.
-        const direction = orthographic.position
-          .clone()
-          .sub(controls.target)
-          .normalize();
-        const distance =
-          orthographic.position.distanceTo(controls.target) /
-          Math.max(orthographic.zoom, 0.0001);
-        camera.position
-          .copy(controls.target)
-          .addScaledVector(direction, distance);
-        camera.quaternion.copy(orthographic.quaternion);
-        context.activeCamera = camera;
-      }
-      rebindControls(context.activeCamera);
-      context.controls.update();
-      emitViewChange();
-      requestRender();
-    }
-
-    /**
-     * Glides the active camera to a new pose instead of snapping. The tween
-     * always animates the perspective master camera; in orthographic mode the
-     * per-frame sync mirrors it into the ortho frustum, and any user input
-     * cancels the glide immediately.
-     */
-    function startCameraTween(pose: CameraPose, onComplete?: () => void) {
-      // Consume leftover damping inertia so the glide starts from rest.
-      controls.update();
-      if (reducedMotionRef.current) {
-        context.cameraTween = null;
-        camera.position.copy(pose.position);
-        controls.target.copy(pose.target);
-        camera.near = pose.near;
-        camera.far = pose.far;
-        camera.updateProjectionMatrix();
-        controls.update();
-        if (context.projection === 'orthographic') {
-          syncOrthographic(false);
-        }
-        onComplete?.();
-        emitViewChange();
-        requestRender();
-        return;
-      }
-      context.cameraTween = {
-        startTime: performance.now(),
-        duration: CAMERA_TWEEN_MS,
-        fromPosition: camera.position.clone(),
-        toPosition: pose.position.clone(),
-        fromTarget: controls.target.clone(),
-        toTarget: pose.target.clone(),
-        near: pose.near,
-        far: pose.far,
-        onComplete
-      };
-      requestRender();
-    }
-
-    function cancelCameraTween() {
-      context.cameraTween = null;
-    }
-
-    function stepCameraTween(now: number): boolean {
-      const tween = context.cameraTween;
-      if (!tween) {
-        return false;
-      }
-      const t = Math.min((now - tween.startTime) / tween.duration, 1);
-      const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-      camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
-      controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
-      if (context.projection === 'orthographic') {
-        syncOrthographic(false);
-      }
-      if (t >= 1) {
-        context.cameraTween = null;
-        camera.near = tween.near;
-        camera.far = tween.far;
-        camera.updateProjectionMatrix();
-        tween.onComplete?.();
-        emitViewChange();
-      }
-      return true;
-    }
-
+    // The camera fields delegate to the rig rather than mirroring it: the
+    // orbit controls are replaced outright on every projection change, so a
+    // copied reference would go stale the first time the user presses P.
     const context: SceneContext = {
       scene,
-      camera,
-      orthographic,
-      activeCamera: camera,
-      projection: 'perspective',
-      applyProjection,
+      get camera() {
+        return cameraRig.perspective;
+      },
+      get orthographic() {
+        return cameraRig.orthographic;
+      },
+      get activeCamera() {
+        return cameraRig.activeCamera;
+      },
+      get projection() {
+        return cameraRig.projection;
+      },
+      get controls() {
+        return cameraRig.controls;
+      },
+      applyProjection: (mode) => cameraRig.applyProjection(mode),
+      syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
+      startCameraTween: (pose, onComplete) =>
+        cameraRig.startTween(pose, onComplete),
+      captureView: () => cameraRig.capture(),
       requestRender,
-      syncOrthographic,
       renderer,
       labelRenderer,
-      controls,
       bodyGroup,
       sketchGroup,
       overlayGroup,
@@ -951,8 +788,6 @@ export function ModelViewer({
       hoveredEdge: null,
       edgeMaterials: new Set(),
       dimensionLabels: new Set(),
-      cameraTween: null,
-      startCameraTween,
       hoverFaceMesh,
       hoverFaceTarget: 0,
       hoverFaceKey: null,
@@ -960,48 +795,15 @@ export function ModelViewer({
       clock: new THREE.Clock()
     };
     contextRef.current = context;
-    controls.addEventListener('end', emitViewChange);
-    controls.addEventListener('change', scheduleSettledViewChange);
 
     const restoredView = initialViewRef.current;
     if (restoredView) {
-      camera.position.fromArray(restoredView.position);
-      controls.target.fromArray(restoredView.target);
-      camera.lookAt(controls.target);
-      camera.updateMatrixWorld(true);
-      controls.update();
+      cameraRig.restore(restoredView, projection);
       context.hasFitCamera = true;
-      if (projection === 'orthographic') {
-        context.applyProjection('orthographic');
-        if (restoredView.orthographicHalfHeight) {
-          const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-          const halfHeight = restoredView.orthographicHalfHeight;
-          orthographic.left = -halfHeight * aspect;
-          orthographic.right = halfHeight * aspect;
-          orthographic.top = halfHeight;
-          orthographic.bottom = -halfHeight;
-        }
-        orthographic.zoom = restoredView.orthographicZoom;
-        orthographic.updateProjectionMatrix();
-        context.controls.update();
-        emitViewChange();
-      }
     }
 
     const observer = new ResizeObserver(() => {
-      camera.aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-      camera.updateProjectionMatrix();
-      if (context.projection === 'orthographic') {
-        // Resizing changes only the horizontal span. Preserve the active
-        // orthographic pose, vertical framing, and zoom exactly.
-        const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-        const halfHeight = Math.max(Math.abs(orthographic.top), 0.0001);
-        orthographic.left = -halfHeight * aspect;
-        orthographic.right = halfHeight * aspect;
-        orthographic.top = halfHeight;
-        orthographic.bottom = -halfHeight;
-        orthographic.updateProjectionMatrix();
-      }
+      cameraRig.handleResize();
       renderer.setSize(host.clientWidth, host.clientHeight);
       labelRenderer.setSize(host.clientWidth, host.clientHeight);
       // Screen-space fat lines rasterize against the drawing-buffer size.
@@ -1604,7 +1406,7 @@ export function ModelViewer({
       }
       faceDrag.object.position.copy(faceDrag.initialPosition);
       faceDrag.object.scale.copy(faceDrag.initialScale);
-      controls.enabled = true;
+      cameraRig.controls.enabled = true;
       dragHud.hidden = true;
       renderer.domElement.style.cursor = 'grab';
       if (renderer.domElement.hasPointerCapture(faceDrag.pointerId)) {
@@ -1628,7 +1430,7 @@ export function ModelViewer({
       if (!extrudeDrag) {
         return;
       }
-      controls.enabled = true;
+      cameraRig.controls.enabled = true;
       dragHud.hidden = true;
       renderer.domElement.style.cursor = 'grab';
       if (renderer.domElement.hasPointerCapture(extrudeDrag.pointerId)) {
@@ -2016,10 +1818,10 @@ export function ModelViewer({
       applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
-      cancelCameraTween();
+      cameraRig.cancelTween();
       if (event.button === 2) {
         rightClickGesture.begin(event.pointerId, event.clientX, event.clientY);
-        rightPanStartTarget = controls.target.clone();
+        rightPanStartTarget = cameraRig.controls.target.clone();
         return;
       }
       if (event.button !== 0) {
@@ -2090,7 +1892,7 @@ export function ModelViewer({
         const focus = { kind: data.kind, axis };
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true);
-        controls.enabled = false;
+        cameraRig.controls.enabled = false;
         renderer.domElement.setPointerCapture(event.pointerId);
         renderer.domElement.style.cursor = 'grabbing';
         event.preventDefault();
@@ -2104,7 +1906,7 @@ export function ModelViewer({
           gesture.dragStart = point;
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
-          controls.enabled = false;
+          cameraRig.controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
           onSketchDrawingChangeRef.current(true);
           event.preventDefault();
@@ -2140,7 +1942,7 @@ export function ModelViewer({
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
-          controls.enabled = false;
+          cameraRig.controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
           renderer.domElement.style.cursor = 'grabbing';
           event.preventDefault();
@@ -2172,7 +1974,7 @@ export function ModelViewer({
           };
           edgeDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
-          controls.enabled = false;
+          cameraRig.controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
           renderer.domElement.style.cursor = 'grabbing';
           event.preventDefault();
@@ -2211,7 +2013,7 @@ export function ModelViewer({
               projectedLength > 0.1 ? projectedY / projectedLength : -1,
             pixelsPerUnit: Math.max(projectedLength, fallback)
           };
-          controls.enabled = false;
+          cameraRig.controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
           positionExtrudeHud(event, activeExtrude.distance);
           renderer.domElement.style.cursor = 'grabbing';
@@ -2303,7 +2105,7 @@ export function ModelViewer({
         initialPosition: object.position.clone(),
         initialScale: object.scale.clone()
       };
-      controls.enabled = false;
+      cameraRig.controls.enabled = false;
       renderer.domElement.setPointerCapture(event.pointerId);
       positionDragHud(event, initialValue, direction.axis);
       event.preventDefault();
@@ -2314,7 +2116,7 @@ export function ModelViewer({
         rightPanStartTarget = null;
         if (
           panStartTarget &&
-          controls.target.distanceToSquared(panStartTarget) >
+          cameraRig.controls.target.distanceToSquared(panStartTarget) >
             RIGHT_PAN_TARGET_EPSILON * RIGHT_PAN_TARGET_EPSILON
         ) {
           // OrbitControls changed the camera target, so this gesture panned
@@ -2335,7 +2137,7 @@ export function ModelViewer({
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
-        controls.enabled = true;
+        cameraRig.controls.enabled = true;
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId);
         }
@@ -2383,7 +2185,7 @@ export function ModelViewer({
           if (renderer.domElement.hasPointerCapture(event.pointerId)) {
             renderer.domElement.releasePointerCapture(event.pointerId);
           }
-          controls.enabled = true;
+          cameraRig.controls.enabled = true;
           if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
             const object = sketchObjectFromDrag(
               mode.tool,
@@ -2455,7 +2257,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
+        cameraRig.controls.enabled = true;
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId);
         }
@@ -2477,7 +2279,7 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
+        cameraRig.controls.enabled = true;
         if (renderer.domElement.hasPointerCapture(event.pointerId)) {
           renderer.domElement.releasePointerCapture(event.pointerId);
         }
@@ -2570,7 +2372,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
+        cameraRig.controls.enabled = true;
         edgeRigRef.current?.setValue(0);
         requestRender();
       }
@@ -2578,14 +2380,14 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
+        cameraRig.controls.enabled = true;
         offsetRigRef.current?.setOffset(0);
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
-        controls.enabled = true;
+        cameraRig.controls.enabled = true;
         clearMoveGizmoHover();
       }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
@@ -2612,9 +2414,9 @@ export function ModelViewer({
         return;
       }
       const pose = computeFitPose(camera, bodyGroup.children);
-      startCameraTween(pose, () => {
+      cameraRig.startTween(pose, () => {
         if (context.projection === 'orthographic') {
-          syncOrthographic(true);
+          cameraRig.syncOrthographic(true);
         }
       });
     };
@@ -2626,7 +2428,7 @@ export function ModelViewer({
     };
 
     const handleWheel = () => {
-      cancelCameraTween();
+      cameraRig.cancelTween();
     };
 
     renderer.domElement.addEventListener(
@@ -2656,8 +2458,8 @@ export function ModelViewer({
     function animate(now: number) {
       animationFrame = null;
       // Camera glide first so controls and the ortho mirror see the result.
-      const tweening = stepCameraTween(now);
-      const controlsChanged = controls.update();
+      const tweening = cameraRig.stepTween(now);
+      const controlsChanged = cameraRig.controls.update();
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
       if (context.projection === 'orthographic' && !tweening) {
@@ -2811,12 +2613,7 @@ export function ModelViewer({
       environment.dispose();
       gradientBackground.dispose();
       axes.dispose();
-      controls.removeEventListener('end', emitViewChange);
-      controls.removeEventListener('change', scheduleSettledViewChange);
-      if (viewChangeTimeout !== null) {
-        window.clearTimeout(viewChangeTimeout);
-      }
-      controls.dispose();
+      cameraRig.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
@@ -3169,7 +2966,7 @@ export function ModelViewer({
       }
       context.controls.update();
       context.hasFitCamera = true;
-      onViewChangeRef.current(captureViewportCamera(context));
+      onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
     performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
@@ -3874,7 +3671,7 @@ export function ModelViewer({
       );
       context.controls.update();
       context.hasFitCamera = true;
-      onViewChangeRef.current(captureViewportCamera(context));
+      onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
   }, [bodies.length, sketches]);
