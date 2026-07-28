@@ -18,6 +18,7 @@ import {
   moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
+  orbitPivotForPoint,
   projectToScreen,
   RightClickGestureTracker,
   VIEW_DIRECTIONS
@@ -480,5 +481,42 @@ describe('projecting a world anchor to the screen', () => {
     expect(
       projectToScreen(new THREE.Vector3(0, 0, 200), camera(), 800, 600)
     ).toBeNull();
+  });
+});
+
+describe('the orbit pivot follows what was picked', () => {
+  const at = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+
+  it('puts the pivot at the picked point when it is dead ahead', () => {
+    const pivot = orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 4));
+    expect(pivot!.toArray()).toEqual([0, 0, 4]);
+  });
+
+  it('keeps the pivot on the view axis for an off-axis pick', () => {
+    // Projecting onto the axis is what stops the camera turning; the pivot
+    // takes the point's depth without inheriting its sideways offset.
+    const pivot = orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(7, -3, 4));
+    expect(pivot!.toArray()).toEqual([0, 0, 4]);
+  });
+
+  it('measures depth along the view direction, not straight-line distance', () => {
+    const pivot = orbitPivotForPoint(at(0, 0, 0), at(1, 0, 0), at(5, 12, 0));
+    expect(pivot!.x).toBeCloseTo(5, 6);
+    expect(pivot!.y).toBeCloseTo(0, 6);
+  });
+
+  it('normalises a view direction that is not already unit length', () => {
+    const pivot = orbitPivotForPoint(at(0, 0, 0), at(0, 0, -4), at(0, 0, -9));
+    expect(pivot!.z).toBeCloseTo(-9, 6);
+  });
+
+  it('declines a point behind the camera', () => {
+    // Clicking through to something behind the viewer would put the pivot
+    // at the camera's back and invert the orbit.
+    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 20))).toBeNull();
+  });
+
+  it('declines a point on the camera plane, where there is no depth', () => {
+    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))).toBeNull();
   });
 });
