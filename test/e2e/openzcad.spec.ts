@@ -1965,3 +1965,52 @@ test('shift-dragging a box selects several bodies at once', async ({ page }) => 
   await sweep(0.6, 0.04, 0.72, 0.14);
   await expect(status).toContainText('Nothing in the box');
 });
+
+test('the status bar names the rung of the Esc ladder you are on', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Prompt Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const status = page.getByRole('contentinfo');
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  if (!area) {
+    throw new Error('viewer canvas not laid out');
+  }
+
+  // Selecting a face arms push-pull, and the hint should say so and say what
+  // Escape will do about it — not the generic "Esc cancels" it used to.
+  await page.mouse.click(
+    area.x + area.width * 0.45,
+    area.y + area.height * 0.55
+  );
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(status).toContainText('push or pull');
+  // Selecting the face also opened the edit panel, which takes Escape itself.
+  // The prompt has to name that rung, not the one behind it.
+  await expect(status).toContainText('Esc closes the panel');
+
+  // Escape does what it promised: the panel goes, the selection stays.
+  await page.keyboard.press('Escape');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+  await expect(status).toContainText('Esc clears the selection');
+
+  // And the next press takes the rung it now names.
+  await page.keyboard.press('Escape');
+  await expect(status).not.toContainText('Esc clears the selection');
+});
