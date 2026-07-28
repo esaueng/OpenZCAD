@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
 /**
  * The preview server hosts the static SPA without the Worker API, so the
@@ -9,6 +10,66 @@ import { toUserId } from '@openzcad/shared';
  * production bundle.
  */
 async function stubApi(page: Page) {
+  // The preview server serves the static bundle without the Worker Durable
+  // Object. Keep cloud project tests authenticated while leaving collaboration
+  // transport coverage to its focused unit tests.
+  await page.addInitScript(() => {
+    class StaticPreviewWebSocket extends EventTarget {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      readonly url: string;
+      readyState = StaticPreviewWebSocket.CONNECTING;
+
+      constructor(url: string | URL) {
+        super();
+        this.url = String(url);
+      }
+
+      send() {}
+
+      close() {
+        this.readyState = StaticPreviewWebSocket.CLOSED;
+      }
+    }
+    window.WebSocket =
+      StaticPreviewWebSocket as unknown as typeof window.WebSocket;
+  });
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: {
+        mode: 'development',
+        emailCodeEnabled: false
+      }
+    })
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      json: {
+        userId: 'user_e2e',
+        displayName: 'E2E user',
+        mode: 'development'
+      }
+    })
+  );
+  await page.route('**/api/settings', (route) =>
+    route.fulfill({
+      json: {
+        settings: DEFAULT_APP_SETTINGS,
+        revision: 0,
+        synced: false,
+        credential: { stored: false, storageAvailable: false },
+        effectiveAssistant: {
+          configured: false,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: 'openai/gpt-5.6-terra',
+          reasoningEffort: 'high'
+        }
+      }
+    })
+  );
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: {
@@ -56,11 +117,289 @@ async function stubApi(page: Page) {
   );
 }
 
+async function stubAnonymousApi(page: Page) {
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: {
+        mode: 'email-code',
+        emailCodeEnabled: false
+      }
+    })
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    })
+  );
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
+    })
+  );
+}
+
+async function stubEmailLoginApi(page: Page) {
+  let signedIn = false;
+  const session = {
+    userId: 'user_email_e2e',
+    displayName: 'maker@example.com',
+    email: 'maker@example.com',
+    mode: 'email-code' as const
+  };
+  const settings = {
+    settings: DEFAULT_APP_SETTINGS,
+    revision: 0,
+    synced: false,
+    credential: { stored: false, storageAvailable: true },
+    effectiveAssistant: {
+      configured: false,
+      source: 'deployment',
+      provider: 'openrouter',
+      model: 'openai/gpt-5.6-terra',
+      reasoningEffort: 'high'
+    }
+  };
+
+  await page.addInitScript(() => {
+    const browserWindow = window as typeof window & {
+      turnstile: {
+        render(
+          _container: HTMLElement,
+          options: { callback(token: string): void }
+        ): string;
+        remove(widgetId: string): void;
+        reset(widgetId: string): void;
+      };
+    };
+    browserWindow.turnstile = {
+      render(_container, options) {
+        setTimeout(() => options.callback('turnstile-e2e-token'), 0);
+        return 'turnstile-e2e-widget';
+      },
+      remove() {},
+      reset() {}
+    };
+  });
+  await page.route(
+    'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+    (route) =>
+      route.fulfill({
+        contentType: 'application/javascript',
+        body: ''
+      })
+  );
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: {
+        mode: 'email-code',
+        emailCodeEnabled: true,
+        turnstileSiteKey: '1x00000000000000000000AA'
+      }
+    })
+  );
+  await page.route('**/api/session', (route) =>
+    signedIn
+      ? route.fulfill({ json: session })
+      : route.fulfill({
+          status: 401,
+          json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+        })
+  );
+  await page.route('**/api/auth/email/start', (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      email: 'maker@example.com',
+      turnstileToken: 'turnstile-e2e-token'
+    });
+    return route.fulfill({
+      status: 202,
+      json: { challengeId: 'challenge_e2e', expiresInSeconds: 600 }
+    });
+  });
+  await page.route('**/api/auth/email/verify', (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      challengeId: 'challenge_e2e',
+      code: '123456'
+    });
+    signedIn = true;
+    return route.fulfill({ json: session });
+  });
+  await page.route('**/api/auth/logout', (route) => {
+    signedIn = false;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.route('**/api/settings', (route) =>
+    route.fulfill({ json: settings })
+  );
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({ json: { projects: [] } })
+  );
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
+    })
+  );
+}
+
 test('loads the OpenZCAD shell', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await expect(page.getByText('OpenZCAD')).toBeVisible();
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
+});
+
+test('restores a remembered local project without flashing the launcher', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Boot Restore Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
+
+  await page.addInitScript(() => {
+    const browserWindow = window as typeof window & {
+      __openZcadBootStates: string[];
+    };
+    browserWindow.__openZcadBootStates = [];
+    let previous = '';
+    const capture = () => {
+      const state = document.querySelector('.startup-screen')
+        ? 'restoring'
+        : document.querySelector('.start-screen')
+          ? 'launcher'
+          : document.querySelector('.app-shell')
+            ? 'workspace'
+            : 'shell';
+      if (state !== previous) {
+        browserWindow.__openZcadBootStates.push(state);
+        previous = state;
+      }
+    };
+    new MutationObserver(capture).observe(document, {
+      childList: true,
+      subtree: true
+    });
+  });
+  await page.unroute('**/api/session');
+  await page.route('**/api/session', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    });
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(
+    page.getByRole('status', { name: 'Restoring workspace' })
+  ).toBeVisible();
+  await page.waitForTimeout(200);
+  await expect(page.locator('.start-screen')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
+  await expect(page.locator('.startup-screen')).toHaveCount(0);
+
+  const bootStates = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __openZcadBootStates: string[];
+        }
+      ).__openZcadBootStates
+  );
+  expect(bootStates).toContain('restoring');
+  expect(bootStates).not.toContain('launcher');
+  expect(bootStates.at(-1)).toBe('workspace');
+});
+
+test('leaves the restore screen when a remembered project is missing', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.addInitScript((storageKey) => {
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 1,
+        activeProjectId: 'missing-project',
+        views: {}
+      })
+    );
+  }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(
+    page.getByRole('status', { name: 'Restoring workspace' })
+  ).toBeVisible();
+  await expect(page.getByLabel('Project name')).toBeVisible();
+  await expect(page.locator('.startup-screen')).toHaveCount(0);
+  await expect(page.locator('.start-status')).toContainText('Local workspace');
+});
+
+test('keeps anonymous CAD creation local without calling cloud projects', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  let cloudProjectRequests = 0;
+  await page.route('**/api/projects', (route) => {
+    cloudProjectRequests += 1;
+    return route.fulfill({
+      status: 500,
+      json: { error: 'Cloud projects should not be called while signed out.' }
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('.start-status')).toContainText('Local workspace');
+  await page.getByLabel('Project name').fill('Anonymous Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
+  await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible();
+  expect(cloudProjectRequests).toBe(0);
+});
+
+test('signs in with an email code only when cloud profile access is requested', async ({
+  page
+}) => {
+  await stubEmailLoginApi(page);
+  await page.goto('/');
+  await expect(page.locator('.start-status')).toContainText('Local workspace');
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
+  await page.getByLabel('Email address').fill('maker@example.com');
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeEnabled();
+  await page.getByRole('button', { name: 'Email me a code' }).click();
+
+  await expect(page.getByText('Enter the email code')).toBeVisible();
+  await page.getByLabel('Email sign-in code').fill('123456');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expect(page.locator('.settings-save-message')).toContainText(
+    'Signed in as maker@example.com'
+  );
+  await expect(
+    page.getByRole('button', { name: 'Save to account' })
+  ).toBeEnabled();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
@@ -97,7 +436,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     '.workspace',
     '.sidebar',
     '.viewer-area',
-    '.ai-rail',
+    '.assistant-panel',
     '.status-bar'
   ];
   for (const selector of selectors) {
@@ -379,7 +718,13 @@ test('grounds an AI fillet request onto every selected edge', async ({
       contentType: 'text/event-stream',
       body: `data: ${JSON.stringify({
         type: 'response.output_text.done',
-        text: JSON.stringify(proposal)
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal,
+          questions: null,
+          message: null,
+          readings: null
+        })
       })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
     });
   });
@@ -398,14 +743,14 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
   await expect(page.getByLabel('CAD change request')).toHaveAttribute(
     'placeholder',
-    'Ask OpenZCAD to change 12 selected edges…'
+    'Ask about 12 selected edges…'
   );
   await page
     .getByLabel('CAD change request')
     .fill('Add fillets of 1 mm on the selected edges');
   await page.getByLabel('CAD change request').press('Enter');
 
-  await expect(page.locator('.ai-proposal.ready')).toContainText(
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
     'Fillet every selected edge by 1 mm.'
   );
   const assistantRequest = await assistantRequestPromise;
@@ -413,7 +758,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   expect(assistantRequest?.digest?.selection?.bodyIds).toHaveLength(1);
   expect(assistantRequest?.digest?.selection?.topologies).toHaveLength(12);
 
-  await page.getByRole('button', { name: 'Apply patch' }).click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
   const fillet = page.locator('.feature-row', {
     hasText: 'AI selected edge fillets'
   });
@@ -422,7 +767,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(page.getByLabel('CAD change request')).toHaveAttribute(
     'placeholder',
-    'Ask OpenZCAD to change the model…'
+    'Describe a part, or attach a drawing…'
   );
   await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
     0
@@ -565,9 +910,7 @@ test('refuses an invalid project name instead of working locally', async ({
 
   // The form itself blocks an over-long name and explains the limit.
   await page.getByLabel('Project name').fill('n'.repeat(201));
-  await expect(page.getByRole('alert')).toContainText(
-    'at most 200 characters'
-  );
+  await expect(page.getByRole('alert')).toContainText('at most 200 characters');
   await expect(
     page.getByRole('button', { name: 'Create project' })
   ).toBeDisabled();

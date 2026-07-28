@@ -91,7 +91,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     id: 'account',
     label: 'Account',
     detail: 'Identity and synchronization',
-    settings: ['Preference synchronization']
+    settings: ['Cloud profile', 'Preference synchronization']
   },
   {
     id: 'shortcuts',

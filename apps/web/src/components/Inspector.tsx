@@ -38,6 +38,7 @@ import {
   formatNumber,
   previewExpression
 } from '../lib/model';
+import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 import { ExprInput } from './ExprInput';
 
 export interface InspectorCallbacks {
@@ -232,7 +233,9 @@ function FaceDirectEdit({
       <h3 className="section-title">Selected feature</h3>
       <div className="selection-summary direct-face-summary">
         <strong>{surfaceLabel}</strong>
-        <span className="mono">{selection.topologyId}</span>
+        <span className="mono">
+          {faceLabel(body, selection.hash, selection.topologyId)}
+        </span>
       </div>
       <div className="kv-grid">
         <b>surface</b>
@@ -608,7 +611,11 @@ export function Inspector(props: InspectorProps) {
               : 'remove face feature'}
           </span>
           <b>source face</b>
-          <span>face:{data.operation.faceHash}</span>
+          <span>
+            {props.selectedBody
+              ? faceLabel(props.selectedBody, data.operation.faceHash)
+              : `face ${String(data.operation.faceHash).slice(-6)}`}
+          </span>
           {data.operation.kind === 'resize-through-hole' && (
             <>
               <b>diameter</b>
@@ -674,7 +681,19 @@ export function Inspector(props: InspectorProps) {
         {selectedTopology?.kind !== 'body' && selectedTopology && (
           <div className="topology-selection">
             <b>{selectedTopology.kind}</b>
-            <span className="mono">{selectedTopology.topologyId}</span>
+            <span className="mono">
+              {selectedTopology.kind === 'edge'
+                ? edgeLabel(
+                    selectedBody ?? undefined,
+                    selectedTopology.hash,
+                    selectedTopology.topologyId
+                  )
+                : faceLabel(
+                    selectedBody ?? undefined,
+                    selectedTopology.hash,
+                    selectedTopology.topologyId
+                  )}
+            </span>
           </div>
         )}
         <div className="form-actions danger-zone">
