@@ -249,6 +249,53 @@ async function stubEmailLoginApi(page: Page) {
   );
 }
 
+async function stubTurnstileLoadFailureApi(page: Page) {
+  let scriptRequests = 0;
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: {
+        mode: 'email-code',
+        emailCodeEnabled: true,
+        turnstileSiteKey: '1x00000000000000000000AA'
+      }
+    })
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    })
+  );
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
+    })
+  );
+  await page.route(
+    'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+    (route) => {
+      scriptRequests += 1;
+      return scriptRequests === 1
+        ? route.abort('failed')
+        : route.fulfill({
+            contentType: 'application/javascript',
+            body: `window.turnstile = {
+              render(_container, options) {
+                setTimeout(() => options.callback('turnstile-retry-token'), 0);
+                return 'turnstile-retry-widget';
+              },
+              remove() {},
+              reset() {}
+            };`
+          });
+    }
+  );
+}
+
 test('loads the OpenZCAD shell', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
@@ -381,6 +428,7 @@ test('signs in with an email code only when cloud profile access is requested', 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
+  await expect(page.getByText('Security check complete.')).toBeVisible();
   await page.getByLabel('Email address').fill('maker@example.com');
   await expect(
     page.getByRole('button', { name: 'Email me a code' })
@@ -400,6 +448,60 @@ test('signs in with an email code only when cloud profile access is requested', 
   ).toBeEnabled();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
+});
+
+test('explains beta auth and Turnstile readiness failures', async ({
+  page
+}) => {
+  await page.route('**/api/auth/config', (route) => route.abort('failed'));
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    })
+  );
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
+    })
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({
+      hasText: 'Beta sign-in configuration could not be reached'
+    })
+  ).toBeVisible();
+  await expect(page.getByLabel('Email address')).toHaveCount(0);
+  await expect(page.locator('.settings-save-message')).toContainText(
+    'Beta sign-in unavailable'
+  );
+
+  await page.unrouteAll({ behavior: 'wait' });
+  await stubTurnstileLoadFailureApi(page);
+  await page.reload();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({
+      hasText: 'Security check could not load'
+    })
+  ).toBeVisible();
+  await page.getByLabel('Email address').fill('maker@example.com');
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeDisabled();
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.getByText('Security check complete.')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeEnabled();
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
@@ -772,6 +874,137 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
     0
   );
+});
+
+test('grounds all cylinder edges onto its two visible rims', async ({
+  page
+}) => {
+  await stubApi(page);
+  type AssistantBody = {
+    bodyId: string;
+    bbox?: {
+      min: { z: number };
+      max: { z: number };
+    };
+    topology?: {
+      edgeCount: number;
+      modifierEdgeCount: number;
+      edgeInventoryComplete: boolean;
+      edges: Array<{
+        hash: number;
+        modelingRole: string;
+        modifierCandidate: boolean;
+        center?: { z: number };
+      }>;
+    };
+  };
+  type AssistantRequest = {
+    digest?: {
+      bodies?: AssistantBody[];
+      selection?: { topologies?: unknown[] };
+    };
+  };
+  let resolveAssistantRequest!: (request: AssistantRequest) => void;
+  const assistantRequestPromise = new Promise<AssistantRequest>((resolve) => {
+    resolveAssistantRequest = resolve;
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'topology-aware-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    const assistantRequest = route.request().postDataJSON() as AssistantRequest;
+    resolveAssistantRequest(assistantRequest);
+    const body = assistantRequest.digest?.bodies?.find(
+      (candidate) => candidate.topology?.modifierEdgeCount === 2
+    );
+    const proposal = {
+      proposalId: 'proposal_cylinder_rims_e2e',
+      summary: 'Fillet the cylinder top and bottom rims by 1 mm.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'AI cylinder rim fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: body?.bodyId ?? 'body_hallucinated',
+          // Deliberately wrong: client grounding must replace it with the two
+          // modifier candidates and must not include the periodic seam.
+          edgeHashes: [999],
+          size: 1
+        }
+      ]
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal,
+          questions: null,
+          message: null,
+          readings: null
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Cylinder Rims');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page
+    .getByLabel('CAD change request')
+    .fill('Add a 1 mm fillet to all the edges');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Fillet the cylinder top and bottom rims by 1 mm.'
+  );
+  const assistantRequest = await assistantRequestPromise;
+  expect(assistantRequest.digest?.selection?.topologies).toHaveLength(0);
+  const body = assistantRequest.digest?.bodies?.find(
+    (candidate) => candidate.topology?.modifierEdgeCount === 2
+  );
+  expect(body?.topology).toMatchObject({
+    edgeCount: 3,
+    modifierEdgeCount: 2,
+    edgeInventoryComplete: true
+  });
+  expect(
+    body?.topology?.edges.filter((edge) => edge.modifierCandidate)
+  ).toHaveLength(2);
+  expect(
+    body?.topology?.edges.filter((edge) => edge.modelingRole === 'seam')
+  ).toHaveLength(1);
+  expect(
+    body?.topology?.edges
+      .filter((edge) => edge.modifierCandidate)
+      .map((edge) => edge.center?.z)
+      .sort((left, right) => (left ?? 0) - (right ?? 0))
+  ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
+
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  const fillet = page.locator('.feature-row', {
+    hasText: 'AI cylinder rim fillets'
+  });
+  await expect(fillet).toBeVisible();
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
 test('models a parametric part and exports a true STEP file', async ({

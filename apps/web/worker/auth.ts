@@ -279,7 +279,16 @@ async function verifyTurnstile(
       'The security check is temporarily unavailable.'
     );
   }
-  const result = (await response.json()) as TurnstileResponse;
+  let result: TurnstileResponse;
+  try {
+    result = (await response.json()) as TurnstileResponse;
+  } catch {
+    throw new AuthFlowError(
+      503,
+      'AUTH_CHALLENGE_UNAVAILABLE',
+      'The security check is temporarily unavailable.'
+    );
+  }
   const expectedHostname = new URL(request.url).hostname;
   if (
     !response.ok ||

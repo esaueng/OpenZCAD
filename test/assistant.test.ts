@@ -533,6 +533,12 @@ describe('assistant integration', () => {
       "copy every selected edge's numeric `hash`"
     );
     expect(budgeted.instructions).toContain(
+      "A primitive cylinder's raw B-rep also has a smooth periodic seam"
+    );
+    expect(budgeted.instructions).toContain(
+      'do not ask them to select edges'
+    );
+    expect(budgeted.instructions).toContain(
       'ONE LIVE BODY for each physical part'
     );
     expect(budgeted.instructions).toContain(

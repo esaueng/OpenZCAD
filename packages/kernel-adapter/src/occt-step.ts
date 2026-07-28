@@ -32,10 +32,10 @@ import {
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
+import { displayTessellationForExtents } from './display-tessellation';
 import type { ExactKernelAdapter } from './exact';
 
 const TESSELLATION_DEFLECTION = 0.08;
-const TESSELLATION_ANGLE = 0.35;
 const GEOMETRY_EPSILON = 1e-9;
 const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
@@ -989,9 +989,15 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     const feature = listNodesByKind(document, 'feature').find(
       (candidate) => candidate.featureId === body.featureId
     );
+    const bounds = this.kernel.getBoundingBox(shape, true);
+    const displayTessellation = displayTessellationForExtents(
+      bounds.xmax - bounds.xmin,
+      bounds.ymax - bounds.ymin,
+      bounds.zmax - bounds.zmin
+    );
     const mesh = this.kernel.meshShape(shape, {
-      linearDeflection: TESSELLATION_DEFLECTION,
-      angularDeflection: TESSELLATION_ANGLE
+      linearDeflection: displayTessellation.linearDeflection,
+      angularDeflection: displayTessellation.angularDeflection
     });
     const faces: BodyTopology['faces'] = [];
     const faceShapes = this.kernel.getSubShapes(shape, 'face');
@@ -1014,7 +1020,10 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       });
     }
 
-    const wireframe = this.kernel.wireframe(shape, TESSELLATION_DEFLECTION);
+    const wireframe = this.kernel.wireframe(
+      shape,
+      displayTessellation.linearDeflection
+    );
     const edges: BodyTopology['edges'] = [];
     for (let index = 0; index + 2 < wireframe.edgeGroups.length; index += 3) {
       const pointStart = wireframe.edgeGroups[index]!;
@@ -1029,7 +1038,6 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       });
     }
 
-    const bounds = this.kernel.getBoundingBox(shape, true);
     return {
       bodyId,
       name: body.name,
