@@ -35,3 +35,24 @@ export function projectedWorldSizePx(
   }
   return viewportHeight;
 }
+
+/**
+ * Projects a world point into viewport pixels, or null when it sits behind
+ * the camera. Overlays anchored to geometry — value chips, dimension pills —
+ * use this to follow their anchor every frame.
+ */
+export function projectToScreen(
+  point: THREE.Vector3,
+  camera: THREE.Camera,
+  width: number,
+  height: number
+): { x: number; y: number } | null {
+  const projected = point.clone().project(camera);
+  if (projected.z > 1) {
+    return null;
+  }
+  return {
+    x: ((projected.x + 1) / 2) * width,
+    y: ((1 - projected.y) / 2) * height
+  };
+}
