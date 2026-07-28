@@ -23,6 +23,7 @@ import {
   VIEW_DIRECTIONS,
   applyDisplayMode,
   CameraController,
+  PickService,
   applyMoveGizmoFocus,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
@@ -30,7 +31,6 @@ import {
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
-  configureEdgeRaycasting,
   createExtrudePreviewGeometry,
   createGradientBackground,
   createObjectForBody,
@@ -50,7 +50,6 @@ import {
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
   normalForTriangle,
-  prioritizeVisibleEdgeHit,
   projectedWorldSizePx,
   sketchCentroid,
   snapTo,
@@ -63,6 +62,7 @@ import {
   type MoveHandleKind,
   type MovePreview,
   type MoveSnap,
+  type PickCandidate,
   type PickDetail,
   type ProjectionMode,
   type SketchOverlay,
@@ -71,7 +71,6 @@ import {
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
-  BodyTopology,
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
@@ -371,14 +370,6 @@ function updateDimensionLabels(
       layout.scale.toFixed(3)
     );
   }
-}
-
-interface PickResult {
-  selection: TopologySelection | null;
-  sketchId?: string;
-  region?: RegionPickData;
-  hit: THREE.Intersection<THREE.Object3D>;
-  faceNormal?: THREE.Vector3;
 }
 
 interface FaceDragState {
@@ -693,6 +684,16 @@ export function ModelViewer({
     moveGizmoGroup.name = 'move-rotate-gizmo';
     scene.add(moveGizmoGroup);
 
+    // Raycasting and topology resolution. The active camera is read per call
+    // because the projection toggle swaps it.
+    const picker = new PickService({
+      domElement: renderer.domElement,
+      camera: () => cameraRig.activeCamera,
+      regionGroup,
+      sketchGroup,
+      bodyGroup
+    });
+
     // Reusable preselection overlay: the face under the pointer gets a cool
     // blue film that fades in and out, instead of a hard emissive snap.
     // toneMapped:false keeps the tint saturated over brightly lit faces —
@@ -781,7 +782,7 @@ export function ModelViewer({
       grid,
       shadowCatcher,
       keyLight,
-      raycaster: new THREE.Raycaster(),
+      raycaster: picker.raycaster,
       objectsByBodyId: new Map(),
       hasFitCamera: false,
       hoveredBodyId: null,
@@ -814,7 +815,6 @@ export function ModelViewer({
     });
     observer.observe(host);
 
-    const pointer = new THREE.Vector2();
     let downPosition: { x: number; y: number } | null = null;
     const rightClickGesture = new RightClickGestureTracker();
     let rightPanStartTarget: THREE.Vector3 | null = null;
@@ -898,13 +898,12 @@ export function ModelViewer({
     host.appendChild(moveGizmoHud);
     moveGizmoHudRef.current = moveGizmoHud;
 
-    configureEdgeRaycasting(context.raycaster);
+    function pick(event: PointerEvent | MouseEvent) {
+      return picker.pick(event);
+    }
 
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      context.raycaster.setFromCamera(pointer, context.activeCamera);
+      picker.setRayFromEvent(event);
     }
 
     function pickExtrudeGizmo(event: PointerEvent) {
@@ -913,8 +912,8 @@ export function ModelViewer({
       }
       setRayFromEvent(event);
       return (
-        context.raycaster
-          .intersectObjects(gizmoGroup.children, true)
+        picker
+          .intersect(gizmoGroup.children)
           .find((hit) => hit.object.userData.extrudeGizmo) ?? null
       );
     }
@@ -1041,107 +1040,6 @@ export function ModelViewer({
       return Math.atan2(offset.dot(v), offset.dot(u));
     }
 
-    function pick(event: PointerEvent | MouseEvent): PickResult | null {
-      setRayFromEvent(event);
-      const regionHits = context.raycaster.intersectObjects(
-        regionGroup.children,
-        true
-      );
-      const regionHit = regionHits.find(
-        (hit) => hit.object.userData.region !== undefined
-      );
-      if (regionHit) {
-        // A region only wins while it is actually the frontmost thing under
-        // the cursor — a solid standing on the sketch plane occludes it.
-        const bodyBlock = context.raycaster
-          .intersectObjects(bodyGroup.children, true)
-          .find((hit) => hit.object.visible);
-        if (!bodyBlock || regionHit.distance <= bodyBlock.distance + 1e-6) {
-          return {
-            selection: null,
-            region: regionHit.object.userData.region as RegionPickData,
-            hit: regionHit
-          };
-        }
-      }
-      const sketchHits = context.raycaster.intersectObjects(
-        sketchGroup.children,
-        true
-      );
-      const sketchHit = sketchHits.find(
-        (hit) => typeof hit.object.userData.sketchId === 'string'
-      );
-      if (sketchHit) {
-        return {
-          selection: null,
-          sketchId: sketchHit.object.userData.sketchId as string,
-          hit: sketchHit
-        };
-      }
-      const hits = context.raycaster
-        .intersectObjects(bodyGroup.children, true)
-        .filter((hit) => hit.object.visible);
-      // Prefer the rendered edge only when it is effectively coplanar with
-      // the nearest hit. This keeps edges usable without selecting geometry
-      // hidden behind the face under the pointer.
-      const ordered = prioritizeVisibleEdgeHit(hits);
-      for (const hit of ordered) {
-        const data = hit.object.userData as {
-          bodyId?: string;
-          topologyKind?: 'edge';
-          topologyId?: string;
-          topologyHash?: number;
-          topology?: BodyTopology;
-        };
-        const bodyId = data.bodyId ?? findBodyId(hit.object);
-        if (!bodyId) {
-          continue;
-        }
-        if (data.topologyKind === 'edge' && data.topologyId) {
-          return {
-            selection: {
-              bodyId: bodyId as TopologySelection['bodyId'],
-              kind: 'edge',
-              topologyId: data.topologyId,
-              hash: data.topologyHash
-            },
-            hit
-          };
-        }
-        const faceIndex = hit.faceIndex;
-        const face =
-          typeof faceIndex === 'number'
-            ? data.topology?.faces.find(
-                (candidate) =>
-                  faceIndex >= candidate.triangleStart &&
-                  faceIndex < candidate.triangleStart + candidate.triangleCount
-              )
-            : undefined;
-        if (face) {
-          return {
-            selection: {
-              bodyId: bodyId as TopologySelection['bodyId'],
-              kind: 'face',
-              topologyId: face.topologyId,
-              hash: face.hash
-            },
-            hit,
-            faceNormal: hit.face?.normal
-              .clone()
-              .transformDirection(hit.object.matrixWorld)
-          };
-        }
-        return {
-          selection: {
-            bodyId: bodyId as TopologySelection['bodyId'],
-            kind: 'body'
-          },
-          hit
-        };
-      }
-      return null;
-    }
-
     function setEdgeHover(next: Line2 | null) {
       if (context.hoveredEdge === next) {
         return;
@@ -1246,7 +1144,7 @@ export function ModelViewer({
       requestRender();
     }
 
-    function applyHover(result: PickResult | null) {
+    function applyHover(result: PickCandidate | null) {
       setRegionHover(result?.region ? result.hit.object : null);
       const bodyId = result?.selection?.bodyId ?? null;
       const canDragFace =

@@ -1,0 +1,240 @@
+import * as THREE from 'three';
+import type { BodyTopology, TopologySelection } from '@openzcad/shared';
+import type { RegionPickData } from '../types';
+import { configureEdgeRaycasting, prioritizeVisibleEdgeHit } from './edges';
+import { findBodyId } from './meshes';
+
+/**
+ * What the pointer is over.
+ *
+ * `region` and `sketch` candidates carry no `selection` because they are not
+ * document topology — the app turns them into their own intents.
+ */
+export interface PickCandidate {
+  kind: 'region' | 'sketch' | 'edge' | 'face' | 'body';
+  distance: number;
+  hit: THREE.Intersection<THREE.Object3D>;
+  selection: TopologySelection | null;
+  sketchId?: string;
+  region?: RegionPickData;
+  /** World-space outward normal at the hit, for face candidates. */
+  faceNormal?: THREE.Vector3;
+}
+
+export interface PickServiceOptions {
+  domElement: HTMLElement;
+  /** Read per call: the active camera changes with the projection. */
+  camera(): THREE.Camera;
+  /** Detected sketch regions (orange hover fills). */
+  regionGroup: THREE.Object3D;
+  /** Sketch profile outlines. */
+  sketchGroup: THREE.Object3D;
+  /** Solid bodies and their exact topology overlays. */
+  bodyGroup: THREE.Object3D;
+}
+
+interface TopologyUserData {
+  bodyId?: string;
+  topologyKind?: 'edge';
+  topologyId?: string;
+  topologyHash?: number;
+  topology?: BodyTopology;
+}
+
+/**
+ * Raycasting and topology resolution for the viewport.
+ *
+ * `pick` answers "what did the user click", applying the layered precedence
+ * the workspace depends on. `pickAll` returns everything under the pointer in
+ * depth order, which is what select-other / depth cycling consumes.
+ */
+export class PickService {
+  readonly raycaster = new THREE.Raycaster();
+
+  private options: PickServiceOptions;
+  private pointer = new THREE.Vector2();
+
+  constructor(options: PickServiceOptions) {
+    this.options = options;
+    configureEdgeRaycasting(this.raycaster);
+  }
+
+  /** Points the shared raycaster at an event's position. */
+  setRayFromEvent(event: PointerEvent | MouseEvent) {
+    const rect = this.options.domElement.getBoundingClientRect();
+    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, this.options.camera());
+  }
+
+  /** Ray-tests an arbitrary object list with the already-aimed ray. */
+  intersect(
+    objects: THREE.Object3D[],
+    recursive = true
+  ): THREE.Intersection<THREE.Object3D>[] {
+    return this.raycaster.intersectObjects(objects, recursive);
+  }
+
+  private regionCandidate(): PickCandidate | null {
+    const regionHit = this.raycaster
+      .intersectObjects(this.options.regionGroup.children, true)
+      .find((hit) => hit.object.userData.region !== undefined);
+    if (!regionHit) {
+      return null;
+    }
+    // A region only wins while it is actually the frontmost thing under the
+    // cursor — a solid standing on the sketch plane occludes it.
+    const bodyBlock = this.raycaster
+      .intersectObjects(this.options.bodyGroup.children, true)
+      .find((hit) => hit.object.visible);
+    if (bodyBlock && regionHit.distance > bodyBlock.distance + 1e-6) {
+      return null;
+    }
+    return {
+      kind: 'region',
+      distance: regionHit.distance,
+      hit: regionHit,
+      selection: null,
+      region: regionHit.object.userData.region as RegionPickData
+    };
+  }
+
+  private sketchCandidate(): PickCandidate | null {
+    const sketchHit = this.raycaster
+      .intersectObjects(this.options.sketchGroup.children, true)
+      .find((hit) => typeof hit.object.userData.sketchId === 'string');
+    return sketchHit
+      ? {
+          kind: 'sketch',
+          distance: sketchHit.distance,
+          hit: sketchHit,
+          selection: null,
+          sketchId: sketchHit.object.userData.sketchId as string
+        }
+      : null;
+  }
+
+  /** Resolves one body-group intersection into edge, face, or whole body. */
+  private topologyCandidate(
+    hit: THREE.Intersection<THREE.Object3D>
+  ): PickCandidate | null {
+    const data = hit.object.userData as TopologyUserData;
+    const bodyId = data.bodyId ?? findBodyId(hit.object);
+    if (!bodyId) {
+      return null;
+    }
+    if (data.topologyKind === 'edge' && data.topologyId) {
+      return {
+        kind: 'edge',
+        distance: hit.distance,
+        hit,
+        selection: {
+          bodyId: bodyId as TopologySelection['bodyId'],
+          kind: 'edge',
+          topologyId: data.topologyId,
+          hash: data.topologyHash
+        }
+      };
+    }
+    const faceIndex = hit.faceIndex;
+    const face =
+      typeof faceIndex === 'number'
+        ? data.topology?.faces.find(
+            (candidate) =>
+              faceIndex >= candidate.triangleStart &&
+              faceIndex < candidate.triangleStart + candidate.triangleCount
+          )
+        : undefined;
+    if (face) {
+      return {
+        kind: 'face',
+        distance: hit.distance,
+        hit,
+        selection: {
+          bodyId: bodyId as TopologySelection['bodyId'],
+          kind: 'face',
+          topologyId: face.topologyId,
+          hash: face.hash
+        },
+        faceNormal: hit.face?.normal
+          .clone()
+          .transformDirection(hit.object.matrixWorld)
+      };
+    }
+    return {
+      kind: 'body',
+      distance: hit.distance,
+      hit,
+      selection: { bodyId: bodyId as TopologySelection['bodyId'], kind: 'body' }
+    };
+  }
+
+  /**
+   * Every body-group candidate under the pointer, nearest first.
+   *
+   * Edges are promoted ahead of a face they are effectively coplanar with, so
+   * a boundary stays selectable from the surface it bounds; an edge genuinely
+   * behind the face keeps its depth order.
+   */
+  private topologyCandidates(): PickCandidate[] {
+    const hits = this.raycaster
+      .intersectObjects(this.options.bodyGroup.children, true)
+      .filter((hit) => hit.object.visible);
+    return prioritizeVisibleEdgeHit(hits)
+      .map((hit) => this.topologyCandidate(hit))
+      .filter((candidate): candidate is PickCandidate => candidate !== null);
+  }
+
+  /**
+   * The single thing a click selects.
+   *
+   * Precedence is layered rather than purely nearest-first: a detected region
+   * outranks the sketch curves that bound it, and both outrank solids, because
+   * those layers are drawn on top of the model and are what the user is aiming
+   * at when they are visible.
+   */
+  pick(event: PointerEvent | MouseEvent): PickCandidate | null {
+    this.setRayFromEvent(event);
+    return (
+      this.regionCandidate() ??
+      this.sketchCandidate() ??
+      this.topologyCandidates()[0] ??
+      null
+    );
+  }
+
+  /**
+   * Everything under the pointer, in the order depth cycling should step
+   * through it. The first entry always matches `pick`.
+   *
+   * Entities appear once each. A single ray routinely returns several hits on
+   * the same face — a triangle pair shares an edge, and a ray down that edge
+   * intersects both — and stepping through the same face twice would read as
+   * a stuck control.
+   */
+  pickAll(event: PointerEvent | MouseEvent): PickCandidate[] {
+    this.setRayFromEvent(event);
+    const region = this.regionCandidate();
+    const sketch = this.sketchCandidate();
+    const ordered = [
+      ...(region ? [region] : []),
+      ...(sketch ? [sketch] : []),
+      ...this.topologyCandidates()
+    ];
+    const seen = new Set<string>();
+    return ordered.filter((candidate) => {
+      const key = JSON.stringify([
+        candidate.kind,
+        candidate.selection?.bodyId ?? '',
+        candidate.selection?.topologyId ?? '',
+        candidate.sketchId ?? '',
+        candidate.region?.regionFingerprint ?? ''
+      ]);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+}
