@@ -1,0 +1,186 @@
+/* ── Start screen ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── StartScreen ─────────────────────────────────────────── */
+
+.startup-screen {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-start-screen);
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+}
+
+.startup-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.startup-card svg {
+  width: 34px;
+  height: 34px;
+  color: var(--color-accent);
+}
+
+.startup-card strong {
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.start-screen {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-start-screen);
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+  overflow-y: auto;
+}
+
+/* Blueprint drafting-sheet atmosphere: radial accent glow over a fine grid,
+   masked toward the edges so the card floats on clean dark. */
+.start-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      60% 50% at 50% 38%,
+      var(--color-accent-dim),
+      transparent 70%
+    ),
+    linear-gradient(rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 / 42px
+      42px,
+    linear-gradient(90deg, rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 /
+      42px 42px;
+  -webkit-mask-image: radial-gradient(
+    70% 65% at 50% 45%,
+    #000,
+    transparent 80%
+  );
+  mask-image: radial-gradient(70% 65% at 50% 45%, #000, transparent 80%);
+}
+
+.start-card {
+  position: relative;
+  width: min(460px, calc(100vw - 48px));
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-5);
+}
+
+.start-brand {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  text-align: center;
+}
+
+.start-brand svg {
+  width: 34px;
+  height: 34px;
+  color: var(--color-accent);
+}
+
+.start-brand h1 {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+}
+
+.start-tagline {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.start-section {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.start-section h2 {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.start-project-list {
+  display: grid;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.start-project-list button {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 10px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.start-project-list button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
+}
+
+.start-project-list strong {
+  min-width: 0;
+  flex: 1;
+  font-weight: var(--fw-regular);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-project-list small {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.start-status {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+.start-settings-button {
+  position: fixed;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  z-index: calc(var(--z-start-screen) + 1);
+  background: var(--color-surface);
+  border: var(--border-thin);
+}
+

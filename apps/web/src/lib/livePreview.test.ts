@@ -1,0 +1,205 @@
+import { describe, expect, it } from 'vitest';
+import { LivePreview } from './livePreview';
+
+interface Doc {
+  value: number;
+}
+
+/** A derive() whose completion the test controls. */
+function deferred() {
+  let resolve!: (value: string) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<string>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function makePreview(overrides: {
+  derive: (document: Doc) => Promise<string>;
+  now?: () => number;
+  slowFrameMs?: number;
+}) {
+  const published: (Doc | null)[] = [];
+  const built: number[] = [];
+  const preview = new LivePreview<Doc, string>({
+    build: (value) => {
+      built.push(value);
+      return value === 0 ? null : { value };
+    },
+    derive: overrides.derive,
+    publish: (preview) => published.push(preview?.document ?? null),
+    ...(overrides.now ? { now: overrides.now } : {}),
+    ...(overrides.slowFrameMs === undefined
+      ? {}
+      : { slowFrameMs: overrides.slowFrameMs })
+  });
+  return { preview, published, built };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('coalescing', () => {
+  it('keeps only the newest value requested during a rebuild', async () => {
+    const first = deferred();
+    let call = 0;
+    const { preview, published, built } = makePreview({
+      derive: () => {
+        call += 1;
+        return call === 1 ? first.promise : Promise.resolve('derived');
+      }
+    });
+
+    preview.request(1);
+    // Three more arrive while the first rebuild is still running.
+    preview.request(2);
+    preview.request(3);
+    preview.request(4);
+    first.resolve('derived');
+    await settle();
+
+    // 1 was built and superseded; only 4 survived the wait. 2 and 3 never ran.
+    expect(built).toEqual([1, 4]);
+    expect(published.map((doc) => doc?.value)).toEqual([1, 4]);
+  });
+
+  it('runs one rebuild at a time', async () => {
+    let concurrent = 0;
+    let peak = 0;
+    const { preview } = makePreview({
+      derive: async () => {
+        concurrent += 1;
+        peak = Math.max(peak, concurrent);
+        await settle();
+        concurrent -= 1;
+        return 'derived';
+      }
+    });
+
+    preview.request(1);
+    preview.request(2);
+    preview.request(3);
+    await settle();
+    await settle();
+    await settle();
+
+    expect(peak).toBe(1);
+  });
+
+  it('ignores a result that lands after the gesture was cleared', async () => {
+    const pending = deferred();
+    const { preview, published } = makePreview({
+      derive: () => pending.promise
+    });
+
+    preview.request(5);
+    preview.clear();
+    // The rebuild finishes after the drag already ended.
+    pending.resolve('derived');
+    await settle();
+
+    // Only the clear itself published, and it published null.
+    expect(published).toEqual([null]);
+  });
+});
+
+describe('failure and invalid input', () => {
+  it('skips a frame whose rebuild rejects, without stopping', async () => {
+    let call = 0;
+    const { preview, published } = makePreview({
+      derive: () => {
+        call += 1;
+        return call === 1
+          ? Promise.reject(new Error('invalid radius'))
+          : Promise.resolve('derived');
+      }
+    });
+
+    preview.request(1);
+    await settle();
+    preview.request(2);
+    await settle();
+
+    expect(published.map((doc) => doc?.value)).toEqual([2]);
+  });
+
+  it('ignores non-positive values', async () => {
+    const { preview, built } = makePreview({
+      derive: () => Promise.resolve('derived')
+    });
+
+    preview.request(0);
+    preview.request(-3);
+    await settle();
+
+    expect(built).toEqual([]);
+  });
+
+  it('publishes nothing when the value cannot build a document', async () => {
+    const published: unknown[] = [];
+    let derived = 0;
+    const preview = new LivePreview<Doc, string>({
+      // Stands in for a selection that cannot express this edit at all.
+      build: () => null,
+      derive: () => {
+        derived += 1;
+        return Promise.resolve('derived');
+      },
+      publish: (value) => published.push(value)
+    });
+
+    preview.request(5);
+    await settle();
+
+    expect(published).toEqual([]);
+    expect(derived).toBe(0);
+  });
+});
+
+describe('slow rebuilds degrade for the rest of the gesture', () => {
+  it('stops previewing once a rebuild exceeds the budget', async () => {
+    let clock = 0;
+    const { preview, built } = makePreview({
+      derive: () => {
+        clock += 500; // one slow rebuild
+        return Promise.resolve('derived');
+      },
+      now: () => clock,
+      slowFrameMs: 400
+    });
+
+    preview.request(1);
+    await settle();
+    expect(preview.degraded).toBe(true);
+
+    preview.request(2);
+    await settle();
+    expect(built).toEqual([1]);
+  });
+
+  it('re-arms on the next gesture', async () => {
+    let clock = 0;
+    let call = 0;
+    const { preview, built } = makePreview({
+      derive: () => {
+        call += 1;
+        clock += call === 1 ? 500 : 10;
+        return Promise.resolve('derived');
+      },
+      now: () => clock,
+      slowFrameMs: 400
+    });
+
+    preview.request(1);
+    await settle();
+    expect(preview.degraded).toBe(true);
+
+    preview.clear();
+    expect(preview.degraded).toBe(false);
+
+    preview.request(2);
+    await settle();
+    expect(built).toEqual([1, 2]);
+  });
+});

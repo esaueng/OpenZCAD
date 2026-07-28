@@ -1,17 +1,44 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { mark, timed } from '../lib/perf';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
-import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import {
   CSS2DObject,
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
+  EDGE_IDLE_COLOR,
+  EDGE_IDLE_OPACITY,
+  EDGE_IDLE_WIDTH,
+  EDGE_SELECTED_COLOR,
+  EDGE_SELECTED_WIDTH,
+  MOVE_AXIS_COLORS,
+  MOVE_AXIS_VECTORS,
+  RightClickGestureTracker,
+  VIEW_DIRECTIONS,
+  applyDisplayMode,
+  CameraController,
+  buildEdgeRadiusHandle,
+  buildOffsetFaceHandle,
+  cycleDepthPick,
+  edgeHandlePlacement,
+  offsetHandlePlacement,
+  GestureRouter,
+  HudLayer,
+  PickService,
+  SelectionManager,
+  applyMoveGizmoFocus,
+  buildMoveGizmoParts,
+  chooseMoveSnapStep,
+  chooseRotateSnapStep,
+  clearGroup,
+  closestAxisT,
+  composeMoveTransform,
   computeFitPose,
   createAxesGizmo,
+  createExtrudePreviewGeometry,
   createFatLine,
   createFatLineMaterial,
   createFatLineSegments,
@@ -21,33 +48,51 @@ import {
   createStudioEnvironment,
   createStudioGrid,
   createStudioHemisphereLight,
+  dimensionLabelLayout,
+  directEditDirectionFromNormal,
   fitCameraToObjects,
+  forEachMesh,
+  isSameMoveGizmoFocus,
+  makeLabel,
+  markExtrudeGizmo,
+  moveEuler,
+  moveGizmoHandleLabel,
+  moveGizmoWorldScale,
+  normalForTriangle,
+  projectToScreen,
+  projectedWorldSizePx,
+  sketchCentroid,
+  snapTo,
   syncFatLineResolution,
   tuneShadowFrustum,
+  type AxisProjection,
   type CameraPose,
+  type DirectEditAxis,
+  type MoveAxis,
+  type MoveGizmoFocus,
+  type MoveHandleKind,
+  type MovePreview,
+  type DepthCycle,
+  type DragRig,
+  type MoveSnap,
+  type PickCandidate,
+  type PickDetail,
+  type ProjectionMode,
+  type SketchOverlay,
+  type StandardView,
+  type ViewerSettings,
   type FatLineResolution
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
-  BodyTopology,
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
-import {
-  buildEdgeRadiusHandle,
-  buildOffsetFaceHandle,
-  edgeHandlePlacement,
-  offsetChipAnchor,
-  offsetHandlePlacement,
-  type EdgeHandleRig,
-  type OffsetHandleRig
-} from './viewer/handles';
 import {
   buildSketchModeRig,
   type SketchModeRig
 } from './viewer/sketchModeController';
 import {
-  REGION_HOVER_OPACITY,
   REGION_SELECTED_OPACITY,
   buildRegionMesh,
   triangulateRegionGeometry,
@@ -75,108 +120,10 @@ import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 
-export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
-
-export type StandardView = 'iso' | 'front' | 'top' | 'right';
-
-export type ProjectionMode = 'perspective' | 'orthographic';
-
-/** Screen-space projections of the world axes, for the orientation widget. */
-export interface AxisProjection {
-  x: { x: number; y: number };
-  y: { x: number; y: number };
-  z: { x: number; y: number };
-}
-
-export type DirectEditAxis = 'x' | 'y' | 'z';
-
 export interface FaceResizeCommit {
   bodyId: TopologySelection['bodyId'];
   axis: DirectEditAxis;
   value: number;
-}
-
-export interface DirectEditDirection {
-  axis: DirectEditAxis;
-  side: -1 | 1;
-}
-
-export interface DimensionLabelLayout {
-  angleDeg: number;
-  scale: number;
-  lineLengthPx: number;
-}
-
-/**
- * Keeps a dimension label aligned to its projected line without 180-degree
- * flips. Model-relative scaling is intentionally bounded at 1 so labels can
- * shrink with the view but never grow beyond their base UI font size.
- */
-export function dimensionLabelLayout(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  modelSizePx: number,
-  previousAngleDeg?: number
-): DimensionLabelLayout {
-  const deltaX = end.x - start.x;
-  const deltaY = end.y - start.y;
-  const lineLengthPx = Math.hypot(deltaX, deltaY);
-  let angleDeg = THREE.MathUtils.radToDeg(Math.atan2(deltaY, deltaX));
-
-  if (Number.isFinite(previousAngleDeg)) {
-    angleDeg += 180 * Math.round((previousAngleDeg! - angleDeg) / 180);
-  } else {
-    if (angleDeg > 90) {
-      angleDeg -= 180;
-    } else if (angleDeg < -90) {
-      angleDeg += 180;
-    }
-  }
-
-  // A dimension axis aimed nearly at the camera has no reliable screen
-  // angle. Hold the previous orientation instead of allowing it to jitter.
-  if (lineLengthPx < 6 && Number.isFinite(previousAngleDeg)) {
-    angleDeg = previousAngleDeg!;
-  }
-
-  const scale = THREE.MathUtils.clamp(
-    Math.sqrt(Math.max(modelSizePx, 1) / 520),
-    0.72,
-    1
-  );
-  return { angleDeg, scale, lineLengthPx };
-}
-
-/** Maps an exact picked face normal to the parametric box dimension it edits. */
-export function directEditDirectionFromNormal(
-  normal: Pick<THREE.Vector3, 'x' | 'y' | 'z'>
-): DirectEditDirection {
-  const components = [
-    ['x', normal.x],
-    ['y', normal.y],
-    ['z', normal.z]
-  ] as const;
-  const [axis, value] = components.reduce((largest, candidate) =>
-    Math.abs(candidate[1]) > Math.abs(largest[1]) ? candidate : largest
-  );
-  return { axis, side: value < 0 ? -1 : 1 };
-}
-
-export interface ViewerSettings {
-  showGrid: boolean;
-  displayMode: DisplayMode;
-  /** Runtime-only accessibility preference; omitted by older saved views. */
-  reducedMotion?: boolean;
-}
-
-/**
- * Where a selection click landed: the world-space hit point and, for faces,
- * the outward normal. Selection-first editing anchors its drag handle here so
- * the affordance appears under the cursor rather than at the face center.
- */
-export interface PickDetail {
-  point: { x: number; y: number; z: number };
-  normal?: { x: number; y: number; z: number };
 }
 
 /** An armed face-offset handle: where it sits and which face it edits. */
@@ -236,116 +183,9 @@ export interface EdgeHandleTarget {
   initialValue?: number;
 }
 
-/** Sketch profile polyline, already lifted onto its 3D plane. */
-export interface SketchOverlay {
-  sketchId: string;
-  name: string;
-  selected: boolean;
-  /** Original local coordinates are used to triangulate the selectable region. */
-  profile: { x: number; y: number }[];
-  normal: { x: number; y: number; z: number };
-  points: { x: number; y: number; z: number }[];
-}
-
 export interface ExtrudePreview {
   sketchId: string;
   distance: number;
-}
-
-/** Pending Move/Rotate values, previewed live and committed as one feature. */
-export interface MovePreview {
-  bodyId: string;
-  translation: { x: number; y: number; z: number };
-  rotationDeg: { x: number; y: number; z: number };
-}
-
-/** Current gizmo snap increments (shown in the overlay, zoom-adaptive). */
-export interface MoveSnap {
-  move: number;
-  rotate: number;
-}
-
-const MOVE_SNAP_STEPS = [100, 50, 25, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05, 0.01];
-const ROTATE_SNAP_STEPS = [90, 45, 15, 5, 1, 0.5, 0.1];
-/** A snap increment must span at least this many pixels to feel deliberate. */
-const SNAP_MIN_PIXELS = 8;
-/** Arrow shaft length in CSS pixels; rings and hit targets scale with it. */
-const MOVE_GIZMO_LENGTH_PIXELS = 104;
-
-/**
- * Converts the desired fixed screen-space gizmo length into world units.
- * Re-evaluating this as the camera zooms keeps the control usable without
- * allowing it to grow over the model or collapse into an unpickable speck.
- */
-export function moveGizmoWorldScale(worldPerPixel: number): number {
-  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
-    return 1;
-  }
-  return worldPerPixel * MOVE_GIZMO_LENGTH_PIXELS;
-}
-
-/**
- * Translation snap step for the current zoom: the smallest "nice" step that
- * still spans ≥8px on screen. Zooming in therefore unlocks finer steps
- * (10 mm → 1 mm → 0.1 mm …).
- */
-export function chooseMoveSnapStep(worldPerPixel: number): number {
-  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
-    return 1;
-  }
-  const minWorld = worldPerPixel * SNAP_MIN_PIXELS;
-  const candidates = MOVE_SNAP_STEPS.filter((step) => step >= minWorld);
-  return candidates.at(-1) ?? MOVE_SNAP_STEPS[0]!;
-}
-
-/** Rotation snap step for the current zoom (ring arc pixels per degree). */
-export function chooseRotateSnapStep(pixelsPerDegree: number): number {
-  if (!Number.isFinite(pixelsPerDegree) || pixelsPerDegree <= 0) {
-    return 15;
-  }
-  const minDegrees = SNAP_MIN_PIXELS / pixelsPerDegree;
-  const candidates = ROTATE_SNAP_STEPS.filter((step) => step >= minDegrees);
-  return candidates.at(-1) ?? ROTATE_SNAP_STEPS[0]!;
-}
-
-/**
- * The Move feature rotates about the world origin (X, then Y, then Z — the
- * exact kernel applies the axes in that order, i.e. Euler 'ZYX'), then
- * translates. To make the gizmo rotate the body about its own center, fold
- * the difference into the committed translation: T = t + c − R·c.
- */
-export function composeMoveTransform(
-  center: { x: number; y: number; z: number },
-  translation: { x: number; y: number; z: number },
-  rotationDeg: { x: number; y: number; z: number }
-): { x: number; y: number; z: number } {
-  const euler = new THREE.Euler(
-    THREE.MathUtils.degToRad(rotationDeg.x),
-    THREE.MathUtils.degToRad(rotationDeg.y),
-    THREE.MathUtils.degToRad(rotationDeg.z),
-    'ZYX'
-  );
-  const rotated = new THREE.Vector3(center.x, center.y, center.z).applyEuler(
-    euler
-  );
-  return {
-    x: translation.x + center.x - rotated.x,
-    y: translation.y + center.y - rotated.y,
-    z: translation.z + center.z - rotated.z
-  };
-}
-
-export function moveEuler(rotationDeg: {
-  x: number;
-  y: number;
-  z: number;
-}): THREE.Euler {
-  return new THREE.Euler(
-    THREE.MathUtils.degToRad(rotationDeg.x),
-    THREE.MathUtils.degToRad(rotationDeg.y),
-    THREE.MathUtils.degToRad(rotationDeg.z),
-    'ZYX'
-  );
 }
 
 interface ModelViewerProps {
@@ -431,37 +271,36 @@ interface ModelViewerProps {
   ): void;
 }
 
-interface CameraTween {
-  startTime: number;
-  duration: number;
-  fromPosition: THREE.Vector3;
-  toPosition: THREE.Vector3;
-  fromTarget: THREE.Vector3;
-  toTarget: THREE.Vector3;
-  near: number;
-  far: number;
-  onComplete?: () => void;
-}
-
 /**
  * The imperative state bag shared by the viewport's interaction code. New
  * handle/gizmo modules receive this rather than reaching into React state.
  */
 export interface SceneContext {
   scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  orthographic: THREE.OrthographicCamera;
-  activeCamera: THREE.Camera;
-  projection: ProjectionMode;
+  /*
+   * Camera state is owned by the `CameraController` and read through here.
+   * These are getters, not copies: the orbit controls are rebuilt on every
+   * projection change, so a captured reference goes stale.
+   */
+  readonly camera: THREE.PerspectiveCamera;
+  readonly orthographic: THREE.OrthographicCamera;
+  readonly activeCamera: THREE.Camera;
+  readonly projection: ProjectionMode;
+  readonly controls: OrbitControls<THREE.Camera>;
   /** Switches projection, rebinding controls and syncing camera poses. */
   applyProjection(mode: ProjectionMode): void;
-  /** Invalidates the viewport and schedules a render if it is idle. */
-  requestRender(): void;
   /** Mirrors the perspective pose onto the ortho camera and its frustum. */
   syncOrthographic(resetZoom: boolean): void;
+  /** Re-applies navigation preferences onto the live orbit controls. */
+  refreshNavigation(): void;
+  /** Starts a glide toward a new pose; user input cancels it. */
+  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
+  /** The durable pose to persist for this project. */
+  captureView(): ViewportCameraState;
+  /** Invalidates the viewport and schedules a render if it is idle. */
+  requestRender(): void;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
-  controls: OrbitControls<THREE.Camera>;
   bodyGroup: THREE.Group;
   sketchGroup: THREE.Group;
   overlayGroup: THREE.Group;
@@ -478,21 +317,23 @@ export interface SceneContext {
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
-  hoveredBodyId: string | null;
-  hoveredEdge: Line2 | null;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
   dimensionLabels: Set<DimensionLabelBinding>;
-  /** Active camera glide, driven by the render loop until it settles. */
-  cameraTween: CameraTween | null;
-  /** Starts a glide toward a new pose; user input cancels it. */
-  startCameraTween(pose: CameraPose, onComplete?: () => void): void;
+  /*
+   * Hover and preselection are owned by the SelectionManager. The fields
+   * below read through to it so existing call sites keep working.
+   */
+  readonly selection: SelectionManager;
+  readonly hoveredBodyId: string | null;
+  readonly hoveredEdge: Line2 | null;
   /** Single reusable preselection overlay for the face under the pointer. */
-  hoverFaceMesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-  hoverFaceTarget: number;
-  hoverFaceKey: string | null;
+  readonly hoverFaceMesh: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.MeshBasicMaterial
+  >;
   /** Selection overlays fading in toward their resting opacity. */
-  fadeIns: Set<THREE.MeshBasicMaterial>;
+  readonly fadeIns: Set<THREE.MeshBasicMaterial>;
   /** Frame timing for the overlay eases; `update()` once per frame, then read. */
   timer: THREE.Timer;
 }
@@ -506,24 +347,6 @@ interface DimensionLabelBinding {
   angleDeg?: number;
 }
 
-function projectedWorldSizePx(
-  camera: THREE.Camera,
-  center: THREE.Vector3,
-  worldSize: number,
-  viewportHeight: number
-): number {
-  if (camera instanceof THREE.OrthographicCamera) {
-    const visibleHeight = Math.max(camera.top - camera.bottom, 1e-9);
-    return (viewportHeight * camera.zoom * worldSize) / visibleHeight;
-  }
-  if (camera instanceof THREE.PerspectiveCamera) {
-    const distance = Math.max(camera.position.distanceTo(center), 1e-9);
-    const visibleHeight =
-      2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    return (viewportHeight * worldSize) / Math.max(visibleHeight, 1e-9);
-  }
-  return viewportHeight;
-}
 
 function updateDimensionLabels(
   context: SceneContext,
@@ -562,25 +385,6 @@ function updateDimensionLabels(
   }
 }
 
-function captureViewportCamera(context: SceneContext): ViewportCameraState {
-  const position = context.activeCamera.position;
-  const target = context.controls.target;
-  return {
-    position: [position.x, position.y, position.z],
-    target: [target.x, target.y, target.z],
-    orthographicZoom: context.orthographic.zoom,
-    orthographicHalfHeight: Math.abs(context.orthographic.top)
-  };
-}
-
-interface PickResult {
-  selection: TopologySelection | null;
-  sketchId?: string;
-  region?: RegionPickData;
-  hit: THREE.Intersection<THREE.Object3D>;
-  faceNormal?: THREE.Vector3;
-}
-
 interface FaceDragState {
   pointerId: number;
   selection: TopologySelection;
@@ -610,13 +414,6 @@ interface ExtrudeDragState {
   pixelsPerUnit: number;
 }
 
-type MoveAxis = 'x' | 'y' | 'z';
-type MoveHandleKind = 'axis' | 'ring' | 'center';
-
-interface MoveGizmoFocus {
-  kind: MoveHandleKind;
-  axis: MoveAxis;
-}
 
 interface MoveDragState {
   pointerId: number;
@@ -640,113 +437,8 @@ interface MoveDragState {
   snapRotate: number;
 }
 
-const MOVE_AXIS_VECTORS: Record<MoveAxis, THREE.Vector3> = {
-  x: new THREE.Vector3(1, 0, 0),
-  y: new THREE.Vector3(0, 1, 0),
-  z: new THREE.Vector3(0, 0, 1)
-};
-
-const MOVE_AXIS_COLORS: Record<MoveAxis, number> = {
-  x: 0xef6a6a,
-  y: 0x6fd66f,
-  z: 0x5f8fef
-};
-
-interface MoveGizmoVisualData {
-  moveHandleVisual?: boolean;
-  moveHandleFocus?: boolean;
-  kind?: MoveHandleKind;
-  axis?: MoveAxis;
-  baseColor?: number;
-  baseOpacity?: number;
-}
-
-function isSameMoveGizmoFocus(
-  left: MoveGizmoFocus | null,
-  right: MoveGizmoFocus | null
-): boolean {
-  return left?.kind === right?.kind && left?.axis === right?.axis;
-}
-
-export function moveGizmoHandleLabel(
-  kind: MoveHandleKind,
-  axis: MoveAxis
-): string {
-  if (kind === 'center') {
-    return 'Move freely';
-  }
-  return `${kind === 'ring' ? 'Rotate' : 'Move'} ${axis.toUpperCase()} axis`;
-}
-
-/**
- * Keeps hover feedback inside Three.js instead of scheduling React renders on
- * every pointer move. The focused handle retains its axis color and gains a
- * white outline while all competing handles recede.
- */
-export function applyMoveGizmoFocus(
-  group: THREE.Group,
-  focus: MoveGizmoFocus | null
-) {
-  group.userData.focus = focus;
-  group.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) {
-      return;
-    }
-    const data = object.userData as MoveGizmoVisualData;
-    const matches = data.kind === focus?.kind && data.axis === focus?.axis;
-    if (data.moveHandleFocus) {
-      object.visible = matches;
-      return;
-    }
-    if (!data.moveHandleVisual) {
-      return;
-    }
-    const material = (
-      object as THREE.Mesh<
-        THREE.BufferGeometry,
-        THREE.Material | THREE.Material[]
-      >
-    ).material;
-    if (!(material instanceof THREE.MeshBasicMaterial)) {
-      return;
-    }
-    const baseOpacity = data.baseOpacity ?? 1;
-    material.opacity = focus ? (matches ? 1 : baseOpacity * 0.2) : baseOpacity;
-    material.color.setHex(data.baseColor ?? 0xffffff);
-  });
-}
-
-/** Parameter t of the closest point on a line to the pointer ray. */
-function closestAxisT(
-  ray: THREE.Ray,
-  origin: THREE.Vector3,
-  direction: THREE.Vector3
-): number | null {
-  const r = origin.clone().sub(ray.origin);
-  const b = direction.dot(ray.direction);
-  const c = direction.dot(r);
-  const f = ray.direction.dot(r);
-  const denominator = 1 - b * b;
-  if (Math.abs(denominator) < 1e-9) {
-    return null; // axis parallel to the view ray
-  }
-  return (b * f - c) / denominator;
-}
-
-function snapTo(value: number, step: number, fine: boolean): number {
-  if (fine) {
-    return Math.round(value * 100) / 100;
-  }
-  return Math.round(value / step) * step;
-}
-
-type ViewerBodyMaterial = THREE.MeshStandardMaterial | THREE.MeshPhongMaterial;
-type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, ViewerBodyMaterial>;
 
 const SELECTION_EMISSIVE = 0x173a5e;
-const HOVER_EMISSIVE = 0x101d2c;
-const HOVER_FACE_COLOR = 0x8fc8ff;
-const HOVER_FACE_OPACITY = 0.3;
 const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
 const SKETCH_COLOR = 0x4da3ff;
@@ -758,296 +450,10 @@ const SKETCH_SELECTED_COLOR = 0x9ecbff;
  */
 const SKETCH_CURVE_WIDTH = 1.4;
 const PREVIEW_EDGE_WIDTH = 1.4;
-const CAMERA_TWEEN_MS = 420;
-const RIGHT_DRAG_THRESHOLD_PX = 5;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
-
-interface ActiveRightClickGesture {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  dragged: boolean;
-}
-
-/**
- * Separates a stationary right-click from OrbitControls' right-button pan.
- * Once the pointer crosses the threshold, returning to the start still counts
- * as a drag and must not open the context menu.
- */
-export class RightClickGestureTracker {
-  private active: ActiveRightClickGesture | null = null;
-
-  begin(pointerId: number, x: number, y: number) {
-    this.active = { pointerId, startX: x, startY: y, dragged: false };
-  }
-
-  move(pointerId: number, x: number, y: number) {
-    const active = this.active;
-    if (!active || active.pointerId !== pointerId || active.dragged) {
-      return;
-    }
-    const dx = x - active.startX;
-    const dy = y - active.startY;
-    active.dragged =
-      dx * dx + dy * dy >= RIGHT_DRAG_THRESHOLD_PX * RIGHT_DRAG_THRESHOLD_PX;
-  }
-
-  markDragged(pointerId: number) {
-    if (this.active?.pointerId === pointerId) {
-      this.active.dragged = true;
-    }
-  }
-
-  end(pointerId: number, x: number, y: number) {
-    const active = this.active;
-    if (!active || active.pointerId !== pointerId) {
-      return false;
-    }
-    this.move(pointerId, x, y);
-    const shouldOpenMenu = !active.dragged;
-    this.active = null;
-    return shouldOpenMenu;
-  }
-
-  cancel(pointerId: number) {
-    if (this.active?.pointerId === pointerId) {
-      this.active = null;
-    }
-  }
-}
-
-// Exact topology edges render as screen-space fat lines so they read clearly
-// and their states are unmistakable: idle slate, hover glow, selected accent.
-const EDGE_IDLE_COLOR = 0x151c26;
-const EDGE_HOVER_COLOR = 0xbfdcff;
-const EDGE_SELECTED_COLOR = 0x7cc0ff;
-const EDGE_IDLE_WIDTH = 1.4;
-const EDGE_HOVER_WIDTH = 4;
-const EDGE_SELECTED_WIDTH = 4.5;
-const EDGE_IDLE_OPACITY = 0.92;
-/**
- * Extra screen-space width used only for edge picking. Line2 adds this to the
- * rendered width before testing the pointer, so an idle edge has a 3 px pick
- * radius without that radius changing as the camera zooms.
- */
-const EDGE_PICK_PADDING_PX = 4;
-/**
- * Edge and face intersections for the same topological boundary can differ by
- * a few floating-point ulps. Keep the allowance relative to camera distance;
- * a fixed model-unit allowance can select an edge hidden behind the face.
- */
-const EDGE_DEPTH_RELATIVE_EPSILON = 1e-4;
-const EDGE_DEPTH_ABSOLUTE_EPSILON = 1e-6;
 
 interface EdgeVisualState {
   selected: boolean;
-}
-
-type TopologyHit = Pick<THREE.Intersection, 'distance' | 'object'>;
-
-export function configureEdgeRaycasting(raycaster: THREE.Raycaster) {
-  raycaster.params.Line2 = { threshold: EDGE_PICK_PADDING_PX };
-}
-
-export function prioritizeVisibleEdgeHit<T extends TopologyHit>(hits: T[]) {
-  const nearestDistance = hits[0]?.distance;
-  if (nearestDistance === undefined) {
-    return hits;
-  }
-  const depthTolerance = Math.max(
-    EDGE_DEPTH_ABSOLUTE_EPSILON,
-    Math.abs(nearestDistance) * EDGE_DEPTH_RELATIVE_EPSILON
-  );
-  const edgeHit = hits.find(
-    (hit) =>
-      (hit.object.userData as { topologyKind?: string }).topologyKind ===
-        'edge' && hit.distance <= nearestDistance + depthTolerance
-  );
-  return edgeHit ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)] : hits;
-}
-
-export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
-  // Direction from the target toward the camera, in the Z-up frame. Top now
-  // looks down +Z, which is parallel to the up vector, so it keeps a hair of
-  // -Y: that both stops OrbitControls seeing a degenerate axis and settles
-  // screen-up on +Y rather than an arbitrary diagonal.
-  iso: new THREE.Vector3(1, -1, 0.9).normalize(),
-  front: new THREE.Vector3(0, -1, 0),
-  top: new THREE.Vector3(0, -0.0001, 1).normalize(),
-  right: new THREE.Vector3(1, 0, 0)
-};
-
-export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
-  return (
-    object instanceof THREE.Mesh &&
-    (object.material instanceof THREE.MeshStandardMaterial ||
-      object.material instanceof THREE.MeshPhongMaterial)
-  );
-}
-
-function forEachMesh(
-  object: THREE.Object3D,
-  visit: (mesh: ViewerMesh) => void
-) {
-  object.traverse((child: THREE.Object3D) => {
-    if (isViewerMesh(child)) {
-      visit(child);
-    }
-  });
-}
-
-function disposeObject(object: THREE.Object3D) {
-  object.traverse((child: THREE.Object3D) => {
-    const disposable = child as unknown as {
-      geometry?: { dispose(): void };
-      material?: { dispose(): void } | { dispose(): void }[];
-    };
-    disposable.geometry?.dispose();
-    if (Array.isArray(disposable.material)) {
-      for (const material of disposable.material) {
-        material.dispose();
-      }
-    } else {
-      disposable.material?.dispose();
-    }
-  });
-}
-
-/** CSS2D label elements stay in the DOM unless removed explicitly. */
-function clearGroup(group: THREE.Group) {
-  for (const child of [...group.children]) {
-    child.traverse((node: THREE.Object3D) => {
-      if (node instanceof CSS2DObject) {
-        node.element.remove();
-      }
-    });
-    group.remove(child);
-    disposeObject(child);
-  }
-}
-
-function makeLabel(className: string, text: string): CSS2DObject {
-  const element = document.createElement('div');
-  element.className = className;
-  element.textContent = text;
-  return new CSS2DObject(element);
-}
-
-function findBodyId(object: THREE.Object3D): string | null {
-  let current: THREE.Object3D | null = object;
-  while (current) {
-    const bodyId = (current.userData as { bodyId?: string }).bodyId;
-    if (bodyId) {
-      return bodyId;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-function normalForTriangle(
-  body: BodyRepresentation,
-  triangleStart: number
-): THREE.Vector3 | null {
-  const offset = triangleStart * 3;
-  const indices = body.mesh.indices.slice(offset, offset + 3);
-  if (indices.length !== 3) {
-    return null;
-  }
-  const [aIndex, bIndex, cIndex] = indices;
-  if (aIndex === undefined || bIndex === undefined || cIndex === undefined) {
-    return null;
-  }
-  const a = new THREE.Vector3().fromArray(body.mesh.vertices, aIndex * 3);
-  const b = new THREE.Vector3().fromArray(body.mesh.vertices, bIndex * 3);
-  const c = new THREE.Vector3().fromArray(body.mesh.vertices, cIndex * 3);
-  return new THREE.Triangle(a, b, c).getNormal(new THREE.Vector3());
-}
-
-/**
- * Meshes render solid or wireframe; baked and exact topology edge overlays
- * toggle together so plain Shaded mode contains surfaces only.
- */
-function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
-  bodyGroup.traverse((child: THREE.Object3D) => {
-    if (isViewerMesh(child)) {
-      child.material.wireframe = mode === 'wireframe';
-    } else if (child instanceof LineSegments2) {
-      // Line2 extends LineSegments2, so this covers exact topology edges and
-      // the tessellated feature-edge fallback together.
-      child.visible = mode === 'shaded-edges';
-    }
-  });
-}
-
-function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {
-  const centroid = new THREE.Vector3();
-  for (const point of sketch.points) {
-    centroid.add(new THREE.Vector3(point.x, point.y, point.z));
-  }
-  return centroid.divideScalar(Math.max(sketch.points.length, 1));
-}
-
-/** A lightweight live prism; the canonical B-rep is only created on confirm. */
-export function createExtrudePreviewGeometry(
-  sketch: SketchOverlay,
-  distance: number
-): THREE.BufferGeometry {
-  const count = sketch.points.length;
-  const normal = new THREE.Vector3(
-    sketch.normal.x,
-    sketch.normal.y,
-    sketch.normal.z
-  );
-  const vertices: number[] = [];
-  for (const point of sketch.points) {
-    vertices.push(point.x, point.y, point.z);
-  }
-  for (const point of sketch.points) {
-    vertices.push(
-      point.x + normal.x * distance,
-      point.y + normal.y * distance,
-      point.z + normal.z * distance
-    );
-  }
-
-  const localPoints = sketch.profile.map(
-    (point) => new THREE.Vector2(point.x, point.y)
-  );
-  const capTriangles = THREE.ShapeUtils.triangulateShape(localPoints, []);
-  const indices: number[] = [];
-  for (const triangle of capTriangles) {
-    const [a, b, c] = triangle;
-    if (a === undefined || b === undefined || c === undefined) {
-      continue;
-    }
-    indices.push(a, c, b, a + count, b + count, c + count);
-  }
-  for (let index = 0; index < count; index += 1) {
-    const next = (index + 1) % count;
-    indices.push(index, next, next + count, index, next + count, index + count);
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute(vertices, 3)
-  );
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function markExtrudeGizmo(object: THREE.Object3D) {
-  object.traverse((child) => {
-    child.userData.extrudeGizmo = true;
-    child.renderOrder = 20;
-    const material = (child as THREE.Mesh | THREE.Line).material;
-    if (material instanceof THREE.Material) {
-      material.depthTest = false;
-      material.transparent = true;
-    }
-  });
 }
 
 export function ModelViewer({
@@ -1125,6 +531,10 @@ export function ModelViewer({
   displayModeRef.current = settings.displayMode;
   const reducedMotionRef = useRef(settings.reducedMotion);
   reducedMotionRef.current = settings.reducedMotion;
+  const zoomToCursorRef = useRef(settings.zoomToCursor);
+  zoomToCursorRef.current = settings.zoomToCursor;
+  const middleDragRef = useRef(settings.middleDrag);
+  middleDragRef.current = settings.middleDrag;
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
@@ -1142,7 +552,7 @@ export function ModelViewer({
   onDirectManipulationChangeRef.current = onDirectManipulationChange;
   const edgeHandleOpRef = useRef<'fillet' | 'chamfer'>('fillet');
   /** Live edge-radius rig; owned by the edgeHandle effect below. */
-  const edgeRigRef = useRef<EdgeHandleRig | null>(null);
+  const edgeRigRef = useRef<DragRig | null>(null);
   const edgeDragActiveRef = useRef(false);
   const sketchModeRef = useRef(sketchMode);
   sketchModeRef.current = sketchMode;
@@ -1184,7 +594,7 @@ export function ModelViewer({
     projection: ProjectionMode;
   } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
-  const offsetRigRef = useRef<OffsetHandleRig | null>(null);
+  const offsetRigRef = useRef<DragRig | null>(null);
   const offsetDragActiveRef = useRef(false);
   const offsetChipRef = useRef<HTMLDivElement | null>(null);
 
@@ -1201,28 +611,6 @@ export function ModelViewer({
     const scene = new THREE.Scene();
     const gradientBackground = createGradientBackground();
     scene.background = gradientBackground;
-
-    const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-    const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
-    // Z-up, matching the solid kernel: a part's vertical size is its `depth`,
-    // and cylinders extrude along +Z. This must be set before OrbitControls is
-    // constructed below — OrbitControls snapshots `object.up` into a quaternion
-    // in its constructor and never refreshes it, so assigning `up` afterwards
-    // leaves the orbit axis on +Y while `camera.up` reads (0,0,1).
-    camera.up.set(0, 0, 1);
-    camera.position.set(90, -90, 80);
-    const orthographic = new THREE.OrthographicCamera(
-      -90,
-      90,
-      90 / aspect,
-      -90 / aspect,
-      -2000,
-      4000
-    );
-    // syncOrthographic copies position and quaternion but never `up`, and
-    // rebindControls can hand this camera to a fresh OrbitControls.
-    orthographic.up.copy(camera.up);
-    orthographic.position.copy(camera.position);
 
     const renderer = timed(
       'viewer.renderer',
@@ -1256,12 +644,25 @@ export function ModelViewer({
     labelRenderer.domElement.style.pointerEvents = 'none';
     host.appendChild(labelRenderer.domElement);
 
-    let controls: OrbitControls<THREE.Camera> = new OrbitControls(
-      camera,
-      renderer.domElement
-    );
-    controls.enableDamping = true;
-    controls.target.set(0, 0, 0);
+    // The camera rig owns both cameras, the orbit controls, the projection
+    // mode, and view glides. `requestRender` is passed as a thunk because it
+    // is a hoisted function declaration further down this effect.
+    const cameraRig = new CameraController({
+      host,
+      domElement: renderer.domElement,
+      requestRender: () => requestRender(),
+      onViewChange: (view) => onViewChangeRef.current(view),
+      reducedMotion: () => reducedMotionRef.current === true,
+      // Defaults on: zooming toward the pointer is what every modern CAD
+      // tool does, and a saved view from before the preference existed
+      // should get the current behaviour rather than the old one.
+      zoomToCursor: () => zoomToCursorRef.current !== false,
+      // Panning is what every other CAD tool puts on the middle drag; the
+      // OrbitControls default of zoom is the odd one out.
+      middleDrag: () => middleDragRef.current ?? 'pan'
+    });
+    const camera = cameraRig.perspective;
+    const orthographic = cameraRig.orthographic;
 
     // Z-up sky plus cool floor bounce keeps undersides readable without
     // weakening the directional key that defines face orientation.
@@ -1316,26 +717,36 @@ export function ModelViewer({
     moveGizmoGroup.name = 'move-rotate-gizmo';
     scene.add(moveGizmoGroup);
 
-    // Reusable preselection overlay: the face under the pointer gets a cool
-    // blue film that fades in and out, instead of a hard emissive snap.
-    // toneMapped:false keeps the tint saturated over brightly lit faces —
-    // ACES would otherwise wash the blue out to gray on hot caps.
-    const hoverFaceMesh = new THREE.Mesh(
-      new THREE.BufferGeometry(),
-      new THREE.MeshBasicMaterial({
-        color: HOVER_FACE_COLOR,
-        toneMapped: false,
-        transparent: true,
-        opacity: 0,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        polygonOffset: true,
-        polygonOffsetFactor: -2
-      })
-    );
-    hoverFaceMesh.visible = false;
-    hoverFaceMesh.renderOrder = 15;
-    hoverFaceMesh.raycast = () => undefined;
+    // Raycasting and topology resolution. The active camera is read per call
+    // because the projection toggle swaps it.
+    const objectsByBodyId = new Map<string, THREE.Object3D>();
+
+    const selection = new SelectionManager({
+      bodyGroup,
+      objectsByBodyId,
+      domElement: renderer.domElement,
+      requestRender: () => requestRender(),
+      bodies: () => bodiesRef.current,
+      isEditableBody: (bodyId: string) => editableBodyIdsRef.current.has(bodyId),
+      extrudeArmed: () => extrudePreviewRef.current !== null
+    });
+
+    // Pointer capture, orbit parking, drag cursor, and click-vs-drag for
+    // every gesture below.
+    const gestures = new GestureRouter({
+      domElement: renderer.domElement,
+      setControlsEnabled: (enabled) => {
+        cameraRig.controls.enabled = enabled;
+      }
+    });
+
+    const picker = new PickService({
+      domElement: renderer.domElement,
+      camera: () => cameraRig.activeCamera,
+      regionGroup,
+      sketchGroup,
+      bodyGroup
+    });
 
     function applyMovePreview(
       translation: MovePreview['translation'],
@@ -1359,24 +770,6 @@ export function ModelViewer({
       );
     }
 
-    function syncOrthographic(resetZoom: boolean) {
-      orthographic.position.copy(camera.position);
-      orthographic.quaternion.copy(camera.quaternion);
-      if (resetZoom) {
-        orthographic.zoom = 1;
-      }
-      const distance = camera.position.distanceTo(controls.target);
-      const halfHeight =
-        distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-      const currentAspect = host!.clientWidth / Math.max(host!.clientHeight, 1);
-      orthographic.left = -halfHeight * currentAspect;
-      orthographic.right = halfHeight * currentAspect;
-      orthographic.top = halfHeight;
-      orthographic.bottom = -halfHeight;
-      orthographic.updateProjectionMatrix();
-    }
-
-    let viewChangeTimeout: number | null = null;
     let animationFrame: number | null = null;
 
     function requestRender() {
@@ -1385,145 +778,35 @@ export function ModelViewer({
       }
     }
 
-    function emitViewChange() {
-      onViewChangeRef.current(captureViewportCamera(context));
-    }
-
-    function scheduleSettledViewChange() {
-      requestRender();
-      if (viewChangeTimeout !== null) {
-        window.clearTimeout(viewChangeTimeout);
-      }
-      // OrbitControls keeps easing after its `end` event when damping is on.
-      // Persist once the change stream settles so reload matches the final
-      // visible frame, while avoiding localStorage writes on every render.
-      viewChangeTimeout = window.setTimeout(() => {
-        viewChangeTimeout = null;
-        emitViewChange();
-      }, 120);
-    }
-
-    function rebindControls(nextCamera: THREE.Camera) {
-      const target = controls.target.clone();
-      controls.removeEventListener('end', emitViewChange);
-      controls.removeEventListener('change', scheduleSettledViewChange);
-      controls.dispose();
-      controls = new OrbitControls(nextCamera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.target.copy(target);
-      controls.addEventListener('end', emitViewChange);
-      controls.addEventListener('change', scheduleSettledViewChange);
-      context.controls = controls;
-    }
-
-    function applyProjection(mode: ProjectionMode) {
-      if (context.projection === mode) {
-        return;
-      }
-      context.projection = mode;
-      if (mode === 'orthographic') {
-        syncOrthographic(true);
-        context.activeCamera = orthographic;
-      } else {
-        // Bake the ortho dolly zoom back into a perspective distance so the
-        // framing survives the switch.
-        const direction = orthographic.position
-          .clone()
-          .sub(controls.target)
-          .normalize();
-        const distance =
-          orthographic.position.distanceTo(controls.target) /
-          Math.max(orthographic.zoom, 0.0001);
-        camera.position
-          .copy(controls.target)
-          .addScaledVector(direction, distance);
-        camera.quaternion.copy(orthographic.quaternion);
-        context.activeCamera = camera;
-      }
-      rebindControls(context.activeCamera);
-      context.controls.update();
-      emitViewChange();
-      requestRender();
-    }
-
-    /**
-     * Glides the active camera to a new pose instead of snapping. The tween
-     * always animates the perspective master camera; in orthographic mode the
-     * per-frame sync mirrors it into the ortho frustum, and any user input
-     * cancels the glide immediately.
-     */
-    function startCameraTween(pose: CameraPose, onComplete?: () => void) {
-      // Consume leftover damping inertia so the glide starts from rest.
-      controls.update();
-      if (reducedMotionRef.current) {
-        context.cameraTween = null;
-        camera.position.copy(pose.position);
-        controls.target.copy(pose.target);
-        camera.near = pose.near;
-        camera.far = pose.far;
-        camera.updateProjectionMatrix();
-        controls.update();
-        if (context.projection === 'orthographic') {
-          syncOrthographic(false);
-        }
-        onComplete?.();
-        emitViewChange();
-        requestRender();
-        return;
-      }
-      context.cameraTween = {
-        startTime: performance.now(),
-        duration: CAMERA_TWEEN_MS,
-        fromPosition: camera.position.clone(),
-        toPosition: pose.position.clone(),
-        fromTarget: controls.target.clone(),
-        toTarget: pose.target.clone(),
-        near: pose.near,
-        far: pose.far,
-        onComplete
-      };
-      requestRender();
-    }
-
-    function cancelCameraTween() {
-      context.cameraTween = null;
-    }
-
-    function stepCameraTween(now: number): boolean {
-      const tween = context.cameraTween;
-      if (!tween) {
-        return false;
-      }
-      const t = Math.min((now - tween.startTime) / tween.duration, 1);
-      const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-      camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
-      controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
-      if (context.projection === 'orthographic') {
-        syncOrthographic(false);
-      }
-      if (t >= 1) {
-        context.cameraTween = null;
-        camera.near = tween.near;
-        camera.far = tween.far;
-        camera.updateProjectionMatrix();
-        tween.onComplete?.();
-        emitViewChange();
-      }
-      return true;
-    }
-
+    // The camera fields delegate to the rig rather than mirroring it: the
+    // orbit controls are replaced outright on every projection change, so a
+    // copied reference would go stale the first time the user presses P.
     const context: SceneContext = {
       scene,
-      camera,
-      orthographic,
-      activeCamera: camera,
-      projection: 'perspective',
-      applyProjection,
+      get camera() {
+        return cameraRig.perspective;
+      },
+      get orthographic() {
+        return cameraRig.orthographic;
+      },
+      get activeCamera() {
+        return cameraRig.activeCamera;
+      },
+      get projection() {
+        return cameraRig.projection;
+      },
+      get controls() {
+        return cameraRig.controls;
+      },
+      applyProjection: (mode) => cameraRig.applyProjection(mode),
+      syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
+      refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
+      startCameraTween: (pose, onComplete) =>
+        cameraRig.startTween(pose, onComplete),
+      captureView: () => cameraRig.capture(),
       requestRender,
-      syncOrthographic,
       renderer,
       labelRenderer,
-      controls,
       bodyGroup,
       sketchGroup,
       overlayGroup,
@@ -1533,67 +816,39 @@ export function ModelViewer({
       grid,
       shadowCatcher,
       keyLight,
-      raycaster: new THREE.Raycaster(),
-      objectsByBodyId: new Map(),
+      raycaster: picker.raycaster,
+      objectsByBodyId,
       hasFitCamera: false,
-      hoveredBodyId: null,
-      hoveredEdge: null,
+      get hoveredBodyId() {
+        return selection.hoveredBodyId;
+      },
+      get hoveredEdge() {
+        return selection.hoveredEdge;
+      },
       fatLineResolution: () => ({
         width: renderer.domElement.clientWidth || 1,
         height: renderer.domElement.clientHeight || 1
       }),
       dimensionLabels: new Set(),
-      cameraTween: null,
-      startCameraTween,
-      hoverFaceMesh,
-      hoverFaceTarget: 0,
-      hoverFaceKey: null,
-      fadeIns: new Set(),
+      get hoverFaceMesh() {
+        return selection.hoverFaceMesh;
+      },
+      get fadeIns() {
+        return selection.fadeIns;
+      },
+      selection,
       timer: new THREE.Timer()
     };
     contextRef.current = context;
-    controls.addEventListener('end', emitViewChange);
-    controls.addEventListener('change', scheduleSettledViewChange);
 
     const restoredView = initialViewRef.current;
     if (restoredView) {
-      camera.position.fromArray(restoredView.position);
-      controls.target.fromArray(restoredView.target);
-      camera.lookAt(controls.target);
-      camera.updateMatrixWorld(true);
-      controls.update();
+      cameraRig.restore(restoredView, projection);
       context.hasFitCamera = true;
-      if (projection === 'orthographic') {
-        context.applyProjection('orthographic');
-        if (restoredView.orthographicHalfHeight) {
-          const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-          const halfHeight = restoredView.orthographicHalfHeight;
-          orthographic.left = -halfHeight * aspect;
-          orthographic.right = halfHeight * aspect;
-          orthographic.top = halfHeight;
-          orthographic.bottom = -halfHeight;
-        }
-        orthographic.zoom = restoredView.orthographicZoom;
-        orthographic.updateProjectionMatrix();
-        context.controls.update();
-        emitViewChange();
-      }
     }
 
     const observer = new ResizeObserver(() => {
-      camera.aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-      camera.updateProjectionMatrix();
-      if (context.projection === 'orthographic') {
-        // Resizing changes only the horizontal span. Preserve the active
-        // orthographic pose, vertical framing, and zoom exactly.
-        const aspect = host.clientWidth / Math.max(host.clientHeight, 1);
-        const halfHeight = Math.max(Math.abs(orthographic.top), 0.0001);
-        orthographic.left = -halfHeight * aspect;
-        orthographic.right = halfHeight * aspect;
-        orthographic.top = halfHeight;
-        orthographic.bottom = -halfHeight;
-        orthographic.updateProjectionMatrix();
-      }
+      cameraRig.handleResize();
       renderer.setSize(host.clientWidth, host.clientHeight);
       labelRenderer.setSize(host.clientWidth, host.clientHeight);
       // Screen-space fat lines rasterize against the viewport size. Walking the
@@ -1604,9 +859,9 @@ export function ModelViewer({
     });
     observer.observe(host);
 
-    const pointer = new THREE.Vector2();
-    let downPosition: { x: number; y: number } | null = null;
     const rightClickGesture = new RightClickGestureTracker();
+    /** Where "select other" has reached, for repeated clicks on one spot. */
+    let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
@@ -1632,20 +887,16 @@ export function ModelViewer({
       initialValue: number;
       lastPreviewAt: number;
     } | null = null;
-    const dragHud = document.createElement('div');
-    dragHud.className = 'direct-edit-hud';
-    dragHud.hidden = true;
-    host.appendChild(dragHud);
+    const hud = new HudLayer(host);
+    const dragHud = hud.create('direct-edit-hud');
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
-    const offsetChip = document.createElement('div');
-    offsetChip.className = 'handle-value-chip';
-    offsetChip.hidden = true;
+    const offsetChip = hud.create('handle-value-chip');
     const handleChipClick = () => {
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
-        onOpenOffsetKeypadRef.current(offsetRig.offset());
+        onOpenOffsetKeypadRef.current(offsetRig.value());
         return;
       }
       const edgeRig = edgeRigRef.current;
@@ -1654,47 +905,82 @@ export function ModelViewer({
       }
     };
     offsetChip.addEventListener('click', handleChipClick);
-    host.appendChild(offsetChip);
     offsetChipRef.current = offsetChip;
 
     // Cursor-following dimension readout for in-viewport sketching.
-    const sketchDimLabel = document.createElement('div');
-    sketchDimLabel.className = 'sketch-dim-label';
-    sketchDimLabel.hidden = true;
-    host.appendChild(sketchDimLabel);
+    const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
 
     // Entity-snap glyph pinned to the cursor: endpoint □, midpoint △, center ◎.
-    const sketchSnapMarker = document.createElement('div');
-    sketchSnapMarker.className = 'sketch-snap-marker';
-    sketchSnapMarker.hidden = true;
-    sketchSnapMarker.setAttribute('aria-hidden', 'true');
-    host.appendChild(sketchSnapMarker);
+    const sketchSnapMarker = hud.create('sketch-snap-marker', {
+      ariaHidden: true
+    });
     sketchSnapMarkerRef.current = sketchSnapMarker;
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
       if (offsetRigRef.current) {
-        offsetRigRef.current.setOffset(value);
+        offsetRigRef.current.setValue(value);
       } else {
         edgeRigRef.current?.setValue(value);
       }
       requestRender();
     };
-    const moveGizmoHud = document.createElement('div');
-    moveGizmoHud.className = 'move-gizmo-hud';
-    moveGizmoHud.hidden = true;
-    moveGizmoHud.setAttribute('aria-hidden', 'true');
-    host.appendChild(moveGizmoHud);
+    const moveGizmoHud = hud.create('move-gizmo-hud', { ariaHidden: true });
     moveGizmoHudRef.current = moveGizmoHud;
 
-    configureEdgeRaycasting(context.raycaster);
+    function pick(event: PointerEvent | MouseEvent) {
+      return picker.pick(event);
+    }
+
+    function selectAtPointer(event: PointerEvent) {
+      const stack = picker.pickAll(event);
+      const stepped = cycleDepthPick(
+        stack,
+        depthCycle,
+        event.clientX,
+        event.clientY
+      );
+      depthCycle = stepped.cycle;
+      const result = stepped.candidate;
+      if (result?.region) {
+        onSelectRegionRef.current(result.region);
+        return;
+      }
+      if (result?.sketchId) {
+        onSelectSketchProfileRef.current(result.sketchId);
+        return;
+      }
+      const detail: PickDetail | undefined = result
+        ? {
+            point: {
+              x: result.hit.point.x,
+              y: result.hit.point.y,
+              z: result.hit.point.z
+            },
+            normal: result.faceNormal
+              ? {
+                  x: result.faceNormal.x,
+                  y: result.faceNormal.y,
+                  z: result.faceNormal.z
+                }
+              : undefined
+          }
+        : undefined;
+      // Orbiting should turn about whatever was just clicked, not the model
+      // origin — otherwise a detail you have zoomed into leaves the frame.
+      if (result) {
+        cameraRig.pivotOn(result.hit.point);
+      }
+      onSelectTopologyRef.current(
+        result?.selection ?? null,
+        event.shiftKey,
+        detail
+      );
+    }
 
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      context.raycaster.setFromCamera(pointer, context.activeCamera);
+      picker.setRayFromEvent(event);
     }
 
     function pickExtrudeGizmo(event: PointerEvent) {
@@ -1703,8 +989,8 @@ export function ModelViewer({
       }
       setRayFromEvent(event);
       return (
-        context.raycaster
-          .intersectObjects(gizmoGroup.children, true)
+        picker
+          .intersect(gizmoGroup.children)
           .find((hit) => hit.object.userData.extrudeGizmo) ?? null
       );
     }
@@ -1768,10 +1054,6 @@ export function ModelViewer({
       active = false,
       value?: number
     ) {
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!hostRect) {
-        return;
-      }
       const axisColor =
         focus.kind === 'center' ? 0xe8f3ff : MOVE_AXIS_COLORS[focus.axis];
       const baseLabel = moveGizmoHandleLabel(focus.kind, focus.axis);
@@ -1788,10 +1070,8 @@ export function ModelViewer({
         '--gizmo-axis-color',
         `#${axisColor.toString(16).padStart(6, '0')}`
       );
-      moveGizmoHud.style.left = `${event.clientX - hostRect.left + 16}px`;
-      moveGizmoHud.style.top = `${event.clientY - hostRect.top - 16}px`;
       moveGizmoHud.classList.toggle('is-active', active);
-      moveGizmoHud.hidden = false;
+      hud.showAtPointer(moveGizmoHud, event, 16, -16);
     }
 
     function clearMoveGizmoHover() {
@@ -1831,247 +1111,8 @@ export function ModelViewer({
       return Math.atan2(offset.dot(v), offset.dot(u));
     }
 
-    function pick(event: PointerEvent | MouseEvent): PickResult | null {
-      setRayFromEvent(event);
-      const regionHits = context.raycaster.intersectObjects(
-        regionGroup.children,
-        true
-      );
-      const regionHit = regionHits.find(
-        (hit) => hit.object.userData.region !== undefined
-      );
-      if (regionHit) {
-        // A region only wins while it is actually the frontmost thing under
-        // the cursor — a solid standing on the sketch plane occludes it.
-        const bodyBlock = context.raycaster
-          .intersectObjects(bodyGroup.children, true)
-          .find((hit) => hit.object.visible);
-        if (!bodyBlock || regionHit.distance <= bodyBlock.distance + 1e-6) {
-          return {
-            selection: null,
-            region: regionHit.object.userData.region as RegionPickData,
-            hit: regionHit
-          };
-        }
-      }
-      const sketchHits = context.raycaster.intersectObjects(
-        sketchGroup.children,
-        true
-      );
-      const sketchHit = sketchHits.find(
-        (hit) => typeof hit.object.userData.sketchId === 'string'
-      );
-      if (sketchHit) {
-        return {
-          selection: null,
-          sketchId: sketchHit.object.userData.sketchId as string,
-          hit: sketchHit
-        };
-      }
-      const hits = context.raycaster
-        .intersectObjects(bodyGroup.children, true)
-        .filter((hit) => hit.object.visible);
-      // Prefer the rendered edge only when it is effectively coplanar with
-      // the nearest hit. This keeps edges usable without selecting geometry
-      // hidden behind the face under the pointer.
-      const ordered = prioritizeVisibleEdgeHit(hits);
-      for (const hit of ordered) {
-        const data = hit.object.userData as {
-          bodyId?: string;
-          topologyKind?: 'edge';
-          topologyId?: string;
-          topologyHash?: number;
-          topology?: BodyTopology;
-        };
-        const bodyId = data.bodyId ?? findBodyId(hit.object);
-        if (!bodyId) {
-          continue;
-        }
-        if (data.topologyKind === 'edge' && data.topologyId) {
-          return {
-            selection: {
-              bodyId: bodyId as TopologySelection['bodyId'],
-              kind: 'edge',
-              topologyId: data.topologyId,
-              hash: data.topologyHash
-            },
-            hit
-          };
-        }
-        const faceIndex = hit.faceIndex;
-        const face =
-          typeof faceIndex === 'number'
-            ? data.topology?.faces.find(
-                (candidate) =>
-                  faceIndex >= candidate.triangleStart &&
-                  faceIndex < candidate.triangleStart + candidate.triangleCount
-              )
-            : undefined;
-        if (face) {
-          return {
-            selection: {
-              bodyId: bodyId as TopologySelection['bodyId'],
-              kind: 'face',
-              topologyId: face.topologyId,
-              hash: face.hash
-            },
-            hit,
-            faceNormal: hit.face?.normal
-              .clone()
-              .transformDirection(hit.object.matrixWorld)
-          };
-        }
-        return {
-          selection: {
-            bodyId: bodyId as TopologySelection['bodyId'],
-            kind: 'body'
-          },
-          hit
-        };
-      }
-      return null;
-    }
-
-    function setEdgeHover(next: Line2 | null) {
-      if (context.hoveredEdge === next) {
-        return;
-      }
-      const restore = context.hoveredEdge;
-      if (restore) {
-        const material = restore.material;
-        const state = restore.userData as EdgeVisualState;
-        material.color.setHex(
-          state.selected ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR
-        );
-        material.linewidth = state.selected
-          ? EDGE_SELECTED_WIDTH
-          : EDGE_IDLE_WIDTH;
-        material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
-      }
-      context.hoveredEdge = next;
-      if (next && !(next.userData as EdgeVisualState).selected) {
-        const material = next.material;
-        material.color.setHex(EDGE_HOVER_COLOR);
-        material.linewidth = EDGE_HOVER_WIDTH;
-        material.opacity = 1;
-      }
-      requestRender();
-    }
-
-    /**
-     * Preselection feedback: the face under the pointer gets a fading blue
-     * film (real-CAD style), topology edges brighten via setEdgeHover, and
-     * only whole-body picks (imported meshes without face topology) fall back
-     * to a body-wide emissive lift.
-     */
-    function setHoverFace(selection: TopologySelection | null) {
-      const key =
-        selection?.kind === 'face' && selection.topologyId
-          ? `${selection.bodyId}:${selection.topologyId}`
-          : null;
-      if (context.hoverFaceKey === key) {
-        return;
-      }
-      context.hoverFaceKey = key;
-      context.hoverFaceTarget = 0;
-      requestRender();
-      if (!key || selection?.kind !== 'face') {
-        return;
-      }
-      const body = bodiesRef.current.find(
-        (candidate) => candidate.bodyId === selection.bodyId
-      );
-      const face = body?.topology?.faces.find(
-        (candidate) => candidate.topologyId === selection.topologyId
-      );
-      const object = context.objectsByBodyId.get(selection.bodyId);
-      if (!body || !face || !object) {
-        return;
-      }
-      const oldGeometry = context.hoverFaceMesh.geometry;
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute(
-        'position',
-        new THREE.Float32BufferAttribute(body.mesh.vertices, 3)
-      );
-      geometry.setIndex(
-        body.mesh.indices.slice(
-          face.triangleStart * 3,
-          (face.triangleStart + face.triangleCount) * 3
-        )
-      );
-      context.hoverFaceMesh.geometry = geometry;
-      oldGeometry.dispose();
-      object.add(context.hoverFaceMesh);
-      context.hoverFaceMesh.visible = true;
-      context.hoverFaceTarget = HOVER_FACE_OPACITY;
-      requestRender();
-    }
-
-    let hoveredRegionMesh: THREE.Mesh<
-      THREE.BufferGeometry,
-      THREE.MeshBasicMaterial
-    > | null = null;
-
-    function setRegionHover(next: THREE.Object3D | null) {
-      const mesh =
-        next instanceof THREE.Mesh && next.userData.region !== undefined
-          ? (next as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>)
-          : null;
-      if (hoveredRegionMesh === mesh) {
-        return;
-      }
-      if (
-        hoveredRegionMesh &&
-        hoveredRegionMesh.userData.regionSelected !== true
-      ) {
-        hoveredRegionMesh.material.userData.targetOpacity = 0;
-        context.fadeIns.add(hoveredRegionMesh.material);
-      }
-      hoveredRegionMesh = mesh;
-      if (mesh && mesh.userData.regionSelected !== true) {
-        mesh.material.userData.targetOpacity = REGION_HOVER_OPACITY;
-        context.fadeIns.add(mesh.material);
-      }
-      requestRender();
-    }
-
-    function applyHover(result: PickResult | null) {
-      setRegionHover(result?.region ? result.hit.object : null);
-      const bodyId = result?.selection?.bodyId ?? null;
-      const canDragFace =
-        result?.selection?.kind === 'face' &&
-        editableBodyIdsRef.current.has(result.selection.bodyId);
-      const hoveredEdge =
-        result?.selection?.kind === 'edge'
-          ? ((result.hit.object.userData as { visual?: Line2 }).visual ?? null)
-          : null;
-      setEdgeHover(hoveredEdge);
-      setHoverFace(result?.selection ?? null);
-      renderer.domElement.style.cursor = extrudePreviewRef.current
-        ? 'grab'
-        : canDragFace
-          ? 'grab'
-          : bodyId || result?.sketchId || result?.region
-            ? 'pointer'
-            : '';
-      // Only body-kind picks (mesh bodies without exact face topology) lift
-      // the whole body's emissive; faces and edges have their own overlays.
-      const emissiveBodyId = result?.selection?.kind === 'body' ? bodyId : null;
-      if (context.hoveredBodyId === emissiveBodyId) {
-        return;
-      }
-      context.hoveredBodyId = emissiveBodyId;
-      forEachMesh(bodyGroup, (mesh) => {
-        const meshBodyId = findBodyId(mesh);
-        const base =
-          (mesh.userData as { baseEmissive?: number }).baseEmissive ?? 0x000000;
-        mesh.material.emissive.setHex(
-          emissiveBodyId && meshBodyId === emissiveBodyId && base === 0
-            ? HOVER_EMISSIVE
-            : base
-        );
-      });
+    function applyHover(result: PickCandidate | null) {
+      selection.applyHover(result);
     }
 
     /**
@@ -2126,52 +1167,40 @@ export function ModelViewer({
       if (!chip) {
         return;
       }
-      const offsetRig = offsetRigRef.current;
-      const edgeRig = edgeRigRef.current;
-      let anchor: { x: number; y: number; z: number } | null = null;
+      // Either rig answers the same two questions; only the label differs.
+      const rig = offsetRigRef.current ?? edgeRigRef.current;
+      let anchor: THREE.Vector3 | null = null;
       let text = '';
-      if (offsetRig) {
-        const scale =
-          (offsetRig.group.userData.gizmoScale as number | undefined) ?? 1;
-        anchor = offsetChipAnchor(
-          offsetRig.origin,
-          offsetRig.direction,
-          offsetRig.offset(),
-          scale
-        );
-        const offset = offsetRig.offset();
-        text = `${offset >= 0 ? '+' : ''}${Math.round(offset * 100) / 100} ${unitsRef.current}`;
-      } else if (edgeRig) {
-        anchor = {
-          x: edgeRig.origin.x,
-          y: edgeRig.origin.y,
-          z: edgeRig.origin.z
-        };
-        const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
-        text = `${prefix} ${Math.round(edgeRig.value() * 100) / 100} ${unitsRef.current}`;
+      if (rig) {
+        const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        anchor = rig.chipAnchor(scale);
+        const value = Math.round(rig.value() * 100) / 100;
+        if (rig.kind === 'edge-radius') {
+          const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
+          text = `${prefix} ${value} ${unitsRef.current}`;
+        } else {
+          text = `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
+        }
       }
       if (!anchor) {
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
-      const projected = new THREE.Vector3(anchor.x, anchor.y, anchor.z).project(
-        context.activeCamera
+      const screen = projectToScreen(
+        anchor,
+        context.activeCamera,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
       );
-      if (projected.z > 1) {
+      if (!screen) {
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
-      const width = renderer.domElement.clientWidth;
-      const height = renderer.domElement.clientHeight;
-      const left = ((projected.x + 1) / 2) * width;
-      const top = ((1 - projected.y) / 2) * height;
-      chip.style.left = `${left}px`;
-      chip.style.top = `${top}px`;
       chip.textContent = text;
-      chip.hidden = false;
-      keypadAnchorRef.current?.({ x: left, y: top });
+      hud.showAt(chip, screen.x, screen.y);
+      keypadAnchorRef.current?.(screen);
     }
 
     function positionDragHud(
@@ -2179,15 +1208,9 @@ export function ModelViewer({
       value: number,
       axis: DirectEditAxis
     ) {
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!hostRect) {
-        return;
-      }
       const label = axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
       dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitsRef.current}`;
-      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
-      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
-      dragHud.hidden = false;
+      hud.showAtPointer(dragHud, event, 14, -36);
     }
 
     function restoreFaceDrag() {
@@ -2196,36 +1219,22 @@ export function ModelViewer({
       }
       faceDrag.object.position.copy(faceDrag.initialPosition);
       faceDrag.object.scale.copy(faceDrag.initialScale);
-      controls.enabled = true;
+      gestures.release(faceDrag.pointerId, 'grab');
       dragHud.hidden = true;
-      renderer.domElement.style.cursor = 'grab';
-      if (renderer.domElement.hasPointerCapture(faceDrag.pointerId)) {
-        renderer.domElement.releasePointerCapture(faceDrag.pointerId);
-      }
     }
 
     function positionExtrudeHud(event: PointerEvent, distance: number) {
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!hostRect) {
-        return;
-      }
       const side = distance < 0 ? 'opposite side' : 'positive side';
       dragHud.textContent = `Extrude ${distance > 0 ? '+' : ''}${Math.round(distance * 10) / 10} ${unitsRef.current} · ${side}`;
-      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
-      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
-      dragHud.hidden = false;
+      hud.showAtPointer(dragHud, event, 14, -36);
     }
 
     function restoreExtrudeDrag() {
       if (!extrudeDrag) {
         return;
       }
-      controls.enabled = true;
+      gestures.release(extrudeDrag.pointerId, 'grab');
       dragHud.hidden = true;
-      renderer.domElement.style.cursor = 'grab';
-      if (renderer.domElement.hasPointerCapture(extrudeDrag.pointerId)) {
-        renderer.domElement.releasePointerCapture(extrudeDrag.pointerId);
-      }
     }
 
     /** Sketch-local point under the cursor: entity snap, then grid snap. */
@@ -2287,16 +1296,9 @@ export function ModelViewer({
       event: PointerEvent,
       kind: SnapTargetKind
     ) {
-      const marker = sketchSnapMarkerRef.current;
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!marker || !hostRect) {
-        return;
-      }
-      marker.dataset.kind = kind;
-      marker.title = kind;
-      marker.style.left = `${event.clientX - hostRect.left}px`;
-      marker.style.top = `${event.clientY - hostRect.top}px`;
-      marker.hidden = false;
+      sketchSnapMarker.dataset.kind = kind;
+      sketchSnapMarker.title = kind;
+      hud.showAtPointer(sketchSnapMarker, event);
     }
 
     function hideSketchSnapMarker() {
@@ -2311,15 +1313,10 @@ export function ModelViewer({
       text: string,
       appendUnits = true
     ) {
-      const label = sketchDimLabelRef.current;
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!label || !hostRect) {
-        return;
-      }
-      label.textContent = appendUnits ? `${text} ${unitsRef.current}` : text;
-      label.style.left = `${event.clientX - hostRect.left + 16}px`;
-      label.style.top = `${event.clientY - hostRect.top - 28}px`;
-      label.hidden = false;
+      sketchDimLabel.textContent = appendUnits
+        ? `${text} ${unitsRef.current}`
+        : text;
+      hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }
 
     function hideSketchDimLabel() {
@@ -2552,7 +1549,7 @@ export function ModelViewer({
           const value = event.shiftKey
             ? Math.round(raw * 100) / 100
             : Math.round(raw / snap) * snap;
-          rig.setOffset(value);
+          rig.setValue(value);
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
         }
@@ -2610,16 +1607,16 @@ export function ModelViewer({
       applyHover(pick(event));
     };
     const handlePointerDown = (event: PointerEvent) => {
-      cancelCameraTween();
+      cameraRig.cancelTween();
       if (event.button === 2) {
         rightClickGesture.begin(event.pointerId, event.clientX, event.clientY);
-        rightPanStartTarget = controls.target.clone();
+        rightPanStartTarget = cameraRig.controls.target.clone();
         return;
       }
       if (event.button !== 0) {
         return;
       }
-      downPosition = { x: event.clientX, y: event.clientY };
+      gestures.begin(event);
       const moveHit = pickMoveGizmo(event);
       if (moveHit && movePreviewRef.current) {
         const activeMove = movePreviewRef.current;
@@ -2684,9 +1681,7 @@ export function ModelViewer({
         const focus = { kind: data.kind, axis };
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true);
-        controls.enabled = false;
-        renderer.domElement.setPointerCapture(event.pointerId);
-        renderer.domElement.style.cursor = 'grabbing';
+        gestures.capture(event);
         event.preventDefault();
         return;
       }
@@ -2698,8 +1693,7 @@ export function ModelViewer({
           gesture.dragStart = point;
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
-          controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
+          gestures.capture(event, null);
           onSketchDrawingChangeRef.current(true);
           event.preventDefault();
         } else if (point && (mode.tool === 'line' || mode.tool === 'arc')) {
@@ -2707,7 +1701,7 @@ export function ModelViewer({
           gesture.moved = false;
           event.preventDefault();
         }
-        downPosition = { x: event.clientX, y: event.clientY };
+        gestures.begin(event);
         return;
       }
       const armedRig = offsetRigRef.current;
@@ -2720,7 +1714,7 @@ export function ModelViewer({
           const screen = screenDirectionFor(
             armedRig.origin
               .clone()
-              .addScaledVector(armedRig.direction, armedRig.offset()),
+              .addScaledVector(armedRig.direction, armedRig.value()),
             armedRig.direction
           );
           offsetDrag = {
@@ -2730,13 +1724,11 @@ export function ModelViewer({
             directionX: screen.directionX,
             directionY: screen.directionY,
             pixelsPerUnit: screen.pixelsPerUnit,
-            initialOffset: armedRig.offset()
+            initialOffset: armedRig.value()
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
-          controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
-          renderer.domElement.style.cursor = 'grabbing';
+          gestures.capture(event);
           event.preventDefault();
           return;
         }
@@ -2766,9 +1758,7 @@ export function ModelViewer({
           };
           edgeDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
-          controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
-          renderer.domElement.style.cursor = 'grabbing';
+          gestures.capture(event);
           event.preventDefault();
           return;
         }
@@ -2805,10 +1795,8 @@ export function ModelViewer({
               projectedLength > 0.1 ? projectedY / projectedLength : -1,
             pixelsPerUnit: Math.max(projectedLength, fallback)
           };
-          controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
+          gestures.capture(event);
           positionExtrudeHud(event, activeExtrude.distance);
-          renderer.domElement.style.cursor = 'grabbing';
           event.preventDefault();
           return;
         }
@@ -2897,8 +1885,7 @@ export function ModelViewer({
         initialPosition: object.position.clone(),
         initialScale: object.scale.clone()
       };
-      controls.enabled = false;
-      renderer.domElement.setPointerCapture(event.pointerId);
+      gestures.capture(event, null);
       positionDragHud(event, initialValue, direction.axis);
       event.preventDefault();
     };
@@ -2908,7 +1895,7 @@ export function ModelViewer({
         rightPanStartTarget = null;
         if (
           panStartTarget &&
-          controls.target.distanceToSquared(panStartTarget) >
+          cameraRig.controls.target.distanceToSquared(panStartTarget) >
             RIGHT_PAN_TARGET_EPSILON * RIGHT_PAN_TARGET_EPSILON
         ) {
           // OrbitControls changed the camera target, so this gesture panned
@@ -2929,10 +1916,7 @@ export function ModelViewer({
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
-        controls.enabled = true;
-        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        }
+        gestures.release(event, null);
         const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
         updateMoveGizmoFocus(moveFocus);
         if (moveFocus) {
@@ -2942,7 +1926,6 @@ export function ModelViewer({
           moveGizmoHud.hidden = true;
           renderer.domElement.style.cursor = '';
         }
-        downPosition = null;
         return;
       }
       if (sketchModeRef.current && event.button === 0) {
@@ -2950,13 +1933,8 @@ export function ModelViewer({
         const rig = sketchRigRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
-        const moved = downPosition
-          ? Math.hypot(
-              event.clientX - downPosition.x,
-              event.clientY - downPosition.y
-            ) >= 5
-          : false;
-        downPosition = null;
+        const moved = gestures.hasMoved(event);
+        gestures.release(event, null);
         if (mode.tool === 'select' && !moved) {
           setRayFromEvent(event);
           const pickThreshold =
@@ -2974,10 +1952,7 @@ export function ModelViewer({
           return;
         }
         if (gesture.dragStart) {
-          if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-            renderer.domElement.releasePointerCapture(event.pointerId);
-          }
-          controls.enabled = true;
+          gestures.release(event, null);
           if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
             const object = sketchObjectFromDrag(
               mode.tool,
@@ -3049,14 +2024,19 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
-        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        }
-        renderer.domElement.style.cursor = 'grab';
-        downPosition = null;
+        gestures.release(event, 'grab');
         const rig = edgeRigRef.current;
         const finalValue = rig?.value() ?? 0;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        if (moved < 4) {
+          rig?.setValue(completed.initialValue);
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
         if (
           rig &&
           finalValue > 1e-9 &&
@@ -3071,14 +2051,19 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
-        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        }
-        renderer.domElement.style.cursor = 'grab';
-        downPosition = null;
+        gestures.release(event, 'grab');
         const rig = offsetRigRef.current;
-        const finalOffset = rig?.offset() ?? 0;
+        const finalOffset = rig?.value() ?? 0;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        if (moved < 4) {
+          rig?.setValue(completed.initialOffset);
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
         if (
           rig &&
           Math.abs(finalOffset - completed.initialOffset) > 1e-9 &&
@@ -3091,7 +2076,6 @@ export function ModelViewer({
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
         extrudeDrag = null;
-        downPosition = null;
         return;
       }
       if (faceDrag && event.pointerId === faceDrag.pointerId) {
@@ -3102,7 +2086,20 @@ export function ModelViewer({
         );
         restoreFaceDrag();
         faceDrag = null;
-        downPosition = null;
+        if (moved < 4) {
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
+        // Primitive faces complete through this path rather than the generic
+        // click below, so a completed resize keeps its original selection.
+        cameraRig.pivotOn(
+          new THREE.Vector3(
+            completed.detail.point.x,
+            completed.detail.point.y,
+            completed.detail.point.z
+          )
+        );
         onSelectTopologyRef.current(
           completed.selection,
           false,
@@ -3120,43 +2117,16 @@ export function ModelViewer({
       if (event.button !== 0) {
         return;
       }
-      if (!downPosition) {
+      const press = gestures.track(event);
+      if (!press) {
         return;
       }
-      const moved = Math.hypot(
-        event.clientX - downPosition.x,
-        event.clientY - downPosition.y
-      );
-      downPosition = null;
-      if (moved < 5) {
-        const result = pick(event);
-        if (result?.region) {
-          onSelectRegionRef.current(result.region);
-        } else if (result?.sketchId) {
-          onSelectSketchProfileRef.current(result.sketchId);
-        } else {
-          const detail: PickDetail | undefined = result
-            ? {
-                point: {
-                  x: result.hit.point.x,
-                  y: result.hit.point.y,
-                  z: result.hit.point.z
-                },
-                normal: result.faceNormal
-                  ? {
-                      x: result.faceNormal.x,
-                      y: result.faceNormal.y,
-                      z: result.faceNormal.z
-                    }
-                  : undefined
-              }
-            : undefined;
-          onSelectTopologyRef.current(
-            result?.selection ?? null,
-            event.shiftKey,
-            detail
-          );
-        }
+      const stayedPut = !press.moved;
+      gestures.release(event, null);
+      if (stayedPut) {
+        selectAtPointer(event);
+      } else {
+        depthCycle = null;
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
@@ -3164,7 +2134,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
+        gestures.release(event);
         edgeRigRef.current?.setValue(0);
         requestRender();
       }
@@ -3172,14 +2142,14 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        controls.enabled = true;
-        offsetRigRef.current?.setOffset(0);
+        gestures.release(event);
+        offsetRigRef.current?.setValue(0);
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
-        controls.enabled = true;
+        gestures.release(event);
         clearMoveGizmoHover();
       }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
@@ -3192,7 +2162,7 @@ export function ModelViewer({
       }
       rightClickGesture.cancel(event.pointerId);
       rightPanStartTarget = null;
-      downPosition = null;
+      gestures.reset();
     };
     const handlePointerLeave = () => {
       if (moveDrag) {
@@ -3202,13 +2172,14 @@ export function ModelViewer({
       applyHover(null);
     };
     const handleDoubleClick = () => {
+      depthCycle = null;
       if (bodyGroup.children.length === 0) {
         return;
       }
       const pose = computeFitPose(camera, bodyGroup.children);
-      startCameraTween(pose, () => {
+      cameraRig.startTween(pose, () => {
         if (context.projection === 'orthographic') {
-          syncOrthographic(true);
+          cameraRig.syncOrthographic(true);
         }
       });
     };
@@ -3220,7 +2191,7 @@ export function ModelViewer({
     };
 
     const handleWheel = () => {
-      cancelCameraTween();
+      cameraRig.cancelTween();
     };
 
     renderer.domElement.addEventListener(
@@ -3250,8 +2221,8 @@ export function ModelViewer({
     function animate(now: number) {
       animationFrame = null;
       // Camera glide first so controls and the ortho mirror see the result.
-      const tweening = stepCameraTween(now);
-      const controlsChanged = controls.update();
+      const tweening = cameraRig.stepTween(now);
+      const controlsChanged = cameraRig.controls.update();
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
       if (context.projection === 'orthographic' && !tweening) {
@@ -3264,18 +2235,7 @@ export function ModelViewer({
       context.timer.update(now);
       const dt = Math.min(context.timer.getDelta(), 0.05);
       const ease = 1 - Math.exp(-dt * 16);
-      const hoverMaterial = context.hoverFaceMesh.material;
-      const hoverNext =
-        hoverMaterial.opacity +
-        (context.hoverFaceTarget - hoverMaterial.opacity) * ease;
-      hoverMaterial.opacity = hoverNext;
-      if (
-        context.hoverFaceTarget === 0 &&
-        hoverNext < 0.004 &&
-        context.hoverFaceMesh.visible
-      ) {
-        context.hoverFaceMesh.visible = false;
-      }
+      selection.step(dt);
       for (const material of context.fadeIns) {
         const target =
           (material.userData.targetOpacity as number | undefined) ?? 0.34;
@@ -3347,8 +2307,7 @@ export function ModelViewer({
           });
         }
       }
-      const hoverAnimating =
-        Math.abs(context.hoverFaceTarget - hoverMaterial.opacity) >= 0.004;
+      const hoverAnimating = selection.isSettling;
       if (
         tweening ||
         controlsChanged ||
@@ -3402,28 +2361,18 @@ export function ModelViewer({
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
-      hoverFaceMesh.geometry.dispose();
-      hoverFaceMesh.material.dispose();
+      selection.dispose();
       environment.dispose();
       gradientBackground.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
-      controls.removeEventListener('end', emitViewChange);
-      controls.removeEventListener('change', scheduleSettledViewChange);
-      if (viewChangeTimeout !== null) {
-        window.clearTimeout(viewChangeTimeout);
-      }
-      controls.dispose();
+      cameraRig.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
-      host.removeChild(dragHud);
-      host.removeChild(moveGizmoHud);
       offsetChip.removeEventListener('click', handleChipClick);
-      host.removeChild(offsetChip);
+      hud.dispose();
       offsetChipRef.current = null;
-      host.removeChild(sketchDimLabel);
       sketchDimLabelRef.current = null;
-      host.removeChild(sketchSnapMarker);
       sketchSnapMarkerRef.current = null;
       offsetSetterRef.current = null;
       moveGizmoHudRef.current = null;
@@ -3442,13 +2391,8 @@ export function ModelViewer({
     clearGroup(context.bodyGroup);
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
-    context.hoveredBodyId = null;
-    context.hoveredEdge = null;
+    context.selection.resetForRebuild();
     context.objectsByBodyId.clear();
-    context.fadeIns.clear();
-    context.hoverFaceKey = null;
-    context.hoverFaceTarget = 0;
-    context.hoverFaceMesh.visible = false;
     const edgeResolution = context.fatLineResolution();
     const selectedEdgeKeys = new Set(
       selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
@@ -3753,7 +2697,7 @@ export function ModelViewer({
       }
       context.controls.update();
       context.hasFitCamera = true;
-      onViewChangeRef.current(captureViewportCamera(context));
+      onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
     performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
@@ -3811,139 +2755,9 @@ export function ModelViewer({
     context.moveGizmoGroup.userData.baseGizmoScale = scale;
     context.moveGizmoGroup.userData.gizmoScale = scale;
 
-    const solid = (color: number, opacity = 0.95) =>
-      new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity,
-        depthTest: false
-      });
-    const invisible = () => new THREE.MeshBasicMaterial({ visible: false });
-    const handleData = (kind: MoveHandleKind, axis: MoveAxis) => ({
-      moveHandle: true,
-      kind,
-      axis
-    });
-    const visualData = (
-      kind: MoveHandleKind,
-      axis: MoveAxis,
-      baseColor: number,
-      baseOpacity: number
-    ) => ({
-      ...handleData(kind, axis),
-      moveHandleVisual: true,
-      baseColor,
-      baseOpacity
-    });
-    const focusData = (kind: MoveHandleKind, axis: MoveAxis) => ({
-      moveHandleFocus: true,
-      kind,
-      axis
-    });
-
-    for (const axis of ['x', 'y', 'z'] as const) {
-      const direction = MOVE_AXIS_VECTORS[axis];
-      const color = MOVE_AXIS_COLORS[axis];
-      const alignment = new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        direction
-      );
-
-      const shaft = new THREE.Mesh(
-        new THREE.CylinderGeometry(scale * 0.032, scale * 0.032, scale, 10),
-        solid(color)
-      );
-      shaft.position.copy(direction.clone().multiplyScalar(scale / 2));
-      shaft.quaternion.copy(alignment);
-
-      const head = new THREE.Mesh(
-        new THREE.ConeGeometry(scale * 0.09, scale * 0.22, 14),
-        solid(color)
-      );
-      head.position.copy(direction.clone().multiplyScalar(scale * 1.08));
-      head.quaternion.copy(alignment);
-
-      const arrowHit = new THREE.Mesh(
-        new THREE.CylinderGeometry(scale * 0.14, scale * 0.14, scale * 1.3, 8),
-        invisible()
-      );
-      arrowHit.position.copy(direction.clone().multiplyScalar(scale * 0.65));
-      arrowHit.quaternion.copy(alignment);
-      const shaftFocus = new THREE.Mesh(
-        new THREE.CylinderGeometry(scale * 0.055, scale * 0.055, scale, 12),
-        solid(0xf8fbff)
-      );
-      shaftFocus.position.copy(shaft.position);
-      shaftFocus.quaternion.copy(alignment);
-      shaftFocus.visible = false;
-      const headFocus = new THREE.Mesh(
-        new THREE.ConeGeometry(scale * 0.12, scale * 0.255, 16),
-        solid(0xf8fbff)
-      );
-      headFocus.position.copy(head.position);
-      headFocus.quaternion.copy(alignment);
-      headFocus.visible = false;
-
-      const ringRotation =
-        axis === 'x'
-          ? new THREE.Euler(0, Math.PI / 2, 0)
-          : axis === 'y'
-            ? new THREE.Euler(Math.PI / 2, 0, 0)
-            : new THREE.Euler(0, 0, 0);
-      const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.02, 8, 56),
-        solid(color, 0.6)
-      );
-      ring.rotation.copy(ringRotation);
-      const ringFocus = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.048, 10, 64),
-        solid(0xf8fbff)
-      );
-      ringFocus.rotation.copy(ringRotation);
-      ringFocus.visible = false;
-      const ringHit = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.1, 6, 40),
-        invisible()
-      );
-      ringHit.rotation.copy(ringRotation);
-
-      for (const part of [shaft, head]) {
-        part.userData = visualData('axis', axis, color, 0.95);
-        part.renderOrder = 20;
-        context.moveGizmoGroup.add(part);
-      }
-      arrowHit.userData = handleData('axis', axis);
-      context.moveGizmoGroup.add(arrowHit);
-      for (const part of [shaftFocus, headFocus]) {
-        part.userData = focusData('axis', axis);
-        part.renderOrder = 19;
-        context.moveGizmoGroup.add(part);
-      }
-      ring.userData = visualData('ring', axis, color, 0.6);
-      ring.renderOrder = 19;
-      context.moveGizmoGroup.add(ring);
-      ringHit.userData = handleData('ring', axis);
-      context.moveGizmoGroup.add(ringHit);
-      ringFocus.userData = focusData('ring', axis);
-      ringFocus.renderOrder = 18;
-      context.moveGizmoGroup.add(ringFocus);
+    for (const part of buildMoveGizmoParts(scale)) {
+      context.moveGizmoGroup.add(part);
     }
-
-    const centerHandle = new THREE.Mesh(
-      new THREE.SphereGeometry(scale * 0.11, 18, 12),
-      solid(0xe8f3ff, 0.9)
-    );
-    centerHandle.userData = visualData('center', 'x', 0xe8f3ff, 0.9);
-    centerHandle.renderOrder = 21;
-    context.moveGizmoGroup.add(centerHandle);
-    const centerFocus = new THREE.Mesh(
-      new THREE.SphereGeometry(scale * 0.155, 20, 14),
-      solid(0xf8fbff)
-    );
-    centerFocus.userData = focusData('center', 'x');
-    centerFocus.renderOrder = 20;
-    centerFocus.visible = false;
-    context.moveGizmoGroup.add(centerFocus);
 
     context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
     applyMoveGizmoFocus(
@@ -3956,6 +2770,12 @@ export function ModelViewer({
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
   }, [projection]);
+
+  // Navigation preferences are read per call, but the orbit controls cache
+  // them, so a live toggle has to push the new value onto the instance.
+  useEffect(() => {
+    contextRef.current?.refreshNavigation();
+  }, [settings.zoomToCursor, settings.middleDrag]);
 
   // Offset-face handle: built when a face is armed, torn down on deselect or
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).
@@ -3998,7 +2818,7 @@ export function ModelViewer({
       ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
       ghostGeometry
     });
-    rig.setOffset(offsetHandle.initialValue ?? 0);
+    rig.setValue(offsetHandle.initialValue ?? 0);
     // Fat-line materials need the viewport resolution for correct widths.
     const { width, height } = context.fatLineResolution();
     syncFatLineResolution(rig.worldGroup, width, height);
@@ -4180,7 +3000,7 @@ export function ModelViewer({
       direction: basis.normal,
       ghostGeometry
     });
-    rig.setOffset(regionHandle.initialValue ?? 0);
+    rig.setValue(regionHandle.initialValue ?? 0);
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
@@ -4442,7 +3262,7 @@ export function ModelViewer({
       );
       context.controls.update();
       context.hasFitCamera = true;
-      onViewChangeRef.current(captureViewportCamera(context));
+      onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
   }, [bodies.length, sketches]);

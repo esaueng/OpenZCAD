@@ -1,0 +1,55 @@
+/* ── Shared button styles ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Buttons ─────────────────────────────────────────────── */
+
+.primary,
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 11px;
+  border-radius: var(--radius-md);
+  border: var(--border-thin);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+}
+
+.primary {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--color-accent-hi);
+  border-color: var(--color-accent-hi);
+}
+
+.secondary {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.secondary:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-hover);
+}
+
+.secondary.danger {
+  color: var(--color-error);
+}
+
+.secondary.danger:hover:not(:disabled) {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.wide {
+  width: 100%;
+}
+

@@ -35,7 +35,9 @@ const brepkitOverlay = process.env.BREPKIT_WASM_PKG
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['test/**/*.test.ts'],
+    // Package-owned tests live beside their source so they resolve that
+    // package's own dependencies (`three` is not a root dependency).
+    include: ['test/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
     setupFiles: ['test/setup.ts'],
     coverage: {
       provider: 'v8',
