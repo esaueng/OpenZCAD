@@ -25,6 +25,7 @@ import {
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
+  HudLayer,
   PickService,
   SelectionManager,
   applyMoveGizmoFocus,
@@ -57,6 +58,7 @@ import {
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
   normalForTriangle,
+  projectToScreen,
   projectedWorldSizePx,
   sketchCentroid,
   snapTo,
@@ -867,16 +869,12 @@ export function ModelViewer({
       initialValue: number;
       lastPreviewAt: number;
     } | null = null;
-    const dragHud = document.createElement('div');
-    dragHud.className = 'direct-edit-hud';
-    dragHud.hidden = true;
-    host.appendChild(dragHud);
+    const hud = new HudLayer(host);
+    const dragHud = hud.create('direct-edit-hud');
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
-    const offsetChip = document.createElement('div');
-    offsetChip.className = 'handle-value-chip';
-    offsetChip.hidden = true;
+    const offsetChip = hud.create('handle-value-chip');
     const handleChipClick = () => {
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
@@ -889,22 +887,16 @@ export function ModelViewer({
       }
     };
     offsetChip.addEventListener('click', handleChipClick);
-    host.appendChild(offsetChip);
     offsetChipRef.current = offsetChip;
 
     // Cursor-following dimension readout for in-viewport sketching.
-    const sketchDimLabel = document.createElement('div');
-    sketchDimLabel.className = 'sketch-dim-label';
-    sketchDimLabel.hidden = true;
-    host.appendChild(sketchDimLabel);
+    const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
 
     // Entity-snap glyph pinned to the cursor: endpoint □, midpoint △, center ◎.
-    const sketchSnapMarker = document.createElement('div');
-    sketchSnapMarker.className = 'sketch-snap-marker';
-    sketchSnapMarker.hidden = true;
-    sketchSnapMarker.setAttribute('aria-hidden', 'true');
-    host.appendChild(sketchSnapMarker);
+    const sketchSnapMarker = hud.create('sketch-snap-marker', {
+      ariaHidden: true
+    });
     sketchSnapMarkerRef.current = sketchSnapMarker;
 
     // Exact entry drives the same preview the drag does.
@@ -916,11 +908,7 @@ export function ModelViewer({
       }
       requestRender();
     };
-    const moveGizmoHud = document.createElement('div');
-    moveGizmoHud.className = 'move-gizmo-hud';
-    moveGizmoHud.hidden = true;
-    moveGizmoHud.setAttribute('aria-hidden', 'true');
-    host.appendChild(moveGizmoHud);
+    const moveGizmoHud = hud.create('move-gizmo-hud', { ariaHidden: true });
     moveGizmoHudRef.current = moveGizmoHud;
 
     function pick(event: PointerEvent | MouseEvent) {
@@ -1002,10 +990,6 @@ export function ModelViewer({
       active = false,
       value?: number
     ) {
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!hostRect) {
-        return;
-      }
       const axisColor =
         focus.kind === 'center' ? 0xe8f3ff : MOVE_AXIS_COLORS[focus.axis];
       const baseLabel = moveGizmoHandleLabel(focus.kind, focus.axis);
@@ -1022,10 +1006,8 @@ export function ModelViewer({
         '--gizmo-axis-color',
         `#${axisColor.toString(16).padStart(6, '0')}`
       );
-      moveGizmoHud.style.left = `${event.clientX - hostRect.left + 16}px`;
-      moveGizmoHud.style.top = `${event.clientY - hostRect.top - 16}px`;
       moveGizmoHud.classList.toggle('is-active', active);
-      moveGizmoHud.hidden = false;
+      hud.showAtPointer(moveGizmoHud, event, 16, -16);
     }
 
     function clearMoveGizmoHover() {
@@ -1141,21 +1123,20 @@ export function ModelViewer({
         keypadAnchorRef.current?.(null);
         return;
       }
-      const projected = anchor.clone().project(context.activeCamera);
-      if (projected.z > 1) {
+      const screen = projectToScreen(
+        anchor,
+        context.activeCamera,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
+      );
+      if (!screen) {
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
-      const width = renderer.domElement.clientWidth;
-      const height = renderer.domElement.clientHeight;
-      const left = ((projected.x + 1) / 2) * width;
-      const top = ((1 - projected.y) / 2) * height;
-      chip.style.left = `${left}px`;
-      chip.style.top = `${top}px`;
       chip.textContent = text;
-      chip.hidden = false;
-      keypadAnchorRef.current?.({ x: left, y: top });
+      hud.showAt(chip, screen.x, screen.y);
+      keypadAnchorRef.current?.(screen);
     }
 
     function positionDragHud(
@@ -1163,15 +1144,9 @@ export function ModelViewer({
       value: number,
       axis: DirectEditAxis
     ) {
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!hostRect) {
-        return;
-      }
       const label = axis === 'x' ? 'Width' : axis === 'y' ? 'Height' : 'Depth';
       dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitsRef.current}`;
-      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
-      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
-      dragHud.hidden = false;
+      hud.showAtPointer(dragHud, event, 14, -36);
     }
 
     function restoreFaceDrag() {
@@ -1185,15 +1160,9 @@ export function ModelViewer({
     }
 
     function positionExtrudeHud(event: PointerEvent, distance: number) {
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!hostRect) {
-        return;
-      }
       const side = distance < 0 ? 'opposite side' : 'positive side';
       dragHud.textContent = `Extrude ${distance > 0 ? '+' : ''}${Math.round(distance * 10) / 10} ${unitsRef.current} · ${side}`;
-      dragHud.style.left = `${event.clientX - hostRect.left + 14}px`;
-      dragHud.style.top = `${event.clientY - hostRect.top - 36}px`;
-      dragHud.hidden = false;
+      hud.showAtPointer(dragHud, event, 14, -36);
     }
 
     function restoreExtrudeDrag() {
@@ -1263,16 +1232,9 @@ export function ModelViewer({
       event: PointerEvent,
       kind: SnapTargetKind
     ) {
-      const marker = sketchSnapMarkerRef.current;
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!marker || !hostRect) {
-        return;
-      }
-      marker.dataset.kind = kind;
-      marker.title = kind;
-      marker.style.left = `${event.clientX - hostRect.left}px`;
-      marker.style.top = `${event.clientY - hostRect.top}px`;
-      marker.hidden = false;
+      sketchSnapMarker.dataset.kind = kind;
+      sketchSnapMarker.title = kind;
+      hud.showAtPointer(sketchSnapMarker, event);
     }
 
     function hideSketchSnapMarker() {
@@ -1287,15 +1249,10 @@ export function ModelViewer({
       text: string,
       appendUnits = true
     ) {
-      const label = sketchDimLabelRef.current;
-      const hostRect = hostRef.current?.getBoundingClientRect();
-      if (!label || !hostRect) {
-        return;
-      }
-      label.textContent = appendUnits ? `${text} ${unitsRef.current}` : text;
-      label.style.left = `${event.clientX - hostRect.left + 16}px`;
-      label.style.top = `${event.clientY - hostRect.top - 28}px`;
-      label.hidden = false;
+      sketchDimLabel.textContent = appendUnits
+        ? `${text} ${unitsRef.current}`
+        : text;
+      hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }
 
     function hideSketchDimLabel() {
@@ -2338,14 +2295,10 @@ export function ModelViewer({
       renderer.dispose();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
-      host.removeChild(dragHud);
-      host.removeChild(moveGizmoHud);
       offsetChip.removeEventListener('click', handleChipClick);
-      host.removeChild(offsetChip);
+      hud.dispose();
       offsetChipRef.current = null;
-      host.removeChild(sketchDimLabel);
       sketchDimLabelRef.current = null;
-      host.removeChild(sketchSnapMarker);
       sketchSnapMarkerRef.current = null;
       offsetSetterRef.current = null;
       moveGizmoHudRef.current = null;

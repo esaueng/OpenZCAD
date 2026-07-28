@@ -18,6 +18,7 @@ import {
   moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
+  projectToScreen,
   RightClickGestureTracker,
   VIEW_DIRECTIONS
 } from './index';
@@ -449,5 +450,35 @@ describe('the move gizmo is built to be picked and focused', () => {
     const reach = (list: THREE.Object3D[]) =>
       Math.max(...list.map((part) => part.position.length()));
     expect(reach(large)).toBeCloseTo(reach(small) * 10, 6);
+  });
+});
+
+describe('projecting a world anchor to the screen', () => {
+  function camera() {
+    const perspective = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    perspective.position.set(0, 0, 10);
+    perspective.lookAt(0, 0, 0);
+    perspective.updateMatrixWorld(true);
+    perspective.updateProjectionMatrix();
+    return perspective;
+  }
+
+  it('puts a point on the view axis at the centre of the viewport', () => {
+    const screen = projectToScreen(new THREE.Vector3(0, 0, 0), camera(), 800, 600);
+    expect(screen?.x).toBeCloseTo(400, 6);
+    expect(screen?.y).toBeCloseTo(300, 6);
+  });
+
+  it('grows y downward, matching CSS rather than clip space', () => {
+    const above = projectToScreen(new THREE.Vector3(0, 1, 0), camera(), 800, 600);
+    expect(above!.y).toBeLessThan(300);
+  });
+
+  it('reports nothing for a point behind the camera', () => {
+    // An anchor that has swung behind the viewer must hide its chip rather
+    // than reappear mirrored on the far side of the screen.
+    expect(
+      projectToScreen(new THREE.Vector3(0, 0, 200), camera(), 800, 600)
+    ).toBeNull();
   });
 });
