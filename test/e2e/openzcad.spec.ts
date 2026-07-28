@@ -961,6 +961,8 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
   // Export STEP and verify the download is a real ISO 10303-21 file.
+  // Exporting now lives behind the topbar File menu, so open that first.
+  await page.locator('.file-menu > summary').click();
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'STEP' }).click();
   const download = await downloadPromise;
