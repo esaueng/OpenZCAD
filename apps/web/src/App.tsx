@@ -118,9 +118,8 @@ import {
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
-import {
-  effectiveSelectionFilter
-} from './lib/selectionFilter';
+import { effectiveSelectionFilter } from './lib/selectionFilter';
+import { commandPromptText } from './lib/interaction/prompt';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -3354,7 +3353,12 @@ export function App() {
         return;
       }
 
-      if (typing || meta || event.altKey) {
+      // Escape is exempt from the typing guard. Every other shortcut must
+      // yield to a focused field, but a panel that autofocuses an input is
+      // exactly the situation someone presses Escape to get out of, and
+      // swallowing it there breaks the one key the workspace promises is
+      // always a way back.
+      if ((typing && event.key !== 'Escape') || meta || event.altKey) {
         return;
       }
 
@@ -3518,8 +3522,12 @@ export function App() {
   const tone: 'ready' | 'warning' | 'running' =
     /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
 
+  // An operation in flight outranks the tool hint: it knows which rung of
+  // the Escape ladder you are on, which is the one thing a generic
+  // "Esc cancels" can never tell you.
   const hint =
-    tool === 'sketch'
+    commandPromptText(interaction, tool !== null || selectedFeatureNodeId !== null) ??
+    (tool === 'sketch'
       ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
       : tool === 'extrude'
         ? extrudePreview
@@ -3539,7 +3547,7 @@ export function App() {
                   ? 'Edit in the panel · Del deletes · Esc closes'
                   : viewerBodies.length > 0
                     ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                    : 'Ctrl+K commands · ? shortcuts';
+                    : 'Ctrl+K commands · ? shortcuts');
 
   const paletteCommands: PaletteCommand[] = [
     ...TOOL_GROUPS.flatMap((group) =>
