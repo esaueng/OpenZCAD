@@ -23,6 +23,7 @@ import {
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
   cycleDepthPick,
+  edgeRunFrom,
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
@@ -218,6 +219,14 @@ interface ModelViewerProps {
     additive: boolean,
     detail?: PickDetail
   ): void;
+  /**
+   * A whole smooth run of edges at once, from double-clicking one of them.
+   *
+   * Separate from `onSelectTopology` because the edges have to land in one
+   * update: replaying them additively would read the same stale selection
+   * each time and keep only the last.
+   */
+  onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
@@ -474,6 +483,7 @@ export function ModelViewer({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  onSelectEdgeChain,
   offsetHandle,
   onOffsetCommit,
   onOpenOffsetKeypad,
@@ -501,6 +511,8 @@ export function ModelViewer({
   const contextRef = useRef<SceneContext | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
+  onSelectEdgeChainRef.current = onSelectEdgeChain;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
   const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
@@ -2171,8 +2183,35 @@ export function ModelViewer({
       clearMoveGizmoHover();
       applyHover(null);
     };
-    const handleDoubleClick = () => {
+    const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
+      // Double-clicking an edge takes the whole smooth run it belongs to.
+      // Rounding a lip means selecting every edge around it, and a filleted
+      // rim is a run of lines and arcs rather than one edge.
+      const picked = picker.pick(event);
+      if (picked?.selection?.kind === 'edge' && picked.selection.topologyId) {
+        const body = bodiesRef.current.find(
+          (candidate) => candidate.bodyId === picked.selection?.bodyId
+        );
+        const edges = body?.topology?.edges;
+        if (edges) {
+          const chain = edgeRunFrom(edges, picked.selection.topologyId);
+          if (chain.length > 1) {
+            const byId = new Map(
+              edges.map((edgeTopology) => [edgeTopology.topologyId, edgeTopology])
+            );
+            onSelectEdgeChainRef.current(
+              chain.map((topologyId) => ({
+                bodyId: picked.selection!.bodyId,
+                kind: 'edge' as const,
+                topologyId,
+                hash: byId.get(topologyId)?.hash
+              }))
+            );
+            return;
+          }
+        }
+      }
       if (bodyGroup.children.length === 0) {
         return;
       }

@@ -20,6 +20,7 @@ export * from './camera/views';
 // resolution, and edge hit ordering.
 export * from './pick/PickService';
 export * from './pick/depthCycle';
+export * from './pick/edgeChain';
 export * from './pick/meshes';
 export * from './pick/edges';
 
