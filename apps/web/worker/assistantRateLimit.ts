@@ -67,6 +67,18 @@ export async function consumeAssistantQuota(
   cost = 1
 ): Promise<AssistantQuotaResult> {
   const { limit, windowSeconds } = rateLimitSettings(env);
+  // Local Vite sessions all use the fixed user_beta_dev identity. Persisting a
+  // production quota for that shared identity makes ordinary development
+  // retries (especially weighted drawing turns) lock every local session out.
+  // Keep the gate on beta, where identities represent an account or client IP.
+  if (env.ENVIRONMENT === 'development') {
+    return {
+      allowed: true,
+      limit,
+      remaining: limit,
+      retryAfterSeconds: 0
+    };
+  }
   const windowMs = windowSeconds * 1_000;
   const windowStart = Math.floor(now / windowMs) * windowMs;
   // A nonsensical cost must not become a free request.
