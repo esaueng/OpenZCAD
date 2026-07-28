@@ -324,6 +324,37 @@ describe('worker authentication', () => {
     );
   });
 
+  it('reports an unavailable security check when siteverify is not JSON', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('upstream unavailable', { status: 502 }))
+    );
+
+    await expect(
+      startEmailLogin(
+        new Request('https://example.com/api/auth/email/start'),
+        {
+          email: 'person@example.com',
+          turnstileToken: 'turnstile-token'
+        },
+        {
+          ENVIRONMENT: 'beta',
+          AUTH_MODE: 'email-code',
+          DB: emptyD1(),
+          EMAIL: { send: async () => ({ messageId: 'message-test' }) },
+          AUTH_EMAIL_FROM: 'login@auth.example.com',
+          AUTH_OTP_PEPPER: 'test-pepper',
+          TURNSTILE_SITE_KEY: 'site-key',
+          TURNSTILE_SECRET_KEY: 'turnstile-secret'
+        }
+      )
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'AUTH_CHALLENGE_UNAVAILABLE',
+      message: 'The security check is temporarily unavailable.'
+    });
+  });
+
   it('consumes an email code once and creates an opaque authenticated session', async () => {
     const fixture = await verificationD1('123456');
     const env = {

@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import type {
   BodyRepresentation,
   BodyTopology,
@@ -216,6 +221,102 @@ function geometryFromMesh(
   return geometry;
 }
 
+/** Viewport size in CSS pixels; fat-line widths are expressed in the same unit. */
+export interface FatLineResolution {
+  width: number;
+  height: number;
+}
+
+export interface FatLineOptions {
+  color: THREE.ColorRepresentation;
+  /** Width in CSS pixels. Screen-space, so it survives camera zoom. */
+  linewidth: number;
+  opacity?: number;
+  depthTest?: boolean;
+  /** Viewport size the shader rasterizes against; keep it in sync on resize. */
+  resolution?: FatLineResolution;
+}
+
+/**
+ * Shared material for every screen-space polyline in the viewport.
+ *
+ * WebGL's native line primitive is locked to a single device pixel and picks
+ * up almost nothing from the framebuffer's MSAA, so it staircases badly on
+ * curves — a sketch circle came out as one hard pixel with no falloff at all.
+ * Line2 draws the line as a quad instead, whose long edges MSAA does resolve,
+ * which is where the antialiasing actually comes from.
+ *
+ * `alphaToCoverage` only reaches the shader's rounded endcaps; measured across
+ * a body edge it leaves the line body byte-for-byte identical. It is on because
+ * the caps are otherwise hard-clipped, not because it smooths the length.
+ */
+export function createFatLineMaterial(options: FatLineOptions): LineMaterial {
+  const material = new LineMaterial({
+    color: options.color,
+    linewidth: options.linewidth,
+    transparent: true,
+    alphaToCoverage: true,
+    opacity: options.opacity ?? 1,
+    depthTest: options.depthTest ?? true
+  });
+  material.resolution.set(
+    Math.max(options.resolution?.width ?? 1, 1),
+    Math.max(options.resolution?.height ?? 1, 1)
+  );
+  return material;
+}
+
+/**
+ * Antialiased polyline through `points`. Closed profiles repeat their first
+ * point rather than using LineLoop, which has no fat-line equivalent.
+ */
+export function createFatLine(
+  points: THREE.Vector3[],
+  options: FatLineOptions & { closed?: boolean }
+): Line2 {
+  const vertices =
+    options.closed && points.length > 2 ? [...points, points[0]!] : points;
+  const geometry = new LineGeometry();
+  geometry.setPositions(
+    vertices.flatMap((point) => [point.x, point.y, point.z])
+  );
+  const line = new Line2(geometry, createFatLineMaterial(options));
+  line.computeLineDistances();
+  return line;
+}
+
+/** Antialiased disjoint segments from flat xyz pairs (two points per segment). */
+export function createFatLineSegments(
+  positions: ArrayLike<number>,
+  options: FatLineOptions
+): LineSegments2 {
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(Array.from(positions));
+  const segments = new LineSegments2(geometry, createFatLineMaterial(options));
+  segments.computeLineDistances();
+  return segments;
+}
+
+/**
+ * Refreshes every fat line under `root` after a resize. Fat-line widths are in
+ * CSS pixels, so the shader needs the viewport size; a registry of materials
+ * would have to be kept in sync by hand at each creation site, and the body
+ * rebuild used to clear one out from under the handle rigs.
+ */
+export function syncFatLineResolution(
+  root: THREE.Object3D,
+  width: number,
+  height: number
+) {
+  const safeWidth = Math.max(width, 1);
+  const safeHeight = Math.max(height, 1);
+  root.traverse((child: THREE.Object3D) => {
+    if (child instanceof LineSegments2) {
+      child.material.resolution.set(safeWidth, safeHeight);
+    }
+  });
+}
+
 /**
  * Classic CAD body material. Phong gives planar faces an even technical shade
  * and broad highlights on curves without environment-map reflections crawling
@@ -237,8 +338,18 @@ export function createBodyMaterial(body: BodyRepresentation) {
  * Builds the render object for one body: a studio-shaded mesh plus a subtle
  * feature-edge overlay for the classic CAD look. Body vertices are already
  * in world space (the kernel bakes transforms), so no placement is applied.
+ *
+ * The overlay is a fallback only. Bodies that carry B-rep topology get their
+ * edges from the exact curves instead (the viewer draws one fat line per
+ * topology edge), and drawing both put two lines along nearly — but not
+ * exactly — the same path. Bodies from the compat kernel, which the AI preview
+ * uses, have no topology at all, so tessellated feature edges remain their
+ * only outline.
  */
-export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
+export function createObjectForBody(
+  body: BodyRepresentation,
+  resolution?: FatLineResolution
+): THREE.Object3D {
   const geometry = geometryFromMesh(body.mesh, body.topology);
   const material = createBodyMaterial(body);
   const mesh = new THREE.Mesh(geometry, material);
@@ -249,16 +360,21 @@ export function createObjectForBody(body: BodyRepresentation): THREE.Object3D {
   // bands across otherwise planar analytic faces.
   mesh.receiveShadow = false;
 
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(geometry, 24),
-    new THREE.LineBasicMaterial({
-      color: '#0a0f16',
-      transparent: true,
-      opacity: 0.78
-    })
-  );
-  edges.raycast = () => undefined; // selection picks faces, not edge lines
-  mesh.add(edges);
+  if (!body.topology?.edges.length) {
+    const featureEdges = new THREE.EdgesGeometry(geometry, 24);
+    const edges = createFatLineSegments(
+      featureEdges.getAttribute('position').array,
+      {
+        color: '#0a0f16',
+        linewidth: 1.4,
+        opacity: 0.78,
+        resolution
+      }
+    );
+    featureEdges.dispose();
+    edges.raycast = () => undefined; // selection picks faces, not edge lines
+    mesh.add(edges);
+  }
   return mesh;
 }
 
@@ -376,6 +492,37 @@ export function createStudioGrid(): THREE.Mesh {
   return mesh;
 }
 
+/**
+ * Origin axis triad. THREE.AxesHelper draws native GL lines, which are stuck
+ * at one hard device pixel; these are fat lines for the same reason every
+ * other viewport polyline is. Picking stays off — the triad is decoration, and
+ * Line2 raycasts against a screen-space radius that would make it an easy
+ * accidental hit where the thin native lines were practically unhittable.
+ */
+export function createAxesGizmo(
+  size: number,
+  resolution?: FatLineResolution
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'axes';
+  const axes = [
+    { direction: new THREE.Vector3(size, 0, 0), color: '#ff0000' },
+    { direction: new THREE.Vector3(0, size, 0), color: '#00ff00' },
+    { direction: new THREE.Vector3(0, 0, size), color: '#0000ff' }
+  ];
+  for (const axis of axes) {
+    const line = createFatLine([new THREE.Vector3(), axis.direction], {
+      color: axis.color,
+      linewidth: 1.6,
+      opacity: 0.55,
+      resolution
+    });
+    line.raycast = () => undefined;
+    group.add(line);
+  }
+  return group;
+}
+
 /** Invisible floor that only receives soft shadows, grounding the model. */
 export function createShadowCatcher(): THREE.Mesh {
   const mesh = new THREE.Mesh(
@@ -389,12 +536,23 @@ export function createShadowCatcher(): THREE.Mesh {
   return mesh;
 }
 
-/** Configures the key light's shadow frustum for a model of `radius` size. */
+/**
+ * Configures the key light's shadow frustum for a model of `radius` size.
+ *
+ * Blockiness in the penumbra is a texel-density problem. three's PCF sampler
+ * takes only five Vogel-disk taps and rotates the pattern per pixel with
+ * interleaved gradient noise, so a wide `radius` spreads those few taps thin
+ * and the dither reads as chunky squares once the camera is close enough to
+ * magnify shadow texels. The fix is more texels over less world space and a
+ * tighter disk, not a wider blur.
+ */
 export function tuneShadowFrustum(
   light: THREE.DirectionalLight,
   radius: number
 ) {
-  const extent = Math.max(radius * 2.2, 40);
+  // 1.6 still clears the cast shadow of a model lit from above and to the side,
+  // and covers 1.9x less area than 2.2 did — every texel gets that much finer.
+  const extent = Math.max(radius * 1.6, 40);
   const { camera } = light.shadow;
   camera.left = -extent;
   camera.right = extent;
@@ -403,10 +561,13 @@ export function tuneShadowFrustum(
   camera.near = 1;
   camera.far = extent * 6;
   camera.updateProjectionMatrix();
-  light.shadow.mapSize.set(2048, 2048);
+  // 3072 rather than 4096: with the tighter frustum this still lands about 2x
+  // finer than the old 2048, at roughly half the shadow-texture memory of a
+  // 4096 map.
+  light.shadow.mapSize.set(3072, 3072);
   light.shadow.bias = -0.0002;
   light.shadow.normalBias = 0.02;
-  light.shadow.radius = 5;
+  light.shadow.radius = 3;
 }
 
 export interface CameraPose {

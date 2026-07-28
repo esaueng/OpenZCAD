@@ -1,4 +1,11 @@
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import {
+  createFatLine,
+  createFatLineMaterial,
+  type FatLineResolution
+} from '@openzcad/viewport';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
 import type { SketchPoint } from '../../lib/sketch/session';
@@ -16,6 +23,8 @@ const COMMITTED_COLOR = 0x4da3ff;
 const SELECTED_COLOR = 0xf59e0b;
 const IN_PROGRESS_COLOR = 0xf59e0b;
 const CIRCLE_SEGMENTS = 96;
+/** Screen-space width in CSS pixels for the sketch polylines. */
+const SKETCH_LINE_WIDTH = 1.6;
 
 export interface SketchModeRig {
   group: THREE.Group;
@@ -117,7 +126,15 @@ export function objectPolyline(
   }
 }
 
-export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
+/**
+ * @param resolution Live viewport size in CSS pixels. Read on every rebuild
+ * rather than captured once, so objects drawn after a resize come out at the
+ * right width even before the next resize sweep.
+ */
+export function buildSketchModeRig(
+  basis: PlaneBasis,
+  resolution: () => FatLineResolution
+): SketchModeRig {
   const group = new THREE.Group();
   group.name = 'sketch-mode';
 
@@ -181,14 +198,14 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
   committedGroup.name = 'sketch-committed';
   group.add(committedGroup);
 
-  const inProgressMaterial = new THREE.LineBasicMaterial({
+  const inProgressMaterial = createFatLineMaterial({
     color: IN_PROGRESS_COLOR,
-    transparent: true,
+    linewidth: SKETCH_LINE_WIDTH,
     opacity: 0.95,
-    depthTest: false
+    depthTest: false,
+    resolution: resolution()
   });
-  const inProgressGeometry = new THREE.BufferGeometry();
-  const inProgress = new THREE.Line(inProgressGeometry, inProgressMaterial);
+  const inProgress = new Line2(new LineGeometry(), inProgressMaterial);
   inProgress.renderOrder = 12;
   inProgress.visible = false;
   inProgress.frustumCulled = false;
@@ -197,6 +214,7 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
   const disposeChildren = (container: THREE.Object3D) => {
     for (const child of [...container.children]) {
       container.remove(child);
+      // Line2 extends Mesh, so fat lines are covered by the Mesh branch.
       if (child instanceof THREE.Line || child instanceof THREE.Mesh) {
         (child.geometry as THREE.BufferGeometry).dispose();
         (child.material as THREE.Material).dispose();
@@ -221,21 +239,33 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
         const vertices = polyline.points.map((point) =>
           liftPoint(basis, point)
         );
+        // The native line stays on as an invisible pick proxy. Line2 raycasts
+        // against a screen-space threshold whereas pickObject's caller supplies
+        // a world-unit radius, so keeping it leaves selection behaviour exactly
+        // as it was. Both are siblings: an invisible parent would hide the
+        // visual with it.
         const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
-        const material = new THREE.LineBasicMaterial({
+        const pickProxy = polyline.closed
+          ? new THREE.LineLoop(geometry, new THREE.LineBasicMaterial())
+          : new THREE.Line(geometry, new THREE.LineBasicMaterial());
+        pickProxy.visible = false;
+        pickProxy.frustumCulled = false;
+        pickProxy.userData.sketchObjectId = object.id;
+        committedGroup.add(pickProxy);
+
+        const visual = createFatLine(vertices, {
           color:
             object.id === selectedObjectId ? SELECTED_COLOR : COMMITTED_COLOR,
-          transparent: true,
+          linewidth: SKETCH_LINE_WIDTH,
           opacity: 0.95,
-          depthTest: false
+          depthTest: false,
+          closed: polyline.closed,
+          resolution: resolution()
         });
-        const line = polyline.closed
-          ? new THREE.LineLoop(geometry, material)
-          : new THREE.Line(geometry, material);
-        line.renderOrder = 11;
-        line.frustumCulled = false;
-        line.userData.sketchObjectId = object.id;
-        committedGroup.add(line);
+        visual.renderOrder = 11;
+        visual.frustumCulled = false;
+        visual.raycast = () => undefined; // the proxy is the only pick target
+        committedGroup.add(visual);
       }
     },
     pickObject(raycaster, threshold) {
@@ -258,8 +288,18 @@ export function buildSketchModeRig(basis: PlaneBasis): SketchModeRig {
       if (closed && vertices.length > 2) {
         vertices.push(vertices[0]!.clone());
       }
+      const geometry = new LineGeometry();
+      geometry.setPositions(
+        vertices.flatMap((vertex) => [vertex.x, vertex.y, vertex.z])
+      );
       inProgress.geometry.dispose();
-      inProgress.geometry = new THREE.BufferGeometry().setFromPoints(vertices);
+      inProgress.geometry = geometry;
+      inProgress.computeLineDistances();
+      const { width, height } = resolution();
+      inProgressMaterial.resolution.set(
+        Math.max(width, 1),
+        Math.max(height, 1)
+      );
       inProgress.visible = true;
     },
     dispose() {

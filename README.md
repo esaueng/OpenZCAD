@@ -13,7 +13,7 @@ OpenZCAD is a browser-first parametric CAD workspace for people who want to turn
 - Local-first IndexedDB autosave. When local and beta-cloud copies differ, OpenZCAD opens the newer document version instead of discarding local work.
 - Optional passwordless cloud profiles using single-use email codes, opaque D1-backed sessions, and owner-scoped project/artifact routes. The CAD workspace remains usable without signing in, and the deployment assistant uses an IP-scoped quota that never stores the raw address. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
 - Live per-project collaboration over a Durable Object WebSocket room, with presence, version-aware document sync, and conflict preservation.
-- Streamed AI proposals through the OpenAI Responses API. The assistant receives compact feature history plus the active topology selection and can propose parameter/dimension edits, primitives, sweeps, booleans, transforms, fillets/chamfers, and patterns. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
+- Streamed AI proposals through the OpenAI Responses API. The assistant receives compact feature history, live-body exact topology summaries, and the active selection, so spatial requests such as “fillet all edges” can resolve the current body’s stable edge hashes without manual selection. It can propose parameter/dimension edits, primitives, sweeps, booleans, transforms, fillets/chamfers, and patterns. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
 - A global Settings workspace for device, viewport, sketching, account, privacy, and AI preferences. Non-secret preferences work locally and can sync by authenticated user; personal AI tokens are encrypted by the Worker and never enter project documents or browser storage.
 - Beta Worker endpoints for project persistence, revisions/checkpoints, upload coordination, artifact metadata, exports, and AI proposal streaming.
 
@@ -64,23 +64,39 @@ projects, artifacts, and collaboration. Set `AUTH_LEGACY_OWNER_EMAIL` as a
 Worker secret or variable to the verified email that should inherit historical
 `user_beta_dev` projects.
 
-Email sign-in uses Cloudflare Email Service and Turnstile. Onboard the
-`auth.esau.app` sending domain, create a managed Turnstile widget for
-`zcad.esau.app`, and keep its secret plus a random OTP HMAC key in Worker
-secrets:
+Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a
+real beta login:
+
+- onboard the `auth.esau.app` sending domain and keep the `EMAIL` binding
+  restricted to `login@auth.esau.app`;
+- create a managed Turnstile widget whose hostname allowlist contains
+  `zcad.esau.app`, and bind its public site key as `TURNSTILE_SITE_KEY`;
+- apply D1 migrations `0004_user_settings.sql` and
+  `0005_email_code_auth.sql`;
+- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, and
+  `AUTH_EMAIL_FROM=login@auth.esau.app`;
+- provide `AUTH_OTP_PEPPER` and `TURNSTILE_SECRET_KEY` as Worker secrets.
+  Personal AI-token storage additionally requires the stable
+  `SETTINGS_ENCRYPTION_KEY` secret.
+
+Generate the two independent 32-byte application secrets and set all secrets
+without writing their values to the repository:
 
 ```bash
 openssl rand -base64 32
 pnpm exec wrangler secret put AUTH_OTP_PEPPER
-pnpm exec wrangler secret put TURNSTILE_SITE_KEY
 pnpm exec wrangler secret put TURNSTILE_SECRET_KEY
+openssl rand -base64 32
+pnpm exec wrangler secret put SETTINGS_ENCRYPTION_KEY
 ```
 
 The checked-in beta Wrangler configuration restricts the `EMAIL` binding to
 `login@auth.esau.app`. Login codes expire after ten minutes, are single-use,
 and are protected by per-email and per-IP rate limits. Sessions use a
 `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the
-opaque session token is stored in D1.
+opaque session token is stored in D1. Turnstile responses must carry the
+`email-code` action, and beta verification also requires the response hostname
+to exactly match the Worker request hostname.
 
 OpenRouter is the default AI provider. Local Vite development declares
 `OPENROUTER_API_KEY` as a required Worker secret, so it can be provided by the
