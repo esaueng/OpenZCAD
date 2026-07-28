@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraPose } from '../render/scene';
-import { orbitPivotForPoint } from './views';
+import { orbitPivotForPoint, tweenDurationFor } from './views';
 import type { ProjectionMode } from '../types';
 
 /** A durable camera pose: what a reload restores. */
@@ -12,8 +12,6 @@ export interface ViewportCameraState {
   /** Vertical half-size of the orthographic frustum before zoom is applied. */
   orthographicHalfHeight?: number;
 }
-
-const CAMERA_TWEEN_MS = 420;
 
 /**
  * OrbitControls keeps easing after its `end` event when damping is on.
@@ -230,12 +228,21 @@ export class CameraController {
       this.options.requestRender();
       return;
     }
+    // Starting from wherever the camera is right now — mid-glide included —
+    // is what lets one view request interrupt another without a jump.
+    const fromPosition = this.perspective.position.clone();
+    const fromTarget = this.orbit.target.clone();
     this.tween = {
       startTime: performance.now(),
-      duration: CAMERA_TWEEN_MS,
-      fromPosition: this.perspective.position.clone(),
+      duration: tweenDurationFor(
+        fromPosition,
+        pose.position,
+        fromTarget,
+        pose.target
+      ),
+      fromPosition,
       toPosition: pose.position.clone(),
-      fromTarget: this.orbit.target.clone(),
+      fromTarget,
       toTarget: pose.target.clone(),
       near: pose.near,
       far: pose.far,

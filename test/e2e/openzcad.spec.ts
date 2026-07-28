@@ -1550,3 +1550,52 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   expect(iso![0]!).toBeGreaterThan(0);
   expect(iso![2]!).toBeGreaterThan(0);
 });
+
+test('a view request interrupts the glide already in flight', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Interrupt Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const camera = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+
+  // Ask for Top, then cut across it with Right before it can settle.
+  await page.keyboard.press('2');
+  await page.waitForTimeout(60);
+  await page.keyboard.press('3');
+  await page.waitForTimeout(1200);
+
+  const settled = await camera();
+  expect(settled).not.toBeNull();
+  // Right looks along +X: the camera ends beside the part, not above it.
+  const offsetX = settled!.position[0]! - settled!.target[0]!;
+  const offsetZ = settled!.position[2]! - settled!.target[2]!;
+  expect(offsetX).toBeGreaterThan(1);
+  expect(Math.abs(offsetZ)).toBeLessThan(1);
+});
