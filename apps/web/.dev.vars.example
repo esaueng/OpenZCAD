@@ -19,7 +19,8 @@ AI_MODEL=openai/gpt-5.6-terra
 # secrets are not needed for normal local CAD development.
 #
 # Beta email-code authentication requires Worker secrets AUTH_OTP_PEPPER and
-# TURNSTILE_SECRET_KEY plus TURNSTILE_SITE_KEY, AUTH_EMAIL_FROM, a D1 binding,
-# and an EMAIL sending binding in the deployed Wrangler configuration.
+# TURNSTILE_SECRET_KEY, the public TURNSTILE_SITE_KEY binding,
+# AUTH_EMAIL_FROM, a D1 binding with migration 0005 applied, and an EMAIL
+# sending binding backed by an onboarded sender domain.
 # AUTH_LEGACY_OWNER_EMAIL can map historical user_beta_dev projects to one
 # verified owner email without rewriting document ownership.

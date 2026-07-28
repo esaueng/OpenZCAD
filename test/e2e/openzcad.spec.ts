@@ -249,6 +249,53 @@ async function stubEmailLoginApi(page: Page) {
   );
 }
 
+async function stubTurnstileLoadFailureApi(page: Page) {
+  let scriptRequests = 0;
+  await page.route('**/api/auth/config', (route) =>
+    route.fulfill({
+      json: {
+        mode: 'email-code',
+        emailCodeEnabled: true,
+        turnstileSiteKey: '1x00000000000000000000AA'
+      }
+    })
+  );
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    })
+  );
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
+    })
+  );
+  await page.route(
+    'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+    (route) => {
+      scriptRequests += 1;
+      return scriptRequests === 1
+        ? route.abort('failed')
+        : route.fulfill({
+            contentType: 'application/javascript',
+            body: `window.turnstile = {
+              render(_container, options) {
+                setTimeout(() => options.callback('turnstile-retry-token'), 0);
+                return 'turnstile-retry-widget';
+              },
+              remove() {},
+              reset() {}
+            };`
+          });
+    }
+  );
+}
+
 test('loads the OpenZCAD shell', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
@@ -381,6 +428,7 @@ test('signs in with an email code only when cloud profile access is requested', 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
+  await expect(page.getByText('Security check complete.')).toBeVisible();
   await page.getByLabel('Email address').fill('maker@example.com');
   await expect(
     page.getByRole('button', { name: 'Email me a code' })
@@ -400,6 +448,60 @@ test('signs in with an email code only when cloud profile access is requested', 
   ).toBeEnabled();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
+});
+
+test('explains beta auth and Turnstile readiness failures', async ({
+  page
+}) => {
+  await page.route('**/api/auth/config', (route) => route.abort('failed'));
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: 'Authentication required.', code: 'AUTH_REQUIRED' }
+    })
+  );
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok',
+        environment: 'beta',
+        time: new Date().toISOString()
+      }
+    })
+  );
+
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({
+      hasText: 'Beta sign-in configuration could not be reached'
+    })
+  ).toBeVisible();
+  await expect(page.getByLabel('Email address')).toHaveCount(0);
+  await expect(page.locator('.settings-save-message')).toContainText(
+    'Beta sign-in unavailable'
+  );
+
+  await page.unrouteAll({ behavior: 'wait' });
+  await stubTurnstileLoadFailureApi(page);
+  await page.reload();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await expect(
+    page.getByRole('alert').filter({
+      hasText: 'Security check could not load'
+    })
+  ).toBeVisible();
+  await page.getByLabel('Email address').fill('maker@example.com');
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeDisabled();
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.getByText('Security check complete.')).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeEnabled();
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
