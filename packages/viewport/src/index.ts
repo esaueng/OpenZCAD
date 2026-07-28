@@ -16,7 +16,9 @@ export * from './render/scene';
 export * from './camera/CameraController';
 export * from './camera/views';
 
-// Picking: mesh classification, body resolution, and edge hit ordering.
+// Picking: raycasting and topology resolution, mesh classification, body
+// resolution, and edge hit ordering.
+export * from './pick/PickService';
 export * from './pick/meshes';
 export * from './pick/edges';
 

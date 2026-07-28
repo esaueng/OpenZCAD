@@ -36,6 +36,14 @@ export interface PickDetail {
   normal?: { x: number; y: number; z: number };
 }
 
+/** Pick payload attached to region meshes via userData. */
+export interface RegionPickData {
+  sketchId: string;
+  regionFingerprint: number;
+  samplePoint: { x: number; y: number };
+  area: number;
+}
+
 /** Sketch profile polyline, already lifted onto its 3D plane. */
 export interface SketchOverlay {
   sketchId: string;
