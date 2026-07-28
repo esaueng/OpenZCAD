@@ -1,5 +1,5 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
-import type { AxisProjection } from './ModelViewer';
+import type { AxisProjection } from '@openzcad/viewport';
 
 const AXIS_COLORS = {
   x: 'var(--color-handle-x)',

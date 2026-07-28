@@ -4,7 +4,7 @@ import type {
   ProjectionMode,
   StandardView,
   ViewerSettings
-} from './ModelViewer';
+} from '@openzcad/viewport';
 
 const VIEWS: { id: StandardView; label: string; shortcut: string }[] = [
   { id: 'front', label: 'F', shortcut: '1' },

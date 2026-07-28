@@ -117,7 +117,7 @@ import {
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform } from './components/ModelViewer';
+import { composeMoveTransform } from '@openzcad/viewport';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -143,10 +143,12 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type {
+  ExtrudePreview,
+  FaceResizeCommit
+} from './components/ModelViewer';
+import type {
   AxisProjection,
   DisplayMode,
-  ExtrudePreview,
-  FaceResizeCommit,
   MovePreview,
   MoveSnap,
   PickDetail,
@@ -154,7 +156,7 @@ import type {
   SketchOverlay,
   StandardView,
   ViewerSettings
-} from './components/ModelViewer';
+} from '@openzcad/viewport';
 import {
   listLocalProjects,
   loadLocalProject,

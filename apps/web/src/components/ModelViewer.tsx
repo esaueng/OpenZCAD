@@ -10,16 +10,63 @@ import {
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
+  EDGE_HOVER_COLOR,
+  EDGE_HOVER_WIDTH,
+  EDGE_IDLE_COLOR,
+  EDGE_IDLE_OPACITY,
+  EDGE_IDLE_WIDTH,
+  EDGE_SELECTED_COLOR,
+  EDGE_SELECTED_WIDTH,
+  MOVE_AXIS_COLORS,
+  MOVE_AXIS_VECTORS,
+  RightClickGestureTracker,
+  VIEW_DIRECTIONS,
+  applyDisplayMode,
+  applyMoveGizmoFocus,
+  chooseMoveSnapStep,
+  chooseRotateSnapStep,
+  clearGroup,
+  closestAxisT,
+  composeMoveTransform,
   computeFitPose,
+  configureEdgeRaycasting,
+  createExtrudePreviewGeometry,
   createGradientBackground,
   createObjectForBody,
   createShadowCatcher,
   createStudioEnvironment,
   createStudioGrid,
   createStudioHemisphereLight,
+  dimensionLabelLayout,
+  directEditDirectionFromNormal,
+  findBodyId,
   fitCameraToObjects,
+  forEachMesh,
+  isSameMoveGizmoFocus,
+  makeLabel,
+  markExtrudeGizmo,
+  moveEuler,
+  moveGizmoHandleLabel,
+  moveGizmoWorldScale,
+  normalForTriangle,
+  prioritizeVisibleEdgeHit,
+  projectedWorldSizePx,
+  sketchCentroid,
+  snapTo,
   tuneShadowFrustum,
-  type CameraPose
+  type AxisProjection,
+  type CameraPose,
+  type DirectEditAxis,
+  type MoveAxis,
+  type MoveGizmoFocus,
+  type MoveHandleKind,
+  type MovePreview,
+  type MoveSnap,
+  type PickDetail,
+  type ProjectionMode,
+  type SketchOverlay,
+  type StandardView,
+  type ViewerSettings
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -69,108 +116,10 @@ import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 
-export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
-
-export type StandardView = 'iso' | 'front' | 'top' | 'right';
-
-export type ProjectionMode = 'perspective' | 'orthographic';
-
-/** Screen-space projections of the world axes, for the orientation widget. */
-export interface AxisProjection {
-  x: { x: number; y: number };
-  y: { x: number; y: number };
-  z: { x: number; y: number };
-}
-
-export type DirectEditAxis = 'x' | 'y' | 'z';
-
 export interface FaceResizeCommit {
   bodyId: TopologySelection['bodyId'];
   axis: DirectEditAxis;
   value: number;
-}
-
-export interface DirectEditDirection {
-  axis: DirectEditAxis;
-  side: -1 | 1;
-}
-
-export interface DimensionLabelLayout {
-  angleDeg: number;
-  scale: number;
-  lineLengthPx: number;
-}
-
-/**
- * Keeps a dimension label aligned to its projected line without 180-degree
- * flips. Model-relative scaling is intentionally bounded at 1 so labels can
- * shrink with the view but never grow beyond their base UI font size.
- */
-export function dimensionLabelLayout(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  modelSizePx: number,
-  previousAngleDeg?: number
-): DimensionLabelLayout {
-  const deltaX = end.x - start.x;
-  const deltaY = end.y - start.y;
-  const lineLengthPx = Math.hypot(deltaX, deltaY);
-  let angleDeg = THREE.MathUtils.radToDeg(Math.atan2(deltaY, deltaX));
-
-  if (Number.isFinite(previousAngleDeg)) {
-    angleDeg += 180 * Math.round((previousAngleDeg! - angleDeg) / 180);
-  } else {
-    if (angleDeg > 90) {
-      angleDeg -= 180;
-    } else if (angleDeg < -90) {
-      angleDeg += 180;
-    }
-  }
-
-  // A dimension axis aimed nearly at the camera has no reliable screen
-  // angle. Hold the previous orientation instead of allowing it to jitter.
-  if (lineLengthPx < 6 && Number.isFinite(previousAngleDeg)) {
-    angleDeg = previousAngleDeg!;
-  }
-
-  const scale = THREE.MathUtils.clamp(
-    Math.sqrt(Math.max(modelSizePx, 1) / 520),
-    0.72,
-    1
-  );
-  return { angleDeg, scale, lineLengthPx };
-}
-
-/** Maps an exact picked face normal to the parametric box dimension it edits. */
-export function directEditDirectionFromNormal(
-  normal: Pick<THREE.Vector3, 'x' | 'y' | 'z'>
-): DirectEditDirection {
-  const components = [
-    ['x', normal.x],
-    ['y', normal.y],
-    ['z', normal.z]
-  ] as const;
-  const [axis, value] = components.reduce((largest, candidate) =>
-    Math.abs(candidate[1]) > Math.abs(largest[1]) ? candidate : largest
-  );
-  return { axis, side: value < 0 ? -1 : 1 };
-}
-
-export interface ViewerSettings {
-  showGrid: boolean;
-  displayMode: DisplayMode;
-  /** Runtime-only accessibility preference; omitted by older saved views. */
-  reducedMotion?: boolean;
-}
-
-/**
- * Where a selection click landed: the world-space hit point and, for faces,
- * the outward normal. Selection-first editing anchors its drag handle here so
- * the affordance appears under the cursor rather than at the face center.
- */
-export interface PickDetail {
-  point: { x: number; y: number; z: number };
-  normal?: { x: number; y: number; z: number };
 }
 
 /** An armed face-offset handle: where it sits and which face it edits. */
@@ -230,116 +179,9 @@ export interface EdgeHandleTarget {
   initialValue?: number;
 }
 
-/** Sketch profile polyline, already lifted onto its 3D plane. */
-export interface SketchOverlay {
-  sketchId: string;
-  name: string;
-  selected: boolean;
-  /** Original local coordinates are used to triangulate the selectable region. */
-  profile: { x: number; y: number }[];
-  normal: { x: number; y: number; z: number };
-  points: { x: number; y: number; z: number }[];
-}
-
 export interface ExtrudePreview {
   sketchId: string;
   distance: number;
-}
-
-/** Pending Move/Rotate values, previewed live and committed as one feature. */
-export interface MovePreview {
-  bodyId: string;
-  translation: { x: number; y: number; z: number };
-  rotationDeg: { x: number; y: number; z: number };
-}
-
-/** Current gizmo snap increments (shown in the overlay, zoom-adaptive). */
-export interface MoveSnap {
-  move: number;
-  rotate: number;
-}
-
-const MOVE_SNAP_STEPS = [100, 50, 25, 10, 5, 2, 1, 0.5, 0.25, 0.1, 0.05, 0.01];
-const ROTATE_SNAP_STEPS = [90, 45, 15, 5, 1, 0.5, 0.1];
-/** A snap increment must span at least this many pixels to feel deliberate. */
-const SNAP_MIN_PIXELS = 8;
-/** Arrow shaft length in CSS pixels; rings and hit targets scale with it. */
-const MOVE_GIZMO_LENGTH_PIXELS = 104;
-
-/**
- * Converts the desired fixed screen-space gizmo length into world units.
- * Re-evaluating this as the camera zooms keeps the control usable without
- * allowing it to grow over the model or collapse into an unpickable speck.
- */
-export function moveGizmoWorldScale(worldPerPixel: number): number {
-  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
-    return 1;
-  }
-  return worldPerPixel * MOVE_GIZMO_LENGTH_PIXELS;
-}
-
-/**
- * Translation snap step for the current zoom: the smallest "nice" step that
- * still spans ≥8px on screen. Zooming in therefore unlocks finer steps
- * (10 mm → 1 mm → 0.1 mm …).
- */
-export function chooseMoveSnapStep(worldPerPixel: number): number {
-  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
-    return 1;
-  }
-  const minWorld = worldPerPixel * SNAP_MIN_PIXELS;
-  const candidates = MOVE_SNAP_STEPS.filter((step) => step >= minWorld);
-  return candidates.at(-1) ?? MOVE_SNAP_STEPS[0]!;
-}
-
-/** Rotation snap step for the current zoom (ring arc pixels per degree). */
-export function chooseRotateSnapStep(pixelsPerDegree: number): number {
-  if (!Number.isFinite(pixelsPerDegree) || pixelsPerDegree <= 0) {
-    return 15;
-  }
-  const minDegrees = SNAP_MIN_PIXELS / pixelsPerDegree;
-  const candidates = ROTATE_SNAP_STEPS.filter((step) => step >= minDegrees);
-  return candidates.at(-1) ?? ROTATE_SNAP_STEPS[0]!;
-}
-
-/**
- * The Move feature rotates about the world origin (X, then Y, then Z — the
- * exact kernel applies the axes in that order, i.e. Euler 'ZYX'), then
- * translates. To make the gizmo rotate the body about its own center, fold
- * the difference into the committed translation: T = t + c − R·c.
- */
-export function composeMoveTransform(
-  center: { x: number; y: number; z: number },
-  translation: { x: number; y: number; z: number },
-  rotationDeg: { x: number; y: number; z: number }
-): { x: number; y: number; z: number } {
-  const euler = new THREE.Euler(
-    THREE.MathUtils.degToRad(rotationDeg.x),
-    THREE.MathUtils.degToRad(rotationDeg.y),
-    THREE.MathUtils.degToRad(rotationDeg.z),
-    'ZYX'
-  );
-  const rotated = new THREE.Vector3(center.x, center.y, center.z).applyEuler(
-    euler
-  );
-  return {
-    x: translation.x + center.x - rotated.x,
-    y: translation.y + center.y - rotated.y,
-    z: translation.z + center.z - rotated.z
-  };
-}
-
-export function moveEuler(rotationDeg: {
-  x: number;
-  y: number;
-  z: number;
-}): THREE.Euler {
-  return new THREE.Euler(
-    THREE.MathUtils.degToRad(rotationDeg.x),
-    THREE.MathUtils.degToRad(rotationDeg.y),
-    THREE.MathUtils.degToRad(rotationDeg.z),
-    'ZYX'
-  );
 }
 
 interface ModelViewerProps {
@@ -499,24 +341,6 @@ interface DimensionLabelBinding {
   angleDeg?: number;
 }
 
-function projectedWorldSizePx(
-  camera: THREE.Camera,
-  center: THREE.Vector3,
-  worldSize: number,
-  viewportHeight: number
-): number {
-  if (camera instanceof THREE.OrthographicCamera) {
-    const visibleHeight = Math.max(camera.top - camera.bottom, 1e-9);
-    return (viewportHeight * camera.zoom * worldSize) / visibleHeight;
-  }
-  if (camera instanceof THREE.PerspectiveCamera) {
-    const distance = Math.max(camera.position.distanceTo(center), 1e-9);
-    const visibleHeight =
-      2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-    return (viewportHeight * worldSize) / Math.max(visibleHeight, 1e-9);
-  }
-  return viewportHeight;
-}
 
 function updateDimensionLabels(
   context: SceneContext,
@@ -603,13 +427,6 @@ interface ExtrudeDragState {
   pixelsPerUnit: number;
 }
 
-type MoveAxis = 'x' | 'y' | 'z';
-type MoveHandleKind = 'axis' | 'ring' | 'center';
-
-interface MoveGizmoFocus {
-  kind: MoveHandleKind;
-  axis: MoveAxis;
-}
 
 interface MoveDragState {
   pointerId: number;
@@ -633,108 +450,6 @@ interface MoveDragState {
   snapRotate: number;
 }
 
-const MOVE_AXIS_VECTORS: Record<MoveAxis, THREE.Vector3> = {
-  x: new THREE.Vector3(1, 0, 0),
-  y: new THREE.Vector3(0, 1, 0),
-  z: new THREE.Vector3(0, 0, 1)
-};
-
-const MOVE_AXIS_COLORS: Record<MoveAxis, number> = {
-  x: 0xef6a6a,
-  y: 0x6fd66f,
-  z: 0x5f8fef
-};
-
-interface MoveGizmoVisualData {
-  moveHandleVisual?: boolean;
-  moveHandleFocus?: boolean;
-  kind?: MoveHandleKind;
-  axis?: MoveAxis;
-  baseColor?: number;
-  baseOpacity?: number;
-}
-
-function isSameMoveGizmoFocus(
-  left: MoveGizmoFocus | null,
-  right: MoveGizmoFocus | null
-): boolean {
-  return left?.kind === right?.kind && left?.axis === right?.axis;
-}
-
-export function moveGizmoHandleLabel(
-  kind: MoveHandleKind,
-  axis: MoveAxis
-): string {
-  if (kind === 'center') {
-    return 'Move freely';
-  }
-  return `${kind === 'ring' ? 'Rotate' : 'Move'} ${axis.toUpperCase()} axis`;
-}
-
-/**
- * Keeps hover feedback inside Three.js instead of scheduling React renders on
- * every pointer move. The focused handle retains its axis color and gains a
- * white outline while all competing handles recede.
- */
-export function applyMoveGizmoFocus(
-  group: THREE.Group,
-  focus: MoveGizmoFocus | null
-) {
-  group.userData.focus = focus;
-  group.traverse((object) => {
-    if (!(object instanceof THREE.Mesh)) {
-      return;
-    }
-    const data = object.userData as MoveGizmoVisualData;
-    const matches = data.kind === focus?.kind && data.axis === focus?.axis;
-    if (data.moveHandleFocus) {
-      object.visible = matches;
-      return;
-    }
-    if (!data.moveHandleVisual) {
-      return;
-    }
-    const material = (
-      object as THREE.Mesh<
-        THREE.BufferGeometry,
-        THREE.Material | THREE.Material[]
-      >
-    ).material;
-    if (!(material instanceof THREE.MeshBasicMaterial)) {
-      return;
-    }
-    const baseOpacity = data.baseOpacity ?? 1;
-    material.opacity = focus ? (matches ? 1 : baseOpacity * 0.2) : baseOpacity;
-    material.color.setHex(data.baseColor ?? 0xffffff);
-  });
-}
-
-/** Parameter t of the closest point on a line to the pointer ray. */
-function closestAxisT(
-  ray: THREE.Ray,
-  origin: THREE.Vector3,
-  direction: THREE.Vector3
-): number | null {
-  const r = origin.clone().sub(ray.origin);
-  const b = direction.dot(ray.direction);
-  const c = direction.dot(r);
-  const f = ray.direction.dot(r);
-  const denominator = 1 - b * b;
-  if (Math.abs(denominator) < 1e-9) {
-    return null; // axis parallel to the view ray
-  }
-  return (b * f - c) / denominator;
-}
-
-function snapTo(value: number, step: number, fine: boolean): number {
-  if (fine) {
-    return Math.round(value * 100) / 100;
-  }
-  return Math.round(value / step) * step;
-}
-
-type ViewerBodyMaterial = THREE.MeshStandardMaterial | THREE.MeshPhongMaterial;
-type ViewerMesh = THREE.Mesh<THREE.BufferGeometry, ViewerBodyMaterial>;
 
 const SELECTION_EMISSIVE = 0x173a5e;
 const HOVER_EMISSIVE = 0x101d2c;
@@ -745,293 +460,10 @@ const SELECTED_FACE_OPACITY = 0.5;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
 const CAMERA_TWEEN_MS = 420;
-const RIGHT_DRAG_THRESHOLD_PX = 5;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
-
-interface ActiveRightClickGesture {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  dragged: boolean;
-}
-
-/**
- * Separates a stationary right-click from OrbitControls' right-button pan.
- * Once the pointer crosses the threshold, returning to the start still counts
- * as a drag and must not open the context menu.
- */
-export class RightClickGestureTracker {
-  private active: ActiveRightClickGesture | null = null;
-
-  begin(pointerId: number, x: number, y: number) {
-    this.active = { pointerId, startX: x, startY: y, dragged: false };
-  }
-
-  move(pointerId: number, x: number, y: number) {
-    const active = this.active;
-    if (!active || active.pointerId !== pointerId || active.dragged) {
-      return;
-    }
-    const dx = x - active.startX;
-    const dy = y - active.startY;
-    active.dragged =
-      dx * dx + dy * dy >= RIGHT_DRAG_THRESHOLD_PX * RIGHT_DRAG_THRESHOLD_PX;
-  }
-
-  markDragged(pointerId: number) {
-    if (this.active?.pointerId === pointerId) {
-      this.active.dragged = true;
-    }
-  }
-
-  end(pointerId: number, x: number, y: number) {
-    const active = this.active;
-    if (!active || active.pointerId !== pointerId) {
-      return false;
-    }
-    this.move(pointerId, x, y);
-    const shouldOpenMenu = !active.dragged;
-    this.active = null;
-    return shouldOpenMenu;
-  }
-
-  cancel(pointerId: number) {
-    if (this.active?.pointerId === pointerId) {
-      this.active = null;
-    }
-  }
-}
-
-// Exact topology edges render as screen-space fat lines so they read clearly
-// and their states are unmistakable: idle slate, hover glow, selected accent.
-const EDGE_IDLE_COLOR = 0x151c26;
-const EDGE_HOVER_COLOR = 0xbfdcff;
-const EDGE_SELECTED_COLOR = 0x7cc0ff;
-const EDGE_IDLE_WIDTH = 1.4;
-const EDGE_HOVER_WIDTH = 4;
-const EDGE_SELECTED_WIDTH = 4.5;
-const EDGE_IDLE_OPACITY = 0.92;
-/**
- * Extra screen-space width used only for edge picking. Line2 adds this to the
- * rendered width before testing the pointer, so an idle edge has a 3 px pick
- * radius without that radius changing as the camera zooms.
- */
-const EDGE_PICK_PADDING_PX = 4;
-/**
- * Edge and face intersections for the same topological boundary can differ by
- * a few floating-point ulps. Keep the allowance relative to camera distance;
- * a fixed model-unit allowance can select an edge hidden behind the face.
- */
-const EDGE_DEPTH_RELATIVE_EPSILON = 1e-4;
-const EDGE_DEPTH_ABSOLUTE_EPSILON = 1e-6;
 
 interface EdgeVisualState {
   selected: boolean;
-}
-
-type TopologyHit = Pick<THREE.Intersection, 'distance' | 'object'>;
-
-export function configureEdgeRaycasting(raycaster: THREE.Raycaster) {
-  raycaster.params.Line2 = { threshold: EDGE_PICK_PADDING_PX };
-}
-
-export function prioritizeVisibleEdgeHit<T extends TopologyHit>(hits: T[]) {
-  const nearestDistance = hits[0]?.distance;
-  if (nearestDistance === undefined) {
-    return hits;
-  }
-  const depthTolerance = Math.max(
-    EDGE_DEPTH_ABSOLUTE_EPSILON,
-    Math.abs(nearestDistance) * EDGE_DEPTH_RELATIVE_EPSILON
-  );
-  const edgeHit = hits.find(
-    (hit) =>
-      (hit.object.userData as { topologyKind?: string }).topologyKind ===
-        'edge' && hit.distance <= nearestDistance + depthTolerance
-  );
-  return edgeHit ? [edgeHit, ...hits.filter((hit) => hit !== edgeHit)] : hits;
-}
-
-export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
-  // Direction from the target toward the camera, in the Z-up frame. Top now
-  // looks down +Z, which is parallel to the up vector, so it keeps a hair of
-  // -Y: that both stops OrbitControls seeing a degenerate axis and settles
-  // screen-up on +Y rather than an arbitrary diagonal.
-  iso: new THREE.Vector3(1, -1, 0.9).normalize(),
-  front: new THREE.Vector3(0, -1, 0),
-  top: new THREE.Vector3(0, -0.0001, 1).normalize(),
-  right: new THREE.Vector3(1, 0, 0)
-};
-
-export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
-  return (
-    object instanceof THREE.Mesh &&
-    (object.material instanceof THREE.MeshStandardMaterial ||
-      object.material instanceof THREE.MeshPhongMaterial)
-  );
-}
-
-function forEachMesh(
-  object: THREE.Object3D,
-  visit: (mesh: ViewerMesh) => void
-) {
-  object.traverse((child: THREE.Object3D) => {
-    if (isViewerMesh(child)) {
-      visit(child);
-    }
-  });
-}
-
-function disposeObject(object: THREE.Object3D) {
-  object.traverse((child: THREE.Object3D) => {
-    const disposable = child as unknown as {
-      geometry?: { dispose(): void };
-      material?: { dispose(): void } | { dispose(): void }[];
-    };
-    disposable.geometry?.dispose();
-    if (Array.isArray(disposable.material)) {
-      for (const material of disposable.material) {
-        material.dispose();
-      }
-    } else {
-      disposable.material?.dispose();
-    }
-  });
-}
-
-/** CSS2D label elements stay in the DOM unless removed explicitly. */
-function clearGroup(group: THREE.Group) {
-  for (const child of [...group.children]) {
-    child.traverse((node: THREE.Object3D) => {
-      if (node instanceof CSS2DObject) {
-        node.element.remove();
-      }
-    });
-    group.remove(child);
-    disposeObject(child);
-  }
-}
-
-function makeLabel(className: string, text: string): CSS2DObject {
-  const element = document.createElement('div');
-  element.className = className;
-  element.textContent = text;
-  return new CSS2DObject(element);
-}
-
-function findBodyId(object: THREE.Object3D): string | null {
-  let current: THREE.Object3D | null = object;
-  while (current) {
-    const bodyId = (current.userData as { bodyId?: string }).bodyId;
-    if (bodyId) {
-      return bodyId;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-function normalForTriangle(
-  body: BodyRepresentation,
-  triangleStart: number
-): THREE.Vector3 | null {
-  const offset = triangleStart * 3;
-  const indices = body.mesh.indices.slice(offset, offset + 3);
-  if (indices.length !== 3) {
-    return null;
-  }
-  const [aIndex, bIndex, cIndex] = indices;
-  if (aIndex === undefined || bIndex === undefined || cIndex === undefined) {
-    return null;
-  }
-  const a = new THREE.Vector3().fromArray(body.mesh.vertices, aIndex * 3);
-  const b = new THREE.Vector3().fromArray(body.mesh.vertices, bIndex * 3);
-  const c = new THREE.Vector3().fromArray(body.mesh.vertices, cIndex * 3);
-  return new THREE.Triangle(a, b, c).getNormal(new THREE.Vector3());
-}
-
-/**
- * Meshes render solid or wireframe; baked and exact topology edge overlays
- * toggle together so plain Shaded mode contains surfaces only.
- */
-function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
-  bodyGroup.traverse((child: THREE.Object3D) => {
-    if (isViewerMesh(child)) {
-      child.material.wireframe = mode === 'wireframe';
-    } else if (child instanceof THREE.LineSegments || child instanceof Line2) {
-      child.visible = mode === 'shaded-edges';
-    }
-  });
-}
-
-function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {
-  const centroid = new THREE.Vector3();
-  for (const point of sketch.points) {
-    centroid.add(new THREE.Vector3(point.x, point.y, point.z));
-  }
-  return centroid.divideScalar(Math.max(sketch.points.length, 1));
-}
-
-/** A lightweight live prism; the canonical B-rep is only created on confirm. */
-export function createExtrudePreviewGeometry(
-  sketch: SketchOverlay,
-  distance: number
-): THREE.BufferGeometry {
-  const count = sketch.points.length;
-  const normal = new THREE.Vector3(
-    sketch.normal.x,
-    sketch.normal.y,
-    sketch.normal.z
-  );
-  const vertices: number[] = [];
-  for (const point of sketch.points) {
-    vertices.push(point.x, point.y, point.z);
-  }
-  for (const point of sketch.points) {
-    vertices.push(
-      point.x + normal.x * distance,
-      point.y + normal.y * distance,
-      point.z + normal.z * distance
-    );
-  }
-
-  const localPoints = sketch.profile.map(
-    (point) => new THREE.Vector2(point.x, point.y)
-  );
-  const capTriangles = THREE.ShapeUtils.triangulateShape(localPoints, []);
-  const indices: number[] = [];
-  for (const triangle of capTriangles) {
-    const [a, b, c] = triangle;
-    if (a === undefined || b === undefined || c === undefined) {
-      continue;
-    }
-    indices.push(a, c, b, a + count, b + count, c + count);
-  }
-  for (let index = 0; index < count; index += 1) {
-    const next = (index + 1) % count;
-    indices.push(index, next, next + count, index, next + count, index + count);
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute(vertices, 3)
-  );
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
-function markExtrudeGizmo(object: THREE.Object3D) {
-  object.traverse((child) => {
-    child.userData.extrudeGizmo = true;
-    child.renderOrder = 20;
-    const material = (child as THREE.Mesh | THREE.Line).material;
-    if (material instanceof THREE.Material) {
-      material.depthTest = false;
-      material.transparent = true;
-    }
-  });
 }
 
 export function ModelViewer({

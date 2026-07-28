@@ -2,7 +2,7 @@ import type {
   DisplayMode,
   ProjectionMode,
   ViewerSettings
-} from '../components/ModelViewer';
+} from '@openzcad/viewport';
 
 export const WORKSPACE_SESSION_STORAGE_KEY = 'openzcad-workspace-session:v1';
 
