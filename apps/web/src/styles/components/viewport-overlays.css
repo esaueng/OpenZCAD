@@ -19,6 +19,34 @@
   stroke-width: 1;
 }
 
+/* The widget stays click-through so a drag started near it still orbits;
+   only the view targets themselves take the pointer. */
+.orientation-hit,
+.orientation-home {
+  pointer-events: auto;
+  cursor: pointer;
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 1;
+  transition:
+    fill var(--motion-fast, 120ms) ease,
+    stroke var(--motion-fast, 120ms) ease;
+}
+
+.orientation-hit:hover,
+.orientation-home:hover {
+  fill: var(--color-accent-dim);
+  stroke: var(--color-accent-border);
+}
+
+.orientation-hit:focus-visible,
+.orientation-home:focus-visible {
+  outline: none;
+  fill: var(--color-accent-dim);
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+
 .context-menu {
   position: fixed;
   z-index: var(--z-context-menu);
