@@ -1968,6 +1968,72 @@ test('shift-dragging a box selects several bodies at once', async ({ page }) => 
   await expect(status).toContainText('Nothing in the box');
 });
 
+test('box selection releases the previous direct-edit target', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Box Target Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const status = page.getByRole('contentinfo');
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  if (!area) {
+    throw new Error('viewer canvas not laid out');
+  }
+
+  await page.mouse.click(
+    area.x + area.width * 0.45,
+    area.y + area.height * 0.55
+  );
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(status).toContainText('push or pull');
+
+  // Sweep empty sky. The body selection clears, and the direct-edit handle
+  // for the face that used to be selected must be released with it.
+  const from = await page.evaluate((bounds) => {
+    for (let yStep = 2; yStep <= 16; yStep += 2) {
+      for (let xStep = 5; xStep <= 95; xStep += 5) {
+        const point = {
+          x: bounds.x + bounds.width * (xStep / 100),
+          y: bounds.y + bounds.height * (yStep / 100)
+        };
+        if (document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS') {
+          return point;
+        }
+      }
+    }
+    return null;
+  }, area);
+  if (!from) {
+    throw new Error('no unobstructed canvas point found for box selection');
+  }
+  await page.keyboard.down('Shift');
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    Math.min(from.x + area.width * 0.12, area.x + area.width * 0.98),
+    Math.min(from.y + area.height * 0.1, area.y + area.height * 0.2)
+  );
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+
+  await expect(status).toContainText('Nothing in the box');
+  await expect(status).not.toContainText('push or pull');
+  await expect(page.locator('.selection-chip')).toHaveCount(0);
+});
+
 test('the status bar names the rung of the Esc ladder you are on', async ({
   page
 }) => {

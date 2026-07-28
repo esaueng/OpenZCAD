@@ -24,6 +24,8 @@ export interface BoxSelectCandidate {
   bodyId: string;
   /** XYZ-interleaved world positions, as the mesh already stores them. */
   positions: ArrayLike<number>;
+  /** Triangle vertex indices into `positions`. */
+  indices: ArrayLike<number>;
 }
 
 export interface BoxSelectOptions {
@@ -88,15 +90,136 @@ function project(
   };
 }
 
+interface ProjectedPoint {
+  x: number;
+  y: number;
+  behind: boolean;
+}
+
+const INTERSECTION_EPSILON = 1e-9;
+
+function pointInRect(point: ProjectedPoint, rect: ScreenRect): boolean {
+  return (
+    point.x >= rect.left &&
+    point.x <= rect.right &&
+    point.y >= rect.top &&
+    point.y <= rect.bottom
+  );
+}
+
+function cross(
+  a: ProjectedPoint,
+  b: ProjectedPoint,
+  c: { x: number; y: number }
+): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointInTriangle(
+  point: { x: number; y: number },
+  a: ProjectedPoint,
+  b: ProjectedPoint,
+  c: ProjectedPoint
+): boolean {
+  if (Math.abs(cross(a, b, c)) <= INTERSECTION_EPSILON) {
+    return false;
+  }
+  const ab = cross(a, b, point);
+  const bc = cross(b, c, point);
+  const ca = cross(c, a, point);
+  const hasNegative =
+    ab < -INTERSECTION_EPSILON ||
+    bc < -INTERSECTION_EPSILON ||
+    ca < -INTERSECTION_EPSILON;
+  const hasPositive =
+    ab > INTERSECTION_EPSILON ||
+    bc > INTERSECTION_EPSILON ||
+    ca > INTERSECTION_EPSILON;
+  return !(hasNegative && hasPositive);
+}
+
+function pointOnSegment(
+  point: { x: number; y: number },
+  from: { x: number; y: number },
+  to: { x: number; y: number }
+): boolean {
+  return (
+    point.x >= Math.min(from.x, to.x) - INTERSECTION_EPSILON &&
+    point.x <= Math.max(from.x, to.x) + INTERSECTION_EPSILON &&
+    point.y >= Math.min(from.y, to.y) - INTERSECTION_EPSILON &&
+    point.y <= Math.max(from.y, to.y) + INTERSECTION_EPSILON
+  );
+}
+
+function segmentsIntersect(
+  a: ProjectedPoint,
+  b: ProjectedPoint,
+  c: { x: number; y: number },
+  d: { x: number; y: number }
+): boolean {
+  const abC = cross(a, b, c);
+  const abD = cross(a, b, d);
+  const cdA = (d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x);
+  const cdB = (d.x - c.x) * (b.y - c.y) - (d.y - c.y) * (b.x - c.x);
+
+  if (
+    ((abC > INTERSECTION_EPSILON && abD < -INTERSECTION_EPSILON) ||
+      (abC < -INTERSECTION_EPSILON && abD > INTERSECTION_EPSILON)) &&
+    ((cdA > INTERSECTION_EPSILON && cdB < -INTERSECTION_EPSILON) ||
+      (cdA < -INTERSECTION_EPSILON && cdB > INTERSECTION_EPSILON))
+  ) {
+    return true;
+  }
+  return (
+    (Math.abs(abC) <= INTERSECTION_EPSILON && pointOnSegment(c, a, b)) ||
+    (Math.abs(abD) <= INTERSECTION_EPSILON && pointOnSegment(d, a, b)) ||
+    (Math.abs(cdA) <= INTERSECTION_EPSILON && pointOnSegment(a, c, d)) ||
+    (Math.abs(cdB) <= INTERSECTION_EPSILON && pointOnSegment(b, c, d))
+  );
+}
+
+function triangleIntersectsRect(
+  a: ProjectedPoint,
+  b: ProjectedPoint,
+  c: ProjectedPoint,
+  rect: ScreenRect
+): boolean {
+  if (pointInRect(a, rect) || pointInRect(b, rect) || pointInRect(c, rect)) {
+    return true;
+  }
+  const corners = [
+    { x: rect.left, y: rect.top },
+    { x: rect.right, y: rect.top },
+    { x: rect.right, y: rect.bottom },
+    { x: rect.left, y: rect.bottom }
+  ];
+  if (corners.some((corner) => pointInTriangle(corner, a, b, c))) {
+    return true;
+  }
+  const triangleEdges: [ProjectedPoint, ProjectedPoint][] = [
+    [a, b],
+    [b, c],
+    [c, a]
+  ];
+  const rectEdges = corners.map(
+    (corner, index) => [corner, corners[(index + 1) % corners.length]!] as const
+  );
+  return triangleEdges.some(([from, to]) =>
+    rectEdges.some(([rectFrom, rectTo]) =>
+      segmentsIntersect(from, to, rectFrom, rectTo)
+    )
+  );
+}
+
 /**
  * The bodies a drag rectangle selects.
  *
- * The test is on mesh vertices rather than exact silhouettes, which is what
- * the viewport actually holds. Window select is exact under that reading: a
- * body is enclosed precisely when every vertex is. Crossing adds the case a
- * vertex test alone would miss — a rectangle dropped entirely inside one
- * broad face, with no vertex anywhere near it — by also taking a body whose
- * projected extent contains the whole rectangle.
+ * The test uses the viewport's projected triangles. Window select is exact
+ * under that reading: a body is enclosed precisely when every vertex is.
+ * Crossing tests the actual triangle projection, including a rectangle
+ * dropped inside one broad face. A projected bounding box is not enough:
+ * holes, concavities, and disconnected pieces contain empty space that must
+ * remain empty to a selection sweep.
  */
 export function bodiesInBox(
   candidates: BoxSelectCandidate[],
@@ -113,12 +236,8 @@ export function bodiesInBox(
       continue;
     }
     let allInside = true;
-    let anyInside = false;
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
     let anyVisible = false;
+    const projected: ProjectedPoint[] = [];
     for (let index = 0; index < count; index += 1) {
       point.set(
         candidate.positions[index * 3] ?? 0,
@@ -126,37 +245,39 @@ export function bodiesInBox(
         candidate.positions[index * 3 + 2] ?? 0
       );
       const screen = project(point, camera, width, height);
+      projected.push(screen);
       if (screen.behind) {
         // Half a body behind the camera is not fully enclosed by anything.
         allInside = false;
         continue;
       }
       anyVisible = true;
-      minX = Math.min(minX, screen.x);
-      maxX = Math.max(maxX, screen.x);
-      minY = Math.min(minY, screen.y);
-      maxY = Math.max(maxY, screen.y);
-      const inside =
-        screen.x >= rect.left &&
-        screen.x <= rect.right &&
-        screen.y >= rect.top &&
-        screen.y <= rect.bottom;
-      if (inside) {
-        anyInside = true;
-      } else {
+      if (!pointInRect(screen, rect)) {
         allInside = false;
       }
     }
     if (!anyVisible) {
       continue;
     }
-    const enclosesRect =
-      minX <= rect.left &&
-      maxX >= rect.right &&
-      minY <= rect.top &&
-      maxY >= rect.bottom;
-    const hit =
-      mode === 'window' ? allInside : anyInside || enclosesRect;
+    let crossingHit = false;
+    if (mode === 'crossing') {
+      const triangleCount = Math.floor(candidate.indices.length / 3);
+      for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+        const a = projected[candidate.indices[triangle * 3] ?? -1];
+        const b = projected[candidate.indices[triangle * 3 + 1] ?? -1];
+        const c = projected[candidate.indices[triangle * 3 + 2] ?? -1];
+        // Near-plane clipping is not represented in the mesh data available
+        // here. Skip such a triangle rather than inventing a visible area.
+        if (!a || !b || !c || a.behind || b.behind || c.behind) {
+          continue;
+        }
+        if (triangleIntersectsRect(a, b, c, rect)) {
+          crossingHit = true;
+          break;
+        }
+      }
+    }
+    const hit = mode === 'window' ? allInside : crossingHit;
     if (hit) {
       selected.push(candidate.bodyId);
     }
