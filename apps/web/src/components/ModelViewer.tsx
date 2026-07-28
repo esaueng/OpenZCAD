@@ -22,6 +22,7 @@ import {
   CameraController,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
+  cycleDepthPick,
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
@@ -71,6 +72,7 @@ import {
   type MoveGizmoFocus,
   type MoveHandleKind,
   type MovePreview,
+  type DepthCycle,
   type DragRig,
   type MoveSnap,
   type PickCandidate,
@@ -858,6 +860,8 @@ export function ModelViewer({
     observer.observe(host);
 
     const rightClickGesture = new RightClickGestureTracker();
+    /** Where "select other" has reached, for repeated clicks on one spot. */
+    let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
@@ -2049,7 +2053,17 @@ export function ModelViewer({
       const stayedPut = !press.moved;
       gestures.release(event, null);
       if (stayedPut) {
-        const result = pick(event);
+        // Clicking the same spot again reaches past what is already selected
+        // rather than reselecting it.
+        const stack = picker.pickAll(event);
+        const stepped = cycleDepthPick(
+          stack,
+          depthCycle,
+          event.clientX,
+          event.clientY
+        );
+        depthCycle = stepped.cycle;
+        const result = stepped.candidate;
         if (result?.region) {
           onSelectRegionRef.current(result.region);
         } else if (result?.sketchId) {
@@ -2128,6 +2142,7 @@ export function ModelViewer({
       applyHover(null);
     };
     const handleDoubleClick = () => {
+      depthCycle = null;
       if (bodyGroup.children.length === 0) {
         return;
       }

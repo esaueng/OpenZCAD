@@ -19,6 +19,7 @@ export * from './camera/views';
 // Picking: raycasting and topology resolution, mesh classification, body
 // resolution, and edge hit ordering.
 export * from './pick/PickService';
+export * from './pick/depthCycle';
 export * from './pick/meshes';
 export * from './pick/edges';
 

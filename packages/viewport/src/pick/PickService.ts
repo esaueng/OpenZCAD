@@ -21,6 +21,21 @@ export interface PickCandidate {
   faceNormal?: THREE.Vector3;
 }
 
+/**
+ * Stable identity for a pick: the same entity picked twice keys the same,
+ * a different one does not. Deduplication and depth cycling both need to
+ * answer "is this the same thing I already have", so they share one answer.
+ */
+export function candidateKey(candidate: PickCandidate): string {
+  return JSON.stringify([
+    candidate.kind,
+    candidate.selection?.bodyId ?? '',
+    candidate.selection?.topologyId ?? '',
+    candidate.sketchId ?? '',
+    candidate.region?.regionFingerprint ?? ''
+  ]);
+}
+
 export interface PickServiceOptions {
   domElement: HTMLElement;
   /** Read per call: the active camera changes with the projection. */
@@ -223,13 +238,7 @@ export class PickService {
     ];
     const seen = new Set<string>();
     return ordered.filter((candidate) => {
-      const key = JSON.stringify([
-        candidate.kind,
-        candidate.selection?.bodyId ?? '',
-        candidate.selection?.topologyId ?? '',
-        candidate.sketchId ?? '',
-        candidate.region?.regionFingerprint ?? ''
-      ]);
+      const key = candidateKey(candidate);
       if (seen.has(key)) {
         return false;
       }

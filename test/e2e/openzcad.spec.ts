@@ -1690,3 +1690,4 @@ test('the middle-button drag preference changes what a middle drag does', async 
   expect(targetMoved).toBeLessThan(0.5);
   expect(cameraMoved).toBeGreaterThan(1);
 });
+
