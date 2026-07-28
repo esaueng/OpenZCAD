@@ -933,6 +933,52 @@ export function ModelViewer({
       return picker.pick(event);
     }
 
+    function selectAtPointer(event: PointerEvent) {
+      const stack = picker.pickAll(event);
+      const stepped = cycleDepthPick(
+        stack,
+        depthCycle,
+        event.clientX,
+        event.clientY
+      );
+      depthCycle = stepped.cycle;
+      const result = stepped.candidate;
+      if (result?.region) {
+        onSelectRegionRef.current(result.region);
+        return;
+      }
+      if (result?.sketchId) {
+        onSelectSketchProfileRef.current(result.sketchId);
+        return;
+      }
+      const detail: PickDetail | undefined = result
+        ? {
+            point: {
+              x: result.hit.point.x,
+              y: result.hit.point.y,
+              z: result.hit.point.z
+            },
+            normal: result.faceNormal
+              ? {
+                  x: result.faceNormal.x,
+                  y: result.faceNormal.y,
+                  z: result.faceNormal.z
+                }
+              : undefined
+          }
+        : undefined;
+      // Orbiting should turn about whatever was just clicked, not the model
+      // origin — otherwise a detail you have zoomed into leaves the frame.
+      if (result) {
+        cameraRig.pivotOn(result.hit.point);
+      }
+      onSelectTopologyRef.current(
+        result?.selection ?? null,
+        event.shiftKey,
+        detail
+      );
+    }
+
     function setRayFromEvent(event: PointerEvent | MouseEvent) {
       picker.setRayFromEvent(event);
     }
@@ -1981,6 +2027,16 @@ export function ModelViewer({
         gestures.release(event, 'grab');
         const rig = edgeRigRef.current;
         const finalValue = rig?.value() ?? 0;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        if (moved < 4) {
+          rig?.setValue(completed.initialValue);
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
         if (
           rig &&
           finalValue > 1e-9 &&
@@ -1998,6 +2054,16 @@ export function ModelViewer({
         gestures.release(event, 'grab');
         const rig = offsetRigRef.current;
         const finalOffset = rig?.value() ?? 0;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        if (moved < 4) {
+          rig?.setValue(completed.initialOffset);
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
         if (
           rig &&
           Math.abs(finalOffset - completed.initialOffset) > 1e-9 &&
@@ -2020,8 +2086,13 @@ export function ModelViewer({
         );
         restoreFaceDrag();
         faceDrag = null;
+        if (moved < 4) {
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
         // Primitive faces complete through this path rather than the generic
-        // click below, so the pivot has to be re-centred here too.
+        // click below, so a completed resize keeps its original selection.
         cameraRig.pivotOn(
           new THREE.Vector3(
             completed.detail.point.x,
@@ -2053,50 +2124,9 @@ export function ModelViewer({
       const stayedPut = !press.moved;
       gestures.release(event, null);
       if (stayedPut) {
-        // Clicking the same spot again reaches past what is already selected
-        // rather than reselecting it.
-        const stack = picker.pickAll(event);
-        const stepped = cycleDepthPick(
-          stack,
-          depthCycle,
-          event.clientX,
-          event.clientY
-        );
-        depthCycle = stepped.cycle;
-        const result = stepped.candidate;
-        if (result?.region) {
-          onSelectRegionRef.current(result.region);
-        } else if (result?.sketchId) {
-          onSelectSketchProfileRef.current(result.sketchId);
-        } else {
-          const detail: PickDetail | undefined = result
-            ? {
-                point: {
-                  x: result.hit.point.x,
-                  y: result.hit.point.y,
-                  z: result.hit.point.z
-                },
-                normal: result.faceNormal
-                  ? {
-                      x: result.faceNormal.x,
-                      y: result.faceNormal.y,
-                      z: result.faceNormal.z
-                    }
-                  : undefined
-              }
-            : undefined;
-          // Orbiting should turn about whatever was just clicked, not the
-          // model origin — otherwise a detail you have zoomed into swings
-          // straight out of frame.
-          if (result) {
-            cameraRig.pivotOn(result.hit.point);
-          }
-          onSelectTopologyRef.current(
-            result?.selection ?? null,
-            event.shiftKey,
-            detail
-          );
-        }
+        selectAtPointer(event);
+      } else {
+        depthCycle = null;
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
