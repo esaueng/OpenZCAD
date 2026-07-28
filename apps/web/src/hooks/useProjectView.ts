@@ -14,6 +14,7 @@ export interface ProjectViewDefaults {
   displayMode: DisplayMode;
   reducedMotion: boolean;
   zoomToCursor: boolean;
+  middleDrag: 'pan' | 'orbit' | 'zoom';
 }
 
 export interface ProjectView {
@@ -114,7 +115,8 @@ export function useProjectView(projectId: string | null): ProjectView {
         displayMode: defaults.displayMode,
         ...saved?.settings,
         reducedMotion: defaults.reducedMotion,
-        zoomToCursor: defaults.zoomToCursor
+        zoomToCursor: defaults.zoomToCursor,
+        middleDrag: defaults.middleDrag
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
     },

@@ -32,6 +32,7 @@ export * from './gizmo/rigs';
 export * from './gizmo/move';
 
 // Input: pointer gesture classification and drag-session bookkeeping.
+export * from './input/bindings';
 export * from './input/GestureRouter';
 export * from './input/RightClickGestureTracker';
 
