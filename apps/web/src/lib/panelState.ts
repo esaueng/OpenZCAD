@@ -10,13 +10,15 @@ export const PANEL_STATE_STORAGE_KEY = 'openzcad-panel-state:v1';
 
 export type SidebarSectionId =
   | 'parameters'
-  | 'features'
+  | 'bodies'
+  | 'history'
   | 'revisions'
   | 'diagnostics';
 
 export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
   'parameters',
-  'features',
+  'bodies',
+  'history',
   'revisions',
   'diagnostics'
 ];
@@ -30,7 +32,8 @@ export interface PanelState {
 export const DEFAULT_PANEL_STATE: PanelState = {
   sidebarSections: {
     parameters: true,
-    features: true,
+    bodies: true,
+    history: true,
     revisions: true,
     diagnostics: true
   },

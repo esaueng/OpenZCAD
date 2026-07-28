@@ -134,7 +134,7 @@ export function AssistantPanel({
           next.configured
             ? null
             : next.provider === 'openrouter'
-              ? 'Add OPENROUTER_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
+              ? 'Set OPENROUTER_API_KEY in your shell or apps/web/.dev.vars (or as a beta Worker secret), then restart the app.'
               : 'Add AI_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
         );
       })

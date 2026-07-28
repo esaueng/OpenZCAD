@@ -38,18 +38,18 @@ describe('workspace panel state', () => {
 
   it('returns independent defaults', () => {
     const first = defaultPanelState();
-    first.sidebarSections.features = false;
-    expect(defaultPanelState().sidebarSections.features).toBe(true);
-    expect(DEFAULT_PANEL_STATE.sidebarSections.features).toBe(true);
+    first.sidebarSections.history = false;
+    expect(defaultPanelState().sidebarSections.history).toBe(true);
+    expect(DEFAULT_PANEL_STATE.sidebarSections.history).toBe(true);
   });
 
   it('toggles one section without touching the others', () => {
-    const collapsed = toggleSidebarSection(defaultPanelState(), 'features');
-    expect(collapsed.sidebarSections.features).toBe(false);
+    const collapsed = toggleSidebarSection(defaultPanelState(), 'history');
+    expect(collapsed.sidebarSections.history).toBe(false);
     expect(collapsed.sidebarSections.parameters).toBe(true);
     expect(collapsed.toolPaletteOpen).toBe(true);
     expect(
-      toggleSidebarSection(collapsed, 'features').sidebarSections.features
+      toggleSidebarSection(collapsed, 'history').sidebarSections.history
     ).toBe(true);
   });
 
@@ -62,7 +62,7 @@ describe('workspace panel state', () => {
     const loaded = loadPanelState();
     expect(loaded.toolPaletteOpen).toBe(false);
     expect(loaded.sidebarSections.diagnostics).toBe(false);
-    expect(loaded.sidebarSections.features).toBe(true);
+    expect(loaded.sidebarSections.history).toBe(true);
   });
 
   it('falls back to open panels on missing or corrupt storage', () => {
@@ -78,13 +78,13 @@ describe('workspace panel state', () => {
     const normalized = normalizePanelState({
       toolPaletteOpen: 'yes',
       sidebarSections: {
-        features: false,
+        history: false,
         parameters: 'no',
         somethingElse: false
       }
     });
     expect(normalized.toolPaletteOpen).toBe(true);
-    expect(normalized.sidebarSections.features).toBe(false);
+    expect(normalized.sidebarSections.history).toBe(false);
     expect(normalized.sidebarSections.parameters).toBe(true);
     expect(Object.keys(normalized.sidebarSections).sort()).toEqual(
       [...SIDEBAR_SECTION_IDS].sort()

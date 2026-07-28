@@ -57,6 +57,21 @@ describe('workspace session persistence', () => {
     expect(loadProjectView('project-1', storage)).toEqual(view);
   });
 
+  it('fails closed when browser storage is unavailable', () => {
+    const unavailableStorage = {
+      getItem() {
+        throw new Error('Storage is disabled.');
+      },
+      setItem() {
+        throw new Error('Storage is disabled.');
+      }
+    };
+
+    expect(loadActiveProjectId(unavailableStorage)).toBeNull();
+    expect(rememberActiveProject('project-1', unavailableStorage)).toBe(false);
+    expect(clearActiveProject(unavailableStorage)).toBe(false);
+  });
+
   it('ignores malformed or non-finite persisted camera data', () => {
     const storage = new MemoryStorage();
     storage.setItem(
