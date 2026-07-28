@@ -858,10 +858,18 @@ test('models a parametric part and exports a true STEP file', async ({
   ).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // Export STEP and verify the download is a real ISO 10303-21 file.
+  // Export STEP and verify the download is a real ISO 10303-21 file. Import
+  // and export live inside the collapsed File menu, so open it first: a
+  // hidden button never becomes actionable and the click waits forever. The
+  // summary is a <summary>, which is exposed as a generic rather than a
+  // button, and the item's accessible name tracks the export scope
+  // ("all bodies" vs "selected body") — so scope the match to the menu.
+  const fileMenu = page.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'STEP' }).click();
+  await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
+  await fileMenu.locator('summary').click(); // collapse; it overlays the sidebar
   expect(download.suggestedFilename()).toBe('E2E-Part.step');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
