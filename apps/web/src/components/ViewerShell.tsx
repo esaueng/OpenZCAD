@@ -3,21 +3,23 @@ import { Box, Cylinder, Globe, Sparkles } from 'lucide-react';
 import {
   ModelViewer,
   type ExtrudePreview,
-  type AxisProjection,
   type FaceResizeCommit,
   type EdgeHandleTarget,
-  type MovePreview,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
-  type MoveSnap,
-  type OffsetHandleTarget,
-  type PickDetail,
-  type ProjectionMode,
-  type SketchOverlay,
-  type StandardView,
-  type ViewerSettings
+  type OffsetHandleTarget
 } from './ModelViewer';
+import type {
+  AxisProjection,
+  MovePreview,
+  MoveSnap,
+  PickDetail,
+  ProjectionMode,
+  SketchOverlay,
+  StandardView,
+  ViewerSettings
+} from '@openzcad/viewport';
 import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';

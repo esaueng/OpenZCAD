@@ -19,7 +19,7 @@ import {
   prioritizeVisibleEdgeHit,
   RightClickGestureTracker,
   VIEW_DIRECTIONS
-} from './ModelViewer';
+} from './index';
 
 describe('model viewer mesh classification', () => {
   it('applies emissive highlighting only to lit body meshes', () => {
