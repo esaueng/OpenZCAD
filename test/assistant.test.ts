@@ -121,6 +121,35 @@ describe('assistant integration', () => {
     ).toBe(false);
   });
 
+  it('does not lock the shared local-development identity out', async () => {
+    const prepare = vi.fn(() => {
+      throw new Error('Local development must not write an AI quota.');
+    });
+    const env = {
+      ENVIRONMENT: 'development',
+      AI_RATE_LIMIT_REQUESTS: '1',
+      DB: { prepare }
+    } as never;
+    const userId = toUserId('user_beta_dev');
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        consumeAssistantQuota(
+          userId,
+          env,
+          1_000,
+          assistantQuotaCost(4)
+        )
+      ).resolves.toMatchObject({
+        allowed: true,
+        limit: 1,
+        remaining: 1,
+        retryAfterSeconds: 0
+      });
+    }
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it('never lets a malformed quota cost buy a free request', async () => {
     const env = { AI_RATE_LIMIT_REQUESTS: '2' };
     const userId = toUserId('user_bad_cost');
@@ -148,6 +177,28 @@ describe('assistant integration', () => {
     expect(limited).toMatchObject({ allowed: false, limit: 2, remaining: 0 });
     expect((await consumeAssistantQuota(userId, env, 61_000)).allowed).toBe(
       true
+    );
+  });
+
+  it('shows when a beta assistant limit will clear', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: 'The modeling assistant request limit has been reached.',
+            code: 'AI_RATE_LIMITED',
+            retryAfterSeconds: 95
+          },
+          { status: 429 }
+        )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toThrow(
+      'The modeling assistant request limit has been reached. Try again in 2 minutes.'
     );
   });
 
