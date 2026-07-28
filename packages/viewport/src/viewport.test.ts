@@ -18,7 +18,10 @@ import {
   moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
+  MAX_TWEEN_MS,
+  MIN_TWEEN_MS,
   orbitPivotForPoint,
+  tweenDurationFor,
   projectToScreen,
   RightClickGestureTracker,
   VIEW_DIRECTIONS
@@ -518,5 +521,52 @@ describe('the orbit pivot follows what was picked', () => {
 
   it('declines a point on the camera plane, where there is no depth', () => {
     expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))).toBeNull();
+  });
+});
+
+describe('glide duration follows how far the camera travels', () => {
+  const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+  // A camera 100 units from what it is looking at.
+  const eye = v(0, 0, 100);
+  const focus = v(0, 0, 0);
+
+  it('keeps a small nudge short', () => {
+    const near = tweenDurationFor(eye, v(2, 0, 100), focus, focus);
+    expect(near).toBe(MIN_TWEEN_MS);
+  });
+
+  it('caps a long reorientation so it never drags', () => {
+    const far = tweenDurationFor(eye, v(0, 0, -400), focus, focus);
+    expect(far).toBe(MAX_TWEEN_MS);
+  });
+
+  it('gives a longer glide to a longer move', () => {
+    const short = tweenDurationFor(eye, v(20, 0, 100), focus, focus);
+    const long = tweenDurationFor(eye, v(90, 0, 100), focus, focus);
+    expect(long).toBeGreaterThan(short);
+  });
+
+  it('is scale-invariant: the same relative move takes the same time', () => {
+    // A bracket and a building should feel identical to fly around.
+    const small = tweenDurationFor(v(0, 0, 10), v(6, 0, 10), v(0, 0, 0), v(0, 0, 0));
+    const large = tweenDurationFor(
+      v(0, 0, 10_000),
+      v(6_000, 0, 10_000),
+      v(0, 0, 0),
+      v(0, 0, 0)
+    );
+    expect(large).toBeCloseTo(small, 6);
+  });
+
+  it('counts a pure pivot move, not just camera travel', () => {
+    // Re-centring without moving the camera still has to be animated.
+    const pivotOnly = tweenDurationFor(eye, eye, focus, v(0, 40, 0));
+    expect(pivotOnly).toBeGreaterThan(MIN_TWEEN_MS);
+  });
+
+  it('falls back to a sane duration when the camera sits on its target', () => {
+    const degenerate = tweenDurationFor(focus, v(1, 0, 0), focus, focus);
+    expect(degenerate).toBeGreaterThanOrEqual(MIN_TWEEN_MS);
+    expect(degenerate).toBeLessThanOrEqual(MAX_TWEEN_MS);
   });
 });
