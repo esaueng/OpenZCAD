@@ -21,6 +21,7 @@ import {
   VIEW_DIRECTIONS,
   applyDisplayMode,
   CameraController,
+  GestureRouter,
   PickService,
   SelectionManager,
   applyMoveGizmoFocus,
@@ -698,6 +699,15 @@ export function ModelViewer({
       extrudeArmed: () => extrudePreviewRef.current !== null
     });
 
+    // Pointer capture, orbit parking, drag cursor, and click-vs-drag for
+    // every gesture below.
+    const gestures = new GestureRouter({
+      domElement: renderer.domElement,
+      setControlsEnabled: (enabled) => {
+        cameraRig.controls.enabled = enabled;
+      }
+    });
+
     const picker = new PickService({
       domElement: renderer.domElement,
       camera: () => cameraRig.activeCamera,
@@ -813,7 +823,6 @@ export function ModelViewer({
     });
     observer.observe(host);
 
-    let downPosition: { x: number; y: number } | null = null;
     const rightClickGesture = new RightClickGestureTracker();
     let rightPanStartTarget: THREE.Vector3 | null = null;
     let faceDrag: FaceDragState | null = null;
@@ -1164,12 +1173,8 @@ export function ModelViewer({
       }
       faceDrag.object.position.copy(faceDrag.initialPosition);
       faceDrag.object.scale.copy(faceDrag.initialScale);
-      cameraRig.controls.enabled = true;
+      gestures.release(faceDrag.pointerId, 'grab');
       dragHud.hidden = true;
-      renderer.domElement.style.cursor = 'grab';
-      if (renderer.domElement.hasPointerCapture(faceDrag.pointerId)) {
-        renderer.domElement.releasePointerCapture(faceDrag.pointerId);
-      }
     }
 
     function positionExtrudeHud(event: PointerEvent, distance: number) {
@@ -1188,12 +1193,8 @@ export function ModelViewer({
       if (!extrudeDrag) {
         return;
       }
-      cameraRig.controls.enabled = true;
+      gestures.release(extrudeDrag.pointerId, 'grab');
       dragHud.hidden = true;
-      renderer.domElement.style.cursor = 'grab';
-      if (renderer.domElement.hasPointerCapture(extrudeDrag.pointerId)) {
-        renderer.domElement.releasePointerCapture(extrudeDrag.pointerId);
-      }
     }
 
     /** Sketch-local point under the cursor: entity snap, then grid snap. */
@@ -1585,7 +1586,7 @@ export function ModelViewer({
       if (event.button !== 0) {
         return;
       }
-      downPosition = { x: event.clientX, y: event.clientY };
+      gestures.begin(event);
       const moveHit = pickMoveGizmo(event);
       if (moveHit && movePreviewRef.current) {
         const activeMove = movePreviewRef.current;
@@ -1650,9 +1651,7 @@ export function ModelViewer({
         const focus = { kind: data.kind, axis };
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true);
-        cameraRig.controls.enabled = false;
-        renderer.domElement.setPointerCapture(event.pointerId);
-        renderer.domElement.style.cursor = 'grabbing';
+        gestures.capture(event);
         event.preventDefault();
         return;
       }
@@ -1664,8 +1663,7 @@ export function ModelViewer({
           gesture.dragStart = point;
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
-          cameraRig.controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
+          gestures.capture(event, null);
           onSketchDrawingChangeRef.current(true);
           event.preventDefault();
         } else if (point && (mode.tool === 'line' || mode.tool === 'arc')) {
@@ -1673,7 +1671,7 @@ export function ModelViewer({
           gesture.moved = false;
           event.preventDefault();
         }
-        downPosition = { x: event.clientX, y: event.clientY };
+        gestures.begin(event);
         return;
       }
       const armedRig = offsetRigRef.current;
@@ -1700,9 +1698,7 @@ export function ModelViewer({
           };
           offsetDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
-          cameraRig.controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
-          renderer.domElement.style.cursor = 'grabbing';
+          gestures.capture(event);
           event.preventDefault();
           return;
         }
@@ -1732,9 +1728,7 @@ export function ModelViewer({
           };
           edgeDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
-          cameraRig.controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
-          renderer.domElement.style.cursor = 'grabbing';
+          gestures.capture(event);
           event.preventDefault();
           return;
         }
@@ -1771,10 +1765,8 @@ export function ModelViewer({
               projectedLength > 0.1 ? projectedY / projectedLength : -1,
             pixelsPerUnit: Math.max(projectedLength, fallback)
           };
-          cameraRig.controls.enabled = false;
-          renderer.domElement.setPointerCapture(event.pointerId);
+          gestures.capture(event);
           positionExtrudeHud(event, activeExtrude.distance);
-          renderer.domElement.style.cursor = 'grabbing';
           event.preventDefault();
           return;
         }
@@ -1863,8 +1855,7 @@ export function ModelViewer({
         initialPosition: object.position.clone(),
         initialScale: object.scale.clone()
       };
-      cameraRig.controls.enabled = false;
-      renderer.domElement.setPointerCapture(event.pointerId);
+      gestures.capture(event, null);
       positionDragHud(event, initialValue, direction.axis);
       event.preventDefault();
     };
@@ -1895,10 +1886,7 @@ export function ModelViewer({
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
-        cameraRig.controls.enabled = true;
-        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        }
+        gestures.release(event, null);
         const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
         updateMoveGizmoFocus(moveFocus);
         if (moveFocus) {
@@ -1908,7 +1896,6 @@ export function ModelViewer({
           moveGizmoHud.hidden = true;
           renderer.domElement.style.cursor = '';
         }
-        downPosition = null;
         return;
       }
       if (sketchModeRef.current && event.button === 0) {
@@ -1916,13 +1903,8 @@ export function ModelViewer({
         const rig = sketchRigRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
-        const moved = downPosition
-          ? Math.hypot(
-              event.clientX - downPosition.x,
-              event.clientY - downPosition.y
-            ) >= 5
-          : false;
-        downPosition = null;
+        const moved = gestures.hasMoved(event);
+        gestures.release(event, null);
         if (mode.tool === 'select' && !moved) {
           setRayFromEvent(event);
           const pickThreshold =
@@ -1940,10 +1922,7 @@ export function ModelViewer({
           return;
         }
         if (gesture.dragStart) {
-          if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-            renderer.domElement.releasePointerCapture(event.pointerId);
-          }
-          cameraRig.controls.enabled = true;
+          gestures.release(event, null);
           if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
             const object = sketchObjectFromDrag(
               mode.tool,
@@ -2015,12 +1994,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        cameraRig.controls.enabled = true;
-        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        }
-        renderer.domElement.style.cursor = 'grab';
-        downPosition = null;
+        gestures.release(event, 'grab');
         const rig = edgeRigRef.current;
         const finalValue = rig?.value() ?? 0;
         if (
@@ -2037,12 +2011,7 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        cameraRig.controls.enabled = true;
-        if (renderer.domElement.hasPointerCapture(event.pointerId)) {
-          renderer.domElement.releasePointerCapture(event.pointerId);
-        }
-        renderer.domElement.style.cursor = 'grab';
-        downPosition = null;
+        gestures.release(event, 'grab');
         const rig = offsetRigRef.current;
         const finalOffset = rig?.offset() ?? 0;
         if (
@@ -2057,7 +2026,6 @@ export function ModelViewer({
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
         restoreExtrudeDrag();
         extrudeDrag = null;
-        downPosition = null;
         return;
       }
       if (faceDrag && event.pointerId === faceDrag.pointerId) {
@@ -2068,7 +2036,6 @@ export function ModelViewer({
         );
         restoreFaceDrag();
         faceDrag = null;
-        downPosition = null;
         onSelectTopologyRef.current(
           completed.selection,
           false,
@@ -2086,15 +2053,13 @@ export function ModelViewer({
       if (event.button !== 0) {
         return;
       }
-      if (!downPosition) {
+      const press = gestures.track(event);
+      if (!press) {
         return;
       }
-      const moved = Math.hypot(
-        event.clientX - downPosition.x,
-        event.clientY - downPosition.y
-      );
-      downPosition = null;
-      if (moved < 5) {
+      const stayedPut = !press.moved;
+      gestures.release(event, null);
+      if (stayedPut) {
         const result = pick(event);
         if (result?.region) {
           onSelectRegionRef.current(result.region);
@@ -2130,7 +2095,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        cameraRig.controls.enabled = true;
+        gestures.release(event);
         edgeRigRef.current?.setValue(0);
         requestRender();
       }
@@ -2138,14 +2103,14 @@ export function ModelViewer({
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
-        cameraRig.controls.enabled = true;
+        gestures.release(event);
         offsetRigRef.current?.setOffset(0);
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
         moveDragActiveRef.current = false;
-        cameraRig.controls.enabled = true;
+        gestures.release(event);
         clearMoveGizmoHover();
       }
       if (extrudeDrag && event.pointerId === extrudeDrag.pointerId) {
@@ -2158,7 +2123,7 @@ export function ModelViewer({
       }
       rightClickGesture.cancel(event.pointerId);
       rightPanStartTarget = null;
-      downPosition = null;
+      gestures.reset();
     };
     const handlePointerLeave = () => {
       if (moveDrag) {
