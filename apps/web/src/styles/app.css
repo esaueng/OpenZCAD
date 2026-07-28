@@ -3183,7 +3183,12 @@
     font-size: 0;
   }
 
-  .workspace {
+  /* The assistant is an overlay below 820px, so it gets no column here. The
+     `.with-assistant` variant has to be named explicitly: the 820px block
+     sets its columns at a higher specificity and would otherwise keep the
+     two-column layout, whose 190px + 280px floor overflows a phone. */
+  .workspace,
+  .workspace.with-assistant {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(120px, 32%) minmax(160px, 1fr);
   }
