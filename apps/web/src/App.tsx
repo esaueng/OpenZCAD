@@ -163,6 +163,7 @@ import {
   selectProjectDocument,
   saveLocalProject
 } from './lib/localProjectStore';
+import { LivePreview } from './lib/livePreview';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useCollaboration } from './lib/useCollaboration';
 import {
@@ -2212,7 +2213,7 @@ export function App() {
   // Leaving edges mode abandons any in-flight preview document.
   useEffect(() => {
     if (interaction.mode !== 'edges') {
-      clearEdgePreview();
+      edgePreview.clear();
     }
   }, [interaction.mode]);
 
@@ -2690,13 +2691,25 @@ export function App() {
    * latest value wins; a slow document (>400ms per preview) degrades to the
    * chip readout only, and the drag still commits exactly on release.
    */
-  const edgePreviewRef = useRef({
-    token: 0,
-    inFlight: false,
-    pending: null as number | null,
-    slow: false,
-    active: false
-  });
+  /**
+   * Live fillet/chamfer preview while the radius handle drags. One rebuild
+   * in flight, newest value wins, and it gives up for the rest of the
+   * gesture if the kernel gets slow.
+   */
+  const edgePreview = useRef(
+    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+      build: (size) => {
+        const command = buildEdgeModifierCommand(size);
+        const base = managerRef.current?.document;
+        return command && base ? command.apply(base) : null;
+      },
+      derive: (document) => geometry.syncOnce(document),
+      publish: (preview) =>
+        setPreviewDoc(
+          preview ? { ...preview.document, derived: preview.derived } : null
+        )
+    })
+  ).current;
 
   function buildEdgeModifierCommand(size: ParamValue) {
     if (interaction.mode !== 'edges') {
@@ -2721,72 +2734,12 @@ export function App() {
       : commandFactories.chamferEdges(payload);
   }
 
-  function requestEdgePreview(size: number) {
-    const state = edgePreviewRef.current;
-    if (state.slow || size <= 0) {
-      return;
-    }
-    state.pending = size;
-    state.active = true;
-    if (!state.inFlight) {
-      void runEdgePreviews();
-    }
-  }
-
-  async function runEdgePreviews() {
-    const state = edgePreviewRef.current;
-    state.inFlight = true;
-    try {
-      while (state.pending !== null) {
-        const size = state.pending;
-        state.pending = null;
-        const token = ++state.token;
-        const command = buildEdgeModifierCommand(size);
-        if (!command) {
-          break;
-        }
-        const base = managerRef.current?.document;
-        if (!base) {
-          break;
-        }
-        const started = performance.now();
-        try {
-          const preview = command.apply(base);
-          const derived = await geometry.syncOnce(preview);
-          if (token !== state.token || !state.active) {
-            continue;
-          }
-          setPreviewDoc({ ...preview, derived });
-        } catch {
-          // Invalid radii simply skip the preview frame.
-        }
-        if (performance.now() - started > 400) {
-          state.slow = true;
-          break;
-        }
-      }
-    } finally {
-      state.inFlight = false;
-    }
-  }
-
-  function clearEdgePreview() {
-    const state = edgePreviewRef.current;
-    state.token += 1;
-    state.pending = null;
-    state.slow = false;
-    if (state.active) {
-      state.active = false;
-      setPreviewDoc(null);
-    }
-  }
-
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
   function handleEdgeCommit(size: number, exact?: ParamValue) {
     if (interaction.mode !== 'edges') {
       return;
     }
-    clearEdgePreview();
+    edgePreview.clear();
     const rounded = Math.round(size * 1000) / 1000;
     const command = buildEdgeModifierCommand(exact ?? rounded);
     if (!command || rounded <= 0) {
@@ -2864,7 +2817,7 @@ export function App() {
       interaction.mode === 'edges' &&
       (action === 'fillet' || action === 'chamfer')
     ) {
-      clearEdgePreview();
+      edgePreview.clear();
       dispatchInteraction({ type: 'set-edge-op', op: action });
     }
   }
@@ -3834,7 +3787,7 @@ export function App() {
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
             edgeHandle={edgeHandleTarget}
-            onEdgeRadiusPreview={requestEdgePreview}
+            onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
             onDirectManipulationChange={(dragging) =>
@@ -3911,7 +3864,7 @@ export function App() {
                             : value - keypad.baseline
                         );
                         if (keypad.kind === 'edge') {
-                          requestEdgePreview(value);
+                          edgePreview.request(value);
                         }
                       }}
                       onCommit={(value, raw) => {
@@ -3936,7 +3889,7 @@ export function App() {
                       onCancel={() => {
                         offsetSetterRef.current?.(0);
                         if (keypad.kind === 'edge') {
-                          clearEdgePreview();
+                          edgePreview.clear();
                         }
                         dispatchInteraction({ type: 'keypad-close' });
                         setKeypad(null);
