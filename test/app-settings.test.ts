@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_APP_SETTINGS, deepClone, toUserId } from '@openzcad/shared';
 import {
+  APP_SETTINGS_STORAGE_KEY,
   defaultAppSettings,
-  normalizeAppSettings
+  loadLocalAppSettings,
+  loadLocalAppSettingsRecord,
+  normalizeAppSettings,
+  saveLocalAppSettings,
+  shouldAdoptAccountSettings
 } from '../apps/web/src/lib/appSettings';
 import {
   decryptAssistantCredential,
@@ -10,6 +15,27 @@ import {
   parseUpdateAppSettingsRequest,
   validateAssistantBaseUrl
 } from '../apps/web/worker/settings';
+
+/**
+ * The device-settings helpers read `window.localStorage`, which the node test
+ * environment does not provide. A map-backed stand-in exercises the real
+ * serialization path without pulling in a DOM.
+ */
+function installLocalStorage(): void {
+  const entries = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => void entries.set(key, value),
+    removeItem: (key: string) => void entries.delete(key),
+    clear: () => entries.clear()
+  };
+  (globalThis as Record<string, unknown>).window = { localStorage: storage };
+}
+
+beforeEach(installLocalStorage);
+afterEach(() => {
+  delete (globalThis as Record<string, unknown>).window;
+});
 
 function encryptionSecret(): string {
   let binary = '';
@@ -70,6 +96,66 @@ describe('application settings', () => {
         'development'
       )
     ).toBe('http://localhost:11434/v1/responses');
+  });
+
+  it('keeps an unsaved device change from being reverted by the account copy', () => {
+    // A boot-time account fetch is only allowed to replace what is on the
+    // device when the device has nothing unsaved; otherwise turning the
+    // assistant off and reloading would turn it back on.
+    expect(shouldAdoptAccountSettings(null)).toBe(true);
+    expect(
+      shouldAdoptAccountSettings({
+        settings: defaultAppSettings(),
+        syncedRevision: 4
+      })
+    ).toBe(true);
+    expect(
+      shouldAdoptAccountSettings({
+        settings: defaultAppSettings(),
+        syncedRevision: null
+      })
+    ).toBe(false);
+  });
+
+  it('round-trips the synced revision alongside device settings', () => {
+    const edited = defaultAppSettings();
+    edited.assistant.enabled = false;
+
+    expect(saveLocalAppSettings(edited, null)).toBe(true);
+    const dirty = loadLocalAppSettingsRecord();
+    expect(dirty?.syncedRevision).toBeNull();
+    expect(dirty?.settings.assistant.enabled).toBe(false);
+    expect(shouldAdoptAccountSettings(dirty)).toBe(false);
+
+    expect(saveLocalAppSettings(edited, 7)).toBe(true);
+    const clean = loadLocalAppSettingsRecord();
+    expect(clean?.syncedRevision).toBe(7);
+    expect(shouldAdoptAccountSettings(clean)).toBe(true);
+  });
+
+  it('treats settings stored before revision tracking as already in sync', () => {
+    // Anyone upgrading has a bare AppSettings blob on disk. Calling that dirty
+    // would strand whatever their account holds behind a stale device copy.
+    const legacy = defaultAppSettings();
+    legacy.appearance.density = 'comfortable';
+    window.localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify(legacy)
+    );
+
+    const stored = loadLocalAppSettingsRecord();
+    expect(stored?.settings.appearance.density).toBe('comfortable');
+    expect(shouldAdoptAccountSettings(stored)).toBe(true);
+  });
+
+  it('falls back to defaults when device storage is empty or corrupt', () => {
+    window.localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
+    expect(loadLocalAppSettingsRecord()).toBeNull();
+    expect(loadLocalAppSettings().assistant.enabled).toBe(true);
+
+    window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, '{not json');
+    expect(loadLocalAppSettingsRecord()).toBeNull();
+    expect(loadLocalAppSettings()).toEqual(defaultAppSettings());
   });
 
   it('encrypts personal credentials with owner-bound authenticated data', async () => {

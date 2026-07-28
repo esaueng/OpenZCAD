@@ -783,11 +783,353 @@ export const CAD_PATCH_JSON_SCHEMA = {
   required: ['proposalId', 'summary', 'assumptions', 'operations']
 } as const;
 
+/**
+ * One earlier turn of the conversation, replayed so the model can see what it
+ * already asked and what the user answered. Text only: the document state comes
+ * from the single current digest, never from a per-turn snapshot.
+ */
+export interface AssistantHistoryTurn {
+  role: 'user' | 'assistant';
+  text: string;
+  /** Set on a user turn that answers a specific earlier question. */
+  answeredQuestionId?: string;
+}
+
+export const ASSISTANT_ATTACHMENT_MEDIA_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp'
+] as const;
+
+export type AssistantAttachmentMediaType =
+  (typeof ASSISTANT_ATTACHMENT_MEDIA_TYPES)[number];
+
+/**
+ * A page of a drawing the user attached, already rasterized to an image by the
+ * client. PDFs are converted before upload so the server only ever handles this
+ * short media-type allowlist, and the user sees the exact pixels the model does.
+ */
+export interface AssistantAttachment {
+  id: string;
+  mediaType: AssistantAttachmentMediaType;
+  /** Base64 payload with no data-URL prefix. */
+  dataBase64: string;
+  /** Human label, e.g. "bracket.pdf page 2". */
+  label: string;
+}
+
+export const MAX_ASSISTANT_HISTORY_TURNS = 12;
+export const MAX_ASSISTANT_HISTORY_CHARS = 8_000;
+export const MAX_ASSISTANT_ATTACHMENTS = 4;
+/** Decoded bytes per attachment. A 2048px drawing scan lands well under this. */
+export const MAX_ASSISTANT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+export const MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES = 10 * 1024 * 1024;
+
+/** A tappable suggested answer to an assistant question. */
+export interface AssistantQuestionOption {
+  /** Shown on the chip. */
+  label: string;
+  /** Sent back verbatim as the user's answer when the chip is tapped. */
+  value: string;
+}
+
+export interface AssistantQuestion {
+  /** Echoed back with the answer so a reply can be matched to its question. */
+  id: string;
+  prompt: string;
+  options: AssistantQuestionOption[];
+  /** True when a typed answer is acceptable in addition to the options. */
+  allowFreeText: boolean;
+  /** Unit the answer is expressed in, e.g. "mm", or null for a non-dimension. */
+  unit: string | null;
+}
+
+/**
+ * One dimension the model took off an attached drawing.
+ *
+ * Prose assumptions are not auditable: someone about to cut metal needs to see
+ * that "⌀12" was read as 12 and not 1.2, and which view it came from.
+ */
+export interface AssistantDrawingReading {
+  /** What the dimension is, e.g. "⌀12 H7 bore". */
+  label: string;
+  /** The value as used, in document units, or why it could not be used. */
+  value: string;
+  /** Where on the drawing it was read, e.g. "front view", "title block". */
+  source: string;
+  confidence: 'read' | 'inferred' | 'unreadable';
+}
+
+export const ASSISTANT_READING_CONFIDENCES = [
+  'read',
+  'inferred',
+  'unreadable'
+] as const;
+
+export const MAX_ASSISTANT_READINGS = 40;
+
+/**
+ * What the assistant can return for one turn.
+ *
+ * Only `patch` changes the document. The other two exist because a strict
+ * patch-only schema forces the model to invent numbers it should be asking
+ * about, and to express "the vocabulary cannot do this" as a wrong patch.
+ */
+export type AssistantReply =
+  | {
+      kind: 'patch';
+      proposal: CadPatchProposal;
+      /** Populated when the turn carried a drawing; empty otherwise. */
+      readings: AssistantDrawingReading[];
+    }
+  | {
+      kind: 'questions';
+      /** One or two sentences of context shown above the questions. */
+      preamble: string;
+      questions: AssistantQuestion[];
+    }
+  | { kind: 'message'; message: string };
+
+export const MAX_ASSISTANT_QUESTIONS = 6;
+export const MAX_ASSISTANT_QUESTION_OPTIONS = 6;
+
+const questionOptionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    label: { type: 'string' },
+    value: { type: 'string' }
+  },
+  required: ['label', 'value']
+} as const;
+
+/**
+ * Strict structured output requires an object root, so the three reply shapes
+ * are a `replyKind` discriminant plus one populated field and explicit nulls —
+ * the same "omit this" idiom the patch schema already uses for absent numbers.
+ * `message` carries the preamble on a questions reply and the whole text on a
+ * message reply.
+ */
+export const ASSISTANT_REPLY_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    replyKind: { type: 'string', enum: ['patch', 'questions', 'message'] },
+    proposal: {
+      anyOf: [CAD_PATCH_JSON_SCHEMA, { type: 'null' }],
+      description:
+        'The model edit, when replyKind is "patch". Null for every other kind.'
+    },
+    questions: {
+      anyOf: [
+        {
+          type: 'array',
+          minItems: 1,
+          maxItems: MAX_ASSISTANT_QUESTIONS,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              prompt: { type: 'string' },
+              options: {
+                type: 'array',
+                maxItems: MAX_ASSISTANT_QUESTION_OPTIONS,
+                items: questionOptionSchema,
+                description:
+                  'Suggested answers offered as chips. Give at least one unless allowFreeText is true.'
+              },
+              allowFreeText: { type: 'boolean' },
+              unit: { anyOf: [{ type: 'string' }, { type: 'null' }] }
+            },
+            required: ['id', 'prompt', 'options', 'allowFreeText', 'unit']
+          }
+        },
+        { type: 'null' }
+      ],
+      description:
+        'Questions to ask before modeling, when replyKind is "questions". Null otherwise.'
+    },
+    message: {
+      anyOf: [{ type: 'string' }, { type: 'null' }],
+      description:
+        'For "message", the whole reply. For "questions", a short preamble. Null for "patch".'
+    },
+    readings: {
+      anyOf: [
+        {
+          type: 'array',
+          maxItems: MAX_ASSISTANT_READINGS,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              label: { type: 'string' },
+              value: { type: 'string' },
+              source: { type: 'string' },
+              confidence: {
+                type: 'string',
+                enum: [...ASSISTANT_READING_CONFIDENCES]
+              }
+            },
+            required: ['label', 'value', 'source', 'confidence']
+          }
+        },
+        { type: 'null' }
+      ],
+      description:
+        'Every dimension taken off an attached drawing, with the view it came from. Null when no drawing was supplied.'
+    }
+  },
+  required: ['replyKind', 'proposal', 'questions', 'message', 'readings']
+} as const;
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('CAD patch proposal must be an object.');
   }
   return value as Record<string, unknown>;
+}
+
+function requireNonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+
+function parseAssistantQuestions(value: unknown): AssistantQuestion[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_ASSISTANT_QUESTIONS
+  ) {
+    throw new Error(
+      `A questions reply must carry 1 to ${MAX_ASSISTANT_QUESTIONS} questions.`
+    );
+  }
+  const ids = new Set<string>();
+  return value.map((candidate, index) => {
+    const question = record(candidate);
+    const id = requireNonEmptyString(question.id, `questions[${index}].id`);
+    if (ids.has(id)) {
+      throw new Error(`Duplicate question id "${id}".`);
+    }
+    ids.add(id);
+    const prompt = requireNonEmptyString(
+      question.prompt,
+      `questions[${index}].prompt`
+    );
+    if (typeof question.allowFreeText !== 'boolean') {
+      throw new Error(`questions[${index}].allowFreeText must be a boolean.`);
+    }
+    if (!Array.isArray(question.options)) {
+      throw new Error(`questions[${index}].options must be an array.`);
+    }
+    if (question.options.length > MAX_ASSISTANT_QUESTION_OPTIONS) {
+      throw new Error(`questions[${index}].options has too many entries.`);
+    }
+    const options = question.options.map((rawOption, optionIndex) => {
+      const option = record(rawOption);
+      return {
+        label: requireNonEmptyString(
+          option.label,
+          `questions[${index}].options[${optionIndex}].label`
+        ),
+        value: requireNonEmptyString(
+          option.value,
+          `questions[${index}].options[${optionIndex}].value`
+        )
+      };
+    });
+    // A question with neither chips nor a text field is unanswerable, which
+    // would strand the conversation with no way forward.
+    if (options.length === 0 && !question.allowFreeText) {
+      throw new Error(
+        `questions[${index}] offers no options and does not allow free text, so it cannot be answered.`
+      );
+    }
+    return {
+      id,
+      prompt,
+      options,
+      allowFreeText: question.allowFreeText,
+      unit:
+        typeof question.unit === 'string' && question.unit.trim()
+          ? question.unit.trim()
+          : null
+    };
+  });
+}
+
+/**
+ * Readings are advisory: they explain a patch rather than drive it, so an
+ * unusable entry is dropped instead of failing an otherwise valid model.
+ */
+function parseAssistantReadings(value: unknown): AssistantDrawingReading[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.slice(0, MAX_ASSISTANT_READINGS).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object') {
+      return [];
+    }
+    const reading = candidate as Record<string, unknown>;
+    const confidence = ASSISTANT_READING_CONFIDENCES.includes(
+      reading.confidence as AssistantDrawingReading['confidence']
+    )
+      ? (reading.confidence as AssistantDrawingReading['confidence'])
+      : 'inferred';
+    return typeof reading.label === 'string' &&
+      reading.label.trim() &&
+      typeof reading.value === 'string' &&
+      reading.value.trim()
+      ? [
+          {
+            label: reading.label.trim(),
+            value: reading.value.trim(),
+            source:
+              typeof reading.source === 'string' && reading.source.trim()
+                ? reading.source.trim()
+                : 'unstated',
+            confidence
+          }
+        ]
+      : [];
+  });
+}
+
+/**
+ * Validates one assistant reply. The patch branch delegates to
+ * `parseCadPatchProposal`, so a patch is held to exactly the same standard it
+ * was before replies could be anything else.
+ */
+export function parseAssistantReply(value: unknown): AssistantReply {
+  const candidate = record(value);
+  switch (candidate.replyKind) {
+    case 'patch':
+      return {
+        kind: 'patch',
+        proposal: parseCadPatchProposal(candidate.proposal),
+        readings: parseAssistantReadings(candidate.readings)
+      };
+    case 'questions':
+      return {
+        kind: 'questions',
+        preamble:
+          typeof candidate.message === 'string' ? candidate.message.trim() : '',
+        questions: parseAssistantQuestions(candidate.questions)
+      };
+    case 'message':
+      return {
+        kind: 'message',
+        message: requireNonEmptyString(candidate.message, 'message')
+      };
+    default:
+      throw new Error(
+        `Unsupported assistant replyKind: ${String(candidate.replyKind)}.`
+      );
+  }
 }
 
 function isScalar(value: unknown): value is ParamValue {

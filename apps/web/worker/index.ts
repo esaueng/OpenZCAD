@@ -22,7 +22,10 @@ import {
   streamAssistantProposal,
   testAssistantConnection
 } from './assistant';
-import { consumeAssistantQuota } from './assistantRateLimit';
+import {
+  assistantQuotaCost,
+  consumeAssistantQuota
+} from './assistantRateLimit';
 import {
   authenticateRequest,
   AuthenticationError,
@@ -125,7 +128,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         503
       );
     }
-    const quota = await consumeAssistantQuota(userId, env);
+    const quota = await consumeAssistantQuota(
+      userId,
+      env,
+      Date.now(),
+      assistantQuotaCost(payload.attachments.length)
+    );
     if (!quota.allowed) {
       return new Response(
         JSON.stringify({

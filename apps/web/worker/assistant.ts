@@ -1,5 +1,7 @@
 import {
-  CAD_PATCH_JSON_SCHEMA,
+  ASSISTANT_REPLY_JSON_SCHEMA,
+  type AssistantAttachment,
+  type AssistantHistoryTurn,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
@@ -29,7 +31,21 @@ Never emit a single solid primitive when the real object needs more construction
 
 Construction complexity is not part count. Unless the user explicitly asks for an assembly, multiple/separate pieces, or an object that mechanically requires independently moving or removable parts, default to one finished physical part. A bracket made from a base, wall, boss, and ribs is one part, even though it needs several construction solids.
 
-Ask a question only when the missing information would substantially change the design or make a valid model impossible. Otherwise choose sensible, editable defaults, build the model, and report every assumption in \`assumptions\`.
+When a missing fact would substantially change the design — not merely a detail you can default — ask for it instead of guessing. Section 1a says how. Otherwise choose sensible, editable defaults, build the model, and report every assumption in \`assumptions\`.
+
+# 1a. Choose one of three replies
+
+Set \`replyKind\` to exactly one of:
+
+- \`patch\` — you can build the object now. \`proposal\` carries the model; \`questions\` and \`message\` are null.
+- \`questions\` — one or more facts you genuinely need are missing, and different answers would produce materially different parts. \`questions\` carries them; \`message\` is one or two sentences of context; \`proposal\` is null.
+- \`message\` — the request cannot be expressed with the operations available, or it is not a modeling request at all. \`message\` says so plainly and names what is missing; the other two are null.
+
+Ask when the answer changes the geometry, the fit, or which part is being made: overall size with no dimension given anywhere, a hole pattern with no diameter or spacing, which of two incompatible interpretations of an ambiguous word is meant, a mating dimension for a part you cannot see. Do NOT ask about anything a competent designer defaults without being told — wall thickness, fillet radii, clearance values, print orientation, or cosmetic naming. Do not ask for permission to proceed, and never ask a question you could answer from the digest.
+
+Ask at most three questions in one turn, and only ones whose answers you will actually use. Every question needs an \`id\` (a short slug such as \`plate_thickness\`), a \`prompt\` that reads as a single plain-language sentence, and a way to answer: give 2-4 concrete \`options\` whose \`value\` is the literal answer text ("6 mm", "M4"), set \`allowFreeText\` true when a typed value makes sense, and set \`unit\` when the answer is a dimension. Put your own recommendation first. Prefer offering options with a sensible default over asking an open question.
+
+When earlier turns are present, they are the conversation so far: any question you already asked and the user's answer to it. Treat those answers as given facts, never re-ask them, and build the patch as soon as you have enough. One round of questions then a patch is the expected shape; do not stretch it over more turns than the missing facts require.
 
 # 2. Plan before you emit operations
 
@@ -45,11 +61,12 @@ Work out, before writing any operation:
 - \`box\` has its CORNER AT THE ORIGIN. It spans (0,0,0) to (width, height, depth). It is NOT centred.
 - For a box, \`width\` is X, \`height\` is Y, and \`depth\` is Z. **\`depth\` is the vertical axis.** A box's upright height is its \`depth\` field. Do not put the vertical size in \`height\`.
 - \`cylinder\` and \`cone\` sit with their BASE ON THE Z=0 PLANE, axis along +Z, centred in X and Y.
-- \`sphere\` and \`torus\` are CENTRED ON THE ORIGIN.
+- **Which field carries the vertical size depends on the primitive, and this is the single easiest thing to get wrong.** A box's vertical size is \`depth\`. A CYLINDER's and a CONE's vertical size is \`height\` — \`cylinder\` uses \`radius\` + \`height\`, \`cone\` uses \`bottomRadius\` + \`topRadius\` + \`height\`, and each leaves every other dimension \`null\`. A cylinder whose length you put in \`depth\` is built with zero height and the whole patch fails. Boxes are the exception, not the rule: only a box puts its upright size in \`depth\`.
+- \`sphere\` uses \`radius\` alone; \`torus\` uses \`majorRadius\` + \`minorRadius\`. Both are CENTRED ON THE ORIGIN.
 - \`add_transform\` rotates about the WORLD ORIGIN and then translates. It moves a body in place and does not create a new body. To rotate a body about its own centre you must account for the offset yourself.
 - \`add_boolean\` creates a new body and CONSUMES its operands: after a subtract, the original box and the cutting tool no longer exist as separate bodies. Never reference a consumed body again.
 - Every positive solid that belongs to the same physical part — plates, walls, bosses, ribs, gussets, and similar features — must overlap that part by more than modeling tolerance and be consumed by an \`add_boolean\` union. Face-only contact is not a reliable union. Do not leave those construction solids as separate live bodies.
-- The solid kernel is Z-up: a part's own vertical axis is +Z, which is why a box's upright size is \`depth\` and cylinders extrude along +Z. Build every part in that frame and keep it consistent across the whole model.
+- The solid kernel is Z-up: a part's own vertical axis is +Z, which is why a box's upright size is \`depth\` and a cylinder's \`height\` runs along +Z. Build every part in that frame and keep it consistent across the whole model.
 - Bodies at the same coordinates overlap. Separate parts need distinct positions, and X is the safest axis to separate them along.
 
 # 4. Referring to bodies you create in the same proposal
@@ -116,13 +133,15 @@ Re-read the operations you are about to emit and confirm:
 - Anything that should be hollow has a cavity actually subtracted from it, and the cavity reaches the intended opening.
 - Mating parts differ by a real clearance and are not identical sizes.
 - Every \`$alias\` is declared earlier and is not already consumed.
-- Every vertical size went into a box's \`depth\`, and every cavity offset accounts for the corner-at-origin placement.
+- Every box's vertical size went into \`depth\`, every cylinder's and cone's went into \`height\`, and every cavity offset accounts for the corner-at-origin placement.
 - Separate parts do not overlap in space.
 Fix any problem before returning; do not describe a defect you could have corrected.
 
 # 10. Output
 
-Every field the schema declares must be present on every operation — none of them are omissible:
+Every field the schema declares must be present, including the three reply fields: set the two your \`replyKind\` does not use to \`null\`.
+
+On a patch, every field the schema declares must be present on every operation — none of them are omissible:
 - \`dimensions\` always carries all eight keys; set the ones the primitive does not use to \`null\` (a box fills width/height/depth and nulls the rest).
 - \`rotationDeg\` is always present; use all zeros when nothing rotates.
 - \`localId\` is always present on the operations that declare it; use \`null\` when nothing needs to reference the result.
@@ -148,9 +167,51 @@ The result is an open-topped box and a separate lid whose skirt wraps the outsid
 
 Return only the strict structured output required by the response schema.`;
 
+/**
+ * Appended only when the turn carries images. A formal 2D drawing has to be
+ * read before it can be modelled, and the failure modes there — a misread
+ * decimal, an assumed projection convention, a dimension invented because it
+ * was illegible — are silent and expensive. This block makes the reading
+ * explicit and pushes the unreadable cases into a question instead of a guess.
+ */
+const DRAWING_INSTRUCTIONS = `# Reading the attached drawing
+
+The images attached to this turn are engineering drawings of the part to model. Read them before planning any geometry, and follow this order.
+
+## 1. Establish the conventions
+
+- Find the projection symbol (the truncated-cone glyph, usually in or near the title block) and state whether the drawing is FIRST angle or THIRD angle. If there is no symbol, infer it from how the views are arranged and say which you assumed.
+- Read the units from the title block. If the drawing states inches and the document digest is in mm, convert every value and say so; the patch must be expressed in the document's units.
+- Note the stated scale, and then ignore it for measurement purposes — see rule 3.
+
+## 2. Identify the views and the dimensions
+
+- Name each view you can see (front, top, right, section A-A, detail, isometric) and what outline each one gives you.
+- Work through every dimension line, diameter (⌀), radius (R), thread callout, counterbore/countersink symbol, and note. Record each one in \`readings\` with its \`label\`, the \`value\` you are using, the \`source\` view it came from, and \`confidence\`:
+  - \`read\` — you can read the number with certainty.
+  - \`inferred\` — not dimensioned, but fixed by the geometry (a symmetric feature, a value implied by two others, an obvious standard).
+  - \`unreadable\` — a dimension is present but you cannot make out the number.
+- Populate \`readings\` on every reply that used a drawing, including a \`questions\` reply. It is the audit trail; a value absent from it is a value nobody can check.
+
+## 3. Never measure pixels
+
+Do not scale a length off the image, and do not derive a dimension by comparing how long two lines look. Drawings are reproduced at arbitrary sizes and are often not to scale in the region you care about. A number is usable only if it is written on the drawing, computable from numbers that are, or fixed by an explicit standard callout.
+
+## 4. Ask about what you could not read
+
+If a dimension you need is \`unreadable\` or simply absent, reply with \`questions\` rather than a patch. Quote the callout as you see it and offer the plausible readings as options — a value that could be 12 or 1.2 is exactly the case to ask about, and the options should be "12 mm" and "1.2 mm". One \`questions\` turn covering everything you could not read beats a patch built on a guess.
+
+Tolerances, surface finish, material, and GD&T frames are context, not geometry: model the nominal dimension and do not ask about them. Where a dimension is given as a range, model the midpoint and record that in \`readings\`.
+
+## 5. Then model it as usual
+
+Once the dimensions are settled, build the part with the same rules as any other request — the coordinate conventions in section 3, the subtract-to-hollow technique in section 5, and named parameters for every driving number so the drawing's dimensions become editable parameters rather than literals. Name the parameters after the drawing's own callouts where it has them.`;
+
 interface ProposalInput {
   prompt: string;
   digest: CadDocumentDigest;
+  history?: readonly AssistantHistoryTurn[];
+  attachments?: readonly AssistantAttachment[];
 }
 
 export interface AssistantStatus {
@@ -274,11 +335,53 @@ function upstreamUrlForRuntime(
   return runtime?.baseUrl ?? upstreamUrlFor(env, provider);
 }
 
-function requestInstructions(runtime: AssistantRuntimeConfig | undefined) {
+function requestInstructions(
+  runtime: AssistantRuntimeConfig | undefined,
+  hasAttachments = false
+) {
   const custom = runtime?.customInstructions.trim();
-  return custom
-    ? `${CAD_ASSISTANT_INSTRUCTIONS}\n\n# User modeling preferences\n${custom}`
+  const base = hasAttachments
+    ? `${CAD_ASSISTANT_INSTRUCTIONS}\n\n${DRAWING_INSTRUCTIONS}`
     : CAD_ASSISTANT_INSTRUCTIONS;
+  return custom
+    ? `${base}\n\n# User modeling preferences\n${custom}`
+    : base;
+}
+
+/**
+ * Builds the provider `input` array.
+ *
+ * Prior turns are replayed as plain-string content, which every
+ * Responses-compatible provider accepts; only the current turn needs the
+ * structured multi-part form, because that is where images attach. Exactly one
+ * digest is sent — the current one — since a per-turn snapshot would both bloat
+ * the context and let the model act on a document state that no longer exists.
+ */
+function assistantInput(input: ProposalInput) {
+  const attachments = input.attachments ?? [];
+  return [
+    ...(input.history ?? []).map((turn) => ({
+      role: turn.role,
+      content: turn.answeredQuestionId
+        ? `[answer to ${turn.answeredQuestionId}] ${turn.text}`
+        : turn.text
+    })),
+    {
+      role: 'user' as const,
+      content: [
+        {
+          type: 'input_text',
+          text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
+        },
+        ...attachments.map((attachment) => ({
+          type: 'input_image',
+          image_url: `data:${attachment.mediaType};base64,${attachment.dataBase64}`,
+          // Dimension text on a drawing is unreadable at anything less.
+          detail: 'high'
+        }))
+      ]
+    }
+  ];
 }
 
 function reasoningRequest(effort: string): {
@@ -409,18 +512,11 @@ export async function streamAssistantProposal(
       signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
         model: runtime?.model ?? modelFor(env, provider),
-        instructions: requestInstructions(runtime),
-        input: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: `CAD request:\n${input.prompt}\n\nCurrent document digest:\n${JSON.stringify(input.digest)}`
-              }
-            ]
-          }
-        ],
+        instructions: requestInstructions(
+          runtime,
+          (input.attachments?.length ?? 0) > 0
+        ),
+        input: assistantInput(input),
         ...reasoningRequest(
           runtime?.reasoningEffort ??
             env.AI_REASONING_EFFORT ??
@@ -429,9 +525,9 @@ export async function streamAssistantProposal(
         text: {
           format: {
             type: 'json_schema',
-            name: 'openzcad_patch',
+            name: 'openzcad_reply',
             strict: true,
-            schema: CAD_PATCH_JSON_SCHEMA
+            schema: ASSISTANT_REPLY_JSON_SCHEMA
           }
         },
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),

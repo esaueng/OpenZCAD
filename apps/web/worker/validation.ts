@@ -11,7 +11,18 @@ import {
   type SaveRevisionRequest,
   type UnitSystem
 } from '@openzcad/shared';
-import type { CadDocumentDigest } from '@openzcad/ai-contracts';
+import {
+  ASSISTANT_ATTACHMENT_MEDIA_TYPES,
+  MAX_ASSISTANT_ATTACHMENTS,
+  MAX_ASSISTANT_ATTACHMENT_BYTES,
+  MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES,
+  MAX_ASSISTANT_HISTORY_CHARS,
+  MAX_ASSISTANT_HISTORY_TURNS,
+  type AssistantAttachment,
+  type AssistantAttachmentMediaType,
+  type AssistantHistoryTurn,
+  type CadDocumentDigest
+} from '@openzcad/ai-contracts';
 
 export class HttpError extends Error {
   constructor(
@@ -40,9 +51,14 @@ const MAX_AI_PROMPT_LENGTH = 4_000;
 const MAX_AI_DIGEST_BYTES = 128_000;
 const MAX_AI_DIGEST_ITEMS = 1_000;
 
+const MAX_AI_ATTACHMENT_LABEL_LENGTH = 200;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
 export interface AssistantProposalRequest {
   prompt: string;
   digest: CadDocumentDigest;
+  history: AssistantHistoryTurn[];
+  attachments: AssistantAttachment[];
 }
 
 function badRequest(message: string): HttpError {
@@ -186,6 +202,109 @@ export function parseFinalizeImportRequest(
   };
 }
 
+/**
+ * Decoded byte count of a base64 payload, without allocating the bytes. An
+ * attachment is rejected on its declared size before anything tries to decode
+ * or forward it.
+ */
+function base64ByteLength(value: string): number {
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  return (value.length / 4) * 3 - padding;
+}
+
+function parseAssistantHistory(value: unknown): AssistantHistoryTurn[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw badRequest('"history" must be an array.');
+  }
+  if (value.length > MAX_ASSISTANT_HISTORY_TURNS) {
+    throw badRequest(
+      `"history" must contain at most ${MAX_ASSISTANT_HISTORY_TURNS} turns.`
+    );
+  }
+  let characters = 0;
+  return value.map((candidate, index) => {
+    const turn = asRecord(candidate, `"history[${index}]"`);
+    if (turn.role !== 'user' && turn.role !== 'assistant') {
+      throw badRequest(`"history[${index}].role" must be user or assistant.`);
+    }
+    const text = requireString(turn, 'text', MAX_ASSISTANT_HISTORY_CHARS);
+    characters += text.length;
+    if (characters > MAX_ASSISTANT_HISTORY_CHARS) {
+      throw badRequest(
+        `"history" must total at most ${MAX_ASSISTANT_HISTORY_CHARS} characters.`
+      );
+    }
+    const answeredQuestionId =
+      turn.answeredQuestionId === undefined
+        ? undefined
+        : requireString(turn, 'answeredQuestionId', 200);
+    return {
+      role: turn.role,
+      text,
+      ...(answeredQuestionId ? { answeredQuestionId } : {})
+    };
+  });
+}
+
+function parseAssistantAttachments(value: unknown): AssistantAttachment[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw badRequest('"attachments" must be an array.');
+  }
+  if (value.length > MAX_ASSISTANT_ATTACHMENTS) {
+    throw badRequest(
+      `"attachments" must contain at most ${MAX_ASSISTANT_ATTACHMENTS} images.`
+    );
+  }
+  let totalBytes = 0;
+  return value.map((candidate, index) => {
+    const attachment = asRecord(candidate, `"attachments[${index}]"`);
+    if (
+      !ASSISTANT_ATTACHMENT_MEDIA_TYPES.includes(
+        attachment.mediaType as AssistantAttachmentMediaType
+      )
+    ) {
+      throw badRequest(
+        `"attachments[${index}].mediaType" must be one of: ${ASSISTANT_ATTACHMENT_MEDIA_TYPES.join(', ')}.`
+      );
+    }
+    const dataBase64 = attachment.dataBase64;
+    if (typeof dataBase64 !== 'string' || dataBase64.length === 0) {
+      throw badRequest(`"attachments[${index}].dataBase64" must be a string.`);
+    }
+    // Reject anything that is not plain base64 before it is put in a data URL,
+    // so a payload cannot smuggle a different media type past the allowlist.
+    if (dataBase64.length % 4 !== 0 || !BASE64_PATTERN.test(dataBase64)) {
+      throw badRequest(
+        `"attachments[${index}].dataBase64" is not valid base64.`
+      );
+    }
+    const bytes = base64ByteLength(dataBase64);
+    if (bytes > MAX_ASSISTANT_ATTACHMENT_BYTES) {
+      throw badRequest(
+        `"attachments[${index}]" exceeds the ${Math.floor(MAX_ASSISTANT_ATTACHMENT_BYTES / (1024 * 1024))} MB per-image limit.`
+      );
+    }
+    totalBytes += bytes;
+    if (totalBytes > MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES) {
+      throw badRequest(
+        `"attachments" exceed the ${Math.floor(MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES / (1024 * 1024))} MB total limit.`
+      );
+    }
+    return {
+      id: requireString(attachment, 'id', 200),
+      mediaType: attachment.mediaType as AssistantAttachmentMediaType,
+      dataBase64,
+      label: requireString(attachment, 'label', MAX_AI_ATTACHMENT_LABEL_LENGTH)
+    };
+  });
+}
+
 export function parseAssistantProposalRequest(
   body: unknown
 ): AssistantProposalRequest {
@@ -217,5 +336,10 @@ export function parseAssistantProposalRequest(
   ) {
     throw badRequest('"digest" is too large.');
   }
-  return { prompt, digest: digest as unknown as CadDocumentDigest };
+  return {
+    prompt,
+    digest: digest as unknown as CadDocumentDigest,
+    history: parseAssistantHistory(record.history),
+    attachments: parseAssistantAttachments(record.attachments)
+  };
 }

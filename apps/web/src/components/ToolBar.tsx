@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { Search } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 import {
   TOOL_GROUPS,
   TOOL_META,
@@ -14,6 +14,9 @@ interface ToolBarProps {
   availability: ToolAvailability;
   onLaunchTool(tool: ToolId): void;
   onOpenSearch(): void;
+  /** Collapsed to a single handle, so the viewport's left edge is usable. */
+  open: boolean;
+  onOpenChange(open: boolean): void;
 }
 
 /**
@@ -26,20 +29,48 @@ export function ToolBar({
   activeTool,
   availability,
   onLaunchTool,
-  onOpenSearch
+  onOpenSearch,
+  open,
+  onOpenChange
 }: ToolBarProps) {
-  return (
-    <nav className="tool-palette" aria-label="Feature tools">
+  if (!open) {
+    return (
       <button
         type="button"
-        className="palette-item palette-search"
-        title="Search commands (Ctrl+K)"
-        onClick={onOpenSearch}
+        className="palette-handle"
+        title="Show tools"
+        aria-label="Show tools"
+        aria-expanded={false}
+        onClick={() => onOpenChange(true)}
       >
-        <Search size={15} aria-hidden="true" />
-        <span className="palette-label">Search</span>
-        <kbd>⌘K</kbd>
+        <PanelLeftOpen size={15} aria-hidden="true" />
       </button>
+    );
+  }
+  return (
+    <nav className="tool-palette" aria-label="Feature tools">
+      <div className="palette-head">
+        <button
+          type="button"
+          className="palette-item palette-search"
+          title="Search commands (Ctrl+K)"
+          onClick={onOpenSearch}
+        >
+          <Search size={15} aria-hidden="true" />
+          <span className="palette-label">Search</span>
+          <kbd>⌘K</kbd>
+        </button>
+        <button
+          type="button"
+          className="palette-collapse"
+          title="Hide tools"
+          aria-label="Hide tools"
+          aria-expanded
+          onClick={() => onOpenChange(false)}
+        >
+          <PanelLeftClose size={14} aria-hidden="true" />
+        </button>
+      </div>
       {TOOL_GROUPS.map((group) => (
         <Fragment key={group.id}>
           <div className="palette-sep" />

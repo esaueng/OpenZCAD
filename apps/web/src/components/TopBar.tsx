@@ -4,6 +4,7 @@ import {
   CloudOff,
   Download,
   Files,
+  FolderOpen,
   LoaderCircle,
   Pencil,
   Redo2,
@@ -166,61 +167,69 @@ export function TopBar({
           <Redo2 size={15} aria-hidden="true" />
         </button>
       </div>
-      <label
-        className="secondary topbar-action"
-        title="Import an editable STEP solid or STL mesh"
-      >
-        <Upload size={14} aria-hidden="true" />
-        Import
-        <input
-          type="file"
-          accept=".stl,.step,.stp"
-          style={{ display: 'none' }}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => {
-            const file = event.target.files?.[0];
-            event.target.value = '';
-            if (file) {
-              onImportFile(file);
-            }
-          }}
-        />
-      </label>
-      <button
-        className="secondary topbar-action"
-        type="button"
-        disabled={!canExport}
-        title={exportTitle('STEP')}
-        onClick={() => onExport('step')}
-      >
-        <Download size={14} aria-hidden="true" />
-        STEP
-      </button>
-      <button
-        className="secondary topbar-action"
-        type="button"
-        disabled={!canExport}
-        title={exportTitle('STL')}
-        onClick={() => onExport('stl')}
-      >
-        <Download size={14} aria-hidden="true" />
-        STL
-      </button>
-      <details className="artifact-menu">
-        <summary
-          className="secondary topbar-action"
-          title="Stored project files"
-        >
-          <Files size={14} aria-hidden="true" />
-          Files{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
+      {/*
+        Import, two exports and the file list used to sit as four peer buttons in
+        a flat row with the sync state and settings, so nothing read as a group.
+        They are one file menu now; the row is identity | history | file | state.
+      */}
+      <details className="topbar-menu file-menu">
+        <summary className="secondary topbar-action" title="Import and export">
+          <FolderOpen size={14} aria-hidden="true" />
+          File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
         </summary>
-        <div className="artifact-menu-panel">
-          <strong>Stored files</strong>
+        <div className="topbar-menu-panel">
+          <label className="topbar-menu-item" title="Import an editable STEP solid or STL mesh">
+            <Upload size={13} aria-hidden="true" />
+            <span>Import STEP or STL…</span>
+            <input
+              type="file"
+              accept=".stl,.step,.stp"
+              style={{ display: 'none' }}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) {
+                  onImportFile(file);
+                }
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className="topbar-menu-item"
+            disabled={!canExport}
+            title={exportTitle('STEP')}
+            onClick={() => onExport('step')}
+          >
+            <Download size={13} aria-hidden="true" />
+            <span>Export STEP</span>
+            <small>{exportScope ?? 'all bodies'}</small>
+          </button>
+          <button
+            type="button"
+            className="topbar-menu-item"
+            disabled={!canExport}
+            title={exportTitle('STL')}
+            onClick={() => onExport('stl')}
+          >
+            <Download size={13} aria-hidden="true" />
+            <span>Export STL</span>
+            <small>{exportScope ?? 'all bodies'}</small>
+          </button>
+          <div className="topbar-menu-sep" />
+          <strong className="topbar-menu-label">
+            <Files size={12} aria-hidden="true" />
+            Stored files
+          </strong>
           {artifacts.length === 0 ? (
-            <span>No archived imports or exports yet.</span>
+            <span className="topbar-menu-empty">
+              No archived imports or exports yet.
+            </span>
           ) : (
             artifacts.map((artifact) => (
               <a
                 key={artifact.artifactId}
+                className="topbar-menu-item"
                 href={`/api/artifacts/${artifact.artifactId}/download`}
                 download={artifact.name}
               >

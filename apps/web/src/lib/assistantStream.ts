@@ -1,13 +1,24 @@
 import {
   groundCadPatchProposalToSelection,
-  parseCadPatchProposal,
-  type CadDocumentDigest,
-  type CadPatchProposal
+  parseAssistantReply,
+  type AssistantAttachment,
+  type AssistantHistoryTurn,
+  type AssistantReply,
+  type CadDocumentDigest
 } from '@openzcad/ai-contracts';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
   onDelta?(text: string): void;
+}
+
+export interface AssistantTurnRequest {
+  /** The current turn's text. */
+  prompt: string;
+  /** Freshly captured for this turn; never a replay of an older snapshot. */
+  digest: CadDocumentDigest;
+  history?: readonly AssistantHistoryTurn[];
+  attachments?: readonly AssistantAttachment[];
 }
 
 export interface AssistantStatus {
@@ -94,15 +105,19 @@ export function parseAssistantEventData(
   }
 }
 
-export async function streamCadPatchProposal(
-  prompt: string,
-  digest: CadDocumentDigest,
+export async function streamAssistantReply(
+  request: AssistantTurnRequest,
   options: AssistantStreamOptions = {}
-): Promise<CadPatchProposal> {
+): Promise<AssistantReply> {
   const response = await fetch('/api/assistant/proposals', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt, digest }),
+    body: JSON.stringify({
+      prompt: request.prompt,
+      digest: request.digest,
+      history: request.history ?? [],
+      attachments: request.attachments ?? []
+    }),
     signal: options.signal
   });
   if (!response.ok || !response.body) {
@@ -169,9 +184,18 @@ export async function streamCadPatchProposal(
   if (!output.trim()) {
     throw new Error('The modeling assistant returned an empty proposal.');
   }
-  return groundCadPatchProposalToSelection(
-    prompt,
-    digest,
-    parseCadPatchProposal(JSON.parse(output))
-  );
+  const reply = parseAssistantReply(JSON.parse(output));
+  // Grounding replaces the model's guesses at which entities words like
+  // "these edges" mean with the actual UI selection, so it applies to the one
+  // branch that names entities.
+  return reply.kind === 'patch'
+    ? {
+        ...reply,
+        proposal: groundCadPatchProposalToSelection(
+          request.prompt,
+          request.digest,
+          reply.proposal
+        )
+      }
+    : reply;
 }

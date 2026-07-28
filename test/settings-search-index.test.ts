@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  SETTINGS_SECTIONS,
+  visibleSettingsSections
+} from '../apps/web/src/lib/settingsSections';
 
 const SOURCE = readFileSync(
   fileURLToPath(
@@ -10,9 +14,10 @@ const SOURCE = readFileSync(
 );
 
 /**
- * The "Find a setting" index lives in SECTIONS while the settings themselves are
- * declared as JSX further down, so the two can drift apart silently and quietly
- * stop matching. Parse both out of the source and require they agree.
+ * The "Find a setting" index lives in SETTINGS_SECTIONS while the settings
+ * themselves are declared as JSX in SettingsPage, so the two can drift apart
+ * silently and quietly stop matching. Parse the rendered side out of the source
+ * and require it agrees with the index.
  */
 function renderedSettingsBySection(): Map<string, string[]> {
   const bySection = new Map<string, string[]>();
@@ -39,21 +44,9 @@ function renderedSettingsBySection(): Map<string, string[]> {
 }
 
 function indexedSettingsBySection(): Map<string, string[]> {
-  const bySection = new Map<string, string[]>();
-  const sections = SOURCE.slice(
-    SOURCE.indexOf('const SECTIONS'),
-    SOURCE.indexOf('const SHORTCUTS')
+  return new Map(
+    SETTINGS_SECTIONS.map((section) => [section.id, section.settings])
   );
-  const entry =
-    /id: '([a-z]+)',[\s\S]*?settings: \[([\s\S]*?)\]\s*\n\s*\}/g;
-  let match: RegExpExecArray | null;
-  while ((match = entry.exec(sections)) !== null) {
-    const titles = Array.from(match[2]!.matchAll(/'((?:[^'\\]|\\')*)'/g)).map(
-      (found) => found[1]!.replace(/\\'/g, "'")
-    );
-    bySection.set(match[1]!, titles);
-  }
-  return bySection;
 }
 
 describe('settings search index', () => {
@@ -61,7 +54,7 @@ describe('settings search index', () => {
     const rendered = renderedSettingsBySection();
     const indexed = indexedSettingsBySection();
 
-    // Guard the parsers themselves: a regex that silently stops matching would
+    // Guard the parser itself: a regex that silently stopped matching would
     // otherwise make this test pass by comparing two empty maps.
     expect(rendered.size).toBe(10);
     expect(indexed.size).toBe(10);
@@ -75,5 +68,66 @@ describe('settings search index', () => {
         titles
       });
     }
+  });
+});
+
+describe('assistant kill switch', () => {
+  it('keeps the master toggle outside the section it removes', () => {
+    // The toggle has to live somewhere that survives being switched off, or
+    // there is no way back to it.
+    const general = SETTINGS_SECTIONS.find((section) => section.id === 'general');
+    const assistant = SETTINGS_SECTIONS.find(
+      (section) => section.id === 'assistant'
+    );
+    expect(general?.settings).toContain('AI assistant');
+    expect(assistant?.settings ?? []).not.toContain('AI assistant');
+  });
+
+  it('removes the assistant section when the assistant is disabled', () => {
+    const enabled = visibleSettingsSections({ assistantEnabled: true });
+    const disabled = visibleSettingsSections({ assistantEnabled: false });
+
+    expect(enabled.map((section) => section.id)).toContain('assistant');
+    expect(disabled.map((section) => section.id)).not.toContain('assistant');
+    expect(disabled).toHaveLength(enabled.length - 1);
+  });
+
+  it('hides the assistant section from search as well as the nav', () => {
+    // Filtering must happen before the query, otherwise a search for a term
+    // that only the AI section carries would walk straight past the switch.
+    for (const query of ['token', 'provider', 'reasoning', 'AI']) {
+      expect(
+        visibleSettingsSections({ assistantEnabled: false, query }).map(
+          (section) => section.id
+        )
+      ).not.toContain('assistant');
+    }
+    expect(
+      visibleSettingsSections({ assistantEnabled: true, query: 'token' }).map(
+        (section) => section.id
+      )
+    ).toContain('assistant');
+  });
+
+  it('still matches sections by label, detail, and setting title', () => {
+    const byLabel = visibleSettingsSections({
+      assistantEnabled: true,
+      query: 'viewport'
+    });
+    const bySettingTitle = visibleSettingsSections({
+      assistantEnabled: true,
+      query: 'angular snap'
+    });
+    const byDetail = visibleSettingsSections({
+      assistantEnabled: true,
+      query: 'diagnostics'
+    });
+
+    expect(byLabel.map((section) => section.id)).toContain('viewport');
+    expect(bySettingTitle.map((section) => section.id)).toEqual(['sketching']);
+    expect(byDetail.map((section) => section.id)).toEqual(['advanced']);
+    expect(
+      visibleSettingsSections({ assistantEnabled: true, query: '   ' })
+    ).toHaveLength(SETTINGS_SECTIONS.length);
   });
 });

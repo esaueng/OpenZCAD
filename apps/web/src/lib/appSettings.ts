@@ -201,27 +201,81 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   };
 }
 
-export function loadLocalAppSettings(): AppSettings {
+/**
+ * What is on this device: the settings themselves plus the account revision they
+ * were last in step with. `syncedRevision: null` means "edited here and not yet
+ * saved to the account" — the dirty flag that stops a boot-time account fetch
+ * from silently reverting the change.
+ */
+export interface LocalAppSettingsRecord {
+  settings: AppSettings;
+  syncedRevision: number | null;
+}
+
+function readStoredRecord(): LocalAppSettingsRecord | null {
+  const raw = window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  const root = record(parsed);
+  // Settings written before this field existed are bare AppSettings objects.
+  // Treating them as clean keeps the previous behaviour for anyone upgrading:
+  // the account copy wins, which is what already happened to them.
+  const nested = root.settings === undefined ? parsed : root.settings;
+  const syncedRevision =
+    typeof root.syncedRevision === 'number' &&
+    Number.isInteger(root.syncedRevision) &&
+    root.syncedRevision >= 0
+      ? root.syncedRevision
+      : root.settings === undefined
+        ? 0
+        : null;
+  return { settings: normalizeAppSettings(nested), syncedRevision };
+}
+
+export function loadLocalAppSettingsRecord(): LocalAppSettingsRecord | null {
   try {
-    const raw = window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
-    return raw
-      ? normalizeAppSettings(JSON.parse(raw) as unknown)
-      : copyDefaults();
+    return readStoredRecord();
   } catch {
-    return copyDefaults();
+    return null;
   }
 }
 
-export function saveLocalAppSettings(settings: AppSettings): boolean {
+export function loadLocalAppSettings(): AppSettings {
+  return loadLocalAppSettingsRecord()?.settings ?? copyDefaults();
+}
+
+export function saveLocalAppSettings(
+  settings: AppSettings,
+  syncedRevision: number | null = null
+): boolean {
   try {
     window.localStorage.setItem(
       APP_SETTINGS_STORAGE_KEY,
-      JSON.stringify(normalizeAppSettings(settings))
+      JSON.stringify({
+        settings: normalizeAppSettings(settings),
+        syncedRevision
+      })
     );
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a boot-time account fetch may replace what is on this device.
+ *
+ * The account copy is authoritative — it can be newer, from another device —
+ * but only when this device has nothing unsaved. Adopting it unconditionally
+ * means any setting changed and not explicitly saved reverts on the next
+ * reload, which for the assistant kill switch reads as the switch not working.
+ */
+export function shouldAdoptAccountSettings(
+  stored: LocalAppSettingsRecord | null
+): boolean {
+  return stored === null || stored.syncedRevision !== null;
 }
 
 export function defaultAppSettings(): AppSettings {
