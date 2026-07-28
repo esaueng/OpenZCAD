@@ -162,8 +162,10 @@ import {
   saveLocalProject
 } from './lib/localProjectStore';
 import { LivePreview } from './lib/livePreview';
+import { errorMessage } from './lib/errors';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
+import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useCollaboration } from './lib/useCollaboration';
 import {
   clearActiveProject,
@@ -193,10 +195,6 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded',
   'wireframe'
 ];
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function mergeProjectSummaries(
   local: ProjectSummary[],
@@ -333,9 +331,27 @@ export function App() {
     onError: setStatus
   });
   const remoteVersionsRef = useRef(new Map<string, number>());
-  const directEditInFlightRef = useRef(false);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const { run: executeValidatedDirectEdit } = useDirectEditCommit({
+    manager: () => managerRef.current,
+    derive: (document) => geometry.syncOnce(document),
+    commit: (command) => executeCommand(command),
+    onValidationStart: (value) =>
+      dispatchInteraction({ type: 'validation-start', value }),
+    onValidationFailed: (message, value) =>
+      dispatchInteraction({ type: 'validation-failed', message, value }),
+    onCommitted: (bodyId) => {
+      dispatchInteraction({ type: 'commit-complete' });
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([bodyId]);
+      setSelectedFeatureNodeId(featureNodeIdForBody(bodyId));
+    },
+    onBusy: setBusy,
+    onStatus: setStatus
+  });
 
   const collaboration = useCollaboration({
     document: doc,
@@ -2085,70 +2101,6 @@ export function App() {
     setStatus('Edge selection cleared.');
   }
 
-  async function executeValidatedDirectEdit(
-    command: AnyCommand,
-    targetBodyId: BodyId,
-    successMessage: string,
-    submittedValue = 0,
-    onSuccess?: () => void
-  ): Promise<boolean> {
-    const manager = managerRef.current;
-    if (!manager || directEditInFlightRef.current) {
-      return false;
-    }
-    directEditInFlightRef.current = true;
-    dispatchInteraction({
-      type: 'validation-start',
-      value: submittedValue
-    });
-    const current = manager.document;
-    setBusy(true);
-    setStatus('Validating direct edit with the exact geometry kernel…');
-    try {
-      command.validate(current);
-      const preview = command.apply(current);
-      const derived = await geometry.syncOnce(preview);
-      const directEditWarning = derived.warnings.find((warning) =>
-        warning.startsWith(`Feature "${command.label}":`)
-      );
-      if (directEditWarning) {
-        throw new Error(directEditWarning.replace(/^Feature "[^"]+":\s*/, ''));
-      }
-      if (!derived.bodyRepresentations[targetBodyId]) {
-        throw new Error('Direct edit did not produce the selected body.');
-      }
-      if (
-        managerRef.current !== manager ||
-        manager.document.projectId !== current.projectId ||
-        manager.document.version !== current.version
-      ) {
-        throw new Error('The document changed while the edit was validating.');
-      }
-      if (!executeCommand(command)) {
-        throw new Error('The validated edit could not be committed.');
-      }
-      dispatchInteraction({ type: 'commit-complete' });
-      setSelectedTopology(null);
-      setSelectedEdges([]);
-      setSelectedBodyIds([targetBodyId]);
-      setSelectedFeatureNodeId(featureNodeIdForBody(targetBodyId));
-      onSuccess?.();
-      setStatus(successMessage);
-      return true;
-    } catch (error) {
-      const message = errorMessage(error, 'Direct edit was not applied.');
-      dispatchInteraction({
-        type: 'validation-failed',
-        message,
-        value: submittedValue
-      });
-      setStatus(message);
-      return false;
-    } finally {
-      directEditInFlightRef.current = false;
-      setBusy(false);
-    }
-  }
 
   /**
    * Armed face-offset handle for the viewport. Memoized so the drag rig is
