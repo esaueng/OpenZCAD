@@ -2203,6 +2203,13 @@ export function App() {
     if (!doc) {
       return;
     }
+    // A box selection replaces the active topology selection. Any direct-
+    // manipulation target belongs to that old face or edge, so retaining it
+    // would leave a handle capable of editing geometry that is no longer
+    // selected.
+    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
     setSelectedEdges([]);
