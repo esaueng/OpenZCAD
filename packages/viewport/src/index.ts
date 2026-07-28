@@ -22,6 +22,9 @@ export * from './pick/PickService';
 export * from './pick/meshes';
 export * from './pick/edges';
 
+// Selection: hover/preselect state and its overlays.
+export * from './selection/SelectionManager';
+
 // Gizmos: the move/rotate handle geometry, snapping, and focus.
 export * from './gizmo/move';
 

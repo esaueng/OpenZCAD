@@ -1,8 +1,13 @@
 import * as THREE from 'three';
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { RegionPickData } from '@openzcad/viewport';
+import {
+  REGION_HOVER_OPACITY,
+  REGION_SELECTED_OPACITY,
+  type RegionPickData
+} from '@openzcad/viewport';
 
 export type { RegionPickData };
+export { REGION_HOVER_OPACITY, REGION_SELECTED_OPACITY };
 
 /**
  * Geometry for detected sketch regions in the viewport: hole-aware
@@ -46,8 +51,6 @@ export function triangulateRegionGeometry(
 }
 
 export const REGION_FILL_COLOR = 0xf59e0b;
-export const REGION_HOVER_OPACITY = 0.32;
-export const REGION_SELECTED_OPACITY = 0.45;
 
 /** Builds the invisible-until-hovered fill mesh for one region. */
 export function buildRegionMesh(
