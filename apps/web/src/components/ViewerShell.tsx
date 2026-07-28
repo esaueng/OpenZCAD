@@ -1,4 +1,5 @@
 import type { MutableRefObject } from 'react';
+import { Box, Cylinder, Globe, Sparkles } from 'lucide-react';
 import {
   ModelViewer,
   type ExtrudePreview,
@@ -47,6 +48,10 @@ interface ViewerShellProps {
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
+  /** Starts a primitive from the empty-state card. */
+  onStartPrimitive(tool: 'box' | 'cylinder' | 'sphere'): void;
+  /** Focuses the assistant prompt; null when the assistant is turned off. */
+  onAskAssistant: (() => void) | null;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -112,6 +117,8 @@ export function ViewerShell({
   modeOverlay,
   hideViewerToolbar = false,
   selectionChip,
+  onStartPrimitive,
+  onAskAssistant,
   onClearSelection,
   projection,
   initialView,
@@ -208,12 +215,38 @@ export function ViewerShell({
         <div className="viewer-notice">
           <div>
             <strong>No geometry yet</strong>
-            <small>
-              Pick a tool from the palette on the left — try <b>Box</b> (B) — or
-              sketch a profile and extrude it.
-            </small>
+            {/*
+              Restating the palette hint wastes the one moment the user is
+              definitely looking here, so the card starts the work instead.
+            */}
+            <small>Start with a solid, or describe the part you want.</small>
+            <div className="viewer-notice-actions">
+              <button type="button" onClick={() => onStartPrimitive('box')}>
+                <Box size={14} aria-hidden="true" />
+                Box <kbd>B</kbd>
+              </button>
+              <button type="button" onClick={() => onStartPrimitive('cylinder')}>
+                <Cylinder size={14} aria-hidden="true" />
+                Cylinder <kbd>C</kbd>
+              </button>
+              <button type="button" onClick={() => onStartPrimitive('sphere')}>
+                <Globe size={14} aria-hidden="true" />
+                Sphere
+              </button>
+              {onAskAssistant && (
+                <button
+                  type="button"
+                  className="viewer-notice-assistant"
+                  onClick={onAskAssistant}
+                >
+                  <Sparkles size={14} aria-hidden="true" />
+                  Describe a part
+                </button>
+              )}
+            </div>
             <small className="viewer-notice-keys">
-              <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands · <kbd>?</kbd> shortcuts
+              <kbd>S</kbd> sketch · <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands ·{' '}
+              <kbd>?</kbd> shortcuts
             </small>
           </div>
         </div>

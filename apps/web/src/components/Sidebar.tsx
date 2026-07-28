@@ -1,7 +1,9 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   Box,
+  ChevronDown,
+  ChevronRight,
   Combine,
   Cone,
   Cylinder,
@@ -25,6 +27,7 @@ import type {
   ProjectCheckpoint
 } from '@openzcad/shared';
 import { FEATURE_KIND_LABELS, formatNumber } from '../lib/model';
+import type { PanelState, SidebarSectionId } from '../lib/panelState';
 
 function featureIcon(feature: FeatureNode) {
   const size = 13;
@@ -56,6 +59,54 @@ function featureIcon(feature: FeatureNode) {
     default:
       return <FileBox size={size} aria-hidden="true" />;
   }
+}
+
+/**
+ * One collapsible browser section. The count is on the header so a collapsed
+ * section still says how much it is hiding — otherwise collapsing loses
+ * information rather than just space.
+ */
+function SidebarSection({
+  id,
+  title,
+  count,
+  open,
+  className,
+  onToggle,
+  children
+}: {
+  id: SidebarSectionId;
+  title: string;
+  count: number | null;
+  open: boolean;
+  className?: string;
+  onToggle(id: SidebarSectionId): void;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={`sidebar-section${className ? ` ${className}` : ''}${open ? '' : ' collapsed'}`}
+    >
+      <button
+        type="button"
+        className="section-title"
+        aria-expanded={open}
+        onClick={() => onToggle(id)}
+        title={open ? `Collapse ${title}` : `Expand ${title}`}
+      >
+        {open ? (
+          <ChevronDown size={12} aria-hidden="true" />
+        ) : (
+          <ChevronRight size={12} aria-hidden="true" />
+        )}
+        <span>{title}</span>
+        {count !== null && count > 0 && (
+          <small className="section-count">{count}</small>
+        )}
+      </button>
+      {open && children}
+    </section>
+  );
 }
 
 interface ParameterRowProps {
@@ -221,6 +272,8 @@ interface SidebarProps {
   onSetParameter(name: string, expression: string): void;
   onDeleteParameter(name: string): void;
   onDeleteFeature(featureId: FeatureId, name: string): void;
+  panelState: PanelState;
+  onToggleSection(id: SidebarSectionId): void;
 }
 
 export function Sidebar({
@@ -237,13 +290,20 @@ export function Sidebar({
   onFeatureContextMenu,
   onSetParameter,
   onDeleteParameter,
-  onDeleteFeature
+  onDeleteFeature,
+  panelState,
+  onToggleSection
 }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="Model browser">
       <div className="sidebar-label">Model</div>
-      <section className="sidebar-section">
-        <h3 className="section-title">Parameters</h3>
+      <SidebarSection
+        id="parameters"
+        title="Parameters"
+        count={parameters.length}
+        open={panelState.sidebarSections.parameters}
+        onToggle={onToggleSection}
+      >
         <div className="param-list">
           {parameters.map((parameter) => (
             <ParameterRow
@@ -262,10 +322,16 @@ export function Sidebar({
             use it in any feature field.
           </p>
         )}
-      </section>
+      </SidebarSection>
 
-      <section className="sidebar-section grow">
-        <h3 className="section-title">Features</h3>
+      <SidebarSection
+        id="features"
+        title="Features"
+        count={features.length}
+        open={panelState.sidebarSections.features}
+        className="grow"
+        onToggle={onToggleSection}
+      >
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
@@ -344,11 +410,17 @@ export function Sidebar({
             );
           })}
         </div>
-      </section>
+      </SidebarSection>
 
       {checkpoints.length > 0 && (
-        <section className="sidebar-section revisions">
-          <h3 className="section-title">Revisions</h3>
+        <SidebarSection
+          id="revisions"
+          title="Revisions"
+          count={checkpoints.length}
+          open={panelState.sidebarSections.revisions}
+          className="revisions"
+          onToggle={onToggleSection}
+        >
           <div className="revision-list">
             {[...checkpoints].reverse().map((checkpoint, index) => (
               <div
@@ -364,19 +436,25 @@ export function Sidebar({
               </div>
             ))}
           </div>
-        </section>
+        </SidebarSection>
       )}
 
       {warnings.length > 0 && (
-        <section className="sidebar-section diagnostics">
-          <h3 className="section-title">Diagnostics</h3>
+        <SidebarSection
+          id="diagnostics"
+          title="Diagnostics"
+          count={warnings.length}
+          open={panelState.sidebarSections.diagnostics}
+          className="diagnostics"
+          onToggle={onToggleSection}
+        >
           {warnings.map((warning, index) => (
             <p key={index} className="diagnostic-row">
               <AlertTriangle size={12} aria-hidden="true" />
               <span>{warning}</span>
             </p>
           ))}
-        </section>
+        </SidebarSection>
       )}
     </aside>
   );

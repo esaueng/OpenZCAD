@@ -383,3 +383,150 @@ describe('AI-generated sketch regions', () => {
     );
   });
 });
+
+/**
+ * A bored plate: the smallest patch that exercises the per-primitive rule for
+ * where a vertical size goes. Boxes put it in `depth`; cylinders and cones put
+ * it in `height` (`buildPrimitive`, and the same in exact.ts and occt-step.ts).
+ * Putting a cylinder's length in `depth` yields a zero-height tool that removes
+ * nothing, which is why the instructions call the difference out and why this
+ * builds the design through the real kernel rather than only parsing it.
+ */
+describe('AI-generated cylindrical features', () => {
+  let adapter: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  });
+
+  afterAll(() => {
+    adapter.dispose();
+  });
+
+  const PLATE_LEN = 80;
+  const PLATE_WID = 60;
+  const PLATE_T = 6;
+  const BORE_DIA = 12;
+
+  function boredPlateProposal(): CadPatchProposal {
+    return parseCadPatchProposal({
+      proposalId: 'bored_plate',
+      summary: 'Will build an 80 x 60 x 6 mm plate with a 12 mm central bore.',
+      assumptions: ['Bore centred on the plate.'],
+      operations: [
+        { kind: 'set_parameter', name: 'plate_len', expression: '80' },
+        { kind: 'set_parameter', name: 'plate_wid', expression: '60' },
+        { kind: 'set_parameter', name: 'plate_t', expression: '6' },
+        { kind: 'set_parameter', name: 'bore_dia', expression: '12' },
+        {
+          kind: 'add_primitive',
+          name: 'Plate',
+          localId: 'plate',
+          primitiveKind: 'box',
+          dimensions: {
+            width: 'plate_len',
+            height: 'plate_wid',
+            // A box's upright size is `depth`.
+            depth: 'plate_t',
+            radius: null,
+            bottomRadius: null,
+            topRadius: null,
+            majorRadius: null,
+            minorRadius: null
+          }
+        },
+        {
+          kind: 'add_primitive',
+          name: 'Bore Tool',
+          localId: 'bore_tool',
+          primitiveKind: 'cylinder',
+          dimensions: {
+            width: null,
+            // A cylinder's is `height` — and it runs past both faces so the cut
+            // cannot leave a membrane.
+            height: 'plate_t + 4',
+            depth: null,
+            radius: 'bore_dia / 2',
+            bottomRadius: null,
+            topRadius: null,
+            majorRadius: null,
+            minorRadius: null
+          }
+        },
+        {
+          kind: 'add_transform',
+          name: 'Position Bore',
+          targetBodyId: '$bore_tool',
+          translation: {
+            x: 'plate_len / 2',
+            y: 'plate_wid / 2',
+            z: '-2'
+          },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        },
+        {
+          kind: 'add_boolean',
+          name: 'Bored Plate',
+          localId: 'bored_plate',
+          operation: 'subtract',
+          targetBodyIds: ['$plate', '$bore_tool']
+        }
+      ]
+    });
+  }
+
+  it('drills a real hole when the cylinder length is in height', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI bored plate', toUserId('user_ai'))
+    );
+    const document = manager.runTransaction(
+      'Apply AI bored plate',
+      commandsForCadPatch(manager.document, boredPlateProposal())
+    );
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+
+    const live = Object.values(derived.bodyRepresentations).filter(
+      (candidate) => !candidate.consumed
+    );
+    expect(live).toHaveLength(1);
+
+    const expected =
+      PLATE_LEN * PLATE_WID * PLATE_T -
+      Math.PI * (BORE_DIA / 2) ** 2 * PLATE_T;
+    expect(
+      Math.abs((live[0]?.volume ?? 0) - expected) / expected
+    ).toBeLessThan(0.005);
+
+    // The tool must break through both faces, leaving no skin behind.
+    const bbox = live[0]!.bbox;
+    expect(bbox.max.z - bbox.min.z).toBeCloseTo(PLATE_T, 6);
+  });
+
+  it('builds nothing usable when a cylinder length goes in depth instead', async () => {
+    const proposal = boredPlateProposal();
+    const tool = proposal.operations[5];
+    if (tool?.kind !== 'add_primitive') {
+      throw new Error('expected the bore tool to be the sixth operation');
+    }
+    // Exactly the mistake the instructions guard against.
+    tool.dimensions = {
+      ...tool.dimensions,
+      height: null,
+      depth: 'plate_t + 4'
+    };
+
+    const manager = new CommandManager(
+      createProjectDocument('AI bored plate wrong', toUserId('user_ai'))
+    );
+    const document = manager.runTransaction(
+      'Apply AI bored plate wrong',
+      commandsForCadPatch(manager.document, proposal)
+    );
+    const derived = await adapter.syncDocument(document);
+
+    // It fails loudly rather than quietly shipping an undrilled plate.
+    expect(derived.warnings.join(' ')).toMatch(/height/i);
+  });
+});

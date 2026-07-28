@@ -26,19 +26,13 @@ import type {
   AppSettingsResponse,
   AuthSession
 } from '@openzcad/shared';
+import {
+  visibleSettingsSections,
+  type SettingsSectionId
+} from '../lib/settingsSections';
 import { BrandMark } from './BrandMark';
 
-type SectionId =
-  | 'general'
-  | 'appearance'
-  | 'viewport'
-  | 'sketching'
-  | 'files'
-  | 'assistant'
-  | 'account'
-  | 'shortcuts'
-  | 'privacy'
-  | 'advanced';
+type SectionId = SettingsSectionId;
 
 interface SettingsPageProps {
   settings: AppSettings;
@@ -56,129 +50,18 @@ interface SettingsPageProps {
   onClose(): void;
 }
 
-const SECTIONS: Array<{
-  id: SectionId;
-  label: string;
-  detail: string;
-  icon: ReactNode;
-  /**
-   * Titles of the individual settings this section renders, so "Find a setting"
-   * can match what the user actually sees rather than only section headings.
-   * Kept in step with the rendered SettingRow titles by a test.
-   */
-  settings: string[];
-}> = [
-  {
-    id: 'general',
-    label: 'General',
-    detail: 'Startup and project defaults',
-    icon: <SlidersHorizontal size={15} aria-hidden="true" />,
-    settings: [
-      'Reopen the last project',
-      'Default units',
-      'Confirm destructive actions'
-    ]
-  },
-  {
-    id: 'appearance',
-    label: 'Appearance',
-    detail: 'Density and accessibility',
-    icon: <Accessibility size={15} aria-hidden="true" />,
-    settings: [
-      'Theme',
-      'Interface density',
-      'Reduce motion'
-    ]
-  },
-  {
-    id: 'viewport',
-    label: 'Viewport',
-    detail: 'Projection, grid, and display',
-    icon: <Monitor size={15} aria-hidden="true" />,
-    settings: [
-      'Projection',
-      'Show construction grid',
-      'Display mode'
-    ]
-  },
-  {
-    id: 'sketching',
-    label: 'Sketching',
-    detail: 'Linear and angular snapping',
-    icon: <Grid3x3 size={15} aria-hidden="true" />,
-    settings: [
-      'Snap sketch input',
-      'Linear snap',
-      'Angular snap',
-      'Direct manipulation (experimental)'
-    ]
-  },
-  {
-    id: 'files',
-    label: 'Files & autosave',
-    detail: 'Recovery, imports, and exports',
-    icon: <FileCog size={15} aria-hidden="true" />,
-    settings: [
-      'Local autosave',
-      'Cloud revisions',
-      'STEP and STL exports'
-    ]
-  },
-  {
-    id: 'assistant',
-    label: 'AI Assistant',
-    detail: 'Provider, model, and credential',
-    icon: <Sparkles size={15} aria-hidden="true" />,
-    settings: [
-      'Enable assistant',
-      'Credential source',
-      'Provider',
-      'API endpoint',
-      'Model',
-      'Reasoning level',
-      'Output budget',
-      'Request timeout',
-      'Personal API token'
-    ]
-  },
-  {
-    id: 'account',
-    label: 'Account',
-    detail: 'Identity and synchronization',
-    icon: <CircleUserRound size={15} aria-hidden="true" />,
-    settings: [
-      'Preference synchronization'
-    ]
-  },
-  {
-    id: 'shortcuts',
-    label: 'Shortcuts',
-    detail: 'Keyboard controls',
-    icon: <Keyboard size={15} aria-hidden="true" />,
-    settings: []
-  },
-  {
-    id: 'privacy',
-    label: 'Privacy & data',
-    detail: 'Local data and reset actions',
-    icon: <ShieldCheck size={15} aria-hidden="true" />,
-    settings: [
-      'Reset application settings',
-      'Project data'
-    ]
-  },
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    detail: 'Architecture and diagnostics',
-    icon: <Info size={15} aria-hidden="true" />,
-    settings: [
-      'Geometry kernel',
-      'Document authority',
-      'Settings schema'
-    ]
-  }
-];
+const SECTION_ICONS: Record<SectionId, ReactNode> = {
+  general: <SlidersHorizontal size={15} aria-hidden="true" />,
+  appearance: <Accessibility size={15} aria-hidden="true" />,
+  viewport: <Monitor size={15} aria-hidden="true" />,
+  sketching: <Grid3x3 size={15} aria-hidden="true" />,
+  files: <FileCog size={15} aria-hidden="true" />,
+  assistant: <Sparkles size={15} aria-hidden="true" />,
+  account: <CircleUserRound size={15} aria-hidden="true" />,
+  shortcuts: <Keyboard size={15} aria-hidden="true" />,
+  privacy: <ShieldCheck size={15} aria-hidden="true" />,
+  advanced: <Info size={15} aria-hidden="true" />
+};
 
 const SHORTCUTS: Array<[string, string]> = [
   ['Ctrl/Cmd+,', 'Open settings'],
@@ -302,17 +185,10 @@ export function SettingsPage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const normalizedQuery = query.trim().toLowerCase();
+  const assistantEnabled = settings.assistant.enabled;
   const visibleSections = useMemo(
-    () =>
-      normalizedQuery
-        ? SECTIONS.filter((section) =>
-            `${section.label} ${section.detail} ${section.settings.join(' ')}`
-              .toLowerCase()
-              .includes(normalizedQuery)
-          )
-        : SECTIONS,
-    [normalizedQuery]
+    () => visibleSettingsSections({ assistantEnabled, query }),
+    [assistantEnabled, query]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -394,7 +270,7 @@ export function SettingsPage({
                 aria-current={active === section.id ? 'page' : undefined}
                 onClick={() => setActive(section.id)}
               >
-                {section.icon}
+                {SECTION_ICONS[section.id]}
                 <span>
                   <strong>{section.label}</strong>
                   <small>{section.detail}</small>
@@ -479,6 +355,23 @@ export function SettingsPage({
                       }
                     })
                   }
+                />
+              </SettingRow>
+              {/*
+                The assistant's master switch lives here rather than in the AI
+                section, because turning it off removes that whole section from
+                the nav — a toggle inside it would take itself away with it and
+                leave no way back.
+              */}
+              <SettingRow
+                title="AI assistant"
+                description="When off, the assistant is removed from the workspace and its provider settings are hidden. The server also refuses assistant requests."
+                scope="All devices"
+              >
+                <Toggle
+                  checked={settings.assistant.enabled}
+                  label="AI assistant"
+                  onChange={(enabled) => patchAssistant({ enabled })}
                 />
               </SettingRow>
             </Section>
@@ -751,22 +644,11 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'assistant' && (
+          {active === 'assistant' && assistantEnabled && (
             <Section
               title="AI Assistant"
-              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied."
+              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied. Turn the assistant off entirely under General."
             >
-              <SettingRow
-                title="Enable assistant"
-                description="Disabling prevents proposal requests without changing model history."
-                scope="All devices"
-              >
-                <Toggle
-                  checked={settings.assistant.enabled}
-                  label="Enable assistant"
-                  onChange={(enabled) => patchAssistant({ enabled })}
-                />
-              </SettingRow>
               <SettingRow
                 title="Credential source"
                 description="Deployment credentials are managed by the operator; personal tokens are owner-scoped."
