@@ -1347,3 +1347,84 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
     1
   );
 });
+
+test('the wheel zooms toward the pointer, and the preference turns it off', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Zoom Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // A body gives the camera something to frame, so the orbit target is not
+  // sitting at the origin by coincidence.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  // Well off-centre: centre-zoom leaves the target alone, cursor-zoom pulls
+  // it toward this point.
+  const cursor = {
+    x: box!.x + box!.width * 0.75,
+    y: box!.y + box!.height * 0.3
+  };
+
+  const target = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (JSON.parse(raw) as { views?: Record<string, { camera: { target: number[] } }> })
+            .views
+        : undefined;
+      const view = views ? Object.values(views)[0] : undefined;
+      return view ? view.camera.target : null;
+    });
+
+  const wheelAtCursor = async () => {
+    await page.mouse.move(cursor.x, cursor.y);
+    for (let step = 0; step < 5; step += 1) {
+      await page.mouse.wheel(0, -120);
+      await page.waitForTimeout(80);
+    }
+    await page.waitForTimeout(400);
+  };
+
+  const before = await target();
+  expect(before).not.toBeNull();
+  await wheelAtCursor();
+  const after = await target();
+  expect(after).not.toBeNull();
+  const travelled = Math.hypot(
+    after![0]! - before![0]!,
+    after![1]! - before![1]!,
+    after![2]! - before![2]!
+  );
+  expect(travelled).toBeGreaterThan(0.5);
+
+  // Turning the preference off restores zooming toward the view centre.
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByLabel('Zoom to cursor').uncheck();
+  await page.getByRole('button', { name: /Back to workspace|Close settings/ })
+    .first()
+    .click();
+  await expect(canvas).toBeVisible();
+
+  const beforeCentre = await target();
+  await wheelAtCursor();
+  const afterCentre = await target();
+  const centreTravel = Math.hypot(
+    afterCentre![0]! - beforeCentre![0]!,
+    afterCentre![1]! - beforeCentre![1]!,
+    afterCentre![2]! - beforeCentre![2]!
+  );
+  expect(centreTravel).toBeLessThan(0.01);
+});
