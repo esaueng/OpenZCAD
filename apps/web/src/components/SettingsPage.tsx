@@ -42,6 +42,7 @@ interface SettingsPageProps {
   settings: AppSettings;
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
+  authConfigStatus: AuthConfigStatus;
   session: AuthSession | null;
   busy: boolean;
   message: string;
@@ -55,11 +56,14 @@ interface SettingsPageProps {
     turnstileToken: string
   ): Promise<{ challengeId: string; expiresInSeconds: number }>;
   onVerifyLoginCode(challengeId: string, code: string): Promise<void>;
+  onRefreshAuthConfig(): Promise<void>;
   onLogout(): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
   onClose(): void;
 }
+
+export type AuthConfigStatus = 'loading' | 'ready' | 'unavailable';
 
 const SECTION_ICONS: Record<SectionId, ReactNode> = {
   general: <SlidersHorizontal size={15} aria-hidden="true" />,
@@ -181,6 +185,8 @@ type TurnstileApi = {
   reset(widgetId: string): void;
 };
 
+type TurnstileState = 'loading' | 'ready' | 'verified' | 'expired' | 'error';
+
 function TurnstileWidget({
   siteKey,
   resetSignal,
@@ -192,9 +198,13 @@ function TurnstileWidget({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string | null>(null);
+  const [state, setState] = useState<TurnstileState>('loading');
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     let disposed = false;
+    setState('loading');
+    onToken('');
     const renderWidget = () => {
       const turnstile = (window as typeof window & { turnstile?: TurnstileApi })
         .turnstile;
@@ -206,17 +216,36 @@ function TurnstileWidget({
       ) {
         return;
       }
-      widgetIdRef.current = turnstile.render(containerRef.current, {
-        sitekey: siteKey,
-        action: 'email-code',
-        callback: onToken,
-        'expired-callback': () => onToken(''),
-        'error-callback': () => onToken('')
-      });
+      try {
+        setState('ready');
+        widgetIdRef.current = turnstile.render(containerRef.current, {
+          sitekey: siteKey,
+          action: 'email-code',
+          callback: (token) => {
+            onToken(token);
+            setState('verified');
+          },
+          'expired-callback': () => {
+            onToken('');
+            setState('expired');
+          },
+          'error-callback': () => {
+            onToken('');
+            setState('error');
+          }
+        });
+      } catch {
+        onToken('');
+        setState('error');
+      }
     };
-    const existing = document.querySelector<HTMLScriptElement>(
+    let existing = document.querySelector<HTMLScriptElement>(
       'script[data-openzcad-turnstile]'
     );
+    if (existing?.dataset.openzcadTurnstileState === 'error') {
+      existing.remove();
+      existing = null;
+    }
     const script =
       existing ??
       Object.assign(document.createElement('script'), {
@@ -225,14 +254,25 @@ function TurnstileWidget({
         defer: true
       });
     script.dataset.openzcadTurnstile = 'true';
-    script.addEventListener('load', renderWidget);
+    const markScriptLoaded = () => {
+      script.dataset.openzcadTurnstileState = 'loaded';
+      renderWidget();
+    };
+    const markScriptFailed = () => {
+      script.dataset.openzcadTurnstileState = 'error';
+      onToken('');
+      setState('error');
+    };
+    script.addEventListener('load', markScriptLoaded);
+    script.addEventListener('error', markScriptFailed);
     if (!existing) {
       document.head.append(script);
     }
     renderWidget();
     return () => {
       disposed = true;
-      script.removeEventListener('load', renderWidget);
+      script.removeEventListener('load', markScriptLoaded);
+      script.removeEventListener('error', markScriptFailed);
       const turnstile = (window as typeof window & { turnstile?: TurnstileApi })
         .turnstile;
       if (widgetIdRef.current && turnstile) {
@@ -240,22 +280,53 @@ function TurnstileWidget({
         widgetIdRef.current = null;
       }
     };
-  }, [onToken, siteKey]);
+  }, [loadAttempt, onToken, siteKey]);
 
   useEffect(() => {
     const turnstile = (window as typeof window & { turnstile?: TurnstileApi })
       .turnstile;
     if (resetSignal > 0 && widgetIdRef.current && turnstile) {
       turnstile.reset(widgetIdRef.current);
+      onToken('');
+      setState('ready');
     }
-  }, [resetSignal]);
+  }, [onToken, resetSignal]);
 
   return (
-    <div
-      className="settings-turnstile"
-      data-action="turnstile-spin-v1"
-      ref={containerRef}
-    />
+    <div className="settings-turnstile-shell">
+      <div
+        className="settings-turnstile"
+        data-action="turnstile-spin-v1"
+        ref={containerRef}
+      />
+      <div
+        className={`settings-challenge-state ${state}`}
+        role={state === 'error' ? 'alert' : 'status'}
+        aria-live="polite"
+      >
+        <span>
+          {state === 'loading'
+            ? 'Loading security check…'
+            : state === 'ready'
+              ? 'Security check ready.'
+              : state === 'verified'
+                ? 'Security check complete.'
+                : state === 'expired'
+                  ? 'Security check expired. Complete it again.'
+                  : 'Security check could not load. Check content blockers or your connection.'}
+        </span>
+        {state === 'error' ? (
+          <button
+            className="secondary"
+            type="button"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            <RefreshCcw size={13} aria-hidden="true" />
+            Retry
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -263,6 +334,7 @@ export function SettingsPage({
   settings,
   accountState,
   authConfig,
+  authConfigStatus,
   session,
   busy,
   message,
@@ -273,6 +345,7 @@ export function SettingsPage({
   onTestAssistant,
   onRequestLoginCode,
   onVerifyLoginCode,
+  onRefreshAuthConfig,
   onLogout,
   onReset,
   onApplyViewportDefaults,
@@ -1111,8 +1184,32 @@ export function SettingsPage({
                   >
                     <CircleUserRound size={18} aria-hidden="true" />
                   </SettingRow>
-                  {authConfig?.emailCodeEnabled &&
-                  authConfig.turnstileSiteKey ? (
+                  {authConfigStatus === 'loading' ? (
+                    <div className="settings-warning" role="status">
+                      Checking beta email sign-in readiness. Device settings and
+                      local CAD projects remain available.
+                    </div>
+                  ) : authConfigStatus === 'unavailable' ? (
+                    <div
+                      className="settings-warning settings-sign-in-warning"
+                      role="alert"
+                    >
+                      <span>
+                        Beta sign-in configuration could not be reached. Check
+                        the connection or retry; local CAD remains available.
+                      </span>
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void onRefreshAuthConfig()}
+                      >
+                        <RefreshCcw size={13} aria-hidden="true" />
+                        Retry
+                      </button>
+                    </div>
+                  ) : authConfig?.emailCodeEnabled &&
+                    authConfig.turnstileSiteKey ? (
                     loginChallengeId ? (
                       <form
                         className="settings-auth-form"
@@ -1229,9 +1326,9 @@ export function SettingsPage({
                       </form>
                     )
                   ) : (
-                    <div className="settings-warning">
-                      Email sign-in is being configured. Device settings and
-                      local CAD projects remain available.
+                    <div className="settings-warning" role="status">
+                      Email sign-in is not ready on this beta Worker. Device
+                      settings and local CAD projects remain available.
                     </div>
                   )}
                 </>

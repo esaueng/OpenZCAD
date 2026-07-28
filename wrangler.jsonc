@@ -19,6 +19,7 @@
     "AUTH_MODE": "email-code",
     "AUTH_EMAIL_FROM": "login@auth.esau.app",
     "AUTH_SESSION_DAYS": "30",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
     "AI_REASONING_EFFORT": "high"

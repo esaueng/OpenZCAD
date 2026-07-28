@@ -403,7 +403,10 @@ export interface FaceGeometry {
 export interface EdgeTopology {
   topologyId: string;
   hash: number;
-  /** XYZ-interleaved sampled polyline points. */
+  /**
+   * XYZ-interleaved display polyline sampled from the exact edge curve.
+   * Closed edges repeat their first point so the viewport draws the seam.
+   */
   points: number[];
 }
 
