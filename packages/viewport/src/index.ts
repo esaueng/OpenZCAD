@@ -11,7 +11,9 @@ export * from './types';
 // Rendering: meshes, materials, lighting, grid, and camera fitting.
 export * from './render/scene';
 
-// Camera: standard view poses and screen-space projection math.
+// Camera: the controller that owns cameras/controls/projection/glides,
+// plus standard view poses and screen-space projection math.
+export * from './camera/CameraController';
 export * from './camera/views';
 
 // Picking: mesh classification, body resolution, and edge hit ordering.
