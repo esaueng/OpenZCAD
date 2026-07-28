@@ -1,0 +1,446 @@
+/* ── Viewer shell, rails, HUD chips, dimension pills ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── ViewerShell ─────────────────────────────────────────── */
+
+.viewer-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-viewport-bg);
+  overflow: hidden;
+}
+
+.viewer-shell canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.viewer-host {
+  position: absolute;
+  inset: 0;
+}
+
+/* Right-hand utility stack: orientation widget on top, labeled rail below. */
+.viewer-rail-stack {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.viewer-rail-stack .orientation-widget {
+  position: static;
+}
+
+.viewer-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 5px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.rail-views {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+  margin-bottom: 2px;
+}
+
+.rail-views button {
+  min-width: 26px;
+  min-height: 22px;
+  padding: 0 5px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.rail-views button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-row {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 2px 6px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.rail-row:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-row.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.rail-icon {
+  display: inline-grid;
+  place-items: center;
+  font-style: normal;
+}
+
+.rail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selection-callout {
+  white-space: nowrap;
+  padding: 3px 7px;
+  color: var(--color-text);
+  background: rgba(17, 24, 33, 0.85);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.selection-callout.sketch-callout {
+  color: var(--color-accent);
+  border-color: rgba(77, 163, 255, 0.3);
+}
+
+.selection-callout.direct-edit-callout {
+  color: rgba(232, 243, 255, 0.9);
+  background: rgba(10, 22, 36, 0.56);
+  border-color: rgba(124, 192, 255, 0.42);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(5px);
+}
+
+.dimension-callout-anchor {
+  pointer-events: auto;
+}
+
+.selection-callout.dimension-callout {
+  transform: rotate(var(--dimension-label-angle, 0deg))
+    scale(var(--dimension-label-scale, 1));
+  transform-origin: center center;
+  will-change: transform;
+}
+
+/* Editable dimension pill: drag the face, or click the value to type. */
+.selection-callout.direct-edit-callout.editable {
+  padding: 0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.callout-value {
+  padding: 4px 11px;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.callout-value:hover {
+  background: rgba(124, 192, 255, 0.18);
+}
+
+.callout-input {
+  width: 84px;
+  height: 26px;
+  padding: 0 9px;
+  color: #f3f8ff;
+  background: rgba(8, 18, 30, 0.98);
+  border: none;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.callout-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+/* Bottom-center selection summary with a quick measurement. */
+.selection-chip {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-viewer-overlay);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 2px 4px 2px 10px;
+  color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.selection-chip-label {
+  font-weight: var(--fw-medium);
+}
+
+.selection-chip-detail {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.selection-chip-clear {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.selection-chip-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* Viewport HUD: ghost stat chips bottom-left (the rail covers view/display
+   state top-right), plus the drafting-frame corner marks. */
+.vp-hud {
+  position: absolute;
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  pointer-events: none;
+}
+
+.vp-hud-bl {
+  bottom: 10px;
+  left: 10px;
+}
+
+.vp-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 1px 6px;
+  color: var(--color-text-muted);
+  background: rgba(17, 24, 33, 0.82);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.vp-chip-sel {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.viewport-frame {
+  position: absolute;
+  inset: 10px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.frame-corner {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 0 solid var(--color-border-strong);
+  opacity: 0.55;
+}
+
+.frame-corner.tl {
+  top: 0;
+  left: 0;
+  border-top-width: 1px;
+  border-left-width: 1px;
+}
+
+.frame-corner.tr {
+  top: 0;
+  right: 0;
+  border-top-width: 1px;
+  border-right-width: 1px;
+}
+
+.frame-corner.bl {
+  bottom: 0;
+  left: 0;
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+}
+
+.frame-corner.br {
+  bottom: 0;
+  right: 0;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+}
+
+.direct-edit-hud {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  min-width: 112px;
+  padding: 6px 9px;
+  color: #f3f8ff;
+  background: rgba(8, 18, 30, 0.96);
+  border: 1px solid rgba(124, 192, 255, 0.7);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.move-gizmo-hud {
+  --gizmo-axis-color: #e8f3ff;
+
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  padding: 7px 10px;
+  color: #f8fbff;
+  background: rgba(5, 12, 22, 0.96);
+  border: 2px solid var(--gizmo-axis-color);
+  border-radius: var(--radius-sm);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.34),
+    0 8px 24px rgba(0, 0, 0, 0.45);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateY(-100%);
+}
+
+.move-gizmo-hud::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  background: var(--gizmo-axis-color);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 999px;
+  box-shadow: 0 0 8px var(--gizmo-axis-color);
+  vertical-align: 1px;
+}
+
+.move-gizmo-hud.is-active {
+  background: rgba(2, 8, 18, 0.98);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.72),
+    0 0 18px color-mix(in srgb, var(--gizmo-axis-color) 65%, transparent),
+    0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.viewer-notice {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-viewer-overlay);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.viewer-notice > div {
+  width: 320px;
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  color: var(--color-text);
+  background: rgba(17, 24, 33, 0.92);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.viewer-notice small {
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.viewer-notice-keys {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+/* The card is the one moment the user is certainly looking here, so its
+   actions have to be clickable even though the notice itself is not. */
+.viewer-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin: 4px 0 2px;
+  pointer-events: auto;
+}
+
+.viewer-notice-actions button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.viewer-notice-actions button:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent-border);
+}
+
+.viewer-notice-actions .viewer-notice-assistant {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.viewer-notice-actions kbd {
+  color: var(--color-text-subtle);
+}
+
