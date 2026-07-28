@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { PickService } from './PickService';
+import type { SelectionFilter } from '../types';
 
 /**
  * The service only calls `getBoundingClientRect`, so a stub keeps these tests
@@ -34,7 +35,7 @@ interface Groups {
   bodyGroup: THREE.Group;
 }
 
-function makeService(groups: Partial<Groups> = {}) {
+function makeService(groups: Partial<Groups> = {}, filter?: SelectionFilter) {
   const regionGroup = groups.regionGroup ?? new THREE.Group();
   const sketchGroup = groups.sketchGroup ?? new THREE.Group();
   const bodyGroup = groups.bodyGroup ?? new THREE.Group();
@@ -47,7 +48,8 @@ function makeService(groups: Partial<Groups> = {}) {
     camera: () => camera,
     regionGroup,
     sketchGroup,
-    bodyGroup
+    bodyGroup,
+    filter: filter ? () => filter : undefined
   });
   return { service, regionGroup, sketchGroup, bodyGroup };
 }
@@ -204,6 +206,78 @@ describe('pickAll feeds depth cycling', () => {
   it('is empty when the pointer is over nothing', () => {
     const { service } = makeService();
     expect(service.pickAll(centreEvent())).toEqual([]);
+    expect(service.pick(centreEvent())).toBeNull();
+  });
+});
+
+describe('selection filters narrow what a click can take', () => {
+  /** A solid whose triangles resolve to a face, with an edge in front of it. */
+  function layered() {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(
+      planeAt(0, {
+        bodyId: 'body-1',
+        topology: {
+          faces: [
+            { topologyId: 'face-1', hash: 7, triangleStart: 0, triangleCount: 2 }
+          ]
+        }
+      })
+    );
+    const edge = planeAt(5, {
+      bodyId: 'body-1',
+      topologyKind: 'edge',
+      topologyId: 'edge-1',
+      topologyHash: 9
+    });
+    bodyGroup.add(edge);
+    return bodyGroup;
+  }
+
+  it('takes the nearest thing of any kind by default', () => {
+    const { service } = makeService({ bodyGroup: layered() });
+    expect(service.pick(centreEvent())?.kind).toBe('edge');
+  });
+
+  it('reaches the face behind an edge when filtering to faces', () => {
+    const { service } = makeService({ bodyGroup: layered() }, 'face');
+    const pick = service.pick(centreEvent());
+    expect(pick?.kind).toBe('face');
+    expect(pick?.selection?.topologyId).toBe('face-1');
+  });
+
+  it('takes only the edge when filtering to edges', () => {
+    const { service } = makeService({ bodyGroup: layered() }, 'edge');
+    const all = service.pickAll(centreEvent());
+    expect(all.map((candidate) => candidate.kind)).toEqual(['edge']);
+  });
+
+  it('resolves a face to its body rather than rejecting it', () => {
+    // A body filter is for grabbing whole solids, so a face click still lands.
+    const { service } = makeService({ bodyGroup: layered() }, 'body');
+    const pick = service.pick(centreEvent());
+    expect(pick?.kind).toBe('body');
+    expect(pick?.selection).toEqual({ bodyId: 'body-1', kind: 'body' });
+  });
+
+  it('collapses one body\'s face and edge into a single body candidate', () => {
+    const { service } = makeService({ bodyGroup: layered() }, 'body');
+    expect(service.pickAll(centreEvent())).toHaveLength(1);
+  });
+
+  it('passes solids through entirely when filtering to sketches', () => {
+    const regionGroup = new THREE.Group();
+    regionGroup.add(planeAt(-5, { region: REGION }));
+    const { service } = makeService(
+      { bodyGroup: layered(), regionGroup },
+      'sketch'
+    );
+    // The region is furthest away and still wins: the solids are not competing.
+    expect(service.pick(centreEvent())?.kind).toBe('region');
+  });
+
+  it('finds nothing when a sketch filter is on and there is no sketch', () => {
+    const { service } = makeService({ bodyGroup: layered() }, 'sketch');
     expect(service.pick(centreEvent())).toBeNull();
   });
 });

@@ -1,3 +1,9 @@
+import {
+  SELECTION_FILTERS,
+  SELECTION_FILTER_LABELS,
+  type SelectionFilter
+} from '@openzcad/viewport';
+
 interface StatusBarProps {
   status: string;
   tone: 'ready' | 'warning' | 'running';
@@ -9,6 +15,12 @@ interface StatusBarProps {
   warningCount: number;
   documentVersion: number | null;
   units: string;
+  /** What picking is currently narrowed to, however that was decided. */
+  selectionFilter: SelectionFilter;
+  /** True while the active tool is choosing the filter rather than the user. */
+  selectionFilterIsAutomatic: boolean;
+  /** Null clears the manual choice and hands the filter back to the tool. */
+  onSelectionFilter(filter: SelectionFilter | null): void;
 }
 
 export function StatusBar({
@@ -20,7 +32,10 @@ export function StatusBar({
   featureCount,
   warningCount,
   documentVersion,
-  units
+  units,
+  selectionFilter,
+  selectionFilterIsAutomatic,
+  onSelectionFilter
 }: StatusBarProps) {
   return (
     <footer className="status-bar">
@@ -32,6 +47,41 @@ export function StatusBar({
         {status}
       </span>
       {hint && <span className="status-hint">{hint}</span>}
+      <div
+        className="status-filters"
+        role="group"
+        aria-label="Selection filter"
+      >
+        <b>select</b>
+        {SELECTION_FILTERS.map((filter) => {
+          const active = filter === selectionFilter;
+          // Clicking the active chip clears the manual choice rather than
+          // re-asserting it, so the tool can take the filter back without a
+          // second control to find.
+          return (
+            <button
+              key={filter}
+              type="button"
+              className={`status-filter${active ? ' active' : ''}${
+                active && selectionFilterIsAutomatic ? ' automatic' : ''
+              }`}
+              aria-pressed={active}
+              title={
+                active && selectionFilterIsAutomatic
+                  ? `${SELECTION_FILTER_LABELS[filter]} — chosen by the active tool`
+                  : `Select ${SELECTION_FILTER_LABELS[filter].toLowerCase()} only (Q cycles)`
+              }
+              onClick={() =>
+                onSelectionFilter(
+                  active && !selectionFilterIsAutomatic ? null : filter
+                )
+              }
+            >
+              {SELECTION_FILTER_LABELS[filter]}
+            </button>
+          );
+        })}
+      </div>
       <div className="status-groups" aria-label="Workspace status">
         <span>
           <b>kernel</b>
