@@ -144,6 +144,7 @@ import {
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import { MarkingMenu } from './components/MarkingMenu';
 import type {
   ExtrudePreview,
   FaceResizeCommit
@@ -3080,12 +3081,18 @@ export function App() {
   function openContextMenu(
     x: number,
     y: number,
-    entries: { item: ContextMenuState['items'][number]; run(): void }[]
+    entries: { item: ContextMenuState['items'][number]; run(): void }[],
+    origin: 'viewport' | 'list' = 'list'
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
     );
-    setContextMenu({ x, y, items: entries.map((entry) => entry.item) });
+    setContextMenu({
+      x,
+      y,
+      origin,
+      items: entries.map((entry) => entry.item)
+    });
   }
 
   function handleViewportContextMenu(
@@ -3138,7 +3145,7 @@ export function App() {
           },
           run: showAllBodies
         }
-      ]);
+      ], 'viewport');
       return;
     }
     // Adopt the clicked geometry as the selection so actions target it.
@@ -3231,7 +3238,7 @@ export function App() {
             }
           ]
         : [])
-    ]);
+    ], 'viewport');
   }
 
   function handleFeatureContextMenu(
@@ -4374,13 +4381,22 @@ export function App() {
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
           )}
-          {contextMenu && (
-            <ContextMenu
-              menu={contextMenu}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
-              onClose={() => setContextMenu(null)}
-            />
-          )}
+          {contextMenu &&
+            (contextMenu.origin === 'viewport' ? (
+              <MarkingMenu
+                x={contextMenu.x}
+                y={contextMenu.y}
+                items={contextMenu.items}
+                onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+                onClose={() => setContextMenu(null)}
+              />
+            ) : (
+              <ContextMenu
+                menu={contextMenu}
+                onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+                onClose={() => setContextMenu(null)}
+              />
+            ))}
         </>
       }
     />
