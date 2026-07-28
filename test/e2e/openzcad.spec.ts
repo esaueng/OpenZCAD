@@ -972,10 +972,11 @@ test('grounds all cylinder edges onto its two visible rims', async ({
     .fill('Add a 1 mm fillet to all the edges');
   await page.getByLabel('CAD change request').press('Enter');
 
-  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
-    'Fillet the cylinder top and bottom rims by 1 mm.'
-  );
   const assistantRequest = await assistantRequestPromise;
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Fillet the cylinder top and bottom rims by 1 mm.',
+    { timeout: 15_000 }
+  );
   expect(assistantRequest.digest?.selection?.topologies).toHaveLength(0);
   const body = assistantRequest.digest?.bodies?.find(
     (candidate) => candidate.topology?.modifierEdgeCount === 2
@@ -1993,39 +1994,66 @@ test('box selection releases the previous direct-edit target', async ({
     throw new Error('viewer canvas not laid out');
   }
 
-  await page.mouse.click(
-    area.x + area.width * 0.45,
-    area.y + area.height * 0.55
-  );
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: area.x + area.width * xRatio,
+        y: area.y + area.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-chip')).toBeVisible();
   await expect(status).toContainText('push or pull');
 
   // Sweep empty sky. The body selection clears, and the direct-edit handle
   // for the face that used to be selected must be released with it.
-  const from = await page.evaluate((bounds) => {
+  const drag = await canvas.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
     for (let yStep = 2; yStep <= 16; yStep += 2) {
-      for (let xStep = 5; xStep <= 95; xStep += 5) {
-        const point = {
+      for (let xStep = 5; xStep <= 78; xStep += 5) {
+        const from = {
           x: bounds.x + bounds.width * (xStep / 100),
           y: bounds.y + bounds.height * (yStep / 100)
         };
-        if (document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS') {
-          return point;
+        const to = {
+          x: from.x + bounds.width * 0.12,
+          y: from.y + bounds.height * 0.1
+        };
+        if (
+          document.elementFromPoint(from.x, from.y) === element &&
+          document.elementFromPoint(to.x, to.y) === element
+        ) {
+          return { from, to };
         }
       }
     }
     return null;
-  }, area);
-  if (!from) {
-    throw new Error('no unobstructed canvas point found for box selection');
+  });
+  if (!drag) {
+    throw new Error('no unobstructed canvas path found for box selection');
   }
   await page.keyboard.down('Shift');
-  await page.mouse.move(from.x, from.y);
+  await page.mouse.move(drag.from.x, drag.from.y);
   await page.mouse.down();
   await page.mouse.move(
-    Math.min(from.x + area.width * 0.12, area.x + area.width * 0.98),
-    Math.min(from.y + area.height * 0.1, area.y + area.height * 0.2)
+    (drag.from.x + drag.to.x) / 2,
+    (drag.from.y + drag.to.y) / 2
   );
+  await page.mouse.move(drag.to.x, drag.to.y);
+  await expect(page.locator('.selection-band')).toBeVisible();
   await page.mouse.up();
   await page.keyboard.up('Shift');
 
