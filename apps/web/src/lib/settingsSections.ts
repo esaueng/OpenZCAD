@@ -52,8 +52,14 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'viewport',
     label: 'Viewport',
-    detail: 'Projection, grid, and display',
-    settings: ['Projection', 'Show construction grid', 'Display mode']
+    detail: 'Projection, navigation, grid, and display',
+    settings: [
+      'Projection',
+      'Show construction grid',
+      'Zoom toward the pointer',
+      'Middle-button drag',
+      'Display mode'
+    ]
   },
   {
     id: 'sketching',

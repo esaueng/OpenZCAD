@@ -1091,12 +1091,18 @@ test('models a parametric part and exports a true STEP file', async ({
   ).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // Export STEP and verify the download is a real ISO 10303-21 file.
-  // Exporting now lives behind the topbar File menu, so open that first.
-  await page.locator('.file-menu > summary').click();
+  // Export STEP and verify the download is a real ISO 10303-21 file. Import
+  // and export live inside the collapsed File menu, so open it first: a
+  // hidden button never becomes actionable and the click waits forever. The
+  // summary is a <summary>, which is exposed as a generic rather than a
+  // button, and the item's accessible name tracks the export scope
+  // ("all bodies" vs "selected body") — so scope the match to the menu.
+  const fileMenu = page.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'STEP' }).click();
+  await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
+  await fileMenu.locator('summary').click(); // collapse; it overlays the sidebar
   expect(download.suggestedFilename()).toBe('E2E-Part.step');
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
@@ -1340,4 +1346,401 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     1
   );
+});
+
+test('the wheel zooms toward the pointer, and the preference turns it off', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Zoom Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // A body gives the camera something to frame, so the orbit target is not
+  // sitting at the origin by coincidence.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  // Well off-centre: centre-zoom leaves the target alone, cursor-zoom pulls
+  // it toward this point.
+  const cursor = {
+    x: box!.x + box!.width * 0.75,
+    y: box!.y + box!.height * 0.3
+  };
+
+  const target = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (JSON.parse(raw) as { views?: Record<string, { camera: { target: number[] } }> })
+            .views
+        : undefined;
+      const view = views ? Object.values(views)[0] : undefined;
+      return view ? view.camera.target : null;
+    });
+
+  const wheelAtCursor = async () => {
+    await page.mouse.move(cursor.x, cursor.y);
+    for (let step = 0; step < 5; step += 1) {
+      await page.mouse.wheel(0, -120);
+      await page.waitForTimeout(80);
+    }
+    await page.waitForTimeout(400);
+  };
+
+  const before = await target();
+  expect(before).not.toBeNull();
+  await wheelAtCursor();
+  const after = await target();
+  expect(after).not.toBeNull();
+  const travelled = Math.hypot(
+    after![0]! - before![0]!,
+    after![1]! - before![1]!,
+    after![2]! - before![2]!
+  );
+  expect(travelled).toBeGreaterThan(0.5);
+
+  // Turning the preference off restores zooming toward the view centre.
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByLabel('Zoom to cursor').uncheck();
+  await page.getByRole('button', { name: /Back to workspace|Close settings/ })
+    .first()
+    .click();
+  await expect(canvas).toBeVisible();
+
+  const beforeCentre = await target();
+  await wheelAtCursor();
+  const afterCentre = await target();
+  const centreTravel = Math.hypot(
+    afterCentre![0]! - beforeCentre![0]!,
+    afterCentre![1]! - beforeCentre![1]!,
+    afterCentre![2]! - beforeCentre![2]!
+  );
+  expect(centreTravel).toBeLessThan(0.01);
+});
+
+test('clicking geometry re-pivots the orbit without moving the view', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Pivot Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const view = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+
+  const canvas = page.locator('.viewer-host canvas');
+  const box = await canvas.boundingBox();
+  // Nudge the camera so a pose is recorded before the click.
+  await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
+  await page.mouse.wheel(0, -120);
+  await page.waitForTimeout(400);
+  const before = await view();
+  expect(before).not.toBeNull();
+
+  // Click the solid off-centre, where the pivot has real depth to gain.
+  await page.mouse.click(
+    box!.x + box!.width * 0.42,
+    box!.y + box!.height * 0.58
+  );
+  // The pivot only moves for a real hit, so prove the click landed first.
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await page.waitForTimeout(500);
+  const after = await view();
+
+  // The camera itself must not have moved: re-pivoting is meant to be
+  // invisible until the user actually orbits.
+  for (const axis of [0, 1, 2]) {
+    expect(after!.position[axis]!).toBeCloseTo(before!.position[axis]!, 3);
+  }
+  // The pivot should have travelled toward the surface under the cursor.
+  const pivotTravel = Math.hypot(
+    after!.target[0]! - before!.target[0]!,
+    after!.target[1]! - before!.target[1]!,
+    after!.target[2]! - before!.target[2]!
+  );
+  expect(pivotTravel).toBeGreaterThan(0.1);
+});
+
+test('the orientation widget snaps to a view the rail cannot reach', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Orientation Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const widget = page.getByRole('group', { name: 'View orientation' });
+  await expect(widget).toBeVisible();
+
+  const cameraPosition = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<string, { camera: { position: number[] } }>;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera.position : null;
+    });
+
+  // Bottom has no toolbar shortcut; before this widget it was unreachable.
+  await widget.getByRole('button', { name: 'Bottom view' }).click();
+  await page.waitForTimeout(900);
+  const bottom = await cameraPosition();
+  expect(bottom).not.toBeNull();
+  // Looking up at the part puts the camera below it.
+  expect(bottom![2]!).toBeLessThan(0);
+
+  await widget.getByRole('button', { name: 'Left view' }).click();
+  await page.waitForTimeout(900);
+  const left = await cameraPosition();
+  expect(left![0]!).toBeLessThan(0);
+
+  // The hub returns to isometric, which sits above and to the right.
+  await widget.getByRole('button', { name: 'Isometric view' }).click();
+  await page.waitForTimeout(900);
+  const iso = await cameraPosition();
+  expect(iso![0]!).toBeGreaterThan(0);
+  expect(iso![2]!).toBeGreaterThan(0);
+});
+
+test('a view request interrupts the glide already in flight', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Interrupt Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const camera = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+
+  // Ask for Top, then cut across it with Right before it can settle.
+  await page.keyboard.press('2');
+  await page.waitForTimeout(60);
+  await page.keyboard.press('3');
+  await page.waitForTimeout(1200);
+
+  const settled = await camera();
+  expect(settled).not.toBeNull();
+  // Right looks along +X: the camera ends beside the part, not above it.
+  const offsetX = settled!.position[0]! - settled!.target[0]!;
+  const offsetZ = settled!.position[2]! - settled!.target[2]!;
+  expect(offsetX).toBeGreaterThan(1);
+  expect(Math.abs(offsetZ)).toBeLessThan(1);
+});
+
+test('the middle-button drag preference changes what a middle drag does', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Middle Drag Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const camera = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  const middleDrag = async () => {
+    await page.mouse.move(
+      area!.x + area!.width * 0.5,
+      area!.y + area!.height * 0.5
+    );
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(
+      area!.x + area!.width * 0.5 + 70,
+      area!.y + area!.height * 0.5,
+      { steps: 8 }
+    );
+    await page.mouse.up({ button: 'middle' });
+    await page.waitForTimeout(400);
+  };
+
+  // Default is pan, which moves the orbit target sideways.
+  const beforePan = await camera();
+  await middleDrag();
+  const afterPan = await camera();
+  const panned = Math.hypot(
+    afterPan!.target[0]! - beforePan!.target[0]!,
+    afterPan!.target[1]! - beforePan!.target[1]!,
+    afterPan!.target[2]! - beforePan!.target[2]!
+  );
+  expect(panned).toBeGreaterThan(1);
+
+  // Switching to orbit turns the camera instead, leaving the target alone.
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page
+    .getByLabel('Middle-button drag')
+    .selectOption('orbit');
+  await page
+    .getByRole('button', { name: /Back to workspace|Close settings/ })
+    .first()
+    .click();
+  await expect(canvas).toBeVisible();
+
+  const beforeOrbit = await camera();
+  await middleDrag();
+  const afterOrbit = await camera();
+  const targetMoved = Math.hypot(
+    afterOrbit!.target[0]! - beforeOrbit!.target[0]!,
+    afterOrbit!.target[1]! - beforeOrbit!.target[1]!,
+    afterOrbit!.target[2]! - beforeOrbit!.target[2]!
+  );
+  const cameraMoved = Math.hypot(
+    afterOrbit!.position[0]! - beforeOrbit!.position[0]!,
+    afterOrbit!.position[1]! - beforeOrbit!.position[1]!,
+    afterOrbit!.position[2]! - beforeOrbit!.position[2]!
+  );
+  expect(targetMoved).toBeLessThan(0.5);
+  expect(cameraMoved).toBeGreaterThan(1);
+});
+
+test('repeated face clicks reach a body behind direct-edit handles', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Depth Cycle Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  for (const primitive of [/^Box \(B\)/, /^Cylinder \(C\)/]) {
+    await page.getByRole('button', { name: primitive }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+  }
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const label = page.locator('.selection-chip-label');
+  let cycled = false;
+
+  // The default box and cylinder overlap around the centre in the isometric
+  // view. Search a small grid so the assertion does not depend on a hard-coded
+  // camera projection or on which primitive is frontmost.
+  for (let y = 0.38; y <= 0.62 && !cycled; y += 0.04) {
+    for (let x = 0.38; x <= 0.62 && !cycled; x += 0.04) {
+      const point = {
+        x: bounds!.x + bounds!.width * x,
+        y: bounds!.y + bounds!.height * y
+      };
+      await page.mouse.click(point.x, point.y);
+      if (!(await label.isVisible())) {
+        continue;
+      }
+      const first = (await label.textContent()) ?? '';
+      await page.mouse.click(point.x, point.y);
+      const second = (await label.textContent()) ?? '';
+      cycled =
+        first !== second &&
+        [first, second].some((value) => value.includes('Box Body')) &&
+        [first, second].some((value) => value.includes('Cylinder Body'));
+    }
+  }
+
+  expect(cycled).toBe(true);
 });

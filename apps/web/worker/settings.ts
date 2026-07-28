@@ -33,6 +33,7 @@ const THEMES = ['system', 'dark'] as const;
 const DENSITIES = ['compact', 'comfortable'] as const;
 const PROJECTIONS = ['perspective', 'orthographic'] as const;
 const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
+const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
 const PROVIDERS = ['openrouter', 'openai', 'responses-compatible'] as const;
 const CREDENTIAL_SOURCES = ['deployment', 'personal'] as const;
 const REASONING_EFFORTS = [
@@ -74,6 +75,22 @@ function requiredMember<T extends string>(
     throw new HttpError(400, `"${key}" must be one of: ${allowed.join(', ')}.`);
   }
   return value as T;
+}
+
+/**
+ * A member that older clients may omit. Unlike `requiredMember`, a missing
+ * value falls back instead of rejecting the whole save.
+ */
+function optionalMember<T extends string>(
+  record: Record<string, unknown>,
+  key: string,
+  allowed: readonly T[],
+  fallback: T
+): T {
+  const value = record[key];
+  return typeof value === 'string' && allowed.includes(value as T)
+    ? (value as T)
+    : fallback;
 }
 
 function requiredNumber(
@@ -226,7 +243,14 @@ export function parseUpdateAppSettingsRequest(
           PROJECTIONS
         ),
         showGrid: requiredBoolean(viewport, 'showGrid'),
-        displayMode: requiredMember(viewport, 'displayMode', DISPLAY_MODES)
+        displayMode: requiredMember(viewport, 'displayMode', DISPLAY_MODES),
+        // Optional in the payload so a client from before this preference
+        // existed keeps saving instead of being rejected.
+        zoomToCursor:
+          typeof viewport.zoomToCursor === 'boolean'
+            ? viewport.zoomToCursor
+            : true,
+        middleDrag: optionalMember(viewport, 'middleDrag', MIDDLE_DRAGS, 'pan')
       },
       sketching: {
         snapEnabled: requiredBoolean(sketching, 'snapEnabled'),

@@ -1,0 +1,119 @@
+/* ── Narrow-screen layout ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Narrow screens ──────────────────────────────────────── */
+
+@media (max-width: 1120px) {
+  .workspace {
+    grid-template-columns: 220px minmax(320px, 1fr);
+  }
+
+  .topbar .topbar-action:not(.save-state) {
+    font-size: 0;
+    gap: 0;
+    padding-inline: 8px;
+  }
+
+  .shortcuts-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 820px) {
+  .workspace {
+    grid-template-columns: 190px minmax(320px, 1fr);
+  }
+  .workspace.with-assistant {
+    grid-template-columns: 190px minmax(280px, 1fr);
+  }
+  .assistant-panel {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(360px, 100%);
+    z-index: 6;
+  }
+}
+
+@media (max-width: 620px) {
+  .topbar {
+    gap: var(--sp-1);
+    padding-inline: 6px;
+  }
+
+  .brand {
+    flex: 0 0 auto;
+    gap: 0;
+    font-size: 0;
+  }
+
+  .brand .beta-tag,
+  .topbar-divider,
+  .breadcrumb .mono,
+  .session-user {
+    display: none;
+  }
+
+  .breadcrumb {
+    flex: 1 1 auto;
+  }
+
+  .project-title-button {
+    max-width: 100%;
+  }
+
+  .topbar-tools {
+    flex: 0 0 auto;
+    margin-left: 0;
+  }
+
+  .topbar .topbar-action {
+    width: 28px;
+    flex: 0 0 28px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+    font-size: 0;
+  }
+
+  .collaboration-state {
+    flex: 0 0 auto;
+    gap: 0;
+    font-size: 0;
+  }
+
+  /* `.workspace.with-assistant` in the 820px block outranks a bare
+     `.workspace` here, so the stacked layout has to match that specificity
+     or the sidebar keeps its column and the viewer overflows the screen.
+     The assistant is an overlay at this width, so it needs no column. */
+  .workspace,
+  .workspace.with-assistant {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(120px, 32%) minmax(160px, 1fr);
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: var(--border-thin);
+  }
+
+  .palette-float {
+    inset: 6px auto 6px 6px;
+  }
+
+  .viewer-rail-stack {
+    top: 6px;
+    right: 6px;
+  }
+
+  .status-bar {
+    gap: 6px;
+    padding-inline: 6px;
+  }
+
+  .status-hint,
+  .status-groups > span:not(:last-child) {
+    display: none;
+  }
+}
+

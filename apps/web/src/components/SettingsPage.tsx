@@ -1,3 +1,4 @@
+import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Accessibility,
@@ -679,6 +680,46 @@ export function SettingsPage({
                     })
                   }
                 />
+              </SettingRow>
+              <SettingRow
+                title="Zoom toward the pointer"
+                description="Wheel zoom moves toward whatever is under the cursor, the way Fusion and SolidWorks do. Turn this off to zoom toward the middle of the view instead."
+                scope="Navigation"
+              >
+                <Toggle
+                  checked={settings.viewport.zoomToCursor}
+                  label="Zoom to cursor"
+                  onChange={(zoomToCursor) =>
+                    patch({
+                      viewport: { ...settings.viewport, zoomToCursor }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Middle-button drag"
+                description="What dragging with the middle mouse button does. Pan matches Fusion, SolidWorks, and Onshape; zoom is the three.js default."
+                scope="Navigation"
+              >
+                <select
+                  aria-label="Middle-button drag"
+                  value={settings.viewport.middleDrag}
+                  onChange={(event) =>
+                    patch({
+                      viewport: {
+                        ...settings.viewport,
+                        middleDrag: event.target
+                          .value as AppSettings['viewport']['middleDrag']
+                      }
+                    })
+                  }
+                >
+                  {(['pan', 'orbit', 'zoom'] as const).map((action) => (
+                    <option key={action} value={action}>
+                      {MIDDLE_DRAG_LABELS[action]}
+                    </option>
+                  ))}
+                </select>
               </SettingRow>
               <SettingRow
                 title="Display mode"

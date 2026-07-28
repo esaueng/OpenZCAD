@@ -1,0 +1,539 @@
+/* ── Assistant dock: thread, cards, questions, composer ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Assistant dock ──────────────────────────────────────── */
+
+.workspace.with-assistant {
+  grid-template-columns:
+    var(--sidebar-w) minmax(320px, 1fr)
+    var(--assistant-w);
+}
+
+.assistant-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--color-surface);
+  border-left: var(--border-thin);
+}
+
+.assistant-panel.dragging {
+  outline: 1px dashed var(--color-accent-border);
+  outline-offset: -3px;
+}
+
+.assistant-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 7px 8px 7px 10px;
+  color: var(--color-accent);
+  border-bottom: var(--border-thin);
+}
+
+.assistant-title {
+  flex: 1;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.assistant-icon-button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.assistant-icon-button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/* Collapsed: a pill hugging the right edge of the viewport. */
+.assistant-launcher {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  box-shadow: var(--shadow-float, 0 6px 18px rgba(0, 0, 0, 0.35));
+}
+
+.assistant-launcher:hover {
+  background: var(--color-surface-hover);
+}
+
+/* ── Thread ─────────────────────────────────────────────── */
+
+.assistant-thread {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 10px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.assistant-empty {
+  margin: auto 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.assistant-empty p {
+  margin: 0 0 var(--sp-2);
+}
+
+.assistant-empty-hint {
+  color: var(--color-text-subtle);
+}
+
+.assistant-turn.user {
+  align-self: flex-end;
+  max-width: 92%;
+  padding: 6px 9px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.assistant-turn.user p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.assistant-answer-list {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.assistant-answer-list dt {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.assistant-answer-list dd {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.assistant-thumbs {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.assistant-thumbs img {
+  width: 62px;
+  height: 62px;
+  object-fit: cover;
+  background: #fff;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.assistant-thinking {
+  margin: 0;
+  color: var(--color-accent);
+  font-size: var(--fs-xs);
+}
+
+/* ── Cards ──────────────────────────────────────────────── */
+
+.assistant-card {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px 9px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+}
+
+.assistant-card.questions {
+  border-color: var(--color-accent-border);
+}
+
+.assistant-card.proposal.open {
+  border-color: var(--color-accent-border);
+}
+
+.assistant-card.proposal.rejected,
+.assistant-card.questions.sent {
+  opacity: 0.62;
+}
+
+.assistant-card.message.error {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.assistant-card-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.assistant-card.questions .assistant-card-label,
+.assistant-card.proposal.open .assistant-card-label {
+  color: var(--color-accent);
+}
+
+.assistant-card-copy {
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.45;
+}
+
+.assistant-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.assistant-card-actions button {
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.assistant-card-actions button:hover:not(:disabled),
+.assistant-card-actions button.active {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.assistant-primary,
+.assistant-card-actions .assistant-primary {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+}
+
+.assistant-primary:hover:not(:disabled),
+.assistant-card-actions .assistant-primary:hover:not(:disabled) {
+  color: var(--color-on-accent);
+  background: var(--color-accent-hi);
+  border-color: var(--color-accent);
+}
+
+/* ── Questions ──────────────────────────────────────────── */
+
+.assistant-questions {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.assistant-question-prompt {
+  margin: 0 0 4px;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+
+.assistant-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.assistant-chip {
+  min-height: 25px;
+  padding: 0 8px;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: 999px;
+  font-size: var(--fs-mini);
+}
+
+.assistant-chip:hover:not(:disabled) {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+}
+
+.assistant-chip-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.assistant-chip-input input {
+  width: 96px;
+  min-height: 25px;
+  padding: 0 6px;
+  font-size: var(--fs-mini);
+}
+
+.assistant-answer {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text);
+}
+
+.assistant-link {
+  padding: 0;
+  color: var(--color-text-subtle);
+  border: 0;
+  font-size: var(--fs-mini);
+  text-decoration: underline;
+}
+
+.assistant-link:hover {
+  color: var(--color-accent);
+}
+
+/* ── Proposal detail ────────────────────────────────────── */
+
+.assistant-assumptions {
+  margin: 0;
+  padding-left: 15px;
+  display: grid;
+  gap: 3px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.45;
+}
+
+.assistant-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  color: var(--color-text-subtle);
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-align: left;
+}
+
+.assistant-disclosure:hover {
+  color: var(--color-text);
+}
+
+.assistant-op-totals {
+  color: var(--color-text-muted);
+}
+
+.assistant-operations {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.5;
+}
+
+/* The audit table: someone checks a misread decimal here before cutting metal. */
+.assistant-readings {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.assistant-readings table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-mini);
+}
+
+.assistant-readings th,
+.assistant-readings td {
+  padding: 3px 5px;
+  text-align: left;
+  vertical-align: top;
+  border-top: var(--border-thin);
+}
+
+.assistant-readings thead th {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-top: 0;
+}
+
+.assistant-readings tbody th {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.assistant-readings tbody td {
+  color: var(--color-text-muted);
+}
+
+.assistant-readings tr.unreadable th,
+.assistant-readings tr.unreadable td {
+  color: #fca5a5;
+}
+
+.assistant-confidence {
+  margin-left: 5px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.assistant-readings tr.read .assistant-confidence {
+  color: var(--color-accent);
+}
+
+/* ── Composer ───────────────────────────────────────────── */
+
+.assistant-composer {
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px 9px;
+  border-top: var(--border-thin);
+}
+
+.assistant-notice {
+  margin: 0;
+  color: #fca5a5;
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+}
+
+.assistant-pending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.assistant-pending-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 5px 3px 3px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+}
+
+.assistant-pending-item img {
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  background: #fff;
+  border-radius: 2px;
+}
+
+.assistant-pending-label {
+  max-width: 116px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-pending-item button {
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  color: var(--color-text-subtle);
+  border: 0;
+}
+
+.assistant-pending-item button:hover {
+  color: var(--color-text);
+}
+
+.assistant-prompt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+  padding: 5px 5px 5px 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.assistant-prompt:focus-within {
+  border-color: var(--color-accent-border);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.assistant-prompt textarea {
+  width: 100%;
+  min-height: 24px;
+  max-height: 128px;
+  padding: 2px 0;
+  resize: vertical;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  line-height: 20px;
+}
+
+.assistant-prompt textarea:focus {
+  box-shadow: none;
+}
+
+.assistant-submit {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.assistant-submit:disabled {
+  opacity: 0.45;
+}
+
+.assistant-foot {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+

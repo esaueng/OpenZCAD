@@ -1,10 +1,11 @@
 import { Box, Camera, Eye, Grid3x3, Maximize2 } from 'lucide-react';
+import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
   DisplayMode,
   ProjectionMode,
   StandardView,
   ViewerSettings
-} from './ModelViewer';
+} from '@openzcad/viewport';
 
 const VIEWS: { id: StandardView; label: string; shortcut: string }[] = [
   { id: 'front', label: 'F', shortcut: '1' },
@@ -13,12 +14,9 @@ const VIEWS: { id: StandardView; label: string; shortcut: string }[] = [
   { id: 'iso', label: 'Iso', shortcut: '4' }
 ];
 
-const VIEW_TITLES: Record<StandardView, string> = {
-  front: 'Front view',
-  top: 'Top view',
-  right: 'Right view',
-  iso: 'Isometric view'
-};
+const VIEW_TITLES: Record<StandardView, string> = Object.fromEntries(
+  Object.entries(VIEW_LABELS).map(([view, label]) => [view, `${label} view`])
+) as Record<StandardView, string>;
 
 export const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
   'shaded-edges': 'Shaded + edges',

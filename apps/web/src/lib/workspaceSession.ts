@@ -1,23 +1,23 @@
 import type {
   DisplayMode,
   ProjectionMode,
-  ViewerSettings
-} from '../components/ModelViewer';
+  ViewerSettings,
+  ViewportCameraState
+} from '@openzcad/viewport';
+
+export type { ViewportCameraState };
+
+type Vector3Tuple = ViewportCameraState['position'];
 
 export const WORKSPACE_SESSION_STORAGE_KEY = 'openzcad-workspace-session:v1';
 
 const WORKSPACE_SESSION_VERSION = 1;
 const MAX_SAVED_PROJECT_VIEWS = 20;
 
-type Vector3Tuple = [number, number, number];
-
-export interface ViewportCameraState {
-  position: Vector3Tuple;
-  target: Vector3Tuple;
-  orthographicZoom: number;
-  /** Vertical half-size of the orthographic frustum before zoom is applied. */
-  orthographicHalfHeight?: number;
-}
+/**
+ * The camera pose lives with the camera controller that produces it; this
+ * module only persists it alongside the rest of the session.
+ */
 
 export interface ProjectViewState {
   camera: ViewportCameraState;
