@@ -9,6 +9,11 @@
 .app-shell {
   height: 100vh;
   display: grid;
+  /* The column is declared as well as the rows: an implicit `auto` track
+     sizes to its widest child's max-content, so the top bar's intrinsic
+     width would set the shell's width and everything inside it would
+     overflow a narrow viewport rather than shrink to fit. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--statusbar-h);
   background: var(--color-bg);
 }
@@ -3183,7 +3188,12 @@
     font-size: 0;
   }
 
-  .workspace {
+  /* `.workspace.with-assistant` in the 820px block outranks a bare
+     `.workspace` here, so the stacked layout has to match that specificity
+     or the sidebar keeps its column and the viewer overflows the screen.
+     The assistant is an overlay at this width, so it needs no column. */
+  .workspace,
+  .workspace.with-assistant {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(120px, 32%) minmax(160px, 1fr);
   }
