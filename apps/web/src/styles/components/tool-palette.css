@@ -1,0 +1,204 @@
+/* ── Floating tool palette and direct-mode strips ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Floating tool palette (left edge of the viewport) ───── */
+
+.palette-float {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  bottom: 10px;
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.palette-float > * {
+  pointer-events: auto;
+}
+
+/* Direct-mode strips announce a modal state; float them top-center instead. */
+.palette-float:has(.direct-mode-strip) {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translateX(-50%);
+}
+
+.tool-palette {
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.tool-palette::-webkit-scrollbar {
+  display: none;
+}
+
+.palette-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.palette-head .palette-search {
+  flex: 1;
+}
+
+.palette-collapse {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.palette-collapse:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.palette-handle {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.palette-handle:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.palette-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.palette-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-border);
+  flex: 0 0 auto;
+}
+
+.palette-item {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.palette-item svg {
+  color: var(--color-text-subtle);
+  flex: 0 0 auto;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.palette-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item kbd {
+  opacity: 0.8;
+}
+
+.palette-item:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.palette-item:hover:not(:disabled) svg {
+  color: var(--color-accent);
+}
+
+.palette-item.active {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+  border-left-color: var(--color-accent);
+}
+
+.palette-item.active svg {
+  color: var(--color-accent);
+}
+
+.palette-search {
+  color: var(--color-text-subtle);
+}
+
+/* Collapse to icons when the viewport gets tight; tooltips carry the names. */
+@media (max-width: 1280px), (max-height: 760px) {
+  .tool-palette .palette-label,
+  .palette-item kbd {
+    display: none;
+  }
+
+  .palette-item {
+    justify-content: center;
+    padding: 6px;
+  }
+}
+
+.direct-mode-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+
+.direct-mode-strip svg {
+  color: var(--color-warning);
+}
+
+.direct-mode-strip.extrude-mode svg {
+  color: var(--color-accent);
+}
+
+.direct-mode-strip strong {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.direct-mode-strip span {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
