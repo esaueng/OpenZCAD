@@ -163,10 +163,7 @@ import {
   selectProjectDocument,
   saveLocalProject
 } from './lib/localProjectStore';
-import type {
-  GeometryExportResult,
-  GeometryWorkerResult
-} from './worker/geometryWorker';
+import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useCollaboration } from './lib/useCollaboration';
 import {
   clearActiveProject,
@@ -329,26 +326,16 @@ export function App() {
   const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
-  const geometryWorkerRef = useRef<Worker | null>(null);
-  const exportRequestsRef = useRef(
-    new Map<
-      string,
-      {
-        resolve(result: Extract<GeometryExportResult, { ok: true }>): void;
-        reject(error: Error): void;
+  const geometry = useGeometryWorker({
+    manager: () => managerRef.current,
+    onDerived: (derived) => {
+      const manager = managerRef.current;
+      if (manager) {
+        setDoc(manager.commitDerivedState(derived));
       }
-    >()
-  );
-  const syncRequestsRef = useRef(
-    new Map<
-      string,
-      {
-        resolve(derived: ProjectDocument['derived']): void;
-        reject(error: Error): void;
-      }
-    >()
-  );
-  const lastSyncedKeyRef = useRef<string | null>(null);
+    },
+    onError: setStatus
+  });
   const remoteVersionsRef = useRef(new Map<string, number>());
   const directEditInFlightRef = useRef(false);
   const viewNonceRef = useRef(0);
@@ -403,74 +390,6 @@ export function App() {
     }));
   }, [appSettings]);
 
-  useEffect(() => {
-    const worker = timed(
-      'worker.create',
-      () =>
-        new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
-          type: 'module'
-        })
-    );
-    geometryWorkerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
-      if (event.data.type === 'export') {
-        const pending = exportRequestsRef.current.get(event.data.requestId);
-        if (!pending) {
-          return;
-        }
-        exportRequestsRef.current.delete(event.data.requestId);
-        if (event.data.ok) {
-          pending.resolve(event.data);
-        } else {
-          pending.reject(new Error(event.data.error));
-        }
-        return;
-      }
-      // Caller-owned one-off syncs (demo seeding) resolve by request id.
-      if (event.data.requestId) {
-        const pending = syncRequestsRef.current.get(event.data.requestId);
-        if (pending) {
-          syncRequestsRef.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.derived);
-          } else {
-            pending.reject(new Error(event.data.error));
-          }
-        }
-        return;
-      }
-      const manager = managerRef.current;
-      if (!manager) {
-        return;
-      }
-      const result = event.data;
-      // Ignore results for documents we are no longer showing.
-      if (
-        result.projectId !== manager.document.projectId ||
-        result.version !== manager.document.version
-      ) {
-        return;
-      }
-      if (!result.ok) {
-        setStatus(`Geometry rebuild failed: ${result.error}`);
-        return;
-      }
-      setDoc(manager.commitDerivedState(result.derived));
-    };
-
-    return () => {
-      for (const request of exportRequestsRef.current.values()) {
-        request.reject(new Error('Geometry worker closed.'));
-      }
-      exportRequestsRef.current.clear();
-      for (const request of syncRequestsRef.current.values()) {
-        request.reject(new Error('Geometry worker closed.'));
-      }
-      syncRequestsRef.current.clear();
-      worker.terminate();
-      geometryWorkerRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -629,18 +548,7 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!doc || !geometryWorkerRef.current) {
-      return;
-    }
-    // Re-derive geometry only when the model itself changed. Derived-state
-    // commits keep the same version, which breaks the otherwise infinite
-    // post -> derive -> commit -> post cycle.
-    const syncKey = `${doc.projectId}:${doc.version}`;
-    if (lastSyncedKeyRef.current === syncKey) {
-      return;
-    }
-    lastSyncedKeyRef.current = syncKey;
-    geometryWorkerRef.current.postMessage({ type: 'sync', document: doc });
+    geometry.sync(doc);
   }, [doc]);
 
   const features = useMemo<FeatureNode[]>(
@@ -1006,7 +914,7 @@ export function App() {
       rememberActiveProject(normalized.projectId);
     }
     managerRef.current = new CommandManager(normalized);
-    lastSyncedKeyRef.current = null;
+    geometry.invalidate();
     setDoc(normalized);
     setPreviewDoc(null);
     setSelectedFeatureNodeId(null);
@@ -1579,19 +1487,6 @@ export function App() {
    * used for seeding demo documents, whose finishing features need exact edge
    * ordinals before the document is ever opened.
    */
-  function requestExactSync(
-    document: ProjectDocument
-  ): Promise<ProjectDocument['derived']> {
-    const worker = geometryWorkerRef.current;
-    if (!worker) {
-      return Promise.reject(new Error('Geometry worker unavailable.'));
-    }
-    return new Promise((resolve, reject) => {
-      const requestId = crypto.randomUUID();
-      syncRequestsRef.current.set(requestId, { resolve, reject });
-      worker.postMessage({ type: 'sync', document, requestId });
-    });
-  }
 
   async function handleOpenDemo(definition: DemoDefinition) {
     setBusy(true);
@@ -1606,7 +1501,7 @@ export function App() {
       const document = await buildDemoDocument(
         definition,
         session?.userId ?? localUserId,
-        requestExactSync
+        (candidate) => geometry.syncOnce(candidate)
       );
       await saveLocalProject(document);
       hydrateDocument(document);
@@ -1948,28 +1843,6 @@ export function App() {
     }
   }
 
-  function exportWithWorker(
-    format: 'step' | 'stl',
-    document: ProjectDocument,
-    bodyIds: BodyId[]
-  ): Promise<Extract<GeometryExportResult, { ok: true }>> {
-    const worker = geometryWorkerRef.current;
-    if (!worker) {
-      return Promise.reject(new Error('Geometry worker is unavailable.'));
-    }
-    const requestId = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
-      exportRequestsRef.current.set(requestId, { resolve, reject });
-      worker.postMessage({
-        type: 'export',
-        requestId,
-        document,
-        bodyIds,
-        format
-      });
-    });
-  }
-
   async function handleExport(format: 'step' | 'stl') {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
@@ -1978,7 +1851,7 @@ export function App() {
     const stem = exportFileStem(doc.name);
     try {
       setStatus(`Exporting exact ${format.toUpperCase()}…`);
-      const result = await exportWithWorker(format, doc, exportBodyIds);
+      const result = await geometry.exportModel(format, doc, exportBodyIds);
       const fileName = `${stem}.${format}`;
       const contentType = format === 'step' ? 'model/step' : 'model/stl';
       downloadText(fileName, result.text);
@@ -2276,7 +2149,7 @@ export function App() {
     try {
       command.validate(current);
       const preview = command.apply(current);
-      const derived = await requestExactSync(preview);
+      const derived = await geometry.syncOnce(preview);
       const directEditWarning = derived.warnings.find((warning) =>
         warning.startsWith(`Feature "${command.label}":`)
       );
@@ -2879,7 +2752,7 @@ export function App() {
         const started = performance.now();
         try {
           const preview = command.apply(base);
-          const derived = await requestExactSync(preview);
+          const derived = await geometry.syncOnce(preview);
           if (token !== state.token || !state.active) {
             continue;
           }
