@@ -1,0 +1,174 @@
+/* ── Command palette and shortcut overlay ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Modals (command palette, shortcuts) ─────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: rgba(4, 7, 11, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.palette {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--color-text-subtle);
+  border-bottom: var(--border-thin);
+}
+
+.palette-input-row input {
+  flex: 1;
+  height: 32px;
+  border: none;
+  background: transparent;
+  font-size: var(--fs-md);
+}
+
+.palette-input-row input:focus {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+
+.palette-list {
+  overflow-y: auto;
+  padding: var(--sp-1);
+  display: grid;
+  gap: 1px;
+}
+
+.palette-empty {
+  margin: 0;
+  padding: var(--sp-3);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+.palette-row {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 9px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.palette-row.active {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.palette-row.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.palette-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  color: var(--color-accent);
+  flex: 0 0 auto;
+}
+
+.palette-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-group,
+.palette-reason {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.palette-reason {
+  color: var(--color-warning);
+}
+
+.shortcuts-card {
+  width: min(640px, 100%);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: var(--border-thin);
+}
+
+.shortcuts-header h2 {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4) var(--sp-5);
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+.shortcuts-grid dl {
+  margin: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.shortcut-row dt {
+  flex: 0 0 96px;
+}
+
+.shortcut-row dd {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+

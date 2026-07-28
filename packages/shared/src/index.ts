@@ -643,6 +643,7 @@ export type AppTheme = 'system' | 'dark';
 export type AppDensity = 'compact' | 'comfortable';
 export type SettingsProjectionMode = 'perspective' | 'orthographic';
 export type SettingsDisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
+export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
 export type AssistantProvider =
   'openrouter' | 'openai' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
@@ -670,6 +671,10 @@ export interface AppSettings {
     defaultProjection: SettingsProjectionMode;
     showGrid: boolean;
     displayMode: SettingsDisplayMode;
+    /** Wheel zoom moves toward the pointer rather than the orbit target. */
+    zoomToCursor: boolean;
+    /** What a middle-button drag does: pan, orbit, or zoom. */
+    middleDrag: SettingsMiddleDrag;
   };
   sketching: {
     snapEnabled: boolean;
@@ -708,7 +713,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   viewport: {
     defaultProjection: 'perspective',
     showGrid: true,
-    displayMode: 'shaded-edges'
+    displayMode: 'shaded-edges',
+    zoomToCursor: true,
+    middleDrag: 'pan'
   },
   sketching: {
     snapEnabled: true,

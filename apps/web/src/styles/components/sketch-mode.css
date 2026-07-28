@@ -1,0 +1,450 @@
+/* ── Focused sketch mode and closed-profile extrusion ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Focused sketch mode ───────────────────────────────── */
+
+.sketch-workspace {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  overflow: hidden;
+  background: #090b0e;
+}
+
+.sketch-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.sketch-instruction,
+.extrude-instruction,
+.profile-pick-prompt {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(430px, calc(100% - 340px));
+  min-width: 280px;
+  padding: 9px 12px;
+  color: var(--color-text);
+  background: rgba(24, 27, 31, 0.94);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  transform: translateX(-50%);
+  backdrop-filter: blur(10px);
+}
+
+.sketch-instruction-icon,
+.extrude-instruction-icon {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--color-warning);
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: var(--radius-md);
+}
+
+.extrude-instruction-icon {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-instruction > span:last-child,
+.extrude-instruction > span:last-child,
+.profile-pick-prompt > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.sketch-instruction strong,
+.extrude-instruction strong,
+.profile-pick-prompt strong {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sketch-instruction small,
+.extrude-instruction small,
+.profile-pick-prompt small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sketch-tools {
+  position: absolute;
+  top: 72px;
+  left: 14px;
+  z-index: 4;
+  width: 176px;
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+  background: rgba(22, 24, 28, 0.94);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.sketch-tools button {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.sketch-tools button:hover:not(:disabled),
+.sketch-tools button.active {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.sketch-tools button.active svg {
+  color: var(--color-warning);
+}
+
+.sketch-tools kbd {
+  padding: 0 4px;
+}
+
+.sketch-tools-separator {
+  height: 1px;
+  margin: 3px 2px;
+  background: var(--color-border);
+}
+
+.sketch-setup {
+  position: absolute;
+  top: 72px;
+  right: 14px;
+  z-index: 4;
+  width: 238px;
+  padding: 10px;
+  color: var(--color-text-muted);
+  background: rgba(22, 24, 28, 0.94);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.sketch-setup-header,
+.extrude-controller-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sketch-setup-header > span,
+.extrude-controller-header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.sketch-setup-header svg {
+  color: var(--color-warning);
+}
+
+.sketch-setup-header button,
+.extrude-controller-header button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.sketch-setup-header button:hover,
+.extrude-controller-header button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.plane-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.plane-picker button {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 6px 3px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.plane-picker button small {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.plane-picker button.active {
+  color: var(--color-text);
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.plane-picker button.active small {
+  color: var(--color-warning);
+}
+
+.sketch-setup-row {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: var(--border-thin);
+  font-size: var(--fs-xs);
+}
+
+.sketch-setup-row b {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+}
+
+.sketch-setup-row b.ready {
+  color: var(--color-success);
+}
+
+.sketch-profile-summary {
+  margin: 5px 0 8px;
+  padding: 7px 8px;
+  color: var(--color-warning);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.24);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-align: center;
+}
+
+.sketch-finish {
+  margin-top: 6px;
+}
+
+.sketch-enter-hint {
+  display: block;
+  margin-top: 7px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  text-align: center;
+}
+
+/* ── Closed-profile selection + direct extrusion ───────── */
+
+.profile-quick-action {
+  position: absolute;
+  top: 66px;
+  left: 50%;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 370px;
+  padding: 7px 8px 7px 10px;
+  color: var(--color-text);
+  background: rgba(17, 24, 33, 0.95);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
+  transform: translateX(-50%);
+  backdrop-filter: blur(10px);
+}
+
+.profile-ready-icon {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  color: #dff9e8;
+  background: rgba(34, 197, 94, 0.18);
+  border: 1px solid rgba(34, 197, 94, 0.38);
+  border-radius: 50%;
+}
+
+.profile-quick-copy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  line-height: 1.3;
+}
+
+.profile-quick-copy strong {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.profile-quick-copy small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+}
+
+.profile-extrude {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+}
+
+.profile-extrude kbd {
+  color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.profile-dismiss {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.profile-dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.extrude-instruction,
+.profile-pick-prompt {
+  z-index: calc(var(--z-viewer-overlay) + 2);
+}
+
+.profile-pick-prompt {
+  width: auto;
+  color: var(--color-text);
+}
+
+.profile-pick-prompt > svg {
+  color: var(--color-accent);
+}
+
+.extrude-controller {
+  position: absolute;
+  top: 66px;
+  right: 14px;
+  z-index: calc(var(--z-viewer-overlay) + 2);
+  width: 250px;
+  padding: 12px;
+  color: var(--color-text-muted);
+  background: rgba(17, 24, 33, 0.95);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(10px);
+}
+
+.extrude-controller-header svg {
+  color: var(--color-accent);
+}
+
+.extrude-controller > p {
+  margin: -2px 0 10px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.extrude-controller label {
+  display: grid;
+  gap: 5px;
+  font-size: var(--fs-xs);
+}
+
+.extrude-distance-input {
+  position: relative;
+  display: block;
+}
+
+.extrude-distance-input input {
+  width: 100%;
+  padding-right: 38px;
+  font-family: var(--font-mono);
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+/* The native spin buttons sit on top of the digits in narrow fields; the
+   gizmo, arrow keys, and typing cover the same interaction. */
+.extrude-distance-input input::-webkit-outer-spin-button,
+.extrude-distance-input input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.extrude-distance-input b {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.extrude-direction {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 12px;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.extrude-actions {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+}
+
+.extrude-value-callout {
+  color: #e6f2ff;
+  background: rgba(8, 18, 30, 0.95);
+  border-color: rgba(124, 192, 255, 0.7);
+}
+
