@@ -28,8 +28,13 @@ import {
 } from './assistantRateLimit';
 import {
   authenticateRequest,
+  AuthFlowError,
   AuthenticationError,
-  identifyAssistantRequest
+  destroyEmailSession,
+  getAuthConfig,
+  identifyAssistantRequest,
+  startEmailLogin,
+  verifyEmailLogin
 } from './auth';
 import {
   deleteAssistantCredential,
@@ -61,16 +66,20 @@ const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 function assertSameOrigin(request: Request): void {
   const origin = request.headers.get('origin');
   if (origin && origin !== new URL(request.url).origin) {
-    throw new HttpError(403, 'Cross-origin settings changes are not allowed.');
+    throw new HttpError(403, 'Cross-origin changes are not allowed.');
   }
 }
 
-function json(data: unknown, status = 200): Response {
+function json(
+  data: unknown,
+  status = 200,
+  responseHeaders?: HeadersInit
+): Response {
+  const headers = new Headers(responseHeaders);
+  headers.set('content-type', 'application/json');
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'content-type': 'application/json'
-    }
+    headers
   });
 }
 
@@ -99,6 +108,57 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     });
   }
 
+  if (request.method === 'GET' && pathname === '/api/auth/config') {
+    return json(getAuthConfig(env));
+  }
+
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+    assertSameOrigin(request);
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/email/start') {
+    const payload = await readJsonBody(request);
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    return json(
+      await startEmailLogin(
+        request,
+        {
+          email: input.email,
+          turnstileToken: input.turnstileToken
+        },
+        env
+      ),
+      202
+    );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/email/verify') {
+    const payload = await readJsonBody(request);
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    const authenticated = await verifyEmailLogin(
+      {
+        challengeId: input.challengeId,
+        code: input.code
+      },
+      env
+    );
+    return json(authenticated.session, 200, {
+      'set-cookie': authenticated.cookie
+    });
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/logout') {
+    return json({ ok: true }, 200, {
+      'set-cookie': await destroyEmailSession(request, env)
+    });
+  }
+
   if (request.method === 'GET' && pathname === '/api/assistant/status') {
     try {
       const userId = await identifyAssistantRequest(request, env);
@@ -108,7 +168,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         credential: settings.credential
       });
     } catch (error) {
-      if (error instanceof AuthenticationError) {
+      if (error instanceof AuthenticationError && error.failure === 'missing') {
         return json({ ...getAssistantStatus(env), source: 'deployment' });
       }
       throw error;
@@ -172,7 +232,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'PATCH' && pathname === '/api/settings') {
-    assertSameOrigin(request);
     const payload = parseUpdateAppSettingsRequest(
       await readJsonBody(request),
       env.ENVIRONMENT
@@ -181,7 +240,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (pathname === '/api/settings/assistant-credential') {
-    assertSameOrigin(request);
     if (request.method === 'PUT') {
       const token = parseAssistantCredential(await readJsonBody(request));
       return json(await saveAssistantCredential(userId, token, env));
@@ -195,7 +253,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     request.method === 'POST' &&
     pathname === '/api/settings/assistant/test'
   ) {
-    assertSameOrigin(request);
     const assistant = await resolveUserAssistant(userId, env);
     if (!assistant.runtime) {
       throw new HttpError(
@@ -222,6 +279,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     (request.method === 'GET' || request.method === 'POST') &&
     collaborationMatch
   ) {
+    // WebSocket upgrades are GET requests, so they do not pass through the
+    // mutation-only origin check above. Require a same-origin browser handshake
+    // before forwarding an authenticated session cookie to the room.
+    assertSameOrigin(request);
     const projectId = collaborationMatch[1]!;
     const project = await persistence.loadProject(userId, projectId);
     if (!project) {
@@ -348,8 +409,17 @@ export default {
       if (error instanceof HttpError) {
         return json({ error: error.message }, error.status);
       }
+      if (error instanceof AuthFlowError) {
+        return json({ error: error.message, code: error.code }, error.status);
+      }
       if (error instanceof AuthenticationError) {
-        return json({ error: error.message }, 401);
+        return json(
+          { error: error.message, code: 'AUTH_REQUIRED' },
+          401,
+          error.failure === 'invalid'
+            ? { 'set-cookie': await destroyEmailSession(request, env) }
+            : undefined
+        );
       }
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);

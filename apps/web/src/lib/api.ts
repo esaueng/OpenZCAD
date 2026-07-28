@@ -1,5 +1,6 @@
 import type {
   AppSettingsResponse,
+  AuthConfigResponse,
   AuthSession,
   ArtifactMetadataResponse,
   CreateProjectRequest,
@@ -13,7 +14,10 @@ import type {
   ListArtifactsResponse,
   SaveAssistantCredentialRequest,
   SaveRevisionRequest,
-  UpdateAppSettingsRequest
+  StartEmailLoginRequest,
+  StartEmailLoginResponse,
+  UpdateAppSettingsRequest,
+  VerifyEmailLoginRequest
 } from '@openzcad/shared';
 
 /**
@@ -42,6 +46,7 @@ async function requestJson<T>(
 ): Promise<T> {
   const response = await fetch(input, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       'content-type': 'application/json',
       ...(init?.headers ?? {})
@@ -70,7 +75,23 @@ async function requestJson<T>(
 
 export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
+  authConfig: () => requestJson<AuthConfigResponse>('/api/auth/config'),
   session: () => requestJson<AuthSession>('/api/session'),
+  startEmailLogin: (payload: StartEmailLoginRequest) =>
+    requestJson<StartEmailLoginResponse>('/api/auth/email/start', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  verifyEmailLogin: (payload: VerifyEmailLoginRequest) =>
+    requestJson<AuthSession>('/api/auth/email/verify', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  logout: () =>
+    requestJson<{ ok: true }>('/api/auth/logout', {
+      method: 'POST',
+      body: '{}'
+    }),
   getSettings: () => requestJson<AppSettingsResponse>('/api/settings'),
   updateSettings: (payload: UpdateAppSettingsRequest) =>
     requestJson<AppSettingsResponse>('/api/settings', {

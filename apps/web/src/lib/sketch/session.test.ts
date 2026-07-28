@@ -8,10 +8,12 @@ import {
   dimensionForInProgress,
   frameFromFace,
   lineObjectFromPoints,
+  nearestSnapTarget,
   screenRayToPlanePoint,
   sketchEntryPose,
   sketchObjectFromDrag,
-  snapSketchPoint
+  snapSketchPoint,
+  snapTargetsForObject
 } from './session';
 
 describe('snapSketchPoint / sketchObjectFromDrag', () => {
@@ -180,5 +182,80 @@ describe('dimensionForInProgress', () => {
     expect(dimensionForInProgress('line', { x: 0, y: 0 }, { x: 3, y: 4 })).toBe(
       '5'
     );
+  });
+});
+
+describe('sketch entity snapping', () => {
+  const identity = (value: unknown): number => Number(value);
+
+  it('collects endpoints and the midpoint of a line', () => {
+    const targets = snapTargetsForObject(
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 4 },
+      identity
+    );
+    expect(targets).toEqual([
+      { x: 0, y: 0, kind: 'endpoint' },
+      { x: 10, y: 4, kind: 'endpoint' },
+      { x: 5, y: 2, kind: 'midpoint' }
+    ]);
+  });
+
+  it('collects rectangle corners, edge midpoints, and center', () => {
+    const targets = snapTargetsForObject(
+      { objectKind: 'rectangle', width: 8, height: 4, centerX: 10, centerY: 6 },
+      identity
+    );
+    expect(targets).toContainEqual({ x: 6, y: 4, kind: 'endpoint' });
+    expect(targets).toContainEqual({ x: 14, y: 8, kind: 'endpoint' });
+    expect(targets).toContainEqual({ x: 10, y: 6, kind: 'center' });
+    expect(targets).toContainEqual({ x: 10, y: 4, kind: 'midpoint' });
+    expect(targets).toHaveLength(9);
+  });
+
+  it('collects circle and arc centers plus arc endpoints', () => {
+    expect(
+      snapTargetsForObject(
+        { objectKind: 'circle', radius: 5, centerX: 3, centerY: -2 },
+        identity
+      )
+    ).toEqual([{ x: 3, y: -2, kind: 'center' }]);
+
+    const arcTargets = snapTargetsForObject(
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 10,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      identity
+    );
+    expect(arcTargets).toContainEqual({ x: 0, y: 0, kind: 'center' });
+    const start = arcTargets.find(
+      (target) => target.kind === 'endpoint' && target.x === 10
+    );
+    expect(start).toMatchObject({ y: 0 });
+    const end = arcTargets.find(
+      (target) => target.kind === 'endpoint' && target.x !== 10
+    );
+    expect(end?.x).toBeCloseTo(0);
+    expect(end?.y).toBeCloseTo(10);
+  });
+
+  it('snaps to the nearest target inside the tolerance only', () => {
+    const targets = snapTargetsForObject(
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      identity
+    );
+    expect(nearestSnapTarget({ x: 0.3, y: 0.2 }, targets, 0.5)).toMatchObject({
+      x: 0,
+      y: 0,
+      kind: 'endpoint'
+    });
+    expect(nearestSnapTarget({ x: 5, y: 0.4 }, targets, 0.5)).toMatchObject({
+      kind: 'midpoint'
+    });
+    expect(nearestSnapTarget({ x: 2, y: 2 }, targets, 0.5)).toBeNull();
   });
 });
