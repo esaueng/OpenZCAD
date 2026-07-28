@@ -4,7 +4,6 @@ import { mark, timed } from '../lib/perf';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   CSS2DObject,
   CSS2DRenderer
@@ -35,7 +34,11 @@ import {
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
+  createAxesGizmo,
   createExtrudePreviewGeometry,
+  createFatLine,
+  createFatLineMaterial,
+  createFatLineSegments,
   createGradientBackground,
   createObjectForBody,
   createShadowCatcher,
@@ -56,6 +59,7 @@ import {
   projectedWorldSizePx,
   sketchCentroid,
   snapTo,
+  syncFatLineResolution,
   tuneShadowFrustum,
   type AxisProjection,
   type CameraPose,
@@ -71,7 +75,8 @@ import {
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
-  type ViewerSettings
+  type ViewerSettings,
+  type FatLineResolution
 } from '@openzcad/viewport';
 import type {
   BodyRepresentation,
@@ -305,8 +310,8 @@ export interface SceneContext {
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
   hasFitCamera: boolean;
-  /** Fat-line materials that need their resolution refreshed on resize. */
-  edgeMaterials: Set<LineMaterial>;
+  /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
+  fatLineResolution(): FatLineResolution;
   dimensionLabels: Set<DimensionLabelBinding>;
   /*
    * Hover and preselection are owned by the SelectionManager. The fields
@@ -322,7 +327,8 @@ export interface SceneContext {
   >;
   /** Selection overlays fading in toward their resting opacity. */
   readonly fadeIns: Set<THREE.MeshBasicMaterial>;
-  clock: THREE.Clock;
+  /** Frame timing for the overlay eases; `update()` once per frame, then read. */
+  timer: THREE.Timer;
 }
 
 interface DimensionLabelBinding {
@@ -430,6 +436,13 @@ const SELECTED_FACE_COLOR = 0x4da3ff;
 const SELECTED_FACE_OPACITY = 0.5;
 const SKETCH_COLOR = 0x4da3ff;
 const SKETCH_SELECTED_COLOR = 0x9ecbff;
+/**
+ * Screen-space widths in CSS pixels for the non-body polylines. Native WebGL
+ * lines were locked to one device pixel; a hair over one CSS pixel keeps the
+ * previous visual weight while leaving the shader room to antialias.
+ */
+const SKETCH_CURVE_WIDTH = 1.4;
+const PREVIEW_EDGE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
 interface EdgeVisualState {
@@ -598,7 +611,11 @@ export function ModelViewer({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCF is the soft one now: three r185 deprecated PCFSoftShadowMap and
+    // silently substitutes this, warning on every renderer. Its sampler spreads
+    // five Vogel-disk taps over `light.shadow.radius`, tuned in
+    // tuneShadowFrustum — which is what PCFSoft used to be needed for.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     host.appendChild(renderer.domElement);
 
     // Studio environment rig: soft IBL reflections do the heavy lifting for
@@ -652,9 +669,10 @@ export function ModelViewer({
     const shadowCatcher = createShadowCatcher();
     scene.add(shadowCatcher);
 
-    const axes = new THREE.AxesHelper(16);
-    (axes.material as THREE.Material).transparent = true;
-    (axes.material as THREE.Material).opacity = 0.55;
+    const axes = createAxesGizmo(16, {
+      width: renderer.domElement.clientWidth || 1,
+      height: renderer.domElement.clientHeight || 1
+    });
     scene.add(axes);
 
     const bodyGroup = new THREE.Group();
@@ -788,7 +806,10 @@ export function ModelViewer({
       get hoveredEdge() {
         return selection.hoveredEdge;
       },
-      edgeMaterials: new Set(),
+      fatLineResolution: () => ({
+        width: renderer.domElement.clientWidth || 1,
+        height: renderer.domElement.clientHeight || 1
+      }),
       dimensionLabels: new Set(),
       get hoverFaceMesh() {
         return selection.hoverFaceMesh;
@@ -797,7 +818,7 @@ export function ModelViewer({
         return selection.fadeIns;
       },
       selection,
-      clock: new THREE.Clock()
+      timer: new THREE.Timer()
     };
     contextRef.current = context;
 
@@ -811,10 +832,10 @@ export function ModelViewer({
       cameraRig.handleResize();
       renderer.setSize(host.clientWidth, host.clientHeight);
       labelRenderer.setSize(host.clientWidth, host.clientHeight);
-      // Screen-space fat lines rasterize against the drawing-buffer size.
-      for (const material of context.edgeMaterials) {
-        material.resolution.set(host.clientWidth, host.clientHeight);
-      }
+      // Screen-space fat lines rasterize against the viewport size. Walking the
+      // scene covers body edges, sketches, previews and handle rigs alike, so
+      // no creation site has to remember to register its material.
+      syncFatLineResolution(scene, host.clientWidth, host.clientHeight);
       requestRender();
     });
     observer.observe(host);
@@ -1230,7 +1251,9 @@ export function ModelViewer({
         new THREE.Vector3(origin.x, origin.y, origin.z)
       );
       return (
-        (2 * distance * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) /
+        (2 *
+          distance *
+          Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) /
         height
       );
     }
@@ -2176,7 +2199,9 @@ export function ModelViewer({
       }
 
       // Preselection and selection overlays ease toward their targets.
-      const dt = Math.min(context.clock.getDelta(), 0.05);
+      // Timer separates advancing time from reading it, so update once here.
+      context.timer.update(now);
+      const dt = Math.min(context.timer.getDelta(), 0.05);
       const ease = 1 - Math.exp(-dt * 16);
       selection.step(dt);
       for (const material of context.fadeIns) {
@@ -2307,7 +2332,7 @@ export function ModelViewer({
       selection.dispose();
       environment.dispose();
       gradientBackground.dispose();
-      axes.dispose();
+      clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
@@ -2339,18 +2364,14 @@ export function ModelViewer({
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
     context.selection.resetForRebuild();
-    context.edgeMaterials.clear();
     context.objectsByBodyId.clear();
-    const edgeResolution = {
-      width: context.renderer.domElement.clientWidth || 1,
-      height: context.renderer.domElement.clientHeight || 1
-    };
+    const edgeResolution = context.fatLineResolution();
     const selectedEdgeKeys = new Set(
       selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
     );
 
     for (const body of bodies) {
-      const object = createObjectForBody(body);
+      const object = createObjectForBody(body, edgeResolution);
       object.userData.bodyId = body.bodyId;
       const isSelected = selectedBodyIds.includes(body.bodyId);
 
@@ -2376,15 +2397,12 @@ export function ModelViewer({
         // edges render via Line2 with a real screen-space width.
         const fatGeometry = new LineGeometry();
         fatGeometry.setPositions(edge.points);
-        const fatMaterial = new LineMaterial({
+        const fatMaterial = createFatLineMaterial({
           color: active ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR,
           linewidth: active ? EDGE_SELECTED_WIDTH : EDGE_IDLE_WIDTH,
-          transparent: true,
           opacity: active ? 1 : EDGE_IDLE_OPACITY,
-          depthTest: true
+          resolution: edgeResolution
         });
-        fatMaterial.resolution.set(edgeResolution.width, edgeResolution.height);
-        context.edgeMaterials.add(fatMaterial);
         const visual = new Line2(fatGeometry, fatMaterial);
         visual.computeLineDistances();
         visual.userData.bodyId = body.bodyId;
@@ -2483,19 +2501,14 @@ export function ModelViewer({
                 lineEnd.y,
                 lineEnd.z
               ]);
-              const dimensionMaterial = new LineMaterial({
+              const dimensionMaterial = createFatLineMaterial({
                 color: 0x7cc0ff,
                 linewidth: 1.5,
-                transparent: true,
                 opacity: 0.48,
                 depthTest: false,
-                depthWrite: false
+                resolution: edgeResolution
               });
-              dimensionMaterial.resolution.set(
-                edgeResolution.width,
-                edgeResolution.height
-              );
-              context.edgeMaterials.add(dimensionMaterial);
+              dimensionMaterial.depthWrite = false;
               const dimensionLine = new Line2(
                 dimensionGeometry,
                 dimensionMaterial
@@ -2903,26 +2916,13 @@ export function ModelViewer({
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     // Fat-line materials need the viewport resolution for correct widths.
-    const rigLineMaterials: LineMaterial[] = [];
-    rig.worldGroup.traverse((child) => {
-      if (child instanceof Line2) {
-        const material = child.material;
-        material.resolution.set(
-          context.renderer.domElement.clientWidth,
-          context.renderer.domElement.clientHeight
-        );
-        context.edgeMaterials.add(material);
-        rigLineMaterials.push(material);
-      }
-    });
+    const { width, height } = context.fatLineResolution();
+    syncFatLineResolution(rig.worldGroup, width, height);
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
     context.requestRender();
     return () => {
-      for (const material of rigLineMaterials) {
-        context.edgeMaterials.delete(material);
-      }
       if (!offsetDragActiveRef.current) {
         rig.dispose();
         if (offsetRigRef.current === rig) {
@@ -3010,15 +3010,13 @@ export function ModelViewer({
               basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
             )
         );
-        const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
-        const material = new THREE.LineBasicMaterial({
+        const line = createFatLine(vertices, {
           color: 0x4da3ff,
-          transparent: true,
-          opacity: 0.9
+          linewidth: SKETCH_CURVE_WIDTH,
+          opacity: 0.9,
+          closed: curve.closed,
+          resolution: context.fatLineResolution()
         });
-        const line = curve.closed
-          ? new THREE.LineLoop(geometry, material)
-          : new THREE.Line(geometry, material);
         line.renderOrder = 10;
         group.add(line);
       }
@@ -3128,7 +3126,7 @@ export function ModelViewer({
     if (!context || !sketchBasis) {
       return;
     }
-    const rig = buildSketchModeRig(sketchBasis);
+    const rig = buildSketchModeRig(sketchBasis, context.fatLineResolution);
     context.scene.add(rig.group);
     sketchRigRef.current = rig;
     sketchGestureRef.current = {
@@ -3318,18 +3316,17 @@ export function ModelViewer({
       profileFill.userData.sketchId = sketch.sketchId;
       context.sketchGroup.add(profileFill);
 
-      const geometry = new THREE.BufferGeometry().setFromPoints(
+      const line = createFatLine(
         sketch.points.map(
           (point) => new THREE.Vector3(point.x, point.y, point.z)
-        )
-      );
-      const line = new THREE.LineLoop(
-        geometry,
-        new THREE.LineBasicMaterial({
+        ),
+        {
           color: sketch.selected ? SKETCH_SELECTED_COLOR : SKETCH_COLOR,
-          transparent: true,
-          opacity: sketch.selected ? 1 : 0.5
-        })
+          linewidth: SKETCH_CURVE_WIDTH,
+          opacity: sketch.selected ? 1 : 0.5,
+          closed: true,
+          resolution: context.fatLineResolution()
+        }
       );
       line.raycast = () => undefined;
       context.sketchGroup.add(line);
@@ -3410,14 +3407,17 @@ export function ModelViewer({
       );
       previewMesh.raycast = () => undefined;
       context.gizmoGroup.add(previewMesh);
-      const previewEdges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(previewGeometry, 25),
-        new THREE.LineBasicMaterial({
+      const previewFeatureEdges = new THREE.EdgesGeometry(previewGeometry, 25);
+      const previewEdges = createFatLineSegments(
+        previewFeatureEdges.getAttribute('position').array,
+        {
           color: 0x8fc8ff,
-          transparent: true,
-          opacity: 0.9
-        })
+          linewidth: PREVIEW_EDGE_WIDTH,
+          opacity: 0.9,
+          resolution: context.fatLineResolution()
+        }
       );
+      previewFeatureEdges.dispose();
       previewEdges.raycast = () => undefined;
       context.gizmoGroup.add(previewEdges);
     }
