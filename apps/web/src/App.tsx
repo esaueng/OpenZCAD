@@ -2191,6 +2191,35 @@ export function App() {
     );
   }
 
+  /**
+   * Bodies swept by a shift-drag rectangle.
+   *
+   * Replaces the selection rather than adding to it, even though the gesture
+   * is on Shift: the rectangle is the statement of what the user wants, and
+   * accumulating across sweeps would make a second attempt at aiming
+   * impossible to distinguish from a deliberate addition.
+   */
+  function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (!doc) {
+      return;
+    }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds(bodyIds as BodyId[]);
+    setSelectedTopology(
+      bodyIds.length === 1 ? { bodyId: bodyIds[0] as BodyId, kind: 'body' } : null
+    );
+    setSelectedFeatureNodeId(
+      bodyIds.length === 1 ? featureNodeIdForBody(bodyIds[0] as BodyId) : null
+    );
+    setStatus(
+      bodyIds.length === 0
+        ? 'Nothing in the box. Selection cleared.'
+        : `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected.`
+    );
+  }
+
   function handleClearSelectedEdges() {
     setSelectedEdges([]);
     const bodyId = edgeModifierBody?.bodyId;
@@ -4032,6 +4061,7 @@ export function App() {
             onSelectTopology={handleSelectTopologyFromViewer}
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             selectionFilter={selectionFilter}
+            onBoxSelect={handleBoxSelectFromViewer}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
             onExtrudeDistanceChange={(distance) =>
