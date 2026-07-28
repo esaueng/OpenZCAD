@@ -78,6 +78,7 @@ import {
   type MoveSnap,
   type PickCandidate,
   type PickDetail,
+  type SelectionFilter,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -219,6 +220,8 @@ interface ModelViewerProps {
     additive: boolean,
     detail?: PickDetail
   ): void;
+  /** What the pointer is allowed to select. */
+  selectionFilter: SelectionFilter;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
    *
@@ -484,6 +487,7 @@ export function ModelViewer({
   orientationRef,
   onSelectTopology,
   onSelectEdgeChain,
+  selectionFilter,
   offsetHandle,
   onOffsetCommit,
   onOpenOffsetKeypad,
@@ -513,6 +517,10 @@ export function ModelViewer({
   onSelectTopologyRef.current = onSelectTopology;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
   onSelectEdgeChainRef.current = onSelectEdgeChain;
+  // Read per pick rather than rebuilding the scene: changing the filter must
+  // not dispose the drag rigs mid-gesture.
+  const selectionFilterRef = useRef(selectionFilter);
+  selectionFilterRef.current = selectionFilter;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
   const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
@@ -757,7 +765,8 @@ export function ModelViewer({
       camera: () => cameraRig.activeCamera,
       regionGroup,
       sketchGroup,
-      bodyGroup
+      bodyGroup,
+      filter: () => selectionFilterRef.current
     });
 
     function applyMovePreview(
