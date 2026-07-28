@@ -25,6 +25,11 @@ import {
   bodiesInBox,
   boxSelectMode,
   cycleDepthPick,
+  resolveSnap,
+  translationToSnap,
+  snapsFromEdges,
+  SNAP_LABELS,
+  SNAP_RADIUS_PX,
   isBoxSelectDrag,
   rectFromDrag,
   edgeRunFrom,
@@ -83,6 +88,8 @@ import {
   type PickCandidate,
   type PickDetail,
   type SelectionFilter,
+  type SnapCandidate,
+  type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
   type StandardView,
@@ -902,6 +909,13 @@ export function ModelViewer({
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
+    /**
+     * Snap candidates for the body being moved, gathered once when the drag
+     * starts. Only other bodies contribute — a body cannot be positioned
+     * against its own corners — and rebuilding them per frame would walk
+     * every edge of the model on every pointer move.
+     */
+    let moveSnaps: SnapCandidate[] = [];
     /** Screen-projected drag along the offset handle's normal. */
     let offsetDrag: {
       pointerId: number;
@@ -926,6 +940,33 @@ export function ModelViewer({
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
     const selectionBand = hud.create('selection-band', { ariaHidden: true });
+    const snapGlyph = hud.create('snap-glyph', { ariaHidden: true });
+
+    /**
+     * Marks the point a drag has locked onto, and names the kind.
+     *
+     * Naming it matters more than marking it: a glyph alone says something
+     * happened, and "Endpoint" says the position is now exact rather than
+     * merely close.
+     */
+    function showSnapGlyph(resolved: SnapResolution) {
+      snapGlyph.textContent = SNAP_LABELS[resolved.candidate.kind];
+      snapGlyph.dataset.kind = resolved.candidate.kind;
+      // `resolved.screen` is already host-local: it was projected against the
+      // canvas size, which is what the overlay is positioned within.
+      hud.showAt(snapGlyph, resolved.screen.x, resolved.screen.y);
+    }
+
+    /** Snap candidates from every body except the one being moved. */
+    function collectMoveSnaps(movingBodyId: string | null): SnapCandidate[] {
+      return bodiesRef.current
+        .filter((body) => !body.consumed && body.bodyId !== movingBodyId)
+        .flatMap((body) =>
+          body.topology
+            ? snapsFromEdges(body.topology.edges, { label: body.name })
+            : []
+        );
+    }
 
     /**
      * Draws the rubber band, and dresses it by drag direction so the rule in
@@ -1536,21 +1577,54 @@ export function ModelViewer({
             .clone()
             .multiplyScalar(dx * drag.worldPerPixel)
             .addScaledVector(drag.cameraUp, -dy * drag.worldPerPixel);
-          translation.x = snapTo(
-            drag.startTranslation.x + world.x,
-            drag.snapMove,
-            fine
-          );
-          translation.y = snapTo(
-            drag.startTranslation.y + world.y,
-            drag.snapMove,
-            fine
-          );
-          translation.z = snapTo(
-            drag.startTranslation.z + world.z,
-            drag.snapMove,
-            fine
-          );
+          // Geometry outranks the grid: a corner is a place someone meant,
+          // and rounding it to the nearest whole step would land beside it.
+          // Shift turns both off together, which is what it already means.
+          const host = renderer.domElement;
+          const snapped = fine
+            ? null
+            : resolveSnap(
+                moveSnaps,
+                { x: event.clientX, y: event.clientY },
+                (point) =>
+                  projectToScreen(
+                    new THREE.Vector3(point.x, point.y, point.z),
+                    context.activeCamera,
+                    host.clientWidth,
+                    host.clientHeight
+                  ),
+                SNAP_RADIUS_PX
+              );
+          if (snapped) {
+            // Land the handle itself on the point, so what the glyph marks is
+            // exactly where the body ends up.
+            const landed = translationToSnap(
+              drag.startTranslation,
+              drag.pivot,
+              snapped.candidate.point
+            );
+            translation.x = landed.x;
+            translation.y = landed.y;
+            translation.z = landed.z;
+            showSnapGlyph(snapped);
+          } else {
+            hud.hide(snapGlyph);
+            translation.x = snapTo(
+              drag.startTranslation.x + world.x,
+              drag.snapMove,
+              fine
+            );
+            translation.y = snapTo(
+              drag.startTranslation.y + world.y,
+              drag.snapMove,
+              fine
+            );
+            translation.z = snapTo(
+              drag.startTranslation.z + world.z,
+              drag.snapMove,
+              fine
+            );
+          }
         }
         context.applyMovePreview(translation, rotation);
         onMovePreviewChangeRef.current(translation, rotation, {
@@ -1704,6 +1778,7 @@ export function ModelViewer({
           axis?: MoveAxis;
         };
         const axis = data.axis ?? 'x';
+        moveSnaps = collectMoveSnaps(activeMove.bodyId);
         const pivot = moveGizmoGroup.position.clone();
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
@@ -2030,6 +2105,8 @@ export function ModelViewer({
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
+        moveSnaps = [];
+        hud.hide(snapGlyph);
         moveDragActiveRef.current = false;
         gestures.release(event, null);
         const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
@@ -2268,6 +2345,8 @@ export function ModelViewer({
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
         moveDrag = null;
+        moveSnaps = [];
+        hud.hide(snapGlyph);
         moveDragActiveRef.current = false;
         gestures.release(event);
         clearMoveGizmoHover();
