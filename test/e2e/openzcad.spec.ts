@@ -1691,3 +1691,56 @@ test('the middle-button drag preference changes what a middle drag does', async 
   expect(cameraMoved).toBeGreaterThan(1);
 });
 
+test('repeated face clicks reach a body behind direct-edit handles', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Depth Cycle Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  for (const primitive of [/^Box \(B\)/, /^Cylinder \(C\)/]) {
+    await page.getByRole('button', { name: primitive }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+  }
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const label = page.locator('.selection-chip-label');
+  let cycled = false;
+
+  // The default box and cylinder overlap around the centre in the isometric
+  // view. Search a small grid so the assertion does not depend on a hard-coded
+  // camera projection or on which primitive is frontmost.
+  for (let y = 0.38; y <= 0.62 && !cycled; y += 0.04) {
+    for (let x = 0.38; x <= 0.62 && !cycled; x += 0.04) {
+      const point = {
+        x: bounds!.x + bounds!.width * x,
+        y: bounds!.y + bounds!.height * y
+      };
+      await page.mouse.click(point.x, point.y);
+      if (!(await label.isVisible())) {
+        continue;
+      }
+      const first = (await label.textContent()) ?? '';
+      await page.mouse.click(point.x, point.y);
+      const second = (await label.textContent()) ?? '';
+      cycled =
+        first !== second &&
+        [first, second].some((value) => value.includes('Box Body')) &&
+        [first, second].some((value) => value.includes('Cylinder Body'));
+    }
+  }
+
+  expect(cycled).toBe(true);
+});
