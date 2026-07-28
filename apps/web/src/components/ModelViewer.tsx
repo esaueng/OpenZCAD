@@ -2011,6 +2011,15 @@ export function ModelViewer({
         );
         restoreFaceDrag();
         faceDrag = null;
+        // Primitive faces complete through this path rather than the generic
+        // click below, so the pivot has to be re-centred here too.
+        cameraRig.pivotOn(
+          new THREE.Vector3(
+            completed.detail.point.x,
+            completed.detail.point.y,
+            completed.detail.point.z
+          )
+        );
         onSelectTopologyRef.current(
           completed.selection,
           false,
@@ -2057,6 +2066,12 @@ export function ModelViewer({
                   : undefined
               }
             : undefined;
+          // Orbiting should turn about whatever was just clicked, not the
+          // model origin — otherwise a detail you have zoomed into swings
+          // straight out of frame.
+          if (result) {
+            cameraRig.pivotOn(result.hit.point);
+          }
           onSelectTopologyRef.current(
             result?.selection ?? null,
             event.shiftKey,

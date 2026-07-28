@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraPose } from '../render/scene';
+import { orbitPivotForPoint } from './views';
 import type { ProjectionMode } from '../types';
 
 /** A durable camera pose: what a reload restores. */
@@ -245,6 +246,26 @@ export class CameraController {
 
   cancelTween() {
     this.tween = null;
+  }
+
+  /**
+   * Re-pivots the orbit onto a picked point's depth. The camera does not
+   * move and does not turn, so nothing on screen shifts; only the centre of
+   * the next rotation changes.
+   */
+  pivotOn(point: THREE.Vector3) {
+    const forward = new THREE.Vector3();
+    this.active.getWorldDirection(forward);
+    const pivot = orbitPivotForPoint(this.active.position, forward, point);
+    if (!pivot) {
+      return;
+    }
+    this.orbit.target.copy(pivot);
+    this.orbit.update();
+    // The target is part of the durable pose, and OrbitControls only emits
+    // a change when the *camera* moves — which re-pivoting deliberately
+    // avoids. Report it, or a reload restores a stale pivot.
+    this.emitViewChange();
   }
 
   /**

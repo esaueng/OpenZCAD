@@ -1428,3 +1428,70 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   );
   expect(centreTravel).toBeLessThan(0.01);
 });
+
+test('clicking geometry re-pivots the orbit without moving the view', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Pivot Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const view = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+
+  const canvas = page.locator('.viewer-host canvas');
+  const box = await canvas.boundingBox();
+  // Nudge the camera so a pose is recorded before the click.
+  await page.mouse.move(box!.x + box!.width * 0.5, box!.y + box!.height * 0.5);
+  await page.mouse.wheel(0, -120);
+  await page.waitForTimeout(400);
+  const before = await view();
+  expect(before).not.toBeNull();
+
+  // Click the solid off-centre, where the pivot has real depth to gain.
+  await page.mouse.click(
+    box!.x + box!.width * 0.42,
+    box!.y + box!.height * 0.58
+  );
+  // The pivot only moves for a real hit, so prove the click landed first.
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await page.waitForTimeout(500);
+  const after = await view();
+
+  // The camera itself must not have moved: re-pivoting is meant to be
+  // invisible until the user actually orbits.
+  for (const axis of [0, 1, 2]) {
+    expect(after!.position[axis]!).toBeCloseTo(before!.position[axis]!, 3);
+  }
+  // The pivot should have travelled toward the surface under the cursor.
+  const pivotTravel = Math.hypot(
+    after!.target[0]! - before!.target[0]!,
+    after!.target[1]! - before!.target[1]!,
+    after!.target[2]! - before!.target[2]!
+  );
+  expect(pivotTravel).toBeGreaterThan(0.1);
+});
