@@ -8,7 +8,14 @@
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
-export type StandardView = 'iso' | 'front' | 'top' | 'right';
+export type StandardView =
+  | 'iso'
+  | 'front'
+  | 'back'
+  | 'top'
+  | 'bottom'
+  | 'right'
+  | 'left';
 
 export type ProjectionMode = 'perspective' | 'orthographic';
 
