@@ -1581,20 +1581,25 @@ export function ModelViewer({
           // and rounding it to the nearest whole step would land beside it.
           // Shift turns both off together, which is what it already means.
           const host = renderer.domElement;
-          const snapped = fine
-            ? null
-            : resolveSnap(
-                moveSnaps,
-                { x: event.clientX, y: event.clientY },
-                (point) =>
-                  projectToScreen(
-                    new THREE.Vector3(point.x, point.y, point.z),
-                    context.activeCamera,
-                    host.clientWidth,
-                    host.clientHeight
-                  ),
-                SNAP_RADIUS_PX
-              );
+          // Candidate projections are host-local pixels. Pointer events are
+          // window-relative, so convert them before comparing distances; the
+          // viewport normally sits below the top bar and beside the model tree.
+          const pointer = hud.toLocal(event.clientX, event.clientY);
+          const snapped =
+            fine || !pointer
+              ? null
+              : resolveSnap(
+                  moveSnaps,
+                  pointer,
+                  (point) =>
+                    projectToScreen(
+                      new THREE.Vector3(point.x, point.y, point.z),
+                      context.activeCamera,
+                      host.clientWidth,
+                      host.clientHeight
+                    ),
+                  SNAP_RADIUS_PX
+                );
           if (snapped) {
             // Land the handle itself on the point, so what the glyph marks is
             // exactly where the body ends up.
@@ -2067,7 +2072,8 @@ export function ModelViewer({
                 bodyId: body.bodyId,
                 // Kernel meshes are already world-space, so no placement is
                 // applied here either — see createObjectForBody.
-                positions: body.mesh.vertices
+                positions: body.mesh.vertices,
+                indices: body.mesh.indices
               })),
             rect,
             boxSelectMode(started.startX, event.clientX),
