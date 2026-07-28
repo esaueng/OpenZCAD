@@ -22,15 +22,29 @@ function camera() {
 const options = () => ({ camera: camera(), width: SIZE, height: SIZE });
 
 /** A square of four vertices centred on (x, y) in the z = 0 plane. */
-function square(bodyId: string, x: number, y: number, half: number): BoxSelectCandidate {
+function square(
+  bodyId: string,
+  x: number,
+  y: number,
+  half: number
+): BoxSelectCandidate {
   return {
     bodyId,
     positions: [
-      x - half, y - half, 0,
-      x + half, y - half, 0,
-      x + half, y + half, 0,
-      x - half, y + half, 0
-    ]
+      x - half,
+      y - half,
+      0,
+      x + half,
+      y - half,
+      0,
+      x + half,
+      y + half,
+      0,
+      x - half,
+      y + half,
+      0
+    ],
+    indices: [0, 1, 2, 0, 2, 3]
   };
 }
 
@@ -133,13 +147,33 @@ describe('crossing select takes anything the rectangle touches', () => {
     const rect = rectFromDrag(corner.x, corner.y, far.x, far.y);
     expect(bodiesInBox([away], rect, 'crossing', options())).toEqual([]);
   });
+
+  it('does not select empty space between disconnected pieces', () => {
+    const pieces: BoxSelectCandidate = {
+      bodyId: 'pieces',
+      positions: [
+        -50, -10, 0, -30, -10, 0, -30, 10, 0, -50, 10, 0, 30, -10, 0, 50, -10,
+        0, 50, 10, 0, 30, 10, 0
+      ],
+      indices: [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]
+    };
+    const corner = pixel(-4, 4);
+    const far = pixel(4, -4);
+    const rect = rectFromDrag(corner.x, corner.y, far.x, far.y);
+    expect(bodiesInBox([pieces], rect, 'crossing', options())).toEqual([]);
+  });
 });
 
 describe('things that are not really there', () => {
   it('ignores a body with no vertices', () => {
     const rect = rectFromDrag(0, 0, SIZE, SIZE);
     expect(
-      bodiesInBox([{ bodyId: 'empty', positions: [] }], rect, 'crossing', options())
+      bodiesInBox(
+        [{ bodyId: 'empty', positions: [], indices: [] }],
+        rect,
+        'crossing',
+        options()
+      )
     ).toEqual([]);
   });
 
@@ -148,7 +182,8 @@ describe('things that are not really there', () => {
     // sweep up geometry nobody can see.
     const behind: BoxSelectCandidate = {
       bodyId: 'behind',
-      positions: [-5, -5, 500, 5, -5, 500, 5, 5, 500, -5, 5, 500]
+      positions: [-5, -5, 500, 5, -5, 500, 5, 5, 500, -5, 5, 500],
+      indices: [0, 1, 2, 0, 2, 3]
     };
     const rect = rectFromDrag(0, 0, SIZE, SIZE);
     expect(bodiesInBox([behind], rect, 'crossing', options())).toEqual([]);
