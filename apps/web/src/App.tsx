@@ -152,10 +152,8 @@ import type {
   MovePreview,
   MoveSnap,
   PickDetail,
-  ProjectionMode,
   SketchOverlay,
-  StandardView,
-  ViewerSettings
+  StandardView
 } from '@openzcad/viewport';
 import {
   listLocalProjects,
@@ -165,13 +163,12 @@ import {
 } from './lib/localProjectStore';
 import { LivePreview } from './lib/livePreview';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
+import { useProjectView } from './hooks/useProjectView';
 import { useCollaboration } from './lib/useCollaboration';
 import {
   clearActiveProject,
   loadActiveProjectId,
-  loadProjectView,
   rememberActiveProject,
-  saveProjectView,
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
@@ -282,11 +279,18 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(() => ({
-    showGrid: appSettings.viewport.showGrid,
-    displayMode: appSettings.viewport.displayMode,
-    reducedMotion: appSettings.appearance.reducedMotion
-  }));
+  const {
+    projection,
+    setProjection,
+    settings: viewerSettings,
+    setSettings: setViewerSettings,
+    initialView,
+    hiddenBodyIds,
+    setHiddenBodyIds,
+    restore: restoreProjectView,
+    onCameraChange: reportCameraPose,
+    forget: forgetProjectView
+  } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
     'saving'
@@ -300,15 +304,6 @@ export function App() {
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [projection, setProjection] = useState<ProjectionMode>(
-    appSettings.viewport.defaultProjection
-  );
-  const [initialView, setInitialView] = useState<ViewportCameraState | null>(
-    null
-  );
-  const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
-    new Set()
-  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -341,7 +336,6 @@ export function App() {
   const directEditInFlightRef = useRef(false);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const viewportCameraRef = useRef<ViewportCameraState | null>(null);
 
   const collaboration = useCollaboration({
     document: doc,
@@ -528,25 +522,6 @@ export function App() {
       cancelled = true;
     };
   }, [doc?.projectId, cloudAvailable]);
-
-  useEffect(() => {
-    const camera = viewportCameraRef.current;
-    if (!doc || !camera) {
-      return;
-    }
-    saveProjectView(doc.projectId, {
-      camera,
-      projection,
-      settings: viewerSettings,
-      hiddenBodyIds: [...hiddenBodyIds]
-    });
-  }, [
-    doc?.projectId,
-    hiddenBodyIds,
-    projection,
-    viewerSettings.displayMode,
-    viewerSettings.showGrid
-  ]);
 
   useEffect(() => {
     geometry.sync(doc);
@@ -896,20 +871,12 @@ export function App() {
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
     if (restoreView) {
-      const savedView = loadProjectView(normalized.projectId);
-      const camera = savedView?.camera ?? null;
-      viewportCameraRef.current = camera;
-      setInitialView(camera);
-      setProjection(
-        savedView?.projection ?? appSettings.viewport.defaultProjection
-      );
-      setViewerSettings({
+      restoreProjectView(normalized.projectId, {
+        projection: appSettings.viewport.defaultProjection,
         showGrid: appSettings.viewport.showGrid,
         displayMode: appSettings.viewport.displayMode,
-        ...savedView?.settings,
         reducedMotion: appSettings.appearance.reducedMotion
       });
-      setHiddenBodyIds(new Set(savedView?.hiddenBodyIds ?? []));
     }
     if (rememberProject) {
       rememberActiveProject(normalized.projectId);
@@ -928,16 +895,7 @@ export function App() {
   }
 
   function handleViewportChange(camera: ViewportCameraState) {
-    viewportCameraRef.current = camera;
-    if (!doc) {
-      return;
-    }
-    saveProjectView(doc.projectId, {
-      camera,
-      projection,
-      settings: viewerSettings,
-      hiddenBodyIds: [...hiddenBodyIds]
-    });
+    reportCameraPose(doc?.projectId ?? null, camera);
   }
 
   function executeCommand(command: AnyCommand): boolean {
@@ -1561,8 +1519,7 @@ export function App() {
 
   async function handleGoHome() {
     clearActiveProject();
-    viewportCameraRef.current = null;
-    setInitialView(null);
+    forgetProjectView();
     managerRef.current = null;
     setDoc(null);
     setArtifacts([]);
