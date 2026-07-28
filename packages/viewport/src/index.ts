@@ -26,6 +26,7 @@ export * from './pick/edges';
 
 // Selection: hover/preselect state and its overlays.
 export * from './selection/SelectionManager';
+export * from './selection/boxSelect';
 
 // Gizmos: the shared drag-rig contract, the selection-first handles built
 // on it, and the move/rotate handle geometry, snapping, and focus.

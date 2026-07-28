@@ -22,7 +22,11 @@ import {
   CameraController,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
+  bodiesInBox,
+  boxSelectMode,
   cycleDepthPick,
+  isBoxSelectDrag,
+  rectFromDrag,
   edgeRunFrom,
   edgeHandlePlacement,
   offsetHandlePlacement,
@@ -222,6 +226,8 @@ interface ModelViewerProps {
   ): void;
   /** What the pointer is allowed to select. */
   selectionFilter: SelectionFilter;
+  /** Bodies swept by a shift-drag rectangle; empty clears the selection. */
+  onBoxSelect(bodyIds: string[]): void;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
    *
@@ -488,6 +494,7 @@ export function ModelViewer({
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
+  onBoxSelect,
   offsetHandle,
   onOffsetCommit,
   onOpenOffsetKeypad,
@@ -521,6 +528,8 @@ export function ModelViewer({
   // not dispose the drag rigs mid-gesture.
   const selectionFilterRef = useRef(selectionFilter);
   selectionFilterRef.current = selectionFilter;
+  const onBoxSelectRef = useRef(onBoxSelect);
+  onBoxSelectRef.current = onBoxSelect;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
   const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
@@ -884,6 +893,12 @@ export function ModelViewer({
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
+    /** Shift-drag rubber band over empty space, for selecting several bodies. */
+    let boxSelect: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+    } | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
@@ -910,6 +925,32 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    const selectionBand = hud.create('selection-band', { ariaHidden: true });
+
+    /**
+     * Draws the rubber band, and dresses it by drag direction so the rule in
+     * force is visible while it is still being chosen rather than explained
+     * afterwards by what got selected.
+     */
+    function drawSelectionBand(
+      startX: number,
+      startY: number,
+      event: PointerEvent
+    ) {
+      const from = hud.toLocal(startX, startY);
+      const to = hud.toLocal(event.clientX, event.clientY);
+      if (!from || !to) {
+        return;
+      }
+      const rect = rectFromDrag(from.x, from.y, to.x, to.y);
+      selectionBand.classList.toggle(
+        'crossing',
+        boxSelectMode(startX, event.clientX) === 'crossing'
+      );
+      selectionBand.style.width = `${rect.right - rect.left}px`;
+      selectionBand.style.height = `${rect.bottom - rect.top}px`;
+      hud.showAt(selectionBand, rect.left, rect.top);
+    }
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
@@ -1439,6 +1480,10 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        drawSelectionBand(boxSelect.startX, boxSelect.startY, event);
+        return;
+      }
       if (sketchModeRef.current) {
         if (event.buttons === 0 || event.buttons === 1) {
           updateSketchInProgress(event);
@@ -1638,6 +1683,19 @@ export function ModelViewer({
         return;
       }
       gestures.begin(event);
+      // Shift-drag sweeps a rectangle over the model. It takes precedence over
+      // every handle below because no handle uses Shift, and a shift-click
+      // that never becomes a drag still falls through to additive selection
+      // on release.
+      if (event.shiftKey && !sketchModeRef.current) {
+        boxSelect = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY
+        };
+        gestures.capture(event, 'crosshair');
+        return;
+      }
       const moveHit = pickMoveGizmo(event);
       if (moveHit && movePreviewRef.current) {
         const activeMove = movePreviewRef.current;
@@ -1911,6 +1969,42 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        const started = boxSelect;
+        boxSelect = null;
+        hud.hide(selectionBand);
+        gestures.release(event, null);
+        const from = hud.toLocal(started.startX, started.startY);
+        const to = hud.toLocal(event.clientX, event.clientY);
+        const rect = from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
+        if (!rect || !isBoxSelectDrag(rect)) {
+          // A shift-click that never travelled is still a shift-click.
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
+        const host = renderer.domElement;
+        onBoxSelectRef.current(
+          bodiesInBox(
+            bodiesRef.current
+              .filter((body) => !body.consumed)
+              .map((body) => ({
+                bodyId: body.bodyId,
+                // Kernel meshes are already world-space, so no placement is
+                // applied here either — see createObjectForBody.
+                positions: body.mesh.vertices
+              })),
+            rect,
+            boxSelectMode(started.startX, event.clientX),
+            {
+              camera: cameraRig.activeCamera,
+              width: host.clientWidth,
+              height: host.clientHeight
+            }
+          )
+        );
+        return;
+      }
       if (event.button === 2) {
         const panStartTarget = rightPanStartTarget;
         rightPanStartTarget = null;
@@ -2151,6 +2245,11 @@ export function ModelViewer({
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      if (boxSelect && event.pointerId === boxSelect.pointerId) {
+        boxSelect = null;
+        hud.hide(selectionBand);
+        gestures.release(event, null);
+      }
       if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
         edgeDrag = null;
         edgeDragActiveRef.current = false;

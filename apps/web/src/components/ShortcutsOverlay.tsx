@@ -43,6 +43,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
       ['Esc', 'Cancel / close panel'],
       ['Shift+Click', 'Add body to selection'],
       ['Q', 'Cycle the selection filter'],
+      ['Shift+Drag', 'Box select — left to right encloses, right to left touches'],
       ['Double-click edge', 'Select the whole run of edges']
     ]
   },

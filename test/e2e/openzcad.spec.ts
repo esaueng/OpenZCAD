@@ -1869,3 +1869,99 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expect(edgeChip).toHaveAttribute('aria-pressed', 'true');
   await expect(edgeChip).toHaveClass(/automatic/);
 });
+
+test('shift-dragging a box selects several bodies at once', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Box Select Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // Two bodies far enough apart that a rectangle can take one and not both.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const moveControls = page.getByRole('form', { name: 'Move controls' });
+  await moveControls.getByLabel('Move X in mm').fill('-90');
+  await moveControls.getByRole('button', { name: 'Apply move' }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Move' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+  await page.getByRole('button', { name: 'Top view (2)' }).click();
+  await page.waitForTimeout(900);
+  await page.keyboard.press('Escape');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  if (!area) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const status = page.getByRole('contentinfo');
+
+  /**
+   * Shift-drags a rectangle. Only the press has to land on the canvas — the
+   * drag takes pointer capture — which matters because the tool palette
+   * overlays the viewport's left edge.
+   */
+  async function sweep(fromX: number, fromY: number, toX: number, toY: number) {
+    const at = (fx: number, fy: number) => ({
+      x: area!.x + area!.width * fx,
+      y: area!.y + area!.height * fy
+    });
+    // Only the press must land on the canvas; the drag holds pointer
+    // capture. The palette, the view rail and the assistant panel all float
+    // over the viewport, so walk toward the middle until the press is clear
+    // of them rather than hard-coding a gap that a layout change would move.
+    let from = at(fromX, fromY);
+    for (let step = 0; step < 12; step += 1) {
+      const clear = await page.evaluate(
+        (point: { x: number; y: number }) =>
+          document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS',
+        from
+      );
+      if (clear) {
+        break;
+      }
+      from = {
+        x: from.x + (area!.x + area!.width / 2 - from.x) * 0.15,
+        y: from.y + (area!.y + area!.height / 2 - from.y) * 0.15
+      };
+    }
+    const to = at(toX, toY);
+    await page.keyboard.down('Shift');
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    // Two steps so the band gets a move before the release decides.
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2);
+    await page.mouse.move(to.x, to.y);
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+  }
+
+  // Right to left is a crossing sweep: everything it touches comes with it.
+  await sweep(0.85, 0.05, 0.01, 0.95);
+  await expect(status).toContainText('2 bodies selected');
+
+  // A window sweep over empty sky takes nothing, and says so rather than
+  // silently leaving the previous selection in place.
+  await sweep(0.6, 0.04, 0.72, 0.14);
+  await expect(status).toContainText('Nothing in the box');
+});
