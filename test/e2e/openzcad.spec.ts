@@ -1806,3 +1806,66 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   expect(run).toBeGreaterThan(1);
   await expect(status).toContainText('connected edges');
 });
+
+test('the selection filter changes what a click takes', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Filter Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const filters = page.getByRole('group', { name: 'Selection filter' });
+  await expect(
+    filters.getByRole('button', { name: 'Any', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const spot = {
+    x: bounds.x + bounds.width * 0.42,
+    y: bounds.y + bounds.height * 0.55
+  };
+  const label = page.locator('.selection-chip-label');
+
+  // A plain click on the solid lands on a face.
+  await page.mouse.click(spot.x, spot.y);
+  await expect(label).toContainText('face');
+
+  // Narrowing to bodies resolves the same click to the whole solid instead.
+  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+  await page.mouse.click(spot.x, spot.y);
+  await expect(label).toHaveText('Box Body');
+
+  // Clicking the active chip hands the filter back rather than re-asserting.
+  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+  await expect(
+    filters.getByRole('button', { name: 'Any', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  // Q steps one along from the filter in force. Pressed here, with nothing
+  // focused, it moves off Any rather than reasserting it.
+  await page.keyboard.press('q');
+  await expect(
+    filters.getByRole('button', { name: 'Body', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+
+  // Arming Fillet narrows to edges on its own, and shows that the choice is
+  // the tool's rather than the user's.
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const edgeChip = filters.getByRole('button', { name: 'Edge', exact: true });
+  await expect(edgeChip).toHaveAttribute('aria-pressed', 'true');
+  await expect(edgeChip).toHaveClass(/automatic/);
+});
