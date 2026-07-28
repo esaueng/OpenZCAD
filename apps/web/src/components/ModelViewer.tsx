@@ -28,6 +28,7 @@ import {
   PickService,
   SelectionManager,
   applyMoveGizmoFocus,
+  buildMoveGizmoParts,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   clearGroup,
@@ -2727,139 +2728,9 @@ export function ModelViewer({
     context.moveGizmoGroup.userData.baseGizmoScale = scale;
     context.moveGizmoGroup.userData.gizmoScale = scale;
 
-    const solid = (color: number, opacity = 0.95) =>
-      new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity,
-        depthTest: false
-      });
-    const invisible = () => new THREE.MeshBasicMaterial({ visible: false });
-    const handleData = (kind: MoveHandleKind, axis: MoveAxis) => ({
-      moveHandle: true,
-      kind,
-      axis
-    });
-    const visualData = (
-      kind: MoveHandleKind,
-      axis: MoveAxis,
-      baseColor: number,
-      baseOpacity: number
-    ) => ({
-      ...handleData(kind, axis),
-      moveHandleVisual: true,
-      baseColor,
-      baseOpacity
-    });
-    const focusData = (kind: MoveHandleKind, axis: MoveAxis) => ({
-      moveHandleFocus: true,
-      kind,
-      axis
-    });
-
-    for (const axis of ['x', 'y', 'z'] as const) {
-      const direction = MOVE_AXIS_VECTORS[axis];
-      const color = MOVE_AXIS_COLORS[axis];
-      const alignment = new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 1, 0),
-        direction
-      );
-
-      const shaft = new THREE.Mesh(
-        new THREE.CylinderGeometry(scale * 0.032, scale * 0.032, scale, 10),
-        solid(color)
-      );
-      shaft.position.copy(direction.clone().multiplyScalar(scale / 2));
-      shaft.quaternion.copy(alignment);
-
-      const head = new THREE.Mesh(
-        new THREE.ConeGeometry(scale * 0.09, scale * 0.22, 14),
-        solid(color)
-      );
-      head.position.copy(direction.clone().multiplyScalar(scale * 1.08));
-      head.quaternion.copy(alignment);
-
-      const arrowHit = new THREE.Mesh(
-        new THREE.CylinderGeometry(scale * 0.14, scale * 0.14, scale * 1.3, 8),
-        invisible()
-      );
-      arrowHit.position.copy(direction.clone().multiplyScalar(scale * 0.65));
-      arrowHit.quaternion.copy(alignment);
-      const shaftFocus = new THREE.Mesh(
-        new THREE.CylinderGeometry(scale * 0.055, scale * 0.055, scale, 12),
-        solid(0xf8fbff)
-      );
-      shaftFocus.position.copy(shaft.position);
-      shaftFocus.quaternion.copy(alignment);
-      shaftFocus.visible = false;
-      const headFocus = new THREE.Mesh(
-        new THREE.ConeGeometry(scale * 0.12, scale * 0.255, 16),
-        solid(0xf8fbff)
-      );
-      headFocus.position.copy(head.position);
-      headFocus.quaternion.copy(alignment);
-      headFocus.visible = false;
-
-      const ringRotation =
-        axis === 'x'
-          ? new THREE.Euler(0, Math.PI / 2, 0)
-          : axis === 'y'
-            ? new THREE.Euler(Math.PI / 2, 0, 0)
-            : new THREE.Euler(0, 0, 0);
-      const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.02, 8, 56),
-        solid(color, 0.6)
-      );
-      ring.rotation.copy(ringRotation);
-      const ringFocus = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.048, 10, 64),
-        solid(0xf8fbff)
-      );
-      ringFocus.rotation.copy(ringRotation);
-      ringFocus.visible = false;
-      const ringHit = new THREE.Mesh(
-        new THREE.TorusGeometry(scale * 0.85, scale * 0.1, 6, 40),
-        invisible()
-      );
-      ringHit.rotation.copy(ringRotation);
-
-      for (const part of [shaft, head]) {
-        part.userData = visualData('axis', axis, color, 0.95);
-        part.renderOrder = 20;
-        context.moveGizmoGroup.add(part);
-      }
-      arrowHit.userData = handleData('axis', axis);
-      context.moveGizmoGroup.add(arrowHit);
-      for (const part of [shaftFocus, headFocus]) {
-        part.userData = focusData('axis', axis);
-        part.renderOrder = 19;
-        context.moveGizmoGroup.add(part);
-      }
-      ring.userData = visualData('ring', axis, color, 0.6);
-      ring.renderOrder = 19;
-      context.moveGizmoGroup.add(ring);
-      ringHit.userData = handleData('ring', axis);
-      context.moveGizmoGroup.add(ringHit);
-      ringFocus.userData = focusData('ring', axis);
-      ringFocus.renderOrder = 18;
-      context.moveGizmoGroup.add(ringFocus);
+    for (const part of buildMoveGizmoParts(scale)) {
+      context.moveGizmoGroup.add(part);
     }
-
-    const centerHandle = new THREE.Mesh(
-      new THREE.SphereGeometry(scale * 0.11, 18, 12),
-      solid(0xe8f3ff, 0.9)
-    );
-    centerHandle.userData = visualData('center', 'x', 0xe8f3ff, 0.9);
-    centerHandle.renderOrder = 21;
-    context.moveGizmoGroup.add(centerHandle);
-    const centerFocus = new THREE.Mesh(
-      new THREE.SphereGeometry(scale * 0.155, 20, 14),
-      solid(0xf8fbff)
-    );
-    centerFocus.userData = focusData('center', 'x');
-    centerFocus.renderOrder = 20;
-    centerFocus.visible = false;
-    context.moveGizmoGroup.add(centerFocus);
 
     context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
     applyMoveGizmoFocus(

@@ -5,6 +5,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   applyMoveGizmoFocus,
+  buildMoveGizmoParts,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   composeMoveTransform,
@@ -378,5 +379,75 @@ describe('standard views are posed for a Z-up world', () => {
     const normal = new THREE.Vector3(0, 0, 1); // PLANE_BASES.XY
     expect(Math.abs(VIEW_DIRECTIONS.top.dot(normal))).toBeGreaterThan(0.99);
     expect(Math.abs(VIEW_DIRECTIONS.front.dot(normal))).toBeLessThan(0.01);
+  });
+});
+
+describe('the move gizmo is built to be picked and focused', () => {
+  const parts = buildMoveGizmoParts(10);
+  const tagged = (key: string) =>
+    parts.filter((part) => part.userData[key] === true);
+
+  it('gives every axis a translation arrow and a rotation ring', () => {
+    // The visible parts are tagged pickable too, so the whole arrow responds
+    // to the pointer rather than only its invisible hit volume.
+    const kinds = new Set(
+      tagged('moveHandle').map(
+        (part) => `${part.userData.kind}:${part.userData.axis}`
+      )
+    );
+    expect([...kinds].sort()).toEqual([
+      'axis:x',
+      'axis:y',
+      'axis:z',
+      'center:x',
+      'ring:x',
+      'ring:y',
+      'ring:z'
+    ]);
+  });
+
+  it('pairs every focus twin with a visual it can highlight', () => {
+    // applyMoveGizmoFocus matches on kind+axis, so a focus part with no
+    // corresponding visual would light up nothing.
+    const visuals = new Set(
+      tagged('moveHandleVisual').map(
+        (part) => `${part.userData.kind}:${part.userData.axis}`
+      )
+    );
+    for (const focus of tagged('moveHandleFocus')) {
+      expect(visuals).toContain(
+        `${focus.userData.kind}:${focus.userData.axis}`
+      );
+    }
+  });
+
+  it('starts with every focus twin hidden', () => {
+    expect(tagged('moveHandleFocus').every((part) => !part.visible)).toBe(true);
+  });
+
+  it('offers a free-move centre handle', () => {
+    const centre = tagged('moveHandleVisual').filter(
+      (part) => part.userData.kind === 'center'
+    );
+    expect(centre).toHaveLength(1);
+  });
+
+  it('backs each axis arrow and ring with an invisible fat hit volume', () => {
+    const invisible = tagged('moveHandle').filter(
+      (part) =>
+        !((part as THREE.Mesh).material as THREE.MeshBasicMaterial).visible
+    );
+    expect(invisible).toHaveLength(6);
+    expect(
+      new Set(invisible.map((part) => String(part.userData.kind)))
+    ).toEqual(new Set(['axis', 'ring']));
+  });
+
+  it('scales its geometry with the requested size', () => {
+    const small = buildMoveGizmoParts(1);
+    const large = buildMoveGizmoParts(10);
+    const reach = (list: THREE.Object3D[]) =>
+      Math.max(...list.map((part) => part.position.length()));
+    expect(reach(large)).toBeCloseTo(reach(small) * 10, 6);
   });
 });
