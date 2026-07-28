@@ -5,6 +5,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   applyMoveGizmoFocus,
+  buildMoveGizmoParts,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   composeMoveTransform,
@@ -17,9 +18,14 @@ import {
   moveGizmoWorldScale,
   moveEuler,
   prioritizeVisibleEdgeHit,
+  MAX_TWEEN_MS,
+  MIN_TWEEN_MS,
+  orbitPivotForPoint,
+  tweenDurationFor,
+  projectToScreen,
   RightClickGestureTracker,
   VIEW_DIRECTIONS
-} from './ModelViewer';
+} from './index';
 
 describe('model viewer mesh classification', () => {
   it('applies emissive highlighting only to lit body meshes', () => {
@@ -378,5 +384,189 @@ describe('standard views are posed for a Z-up world', () => {
     const normal = new THREE.Vector3(0, 0, 1); // PLANE_BASES.XY
     expect(Math.abs(VIEW_DIRECTIONS.top.dot(normal))).toBeGreaterThan(0.99);
     expect(Math.abs(VIEW_DIRECTIONS.front.dot(normal))).toBeLessThan(0.01);
+  });
+});
+
+describe('the move gizmo is built to be picked and focused', () => {
+  const parts = buildMoveGizmoParts(10);
+  const tagged = (key: string) =>
+    parts.filter((part) => part.userData[key] === true);
+
+  it('gives every axis a translation arrow and a rotation ring', () => {
+    // The visible parts are tagged pickable too, so the whole arrow responds
+    // to the pointer rather than only its invisible hit volume.
+    const kinds = new Set(
+      tagged('moveHandle').map(
+        (part) => `${part.userData.kind}:${part.userData.axis}`
+      )
+    );
+    expect([...kinds].sort()).toEqual([
+      'axis:x',
+      'axis:y',
+      'axis:z',
+      'center:x',
+      'ring:x',
+      'ring:y',
+      'ring:z'
+    ]);
+  });
+
+  it('pairs every focus twin with a visual it can highlight', () => {
+    // applyMoveGizmoFocus matches on kind+axis, so a focus part with no
+    // corresponding visual would light up nothing.
+    const visuals = new Set(
+      tagged('moveHandleVisual').map(
+        (part) => `${part.userData.kind}:${part.userData.axis}`
+      )
+    );
+    for (const focus of tagged('moveHandleFocus')) {
+      expect(visuals).toContain(
+        `${focus.userData.kind}:${focus.userData.axis}`
+      );
+    }
+  });
+
+  it('starts with every focus twin hidden', () => {
+    expect(tagged('moveHandleFocus').every((part) => !part.visible)).toBe(true);
+  });
+
+  it('offers a free-move centre handle', () => {
+    const centre = tagged('moveHandleVisual').filter(
+      (part) => part.userData.kind === 'center'
+    );
+    expect(centre).toHaveLength(1);
+  });
+
+  it('backs each axis arrow and ring with an invisible fat hit volume', () => {
+    const invisible = tagged('moveHandle').filter(
+      (part) =>
+        !((part as THREE.Mesh).material as THREE.MeshBasicMaterial).visible
+    );
+    expect(invisible).toHaveLength(6);
+    expect(
+      new Set(invisible.map((part) => String(part.userData.kind)))
+    ).toEqual(new Set(['axis', 'ring']));
+  });
+
+  it('scales its geometry with the requested size', () => {
+    const small = buildMoveGizmoParts(1);
+    const large = buildMoveGizmoParts(10);
+    const reach = (list: THREE.Object3D[]) =>
+      Math.max(...list.map((part) => part.position.length()));
+    expect(reach(large)).toBeCloseTo(reach(small) * 10, 6);
+  });
+});
+
+describe('projecting a world anchor to the screen', () => {
+  function camera() {
+    const perspective = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    perspective.position.set(0, 0, 10);
+    perspective.lookAt(0, 0, 0);
+    perspective.updateMatrixWorld(true);
+    perspective.updateProjectionMatrix();
+    return perspective;
+  }
+
+  it('puts a point on the view axis at the centre of the viewport', () => {
+    const screen = projectToScreen(new THREE.Vector3(0, 0, 0), camera(), 800, 600);
+    expect(screen?.x).toBeCloseTo(400, 6);
+    expect(screen?.y).toBeCloseTo(300, 6);
+  });
+
+  it('grows y downward, matching CSS rather than clip space', () => {
+    const above = projectToScreen(new THREE.Vector3(0, 1, 0), camera(), 800, 600);
+    expect(above!.y).toBeLessThan(300);
+  });
+
+  it('reports nothing for a point behind the camera', () => {
+    // An anchor that has swung behind the viewer must hide its chip rather
+    // than reappear mirrored on the far side of the screen.
+    expect(
+      projectToScreen(new THREE.Vector3(0, 0, 200), camera(), 800, 600)
+    ).toBeNull();
+  });
+});
+
+describe('the orbit pivot follows what was picked', () => {
+  const at = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+
+  it('puts the pivot at the picked point when it is dead ahead', () => {
+    const pivot = orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 4));
+    expect(pivot!.toArray()).toEqual([0, 0, 4]);
+  });
+
+  it('keeps the pivot on the view axis for an off-axis pick', () => {
+    // Projecting onto the axis is what stops the camera turning; the pivot
+    // takes the point's depth without inheriting its sideways offset.
+    const pivot = orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(7, -3, 4));
+    expect(pivot!.toArray()).toEqual([0, 0, 4]);
+  });
+
+  it('measures depth along the view direction, not straight-line distance', () => {
+    const pivot = orbitPivotForPoint(at(0, 0, 0), at(1, 0, 0), at(5, 12, 0));
+    expect(pivot!.x).toBeCloseTo(5, 6);
+    expect(pivot!.y).toBeCloseTo(0, 6);
+  });
+
+  it('normalises a view direction that is not already unit length', () => {
+    const pivot = orbitPivotForPoint(at(0, 0, 0), at(0, 0, -4), at(0, 0, -9));
+    expect(pivot!.z).toBeCloseTo(-9, 6);
+  });
+
+  it('declines a point behind the camera', () => {
+    // Clicking through to something behind the viewer would put the pivot
+    // at the camera's back and invert the orbit.
+    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 20))).toBeNull();
+  });
+
+  it('declines a point on the camera plane, where there is no depth', () => {
+    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))).toBeNull();
+  });
+});
+
+describe('glide duration follows how far the camera travels', () => {
+  const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+  // A camera 100 units from what it is looking at.
+  const eye = v(0, 0, 100);
+  const focus = v(0, 0, 0);
+
+  it('keeps a small nudge short', () => {
+    const near = tweenDurationFor(eye, v(2, 0, 100), focus, focus);
+    expect(near).toBe(MIN_TWEEN_MS);
+  });
+
+  it('caps a long reorientation so it never drags', () => {
+    const far = tweenDurationFor(eye, v(0, 0, -400), focus, focus);
+    expect(far).toBe(MAX_TWEEN_MS);
+  });
+
+  it('gives a longer glide to a longer move', () => {
+    const short = tweenDurationFor(eye, v(20, 0, 100), focus, focus);
+    const long = tweenDurationFor(eye, v(90, 0, 100), focus, focus);
+    expect(long).toBeGreaterThan(short);
+  });
+
+  it('is scale-invariant: the same relative move takes the same time', () => {
+    // A bracket and a building should feel identical to fly around.
+    const small = tweenDurationFor(v(0, 0, 10), v(6, 0, 10), v(0, 0, 0), v(0, 0, 0));
+    const large = tweenDurationFor(
+      v(0, 0, 10_000),
+      v(6_000, 0, 10_000),
+      v(0, 0, 0),
+      v(0, 0, 0)
+    );
+    expect(large).toBeCloseTo(small, 6);
+  });
+
+  it('counts a pure pivot move, not just camera travel', () => {
+    // Re-centring without moving the camera still has to be animated.
+    const pivotOnly = tweenDurationFor(eye, eye, focus, v(0, 40, 0));
+    expect(pivotOnly).toBeGreaterThan(MIN_TWEEN_MS);
+  });
+
+  it('falls back to a sane duration when the camera sits on its target', () => {
+    const degenerate = tweenDurationFor(focus, v(1, 0, 0), focus, focus);
+    expect(degenerate).toBeGreaterThanOrEqual(MIN_TWEEN_MS);
+    expect(degenerate).toBeLessThanOrEqual(MAX_TWEEN_MS);
   });
 });

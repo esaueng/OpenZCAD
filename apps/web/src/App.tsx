@@ -117,7 +117,7 @@ import {
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform } from './components/ModelViewer';
+import { composeMoveTransform } from '@openzcad/viewport';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -143,35 +143,34 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type {
+  ExtrudePreview,
+  FaceResizeCommit
+} from './components/ModelViewer';
+import type {
   AxisProjection,
   DisplayMode,
-  ExtrudePreview,
-  FaceResizeCommit,
   MovePreview,
   MoveSnap,
   PickDetail,
-  ProjectionMode,
   SketchOverlay,
-  StandardView,
-  ViewerSettings
-} from './components/ModelViewer';
+  StandardView
+} from '@openzcad/viewport';
 import {
   listLocalProjects,
   loadLocalProject,
   selectProjectDocument,
   saveLocalProject
 } from './lib/localProjectStore';
-import type {
-  GeometryExportResult,
-  GeometryWorkerResult
-} from './worker/geometryWorker';
+import { LivePreview } from './lib/livePreview';
+import { errorMessage } from './lib/errors';
+import { useGeometryWorker } from './hooks/useGeometryWorker';
+import { useProjectView } from './hooks/useProjectView';
+import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useCollaboration } from './lib/useCollaboration';
 import {
   clearActiveProject,
   loadActiveProjectId,
-  loadProjectView,
   rememberActiveProject,
-  saveProjectView,
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
@@ -196,10 +195,6 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded',
   'wireframe'
 ];
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function mergeProjectSummaries(
   local: ProjectSummary[],
@@ -284,11 +279,18 @@ export function App() {
   const [tool, setTool] = useState<ToolId | null>(null);
   const [status, setStatus] = useState('Checking beta API...');
   const [busy, setBusy] = useState(false);
-  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>(() => ({
-    showGrid: appSettings.viewport.showGrid,
-    displayMode: appSettings.viewport.displayMode,
-    reducedMotion: appSettings.appearance.reducedMotion
-  }));
+  const {
+    projection,
+    setProjection,
+    settings: viewerSettings,
+    setSettings: setViewerSettings,
+    initialView,
+    hiddenBodyIds,
+    setHiddenBodyIds,
+    restore: restoreProjectView,
+    onCameraChange: reportCameraPose,
+    forget: forgetProjectView
+  } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
     'saving'
@@ -302,15 +304,6 @@ export function App() {
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [projection, setProjection] = useState<ProjectionMode>(
-    appSettings.viewport.defaultProjection
-  );
-  const [initialView, setInitialView] = useState<ViewportCameraState | null>(
-    null
-  );
-  const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
-    new Set()
-  );
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -320,6 +313,11 @@ export function App() {
     interactionReducer,
     IDLE
   );
+  // The live-preview coalescer survives for the App lifetime. Its build
+  // callback must read the current mode/selection rather than the initial
+  // `idle` render it was constructed during.
+  const interactionRef = useRef(interaction);
+  interactionRef.current = interaction;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
   const keypadAnchorRef = useRef<
@@ -329,31 +327,38 @@ export function App() {
   const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
-  const geometryWorkerRef = useRef<Worker | null>(null);
-  const exportRequestsRef = useRef(
-    new Map<
-      string,
-      {
-        resolve(result: Extract<GeometryExportResult, { ok: true }>): void;
-        reject(error: Error): void;
+  const geometry = useGeometryWorker({
+    manager: () => managerRef.current,
+    onDerived: (derived) => {
+      const manager = managerRef.current;
+      if (manager) {
+        setDoc(manager.commitDerivedState(derived));
       }
-    >()
-  );
-  const syncRequestsRef = useRef(
-    new Map<
-      string,
-      {
-        resolve(derived: ProjectDocument['derived']): void;
-        reject(error: Error): void;
-      }
-    >()
-  );
-  const lastSyncedKeyRef = useRef<string | null>(null);
+    },
+    onError: setStatus
+  });
   const remoteVersionsRef = useRef(new Map<string, number>());
-  const directEditInFlightRef = useRef(false);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const viewportCameraRef = useRef<ViewportCameraState | null>(null);
+
+  const { run: executeValidatedDirectEdit } = useDirectEditCommit({
+    manager: () => managerRef.current,
+    derive: (document) => geometry.syncOnce(document),
+    commit: (command) => executeCommand(command),
+    onValidationStart: (value) =>
+      dispatchInteraction({ type: 'validation-start', value }),
+    onValidationFailed: (message, value) =>
+      dispatchInteraction({ type: 'validation-failed', message, value }),
+    onCommitted: (bodyId) => {
+      dispatchInteraction({ type: 'commit-complete' });
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([bodyId]);
+      setSelectedFeatureNodeId(featureNodeIdForBody(bodyId));
+    },
+    onBusy: setBusy,
+    onStatus: setStatus
+  });
 
   const collaboration = useCollaboration({
     document: doc,
@@ -399,78 +404,12 @@ export function App() {
       : 'false';
     setViewerSettings((current) => ({
       ...current,
-      reducedMotion: appSettings.appearance.reducedMotion
+      reducedMotion: appSettings.appearance.reducedMotion,
+      zoomToCursor: appSettings.viewport.zoomToCursor,
+      middleDrag: appSettings.viewport.middleDrag
     }));
   }, [appSettings]);
 
-  useEffect(() => {
-    const worker = timed(
-      'worker.create',
-      () =>
-        new Worker(new URL('./worker/geometryWorker.ts', import.meta.url), {
-          type: 'module'
-        })
-    );
-    geometryWorkerRef.current = worker;
-    worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
-      if (event.data.type === 'export') {
-        const pending = exportRequestsRef.current.get(event.data.requestId);
-        if (!pending) {
-          return;
-        }
-        exportRequestsRef.current.delete(event.data.requestId);
-        if (event.data.ok) {
-          pending.resolve(event.data);
-        } else {
-          pending.reject(new Error(event.data.error));
-        }
-        return;
-      }
-      // Caller-owned one-off syncs (demo seeding) resolve by request id.
-      if (event.data.requestId) {
-        const pending = syncRequestsRef.current.get(event.data.requestId);
-        if (pending) {
-          syncRequestsRef.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.derived);
-          } else {
-            pending.reject(new Error(event.data.error));
-          }
-        }
-        return;
-      }
-      const manager = managerRef.current;
-      if (!manager) {
-        return;
-      }
-      const result = event.data;
-      // Ignore results for documents we are no longer showing.
-      if (
-        result.projectId !== manager.document.projectId ||
-        result.version !== manager.document.version
-      ) {
-        return;
-      }
-      if (!result.ok) {
-        setStatus(`Geometry rebuild failed: ${result.error}`);
-        return;
-      }
-      setDoc(manager.commitDerivedState(result.derived));
-    };
-
-    return () => {
-      for (const request of exportRequestsRef.current.values()) {
-        request.reject(new Error('Geometry worker closed.'));
-      }
-      exportRequestsRef.current.clear();
-      for (const request of syncRequestsRef.current.values()) {
-        request.reject(new Error('Geometry worker closed.'));
-      }
-      syncRequestsRef.current.clear();
-      worker.terminate();
-      geometryWorkerRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -621,37 +560,7 @@ export function App() {
   }, [doc?.projectId, cloudAvailable]);
 
   useEffect(() => {
-    const camera = viewportCameraRef.current;
-    if (!doc || !camera) {
-      return;
-    }
-    saveProjectView(doc.projectId, {
-      camera,
-      projection,
-      settings: viewerSettings,
-      hiddenBodyIds: [...hiddenBodyIds]
-    });
-  }, [
-    doc?.projectId,
-    hiddenBodyIds,
-    projection,
-    viewerSettings.displayMode,
-    viewerSettings.showGrid
-  ]);
-
-  useEffect(() => {
-    if (!doc || !geometryWorkerRef.current) {
-      return;
-    }
-    // Re-derive geometry only when the model itself changed. Derived-state
-    // commits keep the same version, which breaks the otherwise infinite
-    // post -> derive -> commit -> post cycle.
-    const syncKey = `${doc.projectId}:${doc.version}`;
-    if (lastSyncedKeyRef.current === syncKey) {
-      return;
-    }
-    lastSyncedKeyRef.current = syncKey;
-    geometryWorkerRef.current.postMessage({ type: 'sync', document: doc });
+    geometry.sync(doc);
   }, [doc]);
 
   const features = useMemo<FeatureNode[]>(
@@ -998,26 +907,20 @@ export function App() {
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
     if (restoreView) {
-      const savedView = loadProjectView(normalized.projectId);
-      const camera = savedView?.camera ?? null;
-      viewportCameraRef.current = camera;
-      setInitialView(camera);
-      setProjection(
-        savedView?.projection ?? appSettings.viewport.defaultProjection
-      );
-      setViewerSettings({
+      restoreProjectView(normalized.projectId, {
+        projection: appSettings.viewport.defaultProjection,
         showGrid: appSettings.viewport.showGrid,
         displayMode: appSettings.viewport.displayMode,
-        ...savedView?.settings,
-        reducedMotion: appSettings.appearance.reducedMotion
+        reducedMotion: appSettings.appearance.reducedMotion,
+        zoomToCursor: appSettings.viewport.zoomToCursor,
+        middleDrag: appSettings.viewport.middleDrag
       });
-      setHiddenBodyIds(new Set(savedView?.hiddenBodyIds ?? []));
     }
     if (rememberProject) {
       rememberActiveProject(normalized.projectId);
     }
     managerRef.current = new CommandManager(normalized);
-    lastSyncedKeyRef.current = null;
+    geometry.invalidate();
     setDoc(normalized);
     setPreviewDoc(null);
     setSelectedFeatureNodeId(null);
@@ -1030,16 +933,7 @@ export function App() {
   }
 
   function handleViewportChange(camera: ViewportCameraState) {
-    viewportCameraRef.current = camera;
-    if (!doc) {
-      return;
-    }
-    saveProjectView(doc.projectId, {
-      camera,
-      projection,
-      settings: viewerSettings,
-      hiddenBodyIds: [...hiddenBodyIds]
-    });
+    reportCameraPose(doc?.projectId ?? null, camera);
   }
 
   function executeCommand(command: AnyCommand): boolean {
@@ -1620,19 +1514,6 @@ export function App() {
    * used for seeding demo documents, whose finishing features need exact edge
    * ordinals before the document is ever opened.
    */
-  function requestExactSync(
-    document: ProjectDocument
-  ): Promise<ProjectDocument['derived']> {
-    const worker = geometryWorkerRef.current;
-    if (!worker) {
-      return Promise.reject(new Error('Geometry worker unavailable.'));
-    }
-    return new Promise((resolve, reject) => {
-      const requestId = crypto.randomUUID();
-      syncRequestsRef.current.set(requestId, { resolve, reject });
-      worker.postMessage({ type: 'sync', document, requestId });
-    });
-  }
 
   async function handleOpenDemo(definition: DemoDefinition) {
     setBusy(true);
@@ -1647,7 +1528,7 @@ export function App() {
       const document = await buildDemoDocument(
         definition,
         session?.userId ?? localUserId,
-        requestExactSync
+        (candidate) => geometry.syncOnce(candidate)
       );
       await saveLocalProject(document);
       hydrateDocument(document);
@@ -1706,8 +1587,7 @@ export function App() {
 
   async function handleGoHome() {
     clearActiveProject();
-    viewportCameraRef.current = null;
-    setInitialView(null);
+    forgetProjectView();
     managerRef.current = null;
     setDoc(null);
     setArtifacts([]);
@@ -1989,28 +1869,6 @@ export function App() {
     }
   }
 
-  function exportWithWorker(
-    format: 'step' | 'stl',
-    document: ProjectDocument,
-    bodyIds: BodyId[]
-  ): Promise<Extract<GeometryExportResult, { ok: true }>> {
-    const worker = geometryWorkerRef.current;
-    if (!worker) {
-      return Promise.reject(new Error('Geometry worker is unavailable.'));
-    }
-    const requestId = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
-      exportRequestsRef.current.set(requestId, { resolve, reject });
-      worker.postMessage({
-        type: 'export',
-        requestId,
-        document,
-        bodyIds,
-        format
-      });
-    });
-  }
-
   async function handleExport(format: 'step' | 'stl') {
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
@@ -2019,7 +1877,7 @@ export function App() {
     const stem = exportFileStem(doc.name);
     try {
       setStatus(`Exporting exact ${format.toUpperCase()}…`);
-      const result = await exportWithWorker(format, doc, exportBodyIds);
+      const result = await geometry.exportModel(format, doc, exportBodyIds);
       const fileName = `${stem}.${format}`;
       const contentType = format === 'step' ? 'model/step' : 'model/stl';
       downloadText(fileName, result.text);
@@ -2295,70 +2153,6 @@ export function App() {
     setStatus('Edge selection cleared.');
   }
 
-  async function executeValidatedDirectEdit(
-    command: AnyCommand,
-    targetBodyId: BodyId,
-    successMessage: string,
-    submittedValue = 0,
-    onSuccess?: () => void
-  ): Promise<boolean> {
-    const manager = managerRef.current;
-    if (!manager || directEditInFlightRef.current) {
-      return false;
-    }
-    directEditInFlightRef.current = true;
-    dispatchInteraction({
-      type: 'validation-start',
-      value: submittedValue
-    });
-    const current = manager.document;
-    setBusy(true);
-    setStatus('Validating direct edit with the exact geometry kernel…');
-    try {
-      command.validate(current);
-      const preview = command.apply(current);
-      const derived = await requestExactSync(preview);
-      const directEditWarning = derived.warnings.find((warning) =>
-        warning.startsWith(`Feature "${command.label}":`)
-      );
-      if (directEditWarning) {
-        throw new Error(directEditWarning.replace(/^Feature "[^"]+":\s*/, ''));
-      }
-      if (!derived.bodyRepresentations[targetBodyId]) {
-        throw new Error('Direct edit did not produce the selected body.');
-      }
-      if (
-        managerRef.current !== manager ||
-        manager.document.projectId !== current.projectId ||
-        manager.document.version !== current.version
-      ) {
-        throw new Error('The document changed while the edit was validating.');
-      }
-      if (!executeCommand(command)) {
-        throw new Error('The validated edit could not be committed.');
-      }
-      dispatchInteraction({ type: 'commit-complete' });
-      setSelectedTopology(null);
-      setSelectedEdges([]);
-      setSelectedBodyIds([targetBodyId]);
-      setSelectedFeatureNodeId(featureNodeIdForBody(targetBodyId));
-      onSuccess?.();
-      setStatus(successMessage);
-      return true;
-    } catch (error) {
-      const message = errorMessage(error, 'Direct edit was not applied.');
-      dispatchInteraction({
-        type: 'validation-failed',
-        message,
-        value: submittedValue
-      });
-      setStatus(message);
-      return false;
-    } finally {
-      directEditInFlightRef.current = false;
-      setBusy(false);
-    }
-  }
 
   /**
    * Armed face-offset handle for the viewport. Memoized so the drag rig is
@@ -2380,7 +2174,7 @@ export function App() {
   // Leaving edges mode abandons any in-flight preview document.
   useEffect(() => {
     if (interaction.mode !== 'edges') {
-      clearEdgePreview();
+      edgePreview.clear();
     }
   }, [interaction.mode]);
 
@@ -2854,23 +2648,31 @@ export function App() {
   }
 
   /**
-   * Throttled kernel previews for edge-radius drags. One sync in flight,
-   * latest value wins; a slow document (>400ms per preview) degrades to the
-   * chip readout only, and the drag still commits exactly on release.
+   * Live fillet/chamfer preview while the radius handle drags. One rebuild
+   * in flight, newest value wins, and it gives up for the rest of the
+   * gesture if the kernel gets slow.
    */
-  const edgePreviewRef = useRef({
-    token: 0,
-    inFlight: false,
-    pending: null as number | null,
-    slow: false,
-    active: false
-  });
+  const edgePreview = useRef(
+    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+      build: (size) => {
+        const command = buildEdgeModifierCommand(size);
+        const base = managerRef.current?.document;
+        return command && base ? command.apply(base) : null;
+      },
+      derive: (document) => geometry.syncOnce(document),
+      publish: (preview) =>
+        setPreviewDoc(
+          preview ? { ...preview.document, derived: preview.derived } : null
+        )
+    })
+  ).current;
 
   function buildEdgeModifierCommand(size: ParamValue) {
-    if (interaction.mode !== 'edges') {
+    const currentInteraction = interactionRef.current;
+    if (currentInteraction.mode !== 'edges') {
       return null;
     }
-    const edges = interaction.edges;
+    const edges = currentInteraction.edges;
     const bodyId = edges[0]?.bodyId;
     const edgeHashes = edges
       .map((edge) => edge.hash)
@@ -2879,74 +2681,17 @@ export function App() {
       return null;
     }
     const payload = {
-      name: interaction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
+      name:
+        currentInteraction.op === 'fillet'
+          ? 'Fillet edges'
+          : 'Chamfer edges',
       targetBodyId: bodyId,
       edgeHashes,
       size
     };
-    return interaction.op === 'fillet'
+    return currentInteraction.op === 'fillet'
       ? commandFactories.filletEdges(payload)
       : commandFactories.chamferEdges(payload);
-  }
-
-  function requestEdgePreview(size: number) {
-    const state = edgePreviewRef.current;
-    if (state.slow || size <= 0) {
-      return;
-    }
-    state.pending = size;
-    state.active = true;
-    if (!state.inFlight) {
-      void runEdgePreviews();
-    }
-  }
-
-  async function runEdgePreviews() {
-    const state = edgePreviewRef.current;
-    state.inFlight = true;
-    try {
-      while (state.pending !== null) {
-        const size = state.pending;
-        state.pending = null;
-        const token = ++state.token;
-        const command = buildEdgeModifierCommand(size);
-        if (!command) {
-          break;
-        }
-        const base = managerRef.current?.document;
-        if (!base) {
-          break;
-        }
-        const started = performance.now();
-        try {
-          const preview = command.apply(base);
-          const derived = await requestExactSync(preview);
-          if (token !== state.token || !state.active) {
-            continue;
-          }
-          setPreviewDoc({ ...preview, derived });
-        } catch {
-          // Invalid radii simply skip the preview frame.
-        }
-        if (performance.now() - started > 400) {
-          state.slow = true;
-          break;
-        }
-      }
-    } finally {
-      state.inFlight = false;
-    }
-  }
-
-  function clearEdgePreview() {
-    const state = edgePreviewRef.current;
-    state.token += 1;
-    state.pending = null;
-    state.slow = false;
-    if (state.active) {
-      state.active = false;
-      setPreviewDoc(null);
-    }
   }
 
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
@@ -2954,7 +2699,7 @@ export function App() {
     if (interaction.mode !== 'edges') {
       return;
     }
-    clearEdgePreview();
+    edgePreview.clear();
     const rounded = Math.round(size * 1000) / 1000;
     const command = buildEdgeModifierCommand(exact ?? rounded);
     if (!command || rounded <= 0) {
@@ -3032,7 +2777,7 @@ export function App() {
       interaction.mode === 'edges' &&
       (action === 'fillet' || action === 'chamfer')
     ) {
-      clearEdgePreview();
+      edgePreview.clear();
       dispatchInteraction({ type: 'set-edge-op', op: action });
     }
   }
@@ -4004,7 +3749,7 @@ export function App() {
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
             edgeHandle={edgeHandleTarget}
-            onEdgeRadiusPreview={requestEdgePreview}
+            onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
             onDirectManipulationChange={(dragging) =>
@@ -4081,7 +3826,7 @@ export function App() {
                             : value - keypad.baseline
                         );
                         if (keypad.kind === 'edge') {
-                          requestEdgePreview(value);
+                          edgePreview.request(value);
                         }
                       }}
                       onCommit={(value, raw) => {
@@ -4106,7 +3851,7 @@ export function App() {
                       onCancel={() => {
                         offsetSetterRef.current?.(0);
                         if (keypad.kind === 'edge') {
-                          clearEdgePreview();
+                          edgePreview.clear();
                         }
                         dispatchInteraction({ type: 'keypad-close' });
                         setKeypad(null);
