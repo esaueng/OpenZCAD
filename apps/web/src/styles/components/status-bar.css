@@ -1,0 +1,81 @@
+/* ── Status bar ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── StatusBar ───────────────────────────────────────────── */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 12px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border-top: var(--border-thin);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-state i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--color-success);
+}
+
+.status-state.warning i {
+  background: var(--color-warning);
+}
+.status-state.running i {
+  background: var(--color-accent);
+}
+
+.status-hint {
+  flex: 0 1 auto;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-left: var(--border-thin);
+  padding-left: var(--sp-3);
+}
+
+.status-groups {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  overflow: hidden;
+}
+
+.status-groups > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.status-groups b {
+  color: var(--color-text-subtle);
+  font-weight: var(--fw-regular);
+}
+
+.status-warning {
+  color: var(--color-warning);
+}
+

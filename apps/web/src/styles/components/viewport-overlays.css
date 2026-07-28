@@ -1,0 +1,158 @@
+/* ── Orientation widget, context menu, move/rotate overlay ──
+   Split out of app.css; the cascade still depends on the import order
+   in app.css, so this file is not free to move. ── */
+
+/* ── Ported from PR #9: orientation widget, context menu, visibility ── */
+
+.orientation-widget {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: var(--z-viewer-overlay);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.orientation-bg {
+  fill: rgba(17, 24, 33, 0.72);
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: var(--z-context-menu);
+  min-width: 190px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+}
+
+.context-menu-section {
+  border-top: var(--border-thin);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.context-menu-item {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 8px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.context-menu-item:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.context-menu-item.danger {
+  color: var(--color-error);
+}
+
+.context-menu-item.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.context-menu-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.context-menu-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-visibility {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  flex: 0 0 auto;
+}
+
+.feature-row:hover .row-visibility,
+.feature-row.hidden-body .row-visibility,
+.body-row:hover .row-visibility,
+.body-row.hidden-body .row-visibility,
+.row-visibility:focus-visible {
+  opacity: 1;
+}
+
+.row-visibility:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.row-visibility.is-hidden {
+  color: var(--color-warning);
+}
+
+.feature-row.hidden-body .feature-name,
+.body-row.hidden-body .feature-name {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+/* ── Move/Rotate overlay ─────────────────────────────────── */
+
+.move-controller {
+  width: 316px;
+}
+
+.move-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.move-grid label {
+  display: grid;
+  gap: 3px;
+}
+
+.move-grid .extrude-distance-input input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 28px;
+}
+
+.move-grid .extrude-distance-input b {
+  right: 7px;
+}
+
+.move-axis {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-text-subtle);
+}
+
+.move-axis-x {
+  color: var(--color-handle-x);
+}
+
+.move-axis-y {
+  color: var(--color-handle-y);
+}
+
+.move-axis-z {
+  color: var(--color-handle-z);
+}
+
