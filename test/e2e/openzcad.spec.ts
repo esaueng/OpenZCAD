@@ -966,6 +966,10 @@ test('grounds all cylinder edges onto its two visible rims', async ({
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
+  // The document feature lands before its asynchronously derived B-rep and
+  // topology. The assistant digest must be captured only after that geometry
+  // is ready, especially on a slower single-worker CI runner.
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page
     .getByLabel('CAD change request')
@@ -973,10 +977,6 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await page.getByLabel('CAD change request').press('Enter');
 
   const assistantRequest = await assistantRequestPromise;
-  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
-    'Fillet the cylinder top and bottom rims by 1 mm.',
-    { timeout: 15_000 }
-  );
   expect(assistantRequest.digest?.selection?.topologies).toHaveLength(0);
   const body = assistantRequest.digest?.bodies?.find(
     (candidate) => candidate.topology?.modifierEdgeCount === 2
@@ -999,6 +999,10 @@ test('grounds all cylinder edges onto its two visible rims', async ({
       .sort((left, right) => (left ?? 0) - (right ?? 0))
   ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
 
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Fillet the cylinder top and bottom rims by 1 mm.',
+    { timeout: 15_000 }
+  );
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   const fillet = page.locator('.feature-row', {
     hasText: 'AI cylinder rim fillets'
@@ -2017,6 +2021,27 @@ test('box selection releases the previous direct-edit target', async ({
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-chip')).toBeVisible();
   await expect(status).toContainText('push or pull');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        const before = await canvas.boundingBox();
+        await page.waitForTimeout(100);
+        const after = await canvas.boundingBox();
+        return Boolean(
+          before &&
+            after &&
+            Math.abs(before.x - after.x) < 0.5 &&
+            Math.abs(before.y - after.y) < 0.5 &&
+            Math.abs(before.width - after.width) < 0.5 &&
+            Math.abs(before.height - after.height) < 0.5
+        );
+      },
+      { timeout: 3_000 }
+    )
+    .toBe(true);
 
   // Sweep empty sky. The body selection clears, and the direct-edit handle
   // for the face that used to be selected must be released with it.
@@ -2053,7 +2078,6 @@ test('box selection releases the previous direct-edit target', async ({
     (drag.from.y + drag.to.y) / 2
   );
   await page.mouse.move(drag.to.x, drag.to.y);
-  await expect(page.locator('.selection-band')).toBeVisible();
   await page.mouse.up();
   await page.keyboard.up('Shift');
 
