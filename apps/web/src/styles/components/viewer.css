@@ -312,6 +312,23 @@
   border-right-width: 1px;
 }
 
+/* Shift-drag rubber band. Solid for window select, dashed for crossing —
+   the same shorthand mechanical CAD has used for decades, so the rule in
+   force is readable while the drag is still happening. */
+.selection-band {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  border: 1px solid var(--color-accent);
+  background: rgba(77, 163, 255, 0.12);
+  pointer-events: none;
+}
+
+.selection-band.crossing {
+  border-style: dashed;
+  border-color: var(--color-success);
+  background: rgba(93, 214, 154, 0.12);
+}
+
 .direct-edit-hud {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
