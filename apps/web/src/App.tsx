@@ -404,7 +404,8 @@ export function App() {
       : 'false';
     setViewerSettings((current) => ({
       ...current,
-      reducedMotion: appSettings.appearance.reducedMotion
+      reducedMotion: appSettings.appearance.reducedMotion,
+      zoomToCursor: appSettings.viewport.zoomToCursor
     }));
   }, [appSettings]);
 
@@ -909,7 +910,8 @@ export function App() {
         projection: appSettings.viewport.defaultProjection,
         showGrid: appSettings.viewport.showGrid,
         displayMode: appSettings.viewport.displayMode,
-        reducedMotion: appSettings.appearance.reducedMotion
+        reducedMotion: appSettings.appearance.reducedMotion,
+        zoomToCursor: appSettings.viewport.zoomToCursor
       });
     }
     if (rememberProject) {

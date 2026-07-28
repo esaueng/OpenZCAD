@@ -289,6 +289,8 @@ export interface SceneContext {
   applyProjection(mode: ProjectionMode): void;
   /** Mirrors the perspective pose onto the ortho camera and its frustum. */
   syncOrthographic(resetZoom: boolean): void;
+  /** Re-applies navigation preferences onto the live orbit controls. */
+  refreshNavigation(): void;
   /** Starts a glide toward a new pose; user input cancels it. */
   startCameraTween(pose: CameraPose, onComplete?: () => void): void;
   /** The durable pose to persist for this project. */
@@ -527,6 +529,8 @@ export function ModelViewer({
   displayModeRef.current = settings.displayMode;
   const reducedMotionRef = useRef(settings.reducedMotion);
   reducedMotionRef.current = settings.reducedMotion;
+  const zoomToCursorRef = useRef(settings.zoomToCursor);
+  zoomToCursorRef.current = settings.zoomToCursor;
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
@@ -644,7 +648,11 @@ export function ModelViewer({
       domElement: renderer.domElement,
       requestRender: () => requestRender(),
       onViewChange: (view) => onViewChangeRef.current(view),
-      reducedMotion: () => reducedMotionRef.current === true
+      reducedMotion: () => reducedMotionRef.current === true,
+      // Defaults on: zooming toward the pointer is what every modern CAD
+      // tool does, and a saved view from before the preference existed
+      // should get the current behaviour rather than the old one.
+      zoomToCursor: () => zoomToCursorRef.current !== false
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
@@ -785,6 +793,7 @@ export function ModelViewer({
       },
       applyProjection: (mode) => cameraRig.applyProjection(mode),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
+      refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
       startCameraTween: (pose, onComplete) =>
         cameraRig.startTween(pose, onComplete),
       captureView: () => cameraRig.capture(),
@@ -2696,6 +2705,12 @@ export function ModelViewer({
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
   }, [projection]);
+
+  // Navigation preferences are read per call, but the orbit controls cache
+  // them, so a live toggle has to push the new value onto the instance.
+  useEffect(() => {
+    contextRef.current?.refreshNavigation();
+  }, [settings.zoomToCursor]);
 
   // Offset-face handle: built when a face is armed, torn down on deselect or
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).

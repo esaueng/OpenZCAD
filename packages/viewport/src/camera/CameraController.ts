@@ -44,6 +44,11 @@ export interface CameraControllerOptions {
   onViewChange(state: ViewportCameraState): void;
   /** Read per call: the preference can change without rebuilding the scene. */
   reducedMotion(): boolean;
+  /**
+   * Whether the wheel zooms toward the pointer rather than the orbit target.
+   * Read per call for the same reason.
+   */
+  zoomToCursor(): boolean;
 }
 
 /**
@@ -134,6 +139,7 @@ export class CameraController {
   private createOrbit(camera: THREE.Camera): OrbitControls<THREE.Camera> {
     const orbit = new OrbitControls(camera, this.options.domElement);
     orbit.enableDamping = true;
+    orbit.zoomToCursor = this.options.zoomToCursor();
     orbit.addEventListener('end', this.emitViewChange);
     orbit.addEventListener('change', this.scheduleSettledViewChange);
     return orbit;
@@ -239,6 +245,15 @@ export class CameraController {
 
   cancelTween() {
     this.tween = null;
+  }
+
+  /**
+   * Re-reads the navigation preferences onto the live controls. Called when
+   * the user changes them; a projection switch picks them up on its own,
+   * because it builds fresh controls.
+   */
+  refreshNavigationPreferences() {
+    this.orbit.zoomToCursor = this.options.zoomToCursor();
   }
 
   /** Advances an in-flight glide. Returns true while one is still running. */

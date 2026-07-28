@@ -670,6 +670,8 @@ export interface AppSettings {
     defaultProjection: SettingsProjectionMode;
     showGrid: boolean;
     displayMode: SettingsDisplayMode;
+    /** Wheel zoom moves toward the pointer rather than the orbit target. */
+    zoomToCursor: boolean;
   };
   sketching: {
     snapEnabled: boolean;
@@ -708,7 +710,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   viewport: {
     defaultProjection: 'perspective',
     showGrid: true,
-    displayMode: 'shaded-edges'
+    displayMode: 'shaded-edges',
+    zoomToCursor: true
   },
   sketching: {
     snapEnabled: true,

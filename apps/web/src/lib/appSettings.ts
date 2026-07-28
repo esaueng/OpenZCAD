@@ -126,6 +126,10 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.displayMode,
         DISPLAY_MODES,
         defaults.viewport.displayMode
+      ),
+      zoomToCursor: boolean(
+        viewport.zoomToCursor,
+        defaults.viewport.zoomToCursor
       )
     },
     sketching: {

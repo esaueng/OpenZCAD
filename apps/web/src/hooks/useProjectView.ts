@@ -13,6 +13,7 @@ export interface ProjectViewDefaults {
   showGrid: boolean;
   displayMode: DisplayMode;
   reducedMotion: boolean;
+  zoomToCursor: boolean;
 }
 
 export interface ProjectView {
@@ -112,7 +113,8 @@ export function useProjectView(projectId: string | null): ProjectView {
         showGrid: defaults.showGrid,
         displayMode: defaults.displayMode,
         ...saved?.settings,
-        reducedMotion: defaults.reducedMotion
+        reducedMotion: defaults.reducedMotion,
+        zoomToCursor: defaults.zoomToCursor
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
     },
