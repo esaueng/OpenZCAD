@@ -57,6 +57,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Projection',
       'Show construction grid',
       'Zoom toward the pointer',
+      'Middle-button drag',
       'Display mode'
     ]
   },

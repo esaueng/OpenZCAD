@@ -16,6 +16,12 @@ const PROJECTIONS: AppSettings['viewport']['defaultProjection'][] = [
   'perspective',
   'orthographic'
 ];
+const MIDDLE_DRAGS: AppSettings['viewport']['middleDrag'][] = [
+  'pan',
+  'orbit',
+  'zoom'
+];
+
 const DISPLAY_MODES: AppSettings['viewport']['displayMode'][] = [
   'shaded-edges',
   'shaded',
@@ -130,6 +136,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       zoomToCursor: boolean(
         viewport.zoomToCursor,
         defaults.viewport.zoomToCursor
+      ),
+      middleDrag: member(
+        viewport.middleDrag,
+        MIDDLE_DRAGS,
+        defaults.viewport.middleDrag
       )
     },
     sketching: {
