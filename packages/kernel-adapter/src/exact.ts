@@ -37,11 +37,12 @@ import {
   type SketchObjectData,
   type SketchObjectNode
 } from '@openzcad/shared';
+import { displayTessellationForExtents } from './display-tessellation';
 import { OpenZCADKernel } from './index';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
 
-const TESSELLATION_DEFLECTION = 0.08;
-const TESSELLATION_ANGLE = 0.35;
+const MEASUREMENT_DEFLECTION = 0.08;
+const STL_EXPORT_DEFLECTION = 0.08;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
@@ -591,7 +592,7 @@ function faceFingerprint(kernel: BrepKernel, face: number): number {
   const signature = [
     kernel.getSurfaceType(face),
     quantizeEdgeCoordinate(
-      Math.sqrt(Math.max(kernel.faceArea(face, TESSELLATION_DEFLECTION), 0))
+      Math.sqrt(Math.max(kernel.faceArea(face, MEASUREMENT_DEFLECTION), 0))
     ),
     analyticParamsSignature(kernel, face),
     centroid
@@ -632,7 +633,7 @@ function measureFaceGeometry(
   const centroid = faceVertexCentroid(kernel, face);
   const geometry: FaceGeometry = {
     surfaceType,
-    area: kernel.faceArea(face, TESSELLATION_DEFLECTION),
+    area: kernel.faceArea(face, MEASUREMENT_DEFLECTION),
     center: centroid ?? { x: 0, y: 0, z: 0 }
   };
   if (surfaceType === 'plane') {
@@ -1524,19 +1525,30 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     let valid = true;
 
     for (const solid of shape.solids) {
+      const bounds = kernel.boundingBox(solid);
+      const displayTessellation = displayTessellationForExtents(
+        bounds[3]! - bounds[0]!,
+        bounds[4]! - bounds[1]!,
+        bounds[5]! - bounds[2]!
+      );
       const mesh = kernel.tessellateSolidGroupedBinary(
         solid,
-        TESSELLATION_DEFLECTION,
-        TESSELLATION_ANGLE
+        displayTessellation.linearDeflection,
+        displayTessellation.angularDeflection
       );
       try {
-        const localPositions = Array.from(mesh.positions);
-        const localIndices = Array.from(mesh.indices);
         const faceOffsets = Array.from(mesh.faceOffsets);
         const vertexOffset = vertices.length / 3;
         const indexOffset = indices.length;
-        vertices.push(...localPositions);
-        indices.push(...localIndices.map((index) => index + vertexOffset));
+        // Large curved bodies can cross V8's argument-count limit when copied
+        // with `push(...typedArray)`. Iteration is bounded and avoids a second
+        // full-sized mapped array while the WASM mesh is still alive.
+        for (const position of mesh.positions) {
+          vertices.push(position);
+        }
+        for (const index of mesh.indices) {
+          indices.push(index + vertexOffset);
+        }
         // Both the tessellation groups and getSolidFaces iterate the same
         // underlying shell, so face handle i owns triangle range i. Guarded
         // because the fingerprint hash below silently depends on it.
@@ -1563,23 +1575,52 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         mesh.free();
       }
 
-      for (const edge of kernel.getSolidEdges(solid)) {
-        const hash = edgeFingerprint(kernel, edge);
-        topology.edges.push({
-          topologyId: `edge:${hash}`,
-          hash,
-          points: Array.from(kernel.tessellateEdge(edge, CURVE_SEGMENTS))
-        });
+      // Use the kernel's adaptive exact-curve sampler with the same chordal and
+      // angular limits as the shaded mesh. This keeps circular outlines closed
+      // and prevents a smooth edge from visibly drifting away from its surface.
+      const edgeHandles = Array.from(kernel.getSolidEdges(solid));
+      const edgeLines = kernel.meshEdgesAll(
+        solid,
+        displayTessellation.linearDeflection,
+        displayTessellation.angularDeflection
+      );
+      try {
+        const edgePositions = Array.from(edgeLines.positions);
+        const edgeOffsets = [
+          ...Array.from(edgeLines.offsets),
+          edgePositions.length
+        ];
+        if (
+          edgeHandles.length !== edgeLines.edgeCount ||
+          edgeOffsets.length !== edgeHandles.length + 1
+        ) {
+          throw new Error(
+            `Edge tessellation layout mismatch: ${edgeHandles.length} handles, ${edgeLines.edgeCount} sampled edges, ${edgeOffsets.length} offsets.`
+          );
+        }
+        for (let index = 0; index < edgeHandles.length; index += 1) {
+          const edge = edgeHandles[index]!;
+          const hash = edgeFingerprint(kernel, edge);
+          topology.edges.push({
+            topologyId: `edge:${hash}`,
+            hash,
+            points: edgePositions.slice(
+              edgeOffsets[index],
+              edgeOffsets[index + 1]
+            )
+          });
+        }
+      } finally {
+        edgeLines.free();
       }
 
-      const bounds = kernel.boundingBox(solid);
       bbox.min.x = Math.min(bbox.min.x, bounds[0]!);
       bbox.min.y = Math.min(bbox.min.y, bounds[1]!);
       bbox.min.z = Math.min(bbox.min.z, bounds[2]!);
       bbox.max.x = Math.max(bbox.max.x, bounds[3]!);
       bbox.max.y = Math.max(bbox.max.y, bounds[4]!);
       bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
-      volume += kernel.volume(solid, TESSELLATION_DEFLECTION);
+      volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       valid = valid && kernel.validateSolidRelaxed(solid) === 0;
     }
 
@@ -1733,7 +1774,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
       return exportSolids
         .map((solid) =>
-          decodeText(kernel.exportStlAscii(solid, TESSELLATION_DEFLECTION))
+          decodeText(kernel.exportStlAscii(solid, STL_EXPORT_DEFLECTION))
         )
         .join('\n');
     } finally {
@@ -1761,7 +1802,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           solids.every((solid) => kernel.validateSolidRelaxed(solid) === 0),
         volume: solids.reduce(
           (total, solid) =>
-            total + kernel.volume(solid, TESSELLATION_DEFLECTION),
+            total + kernel.volume(solid, MEASUREMENT_DEFLECTION),
           0
         )
       };
