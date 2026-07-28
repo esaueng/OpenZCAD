@@ -104,6 +104,114 @@
   white-space: nowrap;
 }
 
+/* ── Marking menu ──
+   Laid out around the point that summoned it, so the sectors are already
+   where the hand will flick. The container has no box of its own: the
+   sectors are the menu, and a panel drawn behind them would fight the
+   model they are meant to be acting on. ── */
+
+.marking-menu {
+  position: fixed;
+  z-index: var(--z-context-menu);
+  /* An anchor, not a panel: it draws nothing and catches nothing, so the
+     model stays visible and clickable right up to the sectors themselves. */
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.marking-menu > * {
+  pointer-events: auto;
+}
+
+/* Marks the dead zone, so it is visible that a small wobble picks nothing. */
+.marking-menu-hub {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.marking-menu-sector {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 4px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  font-size: var(--fs-sm);
+}
+
+.marking-menu-sector:hover:not(:disabled),
+.marking-menu-sector.aimed:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+  background: var(--color-surface-hover);
+}
+
+/* The aimed sector is what a release would take, so it reads as committed
+   rather than merely hovered. */
+.marking-menu-sector.aimed:not(:disabled) {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.marking-menu-sector:disabled {
+  opacity: 0.45;
+}
+
+.marking-menu-sector.danger {
+  color: var(--color-error);
+}
+
+.marking-menu-overflow {
+  position: absolute;
+  left: 0;
+  top: 104px;
+  transform: translateX(-50%);
+  min-width: 176px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+}
+
+.marking-menu-more {
+  width: 100%;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 8px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.marking-menu-more:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.marking-menu-more.danger {
+  color: var(--color-error);
+}
+
+.marking-menu-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
 .row-visibility {
   width: 20px;
   height: 20px;

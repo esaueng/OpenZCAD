@@ -966,15 +966,16 @@ test('grounds all cylinder edges onto its two visible rims', async ({
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
+  // The document feature lands before its asynchronously derived B-rep and
+  // topology. The assistant digest must be captured only after that geometry
+  // is ready, especially on a slower single-worker CI runner.
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
   await page
     .getByLabel('CAD change request')
     .fill('Add a 1 mm fillet to all the edges');
   await page.getByLabel('CAD change request').press('Enter');
 
-  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
-    'Fillet the cylinder top and bottom rims by 1 mm.'
-  );
   const assistantRequest = await assistantRequestPromise;
   expect(assistantRequest.digest?.selection?.topologies).toHaveLength(0);
   const body = assistantRequest.digest?.bodies?.find(
@@ -998,6 +999,10 @@ test('grounds all cylinder edges onto its two visible rims', async ({
       .sort((left, right) => (left ?? 0) - (right ?? 0))
   ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
 
+  await expect(page.locator('.assistant-card.proposal.open')).toContainText(
+    'Fillet the cylinder top and bottom rims by 1 mm.',
+    { timeout: 15_000 }
+  );
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   const fillet = page.locator('.feature-row', {
     hasText: 'AI cylinder rim fillets'
@@ -1273,7 +1278,9 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
     button: 'right',
     position: { x: bounds.width / 2, y: bounds.height / 2 }
   });
-  const menu = page.locator('.context-menu');
+  // The viewport's menu is radial: the actions ring the click point rather
+  // than stacking under it, and clicking one still works without flicking.
+  const menu = page.locator('.marking-menu');
   await expect(menu).toBeVisible();
   await expect(
     menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
@@ -1743,4 +1750,463 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
   }
 
   expect(cycled).toBe(true);
+});
+
+test('double-clicking a filleted rim takes the whole run of edges', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Tangent Run Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  // Rounding every edge turns each face boundary into a smooth run of lines
+  // and arcs — the shape the whole feature exists for. A raw box has only
+  // sharp corners, so every run on one would be a single edge.
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(
+    page.locator('.feature-row', { hasText: 'Fillet' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const status = page.getByRole('contentinfo');
+
+  // Hunt for an edge rather than computing where one projects to: the grid
+  // costs a second and survives any change to the fit pose or the layout.
+  let run = 0;
+  for (let y = 0.2; y <= 0.8 && run === 0; y += 0.05) {
+    for (let x = 0.2; x <= 0.8 && run === 0; x += 0.05) {
+      const point = {
+        x: bounds.x + bounds.width * x,
+        y: bounds.y + bounds.height * y
+      };
+      await page.mouse.click(point.x, point.y);
+      if (!(await status.textContent())?.includes('exact edge selected')) {
+        continue;
+      }
+      await page.mouse.dblclick(point.x, point.y);
+      const chip = await page.evaluate(
+        () =>
+          document.querySelector('.selection-chip-label')?.textContent ?? ''
+      );
+      const match = /^(\d+) edges$/.exec(chip.trim());
+      run = match ? Number(match[1]) : 0;
+    }
+  }
+
+  // A rounded box has no isolated edges: every boundary continues into the
+  // arc beside it, so any edge found belongs to a run of several.
+  expect(run).toBeGreaterThan(1);
+  await expect(status).toContainText('connected edges');
+});
+
+test('the selection filter changes what a click takes', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Filter Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const filters = page.getByRole('group', { name: 'Selection filter' });
+  await expect(
+    filters.getByRole('button', { name: 'Any', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const spot = {
+    x: bounds.x + bounds.width * 0.42,
+    y: bounds.y + bounds.height * 0.55
+  };
+  const label = page.locator('.selection-chip-label');
+
+  // A plain click on the solid lands on a face.
+  await page.mouse.click(spot.x, spot.y);
+  await expect(label).toContainText('face');
+
+  // Narrowing to bodies resolves the same click to the whole solid instead.
+  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+  await page.mouse.click(spot.x, spot.y);
+  await expect(label).toHaveText('Box Body');
+
+  // Clicking the active chip hands the filter back rather than re-asserting.
+  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+  await expect(
+    filters.getByRole('button', { name: 'Any', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  // Q steps one along from the filter in force. Pressed here, with nothing
+  // focused, it moves off Any rather than reasserting it.
+  await page.keyboard.press('q');
+  await expect(
+    filters.getByRole('button', { name: 'Body', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await filters.getByRole('button', { name: 'Body', exact: true }).click();
+
+  // Arming Fillet narrows to edges on its own, and shows that the choice is
+  // the tool's rather than the user's.
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const edgeChip = filters.getByRole('button', { name: 'Edge', exact: true });
+  await expect(edgeChip).toHaveAttribute('aria-pressed', 'true');
+  await expect(edgeChip).toHaveClass(/automatic/);
+});
+
+test('shift-dragging a box selects several bodies at once', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Box Select Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // Two bodies far enough apart that a rectangle can take one and not both.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const moveControls = page.getByRole('form', { name: 'Move controls' });
+  await moveControls.getByLabel('Move X in mm').fill('-90');
+  await moveControls.getByRole('button', { name: 'Apply move' }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Move' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Cylinder' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+  await page.getByRole('button', { name: 'Top view (2)' }).click();
+  await page.waitForTimeout(900);
+  await page.keyboard.press('Escape');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  if (!area) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const status = page.getByRole('contentinfo');
+
+  /**
+   * Shift-drags a rectangle. Only the press has to land on the canvas — the
+   * drag takes pointer capture — which matters because the tool palette
+   * overlays the viewport's left edge.
+   */
+  async function sweep(fromX: number, fromY: number, toX: number, toY: number) {
+    const at = (fx: number, fy: number) => ({
+      x: area!.x + area!.width * fx,
+      y: area!.y + area!.height * fy
+    });
+    // Only the press must land on the canvas; the drag holds pointer
+    // capture. The palette, the view rail and the assistant panel all float
+    // over the viewport, so walk toward the middle until the press is clear
+    // of them rather than hard-coding a gap that a layout change would move.
+    let from = at(fromX, fromY);
+    for (let step = 0; step < 12; step += 1) {
+      const clear = await page.evaluate(
+        (point: { x: number; y: number }) =>
+          document.elementFromPoint(point.x, point.y)?.tagName === 'CANVAS',
+        from
+      );
+      if (clear) {
+        break;
+      }
+      from = {
+        x: from.x + (area!.x + area!.width / 2 - from.x) * 0.15,
+        y: from.y + (area!.y + area!.height / 2 - from.y) * 0.15
+      };
+    }
+    const to = at(toX, toY);
+    await page.keyboard.down('Shift');
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    // Two steps so the band gets a move before the release decides.
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2);
+    await page.mouse.move(to.x, to.y);
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+  }
+
+  // Right to left is a crossing sweep: everything it touches comes with it.
+  await sweep(0.85, 0.05, 0.01, 0.95);
+  await expect(status).toContainText('2 bodies selected');
+
+  // A window sweep over empty sky takes nothing, and says so rather than
+  // silently leaving the previous selection in place.
+  await sweep(0.6, 0.04, 0.72, 0.14);
+  await expect(status).toContainText('Nothing in the box');
+});
+
+test('box selection releases the previous direct-edit target', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Box Target Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const status = page.getByRole('contentinfo');
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  if (!area) {
+    throw new Error('viewer canvas not laid out');
+  }
+
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: area.x + area.width * xRatio,
+        y: area.y + area.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(status).toContainText('push or pull');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        const before = await canvas.boundingBox();
+        await page.waitForTimeout(100);
+        const after = await canvas.boundingBox();
+        return Boolean(
+          before &&
+            after &&
+            Math.abs(before.x - after.x) < 0.5 &&
+            Math.abs(before.y - after.y) < 0.5 &&
+            Math.abs(before.width - after.width) < 0.5 &&
+            Math.abs(before.height - after.height) < 0.5
+        );
+      },
+      { timeout: 3_000 }
+    )
+    .toBe(true);
+
+  // Sweep empty sky. The body selection clears, and the direct-edit handle
+  // for the face that used to be selected must be released with it.
+  const drag = await canvas.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    for (let yStep = 2; yStep <= 16; yStep += 2) {
+      for (let xStep = 5; xStep <= 78; xStep += 5) {
+        const from = {
+          x: bounds.x + bounds.width * (xStep / 100),
+          y: bounds.y + bounds.height * (yStep / 100)
+        };
+        const to = {
+          x: from.x + bounds.width * 0.12,
+          y: from.y + bounds.height * 0.1
+        };
+        if (
+          document.elementFromPoint(from.x, from.y) === element &&
+          document.elementFromPoint(to.x, to.y) === element
+        ) {
+          return { from, to };
+        }
+      }
+    }
+    return null;
+  });
+  if (!drag) {
+    throw new Error('no unobstructed canvas path found for box selection');
+  }
+  await page.keyboard.down('Shift');
+  await page.mouse.move(drag.from.x, drag.from.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    (drag.from.x + drag.to.x) / 2,
+    (drag.from.y + drag.to.y) / 2
+  );
+  await page.mouse.move(drag.to.x, drag.to.y);
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+
+  await expect(status).toContainText('Nothing in the box');
+  await expect(status).not.toContainText('push or pull');
+  await expect(page.locator('.selection-chip')).toHaveCount(0);
+});
+
+test('the status bar names the rung of the Esc ladder you are on', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Prompt Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const status = page.getByRole('contentinfo');
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  if (!area) {
+    throw new Error('viewer canvas not laid out');
+  }
+
+  // Selecting a face arms push-pull, and the hint should say so and say what
+  // Escape will do about it — not the generic "Esc cancels" it used to.
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: area.x + area.width * xRatio,
+        y: area.y + area.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(status).toContainText('push or pull');
+  // Selecting the face also opened the edit panel, which takes Escape itself.
+  // The prompt has to name that rung, not the one behind it.
+  await expect(status).toContainText('Esc closes the panel');
+
+  // Escape does what it promised: the panel goes, the selection stays.
+  await page.keyboard.press('Escape');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+  await expect(status).toContainText('Esc clears the selection');
+
+  // And the next press takes the rung it now names.
+  await page.keyboard.press('Escape');
+  await expect(status).not.toContainText('Esc clears the selection');
+});
+
+test('flicking a direction in the marking menu picks that action', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Marking Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await page.keyboard.press('Escape');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  // Right-click opens the ring; holding the right button pans instead, which
+  // is why the menu arrives on release rather than on press.
+  await canvas.click({
+    button: 'right',
+    position: { x: bounds.width * 0.45, y: bounds.height * 0.5 }
+  });
+  const menu = page.locator('.marking-menu');
+  await expect(menu).toBeVisible();
+
+  const hideBody = menu.getByRole('menuitem', { name: 'Hide Body' });
+  const target = await hideBody.boundingBox();
+  if (!target) {
+    throw new Error('the ring did not lay out');
+  }
+  const origin = await menu.boundingBox();
+  if (!origin) {
+    throw new Error('the menu has no anchor');
+  }
+  // Aim at the sector's direction but stop well short of the label, so only
+  // the direction can be what chose it.
+  const dx = target.x + target.width / 2 - origin.x;
+  const dy = target.y + target.height / 2 - origin.y;
+  const length = Math.hypot(dx, dy);
+  // Press at the hub and flick outward: the direction alone commits, without
+  // the pointer ever reaching the label it chose.
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    origin.x + (dx / length) * 34,
+    origin.y + (dy / length) * 34
+  );
+  await page.mouse.up();
+
+  await expect(menu).toBeHidden();
+  await expect(page.locator('.viewer-notice')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Show Box/ })).toBeVisible();
 });
