@@ -24,6 +24,8 @@ export interface ViewerSettings {
   displayMode: DisplayMode;
   /** Runtime-only accessibility preference; omitted by older saved views. */
   reducedMotion?: boolean;
+  /** Runtime-only navigation preference; omitted by older saved views. */
+  zoomToCursor?: boolean;
 }
 
 /**

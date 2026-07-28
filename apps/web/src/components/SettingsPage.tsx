@@ -681,6 +681,21 @@ export function SettingsPage({
                 />
               </SettingRow>
               <SettingRow
+                title="Zoom toward the pointer"
+                description="Wheel zoom moves toward whatever is under the cursor, the way Fusion and SolidWorks do. Turn this off to zoom toward the middle of the view instead."
+                scope="Navigation"
+              >
+                <Toggle
+                  checked={settings.viewport.zoomToCursor}
+                  label="Zoom to cursor"
+                  onChange={(zoomToCursor) =>
+                    patch({
+                      viewport: { ...settings.viewport, zoomToCursor }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
                 title="Display mode"
                 description="Choose the default solid and edge presentation."
                 scope="View default"
