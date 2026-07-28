@@ -531,6 +531,8 @@ export function ModelViewer({
   reducedMotionRef.current = settings.reducedMotion;
   const zoomToCursorRef = useRef(settings.zoomToCursor);
   zoomToCursorRef.current = settings.zoomToCursor;
+  const middleDragRef = useRef(settings.middleDrag);
+  middleDragRef.current = settings.middleDrag;
   const initialViewRef = useRef(initialView);
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
@@ -652,7 +654,10 @@ export function ModelViewer({
       // Defaults on: zooming toward the pointer is what every modern CAD
       // tool does, and a saved view from before the preference existed
       // should get the current behaviour rather than the old one.
-      zoomToCursor: () => zoomToCursorRef.current !== false
+      zoomToCursor: () => zoomToCursorRef.current !== false,
+      // Panning is what every other CAD tool puts on the middle drag; the
+      // OrbitControls default of zoom is the odd one out.
+      middleDrag: () => middleDragRef.current ?? 'pan'
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
@@ -2725,7 +2730,7 @@ export function ModelViewer({
   // them, so a live toggle has to push the new value onto the instance.
   useEffect(() => {
     contextRef.current?.refreshNavigation();
-  }, [settings.zoomToCursor]);
+  }, [settings.zoomToCursor, settings.middleDrag]);
 
   // Offset-face handle: built when a face is armed, torn down on deselect or
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).

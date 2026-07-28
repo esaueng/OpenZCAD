@@ -1599,3 +1599,94 @@ test('a view request interrupts the glide already in flight', async ({
   expect(offsetX).toBeGreaterThan(1);
   expect(Math.abs(offsetZ)).toBeLessThan(1);
 });
+
+test('the middle-button drag preference changes what a middle drag does', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Middle Drag Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+
+  const camera = async () =>
+    page.evaluate(() => {
+      const raw = localStorage.getItem('openzcad-workspace-session:v1');
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      const first = views ? Object.values(views)[0] : undefined;
+      return first ? first.camera : null;
+    });
+
+  const canvas = page.locator('.viewer-host canvas');
+  const area = await canvas.boundingBox();
+  const middleDrag = async () => {
+    await page.mouse.move(
+      area!.x + area!.width * 0.5,
+      area!.y + area!.height * 0.5
+    );
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(
+      area!.x + area!.width * 0.5 + 70,
+      area!.y + area!.height * 0.5,
+      { steps: 8 }
+    );
+    await page.mouse.up({ button: 'middle' });
+    await page.waitForTimeout(400);
+  };
+
+  // Default is pan, which moves the orbit target sideways.
+  const beforePan = await camera();
+  await middleDrag();
+  const afterPan = await camera();
+  const panned = Math.hypot(
+    afterPan!.target[0]! - beforePan!.target[0]!,
+    afterPan!.target[1]! - beforePan!.target[1]!,
+    afterPan!.target[2]! - beforePan!.target[2]!
+  );
+  expect(panned).toBeGreaterThan(1);
+
+  // Switching to orbit turns the camera instead, leaving the target alone.
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page
+    .getByLabel('Middle-button drag')
+    .selectOption('orbit');
+  await page
+    .getByRole('button', { name: /Back to workspace|Close settings/ })
+    .first()
+    .click();
+  await expect(canvas).toBeVisible();
+
+  const beforeOrbit = await camera();
+  await middleDrag();
+  const afterOrbit = await camera();
+  const targetMoved = Math.hypot(
+    afterOrbit!.target[0]! - beforeOrbit!.target[0]!,
+    afterOrbit!.target[1]! - beforeOrbit!.target[1]!,
+    afterOrbit!.target[2]! - beforeOrbit!.target[2]!
+  );
+  const cameraMoved = Math.hypot(
+    afterOrbit!.position[0]! - beforeOrbit!.position[0]!,
+    afterOrbit!.position[1]! - beforeOrbit!.position[1]!,
+    afterOrbit!.position[2]! - beforeOrbit!.position[2]!
+  );
+  expect(targetMoved).toBeLessThan(0.5);
+  expect(cameraMoved).toBeGreaterThan(1);
+});

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraPose } from '../render/scene';
 import { orbitPivotForPoint, tweenDurationFor } from './views';
+import { pointerBindingsFor, type MiddleDragAction } from '../input/bindings';
 import type { ProjectionMode } from '../types';
 
 /** A durable camera pose: what a reload restores. */
@@ -48,6 +49,8 @@ export interface CameraControllerOptions {
    * Read per call for the same reason.
    */
   zoomToCursor(): boolean;
+  /** What a middle-button drag does. Read per call, like the others. */
+  middleDrag(): MiddleDragAction;
 }
 
 /**
@@ -139,6 +142,7 @@ export class CameraController {
     const orbit = new OrbitControls(camera, this.options.domElement);
     orbit.enableDamping = true;
     orbit.zoomToCursor = this.options.zoomToCursor();
+    this.applyPointerBindings(orbit);
     orbit.addEventListener('end', this.emitViewChange);
     orbit.addEventListener('change', this.scheduleSettledViewChange);
     return orbit;
@@ -282,6 +286,24 @@ export class CameraController {
    */
   refreshNavigationPreferences() {
     this.orbit.zoomToCursor = this.options.zoomToCursor();
+    this.applyPointerBindings(this.orbit);
+  }
+
+  private applyPointerBindings(orbit: OrbitControls<THREE.Camera>) {
+    const bindings = pointerBindingsFor(this.options.middleDrag());
+    const toMouse = (action: string) =>
+      action === 'orbit'
+        ? THREE.MOUSE.ROTATE
+        : action === 'pan'
+          ? THREE.MOUSE.PAN
+          : action === 'zoom'
+            ? THREE.MOUSE.DOLLY
+            : null;
+    orbit.mouseButtons = {
+      LEFT: toMouse(bindings.left),
+      MIDDLE: toMouse(bindings.middle),
+      RIGHT: toMouse(bindings.right)
+    };
   }
 
   /** Advances an in-flight glide. Returns true while one is still running. */
