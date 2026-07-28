@@ -1744,3 +1744,65 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
 
   expect(cycled).toBe(true);
 });
+
+test('double-clicking a filleted rim takes the whole run of edges', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Tangent Run Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  // Rounding every edge turns each face boundary into a smooth run of lines
+  // and arcs — the shape the whole feature exists for. A raw box has only
+  // sharp corners, so every run on one would be a single edge.
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(
+    page.locator('.feature-row', { hasText: 'Fillet' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const status = page.getByRole('contentinfo');
+
+  // Hunt for an edge rather than computing where one projects to: the grid
+  // costs a second and survives any change to the fit pose or the layout.
+  let run = 0;
+  for (let y = 0.2; y <= 0.8 && run === 0; y += 0.05) {
+    for (let x = 0.2; x <= 0.8 && run === 0; x += 0.05) {
+      const point = {
+        x: bounds.x + bounds.width * x,
+        y: bounds.y + bounds.height * y
+      };
+      await page.mouse.click(point.x, point.y);
+      if (!(await status.textContent())?.includes('exact edge selected')) {
+        continue;
+      }
+      await page.mouse.dblclick(point.x, point.y);
+      const chip = await page.evaluate(
+        () =>
+          document.querySelector('.selection-chip-label')?.textContent ?? ''
+      );
+      const match = /^(\d+) edges$/.exec(chip.trim());
+      run = match ? Number(match[1]) : 0;
+    }
+  }
+
+  // A rounded box has no isolated edges: every boundary continues into the
+  // arc beside it, so any edge found belongs to a run of several.
+  expect(run).toBeGreaterThan(1);
+  await expect(status).toContainText('connected edges');
+});

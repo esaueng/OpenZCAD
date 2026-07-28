@@ -58,6 +58,7 @@ interface ViewerShellProps {
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  onSelectEdgeChain(selections: TopologySelection[]): void;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -127,6 +128,7 @@ export function ViewerShell({
   onViewChange,
   orientationRef,
   onSelectTopology,
+  onSelectEdgeChain,
   offsetHandle,
   onOffsetCommit,
   onOpenOffsetKeypad,
@@ -176,6 +178,7 @@ export function ViewerShell({
         onViewChange={onViewChange}
         orientationRef={orientationRef}
         onSelectTopology={onSelectTopology}
+        onSelectEdgeChain={onSelectEdgeChain}
         offsetHandle={offsetHandle}
         onOffsetCommit={onOffsetCommit}
         onOpenOffsetKeypad={onOpenOffsetKeypad}

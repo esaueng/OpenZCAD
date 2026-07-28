@@ -2145,6 +2145,40 @@ export function App() {
     setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
   }
 
+  /**
+   * A whole smooth run of edges, from double-clicking one of them.
+   *
+   * Set in one update rather than replayed through
+   * `handleSelectTopologyFromViewer`: that reads `selectedEdges` from its
+   * closure, so N calls in a row would each append to the same stale list and
+   * only the last would survive. The reducer does accumulate, so the fillet
+   * handle is still armed edge by edge.
+   */
+  function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
+    const first = selections[0];
+    if (!doc || !first) {
+      return;
+    }
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+    if (appSettings.experiments.directManipulation) {
+      selections.forEach((selection, index) => {
+        dispatchInteraction({
+          type: 'select-edge',
+          selection,
+          additive: index > 0
+        });
+      });
+    }
+    setSelectedEdges(selections);
+    setSelectedBodyIds([first.bodyId]);
+    setSelectedTopology(selections.at(-1) ?? first);
+    setSelectedFeatureNodeId(featureNodeIdForBody(first.bodyId));
+    setStatus(
+      `Selected a run of ${selections.length} connected edges. Fillet or chamfer applies to all of them.`
+    );
+  }
+
   function handleClearSelectedEdges() {
     setSelectedEdges([]);
     const bodyId = edgeModifierBody?.bodyId;
@@ -3974,6 +4008,7 @@ export function App() {
             projection={projection}
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
+            onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
             onExtrudeDistanceChange={(distance) =>
