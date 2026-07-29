@@ -9,6 +9,7 @@ import {
 const env = {
   ENVIRONMENT: 'development' as const,
   AUTH_MODE: 'development' as const,
+  ARTIFACTS: {} as R2Bucket,
   PROJECT_ROOM: {
     getByName: vi.fn()
   }
@@ -49,12 +50,64 @@ describe('worker api routes', () => {
     ).toBe(true);
   });
 
-  it('returns health', async () => {
+  it('allows development authentication only in an unguarded development environment', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/health'),
       env
     );
     expect(response.status).toBe(200);
+  });
+
+  it('refuses development authentication in guarded or non-development environments', async () => {
+    await expect(
+      worker.fetch(new Request('https://example.com/api/health'), {
+        ...env,
+        ENVIRONMENT: 'beta'
+      } as never)
+    ).rejects.toThrow(/Refusing to start/);
+    await expect(
+      worker.fetch(new Request('https://example.com/api/health'), {
+        ...env,
+        PRODUCTION_GUARD: 'enabled'
+      })
+    ).rejects.toThrow(/Refusing to start/);
+  });
+
+  it('returns feature-disabled before touching persistence when deployment bindings are absent', async () => {
+    const prepare = vi.fn(() => {
+      throw new Error('Persistence must not be touched.');
+    });
+    const bindinglessEnv = {
+      ENVIRONMENT: 'development' as const,
+      AUTH_MODE: 'development' as const,
+      DB: { prepare }
+    };
+
+    const uploadResponse = await worker.fetch(
+      post('/api/uploads', {
+        projectId: 'proj_test',
+        fileName: 'part.stl',
+        contentType: 'model/stl',
+        kind: 'stl-import'
+      }),
+      bindinglessEnv as never
+    );
+    expect(uploadResponse.status).toBe(501);
+    expect(await uploadResponse.json()).toEqual({
+      error: 'Artifact storage is disabled for this deployment.',
+      code: 'FEATURE_DISABLED'
+    });
+
+    const collaborationResponse = await worker.fetch(
+      new Request('https://example.com/api/projects/proj_test/collaboration'),
+      bindinglessEnv as never
+    );
+    expect(collaborationResponse.status).toBe(501);
+    expect(await collaborationResponse.json()).toEqual({
+      error: 'Collaboration is disabled for this deployment.',
+      code: 'FEATURE_DISABLED'
+    });
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it('exposes public email-auth readiness without exposing secrets', async () => {
