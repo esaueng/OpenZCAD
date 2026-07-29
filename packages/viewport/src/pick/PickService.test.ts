@@ -77,12 +77,20 @@ describe('region picking respects occlusion', () => {
     regionGroup.add(planeAt(0, { region: REGION }));
     const bodyGroup = new THREE.Group();
     // Nearer the camera than the region, so it wins the pointer.
-    bodyGroup.add(planeAt(5, { bodyId: 'body-1' }));
+    const blocker = planeAt(5, { bodyId: 'body-1' });
+    let bodyRaycasts = 0;
+    const raycast = blocker.raycast;
+    blocker.raycast = (raycaster, intersections) => {
+      bodyRaycasts += 1;
+      raycast.call(blocker, raycaster, intersections);
+    };
+    bodyGroup.add(blocker);
     const { service } = makeService({ regionGroup, bodyGroup });
 
     const pick = service.pick(centreEvent());
     expect(pick?.kind).toBe('body');
     expect(pick?.selection).toEqual({ bodyId: 'body-1', kind: 'body' });
+    expect(bodyRaycasts).toBe(1);
   });
 
   it('keeps the region when the body is behind it', () => {
@@ -116,12 +124,7 @@ describe('topology resolution', () => {
         bodyId: 'body-1',
         topology: {
           faces: [
-            {
-              topologyId: 'face-1',
-              hash: 7,
-              triangleStart: 0,
-              triangleCount: 2
-            }
+            { topologyId: 'face-1', hash: 7, triangleStart: 0, triangleCount: 2 }
           ]
         }
       })
@@ -219,7 +222,12 @@ describe('selection filters narrow what a click can take', () => {
         bodyId: 'body-1',
         topology: {
           faces: [
-            { topologyId: 'face-1', hash: 7, triangleStart: 0, triangleCount: 2 }
+            {
+              topologyId: 'face-1',
+              hash: 7,
+              triangleStart: 0,
+              triangleCount: 2
+            }
           ]
         }
       })
