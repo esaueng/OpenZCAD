@@ -27,8 +27,9 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openzcad-beta",
-      "database_id": "7263c6f1-8781-40d1-a0fa-ea03ce874ef2",
+      "database_name": "openzcad-dev",
+      // TODO(peter): create dev DB and replace this intentionally invalid ID.
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ],
