@@ -32,6 +32,7 @@ import { writeStepFile, type StepExportResult } from '@openzcad/io-step';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
+  UNIT_TO_MM,
   featureColor,
   nowIso,
   type BodyId,
@@ -406,6 +407,8 @@ export class OpenZCADKernel implements KernelAdapter {
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): string {
     const { solids } = this.buildSolids(document);
     const bodies = listNodesByKind(document, 'body');
+    // STL carries no unit header; every OpenZCAD STL export is millimetres.
+    const millimeterScale = UNIT_TO_MM[document.units];
     const meshes = bodyIds.map((bodyId) => {
       const solid = solids.get(bodyId);
       if (!solid) {
@@ -415,7 +418,10 @@ export class OpenZCADKernel implements KernelAdapter {
       const mesh = triangulateSolid(solid);
       return {
         name: body?.name ?? 'Body',
-        vertices: mesh.vertices,
+        vertices:
+          millimeterScale === 1
+            ? mesh.vertices
+            : mesh.vertices.map((value) => value * millimeterScale),
         indices: mesh.indices
       };
     });
