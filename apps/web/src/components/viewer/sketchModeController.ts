@@ -4,6 +4,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import {
   createFatLine,
   createFatLineMaterial,
+  VIEWPORT_RENDER_ORDER,
   type FatLineResolution
 } from '@openzcad/viewport';
 import type { PlaneBasis } from '@openzcad/geometry';
@@ -200,7 +201,7 @@ export function buildSketchModeRig(
     color: 0xffffff,
     size: 8,
     sizeAttenuation: false,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false
   });
   const originMarker = new THREE.Points(
@@ -208,7 +209,7 @@ export function buildSketchModeRig(
     originMaterial
   );
   originMarker.name = 'sketch-origin';
-  originMarker.renderOrder = 10;
+  originMarker.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
   group.add(originMarker);
 
   const committedGroup = new THREE.Group();
@@ -219,11 +220,11 @@ export function buildSketchModeRig(
     color: IN_PROGRESS_COLOR,
     linewidth: SKETCH_LINE_WIDTH,
     opacity: 0.95,
-    depthTest: false,
+    depthTest: true,
     resolution: resolution()
   });
   const inProgress = new Line2(new LineGeometry(), inProgressMaterial);
-  inProgress.renderOrder = 12;
+  inProgress.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
   inProgress.visible = false;
   inProgress.frustumCulled = false;
   group.add(inProgress);
@@ -232,7 +233,7 @@ export function buildSketchModeRig(
     color: 0xff5d73,
     size: 9,
     sizeAttenuation: false,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false
   });
   const diagnostics = new THREE.Points(
@@ -240,7 +241,7 @@ export function buildSketchModeRig(
     diagnosticMaterial
   );
   diagnostics.name = 'sketch-profile-diagnostics';
-  diagnostics.renderOrder = 14;
+  diagnostics.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
   diagnostics.visible = false;
   group.add(diagnostics);
 
@@ -295,7 +296,7 @@ export function buildSketchModeRig(
                 : COMMITTED_COLOR,
           linewidth: SKETCH_LINE_WIDTH,
           opacity: object.data.construction ? 0.72 : 0.95,
-          depthTest: false,
+          depthTest: true,
           closed: polyline.closed,
           resolution: resolution()
         });
@@ -304,7 +305,7 @@ export function buildSketchModeRig(
           visual.material.dashSize = 1.4;
           visual.material.gapSize = 1;
         }
-        visual.renderOrder = 11;
+        visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
         visual.frustumCulled = false;
         visual.raycast = () => undefined; // the proxy is the only pick target
         committedGroup.add(visual);
