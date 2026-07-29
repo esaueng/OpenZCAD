@@ -3305,9 +3305,12 @@ export function App() {
    */
   const workspaceInputEnabled = !settingsOpen;
 
-  // Workspace keyboard map (ignored while typing in a field).
+  // Workspace keyboard map (ignored while typing in a field). The ref must be
+  // refreshed before paint: a keydown arriving between a commit and a passive
+  // effect flush would otherwise run the previous render's closure — where a
+  // freshly opened document was still null and every shortcut a no-op.
   const workspaceKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
-  useEffect(() => {
+  useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
       if (!workspaceInputEnabled) {
         return;
