@@ -161,6 +161,10 @@ export class CameraController {
     }
     this.orbit.dampingFactor = GLIDE_DAMPING;
     this.options.requestRender();
+    // Persist the release-time pose right away — the glide only refines it,
+    // and its sub-pixel tail can outlive the user's patience (or their tab).
+    // The settled emit still records the final frame afterwards.
+    this.emitViewChange();
     this.scheduleSettledViewChange();
   };
 
