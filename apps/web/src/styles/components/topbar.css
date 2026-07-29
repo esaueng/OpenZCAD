@@ -329,6 +329,7 @@
 }
 
 .collaboration-state.conflict,
+.collaboration-state.rejected,
 .collaboration-state.oversize {
   color: var(--color-warning);
 }
