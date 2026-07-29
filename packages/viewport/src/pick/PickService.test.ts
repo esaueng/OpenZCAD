@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { PickService } from './PickService';
-import type { SelectionFilter } from '../types';
+import {
+  PickService,
+  type ProfilePickTarget,
+  type PickServiceOptions
+} from './PickService';
+import type { RegionPickData, SelectionFilter } from '../types';
 
 /**
  * The service only calls `getBoundingClientRect`, so a stub keeps these tests
@@ -9,7 +13,12 @@ import type { SelectionFilter } from '../types';
  */
 function stubElement(size = 100): HTMLElement {
   return {
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: size, height: size })
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      width: size,
+      height: size
+    })
   } as unknown as HTMLElement;
 }
 
@@ -35,7 +44,11 @@ interface Groups {
   bodyGroup: THREE.Group;
 }
 
-function makeService(groups: Partial<Groups> = {}, filter?: SelectionFilter) {
+function makeService(
+  groups: Partial<Groups> = {},
+  filter?: SelectionFilter,
+  options: Pick<PickServiceOptions, 'profiles' | 'selectionContext'> = {}
+) {
   const regionGroup = groups.regionGroup ?? new THREE.Group();
   const sketchGroup = groups.sketchGroup ?? new THREE.Group();
   const bodyGroup = groups.bodyGroup ?? new THREE.Group();
@@ -49,7 +62,8 @@ function makeService(groups: Partial<Groups> = {}, filter?: SelectionFilter) {
     regionGroup,
     sketchGroup,
     bodyGroup,
-    filter: filter ? () => filter : undefined
+    filter: filter ? () => filter : undefined,
+    ...options
   });
   return { service, regionGroup, sketchGroup, bodyGroup };
 }
@@ -60,6 +74,43 @@ const REGION = {
   samplePoint: { x: 0, y: 0 },
   area: 100
 };
+
+function projectedProfile(
+  profileId: string,
+  outer = [
+    { x: -4, y: -4 },
+    { x: 4, y: -4 },
+    { x: 4, y: 4 },
+    { x: -4, y: 4 }
+  ],
+  holes: { x: number; y: number }[][] = []
+): ProfilePickTarget {
+  const pick: RegionPickData = {
+    sketchId: 'sketch-1',
+    profileId,
+    regionFingerprint: profileId.length,
+    samplePoint: { x: -3, y: 0 },
+    centroid: { x: 0, y: 0 },
+    boundingBox: {
+      min: { x: -4, y: -4 },
+      max: { x: 4, y: 4 }
+    },
+    sourceEntityIds: ['entity-1'],
+    area: 64
+  };
+  return {
+    pick,
+    object: new THREE.Object3D(),
+    basis: {
+      origin: { x: 0, y: 0, z: 0 },
+      u: { x: 1, y: 0, z: 0 },
+      v: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 0, z: 1 }
+    },
+    outer,
+    holes
+  };
+}
 
 describe('region picking respects occlusion', () => {
   it('selects a detected region when nothing covers it', () => {
@@ -116,6 +167,67 @@ describe('region picking respects occlusion', () => {
   });
 });
 
+describe('command-aware projected profile picking', () => {
+  it('lets a valid profile outrank its coincident body face during Extrude', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(planeAt(0, { bodyId: 'body-1' }));
+    const profile = projectedProfile('profile-a');
+    const { service } = makeService({ bodyGroup }, undefined, {
+      profiles: () => [profile],
+      selectionContext: () => 'profile-command'
+    });
+
+    const pick = service.pick(centreEvent());
+    expect(pick?.kind).toBe('region');
+    expect(pick?.region?.profileId).toBe('profile-a');
+  });
+
+  it('preserves normal depth occlusion outside profile commands', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(planeAt(5, { bodyId: 'body-1' }));
+    const profile = projectedProfile('profile-a');
+    const { service } = makeService({ bodyGroup }, undefined, {
+      profiles: () => [profile],
+      selectionContext: () => 'default'
+    });
+
+    expect(service.pick(centreEvent())?.kind).toBe('body');
+  });
+
+  it('does not select the excluded interior of a profile hole', () => {
+    const profile = projectedProfile('annulus', undefined, [
+      [
+        { x: -1, y: -1 },
+        { x: 1, y: -1 },
+        { x: 1, y: 1 },
+        { x: -1, y: 1 }
+      ]
+    ]);
+    const { service } = makeService({}, undefined, {
+      profiles: () => [profile],
+      selectionContext: () => 'profile-command'
+    });
+
+    expect(service.pick(centreEvent())).toBeNull();
+  });
+
+  it('keeps stacked profiles as distinct select-other candidates', () => {
+    const { service } = makeService({}, undefined, {
+      profiles: () => [
+        projectedProfile('profile-a'),
+        projectedProfile('profile-b')
+      ],
+      selectionContext: () => 'profile-command'
+    });
+
+    expect(
+      service
+        .pickAll(centreEvent())
+        .map((candidate) => candidate.region?.profileId)
+    ).toEqual(['profile-a', 'profile-b']);
+  });
+});
+
 describe('topology resolution', () => {
   it('resolves the picked triangle to its exact face', () => {
     const bodyGroup = new THREE.Group();
@@ -124,7 +236,12 @@ describe('topology resolution', () => {
         bodyId: 'body-1',
         topology: {
           faces: [
-            { topologyId: 'face-1', hash: 7, triangleStart: 0, triangleCount: 2 }
+            {
+              topologyId: 'face-1',
+              hash: 7,
+              triangleStart: 0,
+              triangleCount: 2
+            }
           ]
         }
       })
@@ -268,7 +385,7 @@ describe('selection filters narrow what a click can take', () => {
     expect(pick?.selection).toEqual({ bodyId: 'body-1', kind: 'body' });
   });
 
-  it('collapses one body\'s face and edge into a single body candidate', () => {
+  it("collapses one body's face and edge into a single body candidate", () => {
     const { service } = makeService({ bodyGroup: layered() }, 'body');
     expect(service.pickAll(centreEvent())).toHaveLength(1);
   });

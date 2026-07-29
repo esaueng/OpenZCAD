@@ -10,6 +10,7 @@ import {
   GEOMETRY_LINEAR_TOLERANCE,
   circleProfile,
   frameForPlaneRef,
+  mergeAdjacentProfiles,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -37,7 +38,7 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import { OpenZCADKernel } from './index';
-import { resolveRegionProfile } from './region-profile';
+import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
 import {
   ambiguousReferenceError,
@@ -631,15 +632,17 @@ function edgeFingerprint(kernel: BrepKernel, edge: number): number {
  */
 function legacyEdgeFingerprint(kernel: BrepKernel, edge: number): number {
   const vertices = Array.from(kernel.getEdgeVertices(edge));
-  const endpoints = [vertices.slice(0, 3), vertices.slice(3, 6)].sort((a, b) => {
-    for (let index = 0; index < 3; index += 1) {
-      const difference = (a[index] ?? 0) - (b[index] ?? 0);
-      if (difference !== 0) {
-        return difference;
+  const endpoints = [vertices.slice(0, 3), vertices.slice(3, 6)].sort(
+    (a, b) => {
+      for (let index = 0; index < 3; index += 1) {
+        const difference = (a[index] ?? 0) - (b[index] ?? 0);
+        if (difference !== 0) {
+          return difference;
+        }
       }
+      return 0;
     }
-    return 0;
-  });
+  );
   const domain = Array.from(kernel.getEdgeCurveParameters(edge));
   const midpoint = Array.from(
     kernel.evaluateEdgeCurve(edge, ((domain[0] ?? 0) + (domain[1] ?? 1)) / 2)
@@ -725,9 +728,7 @@ function analyticParamsSignature(kernel: BrepKernel, face: number): string {
       const flip =
         unit.x < 0 ||
         (unit.x === 0 && (unit.y < 0 || (unit.y === 0 && unit.z < 0)));
-      const canonical = flip
-        ? { x: -unit.x, y: -unit.y, z: -unit.z }
-        : unit;
+      const canonical = flip ? { x: -unit.x, y: -unit.y, z: -unit.z } : unit;
       parts.push(
         `ax${quantizeEdgeCoordinate(canonical.x * 1000)}` +
           `,${quantizeEdgeCoordinate(canonical.y * 1000)}` +
@@ -738,7 +739,9 @@ function analyticParamsSignature(kernel: BrepKernel, face: number): string {
         // through zero) is stable even when the parametric origin slides
         // along the axis between rebuilds.
         const along =
-          origin.x * canonical.x + origin.y * canonical.y + origin.z * canonical.z;
+          origin.x * canonical.x +
+          origin.y * canonical.y +
+          origin.z * canonical.z;
         parts.push(
           `ft${quantizeEdgeCoordinate(origin.x - along * canonical.x)}` +
             `,${quantizeEdgeCoordinate(origin.y - along * canonical.y)}` +
@@ -1167,7 +1170,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     );
   }
 
-  /** Extrude one detected closed region of a multi-object sketch. */
+  /** Extrude one or more explicitly selected bounded sketch cells. */
   private buildRegionExtrude(
     kernel: BrepKernel,
     document: ProjectDocument,
@@ -1175,22 +1178,27 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>
   ): ExactShape {
-    const region = resolveRegionProfile(document, sketch, data, scope);
+    const regions = resolveRegionProfiles(document, sketch, data, scope);
     const basis = frameForPlaneRef(sketch.planeRef, (value) =>
       resolveParamValue(value, scope, 'sketch offset')
     );
-    const face = this.makeRegionFace(kernel, region, basis);
     const distance = resolveParamValue(data.distance, scope, 'distance');
+    const solids = connectedRegionGroups(regions).map((group) => {
+      const face = this.makeRegionFace(
+        kernel,
+        mergeAdjacentProfiles(group),
+        basis
+      );
+      return kernel.extrude(
+        face,
+        basis.normal.x,
+        basis.normal.y,
+        basis.normal.z,
+        distance
+      );
+    });
     return {
-      solids: [
-        kernel.extrude(
-          face,
-          basis.normal.x,
-          basis.normal.y,
-          basis.normal.z,
-          distance
-        )
-      ]
+      solids
     };
   }
 
@@ -1206,7 +1214,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     ) {
       throw new Error('Expected a sweep feature.');
     }
-    if (feature.data.featureKind === 'extrude' && feature.data.profile) {
+    if (
+      feature.data.featureKind === 'extrude' &&
+      (feature.data.profile ||
+        (feature.data.profiles && feature.data.profiles.length > 0))
+    ) {
       const sketchNode = findSketch(document, feature.data.sketchId);
       if (!sketchNode) {
         throw new Error('Referenced sketch no longer exists.');
@@ -1292,7 +1304,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             }
             result.shapes.set(
               feature.data.targetBodyId,
-              this.applyDirectEdit(kernel, target, feature.data.operation, scope)
+              this.applyDirectEdit(
+                kernel,
+                target,
+                feature.data.operation,
+                scope
+              )
             );
             break;
           }
@@ -1586,7 +1603,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       throw new Error('Direct B-rep edits require the OpenCascade kernel.');
     }
     const solid = collapseShape(kernel, target);
-    const face = this.resolveFaceByFingerprint(kernel, solid, operation.faceHash);
+    const face = this.resolveFaceByFingerprint(
+      kernel,
+      solid,
+      operation.faceHash
+    );
     const geometry = measureFaceGeometry(kernel, face);
 
     if (operation.kind === 'offset-face') {

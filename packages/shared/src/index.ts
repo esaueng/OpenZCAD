@@ -33,11 +33,7 @@ export type FeatureKind =
   | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind =
-  | 'rectangle'
-  | 'circle'
-  | 'polygon'
-  | 'line'
-  | 'arc';
+  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
 export type PatternKind = 'linear' | 'circular';
 export type AxisId = 'x' | 'y' | 'z';
@@ -200,7 +196,7 @@ export interface SketchNode extends BaseNode {
   objectIds: EntityId[];
 }
 
-export type SketchObjectData =
+export type SketchObjectData = (
   | {
       objectKind: 'rectangle';
       width: ParamValue;
@@ -236,7 +232,14 @@ export type SketchObjectData =
       /** Counter-clockwise sweep from start to end, in degrees. */
       startAngleDeg: ParamValue;
       endAngleDeg: ParamValue;
-    };
+    }
+) & {
+  /**
+   * Reference-only geometry. Construction entities remain visible and
+   * snappable but never split curves or bound a solid profile.
+   */
+  construction?: boolean;
+};
 
 export interface SketchObjectNode extends BaseNode {
   kind: 'sketch-object';
@@ -246,6 +249,21 @@ export interface SketchObjectNode extends BaseNode {
 
 /** In-sketch axis a revolve sweeps the profile around. */
 export type RevolveAxis = 'horizontal' | 'vertical';
+
+/**
+ * Persistent reference to one derived bounded sketch cell.
+ *
+ * `profileId` is the preferred stable identity for newly created references.
+ * The fingerprint/sample/area fields retain fail-closed compatibility with
+ * profile references written before first-class profile ids were introduced.
+ */
+export interface SketchProfileReference {
+  profileId?: string;
+  regionFingerprint: number;
+  samplePoint: { x: number; y: number };
+  sourceArea: number;
+  sourceEntityIds?: string[];
+}
 
 export type FeatureData =
   | {
@@ -267,11 +285,13 @@ export type FeatureData =
        * fingerprint nor the sample point + area match a current region, the
        * rebuild reports a warning rather than guessing.
        */
-      profile?: {
-        regionFingerprint: number;
-        samplePoint: { x: number; y: number };
-        sourceArea: number;
-      };
+      profile?: SketchProfileReference;
+      /**
+       * First-class multi-profile selection. Adjacent cells are fused into
+       * one exact solid; disconnected cells remain distinct solids owned by
+       * the same feature. `profile` remains readable for older documents.
+       */
+      profiles?: SketchProfileReference[];
     }
   | {
       featureKind: 'revolve';

@@ -21,6 +21,19 @@ export interface PickCandidate {
   faceNormal?: THREE.Vector3;
 }
 
+export interface ProfilePickTarget {
+  pick: RegionPickData;
+  object: THREE.Object3D;
+  basis: {
+    origin: { x: number; y: number; z: number };
+    u: { x: number; y: number; z: number };
+    v: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+  };
+  outer: { x: number; y: number }[];
+  holes: { x: number; y: number }[][];
+}
+
 /**
  * Stable identity for a pick: the same entity picked twice keys the same,
  * a different one does not. Deduplication and depth cycling both need to
@@ -32,6 +45,7 @@ export function candidateKey(candidate: PickCandidate): string {
     candidate.selection?.bodyId ?? '',
     candidate.selection?.topologyId ?? '',
     candidate.sketchId ?? '',
+    candidate.region?.profileId ?? '',
     candidate.region?.regionFingerprint ?? ''
   ]);
 }
@@ -48,6 +62,9 @@ export interface PickServiceOptions {
   bodyGroup: THREE.Object3D;
   /** Read per call, like the camera: the filter changes with the tool. */
   filter?(): SelectionFilter;
+  /** Cached plane-local profiles used for command-aware 2D picking. */
+  profiles?(): readonly ProfilePickTarget[];
+  selectionContext?(): 'default' | 'sketch-edit' | 'profile-command';
 }
 
 interface TopologyUserData {
@@ -129,36 +146,160 @@ export class PickService {
     return candidates.filter((candidate) => candidate.kind === filter);
   }
 
-  private regionCandidate(
-    bodyIntersections: () => THREE.Intersection<THREE.Object3D>[]
-  ): PickCandidate | null {
-    if (this.filter !== 'any' && this.filter !== 'sketch') {
-      return null;
+  private pointInLoop(
+    point: { x: number; y: number },
+    loop: { x: number; y: number }[]
+  ): boolean {
+    let inside = false;
+    for (
+      let current = 0, prior = loop.length - 1;
+      current < loop.length;
+      prior = current, current += 1
+    ) {
+      const a = loop[current]!;
+      const b = loop[prior]!;
+      if (
+        a.y > point.y !== b.y > point.y &&
+        point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x
+      ) {
+        inside = !inside;
+      }
     }
-    const regionHit = this.raycaster
+    return inside;
+  }
+
+  /**
+   * Profile interiors are picked in sketch-local 2D, not by mesh ray order.
+   * This makes a profile deterministic when it lies exactly on a body face.
+   */
+  private projectedRegionCandidates(): PickCandidate[] {
+    const targets = this.options.profiles?.() ?? [];
+    const candidates: PickCandidate[] = [];
+    for (const target of targets) {
+      if (!target.object.visible) {
+        continue;
+      }
+      const normal = new THREE.Vector3(
+        target.basis.normal.x,
+        target.basis.normal.y,
+        target.basis.normal.z
+      );
+      const origin = new THREE.Vector3(
+        target.basis.origin.x,
+        target.basis.origin.y,
+        target.basis.origin.z
+      );
+      const denominator = normal.dot(this.raycaster.ray.direction);
+      if (Math.abs(denominator) <= Number.EPSILON * 64) {
+        continue;
+      }
+      const distance =
+        normal.dot(origin.clone().sub(this.raycaster.ray.origin)) / denominator;
+      if (distance < 0) {
+        continue;
+      }
+      const point = this.raycaster.ray.at(distance, new THREE.Vector3());
+      const localOffset = point.clone().sub(origin);
+      const local = {
+        x: localOffset.dot(
+          new THREE.Vector3(
+            target.basis.u.x,
+            target.basis.u.y,
+            target.basis.u.z
+          )
+        ),
+        y: localOffset.dot(
+          new THREE.Vector3(
+            target.basis.v.x,
+            target.basis.v.y,
+            target.basis.v.z
+          )
+        )
+      };
+      const bounds = target.pick.boundingBox;
+      if (
+        local.x < bounds.min.x ||
+        local.x > bounds.max.x ||
+        local.y < bounds.min.y ||
+        local.y > bounds.max.y ||
+        !this.pointInLoop(local, target.outer) ||
+        target.holes.some((hole) => this.pointInLoop(local, hole))
+      ) {
+        continue;
+      }
+      candidates.push({
+        kind: 'region',
+        distance,
+        hit: {
+          distance,
+          point,
+          object: target.object
+        },
+        selection: null,
+        region: target.pick
+      });
+    }
+    return candidates.sort((left, right) => left.distance - right.distance);
+  }
+
+  /**
+   * Compatibility path for callers that only provide rendered region meshes.
+   *
+   * A populated profile cache always uses the projected 2D path above. This
+   * fallback exists for older integrations and tests; it must never become the
+   * deciding mechanism for an active profile-selection command.
+   */
+  private renderedRegionCandidates(): PickCandidate[] {
+    return this.raycaster
       .intersectObjects(this.options.regionGroup.children, true)
-      .find((hit) => hit.object.userData.region !== undefined);
-    if (!regionHit) {
-      return null;
+      .filter(
+        (
+          hit
+        ): hit is THREE.Intersection<
+          THREE.Object3D & { userData: { region: RegionPickData } }
+        > => hit.object.visible && Boolean(hit.object.userData.region)
+      )
+      .map((hit) => ({
+        kind: 'region' as const,
+        distance: hit.distance,
+        hit,
+        selection: null,
+        region: hit.object.userData.region
+      }));
+  }
+
+  private regionCandidates(
+    bodyIntersections: () => THREE.Intersection<THREE.Object3D>[]
+  ): PickCandidate[] {
+    if (this.filter !== 'any' && this.filter !== 'sketch') {
+      return [];
+    }
+    const targets = this.options.profiles?.() ?? [];
+    const projected =
+      targets.length > 0
+        ? this.projectedRegionCandidates()
+        : this.renderedRegionCandidates();
+    if (projected.length === 0) {
+      return [];
     }
     // With nothing filtered out, a region only wins while it is genuinely the
     // frontmost thing under the cursor — a solid standing on the sketch plane
     // occludes it. Under a sketch filter the solids are not competing for the
     // click at all, so letting one block the region would leave a sketch
     // behind a solid unreachable, which is the case the filter exists for.
-    if (this.filter === 'any') {
+    if (
+      this.filter === 'any' &&
+      (this.options.selectionContext?.() ?? 'default') === 'default'
+    ) {
       const bodyBlock = bodyIntersections()[0];
-      if (bodyBlock && regionHit.distance > bodyBlock.distance + 1e-6) {
-        return null;
+      if (bodyBlock) {
+        const epsilon = Math.max(1, bodyBlock.distance) * 1e-7;
+        return projected.filter(
+          (candidate) => candidate.distance <= bodyBlock.distance + epsilon
+        );
       }
     }
-    return {
-      kind: 'region',
-      distance: regionHit.distance,
-      hit: regionHit,
-      selection: null,
-      region: regionHit.object.userData.region as RegionPickData
-    };
+    return projected;
   }
 
   private bodyIntersections(): THREE.Intersection<THREE.Object3D>[] {
@@ -270,7 +411,7 @@ export class PickService {
     let bodyHits: THREE.Intersection<THREE.Object3D>[] | undefined;
     const bodyIntersections = () => (bodyHits ??= this.bodyIntersections());
     return (
-      this.regionCandidate(bodyIntersections) ??
+      this.regionCandidates(bodyIntersections)[0] ??
       this.sketchCandidate() ??
       this.topologyCandidates(bodyIntersections)[0] ??
       null
@@ -290,10 +431,10 @@ export class PickService {
     this.setRayFromEvent(event);
     let bodyHits: THREE.Intersection<THREE.Object3D>[] | undefined;
     const bodyIntersections = () => (bodyHits ??= this.bodyIntersections());
-    const region = this.regionCandidate(bodyIntersections);
+    const regions = this.regionCandidates(bodyIntersections);
     const sketch = this.sketchCandidate();
     const ordered = [
-      ...(region ? [region] : []),
+      ...regions,
       ...(sketch ? [sketch] : []),
       ...this.topologyCandidates(bodyIntersections)
     ];

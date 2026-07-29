@@ -1,13 +1,22 @@
-import { ArrowUpDown, Check, Layers3, MousePointer2, Move3d, X } from 'lucide-react';
+import {
+  ArrowUpDown,
+  Check,
+  Layers3,
+  MousePointer2,
+  Move3d,
+  X
+} from 'lucide-react';
 
 interface ProfileQuickActionProps {
   profileName: string;
+  profileCount?: number;
   onExtrude(): void;
   onDismiss(): void;
 }
 
 export function ProfileQuickAction({
   profileName,
+  profileCount = 1,
   onExtrude,
   onDismiss
 }: ProfileQuickActionProps) {
@@ -21,7 +30,9 @@ export function ProfileQuickAction({
         <Check size={14} aria-hidden="true" />
       </span>
       <span className="profile-quick-copy">
-        <strong>Closed profile selected</strong>
+        <strong>
+          {profileCount} closed profile{profileCount === 1 ? '' : 's'} selected
+        </strong>
         <small>{profileName}</small>
       </span>
       <button type="button" className="profile-extrude" onClick={onExtrude}>
@@ -43,18 +54,28 @@ export function ProfileQuickAction({
 
 interface ExtrudeOverlayProps {
   profileName: string;
+  profileCount: number;
+  availableProfileCount: number;
   distance: number;
   units: string;
   onDistanceChange(value: number): void;
+  onClearProfiles(): void;
+  onSelectAllProfiles(): void;
+  onBackToSketch?: () => void;
   onConfirm(): void;
   onCancel(): void;
 }
 
 export function ExtrudeOverlay({
   profileName,
+  profileCount,
+  availableProfileCount,
   distance,
   units,
   onDistanceChange,
+  onClearProfiles,
+  onSelectAllProfiles,
+  onBackToSketch,
   onConfirm,
   onCancel
 }: ExtrudeOverlayProps) {
@@ -97,7 +118,27 @@ export function ExtrudeOverlay({
             <X size={15} aria-hidden="true" />
           </button>
         </div>
-        <p>{profileName}</p>
+        <div className="extrude-profile-field">
+          <span>
+            <strong>Profiles</strong>
+            <small>{profileName}</small>
+          </span>
+          <b>{profileCount} selected</b>
+          <button type="button" onClick={onClearProfiles}>
+            Clear
+          </button>
+          {availableProfileCount > profileCount && (
+            <button type="button" onClick={onSelectAllProfiles}>
+              Select all valid
+            </button>
+          )}
+        </div>
+        <label>
+          <span>Operation</span>
+          <select aria-label="Extrude operation" value="new-body" disabled>
+            <option value="new-body">New Body</option>
+          </select>
+        </label>
         <label>
           <span>Distance</span>
           <span className="extrude-distance-input">
@@ -113,10 +154,25 @@ export function ExtrudeOverlay({
         <div className="extrude-direction">
           <ArrowUpDown size={14} aria-hidden="true" />
           <span>{direction}</span>
+          <button
+            type="button"
+            onClick={() => onDistanceChange(distance === 0 ? -24 : -distance)}
+          >
+            Flip
+          </button>
         </div>
         <div className="extrude-actions">
+          {onBackToSketch && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={onBackToSketch}
+            >
+              Back to Sketch
+            </button>
+          )}
           <button type="button" className="secondary" onClick={onCancel}>
-            Cancel
+            Cancel Extrude
           </button>
           <button
             type="submit"
@@ -124,7 +180,7 @@ export function ExtrudeOverlay({
             disabled={!Number.isFinite(distance) || Math.abs(distance) < 0.1}
           >
             <Check size={15} aria-hidden="true" />
-            Create solid
+            Apply Extrude
           </button>
         </div>
       </form>
@@ -185,8 +241,9 @@ export function MoveOverlay({
         <span>
           <strong>Drag an arrow to move, a ring to rotate</strong>
           <small>
-            Snaps to {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} — zoom in
-            for finer steps, hold Shift for free movement.
+            Snaps to{' '}
+            {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
+            zoom in for finer steps, hold Shift for free movement.
           </small>
         </span>
       </div>

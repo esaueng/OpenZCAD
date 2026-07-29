@@ -88,6 +88,7 @@ import {
   type MoveSnap,
   type PickCandidate,
   type PickDetail,
+  type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
   type SnapResolution,
@@ -97,10 +98,7 @@ import {
   type ViewerSettings,
   type FatLineResolution
 } from '@openzcad/viewport';
-import type {
-  BodyRepresentation,
-  TopologySelection
-} from '@openzcad/shared';
+import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import {
@@ -108,6 +106,8 @@ import {
   type SketchModeRig
 } from './viewer/sketchModeController';
 import {
+  REGION_COMMAND_OPACITY,
+  REGION_IDLE_OPACITY,
   REGION_SELECTED_OPACITY,
   buildRegionMesh,
   triangulateRegionGeometry,
@@ -177,16 +177,30 @@ export interface SketchModeState {
   objects: { id: string; data: SketchObjectData }[];
   selectedObjectId: string | null;
   parameterScope: Record<string, number>;
+  /** Plane-local endpoints highlighted by Profile diagnostics on request. */
+  diagnosticPoints: { x: number; y: number }[];
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
 export interface SketchViewData {
   sketchId: string;
   basis: PlaneBasis;
-  curves: { points: { x: number; y: number }[]; closed: boolean }[];
+  active: boolean;
+  curves: {
+    points: { x: number; y: number }[];
+    closed: boolean;
+    construction: boolean;
+  }[];
   regions: {
+    profileId: string;
     regionFingerprint: number;
     samplePoint: { x: number; y: number };
+    centroid: { x: number; y: number };
+    boundingBox: {
+      min: { x: number; y: number };
+      max: { x: number; y: number };
+    };
+    sourceEntityIds: string[];
     area: number;
     outer: { x: number; y: number }[];
     holes: { x: number; y: number }[][];
@@ -296,8 +310,16 @@ interface ModelViewerProps {
   onDirectManipulationChange(dragging: boolean): void;
   /** Region-detected sketch rendering (curves + orange hover fills). */
   sketchViews: SketchViewData[];
+  /** Stable ids of persistently selected bounded cells. */
+  selectedProfileIds: string[];
+  /** Extrude is actively requesting one or more profiles. */
+  profileSelectionMode: boolean;
   /** A detected region was clicked: arm the extrude handle. */
-  onSelectRegion(region: RegionPickData): void;
+  onSelectRegion(
+    region: RegionPickData,
+    modifiers: { additive: boolean; toggle: boolean }
+  ): void;
+  onHoverRegion(region: RegionPickData | null): void;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
@@ -401,7 +423,6 @@ interface DimensionLabelBinding {
   angleDeg?: number;
 }
 
-
 function updateDimensionLabels(
   context: SceneContext,
   viewportWidth: number,
@@ -468,7 +489,6 @@ interface ExtrudeDragState {
   pixelsPerUnit: number;
 }
 
-
 interface MoveDragState {
   pointerId: number;
   kind: 'axis' | 'ring' | 'center';
@@ -490,7 +510,6 @@ interface MoveDragState {
   snapMove: number;
   snapRotate: number;
 }
-
 
 const SELECTION_EMISSIVE = 0x173a5e;
 const SELECTED_FACE_COLOR = 0x4da3ff;
@@ -548,7 +567,10 @@ export function ModelViewer({
   onOpenEdgeKeypad,
   onDirectManipulationChange,
   sketchViews,
+  selectedProfileIds,
+  profileSelectionMode,
   onSelectRegion,
+  onHoverRegion,
   regionHandle,
   sketchMode,
   onSketchCommit,
@@ -639,6 +661,11 @@ export function ModelViewer({
   sketchModeRef.current = sketchMode;
   const onSelectRegionRef = useRef(onSelectRegion);
   onSelectRegionRef.current = onSelectRegion;
+  const onHoverRegionRef = useRef(onHoverRegion);
+  onHoverRegionRef.current = onHoverRegion;
+  const profileSelectionModeRef = useRef(profileSelectionMode);
+  profileSelectionModeRef.current = profileSelectionMode;
+  const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
   const onSketchCommitRef = useRef(onSketchCommit);
@@ -824,7 +851,8 @@ export function ModelViewer({
       domElement: renderer.domElement,
       requestRender: () => requestRender(),
       bodies: () => bodiesRef.current,
-      isEditableBody: (bodyId: string) => editableBodyIdsRef.current.has(bodyId),
+      isEditableBody: (bodyId: string) =>
+        editableBodyIdsRef.current.has(bodyId),
       extrudeArmed: () => extrudePreviewRef.current !== null
     });
 
@@ -843,7 +871,14 @@ export function ModelViewer({
       regionGroup,
       sketchGroup,
       bodyGroup,
-      filter: () => selectionFilterRef.current
+      filter: () => selectionFilterRef.current,
+      profiles: () => profilePickTargetsRef.current,
+      selectionContext: () =>
+        profileSelectionModeRef.current
+          ? 'profile-command'
+          : sketchModeRef.current
+            ? 'sketch-edit'
+            : 'default'
     });
 
     function applyMovePreview(
@@ -1180,10 +1215,12 @@ export function ModelViewer({
       if (!e2eCanvasHooksEnabled) {
         return;
       }
-      const detail = (event as CustomEvent<{
-        bodyId?: string;
-        surface?: 'wall' | 'cap';
-      }>).detail;
+      const detail = (
+        event as CustomEvent<{
+          bodyId?: string;
+          surface?: 'wall' | 'cap';
+        }>
+      ).detail;
       const body = bodiesRef.current.find(
         (candidate) =>
           !candidate.consumed &&
@@ -1300,7 +1337,10 @@ export function ModelViewer({
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
       if (result?.region) {
-        onSelectRegionRef.current(result.region);
+        onSelectRegionRef.current(result.region, {
+          additive: event.shiftKey,
+          toggle: event.ctrlKey || event.metaKey
+        });
         return;
       }
       if (result?.sketchId) {
@@ -1467,8 +1507,14 @@ export function ModelViewer({
       return Math.atan2(offset.dot(v), offset.dot(u));
     }
 
+    let hoveredProfileId: string | null = null;
     function applyHover(result: PickCandidate | null) {
       selection.applyHover(result);
+      const nextProfileId = result?.region?.profileId ?? null;
+      if (nextProfileId !== hoveredProfileId) {
+        hoveredProfileId = nextProfileId;
+        onHoverRegionRef.current(result?.region ?? null);
+      }
     }
 
     function applyHoverAt(event: PointerEvent) {
@@ -1543,7 +1589,8 @@ export function ModelViewer({
       let anchor: THREE.Vector3 | null = null;
       let text = '';
       if (rig) {
-        const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        const scale =
+          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         anchor = rig.chipAnchor(scale);
         const rawValue = rig.value();
         const value = Math.round(rawValue * 100) / 100;
@@ -1579,10 +1626,7 @@ export function ModelViewer({
         keypadAnchorRef.current?.(null);
         return;
       }
-      if (
-        e2eCanvasHooksEnabled &&
-        rig?.kind === 'cylinder-radius'
-      ) {
+      if (e2eCanvasHooksEnabled && rig?.kind === 'cylinder-radius') {
         const scale =
           (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         const hitCenter = rig.group.position
@@ -1844,7 +1888,9 @@ export function ModelViewer({
           updateSketchInProgress(event);
         }
         if (event.buttons !== 2 && event.buttons !== 4) {
-          return;
+          if (event.buttons !== 0 || sketchModeRef.current.tool !== 'select') {
+            return;
+          }
         }
       }
       rightClickGesture.move(event.pointerId, event.clientX, event.clientY);
@@ -2326,18 +2372,40 @@ export function ModelViewer({
         }
       }
       const activeExtrude = extrudePreviewRef.current;
-      if (activeExtrude && pickExtrudeGizmo(event)) {
+      const extrudeGizmoHit = activeExtrude ? pickExtrudeGizmo(event) : null;
+      if (activeExtrude && extrudeGizmoHit) {
         const sketch = sketchesRef.current.find(
           (candidate) => candidate.sketchId === activeExtrude.sketchId
         );
-        if (sketch) {
+        const storedOrigin = extrudeGizmoHit.object.userData.extrudeOrigin as
+          number[] | undefined;
+        const storedNormal = extrudeGizmoHit.object.userData.extrudeNormal as
+          number[] | undefined;
+        if (
+          sketch ||
+          (storedOrigin?.length === 3 && storedNormal?.length === 3)
+        ) {
           const rect = renderer.domElement.getBoundingClientRect();
-          const centroid = sketchCentroid(sketch);
-          const normal = new THREE.Vector3(
-            sketch.normal.x,
-            sketch.normal.y,
-            sketch.normal.z
-          ).normalize();
+          const centroid =
+            storedOrigin?.length === 3
+              ? new THREE.Vector3(
+                  storedOrigin[0],
+                  storedOrigin[1],
+                  storedOrigin[2]
+                )
+              : sketchCentroid(sketch!);
+          const normal =
+            storedNormal?.length === 3
+              ? new THREE.Vector3(
+                  storedNormal[0],
+                  storedNormal[1],
+                  storedNormal[2]
+                ).normalize()
+              : new THREE.Vector3(
+                  sketch!.normal.x,
+                  sketch!.normal.y,
+                  sketch!.normal.z
+                ).normalize();
           const projectedStart = centroid.clone().project(camera);
           const projectedEnd = centroid.clone().add(normal).project(camera);
           const projectedX =
@@ -2463,7 +2531,8 @@ export function ModelViewer({
         gestures.release(event, null);
         const from = hud.toLocal(started.startX, started.startY);
         const to = hud.toLocal(event.clientX, event.clientY);
-        const rect = from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
+        const rect =
+          from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
         if (!rect || !isBoxSelectDrag(rect)) {
           // A shift-click that never travelled is still a shift-click.
           selectAtPointer(event);
@@ -2550,9 +2619,18 @@ export function ModelViewer({
                 mode.basis.origin.z
               )
             ) * 8;
-          onSketchSelectObjectRef.current(
-            rig?.pickObject(context.raycaster, pickThreshold) ?? null
-          );
+          const objectId =
+            rig?.pickObject(context.raycaster, pickThreshold) ?? null;
+          onSketchSelectObjectRef.current(objectId);
+          if (!objectId) {
+            const profile = picker.pick(event)?.region;
+            if (profile) {
+              onSelectRegionRef.current(profile, {
+                additive: event.shiftKey,
+                toggle: event.ctrlKey || event.metaKey
+              });
+            }
+          }
           requestRender();
           return;
         }
@@ -2673,10 +2751,7 @@ export function ModelViewer({
           return;
         }
         depthCycle = null;
-        if (
-          rig &&
-          Math.abs(finalRadius - completed.originalRadius) > 1e-9
-        ) {
+        if (rig && Math.abs(finalRadius - completed.originalRadius) > 1e-9) {
           onCylinderRadiusCommitRef.current(finalRadius);
         } else {
           onCylinderRadiusCancelRef.current();
@@ -2847,7 +2922,10 @@ export function ModelViewer({
           const chain = edgeRunFrom(edges, picked.selection.topologyId);
           if (chain.length > 1) {
             const byId = new Map(
-              edges.map((edgeTopology) => [edgeTopology.topologyId, edgeTopology])
+              edges.map((edgeTopology) => [
+                edgeTopology.topologyId,
+                edgeTopology
+              ])
             );
             onSelectEdgeChainRef.current(
               chain.map((topologyId) => ({
@@ -3639,23 +3717,29 @@ export function ModelViewer({
     };
   }, [edgeHandle, bodies]);
 
-  // Region-detected sketch rendering: blue curves for every object plus an
-  // invisible-until-hovered orange fill per detected region.
+  // Region-detected sketch rendering: curves stay readable while bounded
+  // cells get cached fill, boundary, marker, and plane-local pick targets.
   useEffect(() => {
     const context = contextRef.current;
     const group = regionGroupRef.current;
     if (!context || !group) {
       return;
     }
+    context.selection.setRegionHover(null);
     for (const child of [...group.children]) {
       group.remove(child);
       child.traverse((node) => {
-        if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
+        if (
+          node instanceof THREE.Mesh ||
+          node instanceof THREE.Line ||
+          node instanceof THREE.Points
+        ) {
           (node.geometry as THREE.BufferGeometry).dispose();
           (node.material as THREE.Material).dispose();
         }
       });
     }
+    profilePickTargetsRef.current = [];
     for (const view of sketchViews) {
       const basis = view.basis;
       for (const curve of view.curves) {
@@ -3671,28 +3755,124 @@ export function ModelViewer({
             )
         );
         const line = createFatLine(vertices, {
-          color: 0x4da3ff,
+          color: curve.construction ? 0x7b8da3 : 0x4da3ff,
           linewidth: SKETCH_CURVE_WIDTH,
-          opacity: 0.9,
+          opacity: curve.construction ? 0.72 : 0.9,
           closed: curve.closed,
           resolution: context.fatLineResolution()
         });
+        if (curve.construction) {
+          line.material.dashed = true;
+          line.material.dashSize = 1.4;
+          line.material.gapSize = 1;
+        }
         line.renderOrder = 10;
         group.add(line);
       }
       for (const region of view.regions) {
-        group.add(
-          buildRegionMesh(region.outer, region.holes, basis, {
-            sketchId: view.sketchId,
-            regionFingerprint: region.regionFingerprint,
-            samplePoint: region.samplePoint,
-            area: region.area
+        const pick: RegionPickData = {
+          sketchId: view.sketchId,
+          profileId: region.profileId,
+          regionFingerprint: region.regionFingerprint,
+          samplePoint: region.samplePoint,
+          centroid: region.centroid,
+          boundingBox: region.boundingBox,
+          sourceEntityIds: region.sourceEntityIds,
+          area: region.area
+        };
+        const baseOpacity = view.active ? REGION_IDLE_OPACITY : 0;
+        const mesh = buildRegionMesh(region.outer, region.holes, basis, pick, {
+          baseOpacity,
+          selected: false
+        });
+        const boundaries = [region.outer, ...region.holes].map((loop) => {
+          const points = loop.map(
+            (point) =>
+              new THREE.Vector3(
+                basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+                basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+                basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+              )
+          );
+          const boundary = createFatLine(points, {
+            color: 0x79b8ff,
+            linewidth: 1.6,
+            opacity: 0.72,
+            closed: true,
+            resolution: context.fatLineResolution()
+          });
+          boundary.renderOrder = 11;
+          boundary.raycast = () => undefined;
+          group.add(boundary);
+          return boundary;
+        });
+        const markerPosition = new THREE.Vector3(
+          basis.origin.x +
+            basis.u.x * region.centroid.x +
+            basis.v.x * region.centroid.y,
+          basis.origin.y +
+            basis.u.y * region.centroid.x +
+            basis.v.y * region.centroid.y,
+          basis.origin.z +
+            basis.u.z * region.centroid.x +
+            basis.v.z * region.centroid.y
+        );
+        const marker = new THREE.Points(
+          new THREE.BufferGeometry().setFromPoints([markerPosition]),
+          new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 7,
+            sizeAttenuation: false,
+            depthWrite: false
           })
         );
+        marker.renderOrder = 12;
+        marker.visible = false;
+        marker.raycast = () => undefined;
+        group.add(mesh, marker);
+        mesh.userData.regionBoundaries = boundaries;
+        mesh.userData.regionMarker = marker;
+        profilePickTargetsRef.current.push({
+          pick,
+          object: mesh,
+          basis,
+          outer: region.outer,
+          holes: region.holes
+        });
       }
     }
     context.requestRender();
   }, [sketchViews]);
+
+  // Selection and command mode only alter materials/markers. The profile
+  // triangulation above remains cached until sketchViews changes.
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = regionGroupRef.current;
+    if (!context || !group) {
+      return;
+    }
+    const selected = new Set(selectedProfileIds);
+    const activeBySketch = new Map(
+      sketchViews.map((view) => [view.sketchId, view.active] as const)
+    );
+    for (const child of group.children) {
+      if (!(child instanceof THREE.Mesh) || !child.userData.region) {
+        continue;
+      }
+      const pick = child.userData.region as RegionPickData;
+      const baseOpacity = profileSelectionMode
+        ? REGION_COMMAND_OPACITY
+        : activeBySketch.get(pick.sketchId)
+          ? REGION_IDLE_OPACITY
+          : 0;
+      context.selection.updateRegionState(
+        child as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>,
+        selected.has(pick.profileId),
+        baseOpacity
+      );
+    }
+  }, [profileSelectionMode, selectedProfileIds, sketchViews]);
 
   // Armed region: keep its fill lit and share the offset arrow rig for the
   // extrude drag (the drag/chip/keypad machinery is rig-agnostic).
@@ -3903,6 +4083,7 @@ export function ModelViewer({
     const resolve = (value: unknown) =>
       evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
     rig.setObjects(sketchMode.objects, sketchMode.selectedObjectId, resolve);
+    rig.setDiagnostics(sketchMode.diagnosticPoints);
     snapTargetsRef.current = sketchMode.objects.flatMap((object) => {
       try {
         return snapTargetsForObject(object.data, resolve);
@@ -3943,7 +4124,13 @@ export function ModelViewer({
       return;
     }
     clearGroup(context.sketchGroup);
+    const firstClassSketchIds = new Set(
+      sketchViews.map((view) => view.sketchId)
+    );
     for (const sketch of sketches) {
+      if (firstClassSketchIds.has(sketch.sketchId)) {
+        continue;
+      }
       if (sketch.points.length < 2) {
         continue;
       }
@@ -4021,7 +4208,7 @@ export function ModelViewer({
       onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
-  }, [bodies.length, sketches]);
+  }, [bodies.length, sketches, sketchViews]);
 
   // Direct extrusion stays an ephemeral viewport preview until the user
   // confirms, keeping document history as the only durable modeling truth.
@@ -4035,22 +4222,68 @@ export function ModelViewer({
     if (!extrudePreview) {
       return;
     }
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === extrudePreview.sketchId
+    );
+    const selectedRegions =
+      view?.regions.filter((region) =>
+        selectedProfileIds.includes(region.profileId)
+      ) ?? [];
     const sketch = sketches.find(
       (candidate) => candidate.sketchId === extrudePreview.sketchId
     );
-    if (!sketch || sketch.points.length < 3) {
+    if (selectedRegions.length === 0 && (!sketch || sketch.points.length < 3)) {
       return;
     }
 
-    const normal = new THREE.Vector3(
-      sketch.normal.x,
-      sketch.normal.y,
-      sketch.normal.z
-    ).normalize();
-    const centroid = sketchCentroid(sketch);
+    const normal = view
+      ? new THREE.Vector3(
+          view.basis.normal.x,
+          view.basis.normal.y,
+          view.basis.normal.z
+        ).normalize()
+      : new THREE.Vector3(
+          sketch!.normal.x,
+          sketch!.normal.y,
+          sketch!.normal.z
+        ).normalize();
+    const totalArea = selectedRegions.reduce(
+      (total, region) => total + region.area,
+      0
+    );
+    const localCentroid =
+      selectedRegions.length > 0 && totalArea > 0
+        ? selectedRegions.reduce(
+            (total, region) => ({
+              x: total.x + region.centroid.x * region.area,
+              y: total.y + region.centroid.y * region.area
+            }),
+            { x: 0, y: 0 }
+          )
+        : null;
+    if (localCentroid && totalArea > 0) {
+      localCentroid.x /= totalArea;
+      localCentroid.y /= totalArea;
+    }
+    const centroid =
+      view && localCentroid
+        ? new THREE.Vector3(
+            view.basis.origin.x +
+              view.basis.u.x * localCentroid.x +
+              view.basis.v.x * localCentroid.y,
+            view.basis.origin.y +
+              view.basis.u.y * localCentroid.x +
+              view.basis.v.y * localCentroid.y,
+            view.basis.origin.z +
+              view.basis.u.z * localCentroid.x +
+              view.basis.v.z * localCentroid.y
+          )
+        : sketchCentroid(sketch!);
     const distance = extrudePreview.distance;
 
-    if (Math.abs(distance) >= 0.01) {
+    // First-class profiles are previewed by the exact worker-backed body.
+    // Retain the compatibility mesh only for legacy one-object sketches.
+    if (selectedRegions.length === 0 && sketch && Math.abs(distance) >= 0.01) {
       const previewGeometry = createExtrudePreviewGeometry(sketch, distance);
       const previewMesh = new THREE.Mesh(
         previewGeometry,
@@ -4120,6 +4353,8 @@ export function ModelViewer({
     hitTarget.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
     hitTarget.position.copy(centroid);
     hitTarget.userData.extrudeGizmo = true;
+    hitTarget.userData.extrudeOrigin = centroid.toArray();
+    hitTarget.userData.extrudeNormal = normal.toArray();
     context.gizmoGroup.add(hitTarget);
 
     const valuePosition = centroid
@@ -4133,7 +4368,7 @@ export function ModelViewer({
     );
     valueLabel.position.copy(valuePosition);
     context.gizmoGroup.add(valueLabel);
-  }, [extrudePreview, sketches, units]);
+  }, [extrudePreview, selectedProfileIds, sketches, sketchViews, units]);
 
   useEffect(() => {
     const context = contextRef.current;

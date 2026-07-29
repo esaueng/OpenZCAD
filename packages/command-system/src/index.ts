@@ -604,7 +604,11 @@ function assertOperationExpressions(
       );
       operation.objects.forEach((object, index) => {
         Object.entries(object).forEach(([key, value]) => {
-          if (key !== 'objectKind') {
+          if (
+            key !== 'objectKind' &&
+            key !== 'construction' &&
+            typeof value !== 'boolean'
+          ) {
             assertEvaluableExpression(
               scope,
               `${operation.name} objects[${index}].${key}`,
@@ -850,7 +854,8 @@ export function commandsForCadPatch(
               id: `object_${index}`,
               data
             })),
-            (value) => resolveParamValue(value, parameterScope, 'sketch dimension')
+            (value) =>
+              resolveParamValue(value, parameterScope, 'sketch dimension')
           );
           const region = regionAtPoint(regions, operation.samplePoint);
           if (!region) {
