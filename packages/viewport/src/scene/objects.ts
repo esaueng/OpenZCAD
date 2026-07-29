@@ -3,6 +3,11 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { DisplayMode, SketchOverlay } from '../types';
 import { isViewerMesh } from '../pick/meshes';
+import {
+  EDGE_IDLE_COLOR,
+  EDGE_IDLE_OPACITY,
+  EDGE_WIREFRAME_COLOR
+} from '../pick/edges';
 
 export function disposeObject(object: THREE.Object3D) {
   object.traverse((child: THREE.Object3D) => {
@@ -42,15 +47,27 @@ export function makeLabel(className: string, text: string): CSS2DObject {
 }
 
 /**
- * Meshes render solid or wireframe; baked and exact topology edge overlays
- * toggle together so plain Shaded mode contains surfaces only.
+ * CAD display modes keep analytic/topological edges separate from the
+ * tessellated face mesh. Three's material wireframe exposes every render
+ * triangle, which is useful for mesh debugging but is not a CAD wireframe.
  */
 export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
   bodyGroup.traverse((child: THREE.Object3D) => {
     if (isViewerMesh(child)) {
-      child.material.wireframe = mode === 'wireframe';
+      child.material.visible = mode !== 'wireframe';
+      child.material.wireframe = false;
     } else if (child instanceof THREE.LineSegments || child instanceof Line2) {
-      child.visible = mode === 'shaded-edges';
+      child.visible = mode !== 'shaded';
+      child.userData.displayMode = mode;
+      const material = child.material as THREE.Material & {
+        color?: THREE.Color;
+      };
+      if (child.userData.selected !== true && material.color) {
+        material.color.setHex(
+          mode === 'wireframe' ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR
+        );
+        material.opacity = mode === 'wireframe' ? 1 : EDGE_IDLE_OPACITY;
+      }
     }
   });
 }

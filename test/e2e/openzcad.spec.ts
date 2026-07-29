@@ -9,7 +9,12 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
  * commands, the geometry worker, the viewport, STEP writing — is the real
  * production bundle.
  */
-async function stubApi(page: Page) {
+async function stubApi(
+  page: Page,
+  { assistantEnabled = false }: { assistantEnabled?: boolean } = {}
+) {
+  const settings = structuredClone(DEFAULT_APP_SETTINGS);
+  settings.assistant.enabled = assistantEnabled;
   // The preview server serves the static bundle without the Worker Durable
   // Object. Keep cloud project tests authenticated while leaving collaboration
   // transport coverage to its focused unit tests.
@@ -56,9 +61,12 @@ async function stubApi(page: Page) {
   await page.route('**/api/settings', (route) =>
     route.fulfill({
       json: {
-        settings: DEFAULT_APP_SETTINGS,
-        revision: 0,
-        synced: false,
+        settings,
+        revision: assistantEnabled ? 1 : 0,
+        // Account settings are adopted only when the server says they are in
+        // sync. AI-focused tests opt in explicitly so the new default-off
+        // device setting does not outrank their fixture.
+        synced: assistantEnabled,
         credential: { stored: false, storageAvailable: false },
         effectiveAssistant: {
           configured: false,
@@ -392,9 +400,9 @@ test('flushes the latest edit before returning to the project list', async ({
   });
   await expect(savedProject).toBeVisible();
   await savedProject.click();
-  await expect(page.getByRole('button', { name: 'Rename project' })).toContainText(
-    'Latest Autosave Name'
-  );
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Latest Autosave Name');
 });
 
 test('leaves the restore screen when a remembered project is missing', async ({
@@ -598,7 +606,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   page
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Narrow Part');
   await page.getByRole('button', { name: 'Create project' }).click();
@@ -628,6 +636,18 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   const viewerBounds = await page.locator('.viewer-area').boundingBox();
   expect(viewerBounds!.y).toBeGreaterThanOrEqual(
     sidebarBounds!.y + sidebarBounds!.height - 0.5
+  );
+  await expect(page.locator('.status-groups')).toBeHidden();
+  await expect(page.locator('.status-filters > b')).toBeHidden();
+  const statusStateBounds = await page.locator('.status-state').boundingBox();
+  const statusFilterBounds = await page
+    .locator('.status-filters')
+    .boundingBox();
+  expect(statusStateBounds).not.toBeNull();
+  expect(statusFilterBounds).not.toBeNull();
+  expect(statusStateBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(statusFilterBounds!.x + statusFilterBounds!.width).toBeLessThanOrEqual(
+    390.5
   );
   await expect(page.locator('.viewer-rail-stack')).toBeVisible();
 
@@ -677,9 +697,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   });
   await expect(radiusOperation).toBeVisible();
   await expect(page.getByTestId('live-cylinder-radius')).toHaveText('14 mm');
-  await expect(
-    page.getByRole('region', { name: '3D viewport' })
-  ).toContainText('Cylindrical face Ø28');
+  await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
+    'Cylindrical face Ø28'
+  );
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
 
   const handle = await canvas.evaluate((element) => {
@@ -720,18 +740,16 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'R 18 mm'
   );
-  await expect(
-    page.getByRole('region', { name: '3D viewport' })
-  ).toContainText('Cylindrical face Ø36');
+  await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
+    'Cylindrical face Ø36'
+  );
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText(
     'Adjusted cylinder radius to R 18 mm.'
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
-  await expect(
-    page.getByRole('button', { name: 'History 1' })
-  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');
@@ -937,6 +955,230 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('keeps a source circle stable over its coincident extrude edge', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch Edge Regression');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await expect(
+    page.getByText('Pick a sketch plane', { exact: true })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    // Stay clear of the empty-viewport getting-started card while keeping the
+    // whole circle inside the real WebGL canvas.
+    x: bounds!.x + bounds!.width * 0.72,
+    y: bounds!.y + bounds!.height * 0.64
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 64, center.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch 01' })
+  ).toBeVisible();
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await page.getByRole('button', { name: 'Apply Extrude' }).click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch 01' })
+  ).toBeVisible();
+
+  const renderPolicy = await canvas.evaluate(
+    (element) =>
+      new Promise<{
+        bodyFaces: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          polygonOffset: boolean;
+          polygonOffsetFactor: number;
+          polygonOffsetUnits: number;
+          renderOrder: number;
+        }[];
+        bodyEdges: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          name: string;
+          renderOrder: number;
+          visible: boolean;
+        }[];
+        sketchLines: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          name: string;
+          renderOrder: number;
+          visible: boolean;
+        }[];
+      }>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: { resolve }
+          })
+        );
+      })
+  );
+
+  expect(renderPolicy.bodyFaces.length).toBeGreaterThan(0);
+  expect(
+    renderPolicy.bodyFaces.every(
+      (face) =>
+        face.depthTest &&
+        face.depthWrite &&
+        face.polygonOffset &&
+        face.polygonOffsetFactor === 1 &&
+        face.polygonOffsetUnits === 1
+    )
+  ).toBe(true);
+  expect(renderPolicy.bodyEdges.length).toBeGreaterThan(0);
+  expect(
+    renderPolicy.bodyFaces.every(
+      (face) => face.renderOrder < renderPolicy.bodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
+  expect(
+    renderPolicy.bodyEdges.every(
+      (edge) => edge.name === 'body-edge' && edge.depthTest && !edge.depthWrite
+    )
+  ).toBe(true);
+  const sketchCurves = renderPolicy.sketchLines.filter(
+    (line) => line.name === 'sketch-curve'
+  );
+  const idleRegionBoundaries = renderPolicy.sketchLines.filter(
+    (line) => line.name === 'sketch-region-boundary'
+  );
+  expect(sketchCurves).toHaveLength(1);
+  expect(
+    sketchCurves.every(
+      (line) =>
+        line.visible &&
+        line.depthTest &&
+        !line.depthWrite &&
+        line.renderOrder > renderPolicy.bodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
+  expect(idleRegionBoundaries).toHaveLength(1);
+  expect(idleRegionBoundaries.every((line) => !line.visible)).toBe(true);
+});
+
+test('extrudes and edits one of multiple closed sketch regions', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Multi Region Extrude');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const centers = [
+    {
+      x: bounds!.x + bounds!.width * 0.58,
+      y: bounds!.y + bounds!.height * 0.76
+    },
+    {
+      x: bounds!.x + bounds!.width * 0.78,
+      y: bounds!.y + bounds!.height * 0.76
+    }
+  ];
+  for (const [index, center] of centers.entries()) {
+    await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+    await page.mouse.move(center.x, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + 38, center.y, { steps: 6 });
+    await page.mouse.up();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      index === 0 ? 'Sketch 01 started.' : 'Add circle'
+    );
+  }
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '2 valid profiles available'
+  );
+  // Profile picking itself is covered by the viewport package. Select one
+  // detected region through the e2e-only canvas hook so this lifecycle test
+  // cannot race the camera tween on slower machines.
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  const extrude = page.getByRole('form', { name: 'Extrude controls' });
+  await expect(extrude).toContainText('1 selected');
+  await expect(
+    extrude.getByRole('button', { name: 'Select all valid' })
+  ).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 profile selected · exact preview ready',
+    { timeout: 20_000 }
+  );
+  await extrude.getByRole('button', { name: 'Select all valid' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '2 profiles selected · exact preview ready',
+    { timeout: 20_000 }
+  );
+  await expect(extrude).toContainText('2 selected');
+  await extrude.getByRole('button', { name: 'Clear' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Select one or more closed profiles.'
+  );
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 profile selected · exact preview ready',
+    { timeout: 20_000 }
+  );
+  await expect(extrude).toContainText('1 selected');
+  await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude 1' })
+  ).toBeVisible();
+
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector).toBeVisible();
+  await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Edit Extrude 1'
+  );
+  await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Redo');
+  await page.locator('.feature-row-main', { hasText: 'Extrude 1' }).click();
+  await expect(
+    page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('textbox', { name: /^Distance/ })
+  ).toHaveValue('32');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('fillets all twelve edges of a box in one exact feature', async ({
   page
 }) => {
@@ -981,7 +1223,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
 test('grounds an AI fillet request onto every selected edge', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   type AssistantRequest = {
     digest?: {
       selection?: {
@@ -1098,7 +1340,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
 test('grounds all cylinder edges onto its two visible rims', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   type AssistantBody = {
     bodyId: string;
     bbox?: {
@@ -2023,10 +2265,22 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
         y: bounds.y + bounds.height * y
       };
       await page.mouse.click(point.x, point.y);
+      // A pick is committed on the next rendered frame. Reading the footer
+      // synchronously can miss a successful hit and burn the whole grid scan.
+      await page.waitForTimeout(32);
       if (!(await status.textContent())?.includes('exact edge selected')) {
         continue;
       }
-      await page.mouse.dblclick(point.x, point.y);
+      // Selecting the probe edge creates a value chip at that exact point;
+      // a physical double-click can then send its second click to the chip.
+      // Clear the probe and dispatch the measured gesture to the WebGL canvas.
+      await page.getByRole('button', { name: 'Deselect all' }).click();
+      await canvas.dispatchEvent('dblclick', {
+        button: 0,
+        clientX: point.x,
+        clientY: point.y
+      });
+      await expect(status).toContainText('connected edges');
       const chip = await page.evaluate(
         () => document.querySelector('.selection-chip-label')?.textContent ?? ''
       );
@@ -2508,7 +2762,7 @@ async function createProject(page: Page, name: string) {
 test('settings leave the conversation and its in-flight reply intact', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   let releaseReply!: () => void;
   await stubAssistant(
     page,
@@ -2543,7 +2797,7 @@ test('settings leave the conversation and its in-flight reply intact', async ({
 test('disabling the assistant takes its live preview with it', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   await stubAssistant(page);
   await createProject(page, 'Orphan Preview Part');
 
@@ -2610,7 +2864,7 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
 test('a direct mode hides the assistant without ending the conversation', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   await stubAssistant(page);
   await createProject(page, 'Direct Mode Part');
 
@@ -2694,7 +2948,9 @@ test('releasing an orbit eases out instead of stopping dead', async ({
 
   const result = await page.evaluate(() => {
     const glide = (
-      window as unknown as { __glide: { upAt: number | null; changes: number[] } }
+      window as unknown as {
+        __glide: { upAt: number | null; changes: number[] };
+      }
     ).__glide;
     const after = glide.changes.filter(
       (change) => glide.upAt !== null && change > glide.upAt
