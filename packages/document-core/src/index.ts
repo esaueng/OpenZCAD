@@ -38,6 +38,7 @@ import {
   type SketchObjectData,
   type SketchObjectNode,
   type SketchPlaneRef,
+  type SketchProfileReference,
   type UnitSystem,
   type UserId
 } from '@openzcad/shared';
@@ -192,11 +193,9 @@ export interface ExtrudeInput {
   sketchId: SketchId;
   distance: ParamValue;
   /** Extrude one detected region of the sketch instead of the whole profile. */
-  profile?: {
-    regionFingerprint: number;
-    samplePoint: { x: number; y: number };
-    sourceArea: number;
-  };
+  profile?: SketchProfileReference;
+  /** Extrude one or more explicitly selected bounded cells. */
+  profiles?: SketchProfileReference[];
   ids?: BodyFeatureIds;
 }
 
@@ -746,7 +745,10 @@ export function extrudeSketch(
       featureKind: 'extrude',
       sketchId: input.sketchId,
       distance: input.distance,
-      ...(input.profile ? { profile: input.profile } : {})
+      ...(input.profile ? { profile: input.profile } : {}),
+      ...(input.profiles && input.profiles.length > 0
+        ? { profiles: input.profiles }
+        : {})
     }
   };
 

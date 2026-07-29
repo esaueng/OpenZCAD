@@ -1,13 +1,20 @@
 import * as THREE from 'three';
 import type { PlaneBasis } from '@openzcad/geometry';
 import {
+  REGION_COMMAND_OPACITY,
   REGION_HOVER_OPACITY,
+  REGION_IDLE_OPACITY,
   REGION_SELECTED_OPACITY,
   type RegionPickData
 } from '@openzcad/viewport';
 
 export type { RegionPickData };
-export { REGION_HOVER_OPACITY, REGION_SELECTED_OPACITY };
+export {
+  REGION_COMMAND_OPACITY,
+  REGION_HOVER_OPACITY,
+  REGION_IDLE_OPACITY,
+  REGION_SELECTED_OPACITY
+};
 
 /**
  * Geometry for detected sketch regions in the viewport: hole-aware
@@ -29,7 +36,9 @@ export function triangulateRegionGeometry(
   holes: RegionPoint[][],
   basis: PlaneBasis
 ): { positions: Float32Array; indices: number[] } {
-  const outerVectors = outer.map((point) => new THREE.Vector2(point.x, point.y));
+  const outerVectors = outer.map(
+    (point) => new THREE.Vector2(point.x, point.y)
+  );
   const holeVectors = holes.map((hole) =>
     hole.map((point) => new THREE.Vector2(point.x, point.y))
   );
@@ -50,32 +59,37 @@ export function triangulateRegionGeometry(
   return { positions, indices: triangles.flat() };
 }
 
-export const REGION_FILL_COLOR = 0xf59e0b;
+export const REGION_FILL_COLOR = 0x4da3ff;
 
-/** Builds the invisible-until-hovered fill mesh for one region. */
+/** Builds the cached fill mesh for one first-class sketch profile. */
 export function buildRegionMesh(
   outer: RegionPoint[],
   holes: RegionPoint[][],
   basis: PlaneBasis,
-  pick: RegionPickData
+  pick: RegionPickData,
+  options: { baseOpacity?: number; selected?: boolean } = {}
 ): THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> {
-  const { positions, indices } = triangulateRegionGeometry(
-    outer,
-    holes,
-    basis
-  );
+  const { positions, indices } = triangulateRegionGeometry(outer, holes, basis);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(indices);
   const material = new THREE.MeshBasicMaterial({
     color: REGION_FILL_COLOR,
+    toneMapped: false,
     transparent: true,
-    opacity: 0,
+    opacity: options.selected
+      ? REGION_SELECTED_OPACITY
+      : (options.baseOpacity ?? 0),
     depthWrite: false,
-    side: THREE.DoubleSide
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -3,
+    polygonOffsetUnits: -3
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = 9;
   mesh.userData.region = pick;
+  mesh.userData.regionBaseOpacity = options.baseOpacity ?? 0;
+  mesh.userData.regionSelected = options.selected === true;
   return mesh;
 }

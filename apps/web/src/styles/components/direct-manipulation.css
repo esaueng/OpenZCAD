@@ -429,6 +429,17 @@
   color: var(--color-accent-hi);
 }
 
+@media (min-width: 761px) and (max-width: 1500px) {
+  .sketch-rail button {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+
+  .sketch-rail button kbd {
+    display: none;
+  }
+}
+
 .sketch-entity-editor {
   position: absolute;
   top: 124px;
