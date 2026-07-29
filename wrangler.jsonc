@@ -17,6 +17,7 @@
   "vars": {
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
+    "PRODUCTION_GUARD": "enabled",
     "AUTH_EMAIL_FROM": "login@auth.esau.app",
     "AUTH_SESSION_DAYS": "30",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
