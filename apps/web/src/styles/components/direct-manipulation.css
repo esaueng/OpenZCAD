@@ -187,7 +187,9 @@
 /* Floating exact-value keypad anchored at the point of action. */
 .numeric-keypad {
   position: absolute;
-  z-index: calc(var(--z-viewer-overlay) + 3);
+  /* Exact entry must stay actionable when its anchor lands under the floating
+     Inspector; the keypad is the active modal surface for this interaction. */
+  z-index: calc(var(--z-inspector-float) + 2);
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -574,4 +576,3 @@
 .revert-sketch-pill:hover {
   background: var(--color-accent-dim);
 }
-
