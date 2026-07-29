@@ -111,9 +111,17 @@
     padding-inline: 6px;
   }
 
+  .status-state {
+    flex: 1 1 auto;
+  }
+
   .status-hint,
-  .status-groups > span:not(:last-child) {
+  .status-groups,
+  .status-filters > b {
     display: none;
   }
-}
 
+  .status-filters {
+    margin-left: 0;
+  }
+}
