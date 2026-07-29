@@ -4,6 +4,7 @@ import {
   ModelViewer,
   type ExtrudePreview,
   type FaceResizeCommit,
+  type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type RegionHandleTarget,
   type SketchModeState,
@@ -74,6 +75,12 @@ interface ViewerShellProps {
     ((point: { x: number; y: number } | null) => void) | null
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
+  onCylinderRadiusPreview(radius: number): void;
+  onCylinderRadiusCommit(radius: number): void;
+  onCylinderRadiusCancel(): void;
+  onOpenCylinderRadiusKeypad(radius: number): void;
+  cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   edgeHandle: EdgeHandleTarget | null;
   onEdgeRadiusPreview(size: number): void;
   onEdgeCommit(size: number): void;
@@ -139,6 +146,12 @@ export function ViewerShell({
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
+  cylinderRadiusHandle,
+  onCylinderRadiusPreview,
+  onCylinderRadiusCommit,
+  onCylinderRadiusCancel,
+  onOpenCylinderRadiusKeypad,
+  cancelDirectManipulationRef,
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
@@ -191,6 +204,12 @@ export function ViewerShell({
         onOpenOffsetKeypad={onOpenOffsetKeypad}
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
+        cylinderRadiusHandle={cylinderRadiusHandle}
+        onCylinderRadiusPreview={onCylinderRadiusPreview}
+        onCylinderRadiusCommit={onCylinderRadiusCommit}
+        onCylinderRadiusCancel={onCylinderRadiusCancel}
+        onOpenCylinderRadiusKeypad={onOpenCylinderRadiusKeypad}
+        cancelDirectManipulationRef={cancelDirectManipulationRef}
         edgeHandle={edgeHandle}
         onEdgeRadiusPreview={onEdgeRadiusPreview}
         onEdgeCommit={onEdgeCommit}

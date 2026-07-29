@@ -19,7 +19,7 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${PORT}`
   },
   webServer: {
-    command: `pnpm --filter @openzcad/web build && pnpm --filter @openzcad/web preview --host 127.0.0.1 --port ${PORT}`,
+    command: `VITE_E2E=1 pnpm --filter @openzcad/web build && pnpm --filter @openzcad/web preview --host 127.0.0.1 --port ${PORT}`,
     url: `http://127.0.0.1:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000

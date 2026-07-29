@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
 import type {
   AxisId,
@@ -133,6 +133,8 @@ interface PrimitiveFormProps {
   scope: Record<string, number>;
   initialName: string;
   initialDimensions?: Record<string, ParamValue>;
+  /** Transient direct-manipulation value; never writes document history. */
+  liveRadius?: number | null;
   submitLabel: string;
   onSubmit(name: string, dimensions: Record<string, ParamValue>): void;
   onCancel?: () => void;
@@ -143,6 +145,7 @@ export function PrimitiveForm({
   scope,
   initialName,
   initialDimensions,
+  liveRadius,
   submitLabel,
   onSubmit,
   onCancel
@@ -162,6 +165,16 @@ export function PrimitiveForm({
 
   const canSubmit =
     name.trim().length > 0 && fieldsValid(scope, Object.values(values));
+
+  useEffect(() => {
+    if (kind !== 'cylinder' || liveRadius === undefined || liveRadius === null) {
+      return;
+    }
+    const text = String(Math.round(liveRadius * 1000) / 1000);
+    setValues((current) =>
+      current.radius === text ? current : { ...current, radius: text }
+    );
+  }, [kind, liveRadius]);
 
   return (
     <FormShell
