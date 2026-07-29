@@ -371,6 +371,32 @@ test('restores a remembered local project without flashing the launcher', async 
   expect(bootStates.at(-1)).toBe('workspace');
 });
 
+test('flushes the latest edit before returning to the project list', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Autosave Flush Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
+
+  await page.getByRole('button', { name: 'Rename project' }).click();
+  await page.getByLabel('Project name').fill('Latest Autosave Name');
+  await page.getByLabel('Project name').press('Enter');
+  await page.getByTitle('Back to projects').click();
+
+  const savedProject = page.getByRole('button', {
+    name: /Latest Autosave Name/
+  });
+  await expect(savedProject).toBeVisible();
+  await savedProject.click();
+  await expect(page.getByRole('button', { name: 'Rename project' })).toContainText(
+    'Latest Autosave Name'
+  );
+});
+
 test('leaves the restore screen when a remembered project is missing', async ({
   page
 }) => {
