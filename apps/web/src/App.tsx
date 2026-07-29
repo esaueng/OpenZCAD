@@ -3313,9 +3313,36 @@ export function App() {
     ]);
   }
 
-  // Workspace keyboard map (ignored while typing in a field).
+  // `previewDoc` renders geometry from a proposal nobody has applied, and only
+  // the assistant can retire it. Turning the assistant off in Settings unmounts
+  // the panel, so the workspace has to drop the preview itself or the viewport
+  // keeps showing a proposal nothing left on screen can clear. Merely hiding
+  // the panel must not do this: the proposal is still live behind the sketch.
+  useEffect(() => {
+    if (!appSettings.assistant.enabled) {
+      setPreviewDoc(null);
+    }
+  }, [appSettings.assistant.enabled]);
+
+  /**
+   * Whether the workspace still owns the keyboard. A surface layered over it
+   * takes the keys with it: Settings sits on top of a live document, so
+   * Backspace deleting a feature or Ctrl+Z rewinding history behind it would
+   * edit a model the user cannot see. The palette and the shortcut overlay are
+   * not listed — they are handled inside the map, which they need to reach.
+   */
+  const workspaceInputEnabled = !settingsOpen;
+
+  // Workspace keyboard map (ignored while typing in a field). The ref must be
+  // refreshed before paint: a keydown arriving between a commit and a passive
+  // effect flush would otherwise run the previous render's closure — where a
+  // freshly opened document was still null and every shortcut a no-op.
+  const workspaceKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   useLayoutEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
+    workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
+      if (!workspaceInputEnabled) {
+        return;
+      }
       const meta = event.ctrlKey || event.metaKey;
 
       if (meta && event.key === ',') {
@@ -3510,17 +3537,34 @@ export function App() {
         event.preventDefault();
         launchTool(shortcutTool);
       }
-    }
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    };
   });
+
+  // One registration for the app's lifetime. The map closes over roughly forty
+  // pieces of state, so re-binding it on every render was the only way to keep
+  // it current; routing through the ref above does that without touching the
+  // listener, and without an omitted dependency going stale.
+  useLayoutEffect(() => {
+    const listener = (event: KeyboardEvent) =>
+      workspaceKeyDownRef.current(event);
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
+  }, []);
 
   if (startupState === 'restoring') {
     return <StartupScreen />;
   }
 
-  if (settingsOpen) {
-    return (
+  // Settings layers over whatever is behind it instead of replacing it.
+  // Returning it in place of the shell unmounted the whole workspace, and with
+  // it the assistant's conversation and any request still streaming.
+  const settingsOverlay = settingsOpen ? (
+    <div
+      className="settings-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
+    >
       <SettingsPage
         settings={appSettings}
         accountState={accountSettings}
@@ -3542,22 +3586,25 @@ export function App() {
         onApplyViewportDefaults={applyViewportDefaults}
         onClose={() => setSettingsOpen(false)}
       />
-    );
-  }
+    </div>
+  ) : null;
 
   if (!doc) {
     return (
-      <StartScreen
-        projects={projects}
-        status={status}
-        busy={busy}
-        demos={DEMO_DEFINITIONS}
-        defaultUnits={appSettings.general.defaultUnits}
-        onCreate={(name, units) => void handleCreateProject(name, units)}
-        onOpen={(projectId) => void handleOpenProject(projectId)}
-        onOpenDemo={(definition) => void handleOpenDemo(definition)}
-        onOpenSettings={openSettings}
-      />
+      <>
+        <StartScreen
+          projects={projects}
+          status={status}
+          busy={busy}
+          demos={DEMO_DEFINITIONS}
+          defaultUnits={appSettings.general.defaultUnits}
+          onCreate={(name, units) => void handleCreateProject(name, units)}
+          onOpen={(projectId) => void handleOpenProject(projectId)}
+          onOpenDemo={(definition) => void handleOpenDemo(definition)}
+          onOpenSettings={openSettings}
+        />
+        {settingsOverlay}
+      </>
     );
   }
 
@@ -3736,8 +3783,11 @@ export function App() {
     (tool === 'transform' && movePreview !== null);
   // The setting is the only gate on the assistant's presence: rendering nothing
   // also means no /api/assistant/status probe, since that fetch lives in the
-  // rail's mount effect. A direct-manipulation mode hides it temporarily.
-  const assistantAvailable = appSettings.assistant.enabled && !directMode;
+  // rail's mount effect. A direct-manipulation mode only hides it — the panel
+  // owns the conversation and the in-flight request, so unmounting to enter a
+  // sketch would throw both away.
+  const assistantAvailable = appSettings.assistant.enabled;
+  const assistantHidden = directMode;
   const contextualToolCard = toolCardFor(interaction);
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
@@ -4372,10 +4422,12 @@ export function App() {
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
               focusNonce={assistantFocusNonce}
+              hidden={assistantHidden}
             />
           </ErrorBoundary>
         ) : null
       }
+      assistantHidden={assistantHidden}
       statusBar={
         <StatusBar
           status={status}
@@ -4432,6 +4484,7 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
+          {settingsOverlay}
         </>
       }
     />

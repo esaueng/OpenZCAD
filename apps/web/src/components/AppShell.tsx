@@ -13,6 +13,12 @@ interface AppShellProps {
    * what the assistant setting does — and the viewport takes back the space.
    */
   assistant: ReactNode | null;
+  /**
+   * Gives the assistant's column back without unmounting it. A direct
+   * manipulation mode hides the dock, but the panel holds the conversation and
+   * any request still streaming, so it has to stay mounted underneath.
+   */
+  assistantHidden?: boolean;
   statusBar: ReactNode;
   overlays?: ReactNode;
 }
@@ -29,13 +35,16 @@ export function AppShell({
   viewer,
   inspector,
   assistant,
+  assistantHidden = false,
   statusBar,
   overlays
 }: AppShellProps) {
   return (
     <div className="app-shell">
       {topBar}
-      <main className={`workspace${assistant ? ' with-assistant' : ''}`}>
+      <main
+        className={`workspace${assistant && !assistantHidden ? ' with-assistant' : ''}`}
+      >
         {sidebar}
         <div className="viewer-area">
           {viewer}
