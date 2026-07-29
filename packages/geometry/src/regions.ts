@@ -298,12 +298,17 @@ function primitiveCurveKey(curve: Curve, tolerance: number): string {
   const start = toleranceKey(arcPoint(curve, 0), tolerance);
   const end = toleranceKey(arcPoint(curve, curve.sweep), tolerance);
   const ends = start <= end ? `${start}:${end}` : `${end}:${start}`;
+  const midpoint = toleranceKey(
+    arcPoint(curve, curve.sweep / 2),
+    tolerance
+  );
   return [
     'A',
     toleranceKey({ x: curve.cx, y: curve.cy }, tolerance),
     Math.round(curve.r / tolerance),
     Math.round(curve.sweep / 1e-9),
-    ends
+    ends,
+    midpoint
   ].join(':');
 }
 
@@ -955,7 +960,11 @@ function curveSignature(curve: RegionCurve): string {
     quantize(normalizeAngle(curve.startAngle)),
     quantize(normalizeAngle(curve.endAngle))
   ].sort((a, b) => a - b);
-  return `A${base},${angles.join(',')},${quantize(span)}`;
+  const signedSpan = curve.ccw ? span : -span;
+  const midpoint = quantize(
+    normalizeAngle(curve.startAngle + signedSpan / 2)
+  );
+  return `A${base},${angles.join(',')},${quantize(span)},${midpoint}`;
 }
 
 function loopSignature(loop: RegionLoop): string {
