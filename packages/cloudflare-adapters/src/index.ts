@@ -89,23 +89,32 @@ export class D1R2PersistenceService implements PersistenceService {
       }>();
 
     return {
-      projects: (rows.results ?? []).map(
+      projects: (rows.results ?? []).flatMap(
         (row: {
           id: string;
           name: string;
           updated_at: string;
           document_json: string;
         }) => {
-          const document = normalizeDocument(
-            JSON.parse(row.document_json) as ProjectDocument
-          );
-          return {
-            projectId: document.projectId,
-            name: row.name,
-            lastRevisionId: document.revisions.at(-1)?.revisionId,
-            revisionCount: document.revisions.length,
-            updatedAt: row.updated_at
-          };
+          try {
+            const document = normalizeDocument(
+              JSON.parse(row.document_json) as ProjectDocument
+            );
+            return [
+              {
+                projectId: document.projectId,
+                name: row.name,
+                lastRevisionId: document.revisions.at(-1)?.revisionId,
+                revisionCount: document.revisions.length,
+                updatedAt: row.updated_at
+              }
+            ];
+          } catch {
+            console.error('Skipping corrupt project row:', {
+              projectId: row.id
+            });
+            return [];
+          }
         }
       )
     };
