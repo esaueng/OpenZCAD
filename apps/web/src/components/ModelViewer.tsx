@@ -1325,6 +1325,32 @@ export function ModelViewer({
       );
     };
     /**
+     * Select a detected profile by stable index in browser regressions. The
+     * picker itself has focused unit coverage; this avoids racing the camera
+     * tween while exercising the full application selection lifecycle.
+     */
+    const handleE2EProfileSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          index?: number;
+          additive?: boolean;
+          toggle?: boolean;
+        }>
+      ).detail;
+      const profile =
+        profilePickTargetsRef.current[detail?.index ?? 0]?.pick ?? null;
+      if (!profile) {
+        return;
+      }
+      onSelectRegionRef.current(profile, {
+        additive: detail?.additive ?? false,
+        toggle: detail?.toggle ?? false
+      });
+    };
+    /**
      * The regression suite builds real overlapping sketch/body geometry, then
      * reads this compact scene snapshot to prove the live renderer is using
      * the same depth-aware hierarchy covered by unit tests.
@@ -1417,6 +1443,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-render-policy',
         handleE2ERenderPolicy
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-select-profile',
+        handleE2EProfileSelection
       );
     }
 
@@ -3244,6 +3274,10 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'openzcad:e2e-render-policy',
         handleE2ERenderPolicy
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-profile',
+        handleE2EProfileSelection
       );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);

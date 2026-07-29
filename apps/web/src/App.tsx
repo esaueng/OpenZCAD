@@ -434,10 +434,17 @@ export function App() {
           .apply(base);
       },
       derive: (document) => geometry.syncOnce(document),
-      publish: (preview) =>
+      publish: (preview) => {
         setPreviewDoc(
           preview ? { ...preview.document, derived: preview.derived } : null
-        ),
+        );
+        if (preview) {
+          const count = selectedProfilesRef.current.length;
+          setStatus(
+            `${count} profile${count === 1 ? '' : 's'} selected · exact preview ready.`
+          );
+        }
+      },
       continueAfterSlow: true
     })
   ).current;
