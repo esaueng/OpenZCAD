@@ -9,17 +9,16 @@ import {
 import {
   GEOMETRY_LINEAR_TOLERANCE,
   circleProfile,
-  computeSketchRegions,
   frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
-  regionAtPoint,
   type PlaneBasis,
   type SketchRegion,
   type Vec2,
   type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
+import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
   UNIT_TO_MM,
@@ -34,12 +33,23 @@ import {
   type FeatureNode,
   type ProjectDocument,
   type SketchNode,
-  type SketchObjectData,
-  type SketchObjectNode
+  type SketchObjectData
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import { OpenZCADKernel } from './index';
+import { resolveRegionProfile } from './region-profile';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
+import {
+  ambiguousReferenceError,
+  canonicalDirection,
+  cylinderAnalyticSignature,
+  edgeFingerprintOf,
+  faceFingerprintOf,
+  isClosedEdge,
+  planeAnalyticSignature,
+  unresolvedReferenceError,
+  type EdgeSample
+} from './topology-fingerprint';
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
@@ -465,7 +475,75 @@ function quantizeEdgeCoordinate(value: number): number {
   return Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
 }
 
+function pointAt(values: number[], offset: number): Vec3 {
+  return {
+    x: values[offset] ?? 0,
+    y: values[offset + 1] ?? 0,
+    z: values[offset + 2] ?? 0
+  };
+}
+
+/** Sample the ADR-011 edge identity quantities from a BrepKit edge. */
+function edgeSampleOf(kernel: BrepKernel, edge: number): EdgeSample {
+  const vertices = Array.from(kernel.getEdgeVertices(edge));
+  const start = pointAt(vertices, 0);
+  const end = pointAt(vertices, 3);
+  const curveType = kernel.getEdgeCurveType(edge);
+  const length = kernel.edgeLength(edge);
+  const domain = Array.from(kernel.getEdgeCurveParameters(edge));
+  const first = domain[0] ?? 0;
+  const span = (domain[1] ?? 1) - first;
+  if (!isClosedEdge(start, end)) {
+    return {
+      closed: false,
+      curveType,
+      length,
+      endpoints: [start, end],
+      midpoint: pointAt(
+        Array.from(kernel.evaluateEdgeCurve(edge, first + span / 2)),
+        0
+      )
+    };
+  }
+  const center = { x: 0, y: 0, z: 0 };
+  for (let sample = 0; sample < 4; sample += 1) {
+    const point = Array.from(
+      kernel.evaluateEdgeCurve(edge, first + (span * sample) / 4)
+    );
+    center.x += (point[0] ?? 0) / 4;
+    center.y += (point[1] ?? 0) / 4;
+    center.z += (point[2] ?? 0) / 4;
+  }
+  const tangentA = pointAt(
+    Array.from(kernel.evaluateEdgeCurveD1(edge, first)),
+    3
+  );
+  const tangentB = pointAt(
+    Array.from(kernel.evaluateEdgeCurveD1(edge, first + span / 4)),
+    3
+  );
+  const axis = normalized(cross(tangentA, tangentB));
+  return {
+    closed: true,
+    curveType,
+    length,
+    center,
+    axis: axis ? canonicalDirection(axis) : null
+  };
+}
+
 function edgeFingerprint(kernel: BrepKernel, edge: number): number {
+  return edgeFingerprintOf(edgeSampleOf(kernel, edge));
+}
+
+/**
+ * The pre-ADR-011 BrepKit scheme: closed curves hashed their seam vertex and
+ * mid-parameter point, both of which depend on BrepKit's parameterization
+ * phase. Persisted documents still hold these values, so resolution maps
+ * register them alongside the kernel-neutral fingerprint. (For open edges the
+ * two schemes produce identical signatures.)
+ */
+function legacyEdgeFingerprint(kernel: BrepKernel, edge: number): number {
   const vertices = Array.from(kernel.getEdgeVertices(edge));
   const endpoints = [vertices.slice(0, 3), vertices.slice(3, 6)].sort((a, b) => {
     for (let index = 0; index < 3; index += 1) {
@@ -495,6 +573,16 @@ function edgeFingerprint(kernel: BrepKernel, edge: number): number {
   return unsigned === 0 ? 1 : unsigned;
 }
 
+function registerHandle(
+  map: Map<number, number[]>,
+  hash: number,
+  handle: number
+): void {
+  const handles = map.get(hash) ?? [];
+  handles.push(handle);
+  map.set(hash, handles);
+}
+
 function edgeHandlesByFingerprint(
   kernel: BrepKernel,
   solid: number
@@ -502,9 +590,11 @@ function edgeHandlesByFingerprint(
   const result = new Map<number, number[]>();
   for (const edge of kernel.getSolidEdges(solid)) {
     const hash = edgeFingerprint(kernel, edge);
-    const handles = result.get(hash) ?? [];
-    handles.push(edge);
-    result.set(hash, handles);
+    registerHandle(result, hash, edge);
+    const legacy = legacyEdgeFingerprint(kernel, edge);
+    if (legacy !== hash) {
+      registerHandle(result, legacy, edge);
+    }
   }
   return result;
 }
@@ -581,13 +671,59 @@ function analyticParamsSignature(kernel: BrepKernel, face: number): string {
 }
 
 /**
- * Geometric fingerprint of a face, mirroring edgeFingerprint: surface class,
- * quantized area, canonicalized analytic parameters, and the outer-boundary
- * vertex centroid. Stable across identical rebuilds; any real geometry change
- * moves it, so face-referencing features fail closed instead of editing the
- * wrong face (the same contract ADR-008/ADR-010 establish for edges).
+ * Geometric fingerprint of a face (ADR-011): surface class, quantized
+ * boundary perimeter, canonical analytic parameters for planes and cylinders,
+ * and the boundary vertex centroid — all exact quantities both kernels agree
+ * on, unlike the tessellated area the previous scheme used. Stable across
+ * identical rebuilds; any real geometry change moves it, so face-referencing
+ * features fail closed instead of editing the wrong face (the same contract
+ * ADR-008/ADR-010 establish for edges).
  */
 function faceFingerprint(kernel: BrepKernel, face: number): number {
+  const surfaceType = kernel.getSurfaceType(face);
+  let perimeter = 0;
+  for (const edge of kernel.getFaceEdges(face)) {
+    perimeter += kernel.edgeLength(edge);
+  }
+  let analytic = '';
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    parameters = null;
+  }
+  const record = (parameters ?? {}) as Record<string, unknown>;
+  if (surfaceType === 'plane') {
+    const rawNormal = finiteVec3(record.normal);
+    const normal = rawNormal ? normalized(rawNormal) : null;
+    const offset = record.d;
+    if (normal && typeof offset === 'number' && Number.isFinite(offset)) {
+      analytic = planeAnalyticSignature(normal, offset);
+    }
+  } else if (surfaceType === 'cylinder') {
+    const origin = finiteVec3(record.origin);
+    const rawAxis = finiteVec3(record.axis);
+    const axis = rawAxis ? normalized(rawAxis) : null;
+    const radius = record.radius;
+    if (
+      origin &&
+      axis &&
+      typeof radius === 'number' &&
+      Number.isFinite(radius)
+    ) {
+      analytic = cylinderAnalyticSignature(origin, axis, radius);
+    }
+  }
+  return faceFingerprintOf({
+    surfaceType,
+    perimeter,
+    analytic,
+    centroid: faceVertexCentroid(kernel, face)
+  });
+}
+
+/** The pre-ADR-011 BrepKit face scheme, kept only for persisted references. */
+function legacyFaceFingerprint(kernel: BrepKernel, face: number): number {
   const centroid = faceVertexCentroid(kernel, face);
   const signature = [
     kernel.getSurfaceType(face),
@@ -617,9 +753,11 @@ function faceHandlesByFingerprint(
   const result = new Map<number, number[]>();
   for (const face of kernel.getSolidFaces(solid)) {
     const hash = faceFingerprint(kernel, face);
-    const handles = result.get(hash) ?? [];
-    handles.push(face);
-    result.set(hash, handles);
+    registerHandle(result, hash, face);
+    const legacy = legacyFaceFingerprint(kernel, face);
+    if (legacy !== hash) {
+      registerHandle(result, legacy, face);
+    }
   }
   return result;
 }
@@ -735,9 +873,31 @@ function decodeText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+function containsImportedMesh(document: ProjectDocument): boolean {
+  return listFeaturesInOrder(document).some(
+    (feature) => feature.data.featureKind === 'imported-mesh'
+  );
+}
+
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'brepkit' as const;
   private readonly legacy = new OpenZCADKernel();
+  private stepCombiner: Promise<{
+    combineStepSolids(parts: string[]): string;
+    dispose(): void;
+  }> | null = null;
+
+  /**
+   * BrepKit's STEP writer serializes exactly one solid, so multi-body exports
+   * are assembled into a compound document by OpenCascade — loaded lazily,
+   * only when a multi-body export happens.
+   */
+  private getStepCombiner(): NonNullable<typeof this.stepCombiner> {
+    this.stepCombiner ??= import('./occt-step').then(
+      ({ OcctStepKernelAdapter }) => OcctStepKernelAdapter.create()
+    );
+    return this.stepCombiner;
+  }
 
   private makeProfileFace(
     kernel: BrepKernel,
@@ -921,13 +1081,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     );
   }
 
-  /**
-   * Extrude one detected closed region of a multi-object sketch. Resolution
-   * is fail-closed (ADR-010): the stored fingerprint must match a current
-   * region, with a single tolerant fallback — the stored sample point still
-   * falls inside a region whose area is within 1% — so nudging a curve keeps
-   * the feature alive while topology changes refuse to guess.
-   */
+  /** Extrude one detected closed region of a multi-object sketch. */
   private buildRegionExtrude(
     kernel: BrepKernel,
     document: ProjectDocument,
@@ -935,35 +1089,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>
   ): ExactShape {
-    const profile = data.profile!;
-    const objects = sketch.objectIds
-      .map((objectId) => document.nodes[objectId])
-      .filter(
-        (node): node is SketchObjectNode => node?.kind === 'sketch-object'
-      )
-      .map((node) => ({ id: node.id, data: node.data }));
-    const regions = computeSketchRegions(objects, (value) =>
-      resolveParamValue(value, scope, 'sketch dimension')
-    );
-    let region =
-      regions.find(
-        (candidate) => candidate.regionFingerprint === profile.regionFingerprint
-      ) ?? null;
-    if (!region) {
-      const candidate = regionAtPoint(regions, profile.samplePoint);
-      if (
-        candidate &&
-        Math.abs(candidate.area - profile.sourceArea) <=
-          Math.max(profile.sourceArea * 0.01, 1e-9)
-      ) {
-        region = candidate;
-      }
-    }
-    if (!region) {
-      throw new Error(
-        'The sketch region this extrude was built from no longer exists.'
-      );
-    }
+    const region = resolveRegionProfile(document, sketch, data, scope);
     const basis = frameForPlaneRef(sketch.planeRef, (value) =>
       resolveParamValue(value, scope, 'sketch offset')
     );
@@ -1191,16 +1317,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             }
             const target = collapseShape(kernel, storedTarget);
             const requested = new Set(feature.data.edgeHashes);
+            const edgeCount = kernel.getSolidEdges(target).length;
             const edgesByHash = edgeHandlesByFingerprint(kernel, target);
             const selected: number[] = [];
             for (const hash of requested) {
               const matches = edgesByHash.get(hash) ?? [];
-              if (matches.length !== 1) {
-                throw new Error(
-                  matches.length === 0
-                    ? 'A selected edge no longer exists.'
-                    : 'A selected edge is geometrically ambiguous.'
-                );
+              if (matches.length === 0) {
+                throw unresolvedReferenceError('edge', hash, edgeCount);
+              }
+              if (matches.length > 1) {
+                throw ambiguousReferenceError('edge');
               }
               selected.push(matches[0]!);
             }
@@ -1338,10 +1464,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   ): number {
     const matches = faceHandlesByFingerprint(kernel, solid).get(faceHash) ?? [];
     if (matches.length === 0) {
-      throw new Error('The selected face no longer exists.');
+      throw unresolvedReferenceError(
+        'face',
+        faceHash,
+        Array.from(kernel.getSolidFaces(solid)).length
+      );
     }
     if (matches.length > 1) {
-      throw new Error('The selected face is geometrically ambiguous.');
+      throw ambiguousReferenceError('face');
     }
     return matches[0]!;
   }
@@ -1636,11 +1766,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    if (
-      listFeaturesInOrder(document).some(
-        (feature) => feature.data.featureKind === 'imported-mesh'
-      )
-    ) {
+    if (containsImportedMesh(document)) {
       return this.legacy.syncDocument(document);
     }
 
@@ -1735,11 +1861,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 uniformScaleMatrix(millimeterScale)
               )
             );
-      const exportSolid =
-        exportSolids.length === 1
-          ? exportSolids[0]!
-          : kernel.fuseAll(Uint32Array.from(exportSolids));
-      return decodeText(kernel.exportStep(exportSolid));
+      if (exportSolids.length === 1) {
+        return decodeText(kernel.exportStep(exportSolids[0]!));
+      }
+      // Never fuse: a boolean union changes the geometry (overlaps merge,
+      // coincident faces weld). Export each solid and compound them.
+      const parts = exportSolids.map((solid) =>
+        decodeText(kernel.exportStep(solid))
+      );
+      return (await this.getStepCombiner()).combineStepSolids(parts);
     } finally {
       kernel.free();
     }
@@ -1749,6 +1879,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
+    if (containsImportedMesh(document)) {
+      return this.legacy.exportStl(document, bodyIds);
+    }
     const kernel = new BrepKernel();
     try {
       const build = this.build(kernel, document);
@@ -1772,11 +1905,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 uniformScaleMatrix(millimeterScale)
               )
             );
-      return exportSolids
-        .map((solid) =>
-          decodeText(kernel.exportStlAscii(solid, STL_EXPORT_DEFLECTION))
-        )
-        .join('\n');
+      if (exportSolids.length === 1) {
+        return decodeText(
+          kernel.exportStlAscii(exportSolids[0]!, STL_EXPORT_DEFLECTION)
+        );
+      }
+      // Several consumers stop at the first `solid` block, so a multi-body
+      // export must be one block containing every body's facets.
+      const meshes = exportSolids.map((solid, index) => {
+        const mesh = kernel.tessellateSolidGroupedBinary(
+          solid,
+          STL_EXPORT_DEFLECTION
+        );
+        try {
+          return {
+            name: `body_${index + 1}`,
+            vertices: Array.from(mesh.positions),
+            indices: Array.from(mesh.indices)
+          };
+        } finally {
+          mesh.free();
+        }
+      });
+      return writeAsciiStl(document.name, meshes);
     } finally {
       kernel.free();
     }
@@ -1813,6 +1964,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   dispose(): void {
     // Each operation owns and releases a short-lived BrepKernel instance.
+    void this.stepCombiner?.then((combiner) => combiner.dispose());
+    this.stepCombiner = null;
   }
 }
 
