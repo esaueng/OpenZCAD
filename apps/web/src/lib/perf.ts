@@ -15,9 +15,13 @@ const supported =
   typeof performance.mark === 'function' &&
   typeof performance.measure === 'function';
 
-export function mark(name: string): void {
+export function mark(name: string, detail?: unknown): void {
   if (supported) {
-    performance.mark(`${PREFIX}${name}`);
+    if (detail === undefined) {
+      performance.mark(`${PREFIX}${name}`);
+    } else {
+      performance.mark(`${PREFIX}${name}`, { detail });
+    }
   }
 }
 

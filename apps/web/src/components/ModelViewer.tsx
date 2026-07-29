@@ -644,6 +644,7 @@ export function ModelViewer({
 
     mark('viewer.init:begin');
     let firstFrame = true;
+    let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
     const gradientBackground = createGradientBackground();
     scene.background = gradientBackground;
@@ -2514,6 +2515,17 @@ export function ModelViewer({
         );
       } else {
         renderer.render(scene, context.activeCamera);
+      }
+      if (import.meta.env.OZ_PERF === '1') {
+        mark('viewer.frame', {
+          frameMs:
+            lastPerfFrameAt === null
+              ? null
+              : Math.max(now - lastPerfFrameAt, 0),
+          drawCalls: renderer.info.render.calls,
+          triangles: renderer.info.render.triangles
+        });
+        lastPerfFrameAt = now;
       }
       updateDimensionLabels(
         context,

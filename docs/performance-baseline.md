@@ -23,6 +23,43 @@ prefix, so the same phases are visible in the DevTools performance panel, in
 currently marked: `worker.create`, `document.hydrate`, `viewer.init`,
 `viewer.renderer`, `viewer.environment`, `viewer.firstFrame`, `viewer.bodies`.
 
+## Interaction baseline
+
+Reproduce with:
+
+```bash
+OZ_PERF=1 pnpm exec playwright test interaction-probe
+```
+
+The probe opens the Heat Sink demo, the existing model with the busiest edge
+set, then drives a left-button orbit and right-button pan for about five
+seconds. `ModelViewer` emits one `oz:viewer.frame` mark per rendered frame only
+in an `OZ_PERF=1` build; each mark carries the frame interval plus
+`renderer.info.render` draw-call and triangle counts. The spec is excluded from
+the normal Playwright suite.
+
+Baseline captured 2026-07-28 on a MacBook Pro (Mac17,9, Apple M5 Pro, 15 CPU
+cores, 48 GB RAM) running macOS 26.5.2 arm64, Node 22.22.2, and Playwright's
+headless Chromium. The WebGL renderer was ANGLE Vulkan over SwiftShader, so
+these numbers describe the repeatable headless acceptance environment rather
+than real-GPU user experience.
+
+Three serial runs, with the median used as the baseline:
+
+| Metric | Runs | Baseline median |
+|---|---:|---:|
+| Interaction window | 5.743–5.885 s | 5.792 s |
+| Rendered frames | 197–226 | 222 |
+| Frame time p50 | 17.5–25.0 ms | 24.9 ms |
+| Frame time p95 | 33.3–41.7 ms | 33.8 ms |
+| Frame time max | 350.0–554.1 ms | 416.7 ms |
+| Mean draw calls | 133.05–133.14 | 133.12 |
+| Mean triangles | 5,493.58–5,565.37 | 5,513.75 |
+
+The max is sensitive to one-off browser and software-renderer stalls. Use p95
+as the input-path acceptance signal and mean draw calls as the render-loop
+signal.
+
 ## What the numbers say
 
 Every instrumented main-thread phase is small and stable:
