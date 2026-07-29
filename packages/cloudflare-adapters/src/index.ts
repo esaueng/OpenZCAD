@@ -38,6 +38,7 @@ import {
 export interface CloudflareEnv {
   ENVIRONMENT?: 'development' | 'beta';
   AUTH_MODE?: 'development' | 'email-code';
+  PRODUCTION_GUARD?: string;
   AUTH_LEGACY_OWNER_EMAIL?: string;
   AUTH_OTP_PEPPER?: string;
   AUTH_EMAIL_FROM?: string;
