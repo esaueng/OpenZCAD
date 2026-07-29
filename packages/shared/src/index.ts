@@ -809,7 +809,23 @@ export type CollaborationServerMessage =
    * would otherwise never reach the sender.
    */
   | { type: 'ack'; version: number; document?: ProjectDocument }
-  | { type: 'conflict'; document: ProjectDocument };
+  | { type: 'conflict'; document: ProjectDocument }
+  /**
+   * A submission the room refused outright. Room state is unchanged, so the
+   * sender keeps its own document rather than reporting itself synced against
+   * state the room never took.
+   */
+  | { type: 'error'; code: CollaborationErrorCode; message: string };
+
+export type CollaborationErrorCode =
+  /** Larger than a single durable-storage value can hold. */
+  | 'document-too-large'
+  /** Nested or numerous past what the room will walk. */
+  | 'document-too-complex'
+  /** Not a document-shaped payload at all. */
+  | 'document-invalid'
+  /** The room failed while handling an otherwise well-formed message. */
+  | 'internal';
 
 /**
  * Longest accepted project name, measured after trimming. Shared so the client

@@ -13,6 +13,8 @@ export type CollaborationStatus =
   | 'offline'
   | 'conflict'
   | 'oversize'
+  /** The room refused this document outright; local edits are unaffected. */
+  | 'rejected'
   | 'update-required';
 
 interface CollaborationOptions {
@@ -34,6 +36,21 @@ function collaborationDocument(document: ProjectDocument): ProjectDocument {
       updatedAt: document.derived.updatedAt
     }
   };
+}
+
+/**
+ * Maps a refusal frame to the status it should show, or null when the message
+ * is not a refusal. The room kept its previous state either way, so the caller
+ * adopts nothing and stays on its own document.
+ */
+function rejectionStatus(
+  message: CollaborationServerMessage
+): CollaborationStatus | null {
+  if (message.type !== 'error') {
+    return null;
+  }
+  console.error(`Collaboration rejected: ${message.message}`);
+  return message.code === 'document-too-large' ? 'oversize' : 'rejected';
 }
 
 function clientId(): string {
@@ -122,6 +139,11 @@ export function useCollaboration({
         })
           .then(async (response) => {
             const message = (await response.json()) as CollaborationServerMessage;
+            const rejected = rejectionStatus(message);
+            if (rejected) {
+              setStatus(rejected);
+              return;
+            }
             if (!response.ok || message.type === 'conflict') {
               if (message.type === 'conflict') {
                 conflictHandlerRef.current(message.document);
@@ -229,6 +251,11 @@ export function useCollaboration({
           }
           setStatus('conflict');
           conflictHandlerRef.current(message.document);
+          return;
+        }
+        const rejected = rejectionStatus(message);
+        if (rejected) {
+          setStatus(rejected);
         }
       });
       socket.addEventListener('close', () => {
@@ -288,6 +315,11 @@ export function useCollaboration({
         })
           .then(async (response) => {
             const message = (await response.json()) as CollaborationServerMessage;
+            const rejected = rejectionStatus(message);
+            if (rejected) {
+              setStatus(rejected);
+              return;
+            }
             if (!response.ok || message.type === 'conflict') {
               if (message.type === 'conflict') {
                 conflictHandlerRef.current(message.document);
