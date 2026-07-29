@@ -9,13 +9,7 @@
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
 export type StandardView =
-  | 'iso'
-  | 'front'
-  | 'back'
-  | 'top'
-  | 'bottom'
-  | 'right'
-  | 'left';
+  'iso' | 'front' | 'back' | 'top' | 'bottom' | 'right' | 'left';
 
 export type ProjectionMode = 'perspective' | 'orthographic';
 
@@ -76,8 +70,15 @@ export interface PickDetail {
 /** Pick payload attached to region meshes via userData. */
 export interface RegionPickData {
   sketchId: string;
+  profileId: string;
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
+  centroid: { x: number; y: number };
+  boundingBox: {
+    min: { x: number; y: number };
+    max: { x: number; y: number };
+  };
+  sourceEntityIds: string[];
   area: number;
 }
 

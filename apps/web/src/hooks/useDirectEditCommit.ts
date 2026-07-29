@@ -69,7 +69,7 @@ export function useDirectEditCommit(
       host.onValidationStart(submittedValue);
       const current = manager.document;
       host.onBusy(true);
-      host.onStatus('Validating direct edit with the exact geometry kernel…');
+      host.onStatus('Validating operation with the exact geometry kernel…');
       try {
         command.validate(current);
         const preview = command.apply(current);
@@ -95,7 +95,7 @@ export function useDirectEditCommit(
         host.onStatus(successMessage);
         return true;
       } catch (error) {
-        const message = errorMessage(error, 'Direct edit was not applied.');
+        const message = errorMessage(error, 'Operation was not applied.');
         host.onValidationFailed(message, submittedValue);
         host.onStatus(message);
         return false;

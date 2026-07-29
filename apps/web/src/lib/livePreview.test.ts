@@ -136,6 +136,26 @@ describe('failure and invalid input', () => {
     expect(built).toEqual([]);
   });
 
+  it('supports signed operations through an explicit value policy', async () => {
+    const built: number[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => {
+        built.push(value);
+        return { value };
+      },
+      derive: () => Promise.resolve('derived'),
+      publish: () => undefined,
+      acceptValue: (value) => Math.abs(value) >= 0.1
+    });
+
+    preview.request(-8);
+    await settle();
+    preview.request(0);
+    await settle();
+
+    expect(built).toEqual([-8]);
+  });
+
   it('publishes nothing when the value cannot build a document', async () => {
     const published: unknown[] = [];
     let derived = 0;
@@ -220,8 +240,7 @@ describe('slow rebuilds degrade for the rest of the gesture', () => {
           clock += 500;
           return call === 1 ? first.promise : Promise.resolve('derived');
         },
-        publish: (value) =>
-          publishedDocuments.push(value?.document ?? null),
+        publish: (value) => publishedDocuments.push(value?.document ?? null),
         now: () => clock,
         slowFrameMs: 400,
         continueAfterSlow: true

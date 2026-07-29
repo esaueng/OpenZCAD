@@ -91,7 +91,13 @@ interface ViewerShellProps {
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(objectId: string | null): void;
   sketchViews: SketchViewData[];
-  onSelectRegion(region: RegionPickData): void;
+  selectedProfileIds: string[];
+  profileSelectionMode: boolean;
+  onSelectRegion(
+    region: RegionPickData,
+    modifiers: { additive: boolean; toggle: boolean }
+  ): void;
+  onHoverRegion(region: RegionPickData | null): void;
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -162,7 +168,10 @@ export function ViewerShell({
   onSketchDrawingChange,
   onSketchSelectObject,
   sketchViews,
+  selectedProfileIds,
+  profileSelectionMode,
   onSelectRegion,
+  onHoverRegion,
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -220,7 +229,10 @@ export function ViewerShell({
         onSketchDrawingChange={onSketchDrawingChange}
         onSketchSelectObject={onSketchSelectObject}
         sketchViews={sketchViews}
+        selectedProfileIds={selectedProfileIds}
+        profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
+        onHoverRegion={onHoverRegion}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
@@ -259,7 +271,10 @@ export function ViewerShell({
                 <Box size={14} aria-hidden="true" />
                 Box <kbd>B</kbd>
               </button>
-              <button type="button" onClick={() => onStartPrimitive('cylinder')}>
+              <button
+                type="button"
+                onClick={() => onStartPrimitive('cylinder')}
+              >
                 <Cylinder size={14} aria-hidden="true" />
                 Cylinder <kbd>C</kbd>
               </button>

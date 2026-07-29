@@ -38,6 +38,8 @@ export interface SketchModeRig {
   pickObject(raycaster: THREE.Raycaster, threshold: number): string | null;
   /** Replaces the in-progress (orange) polyline; null hides it. */
   setInProgress(points: SketchPoint[] | null, closed: boolean): void;
+  /** Highlights open/gapped endpoints requested by profile diagnostics. */
+  setDiagnostics(points: SketchPoint[]): void;
   dispose(): void;
 }
 
@@ -194,6 +196,21 @@ export function buildSketchModeRig(
   grid.renderOrder = 6;
   group.add(grid);
 
+  const originMaterial = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 8,
+    sizeAttenuation: false,
+    depthTest: false,
+    depthWrite: false
+  });
+  const originMarker = new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints([origin]),
+    originMaterial
+  );
+  originMarker.name = 'sketch-origin';
+  originMarker.renderOrder = 10;
+  group.add(originMarker);
+
   const committedGroup = new THREE.Group();
   committedGroup.name = 'sketch-committed';
   group.add(committedGroup);
@@ -210,6 +227,22 @@ export function buildSketchModeRig(
   inProgress.visible = false;
   inProgress.frustumCulled = false;
   group.add(inProgress);
+
+  const diagnosticMaterial = new THREE.PointsMaterial({
+    color: 0xff5d73,
+    size: 9,
+    sizeAttenuation: false,
+    depthTest: false,
+    depthWrite: false
+  });
+  const diagnostics = new THREE.Points(
+    new THREE.BufferGeometry(),
+    diagnosticMaterial
+  );
+  diagnostics.name = 'sketch-profile-diagnostics';
+  diagnostics.renderOrder = 14;
+  diagnostics.visible = false;
+  group.add(diagnostics);
 
   const disposeChildren = (container: THREE.Object3D) => {
     for (const child of [...container.children]) {
@@ -255,13 +288,22 @@ export function buildSketchModeRig(
 
         const visual = createFatLine(vertices, {
           color:
-            object.id === selectedObjectId ? SELECTED_COLOR : COMMITTED_COLOR,
+            object.id === selectedObjectId
+              ? SELECTED_COLOR
+              : object.data.construction
+                ? 0x7b8da3
+                : COMMITTED_COLOR,
           linewidth: SKETCH_LINE_WIDTH,
-          opacity: 0.95,
+          opacity: object.data.construction ? 0.72 : 0.95,
           depthTest: false,
           closed: polyline.closed,
           resolution: resolution()
         });
+        if (object.data.construction) {
+          visual.material.dashed = true;
+          visual.material.dashSize = 1.4;
+          visual.material.gapSize = 1;
+        }
         visual.renderOrder = 11;
         visual.frustumCulled = false;
         visual.raycast = () => undefined; // the proxy is the only pick target
@@ -302,6 +344,13 @@ export function buildSketchModeRig(
       );
       inProgress.visible = true;
     },
+    setDiagnostics(points) {
+      diagnostics.geometry.dispose();
+      diagnostics.geometry = new THREE.BufferGeometry().setFromPoints(
+        points.map((point) => liftPoint(basis, point))
+      );
+      diagnostics.visible = points.length > 0;
+    },
     dispose() {
       group.removeFromParent();
       disposeChildren(committedGroup);
@@ -309,8 +358,12 @@ export function buildSketchModeRig(
       tint.material.dispose();
       grid.geometry.dispose();
       gridMaterial.dispose();
+      originMarker.geometry.dispose();
+      originMaterial.dispose();
       inProgress.geometry.dispose();
       inProgressMaterial.dispose();
+      diagnostics.geometry.dispose();
+      diagnosticMaterial.dispose();
     }
   };
 }

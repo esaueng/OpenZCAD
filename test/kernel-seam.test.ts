@@ -263,7 +263,9 @@ describe('kernel seam correctness', () => {
     ).toBe(true);
 
     // Removing the STEP source must return to identical BrepKit geometry.
-    const backToBrepKit = await adapter.syncDocument(removeStepImport(withStep));
+    const backToBrepKit = await adapter.syncDocument(
+      removeStepImport(withStep)
+    );
     expect(backToBrepKit.warnings).toEqual([]);
     expect(backToBrepKit.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
       brepkitBody!.volume,
@@ -277,9 +279,7 @@ describe('kernel seam correctness', () => {
       {
         name: 'Disk profile',
         planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
-        objects: [
-          { objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }
-        ]
+        objects: [{ objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }]
       }
     );
     const { document, bodyId } = extrudeSketch(withSketch, {
@@ -299,7 +299,7 @@ describe('kernel seam correctness', () => {
       derived.warnings.some(
         (warning) =>
           warning.includes('Ghost extrude') &&
-          warning.includes('no longer exists')
+          warning.includes('Broken profile reference')
       )
     ).toBe(true);
     // Never the fallback shape: the body must be absent, not the whole disk.
@@ -332,9 +332,7 @@ describe('kernel seam correctness', () => {
     // from the old corner line, so nothing may remain within 0.3 of it.
     expect(hasEdgePointNearLine(brepkitBody, 30, 18, 0.3)).toBe(false);
     // The other intact corner survives untouched.
-    expect(
-      edgeOnVerticalLine(brepkitBody, 30, 0)
-    ).toBeTruthy();
+    expect(edgeOnVerticalLine(brepkitBody, 30, 0)).toBeTruthy();
 
     // Reroute to OpenCascade: the same persisted hash must land on the same
     // geometric edge — asserted by position, not by success.
@@ -419,20 +417,20 @@ describe('kernel seam correctness', () => {
       );
       expect(onBrepKit.warnings).toEqual([]);
       expect(onOcct.warnings).toEqual([]);
-      const brepkitEdges = onBrepKit.bodyRepresentations[bodyId]!.topology!
-        .edges.map((edge) => edge.hash)
-        .sort((a, b) => a - b);
-      const occtEdges = onOcct.bodyRepresentations[bodyId]!.topology!.edges
-        .map((edge) => edge.hash)
-        .sort((a, b) => a - b);
+      const brepkitEdges = onBrepKit.bodyRepresentations[
+        bodyId
+      ]!.topology!.edges.map((edge) => edge.hash).sort((a, b) => a - b);
+      const occtEdges = onOcct.bodyRepresentations[bodyId]!.topology!.edges.map(
+        (edge) => edge.hash
+      ).sort((a, b) => a - b);
       expect(occtEdges).toEqual(brepkitEdges);
 
-      const brepkitFaces = onBrepKit.bodyRepresentations[bodyId]!.topology!
-        .faces.map((face) => face.hash)
-        .sort((a, b) => a - b);
-      const occtFaces = onOcct.bodyRepresentations[bodyId]!.topology!.faces
-        .map((face) => face.hash)
-        .sort((a, b) => a - b);
+      const brepkitFaces = onBrepKit.bodyRepresentations[
+        bodyId
+      ]!.topology!.faces.map((face) => face.hash).sort((a, b) => a - b);
+      const occtFaces = onOcct.bodyRepresentations[bodyId]!.topology!.faces.map(
+        (face) => face.hash
+      ).sort((a, b) => a - b);
       expect(occtFaces).toEqual(brepkitFaces);
     }
   });
@@ -440,8 +438,7 @@ describe('kernel seam correctness', () => {
   it('fails closed on an unresolvable fillet hash instead of changing shape', async () => {
     const { document, resultBodyId } = notchedBlockDocument(6);
     const unfilleted = await adapter.syncDocument(document);
-    const originalVolume =
-      unfilleted.bodyRepresentations[resultBodyId]!.volume;
+    const originalVolume = unfilleted.bodyRepresentations[resultBodyId]!.volume;
 
     const bogus = filletEdges(document, {
       name: 'Ghost fillet',
@@ -487,8 +484,7 @@ describe('kernel seam correctness', () => {
       expect(
         derived.warnings.some(
           (warning) =>
-            warning.includes('Legacy fillet') &&
-            /older version/i.test(warning)
+            warning.includes('Legacy fillet') && /older version/i.test(warning)
         )
       ).toBe(true);
       // No edge anywhere was filleted: all original corners remain sharp.

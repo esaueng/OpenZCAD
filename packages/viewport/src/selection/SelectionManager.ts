@@ -17,9 +17,11 @@ const HOVER_EMISSIVE = 0x101d2c;
 const HOVER_FACE_COLOR = 0x8fc8ff;
 const HOVER_FACE_OPACITY = 0.3;
 
-/** Detected sketch regions: invisible until hovered, brighter once selected. */
-export const REGION_HOVER_OPACITY = 0.32;
-export const REGION_SELECTED_OPACITY = 0.45;
+/** Detected sketch regions: subtle at rest, stronger on hover and selection. */
+export const REGION_IDLE_OPACITY = 0.22;
+export const REGION_COMMAND_OPACITY = 0.28;
+export const REGION_HOVER_OPACITY = 0.38;
+export const REGION_SELECTED_OPACITY = 0.52;
 
 /** Opacity a fading overlay settles on when it declares no target. */
 const DEFAULT_FADE_TARGET = 0.34;
@@ -191,15 +193,72 @@ export class SelectionManager {
       this.hoveredRegionMesh &&
       this.hoveredRegionMesh.userData.regionSelected !== true
     ) {
-      this.hoveredRegionMesh.material.userData.targetOpacity = 0;
+      this.setRegionVisual(this.hoveredRegionMesh, 'idle');
       this.fadeIns.add(this.hoveredRegionMesh.material);
     }
     this.hoveredRegionMesh = mesh;
     if (mesh && mesh.userData.regionSelected !== true) {
-      mesh.material.userData.targetOpacity = REGION_HOVER_OPACITY;
+      this.setRegionVisual(mesh, 'hover');
       this.fadeIns.add(mesh.material);
     }
     this.options.requestRender();
+  }
+
+  /**
+   * Synchronizes persistent profile state without rebuilding its triangulated
+   * mesh. Selection and command-mode changes are visual-only; geometry stays
+   * cached until the owning sketch regenerates.
+   */
+  updateRegionState(
+    mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>,
+    selected: boolean,
+    baseOpacity: number
+  ) {
+    mesh.userData.regionSelected = selected;
+    mesh.userData.regionBaseOpacity = baseOpacity;
+    this.setRegionVisual(
+      mesh,
+      selected ? 'selected' : this.hoveredRegionMesh === mesh ? 'hover' : 'idle'
+    );
+    const target =
+      (mesh.material.userData.targetOpacity as number | undefined) ??
+      baseOpacity;
+    mesh.material.opacity = target;
+    this.fadeIns.delete(mesh.material);
+    this.options.requestRender();
+  }
+
+  private setRegionVisual(
+    mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>,
+    state: 'idle' | 'hover' | 'selected'
+  ) {
+    const baseOpacity =
+      (mesh.userData.regionBaseOpacity as number | undefined) ?? 0;
+    mesh.material.userData.targetOpacity =
+      state === 'selected'
+        ? REGION_SELECTED_OPACITY
+        : state === 'hover'
+          ? REGION_HOVER_OPACITY
+          : baseOpacity;
+    const boundaries =
+      (mesh.userData.regionBoundaries as Line2[] | undefined) ?? [];
+    for (const boundary of boundaries) {
+      boundary.material.color.setHex(
+        state === 'selected'
+          ? 0xffc45c
+          : state === 'hover'
+            ? 0xaed5ff
+            : 0x79b8ff
+      );
+      boundary.material.linewidth =
+        state === 'selected' ? 3 : state === 'hover' ? 2.5 : 1.6;
+      boundary.material.opacity =
+        state === 'selected' ? 1 : state === 'hover' ? 0.95 : 0.72;
+    }
+    const marker = mesh.userData.regionMarker as THREE.Points | undefined;
+    if (marker) {
+      marker.visible = state === 'selected';
+    }
   }
 
   /**
