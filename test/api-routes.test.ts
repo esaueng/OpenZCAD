@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
   MAX_PROJECT_NAME_LENGTH,
@@ -13,6 +13,10 @@ const env = {
     getByName: vi.fn()
   }
 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function post(path: string, body: unknown): Request {
   return new Request(`https://example.com${path}`, {
@@ -254,8 +258,25 @@ describe('worker api routes', () => {
     expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
   });
 
-  it('accepts a rate-limited public assistant request without Access', async () => {
-    const response = await worker.fetch(
+  it('does not limit repeated public assistant requests', async () => {
+    const providerFetch = vi.fn(
+      async () =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', providerFetch);
+    const publicEnv = {
+      ...env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AI_API_KEY: 'test-key',
+      AI_BASE_URL: 'https://models.example.test/v1/responses',
+      // Old deployments may retain these vars. They must no longer cap turns.
+      AI_RATE_LIMIT_REQUESTS: '1',
+      AI_RATE_LIMIT_WINDOW_SECONDS: '3600'
+    } as never;
+    const request = () =>
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',
         headers: { 'cf-connecting-ip': '203.0.113.42' },
@@ -272,12 +293,14 @@ describe('worker api routes', () => {
             warnings: []
           }
         })
-      }),
-      { ...env, AUTH_MODE: 'email-code' } as never
-    );
+      });
 
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await worker.fetch(request(), publicEnv);
+      expect(response.status).toBe(200);
+      await response.body?.cancel();
+    }
+    expect(providerFetch).toHaveBeenCalledTimes(3);
   });
 
   it('rejects oversized assistant digests before provider dispatch', async () => {

@@ -703,9 +703,9 @@ export async function authenticateRequest(
 
 /**
  * The modeling assistant remains available to local-first users. Signed-in
- * users retain their account-scoped quota and personal provider selection;
- * public users receive a one-way, IP-derived identifier so D1 and providers
- * never receive the raw address as the user identifier.
+ * users retain their personal provider selection; public users receive a
+ * one-way, IP-derived identifier so D1 and providers never receive the raw
+ * address as the user identifier.
  */
 export async function identifyAssistantRequest(
   request: Request,
