@@ -21,6 +21,18 @@ export interface ViewportCameraState {
  */
 const VIEW_SETTLE_MS = 120;
 
+/**
+ * Two damping regimes, switched at the gesture boundary. While the pointer is
+ * down the camera must track the hand nearly 1:1 — CAD framing is a precision
+ * task, and heavier smoothing reads as the model swimming after the cursor —
+ * so the drag factor is just enough to absorb pointer jitter. Release hands
+ * the remaining velocity to the glide factor for a short ease-out (~300 ms to
+ * rest at 60 Hz): decisive like a tool, not an instant halt, not a map
+ * viewer's coast past the framing the user chose.
+ */
+const DRAG_DAMPING = 0.35;
+const GLIDE_DAMPING = 0.15;
+
 interface CameraTween {
   startTime: number;
   duration: number;
@@ -127,22 +139,29 @@ export class CameraController {
     this.options.onViewChange(this.capture());
   };
 
+  /** Restores tight tracking; a grab mid-glide folds the residue into it. */
+  private beginGesture = () => {
+    this.orbit.dampingFactor = DRAG_DAMPING;
+  };
+
   /**
-   * Runs out the damping residue a gesture left behind, then reports the pose.
-   *
-   * Rendering is on demand, so frames stop the moment a gesture ends and
-   * whatever offset damping had yet to apply freezes on the controls instead of
-   * decaying to nothing. It thaws on the next `update()` — inside the *next*
-   * gesture — where it lands as a jump in whatever that gesture is doing: a pan
-   * bleeding into an orbit, long after the drag that caused it. Applying it
-   * here keeps it with the gesture that earned it, and leaves the controls
-   * clean for the next one.
+   * Keeps frames flowing after a gesture ends so the damping residue decays
+   * on screen — the ease-out glide — instead of being flushed in one step,
+   * which reads as the camera slamming to a halt on release. The render loop
+   * re-requests frames for as long as `update()` reports movement, so one
+   * kick here is enough to play the whole glide out.
    */
   private settleDamping = () => {
-    this.orbit.enableDamping = false;
-    this.orbit.update();
-    this.orbit.enableDamping = true;
-    this.emitViewChange();
+    if (this.options.reducedMotion()) {
+      this.orbit.enableDamping = false;
+      this.orbit.update();
+      this.orbit.enableDamping = true;
+      this.emitViewChange();
+      return;
+    }
+    this.orbit.dampingFactor = GLIDE_DAMPING;
+    this.options.requestRender();
+    this.scheduleSettledViewChange();
   };
 
   private scheduleSettledViewChange = () => {
@@ -152,6 +171,14 @@ export class CameraController {
     }
     this.settleTimeout = window.setTimeout(() => {
       this.settleTimeout = null;
+      // The glide has decayed below OrbitControls' movement epsilon by now,
+      // but a sub-epsilon offset still sits frozen on the controls; thawed
+      // mid-gesture it lands as a jump in whatever comes next — a pan
+      // bleeding into an orbit. Flush it here, where it is invisible, so the
+      // next gesture starts from rest.
+      this.orbit.enableDamping = false;
+      this.orbit.update();
+      this.orbit.enableDamping = true;
       this.emitViewChange();
     }, VIEW_SETTLE_MS);
   };
@@ -159,8 +186,10 @@ export class CameraController {
   private createOrbit(camera: THREE.Camera): OrbitControls<THREE.Camera> {
     const orbit = new OrbitControls(camera, this.options.domElement);
     orbit.enableDamping = true;
+    orbit.dampingFactor = DRAG_DAMPING;
     orbit.zoomToCursor = this.options.zoomToCursor();
     this.applyPointerBindings(orbit);
+    orbit.addEventListener('start', this.beginGesture);
     orbit.addEventListener('end', this.settleDamping);
     orbit.addEventListener('change', this.scheduleSettledViewChange);
     return orbit;
@@ -168,6 +197,7 @@ export class CameraController {
 
   private rebindControls(nextCamera: THREE.Camera) {
     const target = this.orbit.target.clone();
+    this.orbit.removeEventListener('start', this.beginGesture);
     this.orbit.removeEventListener('end', this.settleDamping);
     this.orbit.removeEventListener('change', this.scheduleSettledViewChange);
     this.orbit.dispose();
@@ -416,6 +446,7 @@ export class CameraController {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
     }
+    this.orbit.removeEventListener('start', this.beginGesture);
     this.orbit.removeEventListener('end', this.settleDamping);
     this.orbit.removeEventListener('change', this.scheduleSettledViewChange);
     this.orbit.dispose();
