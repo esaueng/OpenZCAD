@@ -6,12 +6,13 @@ import { findBodyId, forEachMesh } from '../pick/meshes';
 import {
   EDGE_HOVER_COLOR,
   EDGE_HOVER_WIDTH,
-  EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
   EDGE_IDLE_WIDTH,
   EDGE_SELECTED_COLOR,
-  EDGE_SELECTED_WIDTH
+  EDGE_SELECTED_WIDTH,
+  idleEdgeColor
 } from '../pick/edges';
+import { VIEWPORT_RENDER_ORDER } from '../render/scene';
 
 const HOVER_EMISSIVE = 0x101d2c;
 const HOVER_FACE_COLOR = 0x8fc8ff;
@@ -94,7 +95,7 @@ export class SelectionManager {
       })
     );
     this.hoverFaceMesh.visible = false;
-    this.hoverFaceMesh.renderOrder = 15;
+    this.hoverFaceMesh.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
     this.hoverFaceMesh.raycast = () => undefined;
   }
 
@@ -115,12 +116,15 @@ export class SelectionManager {
       const material = restore.material;
       const state = restore.userData as EdgeVisualState;
       material.color.setHex(
-        state.selected ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR
+        state.selected ? EDGE_SELECTED_COLOR : idleEdgeColor(restore)
       );
       material.linewidth = state.selected
         ? EDGE_SELECTED_WIDTH
         : EDGE_IDLE_WIDTH;
       material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
+      restore.renderOrder = state.selected
+        ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+        : VIEWPORT_RENDER_ORDER.BODY_EDGE;
     }
     this.hoveredEdge = next;
     if (next && !(next.userData as EdgeVisualState).selected) {
@@ -128,6 +132,7 @@ export class SelectionManager {
       material.color.setHex(EDGE_HOVER_COLOR);
       material.linewidth = EDGE_HOVER_WIDTH;
       material.opacity = 1;
+      next.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
     }
     this.options.requestRender();
   }
@@ -243,6 +248,11 @@ export class SelectionManager {
     const boundaries =
       (mesh.userData.regionBoundaries as Line2[] | undefined) ?? [];
     for (const boundary of boundaries) {
+      boundary.visible = state !== 'idle';
+      boundary.renderOrder =
+        state === 'selected'
+          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+          : VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
       boundary.material.color.setHex(
         state === 'selected'
           ? 0xffc45c

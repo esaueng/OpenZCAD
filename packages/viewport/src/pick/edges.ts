@@ -5,12 +5,20 @@ import type * as THREE from 'three';
  * and their states are unmistakable: idle slate, hover glow, selected accent.
  */
 export const EDGE_IDLE_COLOR = 0x151c26;
+/** Idle edge contrast when there is no shaded face behind the topology. */
+export const EDGE_WIREFRAME_COLOR = 0xa9c2da;
 export const EDGE_HOVER_COLOR = 0xbfdcff;
 export const EDGE_SELECTED_COLOR = 0x7cc0ff;
 export const EDGE_IDLE_WIDTH = 1.4;
 export const EDGE_HOVER_WIDTH = 4;
 export const EDGE_SELECTED_WIDTH = 4.5;
 export const EDGE_IDLE_OPACITY = 0.92;
+
+export function idleEdgeColor(edge: THREE.Object3D): number {
+  return edge.userData.displayMode === 'wireframe'
+    ? EDGE_WIREFRAME_COLOR
+    : EDGE_IDLE_COLOR;
+}
 
 /**
  * Extra screen-space width used only for edge picking. Line2 adds this to the
