@@ -448,6 +448,32 @@ test('signs in with an email code only when cloud profile access is requested', 
   page
 }) => {
   await stubEmailLoginApi(page);
+  await page.addInitScript(() => {
+    const browserWindow = window as typeof window & {
+      __openZcadUnhandledRejections: number;
+    };
+    browserWindow.__openZcadUnhandledRejections = 0;
+    window.addEventListener('unhandledrejection', () => {
+      browserWindow.__openZcadUnhandledRejections += 1;
+    });
+  });
+  await page.unroute('**/api/auth/email/verify');
+  await page.route('**/api/auth/email/verify', (route) => {
+    const payload = route.request().postDataJSON() as { code: string };
+    return payload.code === '123456'
+      ? route.fulfill({
+          json: {
+            userId: 'user_email_e2e',
+            displayName: 'maker@example.com',
+            email: 'maker@example.com',
+            mode: 'email-code'
+          }
+        })
+      : route.fulfill({
+          status: 401,
+          json: { error: 'That sign-in code is invalid.', code: 'AUTH_INVALID' }
+        });
+  });
   await page.goto('/');
   await expect(page.locator('.start-status')).toContainText('Local workspace');
 
@@ -462,6 +488,24 @@ test('signs in with an email code only when cloud profile access is requested', 
   await page.getByRole('button', { name: 'Email me a code' }).click();
 
   await expect(page.getByText('Enter the email code')).toBeVisible();
+  await page.getByLabel('Email sign-in code').fill('000000');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.locator('.settings-save-message')).toContainText(
+    'That sign-in code is invalid.'
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __openZcadUnhandledRejections: number;
+            }
+          ).__openZcadUnhandledRejections
+      )
+    )
+    .toBe(0);
+
   await page.getByLabel('Email sign-in code').fill('123456');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
