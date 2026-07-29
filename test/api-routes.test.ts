@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
+  DEFAULT_APP_SETTINGS,
   MAX_PROJECT_NAME_LENGTH,
   type CreateProjectResponse,
   type ProjectDocument
@@ -14,6 +15,32 @@ const env = {
     getByName: vi.fn()
   }
 };
+
+function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
+  overrides: T
+) {
+  const settings = structuredClone(DEFAULT_APP_SETTINGS);
+  settings.assistant.enabled = true;
+  const DB = {
+    prepare(query: string) {
+      return {
+        bind() {
+          return {
+            async first() {
+              return query.includes('FROM user_settings')
+                ? {
+                    settings_json: JSON.stringify(settings),
+                    revision: 1
+                  }
+                : null;
+            }
+          };
+        }
+      };
+    }
+  };
+  return { ...env, ...overrides, DB } as never;
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -177,11 +204,10 @@ describe('worker api routes', () => {
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
-      {
-        ...env,
+      withEnabledDeploymentAssistant({
         AI_API_KEY: 'secret-test-value',
         AI_MODEL: 'model-test'
-      }
+      })
     );
     expect(response.status).toBe(200);
     const status = (await response.json()) as {
@@ -319,8 +345,7 @@ describe('worker api routes', () => {
         })
     );
     vi.stubGlobal('fetch', providerFetch);
-    const publicEnv = {
-      ...env,
+    const publicEnv = withEnabledDeploymentAssistant({
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
       AI_API_KEY: 'test-key',
@@ -328,7 +353,7 @@ describe('worker api routes', () => {
       // Old deployments may retain these vars. They must no longer cap turns.
       AI_RATE_LIMIT_REQUESTS: '1',
       AI_RATE_LIMIT_WINDOW_SECONDS: '3600'
-    } as never;
+    });
     const request = () =>
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',
@@ -368,15 +393,14 @@ describe('worker api routes', () => {
         })
       );
     vi.stubGlobal('fetch', providerFetch);
-    const publicEnv = {
-      ...env,
+    const publicEnv = withEnabledDeploymentAssistant({
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
       AI_API_KEY: 'test-key',
       AI_BASE_URL: 'https://models.example.test/v1/responses',
       AI_RATE_LIMIT_REQUESTS: '1',
       AI_RATE_LIMIT_WINDOW_SECONDS: '3600'
-    } as never;
+    });
     const request = () =>
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',

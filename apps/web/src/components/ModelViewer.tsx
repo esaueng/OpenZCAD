@@ -72,6 +72,7 @@ import {
   normalForTriangle,
   projectToScreen,
   projectedWorldSizePx,
+  shouldShowGroundShadow,
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
@@ -624,6 +625,8 @@ export function ModelViewer({
   unitsRef.current = units;
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
+  const showGridRef = useRef(settings.showGrid);
+  showGridRef.current = settings.showGrid;
   const reducedMotionRef = useRef(settings.reducedMotion);
   reducedMotionRef.current = settings.reducedMotion;
   const zoomToCursorRef = useRef(settings.zoomToCursor);
@@ -3052,6 +3055,10 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       updateOffsetChip();
+      shadowCatcher.visible = shouldShowGroundShadow(
+        context.activeCamera,
+        showGridRef.current
+      );
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
@@ -4374,7 +4381,10 @@ export function ModelViewer({
     const context = contextRef.current;
     if (context) {
       context.grid.visible = settings.showGrid;
-      context.shadowCatcher.visible = settings.showGrid;
+      context.shadowCatcher.visible = shouldShowGroundShadow(
+        context.activeCamera,
+        settings.showGrid
+      );
       applyDisplayMode(context.bodyGroup, settings.displayMode);
       context.requestRender();
     }
