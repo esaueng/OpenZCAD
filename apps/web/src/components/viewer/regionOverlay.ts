@@ -5,6 +5,7 @@ import {
   REGION_HOVER_OPACITY,
   REGION_IDLE_OPACITY,
   REGION_SELECTED_OPACITY,
+  VIEWPORT_RENDER_ORDER,
   type RegionPickData
 } from '@openzcad/viewport';
 
@@ -87,7 +88,7 @@ export function buildRegionMesh(
     polygonOffsetUnits: -3
   });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.renderOrder = 9;
+  mesh.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
   mesh.userData.region = pick;
   mesh.userData.regionBaseOpacity = options.baseOpacity ?? 0;
   mesh.userData.regionSelected = options.selected === true;

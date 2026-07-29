@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
   createBodyMaterial,
+  createFatLineMaterial,
   createObjectForBody,
-  createStudioHemisphereLight
+  createStudioHemisphereLight,
+  VIEWPORT_RENDER_ORDER
 } from '@openzcad/viewport';
 import {
   toBodyId,
@@ -153,8 +155,56 @@ describe('CAD viewport shading', () => {
     expect(material.shininess).toBe(38);
     expect(material.specular.getHex()).toBe(0x667487);
     expect(material.side).toBe(THREE.FrontSide);
+    expect(material.polygonOffset).toBe(true);
+    expect(material.polygonOffsetFactor).toBe(1);
+    expect(material.polygonOffsetUnits).toBe(1);
     expect(object.castShadow).toBe(true);
     expect(object.receiveShadow).toBe(false);
+    expect(object.renderOrder).toBe(VIEWPORT_RENDER_ORDER.BODY_FACE);
+  });
+
+  it('keeps coincident line overlays depth-aware without sharing depth writes', () => {
+    const bodyEdge = createFatLineMaterial({
+      color: '#151c26',
+      linewidth: 1.4
+    });
+    const sketchCurve = createFatLineMaterial({
+      color: '#4da3ff',
+      linewidth: 1.4
+    });
+
+    expect(bodyEdge.depthTest).toBe(true);
+    expect(sketchCurve.depthTest).toBe(true);
+    expect(bodyEdge.depthWrite).toBe(false);
+    expect(sketchCurve.depthWrite).toBe(false);
+    expect(VIEWPORT_RENDER_ORDER.BODY_FACE).toBeLessThan(
+      VIEWPORT_RENDER_ORDER.BODY_EDGE
+    );
+    expect(VIEWPORT_RENDER_ORDER.BODY_EDGE).toBeLessThan(
+      VIEWPORT_RENDER_ORDER.SKETCH_CURVE
+    );
+    expect(VIEWPORT_RENDER_ORDER.SKETCH_CURVE).toBeLessThan(
+      VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT
+    );
+    expect(VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT).toBeLessThan(
+      VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+    );
+    expect(VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY).toBeLessThan(
+      VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH
+    );
+  });
+
+  it('puts fallback body edges on the body-edge render layer', () => {
+    const object = createObjectForBody(
+      bodyWithMesh({
+        kind: 'mesh',
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2]
+      })
+    );
+    const edgeOverlay = object.children[0];
+
+    expect(edgeOverlay?.renderOrder).toBe(VIEWPORT_RENDER_ORDER.BODY_EDGE);
   });
 
   it('uses kernel-oriented front faces for imported STEP solids', () => {
