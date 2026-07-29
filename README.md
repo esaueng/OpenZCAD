@@ -151,7 +151,7 @@ Signed-in users can instead store a personal provider token (Settings → AI). T
 
 Current assistant limitations:
 
-- **Public assistant requests have no application-enforced quota** — request limits were intentionally removed, so provider-side billing controls are the only spend cap on a deployment key. Budget accordingly before exposing a funded key publicly.
+- **Assistant usage is bounded before provider dispatch** — beta requests use D1-backed account and opaque-IP request limits, token/attachment-weighted cost quotas, and expiring concurrency leases. Provider-side billing controls remain the final deployment spend cap.
 - Proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions.
 
 ## Known limitations
