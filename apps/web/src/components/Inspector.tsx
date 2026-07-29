@@ -1,4 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useState,
+  type MutableRefObject,
+  type ReactNode
+} from 'react';
 import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import type {
@@ -132,6 +137,11 @@ interface InspectorProps extends InspectorCallbacks {
   selectedBodyIds: BodyId[];
   /** Sketch to pre-select in extrude/revolve, e.g. the one picked in the tree. */
   preferredSketchId: SketchId | null;
+  /** Active cylindrical-wall gesture, localized to the inspector subtree. */
+  cylinderRadiusEdit: { initialRadius: number } | null;
+  cylinderRadiusSetterRef: MutableRefObject<
+    ((radius: number | null) => void) | null
+  >;
 }
 
 function BodyStats({
@@ -316,8 +326,27 @@ export function Inspector(props: InspectorProps) {
     bodies,
     units,
     selectedBodyIds,
-    preferredSketchId
+    preferredSketchId,
+    cylinderRadiusEdit,
+    cylinderRadiusSetterRef
   } = props;
+  const [liveCylinderRadius, setLiveCylinderRadius] = useState<number | null>(
+    cylinderRadiusEdit?.initialRadius ?? null
+  );
+
+  useEffect(() => {
+    if (!cylinderRadiusEdit) {
+      setLiveCylinderRadius(null);
+      cylinderRadiusSetterRef.current = null;
+      return;
+    }
+    setLiveCylinderRadius(cylinderRadiusEdit.initialRadius);
+    cylinderRadiusSetterRef.current = (radius) =>
+      setLiveCylinderRadius(radius ?? cylinderRadiusEdit.initialRadius);
+    return () => {
+      cylinderRadiusSetterRef.current = null;
+    };
+  }, [cylinderRadiusEdit, cylinderRadiusSetterRef]);
 
   let eyebrow = '';
   let title = '';
@@ -459,6 +488,11 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
+          liveRadius={
+            data.primitiveKind === 'cylinder'
+              ? liveCylinderRadius
+              : undefined
+          }
           submitLabel="Apply"
           onSubmit={(name, dimensions) =>
             props.onApplyPrimitive(selectedFeature, name, dimensions)
@@ -608,7 +642,11 @@ export function Inspector(props: InspectorProps) {
           <span>
             {data.operation.kind === 'resize-through-hole'
               ? 'resize through hole'
-              : 'remove face feature'}
+              : data.operation.kind === 'resize-cylindrical-face'
+                ? 'resize cylinder radius'
+                : data.operation.kind === 'offset-face'
+                  ? 'offset face'
+                  : 'remove face feature'}
           </span>
           <b>source face</b>
           <span>
@@ -620,6 +658,12 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>diameter</b>
               <span>{String(data.operation.diameter)}</span>
+            </>
+          )}
+          {data.operation.kind === 'resize-cylindrical-face' && (
+            <>
+              <b>radius</b>
+              <span>{String(data.operation.radius)}</span>
             </>
           )}
         </div>
@@ -646,6 +690,20 @@ export function Inspector(props: InspectorProps) {
 
     body = (
       <>
+        {cylinderRadiusEdit && liveCylinderRadius !== null && (
+          <section
+            className="direct-face-editor"
+            aria-label="Cylinder radius properties"
+          >
+            <h3 className="section-title">Direct edit</h3>
+            <div className="kv-grid">
+              <b>Radius</b>
+              <span data-testid="live-cylinder-radius">
+                {formatNumber(liveCylinderRadius)} {units}
+              </span>
+            </div>
+          </section>
+        )}
         {selectedTopology?.kind === 'edge' && (
           <>
             <h3 className="section-title">Selected edge</h3>

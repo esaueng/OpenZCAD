@@ -21,6 +21,12 @@ export interface FaceTarget extends FaceCapabilityTarget {
   point: [number, number, number];
   /** Outward face normal at the click point. */
   normal: [number, number, number];
+  /** Fixed world-space axis snapshot for a cylindrical radius gesture. */
+  axisStart?: [number, number, number];
+  axisEnd?: [number, number, number];
+  axialLength?: number;
+  radialDirection?: [number, number, number];
+  concavity?: 'hole' | 'boss';
 }
 
 export interface RegionTarget {
@@ -59,7 +65,7 @@ export type InteractionState =
   | ({
       mode: 'face';
       target: FaceTarget;
-      op: 'offset-face' | 'resize-hole';
+      op: 'offset-face' | 'resize-cylinder-radius';
     } & OperationLifecycle)
   | ({
       mode: 'edges';
@@ -167,7 +173,7 @@ export function interactionReducer(
         target: event.target,
         op:
           preferred.action === 'resize-radial-face'
-            ? 'resize-hole'
+            ? 'resize-cylinder-radius'
             : 'offset-face',
         ...ARMED
       };
@@ -361,7 +367,11 @@ export function interactionReducer(
 // ---------------------------------------------------------------------------
 
 export type ToolCardIcon =
-  'offset-face' | 'resize-hole' | 'fillet' | 'extrude' | 'sketch';
+  | 'offset-face'
+  | 'resize-cylinder-radius'
+  | 'fillet'
+  | 'extrude'
+  | 'sketch';
 
 export interface ToolCardAction {
   id: SelectionActionId;
@@ -412,17 +422,17 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         label: capability.label,
         active:
           (state.op === 'offset-face' && capability.action === 'offset-face') ||
-          (state.op === 'resize-hole' &&
+          (state.op === 'resize-cylinder-radius' &&
             capability.action === 'resize-radial-face')
       }));
-      return state.op === 'resize-hole'
+      return state.op === 'resize-cylinder-radius'
         ? {
-            icon: 'resize-hole',
-            title: 'Resize Hole',
+            icon: 'resize-cylinder-radius',
+            title: 'Resize Cylinder Radius',
             ...(actions.length > 1 ? { actions } : {}),
             ...lifecycleHint(
               state,
-              'Drag the arrow or tap the value to set the diameter.'
+              'Drag the radial handle or tap the value to set the radius.'
             )
           }
         : {

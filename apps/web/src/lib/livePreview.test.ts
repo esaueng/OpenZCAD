@@ -61,7 +61,7 @@ describe('coalescing', () => {
 
     // 1 was built and superseded; only 4 survived the wait. 2 and 3 never ran.
     expect(built).toEqual([1, 4]);
-    expect(published.map((doc) => doc?.value)).toEqual([1, 4]);
+    expect(published.map((doc) => doc?.value)).toEqual([4]);
   });
 
   it('runs one rebuild at a time', async () => {
@@ -201,5 +201,45 @@ describe('slow rebuilds degrade for the rest of the gesture', () => {
     preview.request(2);
     await settle();
     expect(built).toEqual([1, 2]);
+  });
+
+  it('can keep coalescing until a simple edit reaches the latest value', async () => {
+    let clock = 0;
+    const first = deferred();
+    let call = 0;
+    const { preview, published, built } = (() => {
+      const publishedDocuments: (Doc | null)[] = [];
+      const builtValues: number[] = [];
+      const instance = new LivePreview<Doc, string>({
+        build: (value) => {
+          builtValues.push(value);
+          return { value };
+        },
+        derive: () => {
+          call += 1;
+          clock += 500;
+          return call === 1 ? first.promise : Promise.resolve('derived');
+        },
+        publish: (value) =>
+          publishedDocuments.push(value?.document ?? null),
+        now: () => clock,
+        slowFrameMs: 400,
+        continueAfterSlow: true
+      });
+      return {
+        preview: instance,
+        published: publishedDocuments,
+        built: builtValues
+      };
+    })();
+
+    preview.request(17);
+    preview.request(18);
+    first.resolve('derived');
+    await settle();
+
+    expect(preview.degraded).toBe(true);
+    expect(built).toEqual([17, 18]);
+    expect(published.map((document) => document?.value)).toEqual([18]);
   });
 });

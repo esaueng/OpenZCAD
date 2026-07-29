@@ -220,6 +220,136 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   };
 }
 
+export interface CylinderRadiusRigParams {
+  /** Pick point on the original cylindrical wall. */
+  origin: HandleVec3;
+  /** Outward radial unit direction at the pick point. */
+  direction: HandleVec3;
+  /** Absolute radius represented when the gesture begins. */
+  originalRadius: number;
+}
+
+/**
+ * A dedicated radial-radius handle.
+ *
+ * Unlike the planar offset rig, this carries no translated face ghost. The
+ * exact preview owns the cylinder geometry; this affordance only moves the
+ * handle by `newRadius - originalRadius` along the picked radial direction.
+ */
+export function buildCylinderRadiusHandle(
+  params: CylinderRadiusRigParams
+): DragRig {
+  const kind = 'cylinder-radius';
+  const origin = toVector3(params.origin);
+  const direction = toVector3(params.direction).normalize();
+  const originalRadius = params.originalRadius;
+
+  const group = new THREE.Group();
+  group.name = `${kind}-handle`;
+  group.position.copy(origin);
+  group.quaternion.copy(
+    new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      direction
+    )
+  );
+
+  const solid = handleMaterial();
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(
+      ARROW_SHAFT_RADIUS,
+      ARROW_SHAFT_RADIUS,
+      1 - ARROW_HEAD_LENGTH,
+      12
+    ),
+    solid
+  );
+  shaft.position.y = (1 - ARROW_HEAD_LENGTH) / 2;
+  const head = new THREE.Mesh(
+    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
+    solid
+  );
+  head.position.y = 1 - ARROW_HEAD_LENGTH / 2;
+  const hit = createHitMesh(
+    new THREE.CylinderGeometry(ARROW_HIT_RADIUS, ARROW_HIT_RADIUS, 1.8, 8),
+    kind
+  );
+  hit.position.y = 0.7;
+  addHandleParts(group, [shaft, head, hit]);
+
+  const worldGroup = new THREE.Group();
+  worldGroup.name = `${kind}-handle-world`;
+  const leaderGeometry = new LineGeometry();
+  leaderGeometry.setPositions([
+    origin.x,
+    origin.y,
+    origin.z,
+    origin.x,
+    origin.y,
+    origin.z
+  ]);
+  const leader = new Line2(
+    leaderGeometry,
+    new LineMaterial({
+      color: HANDLE_COLOR,
+      linewidth: 1.5,
+      dashed: true,
+      dashSize: 2,
+      gapSize: 1.5,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false
+    })
+  );
+  leader.computeLineDistances();
+  leader.renderOrder = 29;
+  leader.visible = false;
+  worldGroup.add(leader);
+
+  let currentRadius = originalRadius;
+  return {
+    kind,
+    group,
+    worldGroup,
+    origin,
+    direction,
+    setValue(radius: number) {
+      currentRadius = radius;
+      const radialDelta = radius - originalRadius;
+      const tip = origin.clone().addScaledVector(direction, radialDelta);
+      group.position.copy(tip);
+      leader.visible = Math.abs(radialDelta) > 1e-9;
+      if (leader.visible) {
+        leaderGeometry.setPositions([
+          origin.x,
+          origin.y,
+          origin.z,
+          tip.x,
+          tip.y,
+          tip.z
+        ]);
+        leader.computeLineDistances();
+      }
+    },
+    value() {
+      return currentRadius;
+    },
+    chipAnchor(gizmoScale: number) {
+      const radialDelta = currentRadius - originalRadius;
+      return origin
+        .clone()
+        .addScaledVector(
+          direction,
+          radialDelta +
+            CHIP_ANCHOR_LOCAL_DISTANCE * Math.max(gizmoScale, 0)
+        );
+    },
+    dispose() {
+      disposeRigGroups(group, worldGroup);
+    }
+  };
+}
+
 /**
  * A sphere at the reference edge's midpoint. Unlike the offset arrow the
  * visual does not travel: the blend radius grows around the edge, so moving

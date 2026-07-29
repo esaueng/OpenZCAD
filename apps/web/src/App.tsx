@@ -120,6 +120,12 @@ import {
 import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import { commandPromptText } from './lib/interaction/prompt';
+import {
+  MAX_CYLINDER_RADIUS,
+  MIN_CYLINDER_RADIUS,
+  cylinderRadialFrame,
+  sameCylinderAxis
+} from './lib/interaction/cylinderRadius';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -337,6 +343,12 @@ export function App() {
   >(null);
   /** Lets keypad typing drive the viewport's offset-handle preview. */
   const offsetSetterRef = useRef<((offset: number) => void) | null>(null);
+  /** Localized inspector update; avoids rerendering the whole workspace per move. */
+  const cylinderRadiusInspectorSetterRef = useRef<
+    ((radius: number | null) => void) | null
+  >(null);
+  /** Cancels the viewport's captured pointer session on keyboard Escape. */
+  const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const geometry = useGeometryWorker({
@@ -354,6 +366,21 @@ export function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
   const localSaveTimeoutRef = useRef<number | null>(null);
+  const cylinderRadiusPreview = useRef(
+    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+      build: (radius) => {
+        const command = buildCylinderRadiusCommand(radius);
+        const base = managerRef.current?.document;
+        return command && base ? command.apply(base) : null;
+      },
+      derive: (document) => geometry.syncOnce(document),
+      publish: (preview) =>
+        setPreviewDoc(
+          preview ? { ...preview.document, derived: preview.derived } : null
+        ),
+      continueAfterSlow: true
+    })
+  ).current;
 
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
@@ -361,9 +388,13 @@ export function App() {
     commit: (command) => executeCommand(command),
     onValidationStart: (value) =>
       dispatchInteraction({ type: 'validation-start', value }),
-    onValidationFailed: (message, value) =>
-      dispatchInteraction({ type: 'validation-failed', message, value }),
+    onValidationFailed: (message, value) => {
+      cylinderRadiusPreview.clear();
+      cylinderRadiusInspectorSetterRef.current?.(null);
+      dispatchInteraction({ type: 'validation-failed', message, value });
+    },
     onCommitted: (bodyId) => {
+      cylinderRadiusPreview.clear();
       dispatchInteraction({ type: 'commit-complete' });
       setSelectedTopology(null);
       setSelectedEdges([]);
@@ -591,6 +622,75 @@ export function App() {
   );
 
   const representations = doc?.derived.bodyRepresentations ?? {};
+  const renderedRepresentations =
+    previewDoc?.derived.bodyRepresentations ?? representations;
+  /**
+   * Exact regeneration is allowed to assign a new topology ID to the resized
+   * wall. Keep the selected face attached to the preview by its fixed
+   * world-space axis; do not apply this fallback to unrelated edit types.
+   */
+  const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
+    if (selectedTopology?.kind !== 'face') {
+      return selectedTopology;
+    }
+    const body = renderedRepresentations[selectedTopology.bodyId];
+    const faces = body?.topology?.faces ?? [];
+    const exact = faces.find(
+      (face) =>
+        face.topologyId === selectedTopology.topologyId ||
+        (selectedTopology.hash !== undefined &&
+          face.hash === selectedTopology.hash)
+    );
+    if (exact) {
+      return {
+        bodyId: selectedTopology.bodyId,
+        kind: 'face',
+        topologyId: exact.topologyId,
+        hash: exact.hash
+      };
+    }
+    if (
+      interaction.mode !== 'face' ||
+      interaction.op !== 'resize-cylinder-radius' ||
+      interaction.target.bodyId !== selectedTopology.bodyId ||
+      !interaction.target.axisStart ||
+      !interaction.target.axisEnd
+    ) {
+      return selectedTopology;
+    }
+    const axisStart = {
+      x: interaction.target.axisStart[0],
+      y: interaction.target.axisStart[1],
+      z: interaction.target.axisStart[2]
+    };
+    const axisEnd = {
+      x: interaction.target.axisEnd[0],
+      y: interaction.target.axisEnd[1],
+      z: interaction.target.axisEnd[2]
+    };
+    const regenerated = faces.find((face) => {
+      const geometry = face.geometry;
+      return (
+        geometry?.surfaceType === 'cylinder' &&
+        geometry.axisStart !== undefined &&
+        geometry.axisEnd !== undefined &&
+        sameCylinderAxis(
+          axisStart,
+          axisEnd,
+          geometry.axisStart,
+          geometry.axisEnd
+        )
+      );
+    });
+    return regenerated
+      ? {
+          bodyId: selectedTopology.bodyId,
+          kind: 'face',
+          topologyId: regenerated.topologyId,
+          hash: regenerated.hash
+        }
+      : selectedTopology;
+  }, [interaction, renderedRepresentations, selectedTopology]);
   // Warnings must describe what is actually on screen. While a preview is up the
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
@@ -599,12 +699,12 @@ export function App() {
   const viewerBodies = useMemo<BodyRepresentation[]>(
     () =>
       (previewDoc
-        ? Object.values(previewDoc.derived.bodyRepresentations)
+        ? Object.values(renderedRepresentations)
         : doc
           ? Object.values(doc.derived.bodyRepresentations)
           : []
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [doc, previewDoc, hiddenBodyIds]
+    [doc, previewDoc, renderedRepresentations, hiddenBodyIds]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -685,8 +785,14 @@ export function App() {
     return objectNode?.kind === 'sketch-object' ? objectNode.data : null;
   }, [doc, selectedSketch]);
 
-  const selectedBody = selectedFeature?.bodyId
-    ? (representations[selectedFeature.bodyId] ?? null)
+  const selectedFeatureBodyId =
+    selectedFeature?.bodyId ??
+    (selectedFeature?.data.featureKind === 'transform' ||
+    selectedFeature?.data.featureKind === 'direct-edit'
+      ? selectedFeature.data.targetBodyId
+      : null);
+  const selectedBody = selectedFeatureBodyId
+    ? (renderedRepresentations[selectedFeatureBodyId] ?? null)
     : null;
 
   const assistantSelection = useMemo<CadSelectionContext>(
@@ -741,7 +847,7 @@ export function App() {
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
       const total = selectedEdges.reduce((sum, edge) => {
-        const body = representations[edge.bodyId];
+      const body = renderedRepresentations[edge.bodyId];
         return sum + (edgeLength(body, edge.hash, edge.topologyId) ?? 0);
       }, 0);
       return {
@@ -749,12 +855,17 @@ export function App() {
         detail: total > 0 ? `≈ ${round(total)} ${units}` : undefined
       };
     }
-    if (selectedEdges.length === 1 || selectedTopology?.kind === 'edge') {
-      const bodyId = selectedEdges[0]?.bodyId ?? selectedTopology?.bodyId;
-      const body = bodyId ? representations[bodyId] : undefined;
-      const hash = selectedEdges[0]?.hash ?? selectedTopology?.hash;
+    if (
+      selectedEdges.length === 1 ||
+      renderedSelectedTopology?.kind === 'edge'
+    ) {
+      const bodyId =
+        selectedEdges[0]?.bodyId ?? renderedSelectedTopology?.bodyId;
+      const body = bodyId ? renderedRepresentations[bodyId] : undefined;
+      const hash = selectedEdges[0]?.hash ?? renderedSelectedTopology?.hash;
       const topologyId =
-        selectedEdges[0]?.topologyId ?? selectedTopology?.topologyId;
+        selectedEdges[0]?.topologyId ??
+        renderedSelectedTopology?.topologyId;
       const name = edgeLabel(body, hash, topologyId);
       const length = edgeLength(body, hash, topologyId);
       return {
@@ -765,10 +876,12 @@ export function App() {
             : undefined
       };
     }
-    if (selectedTopology?.kind === 'face') {
-      const body = representations[selectedTopology.bodyId];
+    if (renderedSelectedTopology?.kind === 'face') {
+      const body =
+        renderedRepresentations[renderedSelectedTopology.bodyId];
       const face = body?.topology?.faces.find(
-        (candidate) => candidate.hash === selectedTopology.hash
+        (candidate) =>
+          candidate.topologyId === renderedSelectedTopology.topologyId
       );
       const geometry = face?.geometry;
       if (
@@ -782,8 +895,8 @@ export function App() {
       }
       const name = faceLabel(
         body,
-        selectedTopology.hash,
-        selectedTopology.topologyId
+        renderedSelectedTopology.hash,
+        renderedSelectedTopology.topologyId
       );
       return {
         label: body ? `${body.name} · ${name}` : name
@@ -796,7 +909,7 @@ export function App() {
       };
     }
     const bodyId = selectedBodyIds[0];
-    const body = bodyId ? representations[bodyId] : null;
+    const body = bodyId ? renderedRepresentations[bodyId] : null;
     if (body) {
       const size = {
         x: round(body.bbox.max.x - body.bbox.min.x),
@@ -813,9 +926,9 @@ export function App() {
     doc,
     tool,
     selectedEdges,
-    selectedTopology,
+    renderedSelectedTopology,
     selectedBodyIds,
-    representations
+    renderedRepresentations
   ]);
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
@@ -1062,6 +1175,17 @@ export function App() {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
     }
+    // A toolbar command owns the next gesture. Preserve the body selection
+    // that pre-fills Move/boolean forms, but disarm any selection-first face or
+    // edge handle so two manipulators can never claim the same pointer.
+    if (interaction.mode !== 'idle') {
+      cancelDirectManipulationRef.current?.();
+      cylinderRadiusPreview.clear();
+      cylinderRadiusInspectorSetterRef.current?.(null);
+      edgePreview.clear();
+      dispatchInteraction({ type: 'clear' });
+      setKeypad(null);
+    }
     if (nextTool === 'sketch') {
       clearSelection();
       setExtrudePreview(null);
@@ -1162,6 +1286,13 @@ export function App() {
   }
 
   function clearSelection() {
+    if (
+      interaction.mode === 'face' &&
+      interaction.op === 'resize-cylinder-radius'
+    ) {
+      cancelDirectManipulationRef.current?.();
+      handleCylinderRadiusCancel();
+    }
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
@@ -1958,13 +2089,24 @@ export function App() {
     if (!doc) {
       return null;
     }
-    const bodyNode = listNodesByKind(doc, 'body').find(
-      (body) => body.bodyId === bodyId
-    );
-    const feature = bodyNode
-      ? features.find((candidate) => candidate.featureId === bodyNode.featureId)
-      : undefined;
-    return feature?.id ?? null;
+    // Transform and direct-edit features keep BodyId stable. Walk history
+    // backwards so the inspector follows the operation that currently defines
+    // the selected body instead of jumping back to its original primitive.
+    for (let index = features.length - 1; index >= 0; index -= 1) {
+      const feature = features[index]!;
+      if (feature.bodyId === bodyId) {
+        return feature.id;
+      }
+      const data = feature.data;
+      if (
+        (data.featureKind === 'transform' ||
+          data.featureKind === 'direct-edit') &&
+        data.targetBodyId === bodyId
+      ) {
+        return feature.id;
+      }
+    }
+    return null;
   }
 
   function handleSelectSketchProfile(sketchId: string) {
@@ -2088,7 +2230,20 @@ export function App() {
       ]?.topology?.faces.find(
         (face) => face.topologyId === selection.topologyId
       );
-      const surface = faceTopology?.geometry?.surfaceType;
+      const geometry = faceTopology?.geometry;
+      const surface = geometry?.surfaceType;
+      const radialFrame =
+        surface === 'cylinder' &&
+        geometry?.axisStart &&
+        geometry.axisEnd &&
+        geometry.radius !== undefined
+          ? cylinderRadialFrame(
+              detail.point,
+              detail.normal,
+              geometry.axisStart,
+              geometry.axisEnd
+            )
+          : null;
       const target: FaceTarget = {
         bodyId: selection.bodyId,
         topologyId: selection.topologyId,
@@ -2101,7 +2256,28 @@ export function App() {
             : surface === 'cylinder'
               ? 'cylindrical'
               : 'other',
-        diameter: faceTopology?.geometry?.diameter
+        ...(radialFrame && geometry?.radius !== undefined
+          ? {
+              radius: geometry.radius,
+              axisStart: [
+                geometry.axisStart!.x,
+                geometry.axisStart!.y,
+                geometry.axisStart!.z
+              ] as [number, number, number],
+              axisEnd: [
+                geometry.axisEnd!.x,
+                geometry.axisEnd!.y,
+                geometry.axisEnd!.z
+              ] as [number, number, number],
+              axialLength: geometry.axialLength,
+              radialDirection: [
+                radialFrame.radialDirection.x,
+                radialFrame.radialDirection.y,
+                radialFrame.radialDirection.z
+              ] as [number, number, number],
+              concavity: radialFrame.concavity
+            }
+          : {})
       };
       dispatchInteraction({ type: 'select-face', target });
     } else if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
@@ -2604,155 +2780,206 @@ export function App() {
   }, [interaction]);
 
   const offsetHandleTarget = useMemo(() => {
-    if (interaction.mode !== 'face' || interaction.phase === 'validating') {
+    if (
+      interaction.mode !== 'face' ||
+      interaction.op !== 'offset-face' ||
+      interaction.phase === 'validating'
+    ) {
       return null;
     }
     const target = interaction.target;
-    const point = {
-      x: target.point[0],
-      y: target.point[1],
-      z: target.point[2]
-    };
-    if (interaction.op === 'offset-face') {
-      if (target.surfaceType !== 'planar') {
-        return null;
-      }
-      return {
-        bodyId: target.bodyId,
-        topologyId: target.topologyId,
-        point,
-        normal: {
-          x: target.normal[0],
-          y: target.normal[1],
-          z: target.normal[2]
-        },
-        initialValue: interaction.lastValue ?? 0
-      };
-    }
-    // resize-hole: the drag direction is radial — outward from the
-    // cylinder's axis through the click point.
-    const radial = cylinderRadialAt(target);
-    if (!radial) {
+    if (target.surfaceType !== 'planar') {
       return null;
     }
     return {
       bodyId: target.bodyId,
       topologyId: target.topologyId,
-      point,
-      normal: radial.direction,
-      initialValue:
-        interaction.lastValue !== null && target.diameter !== undefined
-          ? interaction.lastValue - target.diameter
-          : 0
+      point: {
+        x: target.point[0],
+        y: target.point[1],
+        z: target.point[2]
+      },
+      normal: {
+        x: target.normal[0],
+        y: target.normal[1],
+        z: target.normal[2]
+      },
+      initialValue: interaction.lastValue ?? 0
     };
   }, [interaction]);
 
-  /**
-   * Radial outward direction and concavity of a cylindrical face at a click
-   * point. Concavity comes from the picked triangle normal: a bore's surface
-   * faces the axis, a boss faces away from it.
-   */
-  function cylinderRadialAt(target: FaceTarget): {
-    direction: { x: number; y: number; z: number };
-    concavity: 'hole' | 'boss';
-  } | null {
-    const geometry = representations[
-      target.bodyId as BodyId
-    ]?.topology?.faces.find(
-      (face) => face.topologyId === target.topologyId
-    )?.geometry;
-    if (!geometry?.axisStart || !geometry.axisEnd) {
+  const cylinderRadiusHandleTarget = useMemo(() => {
+    if (
+      interaction.mode !== 'face' ||
+      interaction.op !== 'resize-cylinder-radius' ||
+      interaction.phase === 'validating'
+    ) {
       return null;
-    }
-    const a = geometry.axisStart;
-    const b = geometry.axisEnd;
-    const axis = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
-    const axisLength = Math.hypot(axis.x, axis.y, axis.z);
-    if (axisLength < 1e-9) {
-      return null;
-    }
-    const unit = {
-      x: axis.x / axisLength,
-      y: axis.y / axisLength,
-      z: axis.z / axisLength
-    };
-    const toPoint = {
-      x: target.point[0] - a.x,
-      y: target.point[1] - a.y,
-      z: target.point[2] - a.z
-    };
-    const along = toPoint.x * unit.x + toPoint.y * unit.y + toPoint.z * unit.z;
-    const foot = {
-      x: a.x + unit.x * along,
-      y: a.y + unit.y * along,
-      z: a.z + unit.z * along
-    };
-    const radial = {
-      x: target.point[0] - foot.x,
-      y: target.point[1] - foot.y,
-      z: target.point[2] - foot.z
-    };
-    const radialLength = Math.hypot(radial.x, radial.y, radial.z);
-    if (radialLength < 1e-9) {
-      return null;
-    }
-    const direction = {
-      x: radial.x / radialLength,
-      y: radial.y / radialLength,
-      z: radial.z / radialLength
-    };
-    const facesInward =
-      target.normal[0] * direction.x +
-        target.normal[1] * direction.y +
-        target.normal[2] * direction.z <
-      0;
-    return { direction, concavity: facesInward ? 'hole' : 'boss' };
-  }
-
-  /** Commits a cylindrical-face resize; `diameter` is the absolute value. */
-  function handleResizeCylindricalCommit(diameter: number) {
-    if (interaction.mode !== 'face' || interaction.op !== 'resize-hole') {
-      return;
     }
     const target = interaction.target;
-    const geometry = representations[
-      target.bodyId as BodyId
-    ]?.topology?.faces.find(
-      (face) => face.topologyId === target.topologyId
-    )?.geometry;
-    const radial = cylinderRadialAt(target);
     if (
-      !geometry?.radius ||
-      !geometry.axisStart ||
-      !geometry.axisEnd ||
-      !radial ||
-      target.hash === undefined
+      target.radius === undefined ||
+      !target.axisStart ||
+      !target.axisEnd ||
+      !target.radialDirection
     ) {
-      setStatus('Exact cylinder measurements are unavailable.');
-      dispatchInteraction({ type: 'clear' });
+      return null;
+    }
+    return {
+      bodyId: target.bodyId,
+      topologyId: target.topologyId,
+      point: {
+        x: target.point[0],
+        y: target.point[1],
+        z: target.point[2]
+      },
+      radialDirection: {
+        x: target.radialDirection[0],
+        y: target.radialDirection[1],
+        z: target.radialDirection[2]
+      },
+      axisStart: {
+        x: target.axisStart[0],
+        y: target.axisStart[1],
+        z: target.axisStart[2]
+      },
+      axisEnd: {
+        x: target.axisEnd[0],
+        y: target.axisEnd[1],
+        z: target.axisEnd[2]
+      },
+      originalRadius: target.radius,
+      minRadius: MIN_CYLINDER_RADIUS,
+      maxRadius: MAX_CYLINDER_RADIUS
+    };
+  }, [interaction]);
+  const cylinderRadiusInspectorInitial =
+    interaction.mode === 'face' &&
+    interaction.op === 'resize-cylinder-radius' &&
+    interaction.target.radius !== undefined
+      ? interaction.target.radius
+      : null;
+  const cylinderRadiusInspectorEdit = useMemo(
+    () =>
+      cylinderRadiusInspectorInitial === null
+        ? null
+        : { initialRadius: cylinderRadiusInspectorInitial },
+    [cylinderRadiusInspectorInitial]
+  );
+
+  function buildCylinderRadiusCommand(radius: ParamValue): AnyCommand | null {
+    const current = interactionRef.current;
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      current.op !== 'resize-cylinder-radius'
+    ) {
+      return null;
+    }
+    const target = current.target;
+    if (
+      target.hash === undefined ||
+      target.radius === undefined ||
+      !target.axisStart ||
+      !target.axisEnd ||
+      !target.concavity
+    ) {
+      return null;
+    }
+
+    // Keep native primitive cylinders parametric whenever no earlier
+    // topology-level edit depends on their old radius. Transform features keep
+    // BodyId stable, so editing the primitive still works after move/rotate.
+    const ordered = listFeaturesInOrder(base);
+    const bodyNode = listNodesByKind(base, 'body').find(
+      (body) => body.bodyId === (target.bodyId as BodyId)
+    );
+    const primitive = bodyNode
+      ? ordered.find(
+          (feature) => feature.featureId === bodyNode.featureId
+        )
+      : undefined;
+    const primitiveIndex = primitive ? ordered.indexOf(primitive) : -1;
+    const hasDependentDirectEdit =
+      primitiveIndex >= 0 &&
+      ordered.slice(primitiveIndex + 1).some(
+        (feature) =>
+          feature.data.featureKind === 'direct-edit' &&
+          feature.data.targetBodyId === target.bodyId
+      );
+    if (
+      primitive?.data.featureKind === 'primitive' &&
+      primitive.data.primitiveKind === 'cylinder' &&
+      typeof primitive.data.dimensions.radius === 'number' &&
+      !hasDependentDirectEdit
+    ) {
+      return commandFactories.updateFeature(
+        {
+          featureId: primitive.featureId,
+          data: {
+            dimensions: {
+              ...primitive.data.dimensions,
+              radius
+            }
+          }
+        },
+        'Resize Cylinder Radius'
+      );
+    }
+
+    return commandFactories.directEditBody({
+      name: 'Resize Cylinder Radius',
+      targetBodyId: target.bodyId as BodyId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: target.hash,
+        sourceRadius: target.radius,
+        sourceAxisStart: {
+          x: target.axisStart[0],
+          y: target.axisStart[1],
+          z: target.axisStart[2]
+        },
+        sourceAxisEnd: {
+          x: target.axisEnd[0],
+          y: target.axisEnd[1],
+          z: target.axisEnd[2]
+        },
+        concavity: target.concavity,
+        radius
+      }
+    });
+  }
+
+  function handleCylinderRadiusPreview(radius: number) {
+    cylinderRadiusInspectorSetterRef.current?.(radius);
+    cylinderRadiusPreview.request(radius);
+  }
+
+  function handleCylinderRadiusCancel() {
+    cylinderRadiusPreview.clear();
+    cylinderRadiusInspectorSetterRef.current?.(null);
+  }
+
+  function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'resize-cylinder-radius'
+    ) {
       return;
     }
-    const rounded = Math.round(diameter * 1000) / 1000;
-    if (rounded <= 0) {
-      setStatus('Diameter must be greater than zero.');
+    const rounded = Math.round(radius * 1000) / 1000;
+    const command = buildCylinderRadiusCommand(exact ?? rounded);
+    if (!command || rounded < MIN_CYLINDER_RADIUS) {
+      cylinderRadiusInspectorSetterRef.current?.(null);
+      setStatus('Radius must be greater than zero.');
       return;
     }
     void executeValidatedDirectEdit(
-      commandFactories.directEditBody({
-        name: radial.concavity === 'hole' ? 'Resize hole' : 'Resize boss',
-        targetBodyId: target.bodyId as BodyId,
-        operation: {
-          kind: 'resize-cylindrical-face',
-          faceHash: target.hash,
-          sourceRadius: geometry.radius,
-          sourceAxisStart: geometry.axisStart,
-          sourceAxisEnd: geometry.axisEnd,
-          concavity: radial.concavity,
-          radius: rounded / 2
-        }
-      }),
-      target.bodyId as BodyId,
-      `Resized ${radial.concavity} to ⌀ ${rounded} ${doc?.units ?? ''}.`,
+      command,
+      current.target.bodyId as BodyId,
+      `Adjusted cylinder radius to R ${rounded} ${doc?.units ?? ''}.`,
       rounded
     );
   }
@@ -2847,26 +3074,6 @@ export function App() {
       return;
     }
     dispatchInteraction({ type: 'keypad-open' });
-    if (interaction.mode === 'face' && interaction.op === 'resize-hole') {
-      const geometry = representations[
-        interaction.target.bodyId as BodyId
-      ]?.topology?.faces.find(
-        (face) => face.topologyId === interaction.target.topologyId
-      )?.geometry;
-      setKeypad({
-        kind: 'diameter',
-        label: '⌀',
-        initial:
-          geometry?.diameter !== undefined
-            ? String(
-                Math.round((geometry.diameter + currentOffset) * 100) / 100
-              )
-            : '',
-        unitKind: 'length',
-        baseline: geometry?.diameter
-      });
-      return;
-    }
     setKeypad({
       kind: 'offset',
       label: interaction.mode === 'region' ? 'Height' : 'Offset',
@@ -2875,6 +3082,23 @@ export function App() {
           ? String(Math.round(currentOffset * 100) / 100)
           : '',
       unitKind: 'length'
+    });
+  }
+
+  function handleOpenCylinderRadiusKeypad(radius: number) {
+    if (
+      interaction.mode !== 'face' ||
+      interaction.op !== 'resize-cylinder-radius'
+    ) {
+      return;
+    }
+    dispatchInteraction({ type: 'keypad-open' });
+    setKeypad({
+      kind: 'radius',
+      label: 'Radius',
+      initial: String(Math.round(radius * 100) / 100),
+      unitKind: 'length',
+      baseline: interaction.target.radius
     });
   }
 
@@ -2900,18 +3124,6 @@ export function App() {
     // The arrow rig is shared: in region mode its drag is an extrude height.
     if (interaction.mode === 'region') {
       handleRegionExtrudeCommit(offset, exact);
-      return;
-    }
-    if (interaction.mode === 'face' && interaction.op === 'resize-hole') {
-      // The drag reads as a diameter delta on the current bore/boss.
-      const geometry = representations[
-        interaction.target.bodyId as BodyId
-      ]?.topology?.faces.find(
-        (face) => face.topologyId === interaction.target.topologyId
-      )?.geometry;
-      if (geometry?.diameter !== undefined) {
-        handleResizeCylindricalCommit(geometry.diameter + offset);
-      }
       return;
     }
     if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
@@ -3461,7 +3673,16 @@ export function App() {
       switch (event.key) {
         case 'Escape':
           if (interaction.mode !== 'idle') {
-            dispatchInteraction({ type: 'escape' });
+            event.preventDefault();
+            const cancelledPointer =
+              interaction.mode !== 'sketch' &&
+              cancelDirectManipulationRef.current?.() === true;
+            if (cancelledPointer && interaction.mode === 'edges') {
+              edgePreview.clear();
+            }
+            if (!cancelledPointer) {
+              dispatchInteraction({ type: 'escape' });
+            }
           } else if (tool || selectedFeatureNodeId) {
             cancelPanel();
           } else {
@@ -3899,7 +4120,7 @@ export function App() {
               appSettings.experiments.directManipulation ? [] : sketchOverlays
             }
             selectedBodyIds={selectedBodyIds}
-            selectedTopology={selectedTopology}
+            selectedTopology={renderedSelectedTopology}
             selectedEdges={selectedEdges}
             settings={viewerSettings}
             fitSignal={fitSignal}
@@ -3933,6 +4154,12 @@ export function App() {
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
+            cylinderRadiusHandle={cylinderRadiusHandleTarget}
+            onCylinderRadiusPreview={handleCylinderRadiusPreview}
+            onCylinderRadiusCommit={handleCylinderRadiusCommit}
+            onCylinderRadiusCancel={handleCylinderRadiusCancel}
+            onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
+            cancelDirectManipulationRef={cancelDirectManipulationRef}
             edgeHandle={edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
@@ -3959,14 +4186,24 @@ export function App() {
                   <ToolCard
                     model={contextualToolCard}
                     onAction={handleSelectionAction}
-                    onClose={() =>
+                    onClose={() => {
+                      if (
+                        interaction.mode !== 'idle' &&
+                        interaction.mode !== 'sketch' &&
+                        interaction.phase === 'dragging'
+                      ) {
+                        cancelDirectManipulationRef.current?.();
+                        if (interaction.mode === 'edges') {
+                          edgePreview.clear();
+                        }
+                      }
                       dispatchInteraction({
                         type:
                           interaction.mode === 'sketch'
                             ? 'exit-sketch'
                             : 'clear'
                       })
-                    }
+                    }}
                   />
                   {interaction.mode === 'sketch' && (
                     <SketchToolRail
@@ -4004,13 +4241,10 @@ export function App() {
                       scope={parameterScope.scope}
                       anchorRef={keypadAnchorRef}
                       onPreview={(value) => {
-                        // The rig animates a delta; absolute kinds convert.
-                        offsetSetterRef.current?.(
-                          keypad.baseline === undefined
-                            ? value
-                            : value - keypad.baseline
-                        );
-                        if (keypad.kind === 'edge') {
+                        offsetSetterRef.current?.(value);
+                        if (keypad.kind === 'radius') {
+                          handleCylinderRadiusPreview(value);
+                        } else if (keypad.kind === 'edge') {
                           edgePreview.request(value);
                         }
                       }}
@@ -4024,8 +4258,11 @@ export function App() {
                             value,
                             isExpression ? raw : undefined
                           );
-                        } else if (keypad.kind === 'diameter') {
-                          handleResizeCylindricalCommit(value);
+                        } else if (keypad.kind === 'radius') {
+                          handleCylinderRadiusCommit(
+                            value,
+                            isExpression ? raw : undefined
+                          );
                         } else {
                           handleOffsetCommit(
                             value,
@@ -4034,8 +4271,10 @@ export function App() {
                         }
                       }}
                       onCancel={() => {
-                        offsetSetterRef.current?.(0);
-                        if (keypad.kind === 'edge') {
+                        offsetSetterRef.current?.(keypad.baseline ?? 0);
+                        if (keypad.kind === 'radius') {
+                          handleCylinderRadiusCancel();
+                        } else if (keypad.kind === 'edge') {
                           edgePreview.clear();
                         }
                         dispatchInteraction({ type: 'keypad-close' });
@@ -4195,7 +4434,7 @@ export function App() {
               selectedSketch={selectedSketch}
               selectedSketchObject={selectedSketchObject}
               selectedBody={selectedBody}
-              selectedTopology={selectedTopology}
+              selectedTopology={renderedSelectedTopology}
               selectedEdges={selectedEdges}
               edgeModifierBody={edgeModifierBody}
               scope={parameterScope.scope}
@@ -4204,6 +4443,8 @@ export function App() {
               units={doc.units}
               selectedBodyIds={selectedBodyIds}
               preferredSketchId={selectedSketch?.sketchId ?? null}
+              cylinderRadiusEdit={cylinderRadiusInspectorEdit}
+              cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
               onLaunchTool={launchTool}
               onCancel={cancelPanel}
               onSelectAllEdges={handleSelectAllEdges}

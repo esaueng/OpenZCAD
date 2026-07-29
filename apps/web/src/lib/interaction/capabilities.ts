@@ -30,7 +30,7 @@ export interface SelectionCapability {
 export interface FaceCapabilityTarget {
   surfaceType: 'planar' | 'cylindrical' | 'other';
   hash?: number;
-  diameter?: number;
+  radius?: number;
 }
 
 export type CapabilitySelection =
@@ -80,16 +80,16 @@ export function selectionCapabilities(
       if (
         target.surfaceType === 'cylindrical' &&
         target.hash !== undefined &&
-        target.diameter !== undefined &&
-        Number.isFinite(target.diameter) &&
-        target.diameter > 0
+        target.radius !== undefined &&
+        Number.isFinite(target.radius) &&
+        target.radius > 0
       ) {
         return [
           enabled(
             'resize-radial-face',
-            'Resize',
-            'diameter',
-            'transform-proxy',
+            'Adjust Radius',
+            'radius',
+            'exact-worker',
             true
           )
         ];

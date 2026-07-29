@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { CHIP_ANCHOR_LOCAL_DISTANCE, type DragRig } from './DragRig';
 import {
+  buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
   edgeHandlePlacement,
@@ -117,6 +118,31 @@ describe('the edge-radius rig', () => {
   });
 });
 
+describe('the cylinder-radius rig', () => {
+  it('tracks an absolute radius while moving only by the radial delta', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 14, y: 0, z: 8 },
+      direction: { x: 1, y: 0, z: 0 },
+      originalRadius: 14
+    });
+    expect(rig.value()).toBe(14);
+    rig.setValue(18);
+    expect(rig.value()).toBe(18);
+    expect(rig.group.position).toMatchObject({ x: 18, y: 0, z: 8 });
+    expect(rig.origin).toMatchObject({ x: 14, y: 0, z: 8 });
+  });
+
+  it('does not create a translated face ghost', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 0, y: 5, z: 0 },
+      direction: { x: 0, y: 1, z: 0 },
+      originalRadius: 5
+    });
+    expect(rig.worldGroup.children).toHaveLength(1);
+    expect(rig.worldGroup.children[0]?.type).toBe('Line2');
+  });
+});
+
 describe('every rig honours the shared contract', () => {
   const rigs: [string, () => DragRig][] = [
     ['offset-face', () => offsetRig()],
@@ -126,6 +152,15 @@ describe('every rig honours the shared contract', () => {
         buildEdgeRadiusHandle({
           origin: { x: 0, y: 0, z: 0 },
           direction: { x: 0, y: 0, z: 1 }
+        })
+    ],
+    [
+      'cylinder-radius',
+      () =>
+        buildCylinderRadiusHandle({
+          origin: { x: 1, y: 0, z: 0 },
+          direction: { x: 1, y: 0, z: 0 },
+          originalRadius: 0
         })
     ]
   ];
