@@ -1450,17 +1450,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             const failureMessage = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}. Edges that end on an existing fillet or chamfer usually cannot be rounded afterwards — edit that earlier feature and add this edge to it instead.`;
             let modified: number;
             try {
-              // BrepKit's fillet fallback can otherwise accept a radius larger
-              // than the selected edge and return a severely distorted blend.
-              if (
-                feature.data.featureKind === 'fillet' &&
-                selected.some(
-                  (edge) =>
-                    size > kernel.edgeLength(edge) / 2 + GEOMETRY_EPSILON
-                )
-              ) {
-                throw new Error('Fillet radius exceeds the selected edge.');
-              }
+              const targetBounds = kernel.boundingBox(target);
               modified =
                 feature.data.featureKind === 'fillet'
                   ? kernel.fillet(target, Uint32Array.from(selected), size)
@@ -1470,6 +1460,42 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               // Treat that as a failed feature instead of reporting success.
               if (modified === target) {
                 throw new Error('Edge modifier produced no geometric change.');
+              }
+              if (kernel.validateSolidRelaxed(modified) !== 0) {
+                throw new Error('Edge modifier produced an invalid solid.');
+              }
+              if (feature.data.featureKind === 'fillet') {
+                // A fillet rounds material inside the target envelope. BrepKit
+                // can return a closed but severely distorted fallback for an
+                // oversized radius, expanding the body to the requested size.
+                // Reject that result rather than guessing a radius limit from
+                // the selected edge's length: the valid limit is set by its
+                // adjacent faces, and can be larger than half the edge length.
+                const modifiedBounds = kernel.boundingBox(modified);
+                const boundsScale = [0, 1, 2].reduce(
+                  (maximum, axis) =>
+                    Math.max(
+                      maximum,
+                      targetBounds[axis + 3]! - targetBounds[axis]!
+                    ),
+                  1
+                );
+                const tolerance = Math.max(
+                  GEOMETRY_EPSILON,
+                  boundsScale * GEOMETRY_LINEAR_TOLERANCE
+                );
+                if (
+                  modifiedBounds[0]! < targetBounds[0]! - tolerance ||
+                  modifiedBounds[1]! < targetBounds[1]! - tolerance ||
+                  modifiedBounds[2]! < targetBounds[2]! - tolerance ||
+                  modifiedBounds[3]! > targetBounds[3]! + tolerance ||
+                  modifiedBounds[4]! > targetBounds[4]! + tolerance ||
+                  modifiedBounds[5]! > targetBounds[5]! + tolerance
+                ) {
+                  throw new Error(
+                    'Fillet expanded beyond the target body bounds.'
+                  );
+                }
               }
             } catch {
               throw new Error(failureMessage);
