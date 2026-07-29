@@ -159,6 +159,26 @@ describe('computeSketchRegions', () => {
     expect(regions[0]!.samplePoint.y).toBeGreaterThan(0);
   });
 
+  it('registers a chord crossing a wrapped non-full arc start', () => {
+    const endpoint = Math.sqrt(50);
+    const regions = computeSketchRegions(
+      [
+        object({
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 10,
+          startAngleDeg: 225,
+          endAngleDeg: 315
+        }),
+        line(-endpoint, -endpoint, endpoint, -endpoint)
+      ],
+      resolve
+    );
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.area).toBeCloseTo(50 * (Math.PI / 2 - 1), 1);
+  });
+
   it('nests holes through multiple levels', () => {
     const regions = computeSketchRegions(
       [rectangle(100, 100), circle(30), circle(15)],
