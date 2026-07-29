@@ -13,7 +13,9 @@ import {
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
+  type SketchRegion,
   type Vec2,
+  type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
 import { writeAsciiStl } from '@openzcad/io-stl';
@@ -30,10 +32,22 @@ import {
   type FaceGeometry,
   type FeatureNode,
   type ProjectDocument,
+  type SketchNode,
   type SketchObjectData
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import type { ExactKernelAdapter } from './exact';
+import { resolveRegionProfile } from './region-profile';
+import {
+  ambiguousReferenceError,
+  canonicalDirection,
+  cylinderAnalyticSignature,
+  edgeFingerprintOf,
+  faceFingerprintOf,
+  isClosedEdge,
+  planeAnalyticSignature,
+  unresolvedReferenceError
+} from './topology-fingerprint';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
@@ -103,6 +117,133 @@ function cross(left: Vec3, right: Vec3): Vec3 {
 
 function midpoint(left: Vec3, right: Vec3): Vec3 {
   return scale(add(left, right), 0.5);
+}
+
+function dot(left: Vec3, right: Vec3): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+/** OpenCascade's curve vocabulary mapped onto BrepKit's persisted names. */
+const CURVE_TYPE_NAMES: Record<string, string> = {
+  line: 'LINE',
+  circle: 'CIRCLE',
+  ellipse: 'ELLIPSE',
+  bspline: 'BSPLINE_CURVE'
+};
+
+/**
+ * ADR-011 edge fingerprint from OpenCascade queries. Every sampled quantity
+ * matches what the BrepKit adapter samples for the same geometry, so a hash
+ * persisted under either kernel resolves under the other.
+ */
+function edgeFingerprint(kernel: OcctKernel, edge: ShapeHandle): number {
+  const rawType = kernel.curveType(edge);
+  const curveType = CURVE_TYPE_NAMES[rawType] ?? rawType.toUpperCase();
+  const length = kernel.curveLength(edge);
+  const { first, last } = kernel.curveParameters(edge);
+  const span = last - first;
+  const vertices = kernel
+    .getSubShapes(edge, 'vertex')
+    .map((vertex) => kernel.vertexPosition(vertex));
+  const start = vertices[0] ?? kernel.curvePointAtParam(edge, first);
+  const end = vertices[1] ?? start;
+  if (!isClosedEdge(start, end)) {
+    return edgeFingerprintOf({
+      closed: false,
+      curveType,
+      length,
+      endpoints: [start, end],
+      midpoint: kernel.curvePointAtParam(edge, first + span / 2)
+    });
+  }
+  const center = { x: 0, y: 0, z: 0 };
+  for (let sample = 0; sample < 4; sample += 1) {
+    const point = kernel.curvePointAtParam(edge, first + (span * sample) / 4);
+    center.x += point.x / 4;
+    center.y += point.y / 4;
+    center.z += point.z / 4;
+  }
+  const axis = normalized(
+    cross(
+      kernel.curveTangent(edge, first),
+      kernel.curveTangent(edge, first + span / 4)
+    )
+  );
+  return edgeFingerprintOf({
+    closed: true,
+    curveType,
+    length,
+    center,
+    axis: axis ? canonicalDirection(axis) : null
+  });
+}
+
+/** ADR-011 face fingerprint from OpenCascade queries; see edgeFingerprint. */
+function faceFingerprint(kernel: OcctKernel, face: ShapeHandle): number {
+  const surfaceType = kernel.surfaceType(face);
+  let perimeter = 0;
+  for (const edge of kernel.getSubShapes(face, 'edge')) {
+    perimeter += kernel.curveLength(edge);
+  }
+  const vertices = kernel.getSubShapes(face, 'vertex');
+  let centroid: Vec3 | null = null;
+  if (vertices.length > 0) {
+    centroid = { x: 0, y: 0, z: 0 };
+    for (const vertex of vertices) {
+      const position = kernel.vertexPosition(vertex);
+      centroid.x += position.x / vertices.length;
+      centroid.y += position.y / vertices.length;
+      centroid.z += position.z / vertices.length;
+    }
+  }
+  let analytic = '';
+  if (surfaceType === 'plane') {
+    const bounds = kernel.uvBounds(face);
+    const u = (bounds.uMin + bounds.uMax) / 2;
+    const v = (bounds.vMin + bounds.vMax) / 2;
+    const normal = normalized(kernel.surfaceNormal(face, u, v));
+    if (normal) {
+      analytic = planeAnalyticSignature(
+        normal,
+        dot(normal, kernel.pointOnSurface(face, u, v))
+      );
+    }
+  } else if (surfaceType === 'cylinder') {
+    const cylinder = kernel.getFaceCylinderData(face);
+    const bounds = kernel.uvBounds(face);
+    const base = kernel.pointOnSurface(face, bounds.uMin, bounds.vMin);
+    const top = kernel.pointOnSurface(face, bounds.uMin, bounds.vMax);
+    const axis = normalized(subtract(top, base));
+    if (cylinder && axis) {
+      // Opposite points on a cylindrical section average to an axis point,
+      // independent of where the face's uv patch sits on the surface.
+      const opposite = kernel.pointOnSurface(
+        face,
+        bounds.uMin + Math.PI,
+        bounds.vMin
+      );
+      analytic = cylinderAnalyticSignature(
+        midpoint(base, opposite),
+        axis,
+        cylinder.radius
+      );
+    }
+  }
+  return faceFingerprintOf({ surfaceType, perimeter, analytic, centroid });
+}
+
+function edgeHandlesByFingerprint(
+  kernel: OcctKernel,
+  edges: ShapeHandle[]
+): Map<number, ShapeHandle[]> {
+  const result = new Map<number, ShapeHandle[]>();
+  for (const edge of edges) {
+    const hash = edgeFingerprint(kernel, edge);
+    const handles = result.get(hash) ?? [];
+    handles.push(edge);
+    result.set(hash, handles);
+  }
+  return result;
 }
 
 function cylinderFrame(origin: Vec3, zAxis: Vec3): number[] {
@@ -400,14 +541,17 @@ function applyDirectEdit(
   operation: DirectEditOperation,
   scope: Record<string, number>
 ): ShapeHandle {
-  if (!Number.isInteger(operation.faceHash) || operation.faceHash < 1) {
-    throw new Error('Selected face reference is invalid.');
-  }
   const faces = kernel.getSubShapes(owner, 'face');
-  const face = faces[operation.faceHash - 1];
-  if (!face) {
-    throw new Error('Selected face no longer exists.');
+  const matches = faces.filter(
+    (candidate) => faceFingerprint(kernel, candidate) === operation.faceHash
+  );
+  if (matches.length === 0) {
+    throw unresolvedReferenceError('face', operation.faceHash, faces.length);
   }
+  if (matches.length > 1) {
+    throw ambiguousReferenceError('face');
+  }
+  const face = matches[0]!;
 
   let output: ShapeHandle;
   if (operation.kind === 'resize-through-hole') {
@@ -682,6 +826,132 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     }
   }
 
+  /** Lift a sketch-local 2D point into world space on the plane basis. */
+  private static planePoint3(basis: PlaneBasis, point: Vec2Like): Vec3 {
+    return {
+      x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+      y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+      z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+    };
+  }
+
+  /**
+   * Build an exact planar face for a detected region: outer wire plus hole
+   * wires from the region's line/arc curves. Mirrors the BrepKit adapter's
+   * construction — including the identical ≤ 90° arc subdivision — so the
+   * resulting edges carry the same ADR-011 fingerprints on both kernels.
+   */
+  private makeRegionFace(region: SketchRegion, basis: PlaneBasis): ShapeHandle {
+    const wireFor = (loop: SketchRegion['outer']): ShapeHandle => {
+      const edges: ShapeHandle[] = [];
+      for (const curve of loop.curves) {
+        if (curve.kind === 'line') {
+          edges.push(
+            this.kernel.makeLineEdge(
+              OcctStepKernelAdapter.planePoint3(basis, curve.a),
+              OcctStepKernelAdapter.planePoint3(basis, curve.b)
+            )
+          );
+          continue;
+        }
+        const span = Math.abs(curve.endAngle - curve.startAngle);
+        const center = OcctStepKernelAdapter.planePoint3(basis, curve.center);
+        if (span >= Math.PI * 2 - 1e-9) {
+          // OpenCascade seams its circles a quarter turn from where BrepKit
+          // does. Rotate the edge about its own axis so the seam vertex — and
+          // the wall seam it extrudes into — lands on the same point in both
+          // kernels; otherwise cross-kernel fingerprints of the seam edge and
+          // wall face would diverge.
+          const edge = this.kernel.makeCircleEdge(
+            center,
+            basis.normal,
+            curve.radius
+          );
+          edges.push(
+            this.kernel.rotate(
+              edge,
+              { point: center, direction: basis.normal },
+              Math.PI / 2
+            )
+          );
+          continue;
+        }
+        // Arc pieces are subdivided to ≤ 90°, exactly as the BrepKit adapter
+        // subdivides them: quarter arcs are unambiguous and the piece
+        // boundaries become shared vertices with identical coordinates.
+        const wrap = Math.PI * 2;
+        const forward =
+          (((curve.endAngle - curve.startAngle) % wrap) + wrap) % wrap;
+        const sweep = curve.ccw ? forward : forward - wrap;
+        const pieces = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2)));
+        const pointAtAngle = (angle: number): Vec3 =>
+          OcctStepKernelAdapter.planePoint3(basis, {
+            x: curve.center.x + Math.cos(angle) * curve.radius,
+            y: curve.center.y + Math.sin(angle) * curve.radius
+          });
+        for (let piece = 0; piece < pieces; piece += 1) {
+          const angleA = curve.startAngle + (sweep * piece) / pieces;
+          const angleB = curve.startAngle + (sweep * (piece + 1)) / pieces;
+          edges.push(
+            this.kernel.makeArcEdge(
+              pointAtAngle(angleA),
+              pointAtAngle((angleA + angleB) / 2),
+              pointAtAngle(angleB)
+            )
+          );
+        }
+      }
+      return this.kernel.makeWire(edges);
+    };
+
+    const face = this.kernel.makeFace(wireFor(region.outer));
+    if (region.holes.length === 0) {
+      return face;
+    }
+    return this.kernel.addHolesInFace(face, region.holes.map(wireFor));
+  }
+
+  /** Extrude one detected closed region of a multi-object sketch. */
+  private buildRegionExtrude(
+    document: ProjectDocument,
+    sketch: SketchNode,
+    data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
+    scope: Record<string, number>
+  ): ShapeHandle {
+    const region = resolveRegionProfile(document, sketch, data, scope);
+    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
+      resolveParamValue(value, scope, 'sketch offset')
+    );
+    const face = this.makeRegionFace(region, basis);
+    const distance = resolveParamValue(data.distance, scope, 'distance');
+    return this.kernel.extrude(
+      face,
+      basis.normal.x * distance,
+      basis.normal.y * distance,
+      basis.normal.z * distance
+    );
+  }
+
+  /**
+   * OpenCascade booleans hand back a compound wrapping their solids, and the
+   * fillet/chamfer builders reject compounds outright. Collapse to the single
+   * contained solid, fusing first when a pattern produced several — the same
+   * semantics as the BrepKit adapter's collapseShape.
+   */
+  private collapseToSolid(shape: ShapeHandle): ShapeHandle {
+    if (this.kernel.isSolid(shape)) {
+      return shape;
+    }
+    const solids = this.kernel.getSubShapes(shape, 'solid');
+    if (solids.length === 0) {
+      throw new Error('Exact body contains no solids.');
+    }
+    if (solids.length === 1) {
+      return solids[0]!;
+    }
+    return this.kernel.unifySameDomain(this.kernel.fuseAll(solids));
+  }
+
   private buildSweep(
     document: ProjectDocument,
     feature: FeatureNode,
@@ -692,6 +962,13 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       feature.data.featureKind !== 'revolve'
     ) {
       throw new Error('Expected a sweep feature.');
+    }
+    if (feature.data.featureKind === 'extrude' && feature.data.profile) {
+      const sketchNode = findSketch(document, feature.data.sketchId);
+      if (!sketchNode) {
+        throw new Error('Referenced sketch no longer exists.');
+      }
+      return this.buildRegionExtrude(document, sketchNode, feature.data, scope);
     }
     const sketch = findSketch(document, feature.data.sketchId);
     const objectId = sketch?.objectIds[0];
@@ -866,19 +1143,31 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             if (!feature.bodyId) {
               throw new Error('Edge modifier has no result body.');
             }
-            const target = result.shapes.get(feature.data.targetBodyId);
-            if (!target) {
+            const storedTarget = result.shapes.get(feature.data.targetBodyId);
+            if (!storedTarget) {
               throw new Error('Edge modifier target is unavailable.');
             }
+            const target = this.collapseToSolid(storedTarget);
             const requested = new Set(feature.data.edgeHashes);
             const targetEdges = this.kernel.getSubShapes(target, 'edge');
-            const selected = targetEdges.filter((_, index) =>
-              requested.has(index + 1)
+            const edgesByHash = edgeHandlesByFingerprint(
+              this.kernel,
+              targetEdges
             );
-            if (selected.length !== requested.size) {
-              throw new Error(
-                `${requested.size - selected.length} selected edge(s) no longer exist.`
-              );
+            const selected: ShapeHandle[] = [];
+            for (const hash of requested) {
+              const matches = edgesByHash.get(hash) ?? [];
+              if (matches.length === 0) {
+                throw unresolvedReferenceError(
+                  'edge',
+                  hash,
+                  targetEdges.length
+                );
+              }
+              if (matches.length > 1) {
+                throw ambiguousReferenceError('edge');
+              }
+              selected.push(matches[0]!);
             }
             const size = resolveParamValue(
               feature.data.featureKind === 'fillet'
@@ -1002,21 +1291,25 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     const faces: BodyTopology['faces'] = [];
     const faceShapes = this.kernel.getSubShapes(shape, 'face');
     const faceGroups = mesh.faceGroups ?? new Int32Array();
-    // OCCT HashCode values include process-local topology identity and change
-    // when the source is rebuilt. Traversal order is deterministic for the
-    // same feature history, so persist the same 1-based indices BrepKit uses.
+    // Tessellation groups and getSubShapes iterate the same underlying shell,
+    // so face handle i owns triangle range i. Guarded because the persisted
+    // ADR-011 fingerprint below silently depends on it.
+    if (faceShapes.length !== faceGroups.length / 3) {
+      throw new Error(
+        `Face handle count ${faceShapes.length} does not match tessellation groups ${faceGroups.length / 3}.`
+      );
+    }
     for (let index = 0; index + 2 < faceGroups.length; index += 3) {
       const indexStart = faceGroups[index]!;
       const indexCount = faceGroups[index + 1]!;
-      const hash = faces.length + 1;
+      const face = faceShapes[index / 3]!;
+      const hash = faceFingerprint(this.kernel, face);
       faces.push({
         topologyId: `face:${hash}`,
         hash,
         triangleStart: indexStart / 3,
         triangleCount: indexCount / 3,
-        geometry: faceShapes[index / 3]
-          ? faceGeometry(this.kernel, shape, faceShapes[index / 3]!)
-          : undefined
+        geometry: faceGeometry(this.kernel, shape, face)
       });
     }
 
@@ -1024,11 +1317,17 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       shape,
       displayTessellation.linearDeflection
     );
+    const edgeShapes = this.kernel.getSubShapes(shape, 'edge');
+    if (edgeShapes.length !== wireframe.edgeGroups.length / 3) {
+      throw new Error(
+        `Edge handle count ${edgeShapes.length} does not match wireframe groups ${wireframe.edgeGroups.length / 3}.`
+      );
+    }
     const edges: BodyTopology['edges'] = [];
     for (let index = 0; index + 2 < wireframe.edgeGroups.length; index += 3) {
       const pointStart = wireframe.edgeGroups[index]!;
       const pointCount = wireframe.edgeGroups[index + 1]!;
-      const hash = edges.length + 1;
+      const hash = edgeFingerprint(this.kernel, edgeShapes[index / 3]!);
       edges.push({
         topologyId: `edge:${hash}`,
         hash,
@@ -1160,6 +1459,16 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
         TESSELLATION_DEFLECTION,
         true
       );
+    } finally {
+      this.kernel.releaseAll();
+    }
+  }
+
+  /** Reassemble separately exported STEP solids into one compound document. */
+  combineStepSolids(parts: string[]): string {
+    try {
+      const shapes = parts.map((part) => this.kernel.importStep(part));
+      return this.kernel.exportStep(this.kernel.makeCompound(shapes));
     } finally {
       this.kernel.releaseAll();
     }
