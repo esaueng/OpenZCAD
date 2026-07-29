@@ -1,8 +1,17 @@
+import { createHash } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
 
-// Dedicated port so the suite never collides with (or reuses) an unrelated
-// dev/preview server from another checkout.
-const PORT = 4319;
+// Each checkout derives its own stable port from its path, so concurrent e2e
+// runs in different worktrees never reuse (or tear down) each other's preview
+// servers. Set PLAYWRIGHT_PORT to pin a specific port instead.
+function portForCheckout(): number {
+  const envPort = Number(process.env.PLAYWRIGHT_PORT);
+  if (Number.isInteger(envPort) && envPort > 0 && envPort < 65536) return envPort;
+  const digest = createHash('sha256').update(process.cwd()).digest();
+  return 20000 + (digest.readUInt32BE(0) % 10000);
+}
+
+const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
