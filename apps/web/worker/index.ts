@@ -96,8 +96,35 @@ async function readJsonBody(request: Request): Promise<unknown> {
     throw new HttpError(413, 'Request body is too large.');
   }
   try {
-    return await request.json();
-  } catch {
+    const reader = request.body?.getReader();
+    if (!reader) {
+      throw new Error('Request body is missing.');
+    }
+    const decoder = new TextDecoder();
+    const chunks: string[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > MAX_JSON_BODY_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          throw new HttpError(413, 'Request body is too large.');
+        }
+        chunks.push(decoder.decode(value, { stream: true }));
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    chunks.push(decoder.decode());
+    return JSON.parse(chunks.join('')) as unknown;
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
     throw new HttpError(400, 'Request body must be valid JSON.');
   }
 }
