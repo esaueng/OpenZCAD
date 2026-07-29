@@ -1718,6 +1718,47 @@ describe('exact hybrid kernel adapter', () => {
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
   });
 
+  it('allows a fillet radius larger than half the selected edge length', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Short edge fillet', toUserId('user_exact')),
+      {
+        name: 'Shallow block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 5 }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const baseBody = Object.values(baseDerived.bodyRepresentations)[0]!;
+    const shortEdge = baseBody.topology?.edges.find((edge) => {
+      const pointCount = edge.points.length;
+      return (
+        pointCount >= 6 &&
+        Math.abs(
+          Math.hypot(
+            edge.points[pointCount - 3]! - edge.points[0]!,
+            edge.points[pointCount - 2]! - edge.points[1]!,
+            edge.points[pointCount - 1]! - edge.points[2]!
+          ) - 5
+        ) < 1e-6
+      );
+    });
+    expect(shortEdge).toBeTruthy();
+
+    const filleted = filletEdges(base, {
+      name: 'Short-edge fillet',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes: [shortEdge!.hash],
+      size: 2.9
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+
+    expect(derived.warnings).toEqual([]);
+    expect(body?.volume).toBeGreaterThan(0);
+    expect(body?.volume).toBeLessThan(baseBody.volume);
+    expect(body?.bbox).toEqual(baseBody.bbox);
+  });
+
   it('fillets all twelve original box edges in one exact feature', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('All-edge fillet', toUserId('user_exact')),
