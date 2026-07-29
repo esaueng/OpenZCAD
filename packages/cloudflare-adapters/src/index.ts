@@ -89,29 +89,27 @@ export class D1R2PersistenceService implements PersistenceService {
         document_json: string;
       }>();
 
-    // One unparseable row must not take the whole listing down with it: the
-    // user still needs to reach every other project to recover.
-    const projects: ListProjectsResponse['projects'] = [];
-    for (const row of rows.results ?? []) {
-      try {
-        const document = normalizeDocument(
-          JSON.parse(row.document_json) as ProjectDocument
-        );
-        projects.push({
-          projectId: document.projectId,
-          name: row.name,
-          lastRevisionId: document.revisions.at(-1)?.revisionId,
-          revisionCount: document.revisions.length,
-          updatedAt: row.updated_at
-        });
-      } catch (error) {
-        console.error(
-          `Skipping unreadable project row ${row.id} while listing projects.`,
-          error
-        );
-      }
-    }
-    return { projects };
+    return {
+      projects: (rows.results ?? []).map(
+        (row: {
+          id: string;
+          name: string;
+          updated_at: string;
+          document_json: string;
+        }) => {
+          const document = normalizeDocument(
+            JSON.parse(row.document_json) as ProjectDocument
+          );
+          return {
+            projectId: document.projectId,
+            name: row.name,
+            lastRevisionId: document.revisions.at(-1)?.revisionId,
+            revisionCount: document.revisions.length,
+            updatedAt: row.updated_at
+          };
+        }
+      )
+    };
   }
 
   async createProject(
