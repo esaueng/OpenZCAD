@@ -23,14 +23,12 @@ export interface CommandPrompt {
 }
 
 /** How each rung of the Escape ladder reads to someone about to press it. */
-const ESCAPE_LABELS: Record<
-  ReturnType<typeof escapeTarget>,
-  string | null
-> = {
+const ESCAPE_LABELS: Record<ReturnType<typeof escapeTarget>, string | null> = {
   'close-keypad': 'closes exact entry',
   'cancel-drag': 'cancels the drag',
   'recover-failure': 'dismisses the error',
   'end-drawing': 'ends the chain',
+  'exit-drawing-tool': 'returns to selection',
   'clear-sketch-selection': 'deselects',
   'clear-selection': 'clears the selection',
   'exit-sketch': 'leaves the sketch',

@@ -206,9 +206,22 @@ describe('escape chain', () => {
     expect(escapeTarget(state)).toBe('end-drawing');
     state = interactionReducer(state, { type: 'escape' });
     expect(state.mode === 'sketch' && state.session.drawing).toBe(false);
+    expect(escapeTarget(state)).toBe('exit-drawing-tool');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('select');
     expect(escapeTarget(state)).toBe('exit-sketch');
     state = interactionReducer(state, { type: 'escape' });
     expect(state).toEqual(IDLE);
+  });
+
+  it('exits an armed drawing tool before leaving the sketch', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'circle' });
+
+    expect(escapeTarget(state)).toBe('exit-drawing-tool');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('select');
+    expect(escapeTarget(state)).toBe('exit-sketch');
   });
 
   it('clears an entity selection before exiting sketch mode', () => {

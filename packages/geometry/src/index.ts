@@ -19,11 +19,18 @@ export {
   isNearlyZero
 } from './tolerance';
 export {
+  computeSketchProfileAnalysis,
   computeSketchRegions,
+  mergeAdjacentProfiles,
+  profileContainsPoint,
+  profilesShareBoundary,
   regionAtPoint,
   regionFingerprintOf,
   type RegionCurve,
   type RegionLoop,
+  type SketchProfile,
+  type SketchProfileAnalysis,
+  type SketchProfileDiagnostic,
   type SketchRegion,
   type SketchRegionObject,
   type Vec2Like
@@ -78,7 +85,11 @@ function subtract(a: Vec3, b: Vec3): Vec3 {
 }
 
 function crossProduct(a: Vec3, b: Vec3): Vec3 {
-  return vec(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+  return vec(
+    a.y * b.z - a.z * b.y,
+    a.z * b.x - a.x * b.z,
+    a.x * b.y - a.y * b.x
+  );
 }
 
 function dotProduct(a: Vec3, b: Vec3): number {
@@ -92,7 +103,11 @@ function requirePositive(value: number, label: string): number {
   return value;
 }
 
-function clampSegments(value: number, minimum: number, maximum: number): number {
+function clampSegments(
+  value: number,
+  minimum: number,
+  maximum: number
+): number {
   return Math.min(maximum, Math.max(minimum, Math.round(value)));
 }
 
@@ -179,7 +194,9 @@ export function makeCone(
   for (let i = 0; i < n; i++) {
     const angle = (i / n) * Math.PI * 2;
     bottomRing.push(
-      vertices.push(vec(Math.cos(angle) * bottomRadius, Math.sin(angle) * bottomRadius, 0)) - 1
+      vertices.push(
+        vec(Math.cos(angle) * bottomRadius, Math.sin(angle) * bottomRadius, 0)
+      ) - 1
     );
   }
 
@@ -194,7 +211,9 @@ export function makeCone(
     for (let i = 0; i < n; i++) {
       const angle = (i / n) * Math.PI * 2;
       topRing.push(
-        vertices.push(vec(Math.cos(angle) * topRadius, Math.sin(angle) * topRadius, height)) - 1
+        vertices.push(
+          vec(Math.cos(angle) * topRadius, Math.sin(angle) * topRadius, height)
+        ) - 1
       );
     }
   }
@@ -270,7 +289,9 @@ export function makeTorus(
   requirePositive(majorRadius, 'Torus major radius');
   requirePositive(minorRadius, 'Torus minor radius');
   if (minorRadius >= majorRadius) {
-    throw new GeometryError('Torus minor radius must be smaller than the major radius.');
+    throw new GeometryError(
+      'Torus minor radius must be smaller than the major radius.'
+    );
   }
   const n = clampSegments(segments, 3, 128);
   const m = clampSegments(tubeSegments, 3, 64);
@@ -282,7 +303,9 @@ export function makeTorus(
     for (let k = 0; k < m; k++) {
       const v = (k / m) * Math.PI * 2;
       const r = majorRadius + Math.cos(v) * minorRadius;
-      vertices.push(vec(Math.cos(u) * r, Math.sin(u) * r, Math.sin(v) * minorRadius));
+      vertices.push(
+        vec(Math.cos(u) * r, Math.sin(u) * r, Math.sin(v) * minorRadius)
+      );
     }
   }
   for (let i = 0; i < n; i++) {
@@ -399,7 +422,10 @@ export function circleProfile(
   const points: Vec2[] = [];
   for (let i = 0; i < n; i++) {
     const angle = (i / n) * Math.PI * 2;
-    points.push({ x: centerX + Math.cos(angle) * radius, y: centerY + Math.sin(angle) * radius });
+    points.push({
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius
+    });
   }
   return points;
 }
@@ -416,7 +442,10 @@ export function polygonProfile(
   for (let i = 0; i < n; i++) {
     // Start at the top so flats sit symmetric about the vertical axis.
     const angle = (i / n) * Math.PI * 2 + Math.PI / 2;
-    points.push({ x: centerX + Math.cos(angle) * radius, y: centerY + Math.sin(angle) * radius });
+    points.push({
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius
+    });
   }
   return points;
 }
@@ -440,9 +469,18 @@ function ensureCcw(profile: Vec2[]): Vec2[] {
 
 function planePoint(basis: PlaneBasis, point: Vec2, offset: number): Vec3 {
   return vec(
-    basis.origin.x + basis.u.x * point.x + basis.v.x * point.y + basis.normal.x * offset,
-    basis.origin.y + basis.u.y * point.x + basis.v.y * point.y + basis.normal.y * offset,
-    basis.origin.z + basis.u.z * point.x + basis.v.z * point.y + basis.normal.z * offset
+    basis.origin.x +
+      basis.u.x * point.x +
+      basis.v.x * point.y +
+      basis.normal.x * offset,
+    basis.origin.y +
+      basis.u.y * point.x +
+      basis.v.y * point.y +
+      basis.normal.y * offset,
+    basis.origin.z +
+      basis.u.z * point.x +
+      basis.v.z * point.y +
+      basis.normal.z * offset
   );
 }
 
@@ -529,9 +567,15 @@ export function revolveProfile(
       const a = along[i]!;
       vertices.push(
         vec(
-          axisOrigin.x + axisDir.x * a + r * (cos * radialDir.x + sin * sweepDir.x),
-          axisOrigin.y + axisDir.y * a + r * (cos * radialDir.y + sin * sweepDir.y),
-          axisOrigin.z + axisDir.z * a + r * (cos * radialDir.z + sin * sweepDir.z)
+          axisOrigin.x +
+            axisDir.x * a +
+            r * (cos * radialDir.x + sin * sweepDir.x),
+          axisOrigin.y +
+            axisDir.y * a +
+            r * (cos * radialDir.y + sin * sweepDir.y),
+          axisOrigin.z +
+            axisDir.z * a +
+            r * (cos * radialDir.z + sin * sweepDir.z)
         )
       );
     }
@@ -542,7 +586,12 @@ export function revolveProfile(
     const s2 = (s + 1) % n;
     for (let i = 0; i < count; i++) {
       const j = (i + 1) % count;
-      faces.push([s * count + i, s * count + j, s2 * count + j, s2 * count + i]);
+      faces.push([
+        s * count + i,
+        s * count + j,
+        s2 * count + j,
+        s2 * count + i
+      ]);
     }
   }
   return orientOutward({ vertices, faces });
@@ -585,7 +634,8 @@ function rotationMatrix(rotationDeg: Vec3): number[] {
 
 export function transformSolid(solid: Solid, transform: Transform): Solid {
   const { translation, rotationDeg } = transform;
-  const rotate = rotationDeg.x !== 0 || rotationDeg.y !== 0 || rotationDeg.z !== 0;
+  const rotate =
+    rotationDeg.x !== 0 || rotationDeg.y !== 0 || rotationDeg.z !== 0;
   const m = rotationMatrix(rotationDeg);
   const vertices = solid.vertices.map((p) => {
     const x = rotate ? m[0]! * p.x + m[1]! * p.y + m[2]! * p.z : p.x;
@@ -598,7 +648,9 @@ export function transformSolid(solid: Solid, transform: Transform): Solid {
 
 export function scaleSolid(solid: Solid, factor: number): Solid {
   return {
-    vertices: solid.vertices.map((p) => vec(p.x * factor, p.y * factor, p.z * factor)),
+    vertices: solid.vertices.map((p) =>
+      vec(p.x * factor, p.y * factor, p.z * factor)
+    ),
     faces: solid.faces.map((face) => [...face])
   };
 }
@@ -641,7 +693,10 @@ function polygonsToSolid(polygons: CsgPolygon[]): Solid {
         lookup.set(key, index);
       }
       // Welding can collapse consecutive points; keep the loop simple.
-      if (loop.length === 0 || (loop[loop.length - 1] !== index && loop[0] !== index)) {
+      if (
+        loop.length === 0 ||
+        (loop[loop.length - 1] !== index && loop[0] !== index)
+      ) {
         loop.push(index);
       } else if (loop[0] === index && loop.length >= 3) {
         break;
@@ -726,7 +781,10 @@ export function healTJunctions(solid: Solid): Solid {
         }
         const closest = vec(a.x + ab.x * t, a.y + ab.y * t, a.z + ab.z * t);
         const offset = subtract(p, closest);
-        if (dotProduct(offset, offset) < ON_EDGE_TOLERANCE * ON_EDGE_TOLERANCE) {
+        if (
+          dotProduct(offset, offset) <
+          ON_EDGE_TOLERANCE * ON_EDGE_TOLERANCE
+        ) {
           inserts.push({ t, index: candidate });
         }
       }
@@ -804,7 +862,10 @@ export function solidVolume(solid: Solid): number {
 /** Flips face winding when the signed volume is negative (inside-out solid). */
 function orientOutward(solid: Solid): Solid {
   if (solidVolume(solid) < 0) {
-    return { vertices: solid.vertices, faces: solid.faces.map((face) => [...face].reverse()) };
+    return {
+      vertices: solid.vertices,
+      faces: solid.faces.map((face) => [...face].reverse())
+    };
   }
   return solid;
 }
@@ -856,7 +917,10 @@ export function triangulateSolid(solid: Solid): TriangleMesh {
 }
 
 /** Builds a solid from raw triangle soup (e.g. an imported STL mesh). */
-export function solidFromTriangles(vertices: number[], indices: number[]): Solid {
+export function solidFromTriangles(
+  vertices: number[],
+  indices: number[]
+): Solid {
   const points: Vec3[] = [];
   const lookup = new Map<string, number>();
   const remap: number[] = [];

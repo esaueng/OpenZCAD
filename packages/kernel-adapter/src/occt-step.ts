@@ -10,6 +10,7 @@ import {
 import {
   circleProfile,
   frameForPlaneRef,
+  mergeAdjacentProfiles,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -37,7 +38,7 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import type { ExactKernelAdapter } from './exact';
-import { resolveRegionProfile } from './region-profile';
+import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   ambiguousReferenceError,
   canonicalDirection,
@@ -506,7 +507,8 @@ function offsetPlanarFace(
     outward.z * offset
   );
   const volumeBefore = kernel.getVolume(owner);
-  const combined = offset > 0 ? kernel.fuse(owner, prism) : kernel.cut(owner, prism);
+  const combined =
+    offset > 0 ? kernel.fuse(owner, prism) : kernel.cut(owner, prism);
   // Unifying merges the prism's walls into adjacent coplanar faces so a clean
   // push/pull leaves no seam edges, but on dense imported bodies the merge of
   // tangent spline neighbours can itself break BRepCheck validity — keep the
@@ -911,25 +913,27 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     return this.kernel.addHolesInFace(face, region.holes.map(wireFor));
   }
 
-  /** Extrude one detected closed region of a multi-object sketch. */
+  /** Extrude one or more explicitly selected bounded sketch cells. */
   private buildRegionExtrude(
     document: ProjectDocument,
     sketch: SketchNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>
   ): ShapeHandle {
-    const region = resolveRegionProfile(document, sketch, data, scope);
+    const regions = resolveRegionProfiles(document, sketch, data, scope);
     const basis = frameForPlaneRef(sketch.planeRef, (value) =>
       resolveParamValue(value, scope, 'sketch offset')
     );
-    const face = this.makeRegionFace(region, basis);
     const distance = resolveParamValue(data.distance, scope, 'distance');
-    return this.kernel.extrude(
-      face,
-      basis.normal.x * distance,
-      basis.normal.y * distance,
-      basis.normal.z * distance
-    );
+    const solids = connectedRegionGroups(regions).map((group) => {
+      return this.kernel.extrude(
+        this.makeRegionFace(mergeAdjacentProfiles(group), basis),
+        basis.normal.x * distance,
+        basis.normal.y * distance,
+        basis.normal.z * distance
+      );
+    });
+    return solids.length === 1 ? solids[0]! : this.kernel.makeCompound(solids);
   }
 
   /**
@@ -963,7 +967,11 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     ) {
       throw new Error('Expected a sweep feature.');
     }
-    if (feature.data.featureKind === 'extrude' && feature.data.profile) {
+    if (
+      feature.data.featureKind === 'extrude' &&
+      (feature.data.profile ||
+        (feature.data.profiles && feature.data.profiles.length > 0))
+    ) {
       const sketchNode = findSketch(document, feature.data.sketchId);
       if (!sketchNode) {
         throw new Error('Referenced sketch no longer exists.');
@@ -1432,10 +1440,7 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     const millimeterScale = UNIT_TO_MM[document.units];
     return millimeterScale === 1
       ? combined
-      : this.kernel.transform(
-          combined,
-          uniformScaleTransform(millimeterScale)
-        );
+      : this.kernel.transform(combined, uniformScaleTransform(millimeterScale));
   }
 
   async exportStep(

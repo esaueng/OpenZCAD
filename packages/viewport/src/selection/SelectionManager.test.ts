@@ -13,7 +13,11 @@ import {
   EDGE_SELECTED_COLOR,
   EDGE_SELECTED_WIDTH
 } from '../pick/edges';
-import { REGION_HOVER_OPACITY, SelectionManager } from './SelectionManager';
+import {
+  REGION_HOVER_OPACITY,
+  REGION_SELECTED_OPACITY,
+  SelectionManager
+} from './SelectionManager';
 
 function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
   const bodyGroup = new THREE.Group();
@@ -225,6 +229,21 @@ describe('region hover fades', () => {
 
     manager.setRegionHover(mesh);
     expect(manager.fadeIns.has(mesh.material)).toBe(false);
+  });
+
+  it('updates persistent selection without rebuilding the region mesh', () => {
+    const { manager } = makeManager();
+    const mesh = regionMesh();
+    const geometry = mesh.geometry;
+
+    manager.updateRegionState(mesh, true, 0.08);
+    expect(mesh.geometry).toBe(geometry);
+    expect(mesh.userData.regionSelected).toBe(true);
+    expect(mesh.material.opacity).toBe(REGION_SELECTED_OPACITY);
+
+    manager.setRegionHover(mesh);
+    manager.updateRegionState(mesh, false, 0.08);
+    expect(mesh.material.opacity).toBe(REGION_HOVER_OPACITY);
   });
 });
 

@@ -11,14 +11,15 @@ import {
   filletEdges,
   findSketch,
   patternBody,
-  transformBody
+  transformBody,
+  updateSketchObject
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type ParamValue } from '@openzcad/shared';
-import { computeSketchRegions } from '@openzcad/geometry';
+import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
@@ -362,6 +363,116 @@ describe('exact hybrid kernel adapter', () => {
     });
   });
 
+  it('fuses adjacent selected cells without an internal wall', async () => {
+    const resolve = (value: ParamValue): number =>
+      typeof value === 'number' ? value : Number(value);
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Overlapping cells', toUserId('user_exact')),
+      {
+        name: 'Overlapping circles',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'circle', radius: 10, centerX: -5, centerY: 0 },
+          { objectKind: 'circle', radius: 10, centerX: 5, centerY: 0 }
+        ]
+      }
+    );
+    const sketch = findSketch(withSketch, sketchId)!;
+    const objects = sketch.objectIds.flatMap((id) => {
+      const node = withSketch.nodes[id];
+      return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+    });
+    const profiles = computeSketchRegions(objects, resolve);
+    const left = profiles.find((profile) =>
+      profileContainsPoint(profile, { x: -8, y: 0 })
+    )!;
+    const lens = profiles.find((profile) =>
+      profileContainsPoint(profile, { x: 0, y: 0 })
+    )!;
+    const reference = (profile: (typeof profiles)[number]) => ({
+      profileId: profile.profileId,
+      regionFingerprint: profile.regionFingerprint,
+      samplePoint: profile.samplePoint,
+      sourceArea: profile.area,
+      sourceEntityIds: profile.sourceEntityIds
+    });
+
+    const { document, bodyId } = extrudeSketch(withSketch, {
+      name: 'Merged cells',
+      sketchId,
+      distance: 7,
+      profiles: [reference(left), reference(lens)]
+    });
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[bodyId];
+    expect(body?.volume).toBeCloseTo(Math.PI * 10 ** 2 * 7, 0);
+    // The curved wall remains split at the source-circle intersections, but
+    // there are exactly two planar caps and no planar wall at the canceled
+    // arrangement edge.
+    const surfaceTypes =
+      body?.topology?.faces.map((face) => face.geometry?.surfaceType) ?? [];
+    expect(surfaceTypes.filter((surface) => surface === 'plane')).toHaveLength(
+      2
+    );
+    expect(
+      surfaceTypes.filter((surface) => surface === 'cylinder')
+    ).toHaveLength(5);
+  });
+
+  it('remaps a profile reference through a parametric source-curve edit', async () => {
+    const resolve = (value: ParamValue): number =>
+      typeof value === 'number' ? value : Number(value);
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Parametric profile', toUserId('user_exact')),
+      {
+        name: 'Editable disk',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }]
+      }
+    );
+    const sketch = findSketch(withSketch, sketchId)!;
+    const objectId = sketch.objectIds[0]!;
+    const profile = computeSketchRegions(
+      sketch.objectIds.flatMap((id) => {
+        const node = withSketch.nodes[id];
+        return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+      }),
+      resolve
+    )[0]!;
+    const { document: extruded, bodyId } = extrudeSketch(withSketch, {
+      name: 'Parametric disk extrude',
+      sketchId,
+      distance: 5,
+      profiles: [
+        {
+          profileId: profile.profileId,
+          regionFingerprint: profile.regionFingerprint,
+          samplePoint: profile.samplePoint,
+          sourceArea: profile.area,
+          sourceEntityIds: profile.sourceEntityIds
+        }
+      ]
+    });
+    const edited = updateSketchObject(extruded, {
+      sketchId,
+      objectId,
+      data: {
+        objectKind: 'circle',
+        radius: 20,
+        centerX: 0,
+        centerY: 0
+      }
+    });
+
+    const derived = await adapter.syncDocument(edited);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      Math.PI * 20 ** 2 * 5,
+      0
+    );
+  });
+
   it('extrudes a chord-split region and resolves by fallback when the fingerprint drifts', async () => {
     const resolve = (value: ParamValue): number =>
       typeof value === 'number' ? value : Number(value);
@@ -434,7 +545,7 @@ describe('exact hybrid kernel adapter', () => {
     const derived = await adapter.syncDocument(document);
     expect(
       derived.warnings.some((warning) =>
-        warning.includes('no longer exists')
+        warning.includes('Broken profile reference')
       )
     ).toBe(true);
     expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
@@ -531,9 +642,7 @@ describe('exact hybrid kernel adapter', () => {
     }).document;
     const derived = await adapter.syncDocument(stale);
     expect(
-      derived.warnings.some((warning) =>
-        warning.includes('no longer exists')
-      )
+      derived.warnings.some((warning) => warning.includes('no longer exists'))
     ).toBe(true);
     // The target body still builds at its original size.
     expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(6000, 4);
@@ -1381,7 +1490,10 @@ describe('exact hybrid kernel adapter', () => {
     );
     const step = await adapter.exportStep(source, [source.bodyOrder[0]!]);
 
-    const base = createProjectDocument('Imported offset', toUserId('user_exact'));
+    const base = createProjectDocument(
+      'Imported offset',
+      toUserId('user_exact')
+    );
     const manager = new CommandManager(base);
     manager.execute(
       commandFactories.importStep({
@@ -1464,7 +1576,9 @@ describe('exact hybrid kernel adapter', () => {
 
     // Cutting deeper than the body is tall would leave nothing; the volume
     // gate fails closed and the body keeps building at its prior size.
-    const sunkTop = sunk.bodyRepresentations[importedBodyId]?.topology?.faces.find(
+    const sunkTop = sunk.bodyRepresentations[
+      importedBodyId
+    ]?.topology?.faces.find(
       (face) =>
         face.geometry?.surfaceType === 'plane' &&
         Math.abs(face.geometry.center.z - 25) < 1e-6
@@ -1501,8 +1615,14 @@ describe('exact hybrid kernel adapter', () => {
     // Regression: on this 821-face import, unifySameDomain after the prism
     // fuse produces a shape BRepCheck rejects; the offset must fall back to
     // the seamed-but-valid boolean result instead of failing the feature.
-    const step = readFileSync(resolve('samples/parametric-bracket.step'), 'utf8');
-    const base = createProjectDocument('Bracket offset', toUserId('user_exact'));
+    const step = readFileSync(
+      resolve('samples/parametric-bracket.step'),
+      'utf8'
+    );
+    const base = createProjectDocument(
+      'Bracket offset',
+      toUserId('user_exact')
+    );
     const manager = new CommandManager(base);
     manager.execute(
       commandFactories.importStep({

@@ -123,6 +123,7 @@ export function escapeTarget(
   | 'cancel-drag'
   | 'recover-failure'
   | 'end-drawing'
+  | 'exit-drawing-tool'
   | 'clear-sketch-selection'
   | 'clear-selection'
   | 'exit-sketch'
@@ -133,6 +134,9 @@ export function escapeTarget(
   if (state.mode === 'sketch') {
     if (state.session.drawing) {
       return 'end-drawing';
+    }
+    if (state.session.tool !== 'select') {
+      return 'exit-drawing-tool';
     }
     return state.session.selectedObjectId
       ? 'clear-sketch-selection'
@@ -342,6 +346,11 @@ export function interactionReducer(
             type: 'sketch-drawing',
             drawing: false
           });
+        case 'exit-drawing-tool':
+          return interactionReducer(state, {
+            type: 'sketch-tool',
+            tool: 'select'
+          });
         case 'clear-sketch-selection':
           return interactionReducer(state, {
             type: 'sketch-select-object',
@@ -367,11 +376,7 @@ export function interactionReducer(
 // ---------------------------------------------------------------------------
 
 export type ToolCardIcon =
-  | 'offset-face'
-  | 'resize-cylinder-radius'
-  | 'fillet'
-  | 'extrude'
-  | 'sketch';
+  'offset-face' | 'resize-cylinder-radius' | 'fillet' | 'extrude' | 'sketch';
 
 export interface ToolCardAction {
   id: SelectionActionId;

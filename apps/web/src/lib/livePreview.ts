@@ -30,6 +30,12 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    * pointer; expensive topology edits can retain the default fail-soft stop.
    */
   continueAfterSlow?: boolean;
+  /**
+   * Determines whether a requested scalar can produce a preview. Direct
+   * dimensions default to positive-only; signed operations such as Extrude
+   * can opt into accepting either direction while still rejecting zero.
+   */
+  acceptValue?(value: number): boolean;
   /** Injected so tests do not depend on wall-clock timing. */
   now?(): number;
 }
@@ -53,9 +59,10 @@ export class LivePreview<TDocument, TDerived> {
     return this.slow;
   }
 
-  /** Queues a value. Non-positive sizes have no meaningful preview. */
+  /** Queues a scalar when it satisfies this previewer's value policy. */
   request(value: number) {
-    if ((this.slow && !this.options.continueAfterSlow) || value <= 0) {
+    const accepted = this.options.acceptValue?.(value) ?? value > 0;
+    if ((this.slow && !this.options.continueAfterSlow) || !accepted) {
       return;
     }
     this.pending = { value, token: ++this.token };
