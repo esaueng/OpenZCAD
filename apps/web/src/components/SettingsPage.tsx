@@ -1214,7 +1214,7 @@ export function SettingsPage({
                     className="secondary"
                     type="button"
                     disabled={busy}
-                    onClick={() => void onLogout()}
+                    onClick={() => void onLogout().catch(() => undefined)}
                   >
                     <LogOut size={14} aria-hidden="true" />
                     Sign out
@@ -1263,7 +1263,7 @@ export function SettingsPage({
                           void onVerifyLoginCode(
                             loginChallengeId,
                             loginCode.trim()
-                          );
+                          ).catch(() => undefined);
                         }}
                       >
                         <span>
