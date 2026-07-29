@@ -371,6 +371,32 @@ test('restores a remembered local project without flashing the launcher', async 
   expect(bootStates.at(-1)).toBe('workspace');
 });
 
+test('flushes the latest edit before returning to the project list', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Autosave Flush Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
+    timeout: 15_000
+  });
+
+  await page.getByRole('button', { name: 'Rename project' }).click();
+  await page.getByLabel('Project name').fill('Latest Autosave Name');
+  await page.getByLabel('Project name').press('Enter');
+  await page.getByTitle('Back to projects').click();
+
+  const savedProject = page.getByRole('button', {
+    name: /Latest Autosave Name/
+  });
+  await expect(savedProject).toBeVisible();
+  await savedProject.click();
+  await expect(page.getByRole('button', { name: 'Rename project' })).toContainText(
+    'Latest Autosave Name'
+  );
+});
+
 test('leaves the restore screen when a remembered project is missing', async ({
   page
 }) => {
@@ -422,6 +448,32 @@ test('signs in with an email code only when cloud profile access is requested', 
   page
 }) => {
   await stubEmailLoginApi(page);
+  await page.addInitScript(() => {
+    const browserWindow = window as typeof window & {
+      __openZcadUnhandledRejections: number;
+    };
+    browserWindow.__openZcadUnhandledRejections = 0;
+    window.addEventListener('unhandledrejection', () => {
+      browserWindow.__openZcadUnhandledRejections += 1;
+    });
+  });
+  await page.unroute('**/api/auth/email/verify');
+  await page.route('**/api/auth/email/verify', (route) => {
+    const payload = route.request().postDataJSON() as { code: string };
+    return payload.code === '123456'
+      ? route.fulfill({
+          json: {
+            userId: 'user_email_e2e',
+            displayName: 'maker@example.com',
+            email: 'maker@example.com',
+            mode: 'email-code'
+          }
+        })
+      : route.fulfill({
+          status: 401,
+          json: { error: 'That sign-in code is invalid.', code: 'AUTH_INVALID' }
+        });
+  });
   await page.goto('/');
   await expect(page.locator('.start-status')).toContainText('Local workspace');
 
@@ -436,6 +488,24 @@ test('signs in with an email code only when cloud profile access is requested', 
   await page.getByRole('button', { name: 'Email me a code' }).click();
 
   await expect(page.getByText('Enter the email code')).toBeVisible();
+  await page.getByLabel('Email sign-in code').fill('000000');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.locator('.settings-save-message')).toContainText(
+    'That sign-in code is invalid.'
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __openZcadUnhandledRejections: number;
+            }
+          ).__openZcadUnhandledRejections
+      )
+    )
+    .toBe(0);
+
   await page.getByLabel('Email sign-in code').fill('123456');
   await page.getByRole('button', { name: 'Sign in' }).click();
 
@@ -1210,6 +1280,13 @@ test('settings name their sections and search individual settings', async ({
     'No settings match'
   );
   await page.getByLabel('Find a setting').fill('');
+
+  await page.getByRole('button', { name: 'Sketching', exact: true }).click();
+  await page.getByLabel('Linear snap increment').fill('0');
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByRole('button', { name: 'Sketching', exact: true }).click();
+  await expect(page.getByLabel('Linear snap increment')).toHaveValue('1');
+  await page.getByRole('button', { name: 'General', exact: true }).click();
 
   // The search itself is desktop-only, but below 580px the nav collapses to
   // icons whose labels are hidden; those buttons used to reach the
