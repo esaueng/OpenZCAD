@@ -1,52 +1,26 @@
 # OpenZCAD
 
-OpenZCAD is a browser-first parametric CAD workspace for people who want to turn design intent into editable, exact solid models without installing a desktop CAD stack. The canonical project document stores named parameters, sketches, feature history, and replayable commands; the [BrepKit](https://github.com/esaueng/brepkit) WebAssembly kernel rebuilds exact B-rep geometry in a browser worker; and an optional AI assistant translates plain-language changes into reviewable, previewable, undoable document patches.
+OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling, a replayable feature history, and direct on-model manipulation, with no desktop install. The canonical project document stores named parameters, sketches, and an ordered command history; a WebAssembly solid kernel rebuilds exact geometry in a background worker; and an optional AI assistant turns plain-language requests into reviewable, previewable, undoable document patches.
 
 ![OpenZCAD workspace](docs/design/openzcad-workspace-qa.png)
 
-## What works
+## Highlights
 
-- Exact BrepKit geometry for primitives, sketch/extrude, revolve, transforms, booleans, fillet, chamfer, and linear/circular patterns.
-- Parametric expressions, ordered feature history, editing, deletion, deterministic replay, transactions, and undo/redo.
-- Editable STEP import stored in replayable document history. Selecting an exact imported face shows its surface type and area; complete through-hole cylinders expose a measured diameter that can be changed parametrically, and validated face features can be removed. STEP and STL downloads come from the same browser worker that rebuilds viewport geometry.
-- A dense model/viewport/inspector workspace with exact face/edge selection, contextual finishing actions, measurements, diagnostics, and responsive compact states.
-- Local-first IndexedDB autosave. When local and beta-cloud copies differ, OpenZCAD opens the newer document version instead of discarding local work.
-- Optional passwordless cloud profiles using single-use email codes, opaque D1-backed sessions, and owner-scoped project/artifact routes. The CAD workspace remains usable without signing in, and public assistant requests use a one-way IP-derived provider safety identifier that never stores the raw address. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
-- Live per-project collaboration over a Durable Object WebSocket room, with presence, version-aware document sync, and conflict preservation.
-- Streamed AI proposals through the OpenAI Responses API. The assistant receives compact feature history, live-body exact topology summaries, and the active selection, so spatial requests such as “fillet all edges” can resolve the current body’s stable edge hashes without manual selection. It can propose parameter/dimension edits, primitives, sweeps, booleans, transforms, fillets/chamfers, and patterns. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
-- A global Settings workspace for device, viewport, sketching, account, privacy, and AI preferences. Non-secret preferences work locally and can sync by authenticated user; personal AI tokens are encrypted by the Worker and never enter project documents or browser storage.
-- Beta Worker endpoints for project persistence, revisions/checkpoints, upload coordination, artifact metadata, exports, and AI proposal streaming.
+**Exact parametric modeling.** Primitives, sketch/extrude, revolve, booleans, transforms, fillet, chamfer, and linear/circular patterns, built on the [BrepKit](https://github.com/esaueng/brepkit) exact kernel. Parametric expressions, ordered feature history with editing and deletion, deterministic replay, transactions, and undo/redo.
 
-## Architecture
+**Direct manipulation.** Shapr3D-style modeling straight on the model: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching with snapping and live dimensions, box select, selection filters, a marking menu, an Esc ladder, and a live orientation widget with perspective/orthographic switching.
 
-```text
-React workspace
-  ├─ canonical ProjectDocument + CommandManager
-  ├─ IndexedDB autosave
-  ├─ Three.js viewport (projection only)
-  └─ geometry Web Worker
-       └─ brepkit-wasm exact B-rep
+**Two kernels, one topology language.** BrepKit is the primary kernel; documents containing STEP imports rebuild through OCCT. Both kernels persist the same geometric topology fingerprints ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md)), so fillets, chamfers, and direct edits survive kernel reroutes and upstream edits — and fail closed with a diagnostic instead of silently landing on different geometry.
 
-Cloudflare Worker (beta orchestration only)
-  ├─ D1 project metadata and documents
-  ├─ R2 artifact coordination
-  ├─ Optional email-code identity + owner authorization
-  ├─ Durable Object live project rooms
-  └─ OpenAI Responses API stream → strict CadPatchProposal
-```
+**Import and export.** Editable STEP import stored in replayable document history: selecting an exact imported face shows its surface type and area, complete through-holes expose a parametrically editable diameter, and validated face features can be removed. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
 
-Important boundaries:
+**AI assistant.** Streamed proposals through the OpenAI Responses API. The assistant sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references.
 
-- The browser document/history model is the source of truth. Meshes are disposable projections.
-- Geometry and exports run in the browser worker, never in the Cloudflare Worker.
-- AI can propose a small allowlisted command patch. It cannot directly mutate a document, viewport, or kernel.
-- Saves/checkpoints are separate from model-edit revisions. Schema-v1/v2 documents migrate to schema v3 on load; v3 adds replayable exact-topology direct edits. Existing owner data can be mapped by email.
+**Local-first, optionally cloud.** IndexedDB autosave works with no account; when local and cloud copies diverge, the newer version wins instead of discarding work. Optional passwordless profiles (single-use email codes, opaque D1-backed sessions) unlock cloud projects, synced settings, encrypted personal AI credentials, and live per-project collaboration over a Durable Object WebSocket room with presence, version-aware sync, and conflict preservation.
 
-See [architecture.md](architecture.md) and the decisions in [docs/adrs](docs/adrs).
+## Quick start
 
-## Local setup
-
-Requirements: Node.js 20+ and pnpm 10.
+Requires Node.js 20+ and pnpm 10.
 
 ```bash
 pnpm install
@@ -54,61 +28,76 @@ cp apps/web/.dev.vars.example apps/web/.dev.vars
 pnpm dev:web
 ```
 
-Open the local URL printed by Vite. The CAD workspace works without an AI key; the assistant displays a clear configuration message until one is provided.
+Open the URL Vite prints. The workspace works without any AI key — the assistant shows a configuration message until one is provided (see [AI configuration](#ai-configuration)). Three built-in demos (Mounting Bracket, Pipe Flange, Heat Sink) are available from the start screen.
 
-Local development uses `AUTH_MODE=development` and the isolated
-`user_beta_dev` identity. Beta deployment uses `AUTH_MODE=email-code`.
-Anonymous visitors can model and save to IndexedDB without an account; a
-verified email session unlocks cloud settings, personal AI credentials,
-projects, artifacts, and collaboration. Set `AUTH_LEGACY_OWNER_EMAIL` as a
-Worker secret or variable to the verified email that should inherit historical
-`user_beta_dev` projects.
+Settings are available from the start screen, the workspace gear, the command palette, or `Ctrl/Cmd+,` — the Settings page overlays the workspace, so an open assistant conversation and any in-flight work survive it.
 
-Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a
-real beta login:
+## Architecture
 
-- onboard the `auth.esau.app` sending domain and keep the `EMAIL` binding
-  restricted to `login@auth.esau.app`;
-- create a managed Turnstile widget whose hostname allowlist contains
-  `zcad.esau.app`, and bind its public site key as `TURNSTILE_SITE_KEY`;
-- apply D1 migrations `0004_user_settings.sql` and
-  `0005_email_code_auth.sql`;
-- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, and
-  `AUTH_EMAIL_FROM=login@auth.esau.app`;
-- provide `AUTH_OTP_PEPPER` and `TURNSTILE_SECRET_KEY` as Worker secrets.
-  Personal AI-token storage additionally requires the stable
-  `SETTINGS_ENCRYPTION_KEY` secret.
+```text
+React workspace (apps/web)
+  ├─ canonical ProjectDocument + CommandManager   (source of truth)
+  ├─ IndexedDB autosave
+  ├─ Three.js viewport                            (disposable projection)
+  └─ geometry Web Worker
+       ├─ brepkit-wasm  — primary exact B-rep kernel
+       └─ occt-wasm     — STEP import/export; documents with STEP
+                          features rebuild through OCCT
 
-Generate the two independent 32-byte application secrets and set all secrets
-without writing their values to the repository:
-
-```bash
-openssl rand -base64 32
-pnpm exec wrangler secret put AUTH_OTP_PEPPER
-pnpm exec wrangler secret put TURNSTILE_SECRET_KEY
-openssl rand -base64 32
-pnpm exec wrangler secret put SETTINGS_ENCRYPTION_KEY
+Cloudflare Worker (beta orchestration only)
+  ├─ D1 project metadata, documents, sessions, settings
+  ├─ R2 artifact coordination
+  ├─ Email-code identity + owner authorization (optional)
+  ├─ Durable Object live project rooms
+  └─ OpenAI Responses API stream → strict CadPatchProposal
 ```
 
-The checked-in beta Wrangler configuration restricts the `EMAIL` binding to
-`login@auth.esau.app`. Login codes expire after ten minutes, are single-use,
-and are protected by per-email and per-IP rate limits. Sessions use a
-`Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the
-opaque session token is stored in D1. Turnstile responses must carry the
-`email-code` action, and beta verification also requires the response hostname
-to exactly match the Worker request hostname.
+Boundaries that hold everywhere:
 
-OpenRouter is the default AI provider. Local Vite development declares
-`OPENROUTER_API_KEY` as a required Worker secret, so it can be provided by the
-launching shell without writing it to disk:
+- The browser document/history model is the source of truth; meshes are disposable projections.
+- Geometry and exports run in the browser worker, never in the Cloudflare Worker.
+- The AI can propose a small allowlisted command patch. It cannot directly mutate a document, viewport, or kernel.
+- Both kernels persist identical topology fingerprints; resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OCCT scheme are rejected with a re-select diagnostic rather than reinterpreted.
+- Schema-v1/v2 documents migrate to v3 on load.
+
+See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
+
+The monorepo is a pnpm workspace: `apps/web` plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (BrepKit + OCCT behind one interface), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
+
+## Development
+
+```bash
+pnpm dev:web          # Vite + local Cloudflare Worker
+pnpm typecheck        # TypeScript
+pnpm lint             # ESLint
+pnpm test             # unit and integration tests (Vitest)
+pnpm test:web         # web app tests
+pnpm test:e2e         # Playwright end-to-end suite
+pnpm test:coverage    # unit tests with coverage
+pnpm build            # production web/worker bundle
+pnpm deploy:beta      # beta-only Cloudflare deployment
+```
+
+Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity; the checked-in `apps/web/wrangler.jsonc` deliberately binds a placeholder dev database ID so it can never write to beta data (create a real dev D1 and drop the ID in). The worker refuses to start if development authentication is combined with a guarded or non-development environment. When R2/Durable Object bindings are absent, the affected routes return a clean `FEATURE_DISABLED` 501 before touching persistence.
+
+### Performance
+
+Interaction and startup performance are measured, not guessed — see [docs/performance-baseline.md](docs/performance-baseline.md) for the committed baselines and history. Rendering is on demand: hover picking is coalesced to one raycast per frame and skipped during camera drags, and the shadow map only re-renders when geometry changes. Reproduce the interaction numbers with:
+
+```bash
+OZ_PERF=1 pnpm exec playwright test interaction-probe
+```
+
+The BrepKit WASM bundle is ~4.7 MB (~1.7 MB gzip) and loads in the geometry worker, not the UI thread; OCCT (~22 MB) loads lazily and only for STEP work. BrepKit is consumed from the `esaueng/brepkit` fork's `main` branch (exact commit pinned in the lockfile), not from npm.
+
+## AI configuration
+
+OpenRouter is the default provider. For local development, export the key in the launching shell or set it in `apps/web/.dev.vars` (git-ignored):
 
 ```bash
 export OPENROUTER_API_KEY=your_key_here
 pnpm dev:web
 ```
-
-Alternatively, configure the secret in `apps/web/.dev.vars` or with
-`wrangler secret`:
 
 ```dotenv
 AI_PROVIDER=openrouter
@@ -116,111 +105,64 @@ OPENROUTER_API_KEY=your_key_here
 AI_MODEL=openai/gpt-5.6-terra
 ```
 
-For local development, copy the example, set the key, and restart `pnpm dev:web`:
+Non-secret settings live in `wrangler.jsonc`:
 
-```bash
-cp apps/web/.dev.vars.example apps/web/.dev.vars
-```
+- `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
+- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret; never shipped to the browser or committed.
+- `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
+- `AI_MODEL` — defaults to `openai/gpt-5.6-terra` (balanced). Use `openai/gpt-5.6-sol` when quality matters more than cost/latency, `openai/gpt-5.6-luna` for cheap latency-sensitive edits.
+- `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
+- `AI_MAX_OUTPUT_TOKENS` — default `32000`; reasoning shares the budget, and too low a ceiling truncates patches mid-stream as a normal incomplete response.
+- `AI_SITE_URL` / `AI_APP_NAME` — optional OpenRouter attribution.
 
-For the beta Worker, store the key as a Cloudflare secret instead of a file:
+Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. The assistant reports the configured model/reasoning tier via public `GET /api/assistant/status` without exposing secrets. Public (signed-out) assistant requests identify to the provider with a one-way hash of the connecting IP.
 
-```bash
-pnpm --filter @openzcad/web exec wrangler secret put OPENROUTER_API_KEY --env beta
-```
+## Beta deployment
 
-To allow authenticated users to save personal provider tokens, apply D1
-migration `0004_user_settings.sql` and configure a base64-encoded 32-byte
-encryption key. This key encrypts credentials with AES-GCM and must remain
-stable across deployments:
+Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
 
-```bash
-openssl rand -base64 32
-pnpm --filter @openzcad/web exec wrangler secret put SETTINGS_ENCRYPTION_KEY --env beta
-```
+- onboard the `auth.esau.app` sending domain and keep the `EMAIL` binding restricted to `login@auth.esau.app`;
+- create a managed Turnstile widget allowlisting `zcad.esau.app` and bind its site key as `TURNSTILE_SITE_KEY`;
+- apply the D1 migrations in `apps/web/migrations`;
+- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=login@auth.esau.app` (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
+- provide secrets, generated with `openssl rand -base64 32` and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and the AI provider key.
 
-The Settings page is available from the start screen, workspace gear,
-command palette, or `Ctrl/Cmd+,`. Deployment credentials remain the fallback;
-selecting Personal token switches proposal generation to the authenticated
-user's provider, endpoint, model, reasoning level, output budget, and timeout.
-
-The assistant checks public `GET /api/assistant/status` on startup and reports
-the configured model/reasoning tier without exposing the secret.
-`POST /api/assistant/proposals` also supports local-only users: email-code
-sessions use their account identity, while public requests use a one-way hash
-of Cloudflare's connecting IP as the provider safety identifier. Cloud
-settings, personal credentials, projects, artifacts, and collaboration routes
-require an email-code session. `.dev.vars` files are ignored by Git.
-
-The recommended default is `openai/gpt-5.6-terra`: it is the balanced GPT-5.6 tier for reliable structured CAD planning. Use `openai/gpt-5.6-sol` when maximum quality matters more than cost/latency, or `openai/gpt-5.6-luna` for inexpensive, latency-sensitive edits.
-
-Direct OpenAI and other Responses-compatible providers remain supported. Non-secret settings live in `wrangler.jsonc`:
-
-- `AI_PROVIDER` accepts `openrouter`, `openai`, or `responses-compatible` and defaults to OpenRouter in the checked-in app config.
-- `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or provider-neutral `AI_API_KEY` supplies the server-side secret.
-- `AI_BASE_URL` optionally overrides the provider endpoint and is required for `responses-compatible`.
-- `AI_MODEL` defaults to `openai/gpt-5.6-terra` for OpenRouter and `gpt-5.6-sol` for direct OpenAI when no app config overrides it.
-- `AI_REASONING_EFFORT` defaults to `high` and accepts `low`, `medium`, `high`, or `xhigh`.
-- `AI_MAX_OUTPUT_TOKENS` defaults to `32000`. Reasoning tokens share this budget, and a multi-part model runs to roughly 20 operations; too low a ceiling truncates the patch mid-stream, which the provider reports as a normal incomplete response rather than an error. Lower it only if your model caps output below the default.
-- `AI_SITE_URL` and `AI_APP_NAME` optionally send OpenRouter attribution headers.
-
-All provider/model choices are centralized; no API key is shipped to the browser or committed.
-
-## Commands
-
-```bash
-pnpm dev:web      # Vite + local Cloudflare Worker
-pnpm typecheck    # TypeScript
-pnpm lint         # ESLint
-pnpm test         # unit and integration tests
-pnpm build        # production web/worker bundle
-pnpm deploy:beta  # beta-only Cloudflare deployment
-```
-
-The BrepKit WASM bundle is about 4.7 MB uncompressed (about 1.7 MB gzip). It is loaded in the geometry worker, not the main UI thread. OpenZCAD consumes the installable `crates/wasm/pkg` subpackage from the `esaueng/brepkit` fork's `main` branch; the lockfile records the exact resolved `main` commit, and BrepKit is not resolved from the npm registry.
+Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and beta verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
 ## API surface
 
-- `GET /api/health`
-- `GET /api/auth/config`
-- `POST /api/auth/email/start`
-- `POST /api/auth/email/verify`
-- `POST /api/auth/logout`
-- `GET /api/session`
-- `GET /api/assistant/status`
-- `GET|PATCH /api/settings`
-- `PUT|DELETE /api/settings/assistant-credential`
-- `POST /api/settings/assistant/test`
-- `GET|POST /api/projects`
-- `GET /api/projects/:id`
-- `POST /api/projects/:id/revisions`
-- `GET /api/projects/:id/collaboration` (WebSocket upgrade)
-- `POST /api/projects/:id/collaboration` (oversize snapshot recovery)
-- `POST /api/uploads`
-- `PUT /api/uploads/:id/content`
-- `POST /api/artifacts/finalize`
-- `GET /api/projects/:id/artifacts`
-- `GET /api/artifacts/:id`
-- `GET /api/artifacts/:id/download`
-- `POST /api/assistant/proposals` (SSE)
+```text
+GET  /api/health                      GET       /api/assistant/status
+GET  /api/auth/config                 POST      /api/assistant/proposals    (SSE)
+POST /api/auth/email/start            GET|PATCH /api/settings
+POST /api/auth/email/verify           PUT|DELETE /api/settings/assistant-credential
+POST /api/auth/logout                 POST      /api/settings/assistant/test
+GET  /api/session                     POST      /api/uploads
+GET|POST /api/projects                PUT       /api/uploads/:id/content
+GET  /api/projects/:id                POST      /api/artifacts/finalize
+POST /api/projects/:id/revisions      GET       /api/projects/:id/artifacts
+GET  /api/projects/:id/collaboration  (WebSocket upgrade)
+POST /api/projects/:id/collaboration  (oversize snapshot recovery)
+GET  /api/artifacts/:id               GET       /api/artifacts/:id/download
+```
 
-Project and revision routes remain schema compatible. The legacy finalize-without-upload and fake export-job routes were removed; artifacts now require an uploaded R2 object before finalization.
+Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users. Artifacts require an uploaded R2 object before finalization.
 
-## Beta limitations and risks
+## Known limitations
 
-- Cloud profile routes require a valid email-code session; local development identity mode is intentionally unsuitable for a public deployment. Login email delivery requires an onboarded sending domain, and every code request must pass server-validated Turnstile plus D1 rate limits. Public assistant requests have no application-enforced request quota; provider-side limits and billing controls still apply.
-- D1/R2 IDs in the checked-in Wrangler configuration are beta placeholders until real beta resources are provisioned.
-- Editable STEP sources are embedded in the canonical document for deterministic offline replay and capped at 12 MB. This preserves editability but can make large documents expensive to save and sync.
-- Imported STL remains a mesh body and uses the compatibility path; native parametric reconstruction is not attempted.
-- Edge topology references use geometric fingerprints instead of relying on unrelated kernel enumeration orders. Direct face edits additionally fingerprint exact surface area/center and cylindrical diameter/axis, so upstream topology changes fail closed rather than modifying a different same-sized face. Upstream geometry edits can still invalidate a downstream finishing feature with a visible diagnostic.
-- BrepKit's difficult boolean cases can fall back to mesh-derived topology, and its STEP round-trip of NURBS blends can shift measured volume slightly. Exports are still re-imported and validated in focused tests; persistent naming and broader STEP interoperability fixtures remain milestones.
-- Live rooms synchronize canonical documents and presence, persist a bounded room history, conservatively merge disjoint edits from a shared base, and recover oversized snapshots over authenticated HTTP. Invitations, viewer/editor roles, and edit locks remain future work.
-- AI proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions. Body-producing operations can publish a local alias for later operations in the same proposal.
-- Exactness-first geometry adds a meaningful initial worker download. Service-worker caching and finer code splitting are future performance milestones.
+- **Public assistant requests currently have no application-enforced quota** — request limits were intentionally removed, so provider-side billing controls are the only spend cap on a deployment key. Budget accordingly before exposing a funded key publicly.
+- Editable STEP sources are embedded in the canonical document (capped at 12 MB) for deterministic offline replay; large documents get expensive to save, sync, and undo (history snapshots clone the full document).
+- Imported STL stays a mesh body on the compatibility path; no parametric reconstruction is attempted.
+- Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, viewer/editor roles, and edit locks remain future work.
+- BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not cross-kernel fingerprint-stable — they fail closed rather than mis-resolve.
+- AI proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions.
+- Viewport draw calls scale with topology edge count (one fat-line draw per edge); edge-overlay consolidation is the next planned rendering milestone.
 
 ## Next milestones
 
-1. Sharing invitations, viewer/editor roles, and edit locks.
-2. Expand imported-face dimension edits beyond complete through holes to blind/counterbored holes, bosses, pockets, tapers, and coordinated multi-face features; add mirror, shell/offset, face-attached sketches, and richer STEP assembly manifests.
-3. Persistent naming resilient to upstream topology changes.
-4. Broader AI patch operations as each feature receives a deterministic command contract.
-5. Exact-kernel caching, loading UX, and finer worker bundle splitting.
+1. Viewport edge-overlay consolidation and selection updates without full scene rebuilds.
+2. Sharing invitations, viewer/editor roles, and edit locks.
+3. Imported-face dimension edits beyond through-holes (blind/counterbored holes, bosses, pockets, tapers); mirror, shell/offset, face-attached sketches.
+4. Persistent naming resilient to upstream topology changes.
+5. Broader AI patch operations as each feature gains a deterministic command contract.
+6. Exact-kernel caching, loading UX, and finer worker bundle splitting.
