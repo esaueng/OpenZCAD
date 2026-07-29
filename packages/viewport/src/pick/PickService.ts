@@ -129,7 +129,9 @@ export class PickService {
     return candidates.filter((candidate) => candidate.kind === filter);
   }
 
-  private regionCandidate(): PickCandidate | null {
+  private regionCandidate(
+    bodyIntersections: () => THREE.Intersection<THREE.Object3D>[]
+  ): PickCandidate | null {
     if (this.filter !== 'any' && this.filter !== 'sketch') {
       return null;
     }
@@ -145,9 +147,7 @@ export class PickService {
     // click at all, so letting one block the region would leave a sketch
     // behind a solid unreachable, which is the case the filter exists for.
     if (this.filter === 'any') {
-      const bodyBlock = this.raycaster
-        .intersectObjects(this.options.bodyGroup.children, true)
-        .find((hit) => hit.object.visible);
+      const bodyBlock = bodyIntersections()[0];
       if (bodyBlock && regionHit.distance > bodyBlock.distance + 1e-6) {
         return null;
       }
@@ -159,6 +159,12 @@ export class PickService {
       selection: null,
       region: regionHit.object.userData.region as RegionPickData
     };
+  }
+
+  private bodyIntersections(): THREE.Intersection<THREE.Object3D>[] {
+    return this.raycaster
+      .intersectObjects(this.options.bodyGroup.children, true)
+      .filter((hit) => hit.object.visible);
   }
 
   private sketchCandidate(): PickCandidate | null {
@@ -241,12 +247,11 @@ export class PickService {
    * a boundary stays selectable from the surface it bounds; an edge genuinely
    * behind the face keeps its depth order.
    */
-  private topologyCandidates(): PickCandidate[] {
-    const hits = this.raycaster
-      .intersectObjects(this.options.bodyGroup.children, true)
-      .filter((hit) => hit.object.visible);
+  private topologyCandidates(
+    bodyIntersections: () => THREE.Intersection<THREE.Object3D>[]
+  ): PickCandidate[] {
     return this.applyFilter(
-      prioritizeVisibleEdgeHit(hits)
+      prioritizeVisibleEdgeHit(bodyIntersections())
         .map((hit) => this.topologyCandidate(hit))
         .filter((candidate): candidate is PickCandidate => candidate !== null)
     );
@@ -262,10 +267,12 @@ export class PickService {
    */
   pick(event: PointerEvent | MouseEvent): PickCandidate | null {
     this.setRayFromEvent(event);
+    let bodyHits: THREE.Intersection<THREE.Object3D>[] | undefined;
+    const bodyIntersections = () => (bodyHits ??= this.bodyIntersections());
     return (
-      this.regionCandidate() ??
+      this.regionCandidate(bodyIntersections) ??
       this.sketchCandidate() ??
-      this.topologyCandidates()[0] ??
+      this.topologyCandidates(bodyIntersections)[0] ??
       null
     );
   }
@@ -281,12 +288,14 @@ export class PickService {
    */
   pickAll(event: PointerEvent | MouseEvent): PickCandidate[] {
     this.setRayFromEvent(event);
-    const region = this.regionCandidate();
+    let bodyHits: THREE.Intersection<THREE.Object3D>[] | undefined;
+    const bodyIntersections = () => (bodyHits ??= this.bodyIntersections());
+    const region = this.regionCandidate(bodyIntersections);
     const sketch = this.sketchCandidate();
     const ordered = [
       ...(region ? [region] : []),
       ...(sketch ? [sketch] : []),
-      ...this.topologyCandidates()
+      ...this.topologyCandidates(bodyIntersections)
     ];
     const seen = new Set<string>();
     return ordered.filter((candidate) => {
