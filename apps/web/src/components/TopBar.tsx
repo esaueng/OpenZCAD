@@ -290,9 +290,11 @@ export function TopBar({
             ? 'Conflict'
             : collaborationStatus === 'oversize'
               ? 'Local only'
-              : collaborationStatus === 'update-required'
-                ? 'Update required'
-                : collaborationStatus}
+              : collaborationStatus === 'rejected'
+                ? 'Not shared'
+                : collaborationStatus === 'update-required'
+                  ? 'Update required'
+                  : collaborationStatus}
       </span>
     </header>
   );
