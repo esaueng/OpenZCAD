@@ -89,9 +89,10 @@ describe('cloudflare adapters', () => {
         })
       ]
     });
-    expect(consoleError).toHaveBeenCalledWith('Skipping corrupt project row:', {
-      projectId: 'project_poisoned'
-    });
+    expect(consoleError).toHaveBeenCalledWith('Skipping corrupt project row.');
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+      'project_poisoned'
+    );
   });
 
   it('accepts newer collaboration documents and rejects divergent peers', () => {
