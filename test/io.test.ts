@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseStepMetadata } from '@openzcad/io-step';
-import { parseStl, writeAsciiStl } from '@openzcad/io-stl';
+import { parseStl, StlParseError, writeAsciiStl } from '@openzcad/io-stl';
 import { solidFromTriangles, solidVolume, validateSolid } from '@openzcad/geometry';
 
 describe('STL parsing', () => {
@@ -76,6 +76,16 @@ describe('STL parsing', () => {
 
   it('rejects files too small to be STL', () => {
     expect(() => parseStl(new ArrayBuffer(10), 'tiny.stl')).toThrow(/too small/);
+  });
+
+  it('reports a truncated binary STL as a parse error', () => {
+    const buffer = new ArrayBuffer(84 + 49);
+    new DataView(buffer).setUint32(80, 1, true);
+
+    expect(() => parseStl(buffer, 'truncated.stl')).toThrowError(StlParseError);
+    expect(() => parseStl(buffer, 'truncated.stl')).toThrow(
+      /declares 1 triangles requiring 134 bytes/
+    );
   });
 });
 

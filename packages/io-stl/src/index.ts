@@ -53,6 +53,19 @@ function parseBinaryStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   return { name: fileName, triangleCount, format: 'binary', vertices, indices };
 }
 
+function assertBinaryStlLength(
+  byteLength: number,
+  triangleCount: number
+): void {
+  const requiredBytes =
+    BINARY_STL_HEADER_BYTES + triangleCount * BINARY_STL_TRIANGLE_BYTES;
+  if (requiredBytes > byteLength) {
+    throw new StlParseError(
+      `Binary STL declares ${triangleCount} triangles requiring ${requiredBytes} bytes, but the file has ${byteLength}.`
+    );
+  }
+}
+
 function parseAsciiStl(text: string, fileName: string): ParsedStl {
   const vertexPattern =
     /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g;
@@ -103,6 +116,8 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   }
 
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
+    const declared = new DataView(buffer).getUint32(80, true);
+    assertBinaryStlLength(buffer.byteLength, declared);
     return parseBinaryStl(buffer, fileName);
   }
   throw new StlParseError('File is too small to be a valid STL.');
