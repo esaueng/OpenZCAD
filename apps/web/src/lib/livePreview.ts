@@ -24,16 +24,22 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    * preview anyone can render. */
   publish(preview: { document: TDocument; derived: TDerived } | null): void;
   slowFrameMs?: number;
+  /**
+   * Keep consuming the latest coalesced value after a slow frame. Appropriate
+   * for simple primitive edits whose visible dimension must catch up to the
+   * pointer; expensive topology edits can retain the default fail-soft stop.
+   */
+  continueAfterSlow?: boolean;
   /** Injected so tests do not depend on wall-clock timing. */
   now?(): number;
 }
 
 export class LivePreview<TDocument, TDerived> {
   private options: LivePreviewOptions<TDocument, TDerived>;
-  /** Increments per attempt; a result from an older token is discarded. */
+  /** Increments per request; a result from any older pointer value is stale. */
   private token = 0;
   private inFlight = false;
-  private pending: number | null = null;
+  private pending: { value: number; token: number } | null = null;
   private slow = false;
   /** True once something has been published and not yet cleared. */
   private active = false;
@@ -49,10 +55,10 @@ export class LivePreview<TDocument, TDerived> {
 
   /** Queues a value. Non-positive sizes have no meaningful preview. */
   request(value: number) {
-    if (this.slow || value <= 0) {
+    if ((this.slow && !this.options.continueAfterSlow) || value <= 0) {
       return;
     }
-    this.pending = value;
+    this.pending = { value, token: ++this.token };
     this.active = true;
     if (!this.inFlight) {
       void this.run();
@@ -65,9 +71,8 @@ export class LivePreview<TDocument, TDerived> {
     const slowFrameMs = this.options.slowFrameMs ?? DEFAULT_SLOW_FRAME_MS;
     try {
       while (this.pending !== null) {
-        const value = this.pending;
+        const { value, token } = this.pending;
         this.pending = null;
-        const token = ++this.token;
         const document = this.options.build(value);
         if (!document) {
           break;
@@ -75,7 +80,8 @@ export class LivePreview<TDocument, TDerived> {
         const started = now();
         try {
           const derived = await this.options.derive(document);
-          // A newer value arrived, or the gesture ended, while we waited.
+          // A newer pointer value arrived, or the gesture ended, while we
+          // waited. Never flash this obsolete geometry before the next build.
           if (token !== this.token || !this.active) {
             continue;
           }
@@ -85,7 +91,9 @@ export class LivePreview<TDocument, TDerived> {
         }
         if (now() - started > slowFrameMs) {
           this.slow = true;
-          break;
+          if (!this.options.continueAfterSlow) {
+            break;
+          }
         }
       }
     } finally {

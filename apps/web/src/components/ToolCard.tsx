@@ -8,7 +8,7 @@ import type { SelectionActionId } from '../lib/interaction/capabilities';
 
 const ICONS: Record<ToolCardIcon, typeof MoveUpRight> = {
   'offset-face': MoveUpRight,
-  'resize-hole': Circle,
+  'resize-cylinder-radius': Circle,
   fillet: Spline,
   extrude: Layers3,
   sketch: PenLine

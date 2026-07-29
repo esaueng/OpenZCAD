@@ -18,7 +18,7 @@ describe('selectionCapabilities', () => {
     expect(
       selectionCapabilities({
         kind: 'face',
-        target: { surfaceType: 'cylindrical', hash: 2, diameter: 8 }
+        target: { surfaceType: 'cylindrical', hash: 2, radius: 4 }
       }).map((capability) => capability.action)
     ).toEqual(['resize-radial-face']);
     expect(
@@ -27,6 +27,17 @@ describe('selectionCapabilities', () => {
         target: { surfaceType: 'cylindrical', hash: 2 }
       })
     ).toEqual([]);
+  });
+
+  it('keeps a planar cap on the face-offset intent', () => {
+    const capability = preferredCapability(
+      selectionCapabilities({
+        kind: 'face',
+        target: { surfaceType: 'planar', hash: 3 }
+      })
+    );
+    expect(capability?.action).toBe('offset-face');
+    expect(capability?.action).not.toBe('resize-radial-face');
   });
 
   it('requires a same-body edge set and exposes both finishing actions', () => {

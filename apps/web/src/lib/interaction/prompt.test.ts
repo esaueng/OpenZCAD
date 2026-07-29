@@ -10,14 +10,16 @@ import { commandPrompt, commandPromptText } from './prompt';
 
 function faceState(
   phase: OperationPhase,
-  op: 'offset-face' | 'resize-hole' = 'offset-face',
+  op: 'offset-face' | 'resize-cylinder-radius' = 'offset-face',
   error: string | null = null
 ): InteractionState {
   return {
     mode: 'face',
     op,
     target: {
-      surfaceType: op === 'resize-hole' ? 'cylindrical' : 'planar',
+      surfaceType:
+        op === 'resize-cylinder-radius' ? 'cylindrical' : 'planar',
+      ...(op === 'resize-cylinder-radius' ? { radius: 4 } : {}),
       bodyId: 'body-1',
       topologyId: 'face-1',
       point: [0, 0, 0],
@@ -90,7 +92,7 @@ const PHASES: OperationPhase[] = [
 
 const EVERY_STATE: InteractionState[] = [
   ...PHASES.map((phase) => faceState(phase)),
-  ...PHASES.map((phase) => faceState(phase, 'resize-hole')),
+  ...PHASES.map((phase) => faceState(phase, 'resize-cylinder-radius')),
   ...PHASES.map((phase) => edgeState(phase)),
   ...PHASES.map((phase) => edgeState(phase, 'chamfer', 3)),
   ...PHASES.map(regionState),
@@ -162,11 +164,11 @@ describe('the Escape line matches the ladder it describes', () => {
 });
 
 describe('the step describes the operation actually armed', () => {
-  it('distinguishes pushing a face from resizing a hole', () => {
+  it('distinguishes pushing a face from adjusting a cylinder radius', () => {
     expect(commandPrompt(faceState('armed'))?.step).toContain('push or pull');
-    expect(commandPrompt(faceState('armed', 'resize-hole'))?.step).toContain(
-      'hole'
-    );
+    expect(
+      commandPrompt(faceState('armed', 'resize-cylinder-radius'))?.step
+    ).toContain('radius');
   });
 
   it('names the edge operation and how many edges it covers', () => {

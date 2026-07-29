@@ -20,6 +20,7 @@ import {
   VIEW_DIRECTIONS,
   applyDisplayMode,
   CameraController,
+  buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
   bodiesInBox,
@@ -111,6 +112,7 @@ import {
   triangulateRegionGeometry,
   type RegionPickData
 } from './viewer/regionOverlay';
+import { radiusFromRadialDelta } from '../lib/interaction/cylinderRadius';
 import {
   arcDimension,
   arcObjectFromPoints,
@@ -147,6 +149,19 @@ export interface OffsetHandleTarget {
   normal: { x: number; y: number; z: number };
   /** Restored after a failed exact-kernel validation. */
   initialValue?: number;
+}
+
+/** An explicit cylindrical-wall radius handle with an immutable world axis. */
+export interface CylinderRadiusHandleTarget {
+  bodyId: string;
+  topologyId: string;
+  point: { x: number; y: number; z: number };
+  radialDirection: { x: number; y: number; z: number };
+  axisStart: { x: number; y: number; z: number };
+  axisEnd: { x: number; y: number; z: number };
+  originalRadius: number;
+  minRadius: number;
+  maxRadius: number;
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
@@ -255,6 +270,18 @@ interface ModelViewerProps {
   >;
   /** Imperative setter letting exact entry drive the handle preview. */
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
+  /** Dedicated cylindrical-wall handle; never reuses face translation. */
+  cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
+  /** Streamed absolute radius during a drag. */
+  onCylinderRadiusPreview(radius: number): void;
+  /** Fired once on release with the absolute radius. */
+  onCylinderRadiusCommit(radius: number): void;
+  /** Clears transient exact geometry without creating history. */
+  onCylinderRadiusCancel(): void;
+  /** Value chip tapped: open exact entry for the absolute radius. */
+  onOpenCylinderRadiusKeypad(radius: number): void;
+  /** Escape reaches the active imperative pointer session through this ref. */
+  cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
   /** Armed edge fillet/chamfer handle (selection-first direct manipulation). */
   edgeHandle: EdgeHandleTarget | null;
   /** Streamed while an edge-radius drag is in flight (throttled by App). */
@@ -507,6 +534,12 @@ export function ModelViewer({
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
+  cylinderRadiusHandle,
+  onCylinderRadiusPreview,
+  onCylinderRadiusCommit,
+  onCylinderRadiusCancel,
+  onOpenCylinderRadiusKeypad,
+  cancelDirectManipulationRef,
   edgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
@@ -557,6 +590,8 @@ export function ModelViewer({
   sketchesRef.current = sketches;
   const bodiesRef = useRef(bodies);
   bodiesRef.current = bodies;
+  const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
+  cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
@@ -578,6 +613,14 @@ export function ModelViewer({
   onOffsetCommitRef.current = onOffsetCommit;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
   onOpenOffsetKeypadRef.current = onOpenOffsetKeypad;
+  const onCylinderRadiusPreviewRef = useRef(onCylinderRadiusPreview);
+  onCylinderRadiusPreviewRef.current = onCylinderRadiusPreview;
+  const onCylinderRadiusCommitRef = useRef(onCylinderRadiusCommit);
+  onCylinderRadiusCommitRef.current = onCylinderRadiusCommit;
+  const onCylinderRadiusCancelRef = useRef(onCylinderRadiusCancel);
+  onCylinderRadiusCancelRef.current = onCylinderRadiusCancel;
+  const onOpenCylinderRadiusKeypadRef = useRef(onOpenCylinderRadiusKeypad);
+  onOpenCylinderRadiusKeypadRef.current = onOpenCylinderRadiusKeypad;
   const onEdgeRadiusPreviewRef = useRef(onEdgeRadiusPreview);
   onEdgeRadiusPreviewRef.current = onEdgeRadiusPreview;
   const onEdgeCommitRef = useRef(onEdgeCommit);
@@ -632,6 +675,9 @@ export function ModelViewer({
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
   const offsetDragActiveRef = useRef(false);
+  /** Cylindrical radius has its own non-translating affordance and lifecycle. */
+  const cylinderRadiusRigRef = useRef<DragRig | null>(null);
+  const cylinderRadiusDragActiveRef = useRef(false);
   const offsetChipRef = useRef<HTMLDivElement | null>(null);
 
   // Scene, renderers, controls, and the render loop live for the component's
@@ -641,6 +687,12 @@ export function ModelViewer({
     if (!host) {
       return;
     }
+    const e2eCanvasHooksEnabled =
+      (
+        import.meta.env as unknown as {
+          VITE_E2E?: string;
+        }
+      ).VITE_E2E === '1';
 
     mark('viewer.init:begin');
     let firstFrame = true;
@@ -934,6 +986,25 @@ export function ModelViewer({
       pixelsPerUnit: number;
       initialOffset: number;
     } | null = null;
+    /** Immutable radius-edit snapshot captured when the handle engages. */
+    let cylinderRadiusDrag: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      directionX: number;
+      directionY: number;
+      pixelsPerUnit: number;
+      bodyId: string;
+      topologyId: string;
+      axisStart: THREE.Vector3;
+      axisEnd: THREE.Vector3;
+      initialHitPoint: THREE.Vector3;
+      radialDirection: THREE.Vector3;
+      originalRadius: number;
+      initialRadius: number;
+      minRadius: number;
+      maxRadius: number;
+    } | null = null;
     /** Screen-projected drag growing the edge blend radius. */
     let edgeDrag: {
       pointerId: number;
@@ -947,6 +1018,54 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    cancelDirectManipulationRef.current = () => {
+      let cancelled = false;
+      if (cylinderRadiusDrag) {
+        const originalRadius = cylinderRadiusDrag.originalRadius;
+        gestures.release(cylinderRadiusDrag.pointerId, 'grab');
+        cylinderRadiusDrag = null;
+        cylinderRadiusDragActiveRef.current = false;
+        cylinderRadiusRigRef.current?.setValue(originalRadius);
+        onCylinderRadiusCancelRef.current();
+        cancelled = true;
+      }
+      if (offsetDrag) {
+        const initialOffset = offsetDrag.initialOffset;
+        gestures.release(offsetDrag.pointerId, 'grab');
+        offsetDrag = null;
+        offsetDragActiveRef.current = false;
+        offsetRigRef.current?.setValue(initialOffset);
+        cancelled = true;
+      }
+      if (edgeDrag) {
+        const initialValue = edgeDrag.initialValue;
+        gestures.release(edgeDrag.pointerId, 'grab');
+        edgeDrag = null;
+        edgeDragActiveRef.current = false;
+        edgeRigRef.current?.setValue(initialValue);
+        cancelled = true;
+      }
+      if (cancelled) {
+        onDirectManipulationChangeRef.current(false);
+      }
+      dragHud.hidden = true;
+      renderer.domElement.style.cursor = 'default';
+      requestRender();
+      return cancelled;
+    };
+    const handleCapturedEscape = (event: KeyboardEvent) => {
+      if (
+        event.key === 'Escape' &&
+        cancelDirectManipulationRef.current?.() === true
+      ) {
+        // The viewport owns an active captured pointer. Retire it before the
+        // workspace's normal Esc ladder can interpret the same key as
+        // "clear the armed selection".
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    document.addEventListener('keydown', handleCapturedEscape, true);
     const selectionBand = hud.create('selection-band', { ariaHidden: true });
     const snapGlyph = hud.create('snap-glyph', { ariaHidden: true });
 
@@ -1004,7 +1123,13 @@ export function ModelViewer({
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
     const offsetChip = hud.create('handle-value-chip');
+    offsetChip.dataset.testid = 'direct-manipulation-value';
     const handleChipClick = () => {
+      const cylinderRig = cylinderRadiusRigRef.current;
+      if (cylinderRig) {
+        onOpenCylinderRadiusKeypadRef.current(cylinderRig.value());
+        return;
+      }
       const offsetRig = offsetRigRef.current;
       if (offsetRig) {
         onOpenOffsetKeypadRef.current(offsetRig.value());
@@ -1030,7 +1155,9 @@ export function ModelViewer({
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
-      if (offsetRigRef.current) {
+      if (cylinderRadiusRigRef.current) {
+        cylinderRadiusRigRef.current.setValue(value);
+      } else if (offsetRigRef.current) {
         offsetRigRef.current.setValue(value);
       } else {
         edgeRigRef.current?.setValue(value);
@@ -1042,6 +1169,124 @@ export function ModelViewer({
 
     function pick(event: PointerEvent | MouseEvent) {
       return picker.pick(event);
+    }
+
+    /**
+     * Production builds contain no canvas-selection shortcut. The e2e build
+     * can request a measured cylinder wall/cap selection so browser tests use
+     * exact topology metadata instead of guessing a screen coordinate.
+     */
+    const handleE2ECylinderSelection = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (event as CustomEvent<{
+        bodyId?: string;
+        surface?: 'wall' | 'cap';
+      }>).detail;
+      const body = bodiesRef.current.find(
+        (candidate) =>
+          !candidate.consumed &&
+          (!detail?.bodyId || candidate.bodyId === detail.bodyId)
+      );
+      const faces = body?.topology?.faces ?? [];
+      const face =
+        detail?.surface === 'cap'
+          ? faces.find(
+              (candidate) =>
+                candidate.geometry?.surfaceType === 'plane' &&
+                candidate.geometry.normal !== undefined
+            )
+          : faces.find(
+              (candidate) =>
+                candidate.geometry?.surfaceType === 'cylinder' &&
+                candidate.geometry.axisStart !== undefined &&
+                candidate.geometry.axisEnd !== undefined &&
+                candidate.geometry.radius !== undefined
+            );
+      if (!body || !face?.geometry) {
+        return;
+      }
+      const geometry = face.geometry;
+      let point = new THREE.Vector3(
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z
+      );
+      let normal = geometry.normal
+        ? new THREE.Vector3(
+            geometry.normal.x,
+            geometry.normal.y,
+            geometry.normal.z
+          ).normalize()
+        : null;
+      if (
+        geometry.surfaceType === 'cylinder' &&
+        geometry.axisStart &&
+        geometry.axisEnd &&
+        geometry.radius !== undefined
+      ) {
+        const start = new THREE.Vector3(
+          geometry.axisStart.x,
+          geometry.axisStart.y,
+          geometry.axisStart.z
+        );
+        const end = new THREE.Vector3(
+          geometry.axisEnd.x,
+          geometry.axisEnd.y,
+          geometry.axisEnd.z
+        );
+        const axis = end.clone().sub(start).normalize();
+        // Anchor on the screen-left silhouette. That keeps the real WebGL
+        // handle outside the inspector/tool overlays at every tested size.
+        const radial = new THREE.Vector3(1, 0, 0)
+          .applyQuaternion(context.activeCamera.quaternion)
+          .addScaledVector(
+            axis,
+            -new THREE.Vector3(1, 0, 0)
+              .applyQuaternion(context.activeCamera.quaternion)
+              .dot(axis)
+          )
+          .normalize()
+          .negate();
+        if (radial.lengthSq() < 1e-9) {
+          const basis =
+            Math.abs(axis.z) < 0.9
+              ? new THREE.Vector3(0, 0, 1)
+              : new THREE.Vector3(1, 0, 0);
+          radial.crossVectors(axis, basis).normalize();
+        }
+        point = start
+          .clone()
+          .lerp(end, 0.5)
+          .addScaledVector(radial, geometry.radius);
+        normal =
+          geometry.featureType === 'through-hole'
+            ? radial.clone().negate()
+            : radial;
+      }
+      if (!normal) {
+        return;
+      }
+      onSelectTopologyRef.current(
+        {
+          bodyId: body.bodyId,
+          kind: 'face',
+          topologyId: face.topologyId,
+          hash: face.hash
+        },
+        false,
+        {
+          point: { x: point.x, y: point.y, z: point.z },
+          normal: { x: normal.x, y: normal.y, z: normal.z }
+        }
+      );
+    };
+    if (e2eCanvasHooksEnabled) {
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-select-cylinder',
+        handleE2ECylinderSelection
+      );
     }
 
     function selectAtPointer(event: PointerEvent) {
@@ -1291,14 +1536,19 @@ export function ModelViewer({
         return;
       }
       // Either rig answers the same two questions; only the label differs.
-      const rig = offsetRigRef.current ?? edgeRigRef.current;
+      const rig =
+        cylinderRadiusRigRef.current ??
+        offsetRigRef.current ??
+        edgeRigRef.current;
       let anchor: THREE.Vector3 | null = null;
       let text = '';
       if (rig) {
         const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         anchor = rig.chipAnchor(scale);
         const value = Math.round(rig.value() * 100) / 100;
-        if (rig.kind === 'edge-radius') {
+        if (rig.kind === 'cylinder-radius') {
+          text = `R ${value} ${unitsRef.current}`;
+        } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           text = `${prefix} ${value} ${unitsRef.current}`;
         } else {
@@ -1308,6 +1558,13 @@ export function ModelViewer({
       if (!anchor) {
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
+        if (e2eCanvasHooksEnabled) {
+          delete renderer.domElement.dataset.e2eHandleX;
+          delete renderer.domElement.dataset.e2eHandleY;
+          delete renderer.domElement.dataset.e2eHandleDx;
+          delete renderer.domElement.dataset.e2eHandleDy;
+          delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
+        }
         return;
       }
       const screen = projectToScreen(
@@ -1320,6 +1577,39 @@ export function ModelViewer({
         chip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
+      }
+      if (
+        e2eCanvasHooksEnabled &&
+        rig?.kind === 'cylinder-radius'
+      ) {
+        const scale =
+          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
+        const hitCenter = rig.group.position
+          .clone()
+          .addScaledVector(rig.direction, 0.7 * scale);
+        const hitScreen = projectToScreen(
+          hitCenter,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        const dragDirection = screenDirectionFor(
+          rig.group.position,
+          rig.direction
+        );
+        if (hitScreen) {
+          renderer.domElement.dataset.e2eHandleX = String(hitScreen.x);
+          renderer.domElement.dataset.e2eHandleY = String(hitScreen.y);
+          renderer.domElement.dataset.e2eHandleDx = String(
+            dragDirection.directionX
+          );
+          renderer.domElement.dataset.e2eHandleDy = String(
+            dragDirection.directionY
+          );
+          renderer.domElement.dataset.e2eHandlePixelsPerUnit = String(
+            dragDirection.pixelsPerUnit
+          );
+        }
       }
       chip.textContent = text;
       hud.showAt(chip, screen.x, screen.y);
@@ -1702,6 +1992,49 @@ export function ModelViewer({
         }
         return;
       }
+      if (
+        cylinderRadiusDrag &&
+        event.pointerId === cylinderRadiusDrag.pointerId
+      ) {
+        event.preventDefault();
+        const rig = cylinderRadiusRigRef.current;
+        if (rig) {
+          const dx = event.clientX - cylinderRadiusDrag.startX;
+          const dy = event.clientY - cylinderRadiusDrag.startY;
+          const projected =
+            dx * cylinderRadiusDrag.directionX +
+            dy * cylinderRadiusDrag.directionY;
+          const accumulatedDelta =
+            cylinderRadiusDrag.initialRadius -
+            cylinderRadiusDrag.originalRadius +
+            projected / cylinderRadiusDrag.pixelsPerUnit;
+          const raw = radiusFromRadialDelta(
+            cylinderRadiusDrag.originalRadius,
+            accumulatedDelta,
+            cylinderRadiusDrag.minRadius,
+            cylinderRadiusDrag.maxRadius
+          );
+          const snap = chooseMoveSnapStep(
+            1 / cylinderRadiusDrag.pixelsPerUnit
+          );
+          const snapped = event.shiftKey
+            ? Math.round(raw * 100) / 100
+            : Math.round(raw / snap) * snap;
+          const value = radiusFromRadialDelta(
+            cylinderRadiusDrag.originalRadius,
+            snapped - cylinderRadiusDrag.originalRadius,
+            cylinderRadiusDrag.minRadius,
+            cylinderRadiusDrag.maxRadius
+          );
+          if (Math.abs(value - rig.value()) > 1e-9) {
+            rig.setValue(value);
+            onCylinderRadiusPreviewRef.current(value);
+            requestRender();
+          }
+          renderer.domElement.style.cursor = 'grabbing';
+        }
+        return;
+      }
       if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
         event.preventDefault();
         const rig = offsetRigRef.current;
@@ -1883,6 +2216,59 @@ export function ModelViewer({
         gestures.begin(event);
         return;
       }
+      const armedCylinderRig = cylinderRadiusRigRef.current;
+      const cylinderTarget = cylinderRadiusHandleRef.current;
+      if (armedCylinderRig && cylinderTarget) {
+        setRayFromEvent(event);
+        const handleHits = context.raycaster
+          .intersectObjects(armedCylinderRig.group.children, true)
+          .filter((hit) => hit.object.userData.directHandle === true);
+        if (handleHits.length > 0) {
+          const screen = screenDirectionFor(
+            armedCylinderRig.group.position,
+            armedCylinderRig.direction
+          );
+          cylinderRadiusDrag = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            directionX: screen.directionX,
+            directionY: screen.directionY,
+            pixelsPerUnit: screen.pixelsPerUnit,
+            bodyId: cylinderTarget.bodyId,
+            topologyId: cylinderTarget.topologyId,
+            axisStart: new THREE.Vector3(
+              cylinderTarget.axisStart.x,
+              cylinderTarget.axisStart.y,
+              cylinderTarget.axisStart.z
+            ),
+            axisEnd: new THREE.Vector3(
+              cylinderTarget.axisEnd.x,
+              cylinderTarget.axisEnd.y,
+              cylinderTarget.axisEnd.z
+            ),
+            initialHitPoint: new THREE.Vector3(
+              cylinderTarget.point.x,
+              cylinderTarget.point.y,
+              cylinderTarget.point.z
+            ),
+            radialDirection: new THREE.Vector3(
+              cylinderTarget.radialDirection.x,
+              cylinderTarget.radialDirection.y,
+              cylinderTarget.radialDirection.z
+            ),
+            originalRadius: cylinderTarget.originalRadius,
+            initialRadius: armedCylinderRig.value(),
+            minRadius: cylinderTarget.minRadius,
+            maxRadius: cylinderTarget.maxRadius
+          };
+          cylinderRadiusDragActiveRef.current = true;
+          onDirectManipulationChangeRef.current(true);
+          gestures.capture(event);
+          event.preventDefault();
+          return;
+        }
+      }
       const armedRig = offsetRigRef.current;
       if (armedRig) {
         setRayFromEvent(event);
@@ -1982,7 +2368,11 @@ export function ModelViewer({
       }
       // While any direct-manipulation handle is armed, the handles own
       // dragging — the legacy box resize would fight the gesture.
-      if (offsetRigRef.current || edgeRigRef.current) {
+      if (
+        cylinderRadiusRigRef.current ||
+        offsetRigRef.current ||
+        edgeRigRef.current
+      ) {
         return;
       }
       const result = pick(event);
@@ -2264,6 +2654,38 @@ export function ModelViewer({
         }
         return;
       }
+      if (
+        cylinderRadiusDrag &&
+        event.pointerId === cylinderRadiusDrag.pointerId
+      ) {
+        const completed = cylinderRadiusDrag;
+        cylinderRadiusDrag = null;
+        cylinderRadiusDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false);
+        gestures.release(event, 'grab');
+        const rig = cylinderRadiusRigRef.current;
+        const finalRadius = rig?.value() ?? completed.originalRadius;
+        const moved = Math.hypot(
+          event.clientX - completed.startX,
+          event.clientY - completed.startY
+        );
+        if (moved < 4) {
+          rig?.setValue(completed.originalRadius);
+          onCylinderRadiusCancelRef.current();
+          selectAtPointer(event);
+          return;
+        }
+        depthCycle = null;
+        if (
+          rig &&
+          Math.abs(finalRadius - completed.originalRadius) > 1e-9
+        ) {
+          onCylinderRadiusCommitRef.current(finalRadius);
+        } else {
+          onCylinderRadiusCancelRef.current();
+        }
+        return;
+      }
       if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
         const completed = offsetDrag;
         offsetDrag = null;
@@ -2355,19 +2777,34 @@ export function ModelViewer({
         gestures.release(event, null);
       }
       if (edgeDrag && event.pointerId === edgeDrag.pointerId) {
+        const initialValue = edgeDrag.initialValue;
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
-        edgeRigRef.current?.setValue(0);
+        edgeRigRef.current?.setValue(initialValue);
+        requestRender();
+      }
+      if (
+        cylinderRadiusDrag &&
+        event.pointerId === cylinderRadiusDrag.pointerId
+      ) {
+        const originalRadius = cylinderRadiusDrag.originalRadius;
+        cylinderRadiusDrag = null;
+        cylinderRadiusDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false);
+        gestures.release(event);
+        cylinderRadiusRigRef.current?.setValue(originalRadius);
+        onCylinderRadiusCancelRef.current();
         requestRender();
       }
       if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
+        const initialOffset = offsetDrag.initialOffset;
         offsetDrag = null;
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
-        offsetRigRef.current?.setValue(0);
+        offsetRigRef.current?.setValue(initialOffset);
         requestRender();
       }
       if (moveDrag && event.pointerId === moveDrag.pointerId) {
@@ -2524,6 +2961,14 @@ export function ModelViewer({
         offsetRig.group.scale.setScalar(rigScale);
         offsetRig.group.userData.gizmoScale = rigScale;
       }
+      const cylinderRig = cylinderRadiusRigRef.current;
+      if (cylinderRig) {
+        const rigScale =
+          moveGizmoWorldScale(worldPerPixelAt(cylinderRig.group.position)) *
+          0.55;
+        cylinderRig.group.scale.setScalar(rigScale);
+        cylinderRig.group.userData.gizmoScale = rigScale;
+      }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
         const rigScale =
@@ -2619,6 +3064,11 @@ export function ModelViewer({
         'pointerleave',
         handlePointerLeave
       );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-select-cylinder',
+        handleE2ECylinderSelection
+      );
+      document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
@@ -2645,6 +3095,7 @@ export function ModelViewer({
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
       offsetSetterRef.current = null;
+      cancelDirectManipulationRef.current = null;
       moveGizmoHudRef.current = null;
       contextRef.current = null;
     };
@@ -3049,6 +3500,41 @@ export function ModelViewer({
   useEffect(() => {
     contextRef.current?.refreshNavigation();
   }, [settings.zoomToCursor, settings.middleDrag]);
+
+  // Cylindrical wall radius: the handle moves radially while exact preview
+  // geometry rebuilds concentrically around the immutable axis snapshot.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || cylinderRadiusDragActiveRef.current) {
+      return;
+    }
+    cylinderRadiusRigRef.current?.dispose();
+    cylinderRadiusRigRef.current = null;
+    if (offsetChipRef.current) {
+      offsetChipRef.current.hidden = true;
+    }
+    if (!cylinderRadiusHandle) {
+      context.requestRender();
+      return;
+    }
+    const rig = buildCylinderRadiusHandle({
+      origin: cylinderRadiusHandle.point,
+      direction: cylinderRadiusHandle.radialDirection,
+      originalRadius: cylinderRadiusHandle.originalRadius
+    });
+    context.scene.add(rig.group);
+    context.scene.add(rig.worldGroup);
+    cylinderRadiusRigRef.current = rig;
+    context.requestRender();
+    return () => {
+      if (!cylinderRadiusDragActiveRef.current) {
+        rig.dispose();
+        if (cylinderRadiusRigRef.current === rig) {
+          cylinderRadiusRigRef.current = null;
+        }
+      }
+    };
+  }, [cylinderRadiusHandle]);
 
   // Offset-face handle: built when a face is armed, torn down on deselect or
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).

@@ -16,16 +16,14 @@ import {
 
 export interface KeypadRequest {
   /** Which commit path the value feeds (routing is the opener's concern). */
-  kind: 'offset' | 'edge' | 'diameter';
-  /** Short label over the value field ('Offset', 'Radius', '⌀', 'Height'). */
+  kind: 'offset' | 'edge' | 'radius';
+  /** Short label over the value field ('Offset', 'Radius', 'Height'). */
   label: string;
   /** Prefill; may be a typed digit captured mid-gesture. */
   initial: string;
   unitKind: 'length' | 'angle';
   /**
-   * For kinds whose value is absolute rather than a delta ('diameter'), the
-   * measurement it is absolute against. The handle rig always animates a
-   * delta, so previews subtract this to drive it.
+   * Original absolute measurement, used to restore exact-entry cancellation.
    */
   baseline?: number;
 }

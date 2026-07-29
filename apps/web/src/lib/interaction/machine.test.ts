@@ -38,7 +38,7 @@ const region: RegionTarget = {
 const plane: SketchPlaneRef = { type: 'canonical', plane: 'XY', offset: 0 };
 
 describe('interactionReducer', () => {
-  it('arms offset-face for planar faces and resize-hole for measured cylinders', () => {
+  it('arms offset-face for planar faces and radius resize for measured cylinders', () => {
     const planar = interactionReducer(IDLE, {
       type: 'select-face',
       target: face()
@@ -48,9 +48,9 @@ describe('interactionReducer', () => {
 
     const bore = interactionReducer(IDLE, {
       type: 'select-face',
-      target: face({ surfaceType: 'cylindrical', diameter: 8 })
+      target: face({ surfaceType: 'cylindrical', radius: 4 })
     });
-    expect(bore.mode === 'face' && bore.op).toBe('resize-hole');
+    expect(bore.mode === 'face' && bore.op).toBe('resize-cylinder-radius');
 
     // Cylindrical without a measurable diameter has no safe direct action.
     const boss = interactionReducer(IDLE, {
@@ -261,10 +261,11 @@ describe('toolCardFor', () => {
     const holeCard = toolCardFor(
       interactionReducer(IDLE, {
         type: 'select-face',
-        target: face({ surfaceType: 'cylindrical', diameter: 8 })
+        target: face({ surfaceType: 'cylindrical', radius: 4 })
       })
     );
-    expect(holeCard?.title).toBe('Resize Hole');
+    expect(holeCard?.title).toBe('Resize Cylinder Radius');
+    expect(holeCard?.hint).toContain('radius');
     let edges = interactionReducer(IDLE, {
       type: 'select-edge',
       selection: edge(1),

@@ -641,6 +641,144 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   expect(overflowingTopbarChildren).toBe(0);
 });
 
+test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
+  page
+}) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Cylinder Radius Drag');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const selectCylinderSurface = async (surface: 'wall' | 'cap') => {
+    await canvas.evaluate((element, requestedSurface) => {
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-cylinder', {
+          detail: { surface: requestedSurface }
+        })
+      );
+    }, surface);
+  };
+  await selectCylinderSurface('wall');
+
+  const radiusOperation = page.getByRole('region', {
+    name: 'Resize Cylinder Radius operation'
+  });
+  await expect(radiusOperation).toBeVisible();
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('14 mm');
+  await expect(
+    page.getByRole('region', { name: '3D viewport' })
+  ).toContainText('Cylindrical face Ø28');
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+
+  const handle = await canvas.evaluate((element) => {
+    const values = [
+      element.dataset.e2eHandleX,
+      element.dataset.e2eHandleY,
+      element.dataset.e2eHandleDx,
+      element.dataset.e2eHandleDy,
+      element.dataset.e2eHandlePixelsPerUnit
+    ].map((value) => Number(value));
+    if (values.some((value) => !Number.isFinite(value))) {
+      return null;
+    }
+    return {
+      x: values[0]!,
+      y: values[1]!,
+      dx: values[2]!,
+      dy: values[3]!,
+      pixelsPerUnit: values[4]!
+    };
+  });
+  const bounds = await canvas.boundingBox();
+  expect(handle).not.toBeNull();
+  expect(bounds).not.toBeNull();
+  const start = {
+    x: bounds!.x + handle!.x,
+    y: bounds!.y + handle!.y
+  };
+  const end = {
+    x: start.x + handle!.dx * handle!.pixelsPerUnit * 4,
+    y: start.y + handle!.dy * handle!.pixelsPerUnit * 4
+  };
+
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 });
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    'R 18 mm'
+  );
+  await expect(
+    page.getByRole('region', { name: '3D viewport' })
+  ).toContainText('Cylindrical face Ø36');
+  await page.mouse.up();
+
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Adjusted cylinder radius to R 18 mm.'
+  );
+  await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: 'History 1' })
+  ).toBeVisible();
+  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
+  await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
+  await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');
+
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('14');
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
+
+  await selectCylinderSurface('wall');
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const cancelHandle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const cancelBounds = await canvas.boundingBox();
+  const cancelStart = {
+    x: cancelBounds!.x + cancelHandle.x,
+    y: cancelBounds!.y + cancelHandle.y
+  };
+  await page.mouse.move(cancelStart.x, cancelStart.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    cancelStart.x + cancelHandle.dx * cancelHandle.pixelsPerUnit * 2,
+    cancelStart.y + cancelHandle.dy * cancelHandle.pixelsPerUnit * 2,
+    { steps: 6 }
+  );
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('20 mm');
+  await expect(radiusOperation).toContainText('Dragging');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
+  await page.mouse.up();
+
+  await selectCylinderSurface('cap');
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
+  await expect(radiusOperation).toHaveCount(0);
+  expect(consoleErrors).toEqual([]);
+});
+
 test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
