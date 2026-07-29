@@ -38,11 +38,20 @@ function emptyD1(): D1Database {
   };
 }
 
-async function verificationD1(code: string) {
+async function verificationD1(
+  code: string,
+  options: { stallLegacyIncorrectUpdates?: boolean } = {}
+) {
   const challengeId = 'challenge-verification-test';
   const email = 'person@example.com';
   const secret = 'test-pepper';
+  let attempts = 0;
   let consumedAt: number | null = null;
+  let incorrectUpdates = 0;
+  let releaseLegacyIncorrectUpdates!: () => void;
+  const legacyIncorrectUpdateGate = new Promise<void>((resolve) => {
+    releaseLegacyIncorrectUpdates = resolve;
+  });
   const codeHash = await hashLoginCode(challengeId, email, code, secret);
 
   function prepare(query: string): D1PreparedStatement {
@@ -58,7 +67,7 @@ async function verificationD1(code: string) {
             id: challengeId,
             email,
             code_hash: codeHash,
-            attempts: 0,
+            attempts,
             expires_at: Math.floor(Date.now() / 1000) + 600,
             consumed_at: consumedAt
           } as T;
@@ -66,6 +75,35 @@ async function verificationD1(code: string) {
         return null;
       },
       async run() {
+        if (query.includes('SET attempts = CASE')) {
+          const codeMatches = Number(values[0]) === 1;
+          if (!codeMatches) {
+            incorrectUpdates += 1;
+          }
+          if (
+            consumedAt !== null ||
+            attempts >= Number(values[4]) ||
+            Math.floor(Date.now() / 1000) > Number(values[5])
+          ) {
+            return { success: true, meta: { changes: 0 } };
+          }
+          if (codeMatches) {
+            consumedAt = Number(values[2]);
+          } else {
+            attempts += 1;
+          }
+          return { success: true, meta: { changes: 1 } };
+        }
+        if (query.includes('SET attempts = attempts + 1')) {
+          incorrectUpdates += 1;
+          if (options.stallLegacyIncorrectUpdates) {
+            await legacyIncorrectUpdateGate;
+          }
+          if (consumedAt === null) {
+            attempts += 1;
+          }
+          return { success: true, meta: { changes: 1 } };
+        }
         if (
           query.includes('UPDATE auth_email_challenges') &&
           query.includes('SET consumed_at')
@@ -90,7 +128,16 @@ async function verificationD1(code: string) {
       return Promise.all(statements.map((statement) => statement.run()));
     }
   };
-  return { db, challengeId, email, secret };
+  return {
+    db,
+    challengeId,
+    email,
+    secret,
+    attempts: () => attempts,
+    consumedAt: () => consumedAt,
+    incorrectUpdates: () => incorrectUpdates,
+    releaseLegacyIncorrectUpdates
+  };
 }
 
 function loginStartD1() {
@@ -387,6 +434,57 @@ describe('worker authentication', () => {
         env
       )
     ).rejects.toThrow('invalid or expired');
+  });
+
+  it('serializes OTP failures with successful consumption at the attempt limit', async () => {
+    const fixture = await verificationD1('123456', {
+      stallLegacyIncorrectUpdates: true
+    });
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      AUTH_MODE: 'email-code' as const,
+      DB: fixture.db,
+      EMAIL: { send: async () => ({ messageId: 'message-test' }) },
+      AUTH_EMAIL_FROM: 'login@auth.example.com',
+      AUTH_OTP_PEPPER: fixture.secret,
+      TURNSTILE_SITE_KEY: 'site-key',
+      TURNSTILE_SECRET_KEY: 'secret-key'
+    };
+    const wrongCodes = [
+      '000000',
+      '000001',
+      '000002',
+      '000003',
+      '000004',
+      '000005'
+    ];
+    const wrongAttempts = Promise.allSettled(
+      wrongCodes.map((code) =>
+        verifyEmailLogin({ challengeId: fixture.challengeId, code }, env)
+      )
+    );
+
+    try {
+      await vi.waitFor(() => {
+        expect(fixture.incorrectUpdates()).toBe(wrongCodes.length);
+      });
+      await expect(
+        verifyEmailLogin(
+          { challengeId: fixture.challengeId, code: '123456' },
+          env
+        )
+      ).rejects.toMatchObject({
+        status: 429,
+        code: 'AUTH_CODE_LOCKED'
+      });
+    } finally {
+      fixture.releaseLegacyIncorrectUpdates();
+    }
+
+    const failures = await wrongAttempts;
+    expect(failures.every((result) => result.status === 'rejected')).toBe(true);
+    expect(fixture.attempts()).toBe(5);
+    expect(fixture.consumedAt()).toBeNull();
   });
 });
 

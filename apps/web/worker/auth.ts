@@ -561,29 +561,33 @@ export async function verifyEmailLogin(
     code,
     env.AUTH_OTP_PEPPER
   );
-  if (!constantTimeEqual(challenge.code_hash, expectedHash)) {
-    await env.DB.prepare(
-      `UPDATE auth_email_challenges
-       SET attempts = attempts + 1
-       WHERE id = ? AND consumed_at IS NULL`
+  const codeMatches = constantTimeEqual(challenge.code_hash, expectedHash);
+  const decision = await env.DB.prepare(
+    `UPDATE auth_email_challenges
+     SET attempts = CASE WHEN ? = 1 THEN attempts ELSE attempts + 1 END,
+         consumed_at = CASE WHEN ? = 1 THEN ? ELSE consumed_at END
+     WHERE id = ?
+       AND consumed_at IS NULL
+       AND attempts < ?
+       AND expires_at >= ?`
+  )
+    .bind(
+      codeMatches ? 1 : 0,
+      codeMatches ? 1 : 0,
+      timestamp,
+      challengeId,
+      LOGIN_CODE_MAX_ATTEMPTS,
+      timestamp
     )
-      .bind(challengeId)
-      .run();
+    .run();
+  if (!codeMatches) {
     throw new AuthFlowError(
       400,
       'AUTH_CODE_INVALID',
       'The login code is invalid or expired.'
     );
   }
-
-  const consumed = await env.DB.prepare(
-    `UPDATE auth_email_challenges
-     SET consumed_at = ?
-     WHERE id = ? AND consumed_at IS NULL AND attempts < ? AND expires_at >= ?`
-  )
-    .bind(timestamp, challengeId, LOGIN_CODE_MAX_ATTEMPTS, timestamp)
-    .run();
-  if (consumed.meta?.changes !== 1) {
+  if (decision.meta?.changes !== 1) {
     throw new AuthFlowError(
       400,
       'AUTH_CODE_INVALID',
