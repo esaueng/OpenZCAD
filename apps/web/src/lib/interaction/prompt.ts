@@ -48,8 +48,8 @@ const SKETCH_TOOL_STEPS: Record<string, string> = {
 /** The armed step for an operation, before any drag has begun. */
 function armedStep(state: InteractionState): string {
   if (state.mode === 'face') {
-    return state.op === 'resize-hole'
-      ? 'Drag the ring to resize the hole, or type an exact diameter'
+    return state.op === 'resize-cylinder-radius'
+      ? 'Drag the radial handle to adjust the radius, or type an exact radius'
       : 'Drag the arrow to push or pull the face, or type an exact distance';
   }
   if (state.mode === 'edges') {
