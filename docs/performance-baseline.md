@@ -60,7 +60,24 @@ The max is sensitive to one-off browser and software-renderer stalls. Use p95
 as the input-path acceptance signal and mean draw calls as the render-loop
 signal.
 
-## What the numbers say
+### After the input-path and render-loop fixes (2026-07-29)
+
+Same machine and protocol, four serial runs, after merging the pointer-move
+hover guard with rAF coalescing (PR #52) and the frozen shadow map plus
+`powerPreference` (PR #55):
+
+| Metric | Runs | Median | vs. baseline |
+|---|---:|---:|---:|
+| Frame time p50 | 15.8–16.5 ms | 16.4 ms | −34% |
+| Frame time p95 | 18.0–33.4 ms | 25.8 ms | −24% |
+| Mean draw calls | ~132.2 | 132.2 | ≈unchanged |
+| Mean triangles | ~2,998 | 2,998 | −46% |
+
+The split is diagnostic. Triangles nearly halved because the frozen shadow map
+no longer redraws the body geometry every frame; draw calls barely moved
+because they are dominated by the one-`Line2`-per-edge overlay, which neither
+PR touched — that is the planned edge-consolidation work, and mean draw calls
+remains the signal to watch for it.
 
 Every instrumented main-thread phase is small and stable:
 
