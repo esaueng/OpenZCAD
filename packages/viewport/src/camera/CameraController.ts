@@ -32,6 +32,8 @@ const VIEW_SETTLE_MS = 120;
  */
 const DRAG_DAMPING = 0.35;
 const GLIDE_DAMPING = 0.15;
+/** Keep low-frame-rate devices from stretching a short CAD glide into a coast. */
+const ORBIT_GLIDE_MAX_MS = 800;
 
 interface CameraTween {
   startTime: number;
@@ -82,6 +84,7 @@ export class CameraController {
   private active: THREE.Camera;
   private tween: CameraTween | null = null;
   private settleTimeout: number | null = null;
+  private orbitGlideEndsAt: number | null = null;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -141,6 +144,7 @@ export class CameraController {
 
   /** Restores tight tracking; a grab mid-glide folds the residue into it. */
   private beginGesture = () => {
+    this.orbitGlideEndsAt = null;
     this.orbit.dampingFactor = DRAG_DAMPING;
   };
 
@@ -153,13 +157,16 @@ export class CameraController {
    */
   private settleDamping = () => {
     if (this.options.reducedMotion()) {
+      this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
       this.orbit.update();
       this.orbit.enableDamping = true;
+      this.orbit.dampingFactor = DRAG_DAMPING;
       this.emitViewChange();
       return;
     }
     this.orbit.dampingFactor = GLIDE_DAMPING;
+    this.orbitGlideEndsAt = performance.now() + ORBIT_GLIDE_MAX_MS;
     this.options.requestRender();
     // Persist the release-time pose right away — the glide only refines it,
     // and its sub-pixel tail can outlive the user's patience (or their tab).
@@ -175,6 +182,7 @@ export class CameraController {
     }
     this.settleTimeout = window.setTimeout(() => {
       this.settleTimeout = null;
+      this.orbitGlideEndsAt = null;
       // The glide has decayed below OrbitControls' movement epsilon by now,
       // but a sub-epsilon offset still sits frozen on the controls; thawed
       // mid-gesture it lands as a jump in whatever comes next — a pan
@@ -183,6 +191,7 @@ export class CameraController {
       this.orbit.enableDamping = false;
       this.orbit.update();
       this.orbit.enableDamping = true;
+      this.orbit.dampingFactor = DRAG_DAMPING;
       this.emitViewChange();
     }, VIEW_SETTLE_MS);
   };
@@ -267,6 +276,8 @@ export class CameraController {
    */
   startTween(pose: CameraPose, onComplete?: () => void) {
     // Consume leftover damping inertia so the glide starts from rest.
+    this.orbitGlideEndsAt = null;
+    this.orbit.dampingFactor = DRAG_DAMPING;
     this.orbit.update();
     if (this.options.reducedMotion()) {
       this.tween = null;
@@ -309,6 +320,31 @@ export class CameraController {
 
   cancelTween() {
     this.tween = null;
+  }
+
+  /**
+   * Advances pointer-driven orbit damping with a real-time upper bound.
+   *
+   * OrbitControls applies damping per rendered frame. Without this deadline,
+   * a busy or low-refresh device turns the same short residue into a much
+   * longer wall-clock coast and drifts beyond the framing the user released.
+   */
+  stepOrbit(now: number): boolean {
+    if (this.orbitGlideEndsAt !== null && now >= this.orbitGlideEndsAt) {
+      this.orbitGlideEndsAt = null;
+      this.orbit.enableDamping = false;
+      const changed = this.orbit.update();
+      this.orbit.enableDamping = true;
+      this.orbit.dampingFactor = DRAG_DAMPING;
+      this.emitViewChange();
+      return changed;
+    }
+    const changed = this.orbit.update();
+    if (this.orbitGlideEndsAt !== null && !changed) {
+      this.orbitGlideEndsAt = null;
+      this.orbit.dampingFactor = DRAG_DAMPING;
+    }
+    return changed;
   }
 
   /**

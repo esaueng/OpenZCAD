@@ -21,6 +21,7 @@ rendering policy, status feedback, and regression instrumentation.
 | UI-03 | Medium | Switch a shaded part to Top view with the grid enabled. A large ground-shadow slab crossed the model. | The perspective ground catcher remained visible for camera directions nearly normal to the grid plane. | Suppress the ground shadow for top/bottom camera directions and update it with the rendered camera pose. | `shouldShowGroundShadow` unit coverage and real-browser top-view capture. |
 | UI-04 | Medium | Resize the workspace to 390 px. Status metadata and the selection filter competed for width and clipped at the right edge. | Desktop status groups and the filter label remained in the compact footer. | Compact mode hides nonessential status groups/label and lets the status text shrink without pushing the filter off-screen. | Narrow-viewport browser regression and measured `scrollWidth === innerWidth === 390`. |
 | UI-05 | Medium | In a sketch containing multiple bounded cells, select one or all profiles for Extrude. A body preview appeared while the footer still said the exact preview was updating. | The async preview publisher updated geometry but did not publish its ready state. | The publisher now reports the selected profile count and `exact preview ready` only after the derived preview lands. | New multi-region create/select-all/clear/create/edit/undo/redo browser lifecycle. |
+| UI-06 | Medium | Release an orbit on a low-frame-rate browser. The same ease-out that settles quickly at 60 Hz could coast for more than 1.4 seconds. | Orbit damping was applied per rendered frame, so low frame rates stretched the inertial tail in wall-clock time. | Preserve the multi-frame ease-out but flush its sub-pixel residue after an 800 ms real-time cap. | Orbit ease-out browser regression repeated five times serially plus the complete matrix. |
 | QA-01 | Medium | AI browser tests still assumed the former assistant-enabled default and could pass with a device fixture that production no longer adopts. | Test account settings were revision zero and unsynced, so the local default correctly outranked them. | AI scenarios explicitly opt into a synced account setting; non-AI scenarios keep the default-off path. | Complete AI grounding/settings browser matrix. |
 | QA-02 | Low | The filleted-rim edge-chain regression could scan past a successful pick or have its second physical click intercepted by the value chip. | The test read selection before the next render frame and reused a point after an overlay appeared there. | Wait one rendered frame, clear the probe selection, then send the measured double-click to the WebGL canvas. | Edge-chain case passes alone and in the complete 44-test browser matrix. |
 
@@ -107,8 +108,9 @@ rather than release thresholds:
 The CPU profile attributes the dominant first-operation cost to cold
 kernel/program startup. The single long interaction frame occurred under
 SwiftShader; no persistent camera lag, stuck tool, or interaction dead zone was
-reproduced. Existing large-chunk build warnings remain a performance risk worth
-tracking separately.
+reproduced. Pointer-driven orbit damping now also has an 800 ms wall-clock cap,
+so low frame rates cannot stretch its framing glide indefinitely. Existing
+large-chunk build warnings remain a performance risk worth tracking separately.
 
 ## Review flags and remaining risk
 

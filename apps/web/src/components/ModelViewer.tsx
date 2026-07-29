@@ -3112,7 +3112,7 @@ export function ModelViewer({
       animationFrame = null;
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
-      const controlsChanged = cameraRig.controls.update();
+      const controlsChanged = cameraRig.stepOrbit(now);
       const hoverEvent = pendingHoverEvent;
       pendingHoverEvent = null;
       if (hoverEvent) {
