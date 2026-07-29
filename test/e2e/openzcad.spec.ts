@@ -1237,6 +1237,13 @@ test('settings name their sections and search individual settings', async ({
   );
   await page.getByLabel('Find a setting').fill('');
 
+  await page.getByRole('button', { name: 'Sketching', exact: true }).click();
+  await page.getByLabel('Linear snap increment').fill('0');
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByRole('button', { name: 'Sketching', exact: true }).click();
+  await expect(page.getByLabel('Linear snap increment')).toHaveValue('1');
+  await page.getByRole('button', { name: 'General', exact: true }).click();
+
   // The search itself is desktop-only, but below 580px the nav collapses to
   // icons whose labels are hidden; those buttons used to reach the
   // accessibility tree with no name at all.
