@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createPersistenceService,
+  D1R2PersistenceService,
   ProjectCollaborationRoom,
   resolveCollaborationDocument
 } from '@openzcad/cloudflare-adapters';
@@ -25,6 +26,48 @@ describe('cloudflare adapters', () => {
         (project) => project.projectId === created.project.projectId
       )
     ).toBe(true);
+  });
+
+  it('skips a corrupt D1 project row without hiding valid projects', async () => {
+    const document = createProjectDocument(
+      'Valid D1 project',
+      toUserId('user_test')
+    );
+    const rows = [
+      {
+        id: document.projectId,
+        name: document.name,
+        updated_at: document.derived.updatedAt,
+        document_json: JSON.stringify(document)
+      },
+      {
+        id: 'project_poisoned',
+        name: 'Poisoned',
+        updated_at: document.derived.updatedAt,
+        document_json: '{not-json'
+      }
+    ];
+    const all = vi.fn(async () => ({ results: rows }));
+    const bind = vi.fn(() => ({ all }));
+    const prepare = vi.fn(() => ({ bind }));
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database
+    });
+
+    await expect(service.listProjects(toUserId('user_test'))).resolves.toEqual({
+      projects: [
+        expect.objectContaining({
+          projectId: document.projectId,
+          name: document.name
+        })
+      ]
+    });
+    expect(consoleError).toHaveBeenCalledWith('Skipping corrupt project row:', {
+      projectId: 'project_poisoned'
+    });
   });
 
   it('accepts newer collaboration documents and rejects divergent peers', () => {
