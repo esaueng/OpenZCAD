@@ -23,10 +23,6 @@ import {
   testAssistantConnection
 } from './assistant';
 import {
-  assistantQuotaCost,
-  consumeAssistantQuota
-} from './assistantRateLimit';
-import {
   authenticateRequest,
   AuthFlowError,
   AuthenticationError,
@@ -186,30 +182,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           code: 'AI_NOT_CONFIGURED'
         },
         503
-      );
-    }
-    const quota = await consumeAssistantQuota(
-      userId,
-      env,
-      Date.now(),
-      assistantQuotaCost(payload.attachments.length)
-    );
-    if (!quota.allowed) {
-      return new Response(
-        JSON.stringify({
-          error: 'The modeling assistant request limit has been reached.',
-          code: 'AI_RATE_LIMITED',
-          retryAfterSeconds: quota.retryAfterSeconds
-        }),
-        {
-          status: 429,
-          headers: {
-            'content-type': 'application/json',
-            'retry-after': String(quota.retryAfterSeconds),
-            'x-ratelimit-limit': String(quota.limit),
-            'x-ratelimit-remaining': String(quota.remaining)
-          }
-        }
       );
     }
     return streamAssistantProposal(

@@ -64,8 +64,6 @@ export interface CloudflareEnv {
    */
   AI_MAX_OUTPUT_TOKENS?: string;
   AI_TIMEOUT_MS?: string;
-  AI_RATE_LIMIT_REQUESTS?: string;
-  AI_RATE_LIMIT_WINDOW_SECONDS?: string;
   /** Base64-encoded 32-byte AES key for owner-scoped AI credentials. */
   SETTINGS_ENCRYPTION_KEY?: string;
   DB?: D1Database;

@@ -10,17 +10,12 @@ import {
   streamAssistantProposal,
   timeoutFor
 } from '../apps/web/worker/assistant';
-import {
-  assistantQuotaCost,
-  consumeAssistantQuota
-} from '../apps/web/worker/assistantRateLimit';
 import { parseAssistantProposalRequest } from '../apps/web/worker/validation';
 import {
   parseAssistantEventData,
   readAssistantEvent,
   streamAssistantReply
 } from '../apps/web/src/lib/assistantStream';
-import { toUserId } from '@openzcad/shared';
 
 const input = {
   prompt: 'Make the bracket wider',
@@ -97,109 +92,6 @@ describe('assistant integration', () => {
     await expect(
       streamAssistantReply({ prompt: input.prompt, digest: input.digest })
     ).rejects.toThrow('connection ended before the proposal was complete');
-  });
-
-  it('charges a drawing turn more of the quota than a text turn', async () => {
-    expect(assistantQuotaCost(0)).toBe(1);
-    expect(assistantQuotaCost(2)).toBe(3);
-
-    const env = {
-      AI_RATE_LIMIT_REQUESTS: '6',
-      AI_RATE_LIMIT_WINDOW_SECONDS: '60'
-    };
-    const userId = toUserId('user_weighted_quota');
-    expect(
-      await consumeAssistantQuota(userId, env, 1_000, assistantQuotaCost(1))
-    ).toMatchObject({ allowed: true, remaining: 3 });
-    expect(
-      await consumeAssistantQuota(userId, env, 1_000, assistantQuotaCost(1))
-    ).toMatchObject({ allowed: true, remaining: 0 });
-    // Six text turns would still be allowed here; two image turns are not.
-    expect(
-      (await consumeAssistantQuota(userId, env, 1_000, assistantQuotaCost(0)))
-        .allowed
-    ).toBe(false);
-  });
-
-  it('does not lock the shared local-development identity out', async () => {
-    const prepare = vi.fn(() => {
-      throw new Error('Local development must not write an AI quota.');
-    });
-    const env = {
-      ENVIRONMENT: 'development',
-      AI_RATE_LIMIT_REQUESTS: '1',
-      DB: { prepare }
-    } as never;
-    const userId = toUserId('user_beta_dev');
-
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await expect(
-        consumeAssistantQuota(
-          userId,
-          env,
-          1_000,
-          assistantQuotaCost(4)
-        )
-      ).resolves.toMatchObject({
-        allowed: true,
-        limit: 1,
-        remaining: 1,
-        retryAfterSeconds: 0
-      });
-    }
-    expect(prepare).not.toHaveBeenCalled();
-  });
-
-  it('never lets a malformed quota cost buy a free request', async () => {
-    const env = { AI_RATE_LIMIT_REQUESTS: '2' };
-    const userId = toUserId('user_bad_cost');
-    for (const cost of [0, -5, 1.5, Number.NaN]) {
-      await consumeAssistantQuota(userId, env, 1_000, cost);
-    }
-    expect(
-      (await consumeAssistantQuota(userId, env, 1_000)).allowed
-    ).toBe(false);
-  });
-
-  it('enforces a bounded per-user request quota', async () => {
-    const env = {
-      AI_RATE_LIMIT_REQUESTS: '2',
-      AI_RATE_LIMIT_WINDOW_SECONDS: '60'
-    };
-    const userId = toUserId('user_quota');
-    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(
-      true
-    );
-    expect((await consumeAssistantQuota(userId, env, 1_000)).allowed).toBe(
-      true
-    );
-    const limited = await consumeAssistantQuota(userId, env, 1_000);
-    expect(limited).toMatchObject({ allowed: false, limit: 2, remaining: 0 });
-    expect((await consumeAssistantQuota(userId, env, 61_000)).allowed).toBe(
-      true
-    );
-  });
-
-  it('shows when a beta assistant limit will clear', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () =>
-        Response.json(
-          {
-            error: 'The modeling assistant request limit has been reached.',
-            code: 'AI_RATE_LIMITED',
-            retryAfterSeconds: 95
-          },
-          { status: 429 }
-        )
-      )
-    );
-
-    await expect(
-      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
-    ).rejects.toThrow(
-      'The modeling assistant request limit has been reached. Try again in 2 minutes.'
-    );
   });
 
   it('bounds conversation history and rejects unusable attachments', () => {

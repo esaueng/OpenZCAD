@@ -105,14 +105,6 @@ export function parseAssistantEventData(
   }
 }
 
-function retryDelay(seconds: number): string {
-  if (seconds < 60) {
-    return `${seconds} second${seconds === 1 ? '' : 's'}`;
-  }
-  const minutes = Math.ceil(seconds / 60);
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
-
 export async function streamAssistantReply(
   request: AssistantTurnRequest,
   options: AssistantStreamOptions = {}
@@ -131,23 +123,9 @@ export async function streamAssistantReply(
   if (!response.ok || !response.body) {
     const error = (await response.json().catch(() => null)) as {
       error?: string;
-      code?: string;
-      retryAfterSeconds?: number;
     } | null;
-    const message =
-      error?.error ?? `Assistant request failed (${response.status}).`;
-    const retrySeconds = error?.retryAfterSeconds;
-    const retryAfterSeconds =
-      error?.code === 'AI_RATE_LIMITED' &&
-      typeof retrySeconds === 'number' &&
-      Number.isFinite(retrySeconds) &&
-      retrySeconds > 0
-        ? Math.ceil(retrySeconds)
-        : null;
     throw new Error(
-      retryAfterSeconds === null
-        ? message
-        : `${message} Try again in ${retryDelay(retryAfterSeconds)}.`
+      error?.error ?? `Assistant request failed (${response.status}).`
     );
   }
 

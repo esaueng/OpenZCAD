@@ -11,7 +11,7 @@ OpenZCAD is a browser-first parametric CAD workspace for people who want to turn
 - Editable STEP import stored in replayable document history. Selecting an exact imported face shows its surface type and area; complete through-hole cylinders expose a measured diameter that can be changed parametrically, and validated face features can be removed. STEP and STL downloads come from the same browser worker that rebuilds viewport geometry.
 - A dense model/viewport/inspector workspace with exact face/edge selection, contextual finishing actions, measurements, diagnostics, and responsive compact states.
 - Local-first IndexedDB autosave. When local and beta-cloud copies differ, OpenZCAD opens the newer document version instead of discarding local work.
-- Optional passwordless cloud profiles using single-use email codes, opaque D1-backed sessions, and owner-scoped project/artifact routes. The CAD workspace remains usable without signing in, and the deployment assistant uses an IP-scoped quota that never stores the raw address. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
+- Optional passwordless cloud profiles using single-use email codes, opaque D1-backed sessions, and owner-scoped project/artifact routes. The CAD workspace remains usable without signing in, and public assistant requests use a one-way IP-derived provider safety identifier that never stores the raw address. `AUTH_LEGACY_OWNER_EMAIL` can map existing beta data to its original owner without rewriting documents.
 - Live per-project collaboration over a Durable Object WebSocket room, with presence, version-aware document sync, and conflict preservation.
 - Streamed AI proposals through the OpenAI Responses API. The assistant receives compact feature history, live-body exact topology summaries, and the active selection, so spatial requests such as “fillet all edges” can resolve the current body’s stable edge hashes without manual selection. It can propose parameter/dimension edits, primitives, sweeps, booleans, transforms, fillets/chamfers, and patterns. Output is constrained to a strict CAD patch schema; users preview, apply, or reject it. Apply creates one normal undoable transaction.
 - A global Settings workspace for device, viewport, sketching, account, privacy, and AI preferences. Non-secret preferences work locally and can sync by authenticated user; personal AI tokens are encrypted by the Worker and never enter project documents or browser storage.
@@ -147,10 +147,9 @@ The assistant checks public `GET /api/assistant/status` on startup and reports
 the configured model/reasoning tier without exposing the secret.
 `POST /api/assistant/proposals` also supports local-only users: email-code
 sessions use their account identity, while public requests use a one-way hash
-of Cloudflare's connecting IP for the existing D1 quota and provider safety
-identifier. Cloud settings, personal credentials, projects, artifacts, and
-collaboration routes require an email-code session. `.dev.vars` files are
-ignored by Git.
+of Cloudflare's connecting IP as the provider safety identifier. Cloud
+settings, personal credentials, projects, artifacts, and collaboration routes
+require an email-code session. `.dev.vars` files are ignored by Git.
 
 The recommended default is `openai/gpt-5.6-terra`: it is the balanced GPT-5.6 tier for reliable structured CAD planning. Use `openai/gpt-5.6-sol` when maximum quality matters more than cost/latency, or `openai/gpt-5.6-luna` for inexpensive, latency-sensitive edits.
 
@@ -208,7 +207,7 @@ Project and revision routes remain schema compatible. The legacy finalize-withou
 
 ## Beta limitations and risks
 
-- Cloud profile routes require a valid email-code session; local development identity mode is intentionally unsuitable for a public deployment. Login email delivery requires an onboarded sending domain, and every code request must pass server-validated Turnstile plus D1 rate limits. Public assistant requests remain bounded by the configured per-identity quota.
+- Cloud profile routes require a valid email-code session; local development identity mode is intentionally unsuitable for a public deployment. Login email delivery requires an onboarded sending domain, and every code request must pass server-validated Turnstile plus D1 rate limits. Public assistant requests have no application-enforced request quota; provider-side limits and billing controls still apply.
 - D1/R2 IDs in the checked-in Wrangler configuration are beta placeholders until real beta resources are provisioned.
 - Editable STEP sources are embedded in the canonical document for deterministic offline replay and capped at 12 MB. This preserves editability but can make large documents expensive to save and sync.
 - Imported STL remains a mesh body and uses the compatibility path; native parametric reconstruction is not attempted.
