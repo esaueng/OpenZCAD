@@ -19,6 +19,16 @@
   border-left: var(--border-thin);
 }
 
+/*
+  A direct-manipulation mode hides the dock without unmounting it — the panel
+  holds the conversation and any request still streaming. `display: none` takes
+  it out of the grid entirely, so the workspace lays out as if it were absent.
+*/
+.assistant-panel.assistant-off-screen,
+.assistant-launcher.assistant-off-screen {
+  display: none;
+}
+
 .assistant-panel.dragging {
   outline: 1px dashed var(--color-accent-border);
   outline-offset: -3px;

@@ -127,6 +127,24 @@ export class CameraController {
     this.options.onViewChange(this.capture());
   };
 
+  /**
+   * Runs out the damping residue a gesture left behind, then reports the pose.
+   *
+   * Rendering is on demand, so frames stop the moment a gesture ends and
+   * whatever offset damping had yet to apply freezes on the controls instead of
+   * decaying to nothing. It thaws on the next `update()` — inside the *next*
+   * gesture — where it lands as a jump in whatever that gesture is doing: a pan
+   * bleeding into an orbit, long after the drag that caused it. Applying it
+   * here keeps it with the gesture that earned it, and leaves the controls
+   * clean for the next one.
+   */
+  private settleDamping = () => {
+    this.orbit.enableDamping = false;
+    this.orbit.update();
+    this.orbit.enableDamping = true;
+    this.emitViewChange();
+  };
+
   private scheduleSettledViewChange = () => {
     this.options.requestRender();
     if (this.settleTimeout !== null) {
@@ -143,14 +161,14 @@ export class CameraController {
     orbit.enableDamping = true;
     orbit.zoomToCursor = this.options.zoomToCursor();
     this.applyPointerBindings(orbit);
-    orbit.addEventListener('end', this.emitViewChange);
+    orbit.addEventListener('end', this.settleDamping);
     orbit.addEventListener('change', this.scheduleSettledViewChange);
     return orbit;
   }
 
   private rebindControls(nextCamera: THREE.Camera) {
     const target = this.orbit.target.clone();
-    this.orbit.removeEventListener('end', this.emitViewChange);
+    this.orbit.removeEventListener('end', this.settleDamping);
     this.orbit.removeEventListener('change', this.scheduleSettledViewChange);
     this.orbit.dispose();
     this.orbit = this.createOrbit(nextCamera);
@@ -398,7 +416,7 @@ export class CameraController {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
     }
-    this.orbit.removeEventListener('end', this.emitViewChange);
+    this.orbit.removeEventListener('end', this.settleDamping);
     this.orbit.removeEventListener('change', this.scheduleSettledViewChange);
     this.orbit.dispose();
   }
