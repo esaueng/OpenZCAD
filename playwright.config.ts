@@ -15,6 +15,14 @@ const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
+  // CI runs the browser matrix on one shared worker, where repeated Chromium,
+  // IndexedDB, and geometry-worker cold starts can cross Playwright's 5 s
+  // assertion default. Product timing probes keep their own strict budgets;
+  // this only gives readiness assertions the same allowance already used by
+  // the focused cold-restore coverage.
+  expect: {
+    timeout: process.env.CI ? 15_000 : 5_000
+  },
   use: {
     baseURL: `http://127.0.0.1:${PORT}`
   },

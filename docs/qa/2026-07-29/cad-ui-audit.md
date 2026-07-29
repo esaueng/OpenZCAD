@@ -24,6 +24,7 @@ rendering policy, status feedback, and regression instrumentation.
 | UI-06 | Medium | Release an orbit on a low-frame-rate browser. The same ease-out that settles quickly at 60 Hz could coast for more than 1.4 seconds. | Orbit damping was applied per rendered frame, so low frame rates stretched the inertial tail in wall-clock time. | Preserve the multi-frame ease-out but flush its sub-pixel residue after an 800 ms real-time cap. | Orbit ease-out browser regression repeated five times serially plus the complete matrix. |
 | QA-01 | Medium | AI browser tests still assumed the former assistant-enabled default and could pass with a device fixture that production no longer adopts. | Test account settings were revision zero and unsynced, so the local default correctly outranked them. | AI scenarios explicitly opt into a synced account setting; non-AI scenarios keep the default-off path. | Complete AI grounding/settings browser matrix. |
 | QA-02 | Low | The filleted-rim edge-chain regression could scan past a successful pick or have its second physical click intercepted by the value chip. | The test read selection before the next render frame and reused a point after an overlay appeared there. | Wait one rendered frame, clear the probe selection, then send the measured double-click to the WebGL canvas. | Edge-chain case passes alone and in the complete 44-test browser matrix. |
+| QA-03 | Low | The single-worker CI matrix intermittently missed the workspace after project create/open while the same exact head passed locally. | Repeated Chromium, IndexedDB, and geometry-worker cold starts crossed Playwright's 5-second default assertion timeout; the affected assertions all stopped at that same boundary. | CI readiness assertions now use the existing 15-second cold-restore allowance while local feedback and explicit performance budgets remain unchanged. | Complete serial browser matrix locally plus exact-head CI. |
 
 ## Browser evidence
 
@@ -78,6 +79,8 @@ At 390 × 844 CSS pixels, the page and footer remain inside the viewport:
 - Production Vite build: pass
 - Playwright functional matrix: 44 passed, 3 intentionally gated performance
   probes skipped
+- Playwright single-worker matrix: 44 passed, 3 intentionally gated
+  performance probes skipped
 - Performance probes, run separately: all 3 passed
 - Final clean-reload browser console: zero errors
 
