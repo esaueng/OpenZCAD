@@ -62,8 +62,11 @@ async function stubApi(
     route.fulfill({
       json: {
         settings,
-        revision: 0,
-        synced: false,
+        revision: assistantEnabled ? 1 : 0,
+        // Account settings are adopted only when the server says they are in
+        // sync. AI-focused tests opt in explicitly so the new default-off
+        // device setting does not outrank their fixture.
+        synced: assistantEnabled,
         credential: { stored: false, storageAvailable: false },
         effectiveAssistant: {
           configured: false,
@@ -1068,6 +1071,112 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   ).toBe(true);
   expect(idleRegionBoundaries).toHaveLength(1);
   expect(idleRegionBoundaries.every((line) => !line.visible)).toBe(true);
+});
+
+test('extrudes and edits one of multiple closed sketch regions', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Multi Region Extrude');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const centers = [
+    {
+      x: bounds!.x + bounds!.width * 0.58,
+      y: bounds!.y + bounds!.height * 0.76
+    },
+    {
+      x: bounds!.x + bounds!.width * 0.78,
+      y: bounds!.y + bounds!.height * 0.76
+    }
+  ];
+  for (const [index, center] of centers.entries()) {
+    await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+    await page.mouse.move(center.x, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + 38, center.y, { steps: 6 });
+    await page.mouse.up();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      index === 0 ? 'Sketch 01 started.' : 'Add circle'
+    );
+  }
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '2 valid profiles available'
+  );
+  // Profile picking itself is covered by the viewport package. Select one
+  // detected region through the e2e-only canvas hook so this lifecycle test
+  // cannot race the camera tween on slower machines.
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  const extrude = page.getByRole('form', { name: 'Extrude controls' });
+  await expect(extrude).toContainText('1 selected');
+  await expect(
+    extrude.getByRole('button', { name: 'Select all valid' })
+  ).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 profile selected · exact preview ready',
+    { timeout: 20_000 }
+  );
+  await extrude.getByRole('button', { name: 'Select all valid' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '2 profiles selected · exact preview ready',
+    { timeout: 20_000 }
+  );
+  await expect(extrude).toContainText('2 selected');
+  await extrude.getByRole('button', { name: 'Clear' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Select one or more closed profiles.'
+  );
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 profile selected · exact preview ready',
+    { timeout: 20_000 }
+  );
+  await expect(extrude).toContainText('1 selected');
+  await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude 1' })
+  ).toBeVisible();
+
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector).toBeVisible();
+  await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Edit Extrude 1'
+  );
+  await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Redo');
+  await page.locator('.feature-row-main', { hasText: 'Extrude 1' }).click();
+  await expect(
+    page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('textbox', { name: /^Distance/ })
+  ).toHaveValue('32');
+  expect(consoleErrors).toEqual([]);
 });
 
 test('fillets all twelve edges of a box in one exact feature', async ({
@@ -2156,10 +2265,22 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
         y: bounds.y + bounds.height * y
       };
       await page.mouse.click(point.x, point.y);
+      // A pick is committed on the next rendered frame. Reading the footer
+      // synchronously can miss a successful hit and burn the whole grid scan.
+      await page.waitForTimeout(32);
       if (!(await status.textContent())?.includes('exact edge selected')) {
         continue;
       }
-      await page.mouse.dblclick(point.x, point.y);
+      // Selecting the probe edge creates a value chip at that exact point;
+      // a physical double-click can then send its second click to the chip.
+      // Clear the probe and dispatch the measured gesture to the WebGL canvas.
+      await page.getByRole('button', { name: 'Deselect all' }).click();
+      await canvas.dispatchEvent('dblclick', {
+        button: 0,
+        clientX: point.x,
+        clientY: point.y
+      });
+      await expect(status).toContainText('connected edges');
       const chip = await page.evaluate(
         () => document.querySelector('.selection-chip-label')?.textContent ?? ''
       );
