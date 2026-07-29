@@ -674,4 +674,61 @@ describe('worker api routes', () => {
     );
     expect(response.status).toBe(413);
   });
+
+  it('accepts a headerless streamed JSON body within the size limit', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(JSON.stringify({ name: 'Streamed Project' }))
+        );
+        controller.close();
+      }
+    });
+    const request = new Request('https://example.com/api/projects', {
+      method: 'POST',
+      body,
+      duplex: 'half'
+    } as RequestInit & { duplex: 'half' });
+    expect(request.headers.has('content-length')).toBe(false);
+
+    const response = await worker.fetch(request, env);
+    expect(response.status).toBe(201);
+  });
+
+  it.each([
+    { description: 'without Content-Length', contentLength: undefined },
+    { description: 'with underreported Content-Length', contentLength: '1' }
+  ])(
+    'rejects an oversized stream $description with 413',
+    async ({ contentLength }) => {
+      const chunk = new Uint8Array(1024 * 1024).fill(0x20);
+      let chunksRemaining = 26;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunksRemaining === 0) {
+            controller.close();
+            return;
+          }
+          chunksRemaining -= 1;
+          controller.enqueue(chunk);
+        }
+      });
+      const request = new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: contentLength
+          ? { 'content-length': contentLength }
+          : undefined,
+        body,
+        duplex: 'half'
+      } as RequestInit & { duplex: 'half' });
+      expect(request.headers.get('content-length')).toBe(contentLength ?? null);
+
+      const response = await worker.fetch(request, env);
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        error: 'Request body is too large.'
+      });
+    }
+  );
 });
