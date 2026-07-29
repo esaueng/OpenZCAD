@@ -651,7 +651,11 @@ export function ModelViewer({
 
     const renderer = timed(
       'viewer.renderer',
-      () => new THREE.WebGLRenderer({ antialias: true })
+      () =>
+        new THREE.WebGLRenderer({
+          antialias: true,
+          powerPreference: 'high-performance'
+        })
     );
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -659,6 +663,7 @@ export function ModelViewer({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.autoUpdate = false;
     // PCF is the soft one now: three r185 deprecated PCFSoftShadowMap and
     // silently substitutes this, warning on every renderer. Its sampler spreads
     // five Vogel-disk taps over `light.shadow.radius`, tuned in
@@ -710,6 +715,7 @@ export function ModelViewer({
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     tuneShadowFrustum(keyLight, 120);
+    renderer.shadowMap.needsUpdate = true;
     scene.add(keyLight);
     scene.add(keyLight.target);
     // Left, behind, slightly above — cool rim for edge separation.
@@ -2909,6 +2915,9 @@ export function ModelViewer({
       context.keyLight.target.position.copy(sceneCenter);
       context.keyLight.target.updateMatrixWorld();
     }
+    // Bodies are the only dynamic shadow casters; camera-only frames reuse
+    // this map until geometry or the fitted key-light rig changes again.
+    context.renderer.shadowMap.needsUpdate = true;
 
     // Name callout on the primary (last picked) selected body.
     const primaryId = selectedBodyIds.at(-1);
