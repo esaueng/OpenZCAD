@@ -112,9 +112,7 @@ export class D1R2PersistenceService implements PersistenceService {
               }
             ];
           } catch {
-            console.error('Skipping corrupt project row:', {
-              projectId: row.id
-            });
+            console.error('Skipping corrupt project row.');
             return [];
           }
         }
@@ -689,8 +687,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           event.data,
           userId as UserId,
           displayName
-        ).catch((error: unknown) => {
-          console.error('Collaboration message handling failed.', error);
+        ).catch(() => {
+          console.error('Collaboration message handling failed.');
           this.send(server, {
             type: 'error',
             code: 'internal',
