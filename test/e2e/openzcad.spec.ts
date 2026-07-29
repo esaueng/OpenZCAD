@@ -2496,3 +2496,69 @@ test('a direct mode hides the assistant without ending the conversation', async 
     'Add a 10 mm cube.'
   );
 });
+
+test('releasing an orbit eases out instead of stopping dead', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Glide Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible();
+
+  // Every camera frame updates the orientation widget's SVG attributes, so
+  // mutation timestamps relative to pointerup separate "ease-out glide" from
+  // "slams to a halt" without reaching into renderer internals.
+  await page.evaluate(() => {
+    const glide = { upAt: null as number | null, changes: [] as number[] };
+    (window as unknown as { __glide: typeof glide }).__glide = glide;
+    const observer = new MutationObserver(() =>
+      glide.changes.push(performance.now())
+    );
+    for (const line of document.querySelectorAll('.orientation-widget line')) {
+      observer.observe(line, { attributes: true });
+    }
+    window.addEventListener(
+      'pointerup',
+      () => {
+        glide.upAt = performance.now();
+      },
+      true
+    );
+  });
+
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('Viewer canvas is not laid out.');
+  }
+  const startX = bounds.x + bounds.width / 2;
+  const startY = bounds.y + bounds.height * 0.6;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  for (let step = 1; step <= 12; step += 1) {
+    await page.mouse.move(startX + step * 12, startY - step * 6);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(1_400);
+
+  const result = await page.evaluate(() => {
+    const glide = (
+      window as unknown as { __glide: { upAt: number | null; changes: number[] } }
+    ).__glide;
+    const after = glide.changes.filter(
+      (change) => glide.upAt !== null && change > glide.upAt
+    );
+    return {
+      framesAfterRelease: after.length,
+      settleMs: after.length ? after[after.length - 1]! - glide.upAt! : 0
+    };
+  });
+
+  // Perceptible ease-out: several rendered frames past release…
+  expect(result.framesAfterRelease).toBeGreaterThan(3);
+  expect(result.settleMs).toBeGreaterThan(60);
+  // …but decisive, not a map viewer's coast past the chosen framing.
+  expect(result.settleMs).toBeLessThan(1_200);
+});
