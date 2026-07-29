@@ -537,6 +537,21 @@ export function createShadowCatcher(): THREE.Mesh {
 }
 
 /**
+ * The horizontal shadow catcher grounds oblique views, but looking almost
+ * straight down turns it into a large dark duplicate behind the model.
+ */
+export function shouldShowGroundShadow(
+  camera: THREE.Camera,
+  showGrid: boolean
+): boolean {
+  if (!showGrid) {
+    return false;
+  }
+  const direction = camera.getWorldDirection(new THREE.Vector3());
+  return Math.abs(direction.z) < 0.92;
+}
+
+/**
  * Configures the key light's shadow frustum for a model of `radius` size.
  *
  * Blockiness in the penumbra is a texel-density problem. three's PCF sampler

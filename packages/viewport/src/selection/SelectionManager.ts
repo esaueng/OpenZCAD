@@ -10,7 +10,8 @@ import {
   EDGE_IDLE_OPACITY,
   EDGE_IDLE_WIDTH,
   EDGE_SELECTED_COLOR,
-  EDGE_SELECTED_WIDTH
+  EDGE_SELECTED_WIDTH,
+  idleEdgeColor
 } from '../pick/edges';
 
 const HOVER_EMISSIVE = 0x101d2c;
@@ -115,7 +116,7 @@ export class SelectionManager {
       const material = restore.material;
       const state = restore.userData as EdgeVisualState;
       material.color.setHex(
-        state.selected ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR
+        state.selected ? EDGE_SELECTED_COLOR : idleEdgeColor(restore)
       );
       material.linewidth = state.selected
         ? EDGE_SELECTED_WIDTH

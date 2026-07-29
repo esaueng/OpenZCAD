@@ -9,7 +9,12 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
  * commands, the geometry worker, the viewport, STEP writing — is the real
  * production bundle.
  */
-async function stubApi(page: Page) {
+async function stubApi(
+  page: Page,
+  { assistantEnabled = false }: { assistantEnabled?: boolean } = {}
+) {
+  const settings = structuredClone(DEFAULT_APP_SETTINGS);
+  settings.assistant.enabled = assistantEnabled;
   // The preview server serves the static bundle without the Worker Durable
   // Object. Keep cloud project tests authenticated while leaving collaboration
   // transport coverage to its focused unit tests.
@@ -56,7 +61,7 @@ async function stubApi(page: Page) {
   await page.route('**/api/settings', (route) =>
     route.fulfill({
       json: {
-        settings: DEFAULT_APP_SETTINGS,
+        settings,
         revision: 0,
         synced: false,
         credential: { stored: false, storageAvailable: false },
@@ -392,9 +397,9 @@ test('flushes the latest edit before returning to the project list', async ({
   });
   await expect(savedProject).toBeVisible();
   await savedProject.click();
-  await expect(page.getByRole('button', { name: 'Rename project' })).toContainText(
-    'Latest Autosave Name'
-  );
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Latest Autosave Name');
 });
 
 test('leaves the restore screen when a remembered project is missing', async ({
@@ -598,7 +603,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   page
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Narrow Part');
   await page.getByRole('button', { name: 'Create project' }).click();
@@ -628,6 +633,18 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   const viewerBounds = await page.locator('.viewer-area').boundingBox();
   expect(viewerBounds!.y).toBeGreaterThanOrEqual(
     sidebarBounds!.y + sidebarBounds!.height - 0.5
+  );
+  await expect(page.locator('.status-groups')).toBeHidden();
+  await expect(page.locator('.status-filters > b')).toBeHidden();
+  const statusStateBounds = await page.locator('.status-state').boundingBox();
+  const statusFilterBounds = await page
+    .locator('.status-filters')
+    .boundingBox();
+  expect(statusStateBounds).not.toBeNull();
+  expect(statusFilterBounds).not.toBeNull();
+  expect(statusStateBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(statusFilterBounds!.x + statusFilterBounds!.width).toBeLessThanOrEqual(
+    390.5
   );
   await expect(page.locator('.viewer-rail-stack')).toBeVisible();
 
@@ -677,9 +694,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   });
   await expect(radiusOperation).toBeVisible();
   await expect(page.getByTestId('live-cylinder-radius')).toHaveText('14 mm');
-  await expect(
-    page.getByRole('region', { name: '3D viewport' })
-  ).toContainText('Cylindrical face Ø28');
+  await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
+    'Cylindrical face Ø28'
+  );
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
 
   const handle = await canvas.evaluate((element) => {
@@ -720,18 +737,16 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'R 18 mm'
   );
-  await expect(
-    page.getByRole('region', { name: '3D viewport' })
-  ).toContainText('Cylindrical face Ø36');
+  await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
+    'Cylindrical face Ø36'
+  );
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText(
     'Adjusted cylinder radius to R 18 mm.'
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
-  await expect(
-    page.getByRole('button', { name: 'History 1' })
-  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');
@@ -981,7 +996,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
 test('grounds an AI fillet request onto every selected edge', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   type AssistantRequest = {
     digest?: {
       selection?: {
@@ -1098,7 +1113,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
 test('grounds all cylinder edges onto its two visible rims', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   type AssistantBody = {
     bodyId: string;
     bbox?: {
@@ -2508,7 +2523,7 @@ async function createProject(page: Page, name: string) {
 test('settings leave the conversation and its in-flight reply intact', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   let releaseReply!: () => void;
   await stubAssistant(
     page,
@@ -2543,7 +2558,7 @@ test('settings leave the conversation and its in-flight reply intact', async ({
 test('disabling the assistant takes its live preview with it', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   await stubAssistant(page);
   await createProject(page, 'Orphan Preview Part');
 
@@ -2610,7 +2625,7 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
 test('a direct mode hides the assistant without ending the conversation', async ({
   page
 }) => {
-  await stubApi(page);
+  await stubApi(page, { assistantEnabled: true });
   await stubAssistant(page);
   await createProject(page, 'Direct Mode Part');
 
@@ -2694,7 +2709,9 @@ test('releasing an orbit eases out instead of stopping dead', async ({
 
   const result = await page.evaluate(() => {
     const glide = (
-      window as unknown as { __glide: { upAt: number | null; changes: number[] } }
+      window as unknown as {
+        __glide: { upAt: number | null; changes: number[] };
+      }
     ).__glide;
     const after = glide.changes.filter(
       (change) => glide.upAt !== null && change > glide.upAt
