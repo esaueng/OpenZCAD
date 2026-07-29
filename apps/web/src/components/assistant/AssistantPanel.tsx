@@ -57,6 +57,12 @@ interface AssistantPanelProps {
   onCollapsedChange(collapsed: boolean): void;
   /** Bumped by the workspace to move focus into the prompt. */
   focusNonce: number;
+  /**
+   * Takes the dock off screen without unmounting it. The conversation and the
+   * in-flight request live here, so a direct-manipulation mode hides the panel
+   * rather than destroying what the user is in the middle of.
+   */
+  hidden?: boolean;
 }
 
 let entrySequence = 0;
@@ -99,7 +105,8 @@ export function AssistantPanel({
   onPreview,
   collapsed,
   onCollapsedChange,
-  focusNonce
+  focusNonce,
+  hidden = false
 }: AssistantPanelProps) {
   const [conversation, dispatch] = useReducer(
     assistantReducer,
@@ -107,6 +114,21 @@ export function AssistantPanel({
   );
   const [prompt, setPrompt] = useState('');
   const [pending, setPending] = useState<AssistantAttachmentPreview[]>([]);
+  // Attachments arrive from async conversions that can overlap — a paste while
+  // a dropped PDF is still rasterizing. The ref is what those readers count
+  // slots against, because component state is a render behind them.
+  const pendingRef = useRef<readonly AssistantAttachmentPreview[]>(pending);
+  const updatePending = useCallback(
+    (
+      next: (
+        current: readonly AssistantAttachmentPreview[]
+      ) => AssistantAttachmentPreview[]
+    ) => {
+      pendingRef.current = next(pendingRef.current);
+      setPending(pendingRef.current as AssistantAttachmentPreview[]);
+    },
+    []
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -232,7 +254,7 @@ export function AssistantPanel({
     }
     const attachments = pending;
     setPrompt('');
-    setPending([]);
+    updatePending(() => []);
     void send(
       text ||
         `Model the part in ${attachments.length === 1 ? 'this drawing' : 'these drawings'}.`,
@@ -253,17 +275,24 @@ export function AssistantPanel({
 
   async function addFiles(files: readonly File[]) {
     setNotice(null);
-    let accepted = [...pending];
     for (const file of files) {
+      const remaining = MAX_ASSISTANT_ATTACHMENTS - pendingRef.current.length;
+      if (remaining <= 0) {
+        setNotice(
+          `Only ${MAX_ASSISTANT_ATTACHMENTS} drawings can be attached at once.`
+        );
+        break;
+      }
       try {
         const converted = await attachmentsFromFile(
           file,
           nextEntryId('att'),
-          MAX_ASSISTANT_ATTACHMENTS - accepted.length
+          remaining
         );
-        accepted = [...accepted, ...converted].slice(
-          0,
-          MAX_ASSISTANT_ATTACHMENTS
+        // Reading the live list here rather than a snapshot from before the
+        // await is what keeps a concurrent drop from discarding this one.
+        updatePending((current) =>
+          [...current, ...converted].slice(0, MAX_ASSISTANT_ATTACHMENTS)
         );
       } catch (error) {
         setNotice(
@@ -273,7 +302,6 @@ export function AssistantPanel({
         );
       }
     }
-    setPending(accepted);
     promptRef.current?.focus();
   }
 
@@ -321,9 +349,10 @@ export function AssistantPanel({
     return (
       <button
         type="button"
-        className="assistant-launcher"
+        className={`assistant-launcher${hidden ? ' assistant-off-screen' : ''}`}
         onClick={() => onCollapsedChange(false)}
         title="Open the modeling assistant"
+        aria-hidden={hidden || undefined}
       >
         <Sparkles size={15} aria-hidden="true" />
         <span>Assistant</span>
@@ -333,8 +362,11 @@ export function AssistantPanel({
 
   return (
     <section
-      className={`assistant-panel${dragging ? ' dragging' : ''}`}
+      className={`assistant-panel${dragging ? ' dragging' : ''}${
+        hidden ? ' assistant-off-screen' : ''
+      }`}
       aria-label="AI modeling assistant"
+      aria-hidden={hidden || undefined}
       onDragOver={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -505,7 +537,7 @@ export function AssistantPanel({
                   type="button"
                   aria-label={`Remove ${attachment.label}`}
                   onClick={() =>
-                    setPending((current) =>
+                    updatePending((current) =>
                       current.filter((item) => item.id !== attachment.id)
                     )
                   }

@@ -1465,8 +1465,11 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
     page.evaluate(() => {
       const raw = localStorage.getItem('openzcad-workspace-session:v1');
       const views = raw
-        ? (JSON.parse(raw) as { views?: Record<string, { camera: { target: number[] } }> })
-            .views
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<string, { camera: { target: number[] } }>;
+            }
+          ).views
         : undefined;
       const view = views ? Object.values(views)[0] : undefined;
       return view ? view.camera.target : null;
@@ -1497,7 +1500,8 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Viewport', exact: true }).click();
   await page.getByLabel('Zoom to cursor').uncheck();
-  await page.getByRole('button', { name: /Back to workspace|Close settings/ })
+  await page
+    .getByRole('button', { name: /Back to workspace|Close settings/ })
     .first()
     .click();
   await expect(canvas).toBeVisible();
@@ -1749,9 +1753,7 @@ test('the middle-button drag preference changes what a middle drag does', async 
   // Switching to orbit turns the camera instead, leaving the target alone.
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Viewport', exact: true }).click();
-  await page
-    .getByLabel('Middle-button drag')
-    .selectOption('orbit');
+  await page.getByLabel('Middle-button drag').selectOption('orbit');
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
     .first()
@@ -1877,8 +1879,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
       }
       await page.mouse.dblclick(point.x, point.y);
       const chip = await page.evaluate(
-        () =>
-          document.querySelector('.selection-chip-label')?.textContent ?? ''
+        () => document.querySelector('.selection-chip-label')?.textContent ?? ''
       );
       const match = /^(\d+) edges$/.exec(chip.trim());
       run = match ? Number(match[1]) : 0;
@@ -1954,7 +1955,9 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expect(edgeChip).toHaveClass(/automatic/);
 });
 
-test('shift-dragging a box selects several bodies at once', async ({ page }) => {
+test('shift-dragging a box selects several bodies at once', async ({
+  page
+}) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Box Select Part');
@@ -2109,11 +2112,11 @@ test('box selection releases the previous direct-edit target', async ({
         const after = await canvas.boundingBox();
         return Boolean(
           before &&
-            after &&
-            Math.abs(before.x - after.x) < 0.5 &&
-            Math.abs(before.y - after.y) < 0.5 &&
-            Math.abs(before.width - after.width) < 0.5 &&
-            Math.abs(before.height - after.height) < 0.5
+          after &&
+          Math.abs(before.x - after.x) < 0.5 &&
+          Math.abs(before.y - after.y) < 0.5 &&
+          Math.abs(before.width - after.width) < 0.5 &&
+          Math.abs(before.height - after.height) < 0.5
         );
       },
       { timeout: 3_000 }
@@ -2286,4 +2289,210 @@ test('flicking a direction in the marking menu picks that action', async ({
   await expect(menu).toBeHidden();
   await expect(page.locator('.viewer-notice')).toBeVisible();
   await expect(page.getByRole('button', { name: /^Show Box/ })).toBeVisible();
+});
+
+/**
+ * A configured assistant whose single proposal adds a box. `gate`, when given,
+ * holds the response open so a test can act while the request is in flight.
+ */
+async function stubAssistant(page: Page, gate?: Promise<void>) {
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'shell-state-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', async (route) => {
+    if (gate) {
+      await gate;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal: {
+            proposalId: 'proposal_shell_state_e2e',
+            summary: 'Add a 10 mm cube.',
+            assumptions: [],
+            operations: [
+              {
+                kind: 'add_primitive',
+                name: 'Assistant Cube',
+                localId: null,
+                primitiveKind: 'box',
+                dimensions: {
+                  width: 10,
+                  height: 10,
+                  depth: 10,
+                  radius: null,
+                  bottomRadius: null,
+                  topRadius: null,
+                  majorRadius: null,
+                  minorRadius: null
+                }
+              }
+            ]
+          },
+          questions: null,
+          message: null,
+          readings: null
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+}
+
+async function createProject(page: Page, name: string) {
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+}
+
+test('settings leave the conversation and its in-flight reply intact', async ({
+  page
+}) => {
+  await stubApi(page);
+  let releaseReply!: () => void;
+  await stubAssistant(
+    page,
+    new Promise<void>((resolve) => {
+      releaseReply = resolve;
+    })
+  );
+  await createProject(page, 'Shell State Part');
+
+  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
+  await page.getByLabel('CAD change request').press('Enter');
+  const thread = page.locator('.assistant-thread');
+  await expect(thread).toContainText('Add a 10 mm cube');
+
+  // Settings used to replace the whole shell. That unmounted the panel, which
+  // aborts the request on its way out and takes the thread with it.
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
+
+  releaseReply();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await expect(settings).toHaveCount(0);
+
+  await expect(thread).toContainText('Add a 10 mm cube');
+  // The reply that landed while Settings was up survived the round trip.
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
+});
+
+test('disabling the assistant takes its live preview with it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await stubAssistant(page);
+  await createProject(page, 'Orphan Preview Part');
+
+  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
+  await page.getByLabel('CAD change request').press('Enter');
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
+
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  const status = page.getByRole('contentinfo');
+  await expect(status).toContainText('Previewing proposed patch');
+  // The preview is unapplied geometry: it shows a body the document does not
+  // have, which is what makes an orphaned preview visible at all.
+  await expect(status.locator('[title*="1 bodies"]')).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('checkbox', { name: 'AI assistant' }).uncheck();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+
+  // The panel is gone, so nothing is left that could retire the preview — the
+  // workspace has to drop it rather than render a proposal forever.
+  await expect(page.locator('.assistant-panel')).toHaveCount(0);
+  await expect(status.locator('[title*="0 bodies"]')).toHaveCount(1);
+});
+
+test('settings swallow workspace shortcuts instead of editing behind them', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Shortcut Guard Part');
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  const feature = page.locator('.feature-row', { hasText: 'Box' });
+  await expect(feature).toBeVisible();
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  // Move focus off the search field so nothing is merely absorbed by an input.
+  await page.getByRole('heading', { level: 1, name: 'Settings' }).click();
+
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+k');
+  await page.keyboard.press('b');
+
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+
+  // Every one of those keys edited or opened something behind the settings UI
+  // before the workspace map learned to stand down.
+  await expect(feature).toBeVisible();
+  await expect(
+    page.getByRole('dialog', { name: 'Command palette' })
+  ).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Box operation' })).toHaveCount(
+    0
+  );
+});
+
+test('a direct mode hides the assistant without ending the conversation', async ({
+  page
+}) => {
+  await stubApi(page);
+  await stubAssistant(page);
+  await createProject(page, 'Direct Mode Part');
+
+  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
+  await page.getByLabel('CAD change request').press('Enter');
+  const thread = page.locator('.assistant-thread');
+  await expect(thread).toContainText('Add a 10 mm cube');
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const panel = page.locator('.assistant-panel');
+  await page.keyboard.press('m');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
+  // Hidden, not unmounted: the panel owns the conversation, so entering a
+  // direct-manipulation mode has to give back its column without dropping it.
+  await expect(panel).toBeHidden();
+  await expect(panel).toHaveCount(1);
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeHidden();
+  await expect(panel).toBeVisible();
+  await expect(thread).toContainText('Add a 10 mm cube');
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
 });

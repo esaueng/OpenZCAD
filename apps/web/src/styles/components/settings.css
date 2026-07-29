@@ -4,6 +4,18 @@
 
 /* ── Global settings ─────────────────────────────────────── */
 
+/*
+  Settings covers the workspace rather than replacing it. The shell underneath
+  stays mounted and keeps its state — the assistant's conversation above all —
+  so the overlay has to be opaque and reach over the start screen too.
+*/
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-settings);
+  background: var(--color-bg);
+}
+
 .settings-page {
   height: 100%;
   display: grid;
