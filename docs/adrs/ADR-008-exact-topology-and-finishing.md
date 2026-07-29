@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Accepted. Topology references are amended by ADR-011: both kernels now
+persist geometric fingerprints instead of sub-shape ordinals.
 
 ## Decision
 
