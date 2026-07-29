@@ -6,7 +6,6 @@ import { findBodyId, forEachMesh } from '../pick/meshes';
 import {
   EDGE_HOVER_COLOR,
   EDGE_HOVER_WIDTH,
-  EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
   EDGE_IDLE_WIDTH,
   EDGE_SELECTED_COLOR,
