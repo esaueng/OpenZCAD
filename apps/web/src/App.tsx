@@ -2893,6 +2893,9 @@ export function App() {
       const active =
         interaction.mode === 'sketch' &&
         interaction.session.sketchId === sketch.sketchId;
+      const selected =
+        selectedSketch?.sketchId === sketch.sketchId ||
+        selectedSketchProfileId === sketch.sketchId;
       const objects = sketch.objectIds.flatMap((objectId) => {
         const node = doc.nodes[objectId];
         return node?.kind === 'sketch-object'
@@ -2951,9 +2954,24 @@ export function App() {
       } catch {
         // Unresolvable sketches simply render without pickable regions.
       }
-      return [{ sketchId: sketch.sketchId, basis, active, curves, regions }];
+      return [
+        {
+          sketchId: sketch.sketchId,
+          basis,
+          active,
+          selected,
+          curves,
+          regions
+        }
+      ];
     });
-  }, [doc, parameterScope, interaction]);
+  }, [
+    doc,
+    parameterScope,
+    interaction,
+    selectedSketch,
+    selectedSketchProfileId
+  ]);
 
   useEffect(() => {
     setSelectedProfiles((current) => {

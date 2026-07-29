@@ -77,6 +77,7 @@ import {
   snapTo,
   syncFatLineResolution,
   tuneShadowFrustum,
+  VIEWPORT_RENDER_ORDER,
   type AxisProjection,
   type CameraPose,
   type DirectEditAxis,
@@ -187,6 +188,7 @@ export interface SketchViewData {
   sketchId: string;
   basis: PlaneBasis;
   active: boolean;
+  selected: boolean;
   curves: {
     points: { x: number; y: number }[];
     closed: boolean;
@@ -1322,10 +1324,99 @@ export function ModelViewer({
         }
       );
     };
+    /**
+     * The regression suite builds real overlapping sketch/body geometry, then
+     * reads this compact scene snapshot to prove the live renderer is using
+     * the same depth-aware hierarchy covered by unit tests.
+     */
+    const handleE2ERenderPolicy = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          resolve?: (value: {
+            bodyFaces: {
+              depthTest: boolean;
+              depthWrite: boolean;
+              polygonOffset: boolean;
+              polygonOffsetFactor: number;
+              polygonOffsetUnits: number;
+              renderOrder: number;
+            }[];
+            bodyEdges: {
+              depthTest: boolean;
+              depthWrite: boolean;
+              name: string;
+              renderOrder: number;
+              visible: boolean;
+            }[];
+            sketchLines: {
+              depthTest: boolean;
+              depthWrite: boolean;
+              name: string;
+              renderOrder: number;
+              visible: boolean;
+            }[];
+          }) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const bodyFaces: {
+        depthTest: boolean;
+        depthWrite: boolean;
+        polygonOffset: boolean;
+        polygonOffsetFactor: number;
+        polygonOffsetUnits: number;
+        renderOrder: number;
+      }[] = [];
+      forEachMesh(bodyGroup, (mesh) => {
+        bodyFaces.push({
+          depthTest: mesh.material.depthTest,
+          depthWrite: mesh.material.depthWrite,
+          polygonOffset: mesh.material.polygonOffset,
+          polygonOffsetFactor: mesh.material.polygonOffsetFactor,
+          polygonOffsetUnits: mesh.material.polygonOffsetUnits,
+          renderOrder: mesh.renderOrder
+        });
+      });
+      const lineStates = (root: THREE.Object3D) => {
+        const states: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          name: string;
+          renderOrder: number;
+          visible: boolean;
+        }[] = [];
+        root.traverse((child) => {
+          if (child instanceof Line2) {
+            states.push({
+              depthTest: child.material.depthTest,
+              depthWrite: child.material.depthWrite,
+              name: child.name,
+              renderOrder: child.renderOrder,
+              visible: child.visible
+            });
+          }
+        });
+        return states;
+      };
+      detail.resolve({
+        bodyFaces,
+        bodyEdges: lineStates(bodyGroup),
+        sketchLines: lineStates(regionGroup)
+      });
+    };
     if (e2eCanvasHooksEnabled) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-render-policy',
+        handleE2ERenderPolicy
       );
     }
 
@@ -3150,6 +3241,10 @@ export function ModelViewer({
         'openzcad:e2e-select-cylinder',
         handleE2ECylinderSelection
       );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-render-policy',
+        handleE2ERenderPolicy
+      );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
@@ -3235,6 +3330,7 @@ export function ModelViewer({
           resolution: edgeResolution
         });
         const visual = new Line2(fatGeometry, fatMaterial);
+        visual.name = 'body-edge';
         visual.computeLineDistances();
         visual.userData.bodyId = body.bodyId;
         visual.userData.topologyKind = 'edge';
@@ -3242,6 +3338,9 @@ export function ModelViewer({
         visual.userData.topologyHash = edge.hash;
         visual.userData.visual = visual;
         (visual.userData as EdgeVisualState).selected = active;
+        visual.renderOrder = active
+          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+          : VIEWPORT_RENDER_ORDER.BODY_EDGE;
         object.add(visual);
       }
 
@@ -3277,7 +3376,7 @@ export function ModelViewer({
         });
         highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
-        highlight.renderOrder = 16;
+        highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
         highlight.raycast = () => undefined;
         object.add(highlight);
         context.fadeIns.add(highlightMaterial);
@@ -3762,18 +3861,25 @@ export function ModelViewer({
             )
         );
         const line = createFatLine(vertices, {
-          color: curve.construction ? 0x7b8da3 : 0x4da3ff,
-          linewidth: SKETCH_CURVE_WIDTH,
-          opacity: curve.construction ? 0.72 : 0.9,
+          color: view.selected
+            ? SKETCH_SELECTED_COLOR
+            : curve.construction
+              ? 0x7b8da3
+              : SKETCH_COLOR,
+          linewidth: view.selected ? 1.8 : SKETCH_CURVE_WIDTH,
+          opacity: view.selected ? 1 : curve.construction ? 0.72 : 0.9,
           closed: curve.closed,
           resolution: context.fatLineResolution()
         });
+        line.name = 'sketch-curve';
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
           line.material.gapSize = 1;
         }
-        line.renderOrder = 10;
+        line.renderOrder = view.selected
+          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+          : VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
         group.add(line);
       }
       for (const region of view.regions) {
@@ -3808,7 +3914,12 @@ export function ModelViewer({
             closed: true,
             resolution: context.fatLineResolution()
           });
-          boundary.renderOrder = 11;
+          boundary.name = 'sketch-region-boundary';
+          // The base curve already renders the sketch. Keep region boundaries
+          // dormant until hover/selection needs an intentional highlight;
+          // drawing both continuously creates a second coincident sketch pass.
+          boundary.visible = false;
+          boundary.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
           boundary.raycast = () => undefined;
           group.add(boundary);
           return boundary;
@@ -4168,6 +4279,7 @@ export function ModelViewer({
         })
       );
       profileFill.userData.sketchId = sketch.sketchId;
+      profileFill.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
       context.sketchGroup.add(profileFill);
 
       const line = createFatLine(
@@ -4182,7 +4294,11 @@ export function ModelViewer({
           resolution: context.fatLineResolution()
         }
       );
+      line.name = 'sketch-curve';
       line.raycast = () => undefined;
+      line.renderOrder = sketch.selected
+        ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+        : VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
       context.sketchGroup.add(line);
 
       if (sketch.selected) {
