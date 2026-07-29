@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cylinderRadiusSnapStep,
+  cylinderRadiusTolerance,
   cylinderRadialFrame,
   diameterToRadius,
+  isValidCylinderRadius,
   radiusFromRadialDelta,
   radiusToDiameter,
   sameCylinderAxis,
@@ -9,10 +12,25 @@ import {
 } from './cylinderRadius';
 
 describe('cylinder radius drag math', () => {
-  it('uses signed radial movement and clamps before inversion', () => {
-    expect(radiusFromRadialDelta(14, 4, 0.1, 100)).toBe(18);
-    expect(radiusFromRadialDelta(14, -20, 0.1, 100)).toBe(0.1);
-    expect(radiusFromRadialDelta(14, 200, 0.1, 100)).toBe(100);
+  it('uses signed radial movement without imposing fixed radius bounds', () => {
+    expect(radiusFromRadialDelta(14, 4)).toBe(18);
+    expect(radiusFromRadialDelta(0.00002, 0.00001)).toBeCloseTo(0.00003, 10);
+    expect(radiusFromRadialDelta(2_000_000, 1_500_000)).toBe(3_500_000);
+  });
+
+  it('withholds inverted, non-finite, and scale-degenerate candidates', () => {
+    expect(radiusFromRadialDelta(14, -20)).toBeNull();
+    expect(radiusFromRadialDelta(14, Number.POSITIVE_INFINITY)).toBeNull();
+    expect(isValidCylinderRadius(0.00002, 0.00002)).toBe(true);
+    expect(isValidCylinderRadius(0.0000005, 1)).toBe(false);
+    expect(isValidCylinderRadius(50, 1_000_000_000_000)).toBe(false);
+    expect(cylinderRadiusTolerance(1_000_000_000_000)).toBe(100);
+  });
+
+  it('chooses unbounded nice snap steps at the current zoom scale', () => {
+    expect(cylinderRadiusSnapStep(0.000001)).toBeCloseTo(0.00001, 12);
+    expect(cylinderRadiusSnapStep(0.1)).toBe(1);
+    expect(cylinderRadiusSnapStep(1_000_000)).toBe(10_000_000);
   });
 
   it('keeps radius and diameter conversion explicit', () => {
