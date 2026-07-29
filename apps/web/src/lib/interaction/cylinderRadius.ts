@@ -1,7 +1,8 @@
 import type { Vector3 } from '@openzcad/shared';
+import { geometryTolerance } from '@openzcad/geometry';
 
-export const MIN_CYLINDER_RADIUS = 0.1;
-export const MAX_CYLINDER_RADIUS = 1_000_000;
+const SNAP_MIN_PIXELS = 8;
+const NICE_SNAP_FACTORS = [1, 2, 5, 10] as const;
 
 export interface CylinderRadialFrame {
   axisOrigin: Vector3;
@@ -136,29 +137,65 @@ export function signedRadialDelta(
   );
 }
 
+/** The smallest meaningful positive radius at the scale of this edit. */
+export function cylinderRadiusTolerance(scale: number): number {
+  return Number.isFinite(scale) ? geometryTolerance(Math.abs(scale)) : Infinity;
+}
+
 /**
- * The direct-edit invariant: only radius changes. The fixed bounds prevent an
- * inverted or numerically unbounded drag before the exact kernel validates it.
+ * Reject radii that are non-finite, inverted, or indistinguishable from zero
+ * at the scale of the edit. There is deliberately no model-size ceiling:
+ * exact-kernel validation decides whether a finite positive radius produces a
+ * valid B-rep.
+ */
+export function isValidCylinderRadius(
+  radius: number,
+  referenceScale = radius
+): boolean {
+  const scale = Math.max(Math.abs(radius), Math.abs(referenceScale));
+  return (
+    Number.isFinite(radius) &&
+    Number.isFinite(referenceScale) &&
+    radius > cylinderRadiusTolerance(scale)
+  );
+}
+
+/**
+ * The direct-edit invariant: only radius changes. Invalid candidates are
+ * withheld from preview instead of being silently replaced with an unrelated
+ * fixed minimum or maximum.
  */
 export function radiusFromRadialDelta(
   originalRadius: number,
-  radialDelta: number,
-  minRadius = MIN_CYLINDER_RADIUS,
-  maxRadius = MAX_CYLINDER_RADIUS
-): number {
-  if (
-    !Number.isFinite(originalRadius) ||
-    !Number.isFinite(radialDelta) ||
-    !Number.isFinite(minRadius) ||
-    !Number.isFinite(maxRadius) ||
-    minRadius <= 0 ||
-    maxRadius < minRadius
-  ) {
-    throw new Error('Cylinder radius drag bounds must be finite and positive.');
+  radialDelta: number
+): number | null {
+  if (!Number.isFinite(originalRadius) || !Number.isFinite(radialDelta)) {
+    return null;
   }
-  return Math.min(
-    maxRadius,
-    Math.max(minRadius, originalRadius + radialDelta)
+  const radius = originalRadius + radialDelta;
+  const editScale = Math.max(
+    Math.abs(originalRadius),
+    Math.abs(radialDelta),
+    Math.abs(radius)
+  );
+  return isValidCylinderRadius(radius, editScale) ? radius : null;
+}
+
+/**
+ * Unbounded zoom-adaptive radius snapping. The generic move gizmo intentionally
+ * uses a finite table, but radius editing must remain usable for cylinders
+ * below 0.01 units and above 1,000,000 units.
+ */
+export function cylinderRadiusSnapStep(worldPerPixel: number): number {
+  if (!Number.isFinite(worldPerPixel) || worldPerPixel <= 0) {
+    return 1;
+  }
+  const minimumStep = worldPerPixel * SNAP_MIN_PIXELS;
+  const magnitude = 10 ** Math.floor(Math.log10(minimumStep));
+  return (
+    NICE_SNAP_FACTORS.map((factor) => factor * magnitude).find(
+      (candidate) => candidate >= minimumStep
+    ) ?? magnitude * 10
   );
 }
 

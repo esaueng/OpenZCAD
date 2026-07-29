@@ -101,6 +101,7 @@ import type {
   BodyRepresentation,
   TopologySelection
 } from '@openzcad/shared';
+import { formatNumber } from '../lib/model';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import {
   buildSketchModeRig,
@@ -112,7 +113,10 @@ import {
   triangulateRegionGeometry,
   type RegionPickData
 } from './viewer/regionOverlay';
-import { radiusFromRadialDelta } from '../lib/interaction/cylinderRadius';
+import {
+  cylinderRadiusSnapStep,
+  radiusFromRadialDelta
+} from '../lib/interaction/cylinderRadius';
 import {
   arcDimension,
   arcObjectFromPoints,
@@ -160,8 +164,6 @@ export interface CylinderRadiusHandleTarget {
   axisStart: { x: number; y: number; z: number };
   axisEnd: { x: number; y: number; z: number };
   originalRadius: number;
-  minRadius: number;
-  maxRadius: number;
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
@@ -1002,8 +1004,6 @@ export function ModelViewer({
       radialDirection: THREE.Vector3;
       originalRadius: number;
       initialRadius: number;
-      minRadius: number;
-      maxRadius: number;
     } | null = null;
     /** Screen-projected drag growing the edge blend radius. */
     let edgeDrag: {
@@ -1545,9 +1545,10 @@ export function ModelViewer({
       if (rig) {
         const scale = (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         anchor = rig.chipAnchor(scale);
-        const value = Math.round(rig.value() * 100) / 100;
+        const rawValue = rig.value();
+        const value = Math.round(rawValue * 100) / 100;
         if (rig.kind === 'cylinder-radius') {
-          text = `R ${value} ${unitsRef.current}`;
+          text = `R ${formatNumber(rawValue)} ${unitsRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           text = `${prefix} ${value} ${unitsRef.current}`;
@@ -2010,23 +2011,21 @@ export function ModelViewer({
             projected / cylinderRadiusDrag.pixelsPerUnit;
           const raw = radiusFromRadialDelta(
             cylinderRadiusDrag.originalRadius,
-            accumulatedDelta,
-            cylinderRadiusDrag.minRadius,
-            cylinderRadiusDrag.maxRadius
+            accumulatedDelta
           );
-          const snap = chooseMoveSnapStep(
+          if (raw === null) {
+            renderer.domElement.style.cursor = 'grabbing';
+            return;
+          }
+          const snap = cylinderRadiusSnapStep(
             1 / cylinderRadiusDrag.pixelsPerUnit
           );
-          const snapped = event.shiftKey
-            ? Math.round(raw * 100) / 100
-            : Math.round(raw / snap) * snap;
+          const snapped = event.shiftKey ? raw : Math.round(raw / snap) * snap;
           const value = radiusFromRadialDelta(
             cylinderRadiusDrag.originalRadius,
-            snapped - cylinderRadiusDrag.originalRadius,
-            cylinderRadiusDrag.minRadius,
-            cylinderRadiusDrag.maxRadius
+            snapped - cylinderRadiusDrag.originalRadius
           );
-          if (Math.abs(value - rig.value()) > 1e-9) {
+          if (value !== null && Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
             onCylinderRadiusPreviewRef.current(value);
             requestRender();
@@ -2258,9 +2257,7 @@ export function ModelViewer({
               cylinderTarget.radialDirection.z
             ),
             originalRadius: cylinderTarget.originalRadius,
-            initialRadius: armedCylinderRig.value(),
-            minRadius: cylinderTarget.minRadius,
-            maxRadius: cylinderTarget.maxRadius
+            initialRadius: armedCylinderRig.value()
           };
           cylinderRadiusDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
