@@ -743,7 +743,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     angleSnap: 15
   },
   assistant: {
-    enabled: true,
+    enabled: false,
     credentialSource: 'deployment',
     provider: 'openrouter',
     baseUrl: '',

@@ -60,6 +60,7 @@ describe('application settings', () => {
     expect(normalized.viewport.showGrid).toBe(false);
     expect(normalized.viewport.displayMode).toBe('shaded-edges');
     expect(normalized.sketching.linearSnap).toBe(1);
+    expect(normalized.assistant.enabled).toBe(false);
     expect(normalized.assistant.model).toBe('openai/gpt-5.6-terra');
   });
 
@@ -151,7 +152,7 @@ describe('application settings', () => {
   it('falls back to defaults when device storage is empty or corrupt', () => {
     window.localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
     expect(loadLocalAppSettingsRecord()).toBeNull();
-    expect(loadLocalAppSettings().assistant.enabled).toBe(true);
+    expect(loadLocalAppSettings().assistant.enabled).toBe(false);
 
     window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, '{not json');
     expect(loadLocalAppSettingsRecord()).toBeNull();
