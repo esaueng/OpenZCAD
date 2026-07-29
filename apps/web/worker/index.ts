@@ -59,6 +59,17 @@ const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 
+export function assertSafeRuntimeConfiguration(env: CloudflareEnv): void {
+  if (
+    env.AUTH_MODE === 'development' &&
+    (env.ENVIRONMENT !== 'development' || env.PRODUCTION_GUARD !== undefined)
+  ) {
+    throw new Error(
+      'Refusing to start with development authentication in a guarded or non-development environment.'
+    );
+  }
+}
+
 function assertSameOrigin(request: Request): void {
   const origin = request.headers.get('origin');
   if (origin && origin !== new URL(request.url).origin) {
@@ -94,7 +105,6 @@ async function readJsonBody(request: Request): Promise<unknown> {
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const { pathname } = url;
-  const persistence = createPersistenceService(env);
 
   if (request.method === 'GET' && pathname === '/api/health') {
     return json({
@@ -107,6 +117,45 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'GET' && pathname === '/api/auth/config') {
     return json(getAuthConfig(env));
   }
+
+  const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
+  if (
+    (request.method === 'GET' || request.method === 'POST') &&
+    collaborationMatch &&
+    !env.PROJECT_ROOM
+  ) {
+    // The beta deployment omits collaboration bindings pending a product decision.
+    return json(
+      {
+        error: 'Collaboration is disabled for this deployment.',
+        code: 'FEATURE_DISABLED'
+      },
+      501
+    );
+  }
+
+  const requiresArtifactStorage =
+    (request.method === 'POST' && pathname === '/api/uploads') ||
+    (request.method === 'PUT' && UPLOAD_CONTENT_ROUTE.test(pathname)) ||
+    (request.method === 'POST' &&
+      (pathname === '/api/artifacts/finalize' ||
+        pathname === '/api/imports/finalize')) ||
+    (request.method === 'GET' &&
+      (PROJECT_ARTIFACTS_ROUTE.test(pathname) ||
+        ARTIFACT_ROUTE.test(pathname) ||
+        ARTIFACT_DOWNLOAD_ROUTE.test(pathname)));
+  if (requiresArtifactStorage && !env.ARTIFACTS) {
+    // The beta deployment omits object storage pending a product decision.
+    return json(
+      {
+        error: 'Artifact storage is disabled for this deployment.',
+        code: 'FEATURE_DISABLED'
+      },
+      501
+    );
+  }
+
+  const persistence = createPersistenceService(env);
 
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
     assertSameOrigin(request);
@@ -246,7 +295,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.createProject(userId, payload), 201);
   }
 
-  const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
   if (
     (request.method === 'GET' || request.method === 'POST') &&
     collaborationMatch
@@ -260,15 +308,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!project) {
       return json({ error: 'Project not found.' }, 404);
     }
-    if (!env.PROJECT_ROOM) {
-      return json({ error: 'Collaboration is unavailable.' }, 503);
-    }
     const headers = new Headers(request.headers);
     headers.set('x-openzcad-user-id', userId);
     headers.set('x-openzcad-display-name', session.displayName);
     const roomUrl = new URL(request.url);
     roomUrl.searchParams.set('projectId', projectId);
-    return env.PROJECT_ROOM.getByName(projectId).fetch(
+    return env.PROJECT_ROOM!.getByName(projectId).fetch(
       new Request(roomUrl, {
         method: request.method,
         headers,
@@ -375,6 +420,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    assertSafeRuntimeConfiguration(env);
     try {
       return await handleApiRequest(request, env);
     } catch (error) {
