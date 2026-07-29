@@ -290,6 +290,38 @@ describe('computeSketchRegions', () => {
     expect(short[0]!.profileId).not.toBe(long[0]!.profileId);
   });
 
+  it('distinguishes complementary semicircles and joins them into a disk', () => {
+    const upper = object({
+      objectKind: 'arc',
+      centerX: 0,
+      centerY: 0,
+      radius: 10,
+      startAngleDeg: 0,
+      endAngleDeg: 180
+    });
+    const lower = object({
+      objectKind: 'arc',
+      centerX: 0,
+      centerY: 0,
+      radius: 10,
+      startAngleDeg: 180,
+      endAngleDeg: 360
+    });
+    const diameter = line(-10, 0, 10, 0);
+    const upperProfile = computeSketchRegions([upper, diameter], resolve);
+    const lowerProfile = computeSketchRegions([lower, diameter], resolve);
+    expect(upperProfile).toHaveLength(1);
+    expect(lowerProfile).toHaveLength(1);
+    expect(upperProfile[0]!.regionFingerprint).not.toBe(
+      lowerProfile[0]!.regionFingerprint
+    );
+    expect(upperProfile[0]!.profileId).not.toBe(lowerProfile[0]!.profileId);
+
+    const disk = computeSketchRegions([upper, lower], resolve);
+    expect(disk).toHaveLength(1);
+    expect(disk[0]!.area).toBeCloseTo(Math.PI * 100, 6);
+  });
+
   it('registers a chord crossing a wrapped non-full arc start', () => {
     const endpoint = Math.sqrt(50);
     const regions = computeSketchRegions(
