@@ -19,6 +19,7 @@ import {
   REGION_SELECTED_OPACITY,
   SelectionManager
 } from './SelectionManager';
+import { VIEWPORT_RENDER_ORDER } from '../render/scene';
 
 function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
   const bodyGroup = new THREE.Group();
@@ -59,6 +60,9 @@ function makeEdge(selected: boolean): Line2 {
   geometry.setPositions([0, 0, 0, 1, 0, 0]);
   const edge = new Line2(geometry, new LineMaterial({ linewidth: 1 }));
   edge.userData = { selected };
+  edge.renderOrder = selected
+    ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+    : VIEWPORT_RENDER_ORDER.BODY_EDGE;
   return edge;
 }
 
@@ -80,11 +84,13 @@ describe('edge hover styling', () => {
     manager.setEdgeHover(edge);
     expect(edge.material.color.getHex()).toBe(EDGE_HOVER_COLOR);
     expect(edge.material.opacity).toBe(1);
+    expect(edge.renderOrder).toBe(VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT);
 
     manager.setEdgeHover(null);
     expect(edge.material.color.getHex()).toBe(EDGE_IDLE_COLOR);
     expect(edge.material.linewidth).toBe(EDGE_IDLE_WIDTH);
     expect(edge.material.opacity).toBe(EDGE_IDLE_OPACITY);
+    expect(edge.renderOrder).toBe(VIEWPORT_RENDER_ORDER.BODY_EDGE);
   });
 
   it('leaves a selected edge looking selected while hovered', () => {
@@ -257,6 +263,24 @@ describe('region hover fades', () => {
     manager.setRegionHover(mesh);
     manager.updateRegionState(mesh, false, 0.08);
     expect(mesh.material.opacity).toBe(REGION_HOVER_OPACITY);
+  });
+
+  it('only draws the duplicate region boundary for hover or selection', () => {
+    const { manager } = makeManager();
+    const mesh = regionMesh();
+    const boundary = makeEdge(false);
+    mesh.userData.regionBoundaries = [boundary];
+
+    manager.updateRegionState(mesh, false, 0.08);
+    expect(boundary.visible).toBe(false);
+
+    manager.setRegionHover(mesh);
+    expect(boundary.visible).toBe(true);
+    expect(boundary.renderOrder).toBe(VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT);
+
+    manager.updateRegionState(mesh, true, 0.08);
+    expect(boundary.visible).toBe(true);
+    expect(boundary.renderOrder).toBe(VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY);
   });
 });
 

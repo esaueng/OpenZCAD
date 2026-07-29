@@ -13,6 +13,7 @@ import {
   EDGE_SELECTED_WIDTH,
   idleEdgeColor
 } from '../pick/edges';
+import { VIEWPORT_RENDER_ORDER } from '../render/scene';
 
 const HOVER_EMISSIVE = 0x101d2c;
 const HOVER_FACE_COLOR = 0x8fc8ff;
@@ -95,7 +96,7 @@ export class SelectionManager {
       })
     );
     this.hoverFaceMesh.visible = false;
-    this.hoverFaceMesh.renderOrder = 15;
+    this.hoverFaceMesh.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
     this.hoverFaceMesh.raycast = () => undefined;
   }
 
@@ -122,6 +123,9 @@ export class SelectionManager {
         ? EDGE_SELECTED_WIDTH
         : EDGE_IDLE_WIDTH;
       material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
+      restore.renderOrder = state.selected
+        ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+        : VIEWPORT_RENDER_ORDER.BODY_EDGE;
     }
     this.hoveredEdge = next;
     if (next && !(next.userData as EdgeVisualState).selected) {
@@ -129,6 +133,7 @@ export class SelectionManager {
       material.color.setHex(EDGE_HOVER_COLOR);
       material.linewidth = EDGE_HOVER_WIDTH;
       material.opacity = 1;
+      next.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
     }
     this.options.requestRender();
   }
@@ -244,6 +249,11 @@ export class SelectionManager {
     const boundaries =
       (mesh.userData.regionBoundaries as Line2[] | undefined) ?? [];
     for (const boundary of boundaries) {
+      boundary.visible = state !== 'idle';
+      boundary.renderOrder =
+        state === 'selected'
+          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+          : VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
       boundary.material.color.setHex(
         state === 'selected'
           ? 0xffc45c

@@ -233,9 +233,30 @@ export interface FatLineOptions {
   linewidth: number;
   opacity?: number;
   depthTest?: boolean;
+  /**
+   * Overlay lines normally test the solid depth buffer without modifying it.
+   * Opt in only for geometry that must occlude later transparent passes.
+   */
+  depthWrite?: boolean;
   /** Viewport size the shader rasterizes against; keep it in sync on resize. */
   resolution?: FatLineResolution;
 }
+
+/**
+ * Stable CAD viewport hierarchy for coincident display geometry.
+ *
+ * Model geometry stays untouched: solid faces populate the depth buffer, then
+ * depth-aware line overlays resolve same-location representations by policy.
+ */
+export const VIEWPORT_RENDER_ORDER = {
+  BODY_FACE: 0,
+  BODY_EDGE: 8,
+  SKETCH_FILL: 9,
+  SKETCH_CURVE: 10,
+  HOVER_HIGHLIGHT: 15,
+  SELECTED_GEOMETRY: 16,
+  ACTIVE_SKETCH: 20
+} as const;
 
 /**
  * Shared material for every screen-space polyline in the viewport.
@@ -257,7 +278,11 @@ export function createFatLineMaterial(options: FatLineOptions): LineMaterial {
     transparent: true,
     alphaToCoverage: true,
     opacity: options.opacity ?? 1,
-    depthTest: options.depthTest ?? true
+    depthTest: options.depthTest ?? true,
+    // Body edges, sketches, and highlights can be coincident. Let the opaque
+    // face depth buffer preserve occlusion, but never let one overlay's
+    // independently tessellated quad mask another overlay drawn later.
+    depthWrite: options.depthWrite ?? false
   });
   material.resolution.set(
     Math.max(options.resolution?.width ?? 1, 1),
@@ -327,6 +352,13 @@ export function createBodyMaterial(body: BodyRepresentation) {
     color: body.color,
     shininess: 38,
     specular: '#667487',
+    // Push only the disposable face rasterization back by the smallest
+    // practical depth-buffer bias. GL line materials ignore polygonOffset;
+    // keeping the bias on the faces lets depth-tested edge/sketch overlays sit
+    // stably on their exact model plane without moving authoritative geometry.
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
     // Exact kernels emit consistently oriented closed faces. Keep culling on
     // so an orientation regression remains visible instead of being hidden by
     // a double-sided material.
@@ -354,6 +386,7 @@ export function createObjectForBody(
   const material = createBodyMaterial(body);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = body.name;
+  mesh.renderOrder = VIEWPORT_RENDER_ORDER.BODY_FACE;
   mesh.castShadow = true;
   // CAD solids cast onto the ground plane but do not receive the shadow map.
   // Self-shadowing on long tessellation triangles creates false triangular
@@ -373,6 +406,8 @@ export function createObjectForBody(
     );
     featureEdges.dispose();
     edges.raycast = () => undefined; // selection picks faces, not edge lines
+    edges.name = 'body-edge';
+    edges.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;
     mesh.add(edges);
   }
   return mesh;
