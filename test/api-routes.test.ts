@@ -303,6 +303,54 @@ describe('worker api routes', () => {
     expect(providerFetch).toHaveBeenCalledTimes(3);
   });
 
+  it('does not lock out the next assistant request after a provider outage', async () => {
+    const providerFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('upstream unavailable', { status: 503 })
+      )
+      .mockResolvedValueOnce(
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+      );
+    vi.stubGlobal('fetch', providerFetch);
+    const publicEnv = {
+      ...env,
+      ENVIRONMENT: 'beta',
+      AUTH_MODE: 'email-code',
+      AI_API_KEY: 'test-key',
+      AI_BASE_URL: 'https://models.example.test/v1/responses',
+      AI_RATE_LIMIT_REQUESTS: '1',
+      AI_RATE_LIMIT_WINDOW_SECONDS: '3600'
+    } as never;
+    const request = () =>
+      new Request('https://example.com/api/assistant/proposals', {
+        method: 'POST',
+        headers: { 'cf-connecting-ip': '203.0.113.42' },
+        body: JSON.stringify({
+          prompt: 'Make it wider',
+          digest: {
+            schemaVersion: 3,
+            projectId: 'proj_ai_retry',
+            name: 'Bracket',
+            units: 'mm',
+            version: 1,
+            parameters: [],
+            features: [],
+            warnings: []
+          }
+        })
+      });
+
+    const failed = await worker.fetch(request(), publicEnv);
+    expect(failed.status).toBe(502);
+    const retry = await worker.fetch(request(), publicEnv);
+    expect(retry.status).toBe(200);
+    await retry.body?.cancel();
+    expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects oversized assistant digests before provider dispatch', async () => {
     const response = await worker.fetch(
       post('/api/assistant/proposals', {
