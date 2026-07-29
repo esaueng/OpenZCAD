@@ -458,7 +458,7 @@ export default {
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
       }
-      console.error('Unhandled API error:', error);
+      console.error('Unhandled API error.');
       return json({ error: 'Internal error' }, 500);
     }
   }

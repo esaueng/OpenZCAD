@@ -589,7 +589,7 @@ describe('assistant integration', () => {
     });
   });
 
-  it('logs bounded provider diagnostics without returning upstream details', async () => {
+  it('does not log upstream provider details', async () => {
     const longMessage = `Invalid response schema: ${'x'.repeat(600)}`;
     vi.stubGlobal(
       'fetch',
@@ -632,12 +632,12 @@ describe('assistant integration', () => {
     });
     expect(consoleError).toHaveBeenCalledWith('AI Responses provider failed:', {
       provider: 'openrouter',
-      status: 400,
-      code: 'invalid_json_schema',
-      errorType: 'invalid_request_error',
-      message: longMessage.slice(0, 500),
-      providerName: 'OpenAI'
+      status: 400
     });
-    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('secret-key');
+    const logged = JSON.stringify(consoleError.mock.calls);
+    expect(logged).not.toContain('secret-key');
+    expect(logged).not.toContain(longMessage);
+    expect(logged).not.toContain('invalid_json_schema');
+    expect(logged).not.toContain('OpenAI');
   });
 });
