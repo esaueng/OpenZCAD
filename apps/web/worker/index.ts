@@ -19,9 +19,15 @@ import {
 import {
   getAssistantStatus,
   HttpAssistantConfigurationError,
+  maxOutputTokensFor,
   streamAssistantProposal,
-  testAssistantConnection
+  testAssistantConnection,
+  timeoutFor
 } from './assistant';
+import {
+  acquireAssistantPermit,
+  assistantQuotaCost
+} from './assistantRateLimit';
 import {
   authenticateRequest,
   AuthFlowError,
@@ -260,12 +266,32 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         503
       );
     }
-    return streamAssistantProposal(
-      payload,
-      env,
-      userId,
-      assistant.runtime ?? undefined
-    );
+    const maxOutputTokens =
+      assistant.runtime?.maxOutputTokens ?? maxOutputTokensFor(env);
+    const permit = await acquireAssistantPermit(request, userId, env, {
+      cost: assistantQuotaCost(payload.attachments.length, maxOutputTokens),
+      leaseMs: assistant.runtime?.timeoutMs ?? timeoutFor(env)
+    });
+    if (!permit.allowed) {
+      return permit.response;
+    }
+    let response: Response;
+    try {
+      response = await streamAssistantProposal(
+        payload,
+        env,
+        userId,
+        assistant.runtime ?? undefined
+      );
+    } catch (error) {
+      await permit.release();
+      throw error;
+    }
+    if (!response.ok || !response.body) {
+      await permit.release();
+      return response;
+    }
+    return permit.track(response);
   }
 
   const session = await authenticateRequest(request, env);
