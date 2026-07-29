@@ -19,6 +19,7 @@ import {
   type CreateUploadSessionRequest,
   type CreateUploadSessionResponse,
   type CollaborationClientMessage,
+  type CollaborationErrorCode,
   type CollaborationMember,
   type CollaborationServerMessage,
   type FinalizeArtifactRequest,
@@ -88,27 +89,29 @@ export class D1R2PersistenceService implements PersistenceService {
         document_json: string;
       }>();
 
-    return {
-      projects: (rows.results ?? []).map(
-        (row: {
-          id: string;
-          name: string;
-          updated_at: string;
-          document_json: string;
-        }) => {
-          const document = normalizeDocument(
-            JSON.parse(row.document_json) as ProjectDocument
-          );
-          return {
-            projectId: document.projectId,
-            name: row.name,
-            lastRevisionId: document.revisions.at(-1)?.revisionId,
-            revisionCount: document.revisions.length,
-            updatedAt: row.updated_at
-          };
-        }
-      )
-    };
+    // One unparseable row must not take the whole listing down with it: the
+    // user still needs to reach every other project to recover.
+    const projects: ListProjectsResponse['projects'] = [];
+    for (const row of rows.results ?? []) {
+      try {
+        const document = normalizeDocument(
+          JSON.parse(row.document_json) as ProjectDocument
+        );
+        projects.push({
+          projectId: document.projectId,
+          name: row.name,
+          lastRevisionId: document.revisions.at(-1)?.revisionId,
+          revisionCount: document.revisions.length,
+          updatedAt: row.updated_at
+        });
+      } catch (error) {
+        console.error(
+          `Skipping unreadable project row ${row.id} while listing projects.`,
+          error
+        );
+      }
+    }
+    return { projects };
   }
 
   async createProject(
@@ -504,12 +507,67 @@ export function createPersistenceService(
   return service;
 }
 
+/** Keys under which one room's state lives; see {@link RoomMeta}. */
+const ROOM_META_KEY = 'room:meta';
+const ROOM_LATEST_KEY = 'room:latest';
+const ROOM_HISTORY_PREFIX = 'room:history:';
+/** Pre-split layout: the whole room under one value. Migrated away on load. */
+const LEGACY_ROOM_STATE_KEY = 'room-state';
+const ROOM_STORAGE_SCHEMA = 1;
+const MAX_ROOM_HISTORY = 20;
+
+/**
+ * Ceiling for any document the room stores. SQLite-backed Durable Object
+ * storage rejects a single value over 2 MiB, and every document now occupies a
+ * key of its own, so this is the real limit rather than a guess at how far the
+ * whole room may grow. Documents above it are refused before any in-memory
+ * state moves, because a write that fails after the mutation leaves the room
+ * serving state that no longer survives eviction.
+ */
+const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
+
+/**
+ * Structural limits applied to client JSON before it reaches `normalizeDocument`
+ * or the three-way merge, both of which recurse without a depth guard.
+ */
+const MAX_CLIENT_DOCUMENT_DEPTH = 64;
+const MAX_CLIENT_DOCUMENT_VALUES = 500_000;
+
+/** Largest HTTP snapshot body accepted, sized to fit one storable document. */
+const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
+
+interface RoomMeta {
+  schema: number;
+  projectId: string | null;
+  latestVersion: number | null;
+  historyVersions: number[];
+}
+
+interface LegacyRoomState {
+  projectId: string | null;
+  latestDocument: ProjectDocument | null;
+  history?: ProjectDocument[];
+}
+
+interface RoomStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  put: {
+    <T>(key: string, value: T): Promise<void>;
+    (entries: Record<string, unknown>): Promise<void>;
+  };
+  delete: {
+    (key: string): Promise<boolean>;
+    (keys: string[]): Promise<number>;
+  };
+}
+
+function historyKey(version: number): string {
+  return `${ROOM_HISTORY_PREFIX}${version}`;
+}
+
 export class ProjectCollaborationRoom extends DurableObject {
   private readonly roomContext: {
-    storage: {
-      get<T>(key: string): Promise<T | undefined>;
-      put<T>(key: string, value: T): Promise<void>;
-    };
+    storage: RoomStorage;
     blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
   };
   private readonly ready: Promise<void>;
@@ -527,17 +585,64 @@ export class ProjectCollaborationRoom extends DurableObject {
     super(ctx, env);
     this.roomContext = ctx as typeof this.roomContext;
     this.ready = this.roomContext.blockConcurrencyWhile(async () => {
-      const stored = await this.roomContext.storage.get<{
-        projectId: string | null;
-        latestDocument: ProjectDocument | null;
-        history?: ProjectDocument[];
-      }>('room-state');
-      this.projectId = stored?.projectId ?? null;
-      this.latestDocument = stored?.latestDocument ?? null;
-      this.documentHistory = new Map(
-        (stored?.history ?? []).map((document) => [document.version, document])
+      await this.migrateLegacyRoomState();
+      const meta = await this.roomContext.storage.get<RoomMeta>(ROOM_META_KEY);
+      if (!meta) {
+        return;
+      }
+      this.projectId = meta.projectId ?? null;
+      this.latestDocument =
+        (await this.roomContext.storage.get<ProjectDocument>(
+          ROOM_LATEST_KEY
+        )) ?? null;
+      const history = await Promise.all(
+        (meta.historyVersions ?? []).map((version) =>
+          this.roomContext.storage.get<ProjectDocument>(historyKey(version))
+        )
       );
+      for (const document of history) {
+        if (document) {
+          this.documentHistory.set(document.version, document);
+        }
+      }
     });
+  }
+
+  /**
+   * Rewrites a pre-split `room-state` value into one key per document. The
+   * legacy key is dropped only once the replacement keys are committed, so an
+   * interrupted migration re-runs from the original on the next load.
+   */
+  private async migrateLegacyRoomState(): Promise<void> {
+    const legacy =
+      await this.roomContext.storage.get<LegacyRoomState>(
+        LEGACY_ROOM_STATE_KEY
+      );
+    if (!legacy) {
+      return;
+    }
+    const alreadySplit =
+      await this.roomContext.storage.get<RoomMeta>(ROOM_META_KEY);
+    if (!alreadySplit) {
+      const history = (legacy.history ?? []).slice(-MAX_ROOM_HISTORY);
+      const entries: Record<string, unknown> = {};
+      for (const document of history) {
+        entries[historyKey(document.version)] = document;
+      }
+      if (legacy.latestDocument) {
+        entries[ROOM_LATEST_KEY] = legacy.latestDocument;
+      }
+      entries[ROOM_META_KEY] = {
+        schema: ROOM_STORAGE_SCHEMA,
+        projectId: legacy.projectId ?? null,
+        latestVersion: legacy.latestDocument?.version ?? null,
+        historyVersions: history
+          .map((document) => document.version)
+          .sort((left, right) => left - right)
+      } satisfies RoomMeta;
+      await this.roomContext.storage.put(entries);
+    }
+    await this.roomContext.storage.delete(LEGACY_ROOM_STATE_KEY);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -557,8 +662,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (this.projectId && this.projectId !== projectId) {
       return new Response('Room project mismatch.', { status: 409 });
     }
-    this.projectId = projectId;
-    await this.persistRoomState();
+    if (this.projectId !== projectId) {
+      this.projectId = projectId;
+      await this.persistRoomState();
+    }
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -567,12 +674,21 @@ export class ProjectCollaborationRoom extends DurableObject {
     server.addEventListener(
       'message',
       (event: MessageEvent<string | ArrayBuffer>) => {
+        // Nothing awaits this handler, so a rejection here would surface as an
+        // unhandled rejection and the sender would wait forever for an ack.
         void this.handleSocketMessage(
           server,
           event.data,
           userId as UserId,
           displayName
-        );
+        ).catch((error: unknown) => {
+          console.error('Collaboration message handling failed.', error);
+          this.send(server, {
+            type: 'error',
+            code: 'internal',
+            message: 'The collaboration room could not process that message.'
+          });
+        });
       }
     );
     const close = () => this.removeSocket(server);
@@ -654,6 +770,11 @@ export class ProjectCollaborationRoom extends DurableObject {
     baseVersion: number | null,
     broadcast: boolean
   ): Promise<void> {
+    const rejection = checkClientDocument(rawDocument);
+    if (rejection) {
+      this.send(socket, { type: 'error', ...rejection });
+      return;
+    }
     const document = normalizeDocument(rawDocument);
     if (document.projectId !== this.projectId) {
       socket.close(1008, 'Document project does not match this room.');
@@ -664,15 +785,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       baseVersion === null ? undefined : this.documentHistory.get(baseVersion);
     const resolution = resolveCollaborationDocument(latest, document, base);
     if (resolution.kind === 'accept') {
-      if (latest) {
-        this.documentHistory.set(latest.version, latest);
+      const oversize = checkPersistedSize(resolution.document);
+      if (oversize) {
+        this.send(socket, { type: 'error', ...oversize });
+        return;
       }
-      this.latestDocument = resolution.document;
-      this.documentHistory.set(
-        resolution.document.version,
-        resolution.document
-      );
-      await this.persistRoomState();
+      await this.commitDocument(resolution.document);
       // A merge produces a document the sender never had. The broadcast below
       // skips the sender, so the merged state has to ride along on the ack or
       // the sender stays silently divergent while reporting itself synced.
@@ -690,6 +808,34 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
+  /**
+   * Promotes a resolved document to latest and persists it. Callers check
+   * {@link checkPersistedSize} first: in-memory state must not move ahead of
+   * what storage will accept, or the room reverts to an older document the
+   * next time it is evicted.
+   */
+  private async commitDocument(document: ProjectDocument): Promise<void> {
+    const dirty = new Set<number>();
+    const previousLatest = this.latestDocument;
+    const previousHistory = new Map(this.documentHistory);
+    if (previousLatest && previousLatest.version !== document.version) {
+      this.documentHistory.set(previousLatest.version, previousLatest);
+      dirty.add(previousLatest.version);
+    }
+    this.latestDocument = document;
+    this.documentHistory.set(document.version, document);
+    dirty.add(document.version);
+    try {
+      await this.persistRoomState(dirty);
+    } catch (error) {
+      // A write that failed for any other reason must not leave the room
+      // serving a document storage never took; the caller reports the failure.
+      this.latestDocument = previousLatest;
+      this.documentHistory = previousHistory;
+      throw error;
+    }
+  }
+
   private async acceptHttpSnapshot(request: Request): Promise<Response> {
     const userId = request.headers.get('x-openzcad-user-id');
     const displayName = request.headers.get('x-openzcad-display-name');
@@ -698,21 +844,37 @@ export class ProjectCollaborationRoom extends DurableObject {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
     const contentLength = Number(request.headers.get('content-length') ?? '0');
-    if (Number.isFinite(contentLength) && contentLength > 10_000_000) {
-      return new Response('Collaboration snapshot is too large.', {
-        status: 413
-      });
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_SNAPSHOT_PAYLOAD_BYTES
+    ) {
+      return oversizeSnapshotResponse();
     }
-    const payload = (await request.json()) as {
+    // `content-length` is absent on chunked bodies, so the body itself is what
+    // actually has to be measured before anything parses it.
+    const body = await request.text();
+    if (body.length > MAX_SNAPSHOT_PAYLOAD_BYTES) {
+      return oversizeSnapshotResponse();
+    }
+    let payload: {
       clientId?: string;
       baseVersion?: number | null;
       document?: ProjectDocument;
     };
+    try {
+      payload = JSON.parse(body) as typeof payload;
+    } catch {
+      return new Response('Invalid collaboration snapshot.', { status: 400 });
+    }
     if (!payload.clientId || !payload.document) {
       return new Response('Invalid collaboration snapshot.', { status: 400 });
     }
     if (this.projectId && this.projectId !== projectId) {
       return new Response('Room project mismatch.', { status: 409 });
+    }
+    const rejection = checkClientDocument(payload.document);
+    if (rejection) {
+      return rejectionResponse(rejection);
     }
     this.projectId = projectId;
     const document = normalizeDocument(payload.document);
@@ -733,18 +895,11 @@ export class ProjectCollaborationRoom extends DurableObject {
       );
     }
     if (resolution.kind === 'accept') {
-      if (this.latestDocument) {
-        this.documentHistory.set(
-          this.latestDocument.version,
-          this.latestDocument
-        );
+      const oversize = checkPersistedSize(resolution.document);
+      if (oversize) {
+        return rejectionResponse(oversize);
       }
-      this.latestDocument = resolution.document;
-      this.documentHistory.set(
-        resolution.document.version,
-        resolution.document
-      );
-      await this.persistRoomState();
+      await this.commitDocument(resolution.document);
       this.broadcast({
         type: 'document',
         clientId: payload.clientId,
@@ -754,14 +909,54 @@ export class ProjectCollaborationRoom extends DurableObject {
     return Response.json(ackFor(resolution.document, document));
   }
 
-  private persistRoomState(): Promise<void> {
-    return this.roomContext.storage.put('room-state', {
+  /**
+   * Writes the room index plus whichever documents changed. Each document owns
+   * a key, so no single value grows with history depth; `put` takes them as one
+   * batch so the index never advertises a version its key is missing.
+   */
+  private async persistRoomState(
+    dirtyHistoryVersions: ReadonlySet<number> = new Set()
+  ): Promise<void> {
+    const evicted = this.trimHistory();
+    const entries: Record<string, unknown> = {};
+    for (const version of dirtyHistoryVersions) {
+      const document = this.documentHistory.get(version);
+      if (document) {
+        entries[historyKey(version)] = document;
+      }
+    }
+    if (this.latestDocument) {
+      entries[ROOM_LATEST_KEY] = this.latestDocument;
+    }
+    entries[ROOM_META_KEY] = {
+      schema: ROOM_STORAGE_SCHEMA,
       projectId: this.projectId,
-      latestDocument: this.latestDocument,
-      history: Array.from(this.documentHistory.values())
-        .sort((left, right) => left.version - right.version)
-        .slice(-20)
-    });
+      latestVersion: this.latestDocument?.version ?? null,
+      historyVersions: Array.from(this.documentHistory.keys()).sort(
+        (left, right) => left - right
+      )
+    } satisfies RoomMeta;
+    await this.roomContext.storage.put(entries);
+    // Deleting after the index no longer references these keys keeps a failed
+    // delete a storage leak rather than a dangling history version.
+    if (evicted.length > 0) {
+      await this.roomContext.storage.delete(evicted.map(historyKey));
+    }
+  }
+
+  /** Drops the oldest history entries, returning the versions to unlink. */
+  private trimHistory(): number[] {
+    const versions = Array.from(this.documentHistory.keys()).sort(
+      (left, right) => left - right
+    );
+    const evicted = versions.slice(
+      0,
+      Math.max(0, versions.length - MAX_ROOM_HISTORY)
+    );
+    for (const version of evicted) {
+      this.documentHistory.delete(version);
+    }
+    return evicted;
   }
 
   private members(): CollaborationMember[] {
@@ -825,6 +1020,87 @@ export class ProjectCollaborationRoom extends DurableObject {
       locks: Array.from(this.locks.entries())
     };
   }
+}
+
+interface CollaborationRejection {
+  code: CollaborationErrorCode;
+  message: string;
+}
+
+/** Carries a refusal on the HTTP path in the same shape sockets receive. */
+function rejectionResponse(rejection: CollaborationRejection): Response {
+  return Response.json(
+    { type: 'error', ...rejection } satisfies CollaborationServerMessage,
+    { status: rejection.code === 'document-invalid' ? 400 : 413 }
+  );
+}
+
+function oversizeSnapshotResponse(): Response {
+  return rejectionResponse({
+    code: 'document-too-large',
+    message: 'Collaboration snapshot is too large to store.'
+  });
+}
+
+/**
+ * Screens client JSON before `normalizeDocument` and the three-way merge walk
+ * it. Both recurse, so a deeply nested payload would throw a RangeError out of
+ * a path with no natural place to report it. The walk here is iterative for the
+ * same reason.
+ */
+function checkClientDocument(value: unknown): CollaborationRejection | null {
+  if (!isRecord(value)) {
+    return {
+      code: 'document-invalid',
+      message: 'Collaboration document must be an object.'
+    };
+  }
+  let visited = 0;
+  const pending: Array<{ value: unknown; depth: number }> = [
+    { value, depth: 1 }
+  ];
+  while (pending.length > 0) {
+    const entry = pending.pop()!;
+    if (entry.depth > MAX_CLIENT_DOCUMENT_DEPTH) {
+      return {
+        code: 'document-too-complex',
+        message: `Collaboration document nests deeper than ${MAX_CLIENT_DOCUMENT_DEPTH} levels.`
+      };
+    }
+    visited += 1;
+    if (visited > MAX_CLIENT_DOCUMENT_VALUES) {
+      return {
+        code: 'document-too-complex',
+        message: `Collaboration document holds more than ${MAX_CLIENT_DOCUMENT_VALUES} values.`
+      };
+    }
+    const current = entry.value;
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        pending.push({ value: item, depth: entry.depth + 1 });
+      }
+    } else if (isRecord(current)) {
+      for (const item of Object.values(current)) {
+        pending.push({ value: item, depth: entry.depth + 1 });
+      }
+    }
+  }
+  return null;
+}
+
+const documentEncoder = new TextEncoder();
+
+/** Rejects a document that would not fit in one durable-storage value. */
+function checkPersistedSize(
+  document: ProjectDocument
+): CollaborationRejection | null {
+  const bytes = documentEncoder.encode(JSON.stringify(document)).byteLength;
+  return bytes > MAX_PERSISTED_DOCUMENT_BYTES
+    ? {
+        code: 'document-too-large',
+        message: `Collaboration document is ${bytes} bytes; the room stores at most ${MAX_PERSISTED_DOCUMENT_BYTES}.`
+      }
+    : null;
 }
 
 /**
