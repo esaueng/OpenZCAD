@@ -257,12 +257,12 @@ function segSegIntersections(
 /** Angle offsets (relative to arc.a0, within [0, sweep]) where the arc meets the full line through the segment. */
 function arcOffsetsOnArc(arc: ArcCurve, angle: number): number | null {
   const offset = normalizeAngle(angle - arc.a0);
-  if (offset <= arc.sweep) {
-    return offset;
+  if (offset <= arc.sweep + 1e-9) {
+    return Math.min(offset, arc.sweep);
   }
   // Endpoints may re-wrap on to the arc within tolerance.
   if (offset - TWO_PI >= -1e-9) {
-    return null;
+    return 0;
   }
   return null;
 }

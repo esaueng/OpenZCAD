@@ -20,6 +20,7 @@ export const ATTACHMENT_MAX_EDGE = 2048;
 /** Rasterization target for a PDF page, before the long-edge clamp. */
 const PDF_RENDER_SCALE = 2.4;
 const JPEG_QUALITY = 0.92;
+let pdfWorkerPortPromise: Promise<Worker> | null = null;
 
 export const ACCEPTED_ATTACHMENT_TYPES =
   'image/png,image/jpeg,image/webp,application/pdf';
@@ -124,6 +125,13 @@ async function fromImageFile(
   return [{ id, label: file.name, ...encoded }];
 }
 
+function sharedPdfWorkerPort(): Promise<Worker> {
+  pdfWorkerPortPromise ??= import(
+    'pdfjs-dist/build/pdf.worker.min.mjs?worker'
+  ).then(({ default: PdfWorker }) => new PdfWorker());
+  return pdfWorkerPortPromise;
+}
+
 async function fromPdfFile(
   file: File,
   id: string,
@@ -135,10 +143,7 @@ async function fromPdfFile(
   // Hand pdf.js a live port from a bundler-built worker rather than a URL it has
   // to instantiate itself; a `workerSrc` URL it cannot start leaves rendering
   // pending forever instead of failing.
-  const { default: PdfWorker } = await import(
-    'pdfjs-dist/build/pdf.worker.min.mjs?worker'
-  );
-  pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
+  pdfjs.GlobalWorkerOptions.workerPort = await sharedPdfWorkerPort();
 
   const data = new Uint8Array(await file.arrayBuffer());
   const loading = pdfjs.getDocument({
@@ -200,7 +205,7 @@ async function fromPdfFile(
     }
     return rendered;
   } finally {
-    // Releases the pdf.js worker as well as the document.
+    // The shared external worker stays alive; this releases only the document.
     await loading.destroy();
   }
 }
