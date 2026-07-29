@@ -809,6 +809,7 @@ export function ModelViewer({
     }
 
     let animationFrame: number | null = null;
+    let pendingHoverEvent: PointerEvent | null = null;
 
     function requestRender() {
       if (animationFrame === null) {
@@ -1219,6 +1220,18 @@ export function ModelViewer({
       selection.applyHover(result);
     }
 
+    function applyHoverAt(event: PointerEvent) {
+      const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
+      if (movePreviewRef.current && moveFocus) {
+        updateMoveGizmoFocus(moveFocus);
+        positionMoveGizmoHud(event, moveFocus);
+        renderer.domElement.style.cursor = 'grab';
+        return;
+      }
+      clearMoveGizmoHover();
+      applyHover(pick(event));
+    }
+
     /**
      * Projects a world direction at a world point into screen space: the unit
      * screen direction a drag should follow and how many pixels one world
@@ -1522,6 +1535,9 @@ export function ModelViewer({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
+      if (event.buttons !== 0) {
+        pendingHoverEvent = null;
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         drawSelectionBand(boxSelect.startX, boxSelect.startY, event);
         return;
@@ -1742,17 +1758,14 @@ export function ModelViewer({
         requestRender();
         return;
       }
-      const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
-      if (movePreviewRef.current && moveFocus) {
-        updateMoveGizmoFocus(moveFocus);
-        positionMoveGizmoHud(event, moveFocus);
-        renderer.domElement.style.cursor = 'grab';
+      if (event.buttons !== 0) {
         return;
       }
-      clearMoveGizmoHover();
-      applyHover(pick(event));
+      pendingHoverEvent = event;
+      requestRender();
     };
     const handlePointerDown = (event: PointerEvent) => {
+      pendingHoverEvent = null;
       cameraRig.cancelTween();
       if (event.button === 2) {
         rightClickGesture.begin(event.pointerId, event.clientX, event.clientY);
@@ -2329,6 +2342,7 @@ export function ModelViewer({
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      pendingHoverEvent = null;
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         boxSelect = null;
         hud.hide(selectionBand);
@@ -2371,6 +2385,7 @@ export function ModelViewer({
       gestures.reset();
     };
     const handlePointerLeave = () => {
+      pendingHoverEvent = null;
       if (moveDrag) {
         return;
       }
@@ -2456,6 +2471,11 @@ export function ModelViewer({
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const controlsChanged = cameraRig.controls.update();
+      const hoverEvent = pendingHoverEvent;
+      pendingHoverEvent = null;
+      if (hoverEvent) {
+        applyHoverAt(hoverEvent);
+      }
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
       if (context.projection === 'orthographic' && !tweening) {
