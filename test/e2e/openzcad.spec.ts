@@ -952,6 +952,124 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('keeps a source circle stable over its coincident extrude edge', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch Edge Regression');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await expect(
+    page.getByText('Pick a sketch plane', { exact: true })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    // Stay clear of the empty-viewport getting-started card while keeping the
+    // whole circle inside the real WebGL canvas.
+    x: bounds!.x + bounds!.width * 0.72,
+    y: bounds!.y + bounds!.height * 0.64
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 64, center.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch 01' })
+  ).toBeVisible();
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await page.getByRole('button', { name: 'Apply Extrude' }).click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Sketch 01' })
+  ).toBeVisible();
+
+  const renderPolicy = await canvas.evaluate(
+    (element) =>
+      new Promise<{
+        bodyFaces: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          polygonOffset: boolean;
+          polygonOffsetFactor: number;
+          polygonOffsetUnits: number;
+          renderOrder: number;
+        }[];
+        bodyEdges: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          name: string;
+          renderOrder: number;
+          visible: boolean;
+        }[];
+        sketchLines: {
+          depthTest: boolean;
+          depthWrite: boolean;
+          name: string;
+          renderOrder: number;
+          visible: boolean;
+        }[];
+      }>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: { resolve }
+          })
+        );
+      })
+  );
+
+  expect(renderPolicy.bodyFaces.length).toBeGreaterThan(0);
+  expect(
+    renderPolicy.bodyFaces.every(
+      (face) =>
+        face.depthTest &&
+        face.depthWrite &&
+        face.polygonOffset &&
+        face.polygonOffsetFactor === 1 &&
+        face.polygonOffsetUnits === 1
+    )
+  ).toBe(true);
+  expect(renderPolicy.bodyEdges.length).toBeGreaterThan(0);
+  expect(
+    renderPolicy.bodyFaces.every(
+      (face) => face.renderOrder < renderPolicy.bodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
+  expect(
+    renderPolicy.bodyEdges.every(
+      (edge) => edge.name === 'body-edge' && edge.depthTest && !edge.depthWrite
+    )
+  ).toBe(true);
+  const sketchCurves = renderPolicy.sketchLines.filter(
+    (line) => line.name === 'sketch-curve'
+  );
+  const idleRegionBoundaries = renderPolicy.sketchLines.filter(
+    (line) => line.name === 'sketch-region-boundary'
+  );
+  expect(sketchCurves).toHaveLength(1);
+  expect(
+    sketchCurves.every(
+      (line) =>
+        line.visible &&
+        line.depthTest &&
+        !line.depthWrite &&
+        line.renderOrder > renderPolicy.bodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
+  expect(idleRegionBoundaries).toHaveLength(1);
+  expect(idleRegionBoundaries.every((line) => !line.visible)).toBe(true);
+});
+
 test('fillets all twelve edges of a box in one exact feature', async ({
   page
 }) => {
