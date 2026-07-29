@@ -11,6 +11,30 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
+import type { ProjectDocument } from '@openzcad/shared';
+import {
+  createRoomContext,
+  settleRoom,
+  storedValueBytes
+} from './collaboration-room-harness';
+
+/** SQLite-backed Durable Object storage refuses a value over 2 MiB. */
+const DURABLE_VALUE_LIMIT_BYTES = 2 * 1024 * 1024;
+
+function roomRequest(
+  document: ProjectDocument,
+  body: Record<string, unknown>
+): Request {
+  return new Request(`https://room.test/?projectId=${document.projectId}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-openzcad-user-id': 'user_room',
+      'x-openzcad-display-name': 'Room user'
+    },
+    body: JSON.stringify(body)
+  });
+}
 
 describe('cloudflare adapters', () => {
   it('falls back to in-memory persistence when D1 is absent', async () => {
@@ -124,20 +148,7 @@ describe('cloudflare adapters', () => {
   });
 
   it('restores the latest collaboration document from durable storage', async () => {
-    const values = new Map<string, unknown>();
-    const context = {
-      storage: {
-        async get<T>(key: string) {
-          return values.get(key) as T | undefined;
-        },
-        async put<T>(key: string, value: T) {
-          values.set(key, structuredClone(value));
-        }
-      },
-      async blockConcurrencyWhile<T>(callback: () => Promise<T>) {
-        return callback();
-      }
-    };
+    const { context } = createRoomContext();
     const base = createProjectDocument('Durable Room', toUserId('user_room'));
     const first = addPrimitiveFeature(base, {
       name: 'A',
@@ -150,18 +161,7 @@ describe('cloudflare adapters', () => {
       dimensions: { radius: 1 }
     });
     const request = (document: typeof first) =>
-      new Request(
-        `https://room.test/?projectId=${document.projectId}`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-openzcad-user-id': 'user_room',
-            'x-openzcad-display-name': 'Room user'
-          },
-          body: JSON.stringify({ clientId: 'client_test', document })
-        }
-      );
+      roomRequest(document, { clientId: 'client_test', document });
 
     const original = new ProjectCollaborationRoom(context, {});
     expect((await original.fetch(request(first))).status).toBe(200);
@@ -176,20 +176,7 @@ describe('cloudflare adapters', () => {
   });
 
   it('returns the merged document to the submitting client', async () => {
-    const values = new Map<string, unknown>();
-    const context = {
-      storage: {
-        async get<T>(key: string) {
-          return values.get(key) as T | undefined;
-        },
-        async put<T>(key: string, value: T) {
-          values.set(key, structuredClone(value));
-        }
-      },
-      async blockConcurrencyWhile<T>(callback: () => Promise<T>) {
-        return callback();
-      }
-    };
+    const { context } = createRoomContext();
     const base = createProjectDocument('Race Room', toUserId('user_room'));
     // Two clients edit disjoint parts of the same base at the same time.
     const fromA = addPrimitiveFeature(base, {
@@ -206,16 +193,7 @@ describe('cloudflare adapters', () => {
       clientId: string,
       document: typeof fromA,
       baseVersion: number | null
-    ) =>
-      new Request(`https://room.test/?projectId=${document.projectId}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-openzcad-user-id': 'user_room',
-          'x-openzcad-display-name': 'Room user'
-        },
-        body: JSON.stringify({ clientId, document, baseVersion })
-      });
+    ) => roomRequest(document, { clientId, document, baseVersion });
 
     const room = new ProjectCollaborationRoom(context, {});
 
@@ -255,5 +233,265 @@ describe('cloudflare adapters', () => {
     ).json()) as { type: string; version: number; document?: typeof fromA };
     expect(ackC.type).toBe('ack');
     expect(ackC.document).toBeUndefined();
+  });
+
+  it('keeps every stored value under the durable-storage limit', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Heavy Room', toUserId('user_room'));
+    // ~1 MB of document. Under the old layout the room wrote latest plus its
+    // whole history into one value, so a handful of these blew past 2 MiB.
+    const heavy = addPrimitiveFeature(base, {
+      name: 'H'.repeat(500_000),
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const at = (version: number): ProjectDocument => ({
+      ...structuredClone(heavy),
+      version
+    });
+
+    const room = new ProjectCollaborationRoom(context, {});
+    for (let offset = 0; offset < 4; offset += 1) {
+      const document = at(heavy.version + offset);
+      const response = await room.fetch(
+        roomRequest(document, {
+          clientId: 'client_heavy',
+          document,
+          baseVersion: null
+        })
+      );
+      expect(response.status).toBe(200);
+    }
+
+    const sizes = storedValueBytes(values);
+    const total = Array.from(sizes.values()).reduce(
+      (sum, bytes) => sum + bytes,
+      0
+    );
+    // The room now holds more than one value could ever have carried...
+    expect(total).toBeGreaterThan(DURABLE_VALUE_LIMIT_BYTES);
+    // ...yet no individual key is anywhere near the per-value ceiling.
+    for (const [key, bytes] of sizes) {
+      expect(
+        bytes,
+        `${key} is ${bytes} bytes`
+      ).toBeLessThan(DURABLE_VALUE_LIMIT_BYTES);
+    }
+    expect(values.has('room:latest')).toBe(true);
+    expect(
+      Array.from(values.keys()).filter((key) =>
+        key.startsWith('room:history:')
+      ).length
+    ).toBeGreaterThan(0);
+  });
+
+  it('refuses an unstorable document without moving room state', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Overflow Room', toUserId('user_room'));
+    const accepted = addPrimitiveFeature(base, {
+      name: 'Keeper',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const room = new ProjectCollaborationRoom(context, {});
+    expect(
+      (
+        await room.fetch(
+          roomRequest(accepted, {
+            clientId: 'client_ok',
+            document: accepted,
+            baseVersion: null
+          })
+        )
+      ).status
+    ).toBe(200);
+
+    // Past what one durable value holds, but under the HTTP body ceiling.
+    const oversize = addPrimitiveFeature(accepted, {
+      name: 'X'.repeat(1_550_000),
+      primitiveKind: 'sphere',
+      dimensions: { radius: 1 }
+    });
+    const rejected = await room.fetch(
+      roomRequest(oversize, {
+        clientId: 'client_big',
+        document: oversize,
+        baseVersion: null
+      })
+    );
+    expect(rejected.status).toBe(413);
+    await expect(rejected.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-too-large'
+    });
+
+    // The rejection has to happen before any mutation, or the room serves a
+    // document that storage never took and reverts on the next eviction.
+    expect(
+      (values.get('room:latest') as ProjectDocument).version
+    ).toBe(accepted.version);
+    const restored = new ProjectCollaborationRoom(context, {});
+    const state = await restored.fetch(
+      roomRequest(accepted, {
+        clientId: 'client_ok',
+        document: accepted,
+        baseVersion: null
+      })
+    );
+    await expect(state.json()).resolves.toMatchObject({
+      type: 'ack',
+      version: accepted.version
+    });
+  });
+
+  it('rejects an over-long snapshot body before parsing it', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Flood Room', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {});
+    const response = await room.fetch(
+      roomRequest(base, {
+        clientId: 'client_flood',
+        padding: 'p'.repeat(1_700_000),
+        document: base
+      })
+    );
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-too-large'
+    });
+  });
+
+  it('migrates a legacy single-value room into per-document keys', async () => {
+    const base = createProjectDocument('Legacy Room', toUserId('user_room'));
+    const first = addPrimitiveFeature(base, {
+      name: 'A',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const divergent = addPrimitiveFeature(base, {
+      name: 'B',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 1 }
+    });
+    const values = new Map<string, unknown>([
+      [
+        'room-state',
+        {
+          projectId: base.projectId,
+          latestDocument: first,
+          history: [base, first]
+        }
+      ]
+    ]);
+    const { context } = createRoomContext(values);
+
+    const room = new ProjectCollaborationRoom(context, {});
+    await settleRoom(room);
+
+    expect(values.has('room-state')).toBe(false);
+    expect(values.get('room:meta')).toMatchObject({
+      projectId: base.projectId,
+      latestVersion: first.version,
+      historyVersions: [base.version, first.version]
+    });
+    expect((values.get('room:latest') as ProjectDocument).version).toBe(
+      first.version
+    );
+    expect(values.has(`room:history:${base.version}`)).toBe(true);
+
+    // The migrated history still serves as a merge ancestor, which is the only
+    // reason to carry it across at all.
+    const merged = (await (
+      await room.fetch(
+        roomRequest(divergent, {
+          clientId: 'client_legacy',
+          document: divergent,
+          baseVersion: base.version
+        })
+      )
+    ).json()) as { type: string; document?: ProjectDocument };
+    expect(merged.type).toBe('ack');
+    expect(merged.document?.featureOrder).toHaveLength(2);
+  });
+
+  it('leaves a migrated room alone when the legacy key reappears', async () => {
+    const base = createProjectDocument('Stale Room', toUserId('user_room'));
+    const current = addPrimitiveFeature(base, {
+      name: 'Current',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const values = new Map<string, unknown>([
+      ['room-state', { projectId: base.projectId, latestDocument: base }],
+      [
+        'room:meta',
+        {
+          schema: 1,
+          projectId: base.projectId,
+          latestVersion: current.version,
+          historyVersions: []
+        }
+      ],
+      ['room:latest', current]
+    ]);
+    const { context } = createRoomContext(values);
+
+    const room = new ProjectCollaborationRoom(context, {});
+    await settleRoom(room);
+
+    expect(values.has('room-state')).toBe(false);
+    // The split layout wins; the stale legacy value must not roll the room back.
+    expect((values.get('room:latest') as ProjectDocument).version).toBe(
+      current.version
+    );
+    const conflict = await room.fetch(
+      roomRequest(base, {
+        clientId: 'client_stale',
+        document: addPrimitiveFeature(base, {
+          name: 'Other',
+          primitiveKind: 'sphere',
+          dimensions: { radius: 1 }
+        })
+      })
+    );
+    expect(conflict.status).toBe(409);
+  });
+
+  it('drops the oldest history entries instead of growing without bound', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Long Room', toUserId('user_room'));
+    let document = addPrimitiveFeature(base, {
+      name: 'Seed',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    const room = new ProjectCollaborationRoom(context, {});
+    for (let step = 0; step < 30; step += 1) {
+      const next: ProjectDocument = {
+        ...document,
+        version: document.version + 1
+      };
+      await room.fetch(
+        roomRequest(next, {
+          clientId: 'client_long',
+          document: next,
+          baseVersion: null
+        })
+      );
+      document = next;
+    }
+
+    const historyKeys = Array.from(values.keys()).filter((key) =>
+      key.startsWith('room:history:')
+    );
+    expect(historyKeys.length).toBeLessThanOrEqual(20);
+    const meta = values.get('room:meta') as { historyVersions: number[] };
+    // Every version the index advertises must still have its key, or a restart
+    // loses the ancestor a merge was going to use.
+    for (const version of meta.historyVersions) {
+      expect(values.has(`room:history:${version}`)).toBe(true);
+    }
+    expect(meta.historyVersions).toHaveLength(historyKeys.length);
   });
 });
