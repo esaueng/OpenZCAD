@@ -352,6 +352,8 @@ export function App() {
   const remoteVersionsRef = useRef(new Map<string, number>());
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
+  const localSaveTimeoutRef = useRef<number | null>(null);
 
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
@@ -537,15 +539,18 @@ export function App() {
       return;
     }
     setSaveState('saving');
+    pendingLocalSaveRef.current = doc;
     const timeout = window.setTimeout(() => {
-      void saveLocalProject(doc)
-        .then(() => setSaveState(cloudAvailable ? 'saved' : 'offline'))
-        .catch(() => {
-          setSaveState('offline');
-          setStatus('Local autosave failed. Export your model before closing.');
-        });
+      localSaveTimeoutRef.current = null;
+      void flushPendingLocalSave();
     }, 450);
-    return () => window.clearTimeout(timeout);
+    localSaveTimeoutRef.current = timeout;
+    return () => {
+      if (localSaveTimeoutRef.current === timeout) {
+        window.clearTimeout(timeout);
+        localSaveTimeoutRef.current = null;
+      }
+    };
   }, [doc, cloudAvailable]);
 
   useEffect(() => {
@@ -942,6 +947,25 @@ export function App() {
     setSelectedSketchProfileId(null);
     setExtrudePreview(null);
     setTool(null);
+  }
+
+  async function flushPendingLocalSave() {
+    if (localSaveTimeoutRef.current !== null) {
+      window.clearTimeout(localSaveTimeoutRef.current);
+      localSaveTimeoutRef.current = null;
+    }
+    const pending = pendingLocalSaveRef.current;
+    pendingLocalSaveRef.current = null;
+    if (!pending) {
+      return;
+    }
+    try {
+      await saveLocalProject(pending);
+      setSaveState(cloudAvailable ? 'saved' : 'offline');
+    } catch {
+      setSaveState('offline');
+      setStatus('Local autosave failed. Export your model before closing.');
+    }
   }
 
   function handleViewportChange(camera: ViewportCameraState) {
@@ -1451,6 +1475,7 @@ export function App() {
   async function handleCreateProject(name: string, units: UnitSystem) {
     setBusy(true);
     try {
+      await flushPendingLocalSave();
       if (!session) {
         const localDocument = createProjectDocument(name, localUserId, units);
         await saveLocalProject(localDocument);
@@ -1530,6 +1555,7 @@ export function App() {
   async function handleOpenDemo(definition: DemoDefinition) {
     setBusy(true);
     try {
+      await flushPendingLocalSave();
       const existing = await loadLocalProject(definition.projectId);
       if (existing) {
         hydrateDocument(existing);
@@ -1567,6 +1593,7 @@ export function App() {
   async function handleOpenProject(projectId: string) {
     setBusy(true);
     try {
+      await flushPendingLocalSave();
       const [localDocument, remoteDocument] = await Promise.all([
         loadLocalProject(projectId),
         session
@@ -1598,6 +1625,7 @@ export function App() {
   }
 
   async function handleGoHome() {
+    await flushPendingLocalSave();
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
