@@ -337,7 +337,7 @@ describe('worker api routes', () => {
     expect(await response.json()).toMatchObject({ code: 'AI_NOT_CONFIGURED' });
   });
 
-  it('does not limit repeated public assistant requests', async () => {
+  it('fails closed before provider dispatch when the beta usage guard is unavailable', async () => {
     const providerFetch = vi.fn(
       async () =>
         new Response('data: {"type":"response.completed"}\n\n', {
@@ -349,12 +349,9 @@ describe('worker api routes', () => {
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
       AI_API_KEY: 'test-key',
-      AI_BASE_URL: 'https://models.example.test/v1/responses',
-      // Old deployments may retain these vars. They must no longer cap turns.
-      AI_RATE_LIMIT_REQUESTS: '1',
-      AI_RATE_LIMIT_WINDOW_SECONDS: '3600'
+      AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
-    const request = () =>
+    const response = await worker.fetch(
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',
         headers: { 'cf-connecting-ip': '203.0.113.42' },
@@ -371,14 +368,15 @@ describe('worker api routes', () => {
             warnings: []
           }
         })
-      });
+      }),
+      publicEnv
+    );
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await worker.fetch(request(), publicEnv);
-      expect(response.status).toBe(200);
-      await response.body?.cancel();
-    }
-    expect(providerFetch).toHaveBeenCalledTimes(3);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'AI_GUARD_UNAVAILABLE'
+    });
+    expect(providerFetch).not.toHaveBeenCalled();
   });
 
   it('does not lock out the next assistant request after a provider outage', async () => {
@@ -394,17 +392,12 @@ describe('worker api routes', () => {
       );
     vi.stubGlobal('fetch', providerFetch);
     const publicEnv = withEnabledDeploymentAssistant({
-      ENVIRONMENT: 'beta',
-      AUTH_MODE: 'email-code',
       AI_API_KEY: 'test-key',
-      AI_BASE_URL: 'https://models.example.test/v1/responses',
-      AI_RATE_LIMIT_REQUESTS: '1',
-      AI_RATE_LIMIT_WINDOW_SECONDS: '3600'
+      AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
     const request = () =>
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',
-        headers: { 'cf-connecting-ip': '203.0.113.42' },
         body: JSON.stringify({
           prompt: 'Make it wider',
           digest: {
