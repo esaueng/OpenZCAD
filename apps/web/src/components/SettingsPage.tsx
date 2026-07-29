@@ -792,7 +792,11 @@ export function SettingsPage({
                   aria-label="Linear snap increment"
                   onChange={(event) => {
                     const value = event.currentTarget.valueAsNumber;
-                    if (Number.isFinite(value)) {
+                    if (
+                      Number.isFinite(value) &&
+                      value >= 0.001 &&
+                      value <= 10_000
+                    ) {
                       patch({
                         sketching: {
                           ...settings.sketching,
