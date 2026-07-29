@@ -930,6 +930,12 @@ describe('exact hybrid kernel adapter', () => {
       Math.PI * 6.5 * 6.5 * (30.25 - 4.5),
       0
     );
+    expect(lowered.bodyRepresentations[bodyId]?.faceCount).toBe(3);
+    const step = await adapter.exportStep(offset, [bodyId]);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
   });
 
   it('offsets both caps of a transformed analytic cylinder', async () => {
