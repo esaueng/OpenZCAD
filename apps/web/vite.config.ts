@@ -127,6 +127,9 @@ export default defineConfig(async ({ command, isPreview }) => {
 
   return {
     plugins,
+    define: {
+      'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? '')
+    },
     optimizeDeps: {
       // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
       exclude: ['brepkit-wasm']
