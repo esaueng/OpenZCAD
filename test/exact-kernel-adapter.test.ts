@@ -724,6 +724,307 @@ describe('exact hybrid kernel adapter', () => {
     );
   });
 
+  it('keeps small, large, and transformed radius edits as exact cylinders', async () => {
+    const cases: Array<{
+      name: string;
+      sourceRadius: number;
+      targetRadius: number;
+      height: number;
+      transform?: {
+        translation: { x: number; y: number; z: number };
+        rotationDeg: { x: number; y: number; z: number };
+      };
+    }> = [
+      {
+        name: 'very small',
+        sourceRadius: 0.00002,
+        targetRadius: 0.00003,
+        height: 0.00008
+      },
+      {
+        name: 'very large',
+        sourceRadius: 2_000_000,
+        targetRadius: 3_500_000,
+        height: 4_000_000
+      },
+      {
+        name: 'transformed',
+        sourceRadius: 6,
+        targetRadius: 9.5,
+        height: 24,
+        transform: {
+          translation: { x: 41, y: -17, z: 23 },
+          rotationDeg: { x: 35, y: 20, z: 15 }
+        }
+      }
+    ];
+
+    for (const testCase of cases) {
+      const base = addPrimitiveFeature(
+        createProjectDocument(
+          `${testCase.name} cylinder`,
+          toUserId(`user_${testCase.name.replace(' ', '_')}`)
+        ),
+        {
+          name: 'Post',
+          primitiveKind: 'cylinder',
+          dimensions: {
+            radius: testCase.sourceRadius,
+            height: testCase.height
+          }
+        }
+      );
+      const bodyId = base.bodyOrder.at(-1)!;
+      const document = testCase.transform
+        ? transformBody(base, {
+            name: 'Place post',
+            targetBodyId: bodyId,
+            ...testCase.transform
+          }).document
+        : base;
+
+      const source = await adapter.syncDocument(document);
+      expect(source.warnings).toEqual([]);
+      const sourceWall = source.bodyRepresentations[
+        bodyId
+      ]?.topology?.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      );
+      expect(sourceWall?.geometry?.radius).toBeCloseTo(
+        testCase.sourceRadius,
+        10
+      );
+
+      const edited = directEditBody(document, {
+        name: 'Resize post',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: sourceWall!.hash,
+          sourceRadius: sourceWall!.geometry!.radius!,
+          sourceAxisStart: sourceWall!.geometry!.axisStart!,
+          sourceAxisEnd: sourceWall!.geometry!.axisEnd!,
+          concavity: 'boss',
+          radius: testCase.targetRadius
+        }
+      }).document;
+      const resized = await adapter.syncDocument(edited);
+      expect(resized.warnings).toEqual([]);
+
+      const body = resized.bodyRepresentations[bodyId]!;
+      const walls =
+        body.topology?.faces.filter(
+          (face) => face.geometry?.surfaceType === 'cylinder'
+        ) ?? [];
+      expect(body.faceCount).toBe(3);
+      expect(walls).toHaveLength(1);
+      expect(walls[0]!.geometry!.radius! / testCase.targetRadius).toBeCloseTo(
+        1,
+        10
+      );
+      expect(
+        body.volume /
+          (Math.PI *
+            testCase.targetRadius *
+            testCase.targetRadius *
+            testCase.height)
+      ).toBeCloseTo(1, 3);
+
+      const sourceStart = sourceWall!.geometry!.axisStart!;
+      const sourceEnd = sourceWall!.geometry!.axisEnd!;
+      const resizedStart = walls[0]!.geometry!.axisStart!;
+      const resizedEnd = walls[0]!.geometry!.axisEnd!;
+      const pointDistance = (
+        left: { x: number; y: number; z: number },
+        right: { x: number; y: number; z: number }
+      ) =>
+        Math.hypot(
+          left.x - right.x,
+          left.y - right.y,
+          left.z - right.z
+        );
+      const aligned = Math.max(
+        pointDistance(sourceStart, resizedStart),
+        pointDistance(sourceEnd, resizedEnd)
+      );
+      const reversed = Math.max(
+        pointDistance(sourceStart, resizedEnd),
+        pointDistance(sourceEnd, resizedStart)
+      );
+      const axisTolerance =
+        Math.max(
+          testCase.sourceRadius,
+          testCase.targetRadius,
+          testCase.height
+        ) * 1e-7;
+      expect(Math.min(aligned, reversed)).toBeLessThanOrEqual(axisTolerance);
+
+      const step = await adapter.exportStep(edited, [bodyId]);
+      await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
+    }
+  });
+
+  it('offsets a cylinder cap after repeated radius edits', async () => {
+    let document = addPrimitiveFeature(
+      createProjectDocument('Edited cylinder cap', toUserId('user_exact')),
+      {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 12, height: 30.25 }
+      }
+    );
+    const bodyId = document.bodyOrder.at(-1)!;
+
+    for (const radius of [9, 13, 8, 10, 5.5, 6.5]) {
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const wall = derived.bodyRepresentations[bodyId]?.topology?.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      );
+      expect(wall).toBeTruthy();
+      document = directEditBody(document, {
+        name: 'Resize boss',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: wall!.hash,
+          sourceRadius: wall!.geometry!.radius!,
+          sourceAxisStart: wall!.geometry!.axisStart!,
+          sourceAxisEnd: wall!.geometry!.axisEnd!,
+          concavity: 'boss',
+          radius
+        }
+      }).document;
+    }
+
+    const resized = await adapter.syncDocument(document);
+    expect(resized.warnings).toEqual([]);
+    const body = resized.bodyRepresentations[bodyId];
+    expect(body?.volume).toBeCloseTo(Math.PI * 6.5 * 6.5 * 30.25, 0);
+    const top = body?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        (face.geometry.normal?.z ?? 0) > 0.99
+    );
+    expect(top).toBeTruthy();
+
+    const offset = directEditBody(document, {
+      name: 'Lower top',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: top!.hash,
+        sourceSurfaceType: 'plane',
+        sourceArea: top!.geometry!.area,
+        sourceCenter: top!.geometry!.center,
+        sourceNormal: top!.geometry!.normal!,
+        offset: -4.5
+      }
+    }).document;
+    const lowered = await adapter.syncDocument(offset);
+    expect(lowered.warnings).toEqual([]);
+    expect(lowered.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      Math.PI * 6.5 * 6.5 * (30.25 - 4.5),
+      0
+    );
+  });
+
+  it('offsets both caps of a transformed analytic cylinder', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument(
+        'Transformed cylinder caps',
+        toUserId('user_exact')
+      ),
+      {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 6, height: 20 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    let document = transformBody(base, {
+      name: 'Place post',
+      targetBodyId: bodyId,
+      translation: { x: 4, y: -3, z: 8 },
+      rotationDeg: { x: 35, y: 20, z: 15 }
+    }).document;
+
+    const capAlongAxis = async (direction: 1 | -1) => {
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      const wall = body?.topology?.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      );
+      const start = wall!.geometry!.axisStart!;
+      const end = wall!.geometry!.axisEnd!;
+      const axisLength = Math.hypot(
+        end.x - start.x,
+        end.y - start.y,
+        end.z - start.z
+      );
+      const axis = {
+        x: (end.x - start.x) / axisLength,
+        y: (end.y - start.y) / axisLength,
+        z: (end.z - start.z) / axisLength
+      };
+      return body!.topology!.faces.find((face) => {
+        const normal = face.geometry?.normal;
+        return (
+          face.geometry?.surfaceType === 'plane' &&
+          normal !== undefined &&
+          Math.abs(
+            normal.x * axis.x +
+              normal.y * axis.y +
+              normal.z * axis.z -
+              direction
+          ) < 1e-6
+        );
+      })!;
+    };
+
+    const top = await capAlongAxis(1);
+    document = directEditBody(document, {
+      name: 'Raise top',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: top.hash,
+        sourceSurfaceType: 'plane',
+        sourceArea: top.geometry!.area,
+        sourceCenter: top.geometry!.center,
+        sourceNormal: top.geometry!.normal!,
+        offset: 3
+      }
+    }).document;
+
+    const bottom = await capAlongAxis(-1);
+    document = directEditBody(document, {
+      name: 'Lower bottom',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: bottom.hash,
+        sourceSurfaceType: 'plane',
+        sourceArea: bottom.geometry!.area,
+        sourceCenter: bottom.geometry!.center,
+        sourceNormal: bottom.geometry!.normal!,
+        offset: 2
+      }
+    }).document;
+
+    const expanded = await adapter.syncDocument(document);
+    expect(expanded.warnings).toEqual([]);
+    expect(expanded.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      Math.PI * 6 * 6 * 25,
+      0
+    );
+    expect(expanded.bodyRepresentations[bodyId]?.faceCount).toBe(3);
+  });
+
   it('grows a boss fused into a plate', async () => {
     // A boss fused into a plate puts the union tool against a coaxial
     // cylindrical face. The kernel used to hand back the original solid —

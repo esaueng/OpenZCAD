@@ -776,6 +776,17 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
   await expect(radiusOperation).toHaveCount(0);
+  await page.getByTestId('direct-manipulation-value').click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  await offsetKeypad.getByRole('textbox').fill('-4.5');
+  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Offset face by -4.5 mm.'
+  );
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toBeVisible();
+  await expect(page.locator('.panel-body')).toContainText('36 × 36 × 23.5 mm');
   expect(consoleErrors).toEqual([]);
 });
 

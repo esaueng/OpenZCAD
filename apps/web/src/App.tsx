@@ -88,6 +88,7 @@ import {
   downloadText,
   evalParamValue,
   exportFileStem,
+  formatNumber,
   inferContentType
 } from './lib/model';
 import {
@@ -121,9 +122,8 @@ import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
-  MAX_CYLINDER_RADIUS,
-  MIN_CYLINDER_RADIUS,
   cylinderRadialFrame,
+  isValidCylinderRadius,
   sameCylinderAxis
 } from './lib/interaction/cylinderRadius';
 import { ToolCard } from './components/ToolCard';
@@ -2848,9 +2848,7 @@ export function App() {
         y: target.axisEnd[1],
         z: target.axisEnd[2]
       },
-      originalRadius: target.radius,
-      minRadius: MIN_CYLINDER_RADIUS,
-      maxRadius: MAX_CYLINDER_RADIUS
+      originalRadius: target.radius
     };
   }, [interaction]);
   const cylinderRadiusInspectorInitial =
@@ -2952,6 +2950,15 @@ export function App() {
   }
 
   function handleCylinderRadiusPreview(radius: number) {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'resize-cylinder-radius' ||
+      current.target.radius === undefined ||
+      !isValidCylinderRadius(radius, current.target.radius)
+    ) {
+      return;
+    }
     cylinderRadiusInspectorSetterRef.current?.(radius);
     cylinderRadiusPreview.request(radius);
   }
@@ -2963,24 +2970,25 @@ export function App() {
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
     const current = interactionRef.current;
-    if (
-      current.mode !== 'face' ||
-      current.op !== 'resize-cylinder-radius'
-    ) {
+    if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
       return;
     }
-    const rounded = Math.round(radius * 1000) / 1000;
-    const command = buildCylinderRadiusCommand(exact ?? rounded);
-    if (!command || rounded < MIN_CYLINDER_RADIUS) {
+    const sourceRadius = current.target.radius;
+    const command = buildCylinderRadiusCommand(exact ?? radius);
+    if (
+      sourceRadius === undefined ||
+      !isValidCylinderRadius(radius, sourceRadius) ||
+      !command
+    ) {
       cylinderRadiusInspectorSetterRef.current?.(null);
-      setStatus('Radius must be greater than zero.');
+      setStatus('Radius is too small to form valid geometry at this scale.');
       return;
     }
     void executeValidatedDirectEdit(
       command,
       current.target.bodyId as BodyId,
-      `Adjusted cylinder radius to R ${rounded} ${doc?.units ?? ''}.`,
-      rounded
+      `Adjusted cylinder radius to R ${formatNumber(radius)} ${doc?.units ?? ''}.`,
+      radius
     );
   }
 
@@ -3096,7 +3104,7 @@ export function App() {
     setKeypad({
       kind: 'radius',
       label: 'Radius',
-      initial: String(Math.round(radius * 100) / 100),
+      initial: String(radius),
       unitKind: 'length',
       baseline: interaction.target.radius
     });

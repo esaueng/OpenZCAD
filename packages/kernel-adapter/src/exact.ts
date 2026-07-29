@@ -249,6 +249,92 @@ function revolveRadialProfile(
 }
 
 /**
+ * Move either cap of a simple analytic cylinder by rebuilding the equivalent
+ * primitive in the cylinder's world-space frame. Repeated cylindrical
+ * resizes leave a valid analytic solid, but BrepKit's generic cap boolean can
+ * accumulate a mismatched circular boundary and fail its exact volume gate.
+ * This path is deliberately limited to the three-face cylinder case; every
+ * more complex prismatic face still uses the general push/pull operation.
+ */
+function tryExactAnalyticCylinderCapOffset(
+  kernel: BrepKernel,
+  solid: number,
+  face: number,
+  offset: number
+): number | null {
+  const cylinder = readAnalyticCylinder(kernel, solid);
+  const cap = measureFaceGeometry(kernel, face);
+  if (
+    !cylinder ||
+    cap?.surfaceType !== 'plane' ||
+    !cap.normal ||
+    !Number.isFinite(offset)
+  ) {
+    return null;
+  }
+
+  const normal = normalized(cap.normal);
+  if (!normal) {
+    return null;
+  }
+  const alignment = dot(normal, cylinder.axis);
+  const span = Math.max(
+    1,
+    cylinder.radius,
+    cylinder.axialMax - cylinder.axialMin
+  );
+  const linearTolerance = ANALYTIC_MATCH_EPSILON * span;
+  const areaTolerance = Math.max(
+    // Face area is measured through BrepKit's bounded-deflection integration,
+    // so a circular cap is not bit-exact even though its surface is analytic.
+    Math.PI * cylinder.radius * cylinder.radius * 5e-4,
+    1e-7
+  );
+  const expectedCapArea = Math.PI * cylinder.radius * cylinder.radius;
+  if (
+    Math.abs(Math.abs(alignment) - 1) > ANALYTIC_MATCH_EPSILON ||
+    Math.abs(cap.area - expectedCapArea) > areaTolerance
+  ) {
+    return null;
+  }
+
+  const capAxialPosition = dot(
+    subtract(cap.center, cylinder.origin),
+    cylinder.axis
+  );
+  const isBottom =
+    Math.abs(capAxialPosition - cylinder.axialMin) <= linearTolerance;
+  const isTop =
+    Math.abs(capAxialPosition - cylinder.axialMax) <= linearTolerance;
+  if (isBottom === isTop) {
+    return null;
+  }
+
+  let axialMin = cylinder.axialMin;
+  let axialMax = cylinder.axialMax;
+  if (isBottom) {
+    axialMin -= offset;
+  } else {
+    axialMax += offset;
+  }
+  const height = axialMax - axialMin;
+  if (height <= GEOMETRY_EPSILON) {
+    return null;
+  }
+
+  const base = {
+    x: cylinder.origin.x + cylinder.axis.x * axialMin,
+    y: cylinder.origin.y + cylinder.axis.y * axialMin,
+    z: cylinder.origin.z + cylinder.axis.z * axialMin
+  };
+  const local = kernel.makeCylinder(cylinder.radius, height);
+  return kernel.copyAndTransformSolid(
+    local,
+    coordinateFrameMatrix(base, cylinder.axis)
+  );
+}
+
+/**
  * Preserve analytic cylinder walls for the common hollow-part operation.
  * BrepKit's generic boolean currently falls back to a triangular B-rep when a
  * smaller coaxial cylinder opens exactly onto either cap. Revolving the exact
@@ -1533,7 +1619,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // move is worth exactly `offset * area`, and the kernel gates the result
       // on that, so a tool that reached material it should not have is
       // rejected rather than returned.
-      const output = kernel.pushPullFace(solid, face, offset);
+      const output =
+        tryExactAnalyticCylinderCapOffset(kernel, solid, face, offset) ??
+        kernel.pushPullFace(solid, face, offset);
       if (kernel.validateSolidRelaxed(output) !== 0) {
         throw new Error(
           `Offsetting the face by ${offset} does not produce a valid solid.`
