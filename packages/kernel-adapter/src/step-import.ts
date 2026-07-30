@@ -15,6 +15,29 @@ interface Replacement {
 }
 
 /**
+ * STEP import is intentionally tolerant: OCCT can still tessellate and display
+ * a compound when one child solid fails BRepCheck. Make that partial-success
+ * state explicit instead of describing a successful import as a body failure.
+ */
+export function importedStepValidationWarning(
+  bodyName: string,
+  invalidSolidCount: number,
+  solidCount: number
+): string {
+  const affected =
+    solidCount === 1
+      ? 'its STEP solid'
+      : `${invalidSolidCount} of its ${solidCount} STEP solids`;
+  const subject = invalidSolidCount === 1 ? 'solid' : 'solids';
+  const verb = invalidSolidCount === 1 ? 'has' : 'have';
+  return (
+    `Body "${bodyName}" imported and rendered, but ${affected} ` +
+    `${verb} OpenCascade B-rep validity issues. Exact edits or booleans involving ` +
+    `the affected ${subject} may fail.`
+  );
+}
+
+/**
  * Split the first STEP DATA section into entities without treating semicolons
  * inside quoted strings or comments as statement terminators.
  */
