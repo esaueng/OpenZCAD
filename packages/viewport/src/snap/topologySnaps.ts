@@ -123,6 +123,9 @@ export function snapsFromEdges(
   };
 
   for (const edge of edges) {
+    if (edge.displayRole === 'seam') {
+      continue;
+    }
     const count = Math.floor(edge.points.length / 3);
     if (count < 2) {
       continue;
