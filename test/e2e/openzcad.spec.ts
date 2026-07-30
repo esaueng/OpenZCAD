@@ -151,6 +151,50 @@ async function stubAnonymousApi(page: Page) {
   );
 }
 
+/**
+ * Selects two stable, visible box edges through the same gesture a user makes.
+ *
+ * The first pick opens the feature inspector over the right side of the
+ * viewport, so close it before reaching the second edge. Selection deliberately
+ * survives that close, and Shift+left click must then add instead of replace.
+ */
+async function shiftSelectTwoVisibleBoxEdges(page: Page) {
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+
+  await canvas.click({
+    position: {
+      x: bounds.width * 0.578,
+      y: bounds.height * 0.29
+    }
+  });
+  const status = page.getByRole('contentinfo');
+  await expect(status).toContainText('1 exact edge selected');
+
+  await page.getByRole('button', { name: 'Close panel' }).click();
+  await page.keyboard.down('Shift');
+  try {
+    await canvas.click({
+      position: {
+        x: bounds.width * 0.393,
+        y: bounds.height * 0.26
+      }
+    });
+  } finally {
+    await page.keyboard.up('Shift');
+  }
+
+  await expect(status).toContainText('2 exact edges selected');
+  await expect(page.locator('.selection-chip-label')).toHaveText('2 edges');
+  await expect(
+    page.getByRole('heading', { name: '2 selected edges' })
+  ).toBeVisible();
+}
+
 async function stubEmailLoginApi(page: Page) {
   let signedIn = false;
   const session = {
@@ -1219,6 +1263,58 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   await expect(page.locator('.panel-body')).toContainText('faces');
   expect(consoleErrors).toEqual([]);
 });
+
+for (const modifier of [
+  {
+    label: 'fillet',
+    tool: 'Fillet — Pick an edge, then set its radius'
+  },
+  {
+    label: 'chamfer',
+    tool: 'Chamfer — Pick an edge, then set its distance'
+  }
+] as const) {
+  test(`Shift+left click applies one exact ${modifier.label} to two selected edges`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    const consoleErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        consoleErrors.push(message.text());
+      }
+    });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill(`Multi-edge ${modifier.label}`);
+    await page.getByRole('button', { name: 'Create project' }).click();
+
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+
+    await shiftSelectTwoVisibleBoxEdges(page);
+    await page
+      .getByRole('button', { name: modifier.tool, exact: true })
+      .click();
+    const inspector = page.getByRole('region', {
+      name: 'Feature inspector'
+    });
+    await expect(inspector.locator('.selection-summary')).toContainText(
+      '2 exact edges selected'
+    );
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+
+    const feature = page.locator('.feature-row', {
+      hasText: modifier.label === 'fillet' ? 'Fillet' : 'Chamfer'
+    });
+    await expect(feature).toBeVisible();
+    await expect(feature.getByTitle('Feature failed to build')).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    expect(consoleErrors).toEqual([]);
+  });
+}
 
 test('grounds an AI fillet request onto every selected edge', async ({
   page
