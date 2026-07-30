@@ -73,6 +73,7 @@ import {
   projectToScreen,
   projectedWorldSizePx,
   shouldShowGroundShadow,
+  shouldRenderTopologyEdge,
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
@@ -3063,6 +3064,16 @@ export function ModelViewer({
           }
         }
       }
+      // A face or isolated edge is still an address on its owning body.
+      // Promote that hit after the edge-run shortcut so double-clicking the
+      // solid selects the whole body without changing the active filter.
+      if (picked?.selection) {
+        onSelectTopologyRef.current(
+          { bodyId: picked.selection.bodyId, kind: 'body' },
+          event.shiftKey
+        );
+        return;
+      }
       if (bodyGroup.children.length === 0) {
         return;
       }
@@ -3346,7 +3357,7 @@ export function ModelViewer({
       });
 
       for (const edge of body.topology?.edges ?? []) {
-        if (edge.points.length < 6) {
+        if (!shouldRenderTopologyEdge(edge)) {
           continue;
         }
         const active = selectedEdgeKeys.has(
