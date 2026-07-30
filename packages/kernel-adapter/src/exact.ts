@@ -1412,7 +1412,19 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   };
                 }),
                 (left, right) =>
-                  kernel.solidToSolidDistance(left, right)[0] ?? NaN
+                  kernel.solidToSolidDistance(left, right)[0] ?? NaN,
+                (left, right) => {
+                  try {
+                    return (
+                      kernel.volume(
+                        kernel.intersect(left, right),
+                        MEASUREMENT_DEFLECTION
+                      ) > 0
+                    );
+                  } catch {
+                    return false;
+                  }
+                }
               );
               if (!connectivity.connected) {
                 result.warnings.push(

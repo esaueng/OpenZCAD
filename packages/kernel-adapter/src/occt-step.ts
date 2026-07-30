@@ -1157,7 +1157,18 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
                     }
                   };
                 }),
-                (left, right) => this.kernel.distanceBetween(left, right)
+                (left, right) => this.kernel.distanceBetween(left, right),
+                (left, right) => {
+                  try {
+                    return (
+                      this.kernel.getVolume(
+                        this.kernel.common(left, right)
+                      ) > 0
+                    );
+                  } catch {
+                    return false;
+                  }
+                }
               );
               if (!connectivity.connected) {
                 result.warnings.push(
