@@ -23,7 +23,9 @@
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
-    "AI_REASONING_EFFORT": "high"
+    "AI_REASONING_EFFORT": "high",
+    "AI_GLOBAL_DAILY_REQUEST_LIMIT": "100",
+    "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "400"
   },
   "d1_databases": [
     {

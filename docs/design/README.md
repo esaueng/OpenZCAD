@@ -1,6 +1,6 @@
 # OpenZCAD Workspace Design Specification
 
-The accepted workspace concept is [`openzcad-workspace-concept.png`](./openzcad-workspace-concept.png).
+The accepted workspace concept is [`openzcad-workspace-concept.png`](./openzcad-workspace-concept.png). The concept was generated with OpenAI's image tooling and intentionally retains its C2PA Content Credentials; it is a design reference, not an application asset.
 
 ## Product hierarchy
 
