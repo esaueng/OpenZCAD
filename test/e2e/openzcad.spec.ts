@@ -1609,6 +1609,67 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(paramInput).toHaveValue('30');
 });
 
+test('rejects a disconnected Union and succeeds after the gap is closed', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Connected Union');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lower');
+  await inspector.getByLabel('Width (X)').fill('10');
+  await inspector.getByLabel('Height (Y)').fill('10');
+  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Upper');
+  await inspector.getByLabel('Width (X)').fill('10');
+  await inspector.getByLabel('Height (Y)').fill('10');
+  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lift upper');
+  await inspector.getByLabel('Move Z').fill('12');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await expect(inspector).toContainText(
+    'Union joins solids that touch or overlap. It does not fill empty gaps.'
+  );
+  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Union does not fill empty space.'
+  );
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+
+  await page.locator('.feature-row-main', { hasText: 'Lift upper' }).click();
+  await inspector.getByLabel('Move Z').fill('10');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible();
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
 test('refuses an invalid project name instead of working locally', async ({
   page
 }) => {
