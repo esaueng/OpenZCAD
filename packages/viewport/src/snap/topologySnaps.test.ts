@@ -102,6 +102,12 @@ describe('sharing a model', () => {
     expect(kinds([edge('degenerate', [[1, 2, 3]])])).toEqual([]);
   });
 
+  it('does not offer snap targets on an invisible periodic seam', () => {
+    const seam = edge('seam', [[0, 0, 0], [0, 0, 10]]);
+    seam.displayRole = 'seam';
+    expect(snapsFromEdges([seam])).toEqual([]);
+  });
+
   it('carries the label a caller supplied, for the readout', () => {
     const labelled = snapsFromEdges([edge('a', [[0, 0, 0], [1, 0, 0]])], {
       label: 'Box Body'
