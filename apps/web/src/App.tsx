@@ -45,7 +45,8 @@ import {
   listNodesByKind,
   listParameters,
   normalizeDocument,
-  resolveParamValue
+  resolveParamValue,
+  type BooleanInput
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -484,10 +485,14 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const { run: executeValidatedFeature } = useValidatedFeatureCommit({
+  const {
+    run: executeValidatedFeature,
+    runTransaction: executeValidatedFeatureTransaction
+  } = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
     commit: (command) => executeCommand(command),
+    commitTransaction: (label, commands) => executeTransaction(label, commands),
     onBusy: setBusy,
     onStatus: setStatus
   });
@@ -2080,15 +2085,32 @@ export function App() {
     }
   }
 
-  function handleApplyPatch(proposal: CadPatchProposal): boolean {
+  async function handleApplyPatch(
+    proposal: CadPatchProposal
+  ): Promise<boolean> {
     if (!doc) {
       return false;
     }
     try {
-      const applied = executeTransaction(
-        'Apply AI patch',
-        commandsForCadPatch(doc, proposal)
-      );
+      const commands = commandsForCadPatch(doc, proposal);
+      const unionTargets = commands.flatMap((command) => {
+        if (command.kind !== 'feature.boolean') {
+          return [];
+        }
+        const payload = command.payload as BooleanInput;
+        const resultBodyId = payload.ids?.bodyId;
+        return payload.operation === 'union' && resultBodyId
+          ? [{ featureName: payload.name, resultBodyId }]
+          : [];
+      });
+      const applied =
+        unionTargets.length > 0
+          ? await executeValidatedFeatureTransaction(commands, {
+              label: 'Apply AI patch',
+              targets: unionTargets,
+              successMessage: 'Apply AI patch'
+            })
+          : executeTransaction('Apply AI patch', commands);
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
