@@ -66,6 +66,14 @@ export interface CloudflareEnv {
    */
   AI_MAX_OUTPUT_TOKENS?: string;
   AI_TIMEOUT_MS?: string;
+  /** Secret used to HMAC public assistant identities and IP quota buckets. */
+  AI_IDENTITY_PEPPER?: string;
+  /** Comma-separated authenticated emails allowed to use deployment AI spend. */
+  AI_DEPLOYMENT_ALLOWED_EMAILS?: string;
+  /** Comma-separated exact hostnames allowed for custom Responses endpoints. */
+  AI_ALLOWED_BASE_URL_HOSTS?: string;
+  AI_GLOBAL_DAILY_REQUEST_LIMIT?: string;
+  AI_GLOBAL_DAILY_COST_LIMIT_UNITS?: string;
   AI_ACCOUNT_RATE_LIMIT_REQUESTS?: string;
   AI_IP_RATE_LIMIT_REQUESTS?: string;
   AI_ACCOUNT_COST_LIMIT_UNITS?: string;

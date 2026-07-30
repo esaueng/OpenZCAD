@@ -14,7 +14,7 @@
 - Configurable streamed AI proposals with compact topology-aware context, broad feature commands, strict structured output, dry-run preview, explicit approval, and undoable application.
 - Conversational assistant: it returns a patch, clarifying questions with tappable suggested answers, or a plain refusal, and carries the conversation forward as bounded history.
 - Modeling from formal 2D drawings: PNG/JPEG/WebP and PDF attachments (rasterized client-side), a drawing-interpretation protocol covering projection convention, units, and scale, and a dimension audit table showing every value read and the view it came from.
-- Cloudflare Access identity, owner-scoped beta APIs, and legacy-owner mapping.
+- Single-use email-code identity, opaque sessions, owner-scoped beta APIs, and legacy-owner mapping.
 - Live per-project Durable Object rooms with presence, version-aware synchronization, and conflict preservation.
 
 ## Next

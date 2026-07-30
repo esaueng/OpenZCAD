@@ -23,7 +23,7 @@ OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling
 
 ## Quick start
 
-Requires Node.js 20+ and pnpm 10.
+Requires Node.js 20.19+ on the 20.x line, or Node.js 22.12+, and pnpm 10.
 
 ```bash
 pnpm install
@@ -80,7 +80,7 @@ pnpm build            # production web/worker bundle
 pnpm deploy:beta      # beta-only Cloudflare deployment
 ```
 
-Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity; the checked-in `apps/web/wrangler.jsonc` deliberately binds a placeholder dev database ID so it can never write to beta data (create a real dev D1 and drop the ID in). The worker refuses to start if development authentication is combined with a guarded or non-development environment. When R2/Durable Object bindings are absent, the affected routes return a clean `FEATURE_DISABLED` 501 before touching persistence.
+Local development uses `AUTH_MODE=development` and the isolated `user_beta_dev` identity. Never deploy `apps/web/wrangler.jsonc`: it is a development-only config and deliberately binds a placeholder dev database ID so it cannot write to beta data (create a real dev D1 and replace the ID for local use). The worker refuses to start if development authentication is combined with a guarded or non-development environment. When R2/Durable Object bindings are absent, the affected routes return a clean `FEATURE_DISABLED` 501 before touching persistence.
 
 ### Performance
 
@@ -100,9 +100,9 @@ Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a rea
 - create a managed Turnstile widget allowlisting `zcad.esau.app` and bind its site key as `TURNSTILE_SITE_KEY`;
 - apply the D1 migrations in `apps/web/migrations`;
 - set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=login@auth.esau.app` (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
-- provide secrets, generated with `openssl rand -base64 32` and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and the AI provider key if the assistant is enabled.
+- provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), `AI_IDENTITY_PEPPER`, `AI_DEPLOYMENT_ALLOWED_EMAILS`, and the AI provider key if the assistant is enabled.
 
-Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and beta verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
+Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
 ## API surface
 
@@ -137,7 +137,7 @@ OPENROUTER_API_KEY=your_key_here
 AI_MODEL=openai/gpt-5.6-terra
 ```
 
-Non-secret settings live in `wrangler.jsonc`:
+Runtime bindings are configured as Wrangler vars or secrets:
 
 - `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
 - `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret; never shipped to the browser or committed.
@@ -146,12 +146,15 @@ Non-secret settings live in `wrangler.jsonc`:
 - `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
 - `AI_MAX_OUTPUT_TOKENS` — default `32000`; reasoning shares the budget, and too low a ceiling truncates patches mid-stream as a normal incomplete response.
 - `AI_SITE_URL` / `AI_APP_NAME` — optional OpenRouter attribution.
+- `AI_ALLOWED_BASE_URL_HOSTS` — exact, comma-separated hostnames approved for saved Responses-compatible endpoints outside development. Redirects are never followed.
+- `AI_GLOBAL_DAILY_REQUEST_LIMIT` / `AI_GLOBAL_DAILY_COST_LIMIT_UNITS` — deployment-wide D1-backed ceilings; defaults are 100 requests and 400 weighted cost units per UTC day.
+- `AI_DEPLOYMENT_ALLOWED_EMAILS` — secret, comma-separated email allowlist for accounts permitted to spend the deployment provider key. An empty or missing value denies deployment-funded AI outside development.
 
-Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. The assistant reports the configured model/reasoning tier via public `GET /api/assistant/status` without exposing secrets. Public (signed-out) assistant requests identify to the provider with a one-way hash of the connecting IP.
+Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. `GET /api/assistant/status` never exposes provider secrets or deployment availability to a signed-out or non-allowlisted request. Public request identities and IP quota buckets use domain-separated HMAC-SHA-256 values keyed by `AI_IDENTITY_PEPPER`; the raw address is never stored or sent upstream.
 
 Current assistant limitations:
 
-- **Assistant usage is bounded before provider dispatch** — beta requests use D1-backed account and opaque-IP request limits, token/attachment-weighted cost quotas, and expiring concurrency leases. Provider-side billing controls remain the final deployment spend cap.
+- **Assistant usage is bounded before provider dispatch** — beta requests use an authenticated deployment-key allowlist, D1-backed global/account/opaque-IP request and token-weighted cost quotas, and expiring concurrency leases. Provider-side billing controls remain the final deployment spend cap.
 - Proposals cannot yet create sketch entities, face-attached sketches, imported geometry, or collaboration actions.
 
 ## Known limitations
@@ -173,4 +176,4 @@ Current assistant limitations:
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Esau Engineering LLC.
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Esau Engineering LLC. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for bundled dependency and font notices.

@@ -155,7 +155,8 @@ function isPrivateIpv4(hostname: string): boolean {
 
 export function validateAssistantBaseUrl(
   value: string,
-  environment: CloudflareEnv['ENVIRONMENT']
+  environment: CloudflareEnv['ENVIRONMENT'],
+  allowedBaseUrlHosts?: string
 ): string {
   let url: URL;
   try {
@@ -190,13 +191,28 @@ export function validateAssistantBaseUrl(
       throw new HttpError(400, 'Private-network AI endpoints are not allowed.');
     }
   }
+  if (environment !== 'development') {
+    const allowedHosts = new Set(
+      (allowedBaseUrlHosts ?? '')
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (!allowedHosts.has(hostname)) {
+      throw new HttpError(
+        400,
+        'The AI endpoint hostname is not approved for this deployment.'
+      );
+    }
+  }
   url.hash = '';
   return url.toString();
 }
 
 export function parseUpdateAppSettingsRequest(
   value: unknown,
-  environment: CloudflareEnv['ENVIRONMENT']
+  environment: CloudflareEnv['ENVIRONMENT'],
+  allowedBaseUrlHosts?: string
 ): UpdateAppSettingsRequest {
   const root = asRecord(value, 'Request body');
   const expectedRevision = requiredNumber(
@@ -217,7 +233,7 @@ export function parseUpdateAppSettingsRequest(
   const rawBaseUrl = requiredString(assistant, 'baseUrl', 2_048, true);
   const baseUrl =
     provider === 'responses-compatible'
-      ? validateAssistantBaseUrl(rawBaseUrl, environment)
+      ? validateAssistantBaseUrl(rawBaseUrl, environment, allowedBaseUrlHosts)
       : '';
   return {
     expectedRevision,
@@ -413,7 +429,8 @@ async function readSettings(
           expectedRevision: row.revision,
           settings: parsedSettings
         },
-        env.ENVIRONMENT
+        env.ENVIRONMENT,
+        env.AI_ALLOWED_BASE_URL_HOSTS
       ).settings,
       revision: row.revision,
       synced: true
@@ -470,10 +487,30 @@ function deploymentEffective(env: CloudflareEnv): EffectiveAssistantSettings {
   };
 }
 
+export function deploymentAssistantAllowed(
+  email: string | undefined,
+  env: CloudflareEnv
+): boolean {
+  if (env.ENVIRONMENT === 'development') {
+    return true;
+  }
+  if (!email) {
+    return false;
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+  return (
+    env.AI_DEPLOYMENT_ALLOWED_EMAILS?.split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean)
+      .includes(normalizedEmail) ?? false
+  );
+}
+
 function effectiveAssistantStatus(
   settings: AppSettings,
   credential: CredentialRow | null,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): EffectiveAssistantSettings {
   if (!settings.assistant.enabled) {
     return {
@@ -485,7 +522,12 @@ function effectiveAssistantStatus(
     };
   }
   if (settings.assistant.credentialSource === 'deployment') {
-    return deploymentEffective(env);
+    return deploymentAssistantAllowed(email, env)
+      ? deploymentEffective(env)
+      : {
+          ...deploymentEffective(env),
+          configured: false
+        };
   }
   return {
     configured: Boolean(credential && env.SETTINGS_ENCRYPTION_KEY?.trim()),
@@ -498,7 +540,8 @@ function effectiveAssistantStatus(
 
 export async function resolveUserAssistant(
   userId: UserId,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<{
   effective: EffectiveAssistantSettings;
   runtime: AssistantRuntimeConfig | null;
@@ -517,7 +560,15 @@ export async function resolveUserAssistant(
     };
   }
   if (settings.assistant.credentialSource === 'deployment') {
-    return { effective: deploymentEffective(env), runtime: null };
+    return {
+      effective: deploymentAssistantAllowed(email, env)
+        ? deploymentEffective(env)
+        : {
+            ...deploymentEffective(env),
+            configured: false
+          },
+      runtime: null
+    };
   }
   const row = await readCredential(userId, env);
   const secret = env.SETTINGS_ENCRYPTION_KEY?.trim();
@@ -561,7 +612,8 @@ export async function resolveUserAssistant(
 
 export async function getAppSettings(
   userId: UserId,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   const [stored, credential] = await Promise.all([
     readSettings(userId, env),
@@ -575,7 +627,8 @@ export async function getAppSettings(
     effectiveAssistant: effectiveAssistantStatus(
       stored.settings,
       credential,
-      env
+      env,
+      email
     )
   };
 }
@@ -583,7 +636,8 @@ export async function getAppSettings(
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
@@ -620,7 +674,7 @@ export async function updateAppSettings(
       'Settings changed elsewhere. Reload and try again.'
     );
   }
-  return getAppSettings(userId, env);
+  return getAppSettings(userId, env, email);
 }
 
 export function parseAssistantCredential(value: unknown): string {
@@ -635,7 +689,8 @@ export function parseAssistantCredential(value: unknown): string {
 export async function saveAssistantCredential(
   userId: UserId,
   token: string,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   const secret = env.SETTINGS_ENCRYPTION_KEY?.trim();
   if (!env.DB || !secret) {
@@ -658,12 +713,13 @@ export async function saveAssistantCredential(
   )
     .bind(userId, encrypted.ciphertext, encrypted.iv, hint, timestamp)
     .run();
-  return getAppSettings(userId, env);
+  return getAppSettings(userId, env, email);
 }
 
 export async function deleteAssistantCredential(
   userId: UserId,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   if (!env.DB) {
     throw new HttpError(503, 'Personal AI credential storage is unavailable.');
@@ -671,7 +727,7 @@ export async function deleteAssistantCredential(
   await env.DB.prepare('DELETE FROM user_ai_credentials WHERE user_id = ?')
     .bind(userId)
     .run();
-  return getAppSettings(userId, env);
+  return getAppSettings(userId, env, email);
 }
 
 export async function markAssistantCredentialValidated(

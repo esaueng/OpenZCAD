@@ -34,7 +34,7 @@ import {
   AuthenticationError,
   destroyEmailSession,
   getAuthConfig,
-  identifyAssistantRequest,
+  identifyAssistantIdentity,
   startEmailLogin,
   verifyEmailLogin
 } from './auth';
@@ -239,24 +239,33 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'GET' && pathname === '/api/assistant/status') {
     try {
-      const userId = await identifyAssistantRequest(request, env);
-      const settings = await getAppSettings(userId, env);
+      const identity = await identifyAssistantIdentity(request, env);
+      const settings = await getAppSettings(
+        identity.userId,
+        env,
+        identity.email
+      );
       return json({
         ...settings.effectiveAssistant,
         credential: settings.credential
       });
     } catch (error) {
       if (error instanceof AuthenticationError && error.failure === 'missing') {
-        return json({ ...getAssistantStatus(env), source: 'deployment' });
+        return json({
+          ...getAssistantStatus(env),
+          configured: false,
+          source: 'deployment'
+        });
       }
       throw error;
     }
   }
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
-    const userId = await identifyAssistantRequest(request, env);
+    const identity = await identifyAssistantIdentity(request, env);
+    const userId = identity.userId;
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
-    const assistant = await resolveUserAssistant(userId, env);
+    const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
       return json(
         {
@@ -270,7 +279,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       assistant.runtime?.maxOutputTokens ?? maxOutputTokensFor(env);
     const permit = await acquireAssistantPermit(request, userId, env, {
       cost: assistantQuotaCost(payload.attachments.length, maxOutputTokens),
-      leaseMs: assistant.runtime?.timeoutMs ?? timeoutFor(env)
+      leaseMs: assistant.runtime?.timeoutMs ?? timeoutFor(env),
+      deploymentFunded: assistant.effective.source === 'deployment'
     });
     if (!permit.allowed) {
       return permit.response;
@@ -302,24 +312,27 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'GET' && pathname === '/api/settings') {
-    return json(await getAppSettings(userId, env));
+    return json(await getAppSettings(userId, env, session.email));
   }
 
   if (request.method === 'PATCH' && pathname === '/api/settings') {
     const payload = parseUpdateAppSettingsRequest(
       await readJsonBody(request),
-      env.ENVIRONMENT
+      env.ENVIRONMENT,
+      env.AI_ALLOWED_BASE_URL_HOSTS
     );
-    return json(await updateAppSettings(userId, payload, env));
+    return json(await updateAppSettings(userId, payload, env, session.email));
   }
 
   if (pathname === '/api/settings/assistant-credential') {
     if (request.method === 'PUT') {
       const token = parseAssistantCredential(await readJsonBody(request));
-      return json(await saveAssistantCredential(userId, token, env));
+      return json(
+        await saveAssistantCredential(userId, token, env, session.email)
+      );
     }
     if (request.method === 'DELETE') {
-      return json(await deleteAssistantCredential(userId, env));
+      return json(await deleteAssistantCredential(userId, env, session.email));
     }
   }
 
@@ -327,7 +340,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     request.method === 'POST' &&
     pathname === '/api/settings/assistant/test'
   ) {
-    const assistant = await resolveUserAssistant(userId, env);
+    const assistant = await resolveUserAssistant(userId, env, session.email);
     if (!assistant.runtime) {
       throw new HttpError(
         400,
