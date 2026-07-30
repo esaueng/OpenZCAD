@@ -18,7 +18,11 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type ParamValue } from '@openzcad/shared';
+import {
+  toUserId,
+  type ParamValue,
+  type PrimitiveKind
+} from '@openzcad/shared';
 import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 
@@ -154,11 +158,18 @@ describe('exact hybrid kernel adapter', () => {
       );
       const circularEdges =
         body.topology?.edges.filter((edge) => edge.points.length > 6) ?? [];
+      const displaySeams =
+        body.topology?.edges.filter((edge) => edge.displayRole === 'seam') ??
+        [];
 
       // The authored/exported solid remains analytic; only its disposable
       // viewport representation is tessellated.
       expect(cylindricalFace?.geometry?.radius).toBeCloseTo(radius, 7);
       expect(circularEdges).toHaveLength(2);
+      expect(displaySeams).toHaveLength(1);
+      expect(
+        circularEdges.every((edge) => edge.displayRole === 'feature')
+      ).toBe(true);
 
       // Shared display tolerances give the shaded rim and exact edge overlay
       // compatible resolution at every model scale. Full circles repeat their
@@ -204,6 +215,100 @@ describe('exact hybrid kernel adapter', () => {
       const step = await adapter.exportStep(document, [bodyId]);
       expect(step).toContain('CYLINDRICAL_SURFACE');
     }
+  });
+
+  it('marks smooth periodic seams without removing exact topology', async () => {
+    let document = createProjectDocument(
+      'Periodic seams',
+      toUserId('user_periodic_seams')
+    );
+    const expected: Array<{
+      name: string;
+      primitiveKind: PrimitiveKind;
+      dimensions: Record<string, ParamValue>;
+      seamCount: number | 'all';
+      featureCount: number;
+    }> = [
+      {
+        name: 'Cone',
+        primitiveKind: 'cone',
+        dimensions: { bottomRadius: 10, topRadius: 5, height: 20 },
+        seamCount: 1,
+        featureCount: 2
+      },
+      {
+        name: 'Sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 10 },
+        seamCount: 'all',
+        featureCount: 0
+      },
+      {
+        name: 'Torus',
+        primitiveKind: 'torus',
+        dimensions: { majorRadius: 20, minorRadius: 5 },
+        seamCount: 'all',
+        featureCount: 0
+      }
+    ];
+    const bodyIds: (typeof document.bodyOrder)[number][] = [];
+    for (const primitive of expected) {
+      document = addPrimitiveFeature(document, primitive);
+      bodyIds.push(document.bodyOrder.at(-1)!);
+    }
+
+    const derived = await adapter.syncDocument(document);
+    for (let index = 0; index < expected.length; index += 1) {
+      const body = derived.bodyRepresentations[bodyIds[index]!];
+      const edges = body?.topology?.edges ?? [];
+      const seamCount = edges.filter(
+        (edge) => edge.displayRole === 'seam'
+      ).length;
+      const featureCount = edges.filter(
+        (edge) => edge.displayRole === 'feature'
+      ).length;
+      expect(seamCount).toBe(
+        expected[index]!.seamCount === 'all'
+          ? edges.length
+          : expected[index]!.seamCount
+      );
+      expect(featureCount).toBe(expected[index]!.featureCount);
+    }
+    expect(derived.warnings).toEqual([]);
+
+    const cylinder = addPrimitiveFeature(
+      createProjectDocument('STEP cylinder', toUserId('user_step_seam')),
+      {
+        name: 'STEP cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 10, height: 20 }
+      }
+    );
+    const step = await adapter.exportStep(cylinder, [cylinder.bodyOrder[0]!]);
+    const imported = createProjectDocument(
+      'Imported STEP cylinder',
+      toUserId('user_step_seam')
+    );
+    const manager = new CommandManager(imported);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Imported STEP cylinder',
+        artifactId: 'artifact_periodic_seam',
+        sourceName: 'cylinder.step',
+        stepText: step
+      })
+    );
+    const importedDerived = await adapter.syncDocument(manager.document);
+    const importedEdges =
+      Object.values(importedDerived.bodyRepresentations)[0]?.topology?.edges ??
+      [];
+    expect(
+      importedEdges.filter((edge) => edge.displayRole === 'seam')
+    ).toHaveLength(1);
+    expect(
+      importedEdges.filter((edge) => edge.displayRole === 'feature')
+    ).toHaveLength(2);
+    expect(importedDerived.warnings).toEqual([]);
   });
 
   it('removes boolean seams from a unioned physical part', async () => {

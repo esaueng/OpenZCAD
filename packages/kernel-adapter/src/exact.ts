@@ -61,6 +61,7 @@ const STL_EXPORT_DEFLECTION = 0.08;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
+const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
 interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
@@ -147,6 +148,84 @@ function finiteVec3(value: unknown): Vec3 | null {
     return null;
   }
   return { x, y, z };
+}
+
+function analyticSurfaceRecord(
+  kernel: BrepKernel,
+  face: number
+): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+    return value && typeof value === 'object'
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameSphereSurface(kernel: BrepKernel, faces: number[]): boolean {
+  if (
+    faces.length !== 2 ||
+    faces.some((face) => kernel.getSurfaceType(face) !== 'sphere')
+  ) {
+    return false;
+  }
+  const records = faces.map((face) => analyticSurfaceRecord(kernel, face));
+  const centers = records.map((record) => finiteVec3(record?.center));
+  const radii = records.map((record) => record?.radius);
+  if (
+    !centers[0] ||
+    !centers[1] ||
+    typeof radii[0] !== 'number' ||
+    typeof radii[1] !== 'number'
+  ) {
+    return false;
+  }
+  const scale = Math.max(
+    1,
+    Math.abs(centers[0].x),
+    Math.abs(centers[0].y),
+    Math.abs(centers[0].z),
+    Math.abs(centers[1].x),
+    Math.abs(centers[1].y),
+    Math.abs(centers[1].z),
+    Math.abs(radii[0]),
+    Math.abs(radii[1])
+  );
+  const tolerance = scale * GEOMETRY_EPSILON;
+  return (
+    Math.abs(radii[0] - radii[1]) <= tolerance &&
+    Math.hypot(
+      centers[0].x - centers[1].x,
+      centers[0].y - centers[1].y,
+      centers[0].z - centers[1].z
+    ) <= tolerance
+  );
+}
+
+/**
+ * A periodic face references its UV-closing seam twice. BrepKit's sphere is
+ * currently built from two same-surface hemispheres, so their smooth equator
+ * fragments are display seams too. Neither case is a physical feature edge.
+ */
+function brepEdgeDisplayRole(
+  kernel: BrepKernel,
+  edge: number,
+  edgeToFaces: Record<string, number[]>
+): 'feature' | 'seam' {
+  const owners = edgeToFaces[String(edge)];
+  if (!Array.isArray(owners) || owners.length < 2) {
+    return 'feature';
+  }
+  const uniqueOwners = [...new Set(owners)];
+  if (
+    uniqueOwners.length === 1 &&
+    PERIODIC_SURFACE_TYPES.has(kernel.getSurfaceType(uniqueOwners[0]!))
+  ) {
+    return 'seam';
+  }
+  return sameSphereSurface(kernel, uniqueOwners) ? 'seam' : 'feature';
 }
 
 /**
@@ -1840,6 +1919,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         bounds[4]! - bounds[1]!,
         bounds[5]! - bounds[2]!
       );
+      const faceHandles = Array.from(kernel.getSolidFaces(solid));
+      const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
+        string,
+        number[]
+      >;
       const mesh = kernel.tessellateSolidGroupedBinary(
         solid,
         displayTessellation.linearDeflection,
@@ -1861,7 +1945,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         // Both the tessellation groups and getSolidFaces iterate the same
         // underlying shell, so face handle i owns triangle range i. Guarded
         // because the fingerprint hash below silently depends on it.
-        const faceHandles = Array.from(kernel.getSolidFaces(solid));
         if (faceHandles.length !== faceOffsets.length - 1) {
           throw new Error(
             `Face handle count ${faceHandles.length} does not match tessellation groups ${faceOffsets.length - 1}.`
@@ -1913,6 +1996,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           topology.edges.push({
             topologyId: `edge:${hash}`,
             hash,
+            displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
             points: edgePositions.slice(
               edgeOffsets[index],
               edgeOffsets[index + 1]
