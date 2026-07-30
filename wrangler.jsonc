@@ -27,6 +27,15 @@
     "AI_GLOBAL_DAILY_REQUEST_LIMIT": "100",
     "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "400"
   },
+  "secrets": {
+    "required": [
+      "AUTH_OTP_PEPPER",
+      "TURNSTILE_SECRET_KEY",
+      "SETTINGS_ENCRYPTION_KEY",
+      "AI_IDENTITY_PEPPER",
+      "AI_DEPLOYMENT_ALLOWED_EMAILS"
+    ]
+  },
   "d1_databases": [
     {
       "binding": "DB",
