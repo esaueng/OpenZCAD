@@ -1913,6 +1913,53 @@ describe('exact hybrid kernel adapter', () => {
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
   });
 
+  it('fillets both rims of a small circular sketch extrusion together', async () => {
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument(
+        'Small extruded cylinder fillet',
+        toUserId('user_exact')
+      ),
+      {
+        name: 'Circle',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }]
+      }
+    );
+    const { document: extruded, bodyId } = extrudeSketch(withSketch, {
+      name: 'Extrude',
+      sketchId,
+      distance: 6
+    });
+    const baseDerived = await adapter.syncDocument(extruded);
+    const baseBody = baseDerived.bodyRepresentations[bodyId]!;
+    const rimHashes =
+      baseBody.topology?.edges
+        .filter((edge) => edge.displayRole !== 'seam')
+        .map((edge) => edge.hash) ?? [];
+
+    expect(rimHashes).toHaveLength(2);
+    const filletRadius = 1;
+    const filleted = filletEdges(extruded, {
+      name: 'Both rim fillets',
+      targetBodyId: bodyId,
+      edgeHashes: rimHashes,
+      size: filletRadius
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+    const squareMoment =
+      filletRadius ** 2 * (2 - filletRadius / 2);
+    const quarterCircleMoment =
+      ((Math.PI * filletRadius ** 2) / 4) *
+      (2 - filletRadius + (4 * filletRadius) / (3 * Math.PI));
+    const expectedVolume =
+      Math.PI * 2 ** 2 * 6 -
+      2 * (2 * Math.PI * (squareMoment - quarterCircleMoment));
+    expect(derived.warnings).toEqual([]);
+    expect(body?.volume).toBeCloseTo(expectedVolume, 2);
+    expect(body?.bbox).toEqual(baseBody.bbox);
+  });
+
   it('allows a fillet radius larger than half the selected edge length', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Short edge fillet', toUserId('user_exact')),
