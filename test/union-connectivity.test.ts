@@ -74,6 +74,25 @@ describe('Union connectivity', () => {
     });
   });
 
+  it('accepts volume overlap when a kernel distance reports penetration', () => {
+    const overlap = vi.fn(() => true);
+    const result = analyzeUnionConnectivity(
+      [
+        box('wall', [0, 32, 7.5], [80, 40, 39.5]),
+        box('boss', [30, 22, 14], [50, 34, 34])
+      ],
+      () => 2,
+      overlap
+    );
+
+    expect(result).toMatchObject({
+      connected: true,
+      componentCount: 1,
+      closestGap: null
+    });
+    expect(overlap).toHaveBeenCalledTimes(1);
+  });
+
   it('does not mistake a visually tiny gap for contact', () => {
     const result = analyzeUnionConnectivity(
       [

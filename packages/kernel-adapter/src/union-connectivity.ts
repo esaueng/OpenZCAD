@@ -91,10 +91,13 @@ function contactTolerance<T>(solids: readonly UnionSolid<T>[]): number {
  * Finds whether every solid lump participates in one touching/overlapping
  * graph. Bounding-box lower bounds prune exact kernel distance calls, which
  * keeps patterned bodies bounded while preserving exact contact decisions.
+ * `exactOverlap` covers kernels whose distance query reports penetration
+ * depth instead of zero for intersecting solids.
  */
 export function analyzeUnionConnectivity<T>(
   solids: readonly UnionSolid<T>[],
-  exactDistance: (left: T, right: T) => number
+  exactDistance: (left: T, right: T) => number,
+  exactOverlap?: (left: T, right: T) => boolean
 ): UnionConnectivity {
   if (solids.length <= 1) {
     return {
@@ -167,7 +170,13 @@ export function analyzeUnionConnectivity<T>(
     if (pair.lowerBound > tolerance) {
       break;
     }
-    if (distanceFor(pair) <= tolerance) {
+    if (
+      distanceFor(pair) <= tolerance ||
+      exactOverlap?.(
+        solids[pair.left]!.solid,
+        solids[pair.right]!.solid
+      ) === true
+    ) {
       union(pair.left, pair.right);
     }
   }
