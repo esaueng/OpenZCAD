@@ -9,11 +9,13 @@ import {
 } from 'lucide-react';
 import {
   MAX_PROJECT_NAME_LENGTH,
+  type BodyRepresentation,
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
 import type { DemoDefinition } from '../lib/demos';
 import { BrandMark } from './BrandMark';
+import { PartThumbnail } from './PartThumbnail';
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -25,6 +27,7 @@ interface StartScreenProps {
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
   onOpenSettings(): void;
+  loadThumbnailBodies(project: ProjectSummary): Promise<BodyRepresentation[]>;
 }
 
 /**
@@ -35,30 +38,6 @@ interface StartScreenProps {
  */
 const COLLAPSED_PROJECT_LIMIT = 7;
 
-/**
- * Stand-in for a part preview. Nothing renders and stores a snapshot on save
- * yet, so every tile gets the same neutral isometric cage rather than a wireframe
- * implying geometry we have not actually read — a bracket drawn on a cylinder
- * would be worse than no drawing at all. Swap this for the cached preview once
- * one exists; the tile geometry does not change.
- */
-function PartThumbnail() {
-  return (
-    <svg viewBox="0 0 120 80" aria-hidden="true">
-      <g
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.1}
-        strokeLinejoin="round"
-      >
-        <path d="M34 52 60 40l26 12-26 12-26-12Z" />
-        <path d="M34 52V32l26-12 26 12v20" />
-        <path d="M60 40V20" />
-      </g>
-    </svg>
-  );
-}
-
 export function StartScreen({
   projects,
   status,
@@ -68,7 +47,8 @@ export function StartScreen({
   onCreate,
   onOpen,
   onOpenDemo,
-  onOpenSettings
+  onOpenSettings,
+  loadThumbnailBodies
 }: StartScreenProps) {
   const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
@@ -240,7 +220,10 @@ export function StartScreen({
                 onClick={() => onOpen(project.projectId)}
               >
                 <span className="start-tile-thumb">
-                  <PartThumbnail />
+                  <PartThumbnail
+                    project={project}
+                    loadBodies={loadThumbnailBodies}
+                  />
                 </span>
                 <strong className="start-tile-name">{project.name}</strong>
                 <small className="start-tile-meta">

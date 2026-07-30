@@ -355,6 +355,65 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
+test('renders saved part geometry in the project thumbnail', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Thumbnail Box');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  await page.getByTitle('Back to projects').click();
+  const projectCard = page.locator('.start-tile-project', {
+    hasText: 'Thumbnail Box'
+  });
+  const thumbnail = projectCard.locator('.start-tile-thumb img');
+  await expect(thumbnail).toBeVisible({ timeout: 15_000 });
+  await expect(thumbnail).toHaveAttribute(
+    'src',
+    /^data:image\/(webp|png);base64,/
+  );
+  await expect(projectCard.getByText('No geometry')).toHaveCount(0);
+
+  const nonBackgroundPixels = await thumbnail.evaluate(
+    async (element: HTMLImageElement) => {
+      await element.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = element.naturalWidth;
+      canvas.height = element.naturalHeight;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return 0;
+      }
+      context.drawImage(element, 0, 0);
+      const pixels = context.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      ).data;
+      let count = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const distanceFromBackground =
+          Math.abs(pixels[index]! - 5) +
+          Math.abs(pixels[index + 1]! - 8) +
+          Math.abs(pixels[index + 2]! - 12);
+        if (distanceFromBackground > 36) {
+          count += 1;
+        }
+      }
+      return count;
+    }
+  );
+  expect(nonBackgroundPixels).toBeGreaterThan(500);
+});
+
 test('restores a remembered local project without flashing the launcher', async ({
   page
 }) => {
