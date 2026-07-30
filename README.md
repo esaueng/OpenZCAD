@@ -98,9 +98,9 @@ Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a rea
 
 - onboard the `auth.esau.app` sending domain and keep the `EMAIL` binding restricted to `login@auth.esau.app`;
 - create a managed Turnstile widget allowlisting `zcad.esau.app` and bind its site key as `TURNSTILE_SITE_KEY`;
-- apply the D1 migrations in `apps/web/migrations`;
+- deploy with `pnpm deploy:beta`, which applies the remote D1 migrations before publishing the Worker;
 - set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=login@auth.esau.app` (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
-- provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), `AI_IDENTITY_PEPPER`, `AI_DEPLOYMENT_ALLOWED_EMAILS`, and the AI provider key if the assistant is enabled.
+- provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), `AI_IDENTITY_PEPPER`, `AI_DEPLOYMENT_ALLOWED_EMAILS`, and the AI provider key if the assistant is enabled. The required non-provider secrets are declared in `wrangler.jsonc`, so Wrangler rejects an incomplete deployment.
 
 Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
