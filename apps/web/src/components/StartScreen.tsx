@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, GraduationCap, Plus, Settings } from 'lucide-react';
+import {
+  ChevronDown,
+  GraduationCap,
+  Plus,
+  Search,
+  Settings,
+  X
+} from 'lucide-react';
 import {
   MAX_PROJECT_NAME_LENGTH,
   type ProjectSummary,
@@ -20,6 +27,38 @@ interface StartScreenProps {
   onOpenSettings(): void;
 }
 
+/**
+ * How many saved parts the grid shows before it has to be expanded. Seven parts
+ * plus the create tile fills roughly two rows at the widths the grid actually
+ * settles on, which is enough to recognise recent work without the demos below
+ * being pushed off the screen.
+ */
+const COLLAPSED_PROJECT_LIMIT = 7;
+
+/**
+ * Stand-in for a part preview. Nothing renders and stores a snapshot on save
+ * yet, so every tile gets the same neutral isometric cage rather than a wireframe
+ * implying geometry we have not actually read — a bracket drawn on a cylinder
+ * would be worse than no drawing at all. Swap this for the cached preview once
+ * one exists; the tile geometry does not change.
+ */
+function PartThumbnail() {
+  return (
+    <svg viewBox="0 0 120 80" aria-hidden="true">
+      <g
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.1}
+        strokeLinejoin="round"
+      >
+        <path d="M34 52 60 40l26 12-26 12-26-12Z" />
+        <path d="M34 52V32l26-12 26 12v20" />
+        <path d="M60 40V20" />
+      </g>
+    </svg>
+  );
+}
+
 export function StartScreen({
   projects,
   status,
@@ -33,6 +72,8 @@ export function StartScreen({
 }: StartScreenProps) {
   const [name, setName] = useState('New Part');
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState('');
 
   // The server measures the trimmed name, so the form has to agree exactly or
   // it would block names the API accepts (or vice versa).
@@ -49,26 +90,204 @@ export function StartScreen({
     (project) => !demoIds.has(project.projectId)
   );
 
+  const search = query.trim().toLowerCase();
+  const matchingProjects = search
+    ? userProjects.filter((project) =>
+        project.name.toLowerCase().includes(search)
+      )
+    : userProjects;
+
+  // A query is already a narrowing, so it shows every match and retires the
+  // expand toggle — being told "3 of 40 match" and *still* having to expand to
+  // see the third one would be absurd.
+  const overflowCount = search
+    ? 0
+    : matchingProjects.length - COLLAPSED_PROJECT_LIMIT;
+  const visibleProjects =
+    expanded || overflowCount <= 0
+      ? matchingProjects
+      : matchingProjects.slice(0, COLLAPSED_PROJECT_LIMIT);
+
   return (
     <div className="start-screen">
-      <button
-        className="start-settings-button icon-button"
-        type="button"
-        aria-label="Open settings"
-        title="Settings (Ctrl+,)"
-        onClick={onOpenSettings}
-      >
-        <Settings size={16} aria-hidden="true" />
-      </button>
-      <div className="start-card">
-        <div className="start-brand">
-          <BrandMark />
-          <h1>OpenZCAD</h1>
-          <span className="start-tagline">parametric cad in the browser</span>
-        </div>
+      <header className="start-header">
+        <BrandMark />
+        <span className="start-header-name">OpenZCAD</span>
+        <span className="start-tagline">parametric cad in the browser</span>
+        <button
+          className="start-settings-button icon-button"
+          type="button"
+          aria-label="Open settings"
+          title="Settings (Ctrl+,)"
+          onClick={onOpenSettings}
+        >
+          <Settings size={16} aria-hidden="true" />
+        </button>
+      </header>
 
-        <div className="start-section">
-          <h2>Design revision demos</h2>
+      <div className="start-body">
+        <section className="start-section">
+          <div className="start-section-head">
+            <h2>Your parts</h2>
+            <span className="start-section-note">
+              {userProjects.length === 0
+                ? 'nothing saved yet'
+                : search
+                  ? `${matchingProjects.length} of ${userProjects.length} match`
+                  : `${userProjects.length} ${
+                      userProjects.length === 1 ? 'project' : 'projects'
+                    }`}
+            </span>
+            {userProjects.length > 0 && (
+              <div className="start-search">
+                <Search size={13} aria-hidden="true" />
+                <input
+                  value={query}
+                  type="text"
+                  aria-label="Search parts"
+                  placeholder="Search parts…"
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && query) {
+                      // Escape belongs to the field while it has a query;
+                      // swallowing it stops the app's Escape ladder from also
+                      // reacting to a keystroke the user aimed here.
+                      event.stopPropagation();
+                      setQuery('');
+                    }
+                  }}
+                />
+                {query && (
+                  <button
+                    type="button"
+                    className="start-search-clear"
+                    aria-label="Clear search"
+                    onClick={() => setQuery('')}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="start-tile-grid">
+            <form
+              className="start-tile start-tile-new"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (canCreate) {
+                  onCreate(trimmedName, units);
+                }
+              }}
+              onKeyDown={(event) => {
+                // Enter creates from any field, including the units select.
+                if (
+                  event.key === 'Enter' &&
+                  !(event.target instanceof HTMLButtonElement)
+                ) {
+                  event.preventDefault();
+                  if (canCreate) {
+                    onCreate(trimmedName, units);
+                  }
+                }
+              }}
+            >
+              <span className="start-tile-new-head">
+                <Plus size={15} aria-hidden="true" />
+                New part
+              </span>
+              <input
+                value={name}
+                aria-label="Project name"
+                autoFocus
+                aria-invalid={nameTooLong || undefined}
+                aria-describedby={nameTooLong ? 'project-name-error' : undefined}
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setName(event.target.value)}
+              />
+              {nameTooLong && (
+                <small
+                  id="project-name-error"
+                  className="field-error"
+                  role="alert"
+                >
+                  Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
+                  characters.
+                </small>
+              )}
+              <select
+                value={units}
+                aria-label="Unit system"
+                onChange={(event) => setUnits(event.target.value as UnitSystem)}
+              >
+                <option value="mm">Millimeters</option>
+                <option value="cm">Centimeters</option>
+                <option value="m">Meters</option>
+                <option value="inch">Inches</option>
+              </select>
+              <button type="submit" className="primary wide" disabled={!canCreate}>
+                Create project
+              </button>
+            </form>
+
+            {visibleProjects.map((project) => (
+              <button
+                key={project.projectId}
+                type="button"
+                className="start-tile start-tile-project"
+                disabled={busy}
+                onClick={() => onOpen(project.projectId)}
+              >
+                <span className="start-tile-thumb">
+                  <PartThumbnail />
+                </span>
+                <strong className="start-tile-name">{project.name}</strong>
+                <small className="start-tile-meta">
+                  rev {project.revisionCount} ·{' '}
+                  {new Date(project.updatedAt).toLocaleDateString()}
+                </small>
+              </button>
+            ))}
+          </div>
+
+          {search && matchingProjects.length === 0 && (
+            <p className="start-no-matches" role="status">
+              No parts match “{query.trim()}”.
+              <button type="button" onClick={() => setQuery('')}>
+                Clear search
+              </button>
+            </p>
+          )}
+
+          {overflowCount > 0 && (
+            <button
+              type="button"
+              className="start-expand"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((open) => !open)}
+            >
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className={expanded ? 'is-open' : undefined}
+              />
+              {expanded
+                ? 'Show fewer parts'
+                : `Show ${overflowCount} more ${
+                    overflowCount === 1 ? 'part' : 'parts'
+                  }`}
+            </button>
+          )}
+        </section>
+
+        <section className="start-section">
+          <div className="start-section-head">
+            <h2>Design revision demos</h2>
+            <span className="start-section-note">
+              walk a part through revisions A → C
+            </span>
+          </div>
           <div className="demo-list">
             {demos.map((demo) => (
               <button
@@ -93,96 +312,12 @@ export function StartScreen({
               </button>
             ))}
           </div>
-        </div>
-
-        <form
-          className="start-section"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (canCreate) {
-              onCreate(trimmedName, units);
-            }
-          }}
-          onKeyDown={(event) => {
-            // Enter creates from any field, including the units select.
-            if (
-              event.key === 'Enter' &&
-              !(event.target instanceof HTMLButtonElement)
-            ) {
-              event.preventDefault();
-              if (canCreate) {
-                onCreate(trimmedName, units);
-              }
-            }
-          }}
-        >
-          <h2>New project</h2>
-          <div className="field">
-            <span>Project name</span>
-            <input
-              value={name}
-              aria-label="Project name"
-              autoFocus
-              aria-invalid={nameTooLong || undefined}
-              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onFocus={(event) => event.currentTarget.select()}
-              onChange={(event) => setName(event.target.value)}
-            />
-            {nameTooLong && (
-              <small id="project-name-error" className="field-error" role="alert">
-                Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
-                characters.
-              </small>
-            )}
-          </div>
-          <div className="field">
-            <span>Units</span>
-            <select
-              value={units}
-              aria-label="Unit system"
-              onChange={(event) => setUnits(event.target.value as UnitSystem)}
-            >
-              <option value="mm">Millimeters</option>
-              <option value="cm">Centimeters</option>
-              <option value="m">Meters</option>
-              <option value="inch">Inches</option>
-            </select>
-          </div>
-          <button
-            type="submit"
-            className="primary wide"
-            disabled={!canCreate}
-          >
-            <Plus size={15} aria-hidden="true" />
-            Create project
-          </button>
-        </form>
-
-        {userProjects.length > 0 && (
-          <div className="start-section">
-            <h2>Open existing</h2>
-            <div className="start-project-list">
-              {userProjects.map((project) => (
-                <button
-                  key={project.projectId}
-                  type="button"
-                  disabled={busy}
-                  onClick={() => onOpen(project.projectId)}
-                >
-                  <FolderOpen size={14} aria-hidden="true" />
-                  <strong>{project.name}</strong>
-                  <small>
-                    rev {project.revisionCount} ·{' '}
-                    {new Date(project.updatedAt).toLocaleDateString()}
-                  </small>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="start-status">{status}</div>
+        </section>
       </div>
+
+      <footer className="start-foot">
+        <span className="start-status">{status}</span>
+      </footer>
     </div>
   );
 }

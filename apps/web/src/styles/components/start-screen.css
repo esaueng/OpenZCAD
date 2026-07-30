@@ -38,18 +38,23 @@
   text-transform: none;
 }
 
+/* A full application surface, not a centred card: a slim chrome header, a
+   scrolling body of sections, and a status footer. The header and footer are
+   fixed rows so only the parts grid scrolls. */
 .start-screen {
   position: absolute;
   inset: 0;
   z-index: var(--z-start-screen);
   display: grid;
-  place-items: center;
+  grid-template-rows: var(--topbar-h) 1fr var(--statusbar-h);
   background: var(--color-bg);
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-/* Blueprint drafting-sheet atmosphere: radial accent glow over a fine grid,
-   masked toward the edges so the card floats on clean dark. */
+/* Blueprint drafting-sheet atmosphere: a fine grid under a wide accent wash.
+   Both are anchored to the top, where the content is, so the glow reads as light
+   falling across the sheet rather than a blob hovering in the empty middle, and
+   the grid fades out before the status footer. */
 .start-screen::before {
   content: '';
   position: absolute;
@@ -57,65 +62,87 @@
   pointer-events: none;
   background:
     radial-gradient(
-      60% 50% at 50% 38%,
+      120% 60% at 50% 0%,
       var(--color-accent-dim),
-      transparent 70%
+      transparent 65%
     ),
     linear-gradient(rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 / 42px
       42px,
     linear-gradient(90deg, rgba(77, 163, 255, 0.055) 1px, transparent 1px) 0 0 /
       42px 42px;
-  -webkit-mask-image: radial-gradient(
-    70% 65% at 50% 45%,
-    #000,
-    transparent 80%
-  );
-  mask-image: radial-gradient(70% 65% at 50% 45%, #000, transparent 80%);
+  -webkit-mask-image: linear-gradient(#000, #000 45%, transparent 92%);
+  mask-image: linear-gradient(#000, #000 45%, transparent 92%);
 }
 
-.start-card {
+.start-header,
+.start-foot {
   position: relative;
-  width: min(460px, calc(100vw - 48px));
-  display: grid;
-  gap: var(--sp-4);
-  padding: var(--sp-6) var(--sp-5);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-5);
+  background: var(--color-surface);
 }
 
-.start-brand {
-  display: grid;
-  gap: 6px;
-  justify-items: center;
-  text-align: center;
+.start-header {
+  border-bottom: var(--border-thin);
 }
 
-.start-brand svg {
-  width: 34px;
-  height: 34px;
+.start-foot {
+  border-top: var(--border-thin);
+}
+
+.start-header svg:first-child {
+  width: 22px;
+  height: 22px;
+  flex: none;
   color: var(--color-accent);
 }
 
-.start-brand h1 {
-  margin: 0;
-  font-size: var(--fs-xl);
+.start-header-name {
+  font-size: var(--fs-md);
   font-weight: var(--fw-medium);
   letter-spacing: 0.01em;
 }
 
 .start-tagline {
+  padding-left: var(--sp-3);
+  border-left: var(--border-thin);
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  letter-spacing: 0.2em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
+}
+
+.start-body {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: start;
+  gap: var(--sp-5);
+  /* Wide enough for eight tiles, narrow enough that they never stretch into
+     billboards on a 4K display. */
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: var(--sp-5) var(--sp-5) var(--sp-4);
+  overflow-y: auto;
 }
 
 .start-section {
   display: grid;
-  gap: var(--sp-2);
-  padding: var(--sp-4);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
+  gap: var(--sp-3);
+}
+
+.start-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  /* The search field is taller than the eyebrow, so the head keeps a constant
+     height whether or not a section has one — the parts and demos eyebrows stay
+     on the same rhythm. */
+  min-height: 30px;
 }
 
 .start-section h2 {
@@ -128,59 +155,205 @@
   text-transform: uppercase;
 }
 
-.start-project-list {
-  display: grid;
-  gap: 4px;
-  max-height: 200px;
-  overflow-y: auto;
+.start-section-note {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
 }
 
-.start-project-list button {
-  min-height: 34px;
+/* ── Parts search ────────────────────────────────────────── */
+
+.start-search {
+  position: relative;
   display: flex;
   align-items: center;
+  margin-left: auto;
+  width: min(240px, 40%);
+}
+
+.start-search > svg {
+  position: absolute;
+  left: 9px;
+  color: var(--color-text-subtle);
+  pointer-events: none;
+}
+
+.start-search input {
+  width: 100%;
+  padding-left: 27px;
+  padding-right: 26px;
+  background: var(--color-surface);
+  font-size: var(--fs-sm);
+}
+
+.start-search input::placeholder {
+  color: var(--color-text-subtle);
+}
+
+.start-search-clear {
+  position: absolute;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.start-search-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-no-matches {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
+.start-no-matches button {
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.start-no-matches button:hover {
+  color: var(--color-accent-hi);
+}
+
+/* ── Part tiles ──────────────────────────────────────────── */
+
+.start-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: var(--sp-3);
+}
+
+.start-tile {
+  display: grid;
   gap: var(--sp-2);
-  padding: 4px 10px;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
+  padding: var(--sp-3);
+  background: var(--color-surface);
+  border: var(--border-thin);
   border-radius: var(--radius-md);
   text-align: left;
 }
 
-.start-project-list button:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border);
+.start-tile-project {
+  grid-template-rows: auto 1fr auto;
+  gap: 6px;
+  color: var(--color-text-muted);
 }
 
-.start-project-list strong {
-  min-width: 0;
-  flex: 1;
-  font-weight: var(--fw-regular);
+.start-tile-project:hover:not(:disabled),
+.start-tile-project:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent-border);
+  outline: none;
+}
+
+.start-tile-thumb {
+  display: grid;
+  place-items: center;
+  height: 84px;
+  padding: var(--sp-2);
+  /* The tile preview is a viewport, so it carries the viewport's background. */
+  background: var(--color-viewport-bg);
+  border: 1px solid var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-border-strong);
+}
+
+.start-tile-thumb svg {
+  width: 100%;
+  height: 100%;
+}
+
+.start-tile-project:hover:not(:disabled) .start-tile-thumb {
+  color: var(--color-accent);
+}
+
+.start-tile-name {
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.start-project-list small {
+.start-tile-meta {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
+}
+
+/* The create tile is a dashed peer of the parts rather than a separate panel,
+   so "make a new one" sits in the same plane as "open an old one". */
+.start-tile-new {
+  align-content: start;
+  background: var(--color-surface-2);
+  border: 1px dashed var(--color-accent-border);
+}
+
+.start-tile-new-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-accent);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.start-tile-new input,
+.start-tile-new select {
+  width: 100%;
+}
+
+.start-expand {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.04em;
+}
+
+.start-expand:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.start-expand svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.start-expand svg.is-open {
+  transform: rotate(180deg);
 }
 
 .start-status {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  text-align: center;
 }
 
 .start-settings-button {
-  position: fixed;
-  top: var(--sp-3);
-  right: var(--sp-3);
-  z-index: calc(var(--z-start-screen) + 1);
-  background: var(--color-surface);
+  margin-left: auto;
+  background: var(--color-surface-2);
   border: var(--border-thin);
 }
 
