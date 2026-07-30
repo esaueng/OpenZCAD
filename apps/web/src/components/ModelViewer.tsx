@@ -249,6 +249,11 @@ interface ModelViewerProps {
   fitSignal: number;
   /** Set to move the camera to a standard view; nonce forces re-runs. */
   viewRequest: { view: StandardView; nonce: number } | null;
+  /**
+   * Set to spin the view a quarter turn about the world up axis; direction is
+   * how the model appears to turn on screen. Nonce forces re-runs.
+   */
+  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
@@ -542,6 +547,7 @@ export function ModelViewer({
   settings,
   fitSignal,
   viewRequest,
+  rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
@@ -3227,7 +3233,7 @@ export function ModelViewer({
           const inverse = camera.quaternion.clone().invert();
           const project = (axis: THREE.Vector3) => {
             const view = axis.clone().applyQuaternion(inverse);
-            return { x: view.x, y: -view.y };
+            return { x: view.x, y: -view.y, z: view.z };
           };
           sink({
             x: project(new THREE.Vector3(1, 0, 0)),
@@ -4584,6 +4590,33 @@ export function ModelViewer({
       far: camera.far
     });
   }, [viewRequest]);
+
+  // The view-cube arrows swing the camera a quarter turn around the world up
+  // axis. In a head-on top or bottom view the orbit offset is only the tiny
+  // nudge VIEW_DIRECTIONS keeps off the pole, so the same quarter turn reads
+  // as the drawing spinning in place — which is what the arrows should do
+  // there.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !rotateRequest) {
+      return;
+    }
+    const { camera, controls } = context;
+    // `direction` names the way the model appears to turn on screen, so the
+    // camera swings the opposite way: model clockwise = camera counterclockwise.
+    const angle =
+      rotateRequest.direction === 'cw' ? Math.PI / 2 : -Math.PI / 2;
+    const offset = camera.position
+      .clone()
+      .sub(controls.target)
+      .applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+    context.startCameraTween({
+      position: controls.target.clone().add(offset),
+      target: controls.target.clone(),
+      near: camera.near,
+      far: camera.far
+    });
+  }, [rotateRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
 }

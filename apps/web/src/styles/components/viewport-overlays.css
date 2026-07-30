@@ -9,42 +9,77 @@
   top: 10px;
   right: 10px;
   z-index: var(--z-viewer-overlay);
-  border-radius: 999px;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
   pointer-events: none;
 }
 
-.orientation-bg {
-  fill: rgba(17, 24, 33, 0.72);
-  stroke: var(--color-border);
-  stroke-width: 1;
+/* The widget stays click-through so a drag started near it still orbits;
+   only the cube faces and the rotate arrows take the pointer. */
+.orientation-cube {
+  pointer-events: none;
 }
 
-/* The widget stays click-through so a drag started near it still orbits;
-   only the view targets themselves take the pointer. */
-.orientation-hit,
-.orientation-home {
+.cube-face {
   pointer-events: auto;
   cursor: pointer;
-  fill: transparent;
-  stroke: transparent;
-  stroke-width: 1;
-  transition:
-    fill var(--motion-fast, 120ms) ease,
-    stroke var(--motion-fast, 120ms) ease;
+  /* Dark seams between faces read as the cube's rounded bevels. */
+  stroke: #10151c;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  transition: fill var(--dur-fast) ease;
 }
 
-.orientation-hit:hover,
-.orientation-home:hover {
-  fill: var(--color-accent-dim);
-  stroke: var(--color-accent-border);
+/* A CSS rule outranks the presentation attribute the frame loop writes. */
+.cube-face:hover {
+  fill: #37527a;
 }
 
-.orientation-hit:focus-visible,
-.orientation-home:focus-visible {
+.cube-face:focus-visible {
   outline: none;
-  fill: var(--color-accent-dim);
   stroke: var(--color-accent);
   stroke-width: 1.5;
+}
+
+.cube-face-label {
+  fill: var(--color-text);
+  font-size: 9px;
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.02em;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+
+.orientation-axis-label {
+  font-size: 8px;
+  font-weight: var(--fw-medium);
+  text-anchor: middle;
+  user-select: none;
+}
+
+.orientation-roll {
+  pointer-events: auto;
+  width: 26px;
+  height: 26px;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--color-text);
+  background: rgba(17, 24, 33, 0.72);
+  border: var(--border-thin);
+  transition:
+    background var(--dur-fast) ease,
+    border-color var(--dur-fast) ease;
+}
+
+.orientation-roll:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 .context-menu {
