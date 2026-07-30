@@ -1433,6 +1433,116 @@ test('grounds an AI fillet request onto every selected edge', async ({
   );
 });
 
+test('rejects a disconnected Union proposed by the assistant before commit', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'union-validation-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    const request = route.request().postDataJSON() as {
+      digest?: {
+        bodies?: Array<{
+          bodyId: string;
+          consumed: boolean;
+        }>;
+      };
+    };
+    const liveBodyIds =
+      request.digest?.bodies
+        ?.filter((body) => !body.consumed)
+        .map((body) => body.bodyId) ?? [];
+    const proposal = {
+      proposalId: 'proposal_disconnected_union_e2e',
+      summary: 'Union the two separated bodies.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_boolean',
+          name: 'AI disconnected Union',
+          localId: null,
+          operation: 'union',
+          targetBodyIds: liveBodyIds
+        }
+      ]
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal,
+          questions: null,
+          message: null,
+          readings: null
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Union Guard');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lower');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Upper');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Name').fill('Separate upper');
+  await inspector.getByLabel('Move Z').fill('32');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByLabel('CAD change request').fill('Union the two bodies');
+  await page.getByLabel('CAD change request').press('Enter');
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText('Union the two separated bodies.');
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Union does not fill empty space.'
+  );
+  await expect(proposal).toContainText('Proposed change');
+  await expect(
+    proposal.getByRole('button', { name: 'Apply', exact: true })
+  ).toBeEnabled();
+  await expect(
+    page.locator('.feature-row', { hasText: 'AI disconnected Union' })
+  ).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+
+  await page
+    .locator('.feature-row-main', { hasText: 'Separate upper' })
+    .click();
+  await inspector.getByLabel('Move Z').fill('24');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+
+  await expect(
+    page.locator('.feature-row', { hasText: 'AI disconnected Union' })
+  ).toBeVisible();
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Applied'
+  );
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
 test('grounds all cylinder edges onto its two visible rims', async ({
   page
 }) => {
@@ -1703,6 +1813,67 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(page.locator('.param-row')).toHaveAttribute('title', 'w = 30');
   await paramInput.blur();
   await expect(paramInput).toHaveValue('30');
+});
+
+test('rejects a disconnected Union and succeeds after the gap is closed', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Connected Union');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lower');
+  await inspector.getByLabel('Width (X)').fill('10');
+  await inspector.getByLabel('Height (Y)').fill('10');
+  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Upper');
+  await inspector.getByLabel('Width (X)').fill('10');
+  await inspector.getByLabel('Height (Y)').fill('10');
+  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lift upper');
+  await inspector.getByLabel('Move Z').fill('12');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await expect(inspector).toContainText(
+    'Union joins solids that touch or overlap. It does not fill empty gaps.'
+  );
+  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Union does not fill empty space.'
+  );
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+
+  await page.locator('.feature-row-main', { hasText: 'Lift upper' }).click();
+  await inspector.getByLabel('Move Z').fill('10');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible();
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
 test('refuses an invalid project name instead of working locally', async ({
