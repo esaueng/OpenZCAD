@@ -73,6 +73,7 @@ import {
   projectToScreen,
   projectedWorldSizePx,
   shouldShowGroundShadow,
+  shouldRenderTopologyEdge,
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
@@ -3356,7 +3357,7 @@ export function ModelViewer({
       });
 
       for (const edge of body.topology?.edges ?? []) {
-        if (edge.points.length < 6) {
+        if (!shouldRenderTopologyEdge(edge)) {
           continue;
         }
         const active = selectedEdgeKeys.has(

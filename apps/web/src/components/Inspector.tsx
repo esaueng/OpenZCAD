@@ -442,7 +442,11 @@ export function Inspector(props: InspectorProps) {
           edgeHashes={selectedEdges.flatMap((edge) =>
             edge.hash === undefined ? [] : [edge.hash]
           )}
-          availableEdgeCount={edgeModifierBody?.topology?.edges.length}
+          availableEdgeCount={
+            edgeModifierBody?.topology?.edges.filter(
+              (edge) => edge.displayRole !== 'seam'
+            ).length
+          }
           onSelectAllEdges={
             edgeModifierBody
               ? () => props.onSelectAllEdges(edgeModifierBody)
