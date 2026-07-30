@@ -705,6 +705,29 @@ test('keeps command names visible at the compact desktop breakpoint', async ({
   ).toBeVisible();
 });
 
+test('keeps settings at the far right and dismisses the file menu outside', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Top Bar Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+
+  const topbar = page.locator('.topbar');
+  await expect(topbar.locator(':scope > :last-child')).toHaveAttribute(
+    'aria-label',
+    'Open settings'
+  );
+
+  const fileMenu = topbar.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
+  await expect(fileMenu).toHaveAttribute('open', '');
+
+  await topbar.locator('.topbar-divider').click();
+  await expect(fileMenu).not.toHaveAttribute('open', '');
+});
+
 test('keeps every workspace surface inside a narrow viewport', async ({
   page
 }) => {

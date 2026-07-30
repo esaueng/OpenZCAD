@@ -64,12 +64,34 @@ export function TopBar({
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
   const projectNameInputRef = useRef<HTMLInputElement>(null);
+  const fileMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     if (editingProjectName) {
       projectNameInputRef.current?.select();
     }
   }, [editingProjectName]);
+
+  useEffect(() => {
+    function closeFileMenuOnOutsidePointer(event: PointerEvent) {
+      const fileMenu = fileMenuRef.current;
+      if (
+        fileMenu?.open &&
+        event.target instanceof Node &&
+        !fileMenu.contains(event.target)
+      ) {
+        fileMenu.open = false;
+      }
+    }
+
+    document.addEventListener('pointerdown', closeFileMenuOnOutsidePointer);
+    return () => {
+      document.removeEventListener(
+        'pointerdown',
+        closeFileMenuOnOutsidePointer
+      );
+    };
+  }, []);
 
   function beginProjectRename() {
     if (!projectName) {
@@ -172,7 +194,7 @@ export function TopBar({
         a flat row with the sync state and settings, so nothing read as a group.
         They are one file menu now; the row is identity | history | file | state.
       */}
-      <details className="topbar-menu file-menu">
+      <details ref={fileMenuRef} className="topbar-menu file-menu">
         <summary className="secondary topbar-action" title="Import and export">
           <FolderOpen size={14} aria-hidden="true" />
           File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
@@ -270,15 +292,6 @@ export function TopBar({
           {session.displayName}
         </span>
       )}
-      <button
-        className="icon-button"
-        type="button"
-        title="Settings (Ctrl+,)"
-        aria-label="Open settings"
-        onClick={onOpenSettings}
-      >
-        <SettingsIcon size={15} aria-hidden="true" />
-      </button>
       <span
         className={`collaboration-state ${collaborationStatus}`}
         title={`Collaboration: ${collaborationStatus}`}
@@ -296,6 +309,15 @@ export function TopBar({
                   ? 'Update required'
                   : collaborationStatus}
       </span>
+      <button
+        className="icon-button"
+        type="button"
+        title="Settings (Ctrl+,)"
+        aria-label="Open settings"
+        onClick={onOpenSettings}
+      >
+        <SettingsIcon size={15} aria-hidden="true" />
+      </button>
     </header>
   );
 }
