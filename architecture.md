@@ -58,8 +58,9 @@ The digest reports every body's liveness (`consumed`), placement (`bbox`), and v
 - Durable Objects: authenticated per-project presence and live document synchronization.
 - Workflows/Queues: export/import orchestration scaffolding.
 - Worker secret: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or provider-neutral `AI_API_KEY`; never shipped to the browser.
-- `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_REASONING_EFFORT`, `AI_SITE_URL`, and `AI_APP_NAME` select and attribute a Responses-compatible provider/model without code changes.
+- `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_REASONING_EFFORT`, `AI_SITE_URL`, and `AI_APP_NAME` select and attribute a Responses-compatible provider/model without code changes. Saved custom endpoint hostnames require the exact `AI_ALLOWED_BASE_URL_HOSTS` allowlist outside development, and provider redirects are not followed.
 - D1 stores versioned owner-scoped application preferences separately from canonical project documents. Optional personal AI tokens are stored in a separate table as AES-GCM ciphertext bound to the authenticated user; `SETTINGS_ENCRYPTION_KEY` remains a Worker secret and plaintext tokens are used only inside the provider request.
+- Deployment-funded AI requires the authenticated email to appear in `AI_DEPLOYMENT_ALLOWED_EMAILS`. D1 atomically enforces global daily request/cost ceilings in addition to account/IP window and concurrency limits.
 
 ## API and errors
 
@@ -67,4 +68,4 @@ All JSON POST bodies are validated. Oversized bodies return `413`, malformed dat
 
 ## Security posture
 
-This remains beta-only. Project, revision, artifact, import/export, and collaboration requests require Cloudflare Access identity and are owner-scoped. Assistant status and proposal routes also work in a local-only workspace: authenticated requests use the Access user ID, while public requests use a one-way hash of Cloudflare's connecting IP for the D1 quota and provider safety identifier. The raw address is never stored or sent upstream. Development mode supplies an isolated local identity and must not be used on a public route. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.
+This remains beta-only. Project, revision, artifact, import/export, settings, and collaboration requests require a single-use email-code session and are owner-scoped. Public assistant identities and IP quota buckets are domain-separated HMAC-SHA-256 values keyed by the Worker-only `AI_IDENTITY_PEPPER`; the raw address is never stored or sent upstream. Deployment-funded AI additionally requires an allowlisted authenticated email, while personal provider credentials remain owner-scoped. Development mode supplies an isolated local identity and must not be used on a public route. Parameter expressions use a parser rather than `eval`. AI output is schema-constrained, runtime-validated, previewed, and user-approved before it becomes a command transaction.

@@ -160,6 +160,15 @@ async function hashedUserId(
   return toUserId(`${prefix}_${suffix}`);
 }
 
+async function hmacUserId(
+  prefix: 'user_anon',
+  identity: string,
+  secret: string
+): Promise<AuthSession['userId']> {
+  const digest = await hmac(identity, secret);
+  return toUserId(`${prefix}_${digest.slice(0, 24)}`);
+}
+
 function readCookie(request: Request, name: string): string | null {
   const header = request.headers.get('cookie');
   if (!header) {
@@ -294,7 +303,7 @@ async function verifyTurnstile(
     !response.ok ||
     result.success !== true ||
     result.action !== TURNSTILE_ACTION ||
-    (env.ENVIRONMENT === 'beta' && result.hostname !== expectedHostname)
+    (env.ENVIRONMENT !== 'development' && result.hostname !== expectedHostname)
   ) {
     throw new AuthFlowError(
       400,
@@ -708,22 +717,56 @@ export async function authenticateRequest(
 /**
  * The modeling assistant remains available to local-first users. Signed-in
  * users retain their personal provider selection; public users receive a
- * one-way, IP-derived identifier so D1 and providers never receive the raw
- * address as the user identifier.
+ * secret-keyed, IP-derived identifier so D1 and providers never receive the
+ * raw address as the user identifier.
  */
-export async function identifyAssistantRequest(
+export interface AssistantRequestIdentity {
+  userId: AuthSession['userId'];
+  email?: string;
+}
+
+export async function identifyAssistantIdentity(
   request: Request,
   env: CloudflareEnv
-): Promise<AuthSession['userId']> {
+): Promise<AssistantRequestIdentity> {
   if (env.AUTH_MODE !== 'email-code') {
-    return (await authenticateRequest(request, env)).userId;
+    const session = await authenticateRequest(request, env);
+    return {
+      userId: session.userId,
+      ...(session.email ? { email: session.email } : {})
+    };
   }
   if (readCookie(request, SESSION_COOKIE_NAME)) {
-    return (await authenticateRequest(request, env)).userId;
+    const session = await authenticateRequest(request, env);
+    return {
+      userId: session.userId,
+      ...(session.email ? { email: session.email } : {})
+    };
   }
   const connectingIp = request.headers.get('cf-connecting-ip')?.trim();
   if (!connectingIp) {
     throw new AuthenticationError();
   }
-  return hashedUserId('user_anon', connectingIp);
+  const pepper = env.AI_IDENTITY_PEPPER?.trim();
+  if (!pepper) {
+    throw new AuthFlowError(
+      503,
+      'AI_IDENTITY_UNAVAILABLE',
+      'The modeling assistant identity service is unavailable.'
+    );
+  }
+  return {
+    userId: await hmacUserId(
+      'user_anon',
+      `openzcad-ai-user-v1:${connectingIp}`,
+      pepper
+    )
+  };
+}
+
+export async function identifyAssistantRequest(
+  request: Request,
+  env: CloudflareEnv
+): Promise<AuthSession['userId']> {
+  return (await identifyAssistantIdentity(request, env)).userId;
 }

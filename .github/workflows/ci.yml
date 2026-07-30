@@ -12,10 +12,7 @@ permissions:
 
 jobs:
   validate:
-    # Fork PRs would otherwise consume the private Depot runners; maintainers
-    # push a branch to this repo when an outside contribution needs CI.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6

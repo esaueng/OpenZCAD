@@ -343,6 +343,7 @@ describe('assistant integration', () => {
     );
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     const [, init] = fetchMock.mock.calls[0]!;
+    expect(init?.redirect).toBe('manual');
     expect(typeof init?.body).toBe('string');
     const request = JSON.parse(init?.body as string) as Record<string, unknown>;
     expect(request).toMatchObject({
