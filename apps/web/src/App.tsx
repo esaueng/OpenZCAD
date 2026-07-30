@@ -179,6 +179,7 @@ import { errorMessage } from './lib/errors';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
+import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
 import { useCollaboration } from './lib/useCollaboration';
 import {
   clearActiveProject,
@@ -480,6 +481,13 @@ export function App() {
       setSelectedBodyIds([bodyId]);
       setSelectedFeatureNodeId(featureNodeIdForBody(bodyId));
     },
+    onBusy: setBusy,
+    onStatus: setStatus
+  });
+  const { run: executeValidatedFeature } = useValidatedFeatureCommit({
+    manager: () => managerRef.current,
+    derive: (document) => geometry.syncOnce(document),
+    commit: (command) => executeCommand(command),
     onBusy: setBusy,
     onStatus: setStatus
   });
@@ -1192,17 +1200,21 @@ export function App() {
     }
   }
 
+  function finishFeatureCreation(): void {
+    // Back to an idle viewport so sequential adds stay one key away; the
+    // new feature is selectable from the history or the viewport.
+    setTool(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+  }
+
   function createFeature(command: AnyCommand): void {
     if (executeCommand(command)) {
-      // Back to an idle viewport so sequential adds stay one key away; the
-      // new feature is selectable from the history or the viewport.
-      setTool(null);
-      setSelectedFeatureNodeId(null);
-      setSelectedTopology(null);
-      setSelectedEdges([]);
-      setSelectedBodyIds([]);
-      setSelectedSketchProfileId(null);
-      setExtrudePreview(null);
+      finishFeatureCreation();
     }
   }
 
@@ -5075,9 +5087,24 @@ export function App() {
               onCreateRevolve={(value) =>
                 createFeature(commandFactories.revolveSketch(value))
               }
-              onCreateBoolean={(value) =>
-                createFeature(commandFactories.booleanBodies(value))
-              }
+              onCreateBoolean={(value) => {
+                const command = commandFactories.booleanBodies(value);
+                if (value.operation !== 'union') {
+                  createFeature(command);
+                  return;
+                }
+                const resultBodyId = command.payload.ids?.bodyId;
+                if (!resultBodyId) {
+                  setStatus('Union could not reserve a result body.');
+                  return;
+                }
+                void executeValidatedFeature(command, {
+                  featureName: value.name,
+                  resultBodyId,
+                  successMessage: command.label,
+                  onSuccess: finishFeatureCreation
+                });
+              }}
               onCreateTransform={(value) =>
                 createFeature(
                   commandFactories.transformBody({
@@ -5179,22 +5206,33 @@ export function App() {
                   )
                 )
               }
-              onApplyBoolean={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'boolean',
-                        operation: value.operation,
-                        targetBodyIds: value.targetBodyIds
-                      }
-                    },
-                    `Edit ${value.name}`
-                  )
-                )
-              }
+              onApplyBoolean={(feature, value) => {
+                const command = commandFactories.updateFeature(
+                  {
+                    featureId: feature.featureId,
+                    name: value.name,
+                    data: {
+                      featureKind: 'boolean',
+                      operation: value.operation,
+                      targetBodyIds: value.targetBodyIds
+                    }
+                  },
+                  `Edit ${value.name}`
+                );
+                if (value.operation !== 'union') {
+                  executeCommand(command);
+                  return;
+                }
+                if (!feature.bodyId) {
+                  setStatus('Boolean feature has no result body.');
+                  return;
+                }
+                void executeValidatedFeature(command, {
+                  featureName: value.name,
+                  resultBodyId: feature.bodyId,
+                  successMessage: command.label
+                });
+              }}
               onApplyTransform={(feature, value) =>
                 executeCommand(
                   commandFactories.updateFeature(
