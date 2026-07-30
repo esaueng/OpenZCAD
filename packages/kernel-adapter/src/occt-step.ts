@@ -40,6 +40,10 @@ import { displayTessellationForExtents } from './display-tessellation';
 import type { ExactKernelAdapter } from './exact';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
+  analyzeUnionConnectivity,
+  disconnectedUnionWarning
+} from './union-connectivity';
+import {
   ambiguousReferenceError,
   canonicalDirection,
   cylinderAnalyticSignature,
@@ -1176,6 +1180,51 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             });
             let output: ShapeHandle;
             if (feature.data.operation === 'union') {
+              const unionSolids = operands.flatMap((operand) =>
+                this.kernel.isSolid(operand)
+                  ? [operand]
+                  : this.kernel.getSubShapes(operand, 'solid')
+              );
+              const connectivity = analyzeUnionConnectivity(
+                unionSolids.map((candidate) => {
+                  const bounds = this.kernel.getBoundingBox(candidate, true);
+                  return {
+                    solid: candidate,
+                    bounds: {
+                      min: {
+                        x: bounds.xmin,
+                        y: bounds.ymin,
+                        z: bounds.zmin
+                      },
+                      max: {
+                        x: bounds.xmax,
+                        y: bounds.ymax,
+                        z: bounds.zmax
+                      }
+                    }
+                  };
+                }),
+                (left, right) => this.kernel.distanceBetween(left, right),
+                (left, right) => {
+                  try {
+                    return (
+                      this.kernel.getVolume(
+                        this.kernel.common(left, right)
+                      ) > 0
+                    );
+                  } catch {
+                    return false;
+                  }
+                }
+              );
+              if (!connectivity.connected) {
+                result.warnings.push(
+                  `Feature "${feature.name}": ${disconnectedUnionWarning(
+                    connectivity,
+                    document.units
+                  )}`
+                );
+              }
               output = this.kernel.fuseAll(operands);
             } else {
               output = operands[0]!;

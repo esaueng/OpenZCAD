@@ -50,7 +50,7 @@ interface AssistantPanelProps {
   document: ProjectDocument;
   selection: CadSelectionContext;
   /** Returns false when the patch could not be applied, so the panel can say so. */
-  onApply(proposal: CadPatchProposal): boolean;
+  onApply(proposal: CadPatchProposal): Promise<boolean>;
   /** Returns false when the patch could not be previewed. */
   onPreview(proposal: CadPatchProposal | null): boolean;
   collapsed: boolean;
@@ -133,6 +133,8 @@ export function AssistantPanel({
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [applyingEntryId, setApplyingEntryId] = useState<string | null>(null);
+  const applyingEntryRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -329,20 +331,34 @@ export function AssistantPanel({
     dispatch({ type: 'preview', entryId });
   }
 
-  function applyProposal(entryId: string, proposal: CadPatchProposal) {
+  async function applyProposal(entryId: string, proposal: CadPatchProposal) {
+    if (applyingEntryRef.current) {
+      return;
+    }
+    applyingEntryRef.current = entryId;
+    setApplyingEntryId(entryId);
     onPreview(null);
     dispatch({ type: 'preview', entryId: null });
     // A patch can still fail here — an expression that will not evaluate, or a
     // body an earlier operation consumed. Leave the card open when it does
     // rather than reporting a success that did not happen.
-    if (!onApply(proposal)) {
+    try {
+      if (!(await onApply(proposal))) {
+        setNotice(
+          'That patch could not be applied. See the status bar for details.'
+        );
+        return;
+      }
+      dispatch({ type: 'resolve-proposal', entryId, status: 'applied' });
+      setNotice(null);
+    } catch {
       setNotice(
         'That patch could not be applied. See the status bar for details.'
       );
-      return;
+    } finally {
+      applyingEntryRef.current = null;
+      setApplyingEntryId(null);
     }
-    dispatch({ type: 'resolve-proposal', entryId, status: 'applied' });
-    setNotice(null);
   }
 
   if (collapsed) {
@@ -383,6 +399,7 @@ export function AssistantPanel({
             className="assistant-icon-button"
             title="Clear this conversation"
             aria-label="Clear this conversation"
+            disabled={applyingEntryId !== null}
             onClick={() => {
               abortRef.current?.abort();
               onPreview(null);
@@ -472,10 +489,12 @@ export function AssistantPanel({
               <ProposalCard
                 key={entry.id}
                 entry={entry}
-                busy={thinking}
+                busy={thinking || applyingEntryId !== null}
                 previewing={conversation.previewEntryId === entry.id}
                 onPreview={() => previewProposal(entry.id, entry.proposal)}
-                onApply={() => applyProposal(entry.id, entry.proposal)}
+                onApply={() => {
+                  void applyProposal(entry.id, entry.proposal);
+                }}
                 onReject={() => {
                   if (conversation.previewEntryId === entry.id) {
                     onPreview(null);
