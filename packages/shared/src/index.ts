@@ -424,8 +424,15 @@ export interface EdgeTopology {
   topologyId: string;
   hash: number;
   /**
+   * Periodic B-Rep faces need topological seam edges to close their UV
+   * parameterization. They remain available to the kernel for stable topology
+   * identity, but are not physical feature edges and stay out of the viewport.
+   */
+  displayRole?: 'feature' | 'seam';
+  /**
    * XYZ-interleaved display polyline sampled from the exact edge curve.
-   * Closed edges repeat their first point so the viewport draws the seam.
+   * Closed feature edges repeat their first point so the viewport draws the
+   * closing segment.
    */
   points: number[];
 }
