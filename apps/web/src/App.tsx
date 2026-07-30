@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -331,6 +332,30 @@ export function App() {
   );
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(null);
+  const loadThumbnailBodies = useCallback(
+    async (project: ProjectSummary): Promise<BodyRepresentation[]> => {
+      const localDocument = await loadLocalProject(project.projectId).catch(
+        () => null
+      );
+      const localRevisionId = localDocument?.revisions.at(-1)?.revisionId;
+      const localMatchesSummary =
+        localDocument !== null &&
+        (!project.lastRevisionId || localRevisionId === project.lastRevisionId);
+
+      const remoteDocument =
+        !localMatchesSummary && session
+          ? await api.loadProject(project.projectId).catch(() => null)
+          : null;
+      const thumbnailDocument = selectProjectDocument(
+        localDocument,
+        remoteDocument
+      );
+      return thumbnailDocument
+        ? Object.values(thumbnailDocument.derived.bodyRepresentations)
+        : [];
+    },
+    [session]
+  );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
     view: StandardView;
@@ -4419,6 +4444,7 @@ export function App() {
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
+          loadThumbnailBodies={loadThumbnailBodies}
         />
         {settingsOverlay}
       </>
