@@ -333,6 +333,130 @@ function revolveRadialProfile(
 }
 
 /**
+ * Rebuild selected rims on a simple cylinder from a bounded radial profile.
+ *
+ * BrepKit's general fillet can return the input handle unchanged when the
+ * blend is exactly half the cylinder diameter, even though the rounded radial
+ * profile is valid. The profile uses a fixed, fine-grained quarter-circle
+ * approximation so the result remains a valid revolved solid. Keep this
+ * fallback deliberately narrow: every selected edge must be one of the two
+ * full circular cap rims on a three-face analytic cylinder.
+ */
+function tryExactAnalyticCylinderRimFillet(
+  kernel: BrepKernel,
+  solid: number,
+  selectedEdges: number[],
+  radius: number
+): number | null {
+  const cylinder = readAnalyticCylinder(kernel, solid);
+  if (!cylinder || selectedEdges.length === 0 || !Number.isFinite(radius)) {
+    return null;
+  }
+
+  const height = cylinder.axialMax - cylinder.axialMin;
+  const span = Math.max(1, cylinder.radius, height);
+  const linearTolerance = ANALYTIC_MATCH_EPSILON * span;
+  const lengthTolerance = Math.max(
+    linearTolerance,
+    2 * Math.PI * cylinder.radius * 1e-5
+  );
+  const selectedRims = new Set<'bottom' | 'top'>();
+
+  for (const edge of selectedEdges) {
+    const sample = edgeSampleOf(kernel, edge);
+    if (
+      !sample.closed ||
+      sample.curveType.toUpperCase() !== 'CIRCLE' ||
+      Math.abs(sample.length - 2 * Math.PI * cylinder.radius) >
+        lengthTolerance
+    ) {
+      return null;
+    }
+    const centerOffset = subtract(sample.center, cylinder.origin);
+    const axialPosition = dot(centerOffset, cylinder.axis);
+    const radialOffset = subtract(
+      centerOffset,
+      scale(cylinder.axis, axialPosition)
+    );
+    if (length(radialOffset) > linearTolerance) {
+      return null;
+    }
+    if (
+      Math.abs(axialPosition - cylinder.axialMin) <= linearTolerance &&
+      !selectedRims.has('bottom')
+    ) {
+      selectedRims.add('bottom');
+    } else if (
+      Math.abs(axialPosition - cylinder.axialMax) <= linearTolerance &&
+      !selectedRims.has('top')
+    ) {
+      selectedRims.add('top');
+    } else {
+      return null;
+    }
+  }
+
+  if (
+    radius <= GEOMETRY_EPSILON ||
+    radius >= cylinder.radius - linearTolerance ||
+    (selectedRims.size === 2 && radius * 2 >= height - linearTolerance) ||
+    (selectedRims.size === 1 && radius >= height - linearTolerance)
+  ) {
+    return null;
+  }
+
+  const profile: Vec2[] = [];
+  const appendQuarter = (
+    center: Vec2,
+    startAngle: number,
+    endAngle: number
+  ) => {
+    const segments = 64;
+    for (let index = 0; index <= segments; index += 1) {
+      if (profile.length > 0 && index === 0) {
+        continue;
+      }
+      const angle =
+        startAngle + ((endAngle - startAngle) * index) / segments;
+      profile.push({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+    }
+  };
+  const bottomAxis = { x: 0, y: cylinder.axialMin };
+  const bottomOuter = selectedRims.has('bottom')
+    ? { x: cylinder.radius - radius, y: cylinder.axialMin }
+    : { x: cylinder.radius, y: cylinder.axialMin };
+  profile.push(bottomAxis, bottomOuter);
+
+  if (selectedRims.has('bottom')) {
+    appendQuarter(
+      { x: cylinder.radius - radius, y: cylinder.axialMin + radius },
+      -Math.PI / 2,
+      0
+    );
+  }
+
+  const wallTop = selectedRims.has('top')
+    ? { x: cylinder.radius, y: cylinder.axialMax - radius }
+    : { x: cylinder.radius, y: cylinder.axialMax };
+  profile.push(wallTop);
+
+  if (selectedRims.has('top')) {
+    appendQuarter(
+      { x: cylinder.radius - radius, y: cylinder.axialMax - radius },
+      0,
+      Math.PI / 2
+    );
+  }
+
+  const topAxis = { x: 0, y: cylinder.axialMax };
+  profile.push(topAxis);
+  return revolveRadialProfile(kernel, profile, cylinder);
+}
+
+/**
  * Move either cap of a simple analytic cylinder by rebuilding the equivalent
  * primitive in the cylinder's world-space frame. Repeated cylindrical
  * resizes leave a valid analytic solid, but BrepKit's generic cap boolean can
@@ -1574,10 +1698,32 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             let modified: number;
             try {
               const targetBounds = kernel.boundingBox(target);
-              modified =
-                feature.data.featureKind === 'fillet'
-                  ? kernel.fillet(target, Uint32Array.from(selected), size)
-                  : kernel.chamfer(target, Uint32Array.from(selected), size);
+              if (feature.data.featureKind === 'fillet') {
+                try {
+                  modified = kernel.fillet(
+                    target,
+                    Uint32Array.from(selected),
+                    size
+                  );
+                } catch {
+                  modified = target;
+                }
+                if (modified === target) {
+                  modified =
+                    tryExactAnalyticCylinderRimFillet(
+                      kernel,
+                      target,
+                      selected,
+                      size
+                    ) ?? target;
+                }
+              } else {
+                modified = kernel.chamfer(
+                  target,
+                  Uint32Array.from(selected),
+                  size
+                );
+              }
               // When a second blend cannot be attached to an existing NURBS
               // blend, BrepKit intentionally falls back to the input handle.
               // Treat that as a failed feature instead of reporting success.
