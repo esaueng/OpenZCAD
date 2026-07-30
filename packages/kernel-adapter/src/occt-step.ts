@@ -54,6 +54,8 @@ const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
 const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
+const TOPOLOGY_HASH_UPPER_BOUND = 2_147_483_647;
+const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
 function uniformScaleTransform(factor: number): number[] {
   return [factor, 0, 0, 0, 0, factor, 0, 0, 0, 0, factor, 0];
@@ -73,6 +75,51 @@ interface ThroughHoleGeometry extends FaceGeometry {
   axialLength: number;
   featureType: 'through-hole';
   editableDimension: 'diameter';
+}
+
+function occtEdgeFaceAdjacency(
+  kernel: OcctKernel,
+  owner: ShapeHandle
+): Map<number, Set<number>> {
+  const flat = kernel.edgeToFaceMap(owner, TOPOLOGY_HASH_UPPER_BOUND);
+  const adjacency = new Map<number, Set<number>>();
+  for (let index = 0; index < flat.length;) {
+    const edgeHash = flat[index++];
+    const faceCount = flat[index++];
+    if (
+      edgeHash === undefined ||
+      faceCount === undefined ||
+      !Number.isInteger(faceCount) ||
+      faceCount < 0 ||
+      index + faceCount > flat.length
+    ) {
+      throw new Error('OCCT returned an invalid edge-to-face map.');
+    }
+    const owners = adjacency.get(edgeHash) ?? new Set<number>();
+    for (let faceIndex = 0; faceIndex < faceCount; faceIndex += 1) {
+      owners.add(flat[index++]!);
+    }
+    adjacency.set(edgeHash, owners);
+  }
+  return adjacency;
+}
+
+function occtEdgeDisplayRole(
+  kernel: OcctKernel,
+  edge: ShapeHandle,
+  edgeToFaces: Map<number, Set<number>>,
+  faceTypesByHash: Map<number, Set<string>>
+): 'feature' | 'seam' {
+  const edgeHash = kernel.hashCode(edge, TOPOLOGY_HASH_UPPER_BOUND);
+  const owners = edgeToFaces.get(edgeHash);
+  if (!owners || owners.size !== 1) {
+    return 'feature';
+  }
+  const ownerTypes = faceTypesByHash.get([...owners][0]!);
+  return ownerTypes?.size === 1 &&
+    PERIODIC_SURFACE_TYPES.has([...ownerTypes][0]!)
+    ? 'seam'
+    : 'feature';
 }
 
 function subtract(left: Vec3, right: Vec3): Vec3 {
@@ -1298,6 +1345,14 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     });
     const faces: BodyTopology['faces'] = [];
     const faceShapes = this.kernel.getSubShapes(shape, 'face');
+    const edgeToFaces = occtEdgeFaceAdjacency(this.kernel, shape);
+    const faceTypesByHash = new Map<number, Set<string>>();
+    for (const face of faceShapes) {
+      const hash = this.kernel.hashCode(face, TOPOLOGY_HASH_UPPER_BOUND);
+      const types = faceTypesByHash.get(hash) ?? new Set<string>();
+      types.add(this.kernel.surfaceType(face));
+      faceTypesByHash.set(hash, types);
+    }
     const faceGroups = mesh.faceGroups ?? new Int32Array();
     // Tessellation groups and getSubShapes iterate the same underlying shell,
     // so face handle i owns triangle range i. Guarded because the persisted
@@ -1339,6 +1394,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       edges.push({
         topologyId: `edge:${hash}`,
         hash,
+        displayRole: occtEdgeDisplayRole(
+          this.kernel,
+          edgeShapes[index / 3]!,
+          edgeToFaces,
+          faceTypesByHash
+        ),
         points: Array.from(
           wireframe.points.slice(pointStart, pointStart + pointCount)
         )

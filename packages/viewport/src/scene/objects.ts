@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { DisplayMode, SketchOverlay } from '../types';
+import type { EdgeTopology } from '@openzcad/shared';
 import { isViewerMesh } from '../pick/meshes';
 import {
   EDGE_IDLE_COLOR,
@@ -37,6 +38,11 @@ export function clearGroup(group: THREE.Group) {
     group.remove(child);
     disposeObject(child);
   }
+}
+
+/** Smooth B-Rep parameterization seams are topology, not visible part edges. */
+export function shouldRenderTopologyEdge(edge: EdgeTopology): boolean {
+  return edge.displayRole !== 'seam' && edge.points.length >= 6;
 }
 
 export function makeLabel(className: string, text: string): CSS2DObject {
