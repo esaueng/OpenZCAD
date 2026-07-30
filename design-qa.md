@@ -2,15 +2,8 @@
 
 ## Comparison setup
 
-- Source visuals:
-  - `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-8e2e9dd8-1c0b-4b1d-89f5-a28ff936fe9e.png` — focused sketch interaction reference.
-  - `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-c7bd1bf9-c27c-49b3-b017-f12d71165714.png` — arrow extrusion reference.
-  - `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-c953e1c3-672a-4bd1-8ae8-c485115aafe9.png` — existing OpenZCAD visual-language baseline.
-- Implementation evidence:
-  - `/private/tmp/openzcad-qa/openzcad-sketch.png`
-  - `/private/tmp/openzcad-qa/openzcad-extrude.png`
-  - `/private/tmp/openzcad-qa/openzcad-solid.png`
-- Side-by-side comparison input: `/private/tmp/openzcad-qa/comparison.png`
+- Source visuals: three reference screenshots — a focused sketch interaction reference, an arrow extrusion reference, and the existing OpenZCAD visual-language baseline (not stored in the repository).
+- Implementation evidence: sketch, extrude, and confirmed-solid screenshots of the implementation, reviewed side by side against the references.
 - Primary viewport: 1440 × 900 at device pixel ratio 2.
 - Responsive checks: 1024 × 768 and 768 × 650.
 

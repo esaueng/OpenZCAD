@@ -170,3 +170,7 @@ Current assistant limitations:
 4. Persistent naming resilient to upstream topology changes.
 5. Broader AI patch operations as each feature gains a deterministic command contract.
 6. Exact-kernel caching, loading UX, and finer worker bundle splitting.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright 2026 Esau Engineering LLC.
