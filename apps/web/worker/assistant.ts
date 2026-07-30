@@ -451,6 +451,7 @@ export async function streamAssistantProposal(
   try {
     upstream = await fetch(upstreamUrl, {
       method: 'POST',
+      redirect: 'manual',
       headers,
       signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
@@ -534,6 +535,7 @@ export async function testAssistantConnection(
   try {
     response = await fetch(upstreamUrl, {
       method: 'POST',
+      redirect: 'manual',
       headers: {
         authorization: `Bearer ${runtime.apiKey}`,
         'content-type': 'application/json',

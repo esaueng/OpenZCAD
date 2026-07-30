@@ -8,4 +8,4 @@ allowBuilds:
   workerd: true
 
 minimumReleaseAgeExclude:
-  - occt-wasm@3.7.1
+  - occt-wasm@3.8.0

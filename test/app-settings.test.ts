@@ -78,9 +78,22 @@ describe('application settings', () => {
     settings.assistant.baseUrl = 'https://models.example.test/v1/responses';
 
     expect(
-      parseUpdateAppSettingsRequest({ expectedRevision: 0, settings }, 'beta')
-        .settings.assistant.baseUrl
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings },
+        'beta',
+        'models.example.test'
+      ).settings.assistant.baseUrl
     ).toBe('https://models.example.test/v1/responses');
+    expect(() =>
+      parseUpdateAppSettingsRequest({ expectedRevision: 0, settings }, 'beta')
+    ).toThrow('not approved');
+    expect(() =>
+      validateAssistantBaseUrl(
+        'https://other.example.test/v1/responses',
+        'beta',
+        'models.example.test'
+      )
+    ).toThrow('not approved');
 
     expect(() =>
       validateAssistantBaseUrl('http://169.254.169.254/latest', 'beta')

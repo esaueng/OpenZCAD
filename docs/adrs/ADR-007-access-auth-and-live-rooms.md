@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Superseded in part by [ADR-012](ADR-012-email-code-identity.md). The live-room
+design remains current; the Cloudflare Access identity decision does not.
 
 ## Decision
 

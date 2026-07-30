@@ -5,6 +5,8 @@ const DEFAULT_ACCOUNT_REQUEST_LIMIT = 6;
 const DEFAULT_IP_REQUEST_LIMIT = 30;
 const DEFAULT_ACCOUNT_COST_LIMIT = 24;
 const DEFAULT_IP_COST_LIMIT = 120;
+const DEFAULT_GLOBAL_DAILY_REQUEST_LIMIT = 100;
+const DEFAULT_GLOBAL_DAILY_COST_LIMIT = 400;
 const DEFAULT_WINDOW_SECONDS = 10 * 60;
 const DEFAULT_ACCOUNT_CONCURRENCY_LIMIT = 2;
 const DEFAULT_IP_CONCURRENCY_LIMIT = 8;
@@ -22,6 +24,8 @@ interface UsageRow {
 }
 
 interface AssistantGuardSettings {
+  globalDailyRequestLimit: number;
+  globalDailyCostLimit: number;
   accountRequestLimit: number;
   ipRequestLimit: number;
   accountCostLimit: number;
@@ -57,6 +61,16 @@ function boundedInteger(
 
 function guardSettings(env: CloudflareEnv): AssistantGuardSettings {
   return {
+    globalDailyRequestLimit: boundedInteger(
+      env.AI_GLOBAL_DAILY_REQUEST_LIMIT,
+      DEFAULT_GLOBAL_DAILY_REQUEST_LIMIT,
+      MAX_REQUEST_LIMIT
+    ),
+    globalDailyCostLimit: boundedInteger(
+      env.AI_GLOBAL_DAILY_COST_LIMIT_UNITS,
+      DEFAULT_GLOBAL_DAILY_COST_LIMIT,
+      MAX_COST_LIMIT
+    ),
     accountRequestLimit: boundedInteger(
       env.AI_ACCOUNT_RATE_LIMIT_REQUESTS,
       DEFAULT_ACCOUNT_REQUEST_LIMIT,
@@ -152,19 +166,31 @@ function jsonError(
   };
 }
 
-async function opaqueIpBucket(request: Request): Promise<string | null> {
+async function hmacHex(value: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const digest = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
+}
+
+async function opaqueIpBucket(
+  request: Request,
+  secret: string
+): Promise<string | null> {
   const connectingIp = request.headers.get('cf-connecting-ip')?.trim();
   if (!connectingIp) {
     return null;
   }
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(connectingIp)
-  );
-  return `ip:${Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
-    .slice(0, 32)}`;
+  const digest = await hmacHex(`openzcad-ai-rate-v1:${connectingIp}`, secret);
+  return `ip:${digest.slice(0, 32)}`;
 }
 
 async function consumeUsageBucket(
@@ -193,6 +219,25 @@ async function consumeUsageBucket(
        RETURNING request_count, cost_units`
     )
     .bind(bucket, windowStart, cost)
+    .first<UsageRow>();
+}
+
+async function consumeGlobalDailyBudget(
+  db: D1Database,
+  dayStart: number,
+  cost: number
+): Promise<UsageRow | null> {
+  return db
+    .prepare(
+      `INSERT INTO ai_global_daily_usage
+         (day_start, request_count, cost_units)
+       VALUES (?, 1, ?)
+       ON CONFLICT(day_start) DO UPDATE SET
+         request_count = ai_global_daily_usage.request_count + 1,
+         cost_units = ai_global_daily_usage.cost_units + excluded.cost_units
+       RETURNING request_count, cost_units`
+    )
+    .bind(dayStart, cost)
     .first<UsageRow>();
 }
 
@@ -250,6 +295,7 @@ export async function acquireAssistantPermit(
   options: {
     cost: number;
     leaseMs: number;
+    deploymentFunded?: boolean;
     now?: number;
   }
 ): Promise<AssistantPermitResult> {
@@ -269,7 +315,15 @@ export async function acquireAssistantPermit(
       'AI_GUARD_UNAVAILABLE'
     );
   }
-  const ipBucket = await opaqueIpBucket(request);
+  const identityPepper = env.AI_IDENTITY_PEPPER?.trim();
+  if (!identityPepper) {
+    return jsonError(
+      503,
+      'The modeling assistant usage guard is unavailable.',
+      'AI_GUARD_UNAVAILABLE'
+    );
+  }
+  const ipBucket = await opaqueIpBucket(request, identityPepper);
   if (!ipBucket) {
     return jsonError(
       503,
@@ -287,6 +341,8 @@ export async function acquireAssistantPermit(
     1,
     Math.ceil((windowStart + windowMs - now) / 1_000)
   );
+  const dayStart = Math.floor(now / 86_400_000) * 86_400;
+  const globalRetryAfterSeconds = Math.max(1, dayStart + 86_400 - nowSeconds);
   const accountBucket = `account:${userId}`;
   const leaseId = crypto.randomUUID();
   const leaseSeconds =
@@ -401,6 +457,36 @@ export async function acquireAssistantPermit(
           remaining: Math.max(0, requestLimit - requestCount)
         }
       );
+    }
+    if (options.deploymentFunded !== false) {
+      const globalUsage = await consumeGlobalDailyBudget(
+        env.DB,
+        dayStart,
+        safeCost
+      );
+      const globalLimited = overUsageLimit(
+        globalUsage,
+        settings.globalDailyRequestLimit,
+        settings.globalDailyCostLimit
+      );
+      if (globalLimited) {
+        await release();
+        return jsonError(
+          429,
+          'The modeling assistant daily deployment budget has been reached.',
+          'AI_GLOBAL_BUDGET_EXHAUSTED',
+          globalRetryAfterSeconds,
+          {
+            limit: settings.globalDailyRequestLimit,
+            remaining: Math.max(
+              0,
+              settings.globalDailyRequestLimit -
+                (globalUsage?.request_count ??
+                  settings.globalDailyRequestLimit + 1)
+            )
+          }
+        );
+      }
     }
 
     return {

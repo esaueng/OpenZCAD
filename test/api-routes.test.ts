@@ -27,6 +27,13 @@ function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
         bind() {
           return {
             async first() {
+              if (query.includes('FROM auth_sessions')) {
+                return {
+                  user_id: 'user_allowed_test',
+                  email: 'allowed@example.com',
+                  expires_at: 4_000_000_000
+                };
+              }
               return query.includes('FROM user_settings')
                 ? {
                     settings_json: JSON.stringify(settings),
@@ -225,7 +232,7 @@ describe('worker api routes', () => {
     expect(JSON.stringify(status)).not.toContain('secret-test-value');
   });
 
-  it('exposes assistant status without an email-code session', async () => {
+  it('does not expose deployment assistant availability without an allowlisted session', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
       {
@@ -237,8 +244,29 @@ describe('worker api routes', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      configured: true,
+      configured: false,
       provider: 'openrouter'
+    });
+  });
+
+  it('reports deployment assistant availability to an allowlisted session', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { cookie: '__Host-openzcad_session=test-session' }
+      }),
+      withEnabledDeploymentAssistant({
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        AI_DEPLOYMENT_ALLOWED_EMAILS: 'allowed@example.com',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: true,
+      provider: 'openrouter',
+      source: 'deployment'
     });
   });
 
@@ -348,13 +376,18 @@ describe('worker api routes', () => {
     const publicEnv = withEnabledDeploymentAssistant({
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
+      AI_IDENTITY_PEPPER: 'route-test-pepper',
+      AI_DEPLOYMENT_ALLOWED_EMAILS: 'allowed@example.com',
       AI_API_KEY: 'test-key',
       AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',
-        headers: { 'cf-connecting-ip': '203.0.113.42' },
+        headers: {
+          cookie: '__Host-openzcad_session=test-session',
+          'cf-connecting-ip': '203.0.113.42'
+        },
         body: JSON.stringify({
           prompt: 'Make it wider',
           digest: {
