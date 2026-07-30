@@ -5,6 +5,7 @@ import {
   createFatLineMaterial,
   createObjectForBody,
   createStudioHemisphereLight,
+  shouldRenderTopologyEdge,
   VIEWPORT_RENDER_ORDER
 } from '@openzcad/viewport';
 import {
@@ -205,6 +206,27 @@ describe('CAD viewport shading', () => {
     const edgeOverlay = object.children[0];
 
     expect(edgeOverlay?.renderOrder).toBe(VIEWPORT_RENDER_ORDER.BODY_EDGE);
+  });
+
+  it('keeps periodic B-Rep seams out of the visible edge overlay', () => {
+    const points = [0, 0, 0, 0, 0, 10];
+
+    expect(
+      shouldRenderTopologyEdge({
+        topologyId: 'edge:feature',
+        hash: 1,
+        displayRole: 'feature',
+        points
+      })
+    ).toBe(true);
+    expect(
+      shouldRenderTopologyEdge({
+        topologyId: 'edge:seam',
+        hash: 2,
+        displayRole: 'seam',
+        points
+      })
+    ).toBe(false);
   });
 
   it('uses kernel-oriented front faces for imported STEP solids', () => {

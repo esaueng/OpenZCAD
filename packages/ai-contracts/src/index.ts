@@ -341,7 +341,8 @@ function compactEdge(
     primitiveKind === 'sphere' || primitiveKind === 'torus';
   const seamOnAxialPrimitive =
     (primitiveKind === 'cylinder' || primitiveKind === 'cone') && !closed;
-  const seam = smoothPrimitive || seamOnAxialPrimitive;
+  const seam =
+    edge.displayRole === 'seam' || smoothPrimitive || seamOnAxialPrimitive;
 
   return {
     ...base,
