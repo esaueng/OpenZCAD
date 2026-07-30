@@ -2222,6 +2222,56 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
   expect(cycled).toBe(true);
 });
 
+test('double-clicking a face selects its whole body', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Body Double Click Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  const filters = page.getByRole('group', { name: 'Selection filter' });
+  const faceFilter = filters.getByRole('button', {
+    name: 'Face',
+    exact: true
+  });
+  await faceFilter.click();
+  await expect(faceFilter).toHaveAttribute('aria-pressed', 'true');
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const spot = {
+    x: bounds.x + bounds.width * 0.42,
+    y: bounds.y + bounds.height * 0.55
+  };
+  const label = page.locator('.selection-chip-label');
+
+  // A plain click keeps the active sub-element filter.
+  await page.mouse.click(spot.x, spot.y);
+  await expect(label).toContainText('face');
+
+  // Dispatch to the canvas directly because the first physical click creates
+  // a selection chip at the hit point, which can receive the second click.
+  await canvas.dispatchEvent('dblclick', {
+    button: 0,
+    clientX: spot.x,
+    clientY: spot.y
+  });
+  await expect(label).toHaveText('Box Body');
+  await expect(faceFilter).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('double-clicking a filleted rim takes the whole run of edges', async ({
   page
 }) => {
