@@ -48,6 +48,12 @@ describe('a run of one', () => {
     const edges = [edge('a', [[1, 2, 3]])];
     expect(edgeRunFrom(edges, 'a')).toEqual(['a']);
   });
+
+  it('does not expose an invisible periodic seam as an edge run', () => {
+    const seam = edge('seam', [[0, 0, 0], [0, 0, 10]]);
+    seam.displayRole = 'seam';
+    expect(edgeRunFrom([seam], 'seam')).toEqual([]);
+  });
 });
 
 describe('walking a smooth run', () => {
