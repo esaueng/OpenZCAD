@@ -10,7 +10,10 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
-import { normalizeStepPlaneAnglesForKernel } from '../packages/kernel-adapter/src/step-import';
+import {
+  importedStepValidationWarning,
+  normalizeStepPlaneAnglesForKernel
+} from '../packages/kernel-adapter/src/step-import';
 
 const DEGREE_TO_RADIAN = 0.0174532925199433;
 
@@ -105,5 +108,21 @@ describe('STEP plane-angle compatibility', () => {
 
     const noContext = `ISO-10303-21;\nDATA;\n#1=(CONVERSION_BASED_UNIT('DEGREE',#2)NAMED_UNIT(*)PLANE_ANGLE_UNIT());\n#2=PLANE_ANGLE_MEASURE_WITH_UNIT(PLANE_ANGLE_MEASURE(${DEGREE_TO_RADIAN}),#3);\n#3=CONICAL_SURFACE('',#4,10.,45.);\nENDSEC;\nEND-ISO-10303-21;\n`;
     expect(normalizeStepPlaneAnglesForKernel(noContext)).toBe(noContext);
+  });
+});
+
+describe('STEP import validation diagnostics', () => {
+  it('describes a partially invalid compound as an imported body', () => {
+    expect(importedStepValidationWarning('Imported assembly', 1, 10)).toBe(
+      'Body "Imported assembly" imported and rendered, but 1 of its 10 STEP solids ' +
+        'has OpenCascade B-rep validity issues. Exact edits or booleans involving ' +
+        'the affected solid may fail.'
+    );
+  });
+
+  it('uses singular wording for one imported solid', () => {
+    expect(importedStepValidationWarning('Imported part', 1, 1)).toContain(
+      'but its STEP solid has OpenCascade B-rep validity issues'
+    );
   });
 });

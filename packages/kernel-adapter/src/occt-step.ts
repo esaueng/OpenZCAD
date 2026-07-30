@@ -53,6 +53,7 @@ import {
   planeAnalyticSignature,
   unresolvedReferenceError
 } from './topology-fingerprint';
+import { importedStepValidationWarning } from './step-import';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
@@ -1501,8 +1502,20 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
           body.representationSource !== 'mesh-import' &&
           !this.kernel.isValid(shape)
         ) {
+          const invalidStepSolids =
+            body.representationSource === 'step-import'
+              ? this.kernel
+                  .getSubShapes(shape, 'solid')
+                  .filter((solid) => !this.kernel.isValid(solid))
+              : [];
           build.warnings.push(
-            `Body "${body.name}" failed OpenCascade B-rep validation.`
+            invalidStepSolids.length > 0
+              ? importedStepValidationWarning(
+                  body.name,
+                  invalidStepSolids.length,
+                  this.kernel.subShapeCount(shape, 'solid')
+                )
+              : `Body "${body.name}" failed OpenCascade B-rep validation.`
           );
         }
         const representation = this.representation(
