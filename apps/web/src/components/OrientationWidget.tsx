@@ -1,4 +1,5 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
+import { Redo2, Undo2 } from 'lucide-react';
 import { VIEW_LABELS, type AxisProjection, type StandardView } from '@openzcad/viewport';
 
 const AXIS_COLORS = {
@@ -6,25 +7,58 @@ const AXIS_COLORS = {
   y: 'var(--color-handle-y)',
   z: 'var(--color-handle-z)'
 };
-const WIDGET_R = 24;
-/** Click radius around each axis tip; larger than the drawn label. */
-const TIP_HIT_R = 8;
 
-type Axis = 'x' | 'y' | 'z';
+/** SVG center and pixels per cube half-edge. */
+const CX = 52;
+const CY = 54;
+const SCALE = 21;
+/** Axis stubs run from just past the face to the letter at the tip. */
+const AXIS_FROM = 1.3;
+const AXIS_TO = 1.95;
+const AXIS_LABEL_AT = 2.25;
+
+type Vec3 = readonly [number, number, number];
 
 /**
- * Each axis reads as two views: the end you can see, and the one behind it.
- * `positive` is the view from the +axis side.
+ * One cube face: its outward normal and the in-plane frame its label is drawn
+ * in. `u`/`v` are screen-right/screen-up when the face is viewed head-on in
+ * its own standard view, so the label reads upright exactly when you arrive.
  */
-const AXIS_VIEWS: Record<Axis, { positive: StandardView; negative: StandardView }> = {
-  x: { positive: 'right', negative: 'left' },
-  y: { positive: 'back', negative: 'front' },
-  z: { positive: 'top', negative: 'bottom' }
-};
+interface FaceSpec {
+  view: StandardView;
+  opposite: StandardView;
+  normal: Vec3;
+  u: Vec3;
+  v: Vec3;
+}
+
+const FACES: FaceSpec[] = [
+  { view: 'right', opposite: 'left', normal: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
+  { view: 'left', opposite: 'right', normal: [-1, 0, 0], u: [0, -1, 0], v: [0, 0, 1] },
+  { view: 'back', opposite: 'front', normal: [0, 1, 0], u: [-1, 0, 0], v: [0, 0, 1] },
+  { view: 'front', opposite: 'back', normal: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+  { view: 'top', opposite: 'bottom', normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+  // Bottom's frame follows VIEW_DIRECTIONS' pole nudge, which settles
+  // screen-up on -Y when looking up — not the +Y a mirror of top would give.
+  { view: 'bottom', opposite: 'top', normal: [0, 0, -1], u: [1, 0, 0], v: [0, -1, 0] }
+];
+
+/** Face fill lerps between these as it turns toward the camera. */
+const FACE_GLANCING = [0x22, 0x2a, 0x34] as const;
+const FACE_FRONTAL = [0x3a, 0x44, 0x50] as const;
+
+/** Below this facing ratio a face is a sliver not worth drawing or clicking. */
+const FACING_EPSILON = 0.03;
+/** Above this the face is head-on, and clicking it flips to the far side. */
+const HEAD_ON = 0.999;
 
 /**
- * Live world-axis trihedron in the viewport's upper-right, doubling as a view
- * picker: click an axis tip to look down it, click the hub for isometric.
+ * View cube in the viewport's upper-right: an orthographic cube whose faces
+ * are the six standard views, world-axis stubs in the handle colors, and two
+ * arrows that spin the view a quarter turn about the world up axis. Clicking
+ * the face you are already looking at flips to the opposite side, which is
+ * how bottom/left/back stay one-or-two clicks away without cluttering the
+ * cube with invisible targets.
  *
  * The viewer pushes axis projections through `orientationRef` and the SVG
  * updates imperatively, so no React render happens per camera frame — the
@@ -33,11 +67,17 @@ const AXIS_VIEWS: Record<Axis, { positive: StandardView; negative: StandardView 
  */
 export function OrientationWidget({
   orientationRef,
-  onSelectView
+  onSelectView,
+  onRotateView
 }: {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectView(view: StandardView): void;
+  onRotateView(direction: 'cw' | 'ccw'): void;
 }) {
+  const faceRefs = useRef<(SVGPolygonElement | null)[]>([]);
+  const faceLabelRefs = useRef<(SVGTextElement | null)[]>([]);
+  /** What clicking each face does right now (flips when head-on). */
+  const faceActions = useRef<StandardView[]>(FACES.map((face) => face.view));
   const lineRefs = {
     x: useRef<SVGLineElement | null>(null),
     y: useRef<SVGLineElement | null>(null),
@@ -48,39 +88,78 @@ export function OrientationWidget({
     y: useRef<SVGTextElement | null>(null),
     z: useRef<SVGTextElement | null>(null)
   };
-  /** Hit targets ride the tips, so they follow the camera like the labels. */
-  const positiveHitRefs = {
-    x: useRef<SVGCircleElement | null>(null),
-    y: useRef<SVGCircleElement | null>(null),
-    z: useRef<SVGCircleElement | null>(null)
-  };
-  const negativeHitRefs = {
-    x: useRef<SVGCircleElement | null>(null),
-    y: useRef<SVGCircleElement | null>(null),
-    z: useRef<SVGCircleElement | null>(null)
-  };
 
   useEffect(() => {
     orientationRef.current = (axes) => {
+      const sx = (p: Vec3) => p[0] * axes.x.x + p[1] * axes.y.x + p[2] * axes.z.x;
+      const sy = (p: Vec3) => p[0] * axes.x.y + p[1] * axes.y.y + p[2] * axes.z.y;
+      const depth = (p: Vec3) => p[0] * axes.x.z + p[1] * axes.y.z + p[2] * axes.z.z;
+      const px = (p: Vec3) => CX + SCALE * sx(p);
+      const py = (p: Vec3) => CY + SCALE * sy(p);
+
+      FACES.forEach((face, index) => {
+        const polygon = faceRefs.current[index];
+        const label = faceLabelRefs.current[index];
+        if (!polygon || !label) {
+          return;
+        }
+        const facing = depth(face.normal);
+        if (facing < FACING_EPSILON) {
+          polygon.style.display = 'none';
+          label.style.display = 'none';
+          return;
+        }
+        polygon.style.display = '';
+        label.style.display = '';
+        const { normal: n, u, v } = face;
+        const corners: Vec3[] = [
+          [n[0] + u[0] + v[0], n[1] + u[1] + v[1], n[2] + u[2] + v[2]],
+          [n[0] - u[0] + v[0], n[1] - u[1] + v[1], n[2] - u[2] + v[2]],
+          [n[0] - u[0] - v[0], n[1] - u[1] - v[1], n[2] - u[2] - v[2]],
+          [n[0] + u[0] - v[0], n[1] + u[1] - v[1], n[2] + u[2] - v[2]]
+        ];
+        polygon.setAttribute(
+          'points',
+          corners.map((corner) => `${px(corner)},${py(corner)}`).join(' ')
+        );
+        // The cube is lit by facing angle alone: full-on faces are lightest.
+        const fill = FACE_GLANCING.map((from, channel) =>
+          Math.round(from + ((FACE_FRONTAL[channel] ?? from) - from) * facing)
+        );
+        polygon.setAttribute('fill', `rgb(${fill[0]}, ${fill[1]}, ${fill[2]})`);
+        // An orthographic projection of a planar face is exactly a 2D affine
+        // map, so the label lies on the face via a single matrix: text-right
+        // along u, text-up along v (negated — SVG y grows downward).
+        label.setAttribute(
+          'transform',
+          `matrix(${sx(u)}, ${sy(u)}, ${-sx(v)}, ${-sy(v)}, ${px(n)}, ${py(n)})`
+        );
+        const action = facing > HEAD_ON ? face.opposite : face.view;
+        if (faceActions.current[index] !== action) {
+          faceActions.current[index] = action;
+          polygon.setAttribute('aria-label', `${VIEW_LABELS[action]} view`);
+        }
+      });
+
       for (const key of ['x', 'y', 'z'] as const) {
         const line = lineRefs[key].current;
         const label = labelRefs[key].current;
-        const positive = positiveHitRefs[key].current;
-        const negative = negativeHitRefs[key].current;
         if (!line || !label) {
           continue;
         }
-        const tipX = 30 + axes[key].x * WIDGET_R;
-        const tipY = 30 + axes[key].y * WIDGET_R;
-        line.setAttribute('x2', String(tipX));
-        line.setAttribute('y2', String(tipY));
-        label.setAttribute('x', String(30 + axes[key].x * (WIDGET_R + 4.5)));
-        label.setAttribute('y', String(30 + axes[key].y * (WIDGET_R + 4.5) + 2.5));
-        positive?.setAttribute('cx', String(tipX));
-        positive?.setAttribute('cy', String(tipY));
-        // The opposite end has no drawn arm; it is the mirror of the tip.
-        negative?.setAttribute('cx', String(60 - tipX));
-        negative?.setAttribute('cy', String(60 - tipY));
+        const dir = axes[key];
+        line.setAttribute('x1', String(CX + dir.x * SCALE * AXIS_FROM));
+        line.setAttribute('y1', String(CY + dir.y * SCALE * AXIS_FROM));
+        line.setAttribute('x2', String(CX + dir.x * SCALE * AXIS_TO));
+        line.setAttribute('y2', String(CY + dir.y * SCALE * AXIS_TO));
+        label.setAttribute('x', String(CX + dir.x * SCALE * AXIS_LABEL_AT));
+        label.setAttribute('y', String(CY + dir.y * SCALE * AXIS_LABEL_AT + 2.5));
+        // An axis pointing at the camera collapses to a dot behind the cube;
+        // fade it out rather than leave a letter floating on a face.
+        const planar = Math.hypot(dir.x, dir.y);
+        const opacity = Math.min(Math.max((planar - 0.3) / 0.25, 0), 1);
+        line.setAttribute('opacity', String(opacity));
+        label.setAttribute('opacity', String(opacity));
       }
     };
     return () => {
@@ -89,81 +168,87 @@ export function OrientationWidget({
   }, []);
 
   return (
-    <svg
-      className="orientation-widget"
-      viewBox="0 0 60 60"
-      width="60"
-      height="60"
-      role="group"
-      aria-label="View orientation"
-    >
-      <circle cx="30" cy="30" r="28" className="orientation-bg" />
-      {(['x', 'y', 'z'] as const).map((key) => (
-        <g key={key}>
-          <line
-            ref={lineRefs[key]}
-            x1="30"
-            y1="30"
-            x2="30"
-            y2="30"
-            stroke={AXIS_COLORS[key]}
-            strokeWidth="1.6"
-          />
-          <text
-            ref={labelRefs[key]}
-            x="30"
-            y="30"
-            fill={AXIS_COLORS[key]}
-            fontSize="7"
-            textAnchor="middle"
-            aria-hidden="true"
-          >
-            {key.toUpperCase()}
-          </text>
-        </g>
-      ))}
-      {(['x', 'y', 'z'] as const).flatMap((key) =>
-        (['positive', 'negative'] as const).map((end) => {
-          const view = AXIS_VIEWS[key][end];
-          const ref = end === 'positive' ? positiveHitRefs[key] : negativeHitRefs[key];
-          return (
-            <circle
-              key={`${key}-${end}`}
-              ref={ref}
-              className="orientation-hit"
-              cx="30"
-              cy="30"
-              r={TIP_HIT_R}
+    <div className="orientation-widget" role="group" aria-label="View orientation">
+      <button
+        type="button"
+        className="orientation-roll"
+        title="Rotate view clockwise"
+        aria-label="Rotate view clockwise"
+        onClick={() => onRotateView('cw')}
+      >
+        <Redo2 size={14} aria-hidden="true" />
+      </button>
+      <svg
+        className="orientation-cube"
+        viewBox="0 0 104 104"
+        width="104"
+        height="104"
+      >
+        {/* Axis stubs draw under the cube so degenerate ones hide behind it. */}
+        {(['x', 'y', 'z'] as const).map((key) => (
+          <g key={key}>
+            <line
+              ref={lineRefs[key]}
+              x1={CX}
+              y1={CY}
+              x2={CX}
+              y2={CY}
+              stroke={AXIS_COLORS[key]}
+              strokeWidth="1.6"
+            />
+            <text
+              ref={labelRefs[key]}
+              className="orientation-axis-label"
+              x={CX}
+              y={CY}
+              fill={AXIS_COLORS[key]}
+              aria-hidden="true"
+            >
+              {key.toUpperCase()}
+            </text>
+          </g>
+        ))}
+        {FACES.map((face, index) => (
+          <g key={face.view}>
+            <polygon
+              ref={(element) => {
+                faceRefs.current[index] = element;
+              }}
+              className="cube-face"
+              style={{ display: 'none' }}
               role="button"
               tabIndex={0}
-              aria-label={`${VIEW_LABELS[view]} view`}
-              onClick={() => onSelectView(view)}
+              aria-label={`${VIEW_LABELS[face.view]} view`}
+              onClick={() => onSelectView(faceActions.current[index] ?? face.view)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  onSelectView(view);
+                  onSelectView(faceActions.current[index] ?? face.view);
                 }
               }}
             />
-          );
-        })
-      )}
-      <circle
-        className="orientation-home"
-        cx="30"
-        cy="30"
-        r="6"
-        role="button"
-        tabIndex={0}
-        aria-label="Isometric view"
-        onClick={() => onSelectView('iso')}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onSelectView('iso');
-          }
-        }}
-      />
-    </svg>
+            <text
+              ref={(element) => {
+                faceLabelRefs.current[index] = element;
+              }}
+              className="cube-face-label"
+              style={{ display: 'none' }}
+              aria-hidden="true"
+            >
+              {VIEW_LABELS[face.view]}
+            </text>
+          </g>
+        ))}
+      </svg>
+      <button
+        type="button"
+        className="orientation-roll"
+        title="Rotate view counterclockwise"
+        aria-label="Rotate view counterclockwise"
+        onClick={() => onRotateView('ccw')}
+      >
+        <Undo2 size={14} aria-hidden="true" />
+      </button>
+    </div>
   );
 }

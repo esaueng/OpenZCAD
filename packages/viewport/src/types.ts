@@ -39,11 +39,15 @@ export const SELECTION_FILTER_LABELS: Record<SelectionFilter, string> = {
   sketch: 'Sketch'
 };
 
-/** Screen-space projections of the world axes, for the orientation widget. */
+/**
+ * Screen-space projections of the world axes, for the orientation widget.
+ * `x`/`y` are screen direction (y already flipped for SVG); `z` is view-space
+ * depth toward the camera, which the view cube needs to cull its back faces.
+ */
 export interface AxisProjection {
-  x: { x: number; y: number };
-  y: { x: number; y: number };
-  z: { x: number; y: number };
+  x: { x: number; y: number; z: number };
+  y: { x: number; y: number; z: number };
+  z: { x: number; y: number; z: number };
 }
 
 export interface ViewerSettings {

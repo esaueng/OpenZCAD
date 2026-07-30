@@ -361,6 +361,10 @@ export function App() {
     view: StandardView;
     nonce: number;
   } | null>(null);
+  const [rotateRequest, setRotateRequest] = useState<{
+    direction: 'cw' | 'ccw';
+    nonce: number;
+  } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -1538,6 +1542,10 @@ export function App() {
 
   function requestView(view: StandardView) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function requestRotate(direction: 'cw' | 'ccw') {
+    setRotateRequest({ direction, nonce: ++viewNonceRef.current });
   }
 
   function cycleDisplayMode() {
@@ -4760,6 +4768,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
+            rotateRequest={rotateRequest}
             units={doc.units}
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
@@ -5085,6 +5094,7 @@ export function App() {
             }
             onFit={() => setFitSignal((value) => value + 1)}
             onView={requestView}
+            onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
