@@ -364,6 +364,96 @@ describe('exact hybrid kernel adapter', () => {
     });
   });
 
+  it('diagnoses a disconnected BrepKit union without rewriting legacy history', async () => {
+    const withLower = addPrimitiveFeature(
+      createProjectDocument('Separated union', toUserId('user_exact')),
+      {
+        name: 'Lower',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const lowerId = withLower.bodyOrder.at(-1)!;
+    const withUpper = addPrimitiveFeature(withLower, {
+      name: 'Upper',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const upperId = withUpper.bodyOrder.at(-1)!;
+    const positioned = transformBody(withUpper, {
+      name: 'Leave a gap',
+      targetBodyId: upperId,
+      translation: { x: 0, y: 0, z: 12 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Separated union',
+        operation: 'union',
+        targetBodyIds: [lowerId, upperId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    expect(derived.warnings).toContain(
+      'Feature "Separated union": Union does not fill empty space. The selected solids form 2 disconnected groups. The closest gap is 2 mm. Move or extend a body until every solid touches or overlaps.'
+    );
+    expect(derived.bodyRepresentations[resultId]?.volume).toBeCloseTo(2000, 4);
+    expect(derived.bodyRepresentations[lowerId]?.consumed).toBe(true);
+    expect(derived.bodyRepresentations[upperId]?.consumed).toBe(true);
+  });
+
+  it('diagnoses the same disconnected union through the OCCT route', async () => {
+    const source = addPrimitiveFeature(
+      createProjectDocument('Source box', toUserId('user_exact')),
+      {
+        name: 'Source box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const step = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+    const importManager = new CommandManager(
+      createProjectDocument('OCCT separated union', toUserId('user_exact'))
+    );
+    const imported = importManager.execute(
+      commandFactories.importStep({
+        name: 'Imported lower',
+        artifactId: 'artifact_union_gap',
+        sourceName: 'lower.step',
+        stepText: step
+      })
+    );
+    const lowerId = imported.bodyOrder.at(-1)!;
+    const withUpper = addPrimitiveFeature(imported, {
+      name: 'Upper',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const upperId = withUpper.bodyOrder.at(-1)!;
+    const positioned = transformBody(withUpper, {
+      name: 'Leave a gap',
+      targetBodyId: upperId,
+      translation: { x: 0, y: 0, z: 12 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'OCCT separated union',
+        operation: 'union',
+        targetBodyIds: [lowerId, upperId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toContain(
+      'Feature "OCCT separated union": Union does not fill empty space. The selected solids form 2 disconnected groups. The closest gap is 2 mm. Move or extend a body until every solid touches or overlaps.'
+    );
+  });
+
   it('keeps a coaxial cylinder cut as smooth analytic B-rep surfaces', async () => {
     const withOuter = addPrimitiveFeature(
       createProjectDocument('Bottle cap', toUserId('user_exact')),

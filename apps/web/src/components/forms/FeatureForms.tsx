@@ -719,6 +719,11 @@ export function BooleanForm({
       {operation === 'subtract' && (
         <p className="muted">Bodies 2+ are subtracted from body 1.</p>
       )}
+      {operation === 'union' && (
+        <p className="muted">
+          Union joins solids that touch or overlap. It does not fill empty gaps.
+        </p>
+      )}
       <p className="muted">
         Input bodies are consumed; deleting the boolean restores them.
       </p>

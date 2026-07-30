@@ -41,6 +41,10 @@ import { OpenZCADKernel } from './index';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
 import {
+  analyzeUnionConnectivity,
+  disconnectedUnionWarning
+} from './union-connectivity';
+import {
   ambiguousReferenceError,
   canonicalDirection,
   cylinderAnalyticSignature,
@@ -1466,10 +1470,50 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             });
             let solid: number;
             if (feature.data.operation === 'union') {
-              solid = fuseUniformSolid(
-                kernel,
-                operands.flatMap((shape) => shape.solids)
+              const unionSolids = operands.flatMap((shape) => shape.solids);
+              const connectivity = analyzeUnionConnectivity(
+                unionSolids.map((candidate) => {
+                  const bounds = kernel.boundingBox(candidate);
+                  return {
+                    solid: candidate,
+                    bounds: {
+                      min: {
+                        x: bounds[0]!,
+                        y: bounds[1]!,
+                        z: bounds[2]!
+                      },
+                      max: {
+                        x: bounds[3]!,
+                        y: bounds[4]!,
+                        z: bounds[5]!
+                      }
+                    }
+                  };
+                }),
+                (left, right) =>
+                  kernel.solidToSolidDistance(left, right)[0] ?? NaN,
+                (left, right) => {
+                  try {
+                    return (
+                      kernel.volume(
+                        kernel.intersect(left, right),
+                        MEASUREMENT_DEFLECTION
+                      ) > 0
+                    );
+                  } catch {
+                    return false;
+                  }
+                }
               );
+              if (!connectivity.connected) {
+                result.warnings.push(
+                  `Feature "${feature.name}": ${disconnectedUnionWarning(
+                    connectivity,
+                    document.units
+                  )}`
+                );
+              }
+              solid = fuseUniformSolid(kernel, unionSolids);
             } else {
               solid = collapseShape(kernel, operands[0]!);
               for (const operand of operands.slice(1)) {
