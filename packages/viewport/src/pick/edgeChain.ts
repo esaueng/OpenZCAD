@@ -192,12 +192,13 @@ export function edgeRunFrom(
   const minDot = Math.cos(
     ((options.tangentToleranceDeg ?? TANGENT_TOLERANCE_DEG) * Math.PI) / 180
   );
-  const ends = edges
+  const visibleEdges = edges.filter((edge) => edge.displayRole !== 'seam');
+  const ends = visibleEdges
     .map(edgeEnds)
     .filter((entry): entry is EdgeEnds => entry !== null);
   const seed = ends.find((entry) => entry.topologyId === seedTopologyId);
   if (!seed) {
-    return edges.some((edge) => edge.topologyId === seedTopologyId)
+    return visibleEdges.some((edge) => edge.topologyId === seedTopologyId)
       ? [seedTopologyId]
       : [];
   }
