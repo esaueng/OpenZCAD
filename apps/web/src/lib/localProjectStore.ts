@@ -70,6 +70,7 @@ export function listLocalProjects(): Promise<ProjectSummary[]> {
       .map((document) => ({
         projectId: document.projectId,
         name: document.name,
+        lastRevisionId: document.revisions.at(-1)?.revisionId,
         updatedAt: document.derived.updatedAt,
         revisionCount: document.checkpoints.length
       }))
