@@ -2550,14 +2550,14 @@ export function App() {
   }
 
   function handleSelectAllEdges(body: BodyRepresentation) {
-    const edges = (body.topology?.edges ?? []).map(
-      (edge): TopologySelection => ({
+    const edges = (body.topology?.edges ?? [])
+      .filter((edge) => edge.displayRole !== 'seam')
+      .map((edge): TopologySelection => ({
         bodyId: body.bodyId,
         kind: 'edge',
         topologyId: edge.topologyId,
         hash: edge.hash
-      })
-    );
+      }));
     setSelectedEdges(edges);
     setSelectedBodyIds([body.bodyId]);
     setSelectedTopology(edges.at(-1) ?? { bodyId: body.bodyId, kind: 'body' });
