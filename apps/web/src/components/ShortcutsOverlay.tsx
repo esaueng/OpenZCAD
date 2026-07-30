@@ -41,7 +41,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
       ['Ctrl+S', 'Save revision'],
       ['Del', 'Delete selected feature'],
       ['Esc', 'Cancel / close panel'],
-      ['Shift+Click', 'Add body to selection'],
+      ['Shift+Click', 'Add or remove from selection'],
       ['Q', 'Cycle the selection filter'],
       ['Shift+Drag', 'Box select — left to right encloses, right to left touches'],
       ['Double-click edge', 'Select the whole run of edges']

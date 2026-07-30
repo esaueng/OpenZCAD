@@ -710,7 +710,11 @@ export function Inspector(props: InspectorProps) {
         )}
         {selectedTopology?.kind === 'edge' && (
           <>
-            <h3 className="section-title">Selected edge</h3>
+            <h3 className="section-title">
+              {selectedEdges.length > 1
+                ? `${selectedEdges.length} selected edges`
+                : 'Selected edge'}
+            </h3>
             <div className="tool-grid">
               {(['fillet', 'chamfer'] as const).map((edgeTool) => (
                 <button
