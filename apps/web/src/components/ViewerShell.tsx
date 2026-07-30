@@ -43,6 +43,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: StandardView; nonce: number } | null;
+  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
@@ -115,6 +116,7 @@ interface ViewerShellProps {
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
+  onRotateView(direction: 'cw' | 'ccw'): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
 }
@@ -129,6 +131,7 @@ export function ViewerShell({
   settings,
   fitSignal,
   viewRequest,
+  rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
@@ -181,6 +184,7 @@ export function ViewerShell({
   onToggleGrid,
   onFit,
   onView,
+  onRotateView,
   onCycleDisplayMode,
   onToggleProjection
 }: ViewerShellProps) {
@@ -196,6 +200,7 @@ export function ViewerShell({
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
@@ -245,6 +250,7 @@ export function ViewerShell({
           <OrientationWidget
             orientationRef={orientationRef}
             onSelectView={onView}
+            onRotateView={onRotateView}
           />
           <ViewerToolbar
             settings={settings}

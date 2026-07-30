@@ -2335,25 +2335,43 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
       return first ? first.camera.position : null;
     });
 
-  // Bottom has no toolbar shortcut; before this widget it was unreachable.
+  // Bottom has no toolbar shortcut. The cube reaches it in two clicks:
+  // face the top, then click the now head-on face to flip to the far side.
+  await widget.getByRole('button', { name: 'Top view' }).click();
+  await page.waitForTimeout(900);
+  const top = await cameraPosition();
+  expect(top).not.toBeNull();
+  expect(top![2]!).toBeGreaterThan(0);
+
   await widget.getByRole('button', { name: 'Bottom view' }).click();
   await page.waitForTimeout(900);
   const bottom = await cameraPosition();
-  expect(bottom).not.toBeNull();
   // Looking up at the part puts the camera below it.
   expect(bottom![2]!).toBeLessThan(0);
 
+  // Left works the same way from the right face, after resetting to iso so
+  // the right face is visible again.
+  await page.getByRole('button', { name: /^Isometric view/ }).click();
+  await page.waitForTimeout(900);
+  await widget.getByRole('button', { name: 'Right view' }).click();
+  await page.waitForTimeout(900);
   await widget.getByRole('button', { name: 'Left view' }).click();
   await page.waitForTimeout(900);
   const left = await cameraPosition();
   expect(left![0]!).toBeLessThan(0);
 
-  // The hub returns to isometric, which sits above and to the right.
-  await widget.getByRole('button', { name: 'Isometric view' }).click();
+  // The rotate arrows swing the camera a quarter turn about the world up
+  // axis: from iso (x > 0, y < 0), a clockwise model turn lands at y > 0.
+  await page.getByRole('button', { name: /^Isometric view/ }).click();
   await page.waitForTimeout(900);
   const iso = await cameraPosition();
   expect(iso![0]!).toBeGreaterThan(0);
-  expect(iso![2]!).toBeGreaterThan(0);
+  expect(iso![1]!).toBeLessThan(0);
+  await widget.getByRole('button', { name: 'Rotate view clockwise' }).click();
+  await page.waitForTimeout(900);
+  const rotated = await cameraPosition();
+  expect(rotated![0]!).toBeGreaterThan(0);
+  expect(rotated![1]!).toBeGreaterThan(0);
 });
 
 test('a view request interrupts the glide already in flight', async ({
