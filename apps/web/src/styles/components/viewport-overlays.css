@@ -15,20 +15,24 @@
   pointer-events: none;
 }
 
-/* The widget stays click-through so a drag started near it still orbits;
-   only the cube faces and the rotate arrows take the pointer. */
+/* The transparent SVG stays click-through; visible faces own click and drag. */
 .orientation-cube {
   pointer-events: none;
 }
 
 .cube-face {
   pointer-events: auto;
-  cursor: pointer;
+  touch-action: none;
+  cursor: grab;
   /* Dark seams between faces read as the cube's rounded bevels. */
   stroke: #10151c;
   stroke-width: 2.5;
   stroke-linejoin: round;
   transition: fill var(--dur-fast) ease;
+}
+
+.orientation-cube:active .cube-face {
+  cursor: grabbing;
 }
 
 /* A CSS rule outranks the presentation attribute the frame loop writes. */
