@@ -231,6 +231,12 @@ export interface EdgeHandleTarget {
   initialValue?: number;
 }
 
+export interface OrientationDragControls {
+  begin(): void;
+  move(deltaX: number, deltaY: number): void;
+  end(): void;
+}
+
 export interface ExtrudePreview {
   sketchId: string;
   distance: number;
@@ -266,6 +272,8 @@ interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  /** Imperative bridge from the SVG view cube into the live camera rig. */
+  orientationDragRef: MutableRefObject<OrientationDragControls | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -556,6 +564,7 @@ export function ModelViewer({
   initialView,
   onViewChange,
   orientationRef,
+  orientationDragRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -798,6 +807,12 @@ export function ModelViewer({
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
+    const orientationDragControls: OrientationDragControls = {
+      begin: () => cameraRig.beginOrbitDrag(),
+      move: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
+      end: () => cameraRig.endOrbitDrag()
+    };
+    orientationDragRef.current = orientationDragControls;
 
     // Z-up sky plus cool floor bounce keeps undersides readable without
     // weakening the directional key that defines face orientation.
@@ -3226,11 +3241,12 @@ export function ModelViewer({
       labelRenderer.render(scene, context.activeCamera);
 
       // Push camera orientation to the view widget only when it changes.
-      if (!camera.quaternion.equals(lastQuaternion)) {
-        lastQuaternion.copy(camera.quaternion);
+      const orientationCamera = context.activeCamera;
+      if (!orientationCamera.quaternion.equals(lastQuaternion)) {
+        lastQuaternion.copy(orientationCamera.quaternion);
         const sink = orientationRef.current;
         if (sink) {
-          const inverse = camera.quaternion.clone().invert();
+          const inverse = orientationCamera.quaternion.clone().invert();
           const project = (axis: THREE.Vector3) => {
             const view = axis.clone().applyQuaternion(inverse);
             return { x: view.x, y: -view.y, z: view.z };
@@ -3325,6 +3341,9 @@ export function ModelViewer({
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
       moveGizmoHudRef.current = null;
+      if (orientationDragRef.current === orientationDragControls) {
+        orientationDragRef.current = null;
+      }
       contextRef.current = null;
     };
   }, []);

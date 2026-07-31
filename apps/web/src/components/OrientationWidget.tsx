@@ -1,4 +1,9 @@
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import {
+  useEffect,
+  useRef,
+  type MutableRefObject,
+  type PointerEvent as ReactPointerEvent
+} from 'react';
 import { Redo2, Undo2 } from 'lucide-react';
 import { VIEW_LABELS, type AxisProjection, type StandardView } from '@openzcad/viewport';
 
@@ -51,6 +56,18 @@ const FACE_FRONTAL = [0x3a, 0x44, 0x50] as const;
 const FACING_EPSILON = 0.03;
 /** Above this the face is head-on, and clicking it flips to the far side. */
 const HEAD_ON = 0.999;
+/** Preserve face clicks through normal pointer wobble, then commit to orbit. */
+const DRAG_THRESHOLD_PX = 4;
+
+interface CubeDragState {
+  pointerId: number;
+  captureTarget: SVGElement;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  dragging: boolean;
+}
 
 /**
  * View cube in the viewport's upper-right: an orthographic cube whose faces
@@ -68,16 +85,24 @@ const HEAD_ON = 0.999;
 export function OrientationWidget({
   orientationRef,
   onSelectView,
-  onRotateView
+  onRotateView,
+  onDragStart,
+  onDrag,
+  onDragEnd
 }: {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectView(view: StandardView): void;
   onRotateView(direction: 'cw' | 'ccw'): void;
+  onDragStart(): void;
+  onDrag(deltaX: number, deltaY: number): void;
+  onDragEnd(): void;
 }) {
   const faceRefs = useRef<(SVGPolygonElement | null)[]>([]);
   const faceLabelRefs = useRef<(SVGTextElement | null)[]>([]);
   /** What clicking each face does right now (flips when head-on). */
   const faceActions = useRef<StandardView[]>(FACES.map((face) => face.view));
+  const dragRef = useRef<CubeDragState | null>(null);
+  const suppressFaceClickRef = useRef(false);
   const lineRefs = {
     x: useRef<SVGLineElement | null>(null),
     y: useRef<SVGLineElement | null>(null),
@@ -167,6 +192,74 @@ export function OrientationWidget({
     };
   }, []);
 
+  function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    if (event.button !== 0 || dragRef.current) {
+      return;
+    }
+    const captureTarget = event.target;
+    if (!(captureTarget instanceof SVGElement)) {
+      return;
+    }
+    suppressFaceClickRef.current = false;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      captureTarget,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      dragging: false
+    };
+    captureTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    if (
+      !drag.dragging &&
+      Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <
+        DRAG_THRESHOLD_PX
+    ) {
+      return;
+    }
+    if (!drag.dragging) {
+      drag.dragging = true;
+      suppressFaceClickRef.current = true;
+      onDragStart();
+    }
+    const deltaX = event.clientX - drag.lastX;
+    const deltaY = event.clientY - drag.lastY;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    if (deltaX !== 0 || deltaY !== 0) {
+      onDrag(deltaX, deltaY);
+    }
+    event.preventDefault();
+  }
+
+  function finishPointerDrag(
+    event: ReactPointerEvent<SVGSVGElement>,
+    cancelled = false
+  ) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    if (drag.dragging) {
+      onDragEnd();
+    }
+    dragRef.current = null;
+    if (cancelled) {
+      suppressFaceClickRef.current = false;
+    }
+    if (drag.captureTarget.hasPointerCapture(event.pointerId)) {
+      drag.captureTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   return (
     <div className="orientation-widget" role="group" aria-label="View orientation">
       <button
@@ -183,7 +276,12 @@ export function OrientationWidget({
         viewBox="0 0 104 104"
         width="104"
         height="104"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={(event) => finishPointerDrag(event)}
+        onPointerCancel={(event) => finishPointerDrag(event, true)}
       >
+        <title>Drag to rotate the view</title>
         {/* Axis stubs draw under the cube so degenerate ones hide behind it. */}
         {(['x', 'y', 'z'] as const).map((key) => (
           <g key={key}>
@@ -219,7 +317,14 @@ export function OrientationWidget({
               role="button"
               tabIndex={0}
               aria-label={`${VIEW_LABELS[face.view]} view`}
-              onClick={() => onSelectView(faceActions.current[index] ?? face.view)}
+              onClick={(event) => {
+                if (suppressFaceClickRef.current) {
+                  suppressFaceClickRef.current = false;
+                  event.preventDefault();
+                  return;
+                }
+                onSelectView(faceActions.current[index] ?? face.view);
+              }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();

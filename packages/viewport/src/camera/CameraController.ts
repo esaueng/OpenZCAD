@@ -323,6 +323,37 @@ export class CameraController {
   }
 
   /**
+   * Starts an orbit owned by an external viewport control such as the view
+   * cube. This mirrors OrbitControls' pointer lifecycle without synthesizing
+   * DOM events onto the canvas.
+   */
+  beginOrbitDrag() {
+    this.cancelTween();
+    this.beginGesture();
+  }
+
+  /**
+   * Applies the same screen-space rotation scale OrbitControls uses for a
+   * canvas drag. Keeping this conversion here makes cube and canvas orbiting
+   * feel identical at every viewport size.
+   */
+  orbitByPixels(deltaX: number, deltaY: number) {
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+      return;
+    }
+    const height = Math.max(this.options.domElement.clientHeight, 1);
+    this.orbit.rotateLeft((2 * Math.PI * deltaX) / height);
+    this.orbit.rotateUp((2 * Math.PI * deltaY) / height);
+    this.orbit.update();
+    this.options.requestRender();
+  }
+
+  /** Releases an external orbit into the same short damping tail as canvas. */
+  endOrbitDrag() {
+    this.settleDamping();
+  }
+
+  /**
    * Advances pointer-driven orbit damping with a real-time upper bound.
    *
    * OrbitControls applies damping per rendered frame. Without this deadline,
