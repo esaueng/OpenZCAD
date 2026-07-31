@@ -22,8 +22,10 @@ live in [PLAN.md](PLAN.md).
 - Debounced local-first cloud settings autosave: coalesced edits, serialized
   requests, revision-safe 409 retry, flush before logout, and dirty-state
   preservation through reload.
-- Orientation cube with face snapping, pointer-drag orbiting, and a drag
-  threshold separating click-snap from orbit.
+- Orientation cube with face snapping, bevelled corner facets for the
+  diagonal isometric views, an origin-corner XYZ triad clipped by the cube's
+  silhouette, pointer-drag orbiting, and a drag threshold separating
+  click-snap from orbit.
 - CAD workspace with feature editing, diagnostics, contextual topology
   actions, responsive compact layout, a collapsible tool palette, and a
   docked assistant panel that one setting removes entirely.
