@@ -97,6 +97,7 @@ import {
   formatNumber,
   inferContentType
 } from './lib/model';
+import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import {
   SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
@@ -2489,6 +2490,28 @@ export function App() {
     }
   }
 
+  function handleExportDiagnostics() {
+    if (!doc) {
+      setStatus('Open a project before exporting diagnostics.');
+      return;
+    }
+    try {
+      const bundle = createProjectDiagnosticBundle(doc, {
+        brepkitVersion: import.meta.env.OZ_BREPKIT_VERSION,
+        brepkitCommit: import.meta.env.OZ_BREPKIT_COMMIT
+      });
+      const fileName = `${exportFileStem(doc.name)}.openzcad-diagnostic.json`;
+      downloadText(
+        fileName,
+        `${JSON.stringify(bundle, null, 2)}\n`,
+        'application/json'
+      );
+      setStatus(`Exported sanitized diagnostics to ${fileName}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Diagnostic export failed.'));
+    }
+  }
+
   function featureNodeIdForBody(bodyId: BodyId): string | null {
     if (!doc) {
       return null;
@@ -4826,6 +4849,7 @@ export function App() {
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
+          onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
             executeCommand(
               commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
