@@ -211,7 +211,7 @@ importers:
         version: link:../shared
       brepkit-wasm:
         specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/brepkit/tar.gz/fcb56573fa4a7a316d6cc0064846ae0b1aeb74dc#path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/brepkit/tar.gz/e21f16785ae3e827d930d2d650c23b30e63e7437#path:/crates/wasm/pkg
       occt-wasm:
         specifier: 3.8.0
         version: 3.8.0
@@ -1127,8 +1127,8 @@ packages:
     resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
     engines: {node: 20 || >=22}
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/fcb56573fa4a7a316d6cc0064846ae0b1aeb74dc#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/fcb56573fa4a7a316d6cc0064846ae0b1aeb74dc}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/e21f16785ae3e827d930d2d650c23b30e63e7437#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/e21f16785ae3e827d930d2d650c23b30e63e7437}
     version: 2.129.0
 
   chai@6.2.2:
@@ -2518,7 +2518,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/fcb56573fa4a7a316d6cc0064846ae0b1aeb74dc#path:/crates/wasm/pkg: {}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/e21f16785ae3e827d930d2d650c23b30e63e7437#path:/crates/wasm/pkg: {}
 
   chai@6.2.2: {}
 
