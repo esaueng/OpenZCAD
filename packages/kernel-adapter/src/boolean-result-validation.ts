@@ -10,7 +10,8 @@ interface MeshEdgeUse {
   directionBalance: number;
 }
 
-const POSITION_QUANTIZATION = 1e-4;
+const POSITION_QUANTIZATION_RATIO = 1e-6;
+const MIN_POSITION_QUANTIZATION = 1e-9;
 const IDENTITY_MATRIX = new Float64Array([
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
 ]);
@@ -23,8 +24,33 @@ export function inspectTriangleMeshClosure(
   positions: ArrayLike<number>,
   indices: ArrayLike<number>
 ): TriangleMeshClosure {
+  const minimum = [Infinity, Infinity, Infinity];
+  const maximum = [-Infinity, -Infinity, -Infinity];
+  let maximumMagnitude = 0;
+  for (let index = 0; index + 2 < positions.length; index += 3) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      const value = positions[index + axis] ?? 0;
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+      minimum[axis] = Math.min(minimum[axis]!, value);
+      maximum[axis] = Math.max(maximum[axis]!, value);
+      maximumMagnitude = Math.max(maximumMagnitude, Math.abs(value));
+    }
+  }
+  const extent = Math.max(
+    ...minimum.map((value, axis) => maximum[axis]! - value),
+    0
+  );
+  // The projection crosses WASM as f32. Weld at one part per million of the
+  // body extent, while accounting for f32 precision loss far from the origin.
+  const positionQuantization = Math.max(
+    MIN_POSITION_QUANTIZATION,
+    extent * POSITION_QUANTIZATION_RATIO,
+    maximumMagnitude * 2 ** -22
+  );
   const quantize = (value: number): number =>
-    Math.round(value / POSITION_QUANTIZATION);
+    Math.round(value / positionQuantization);
   const vertexKey = (index: number): string => {
     const offset = index * 3;
     return `${quantize(positions[offset] ?? 0)},${quantize(
