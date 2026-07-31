@@ -38,6 +38,7 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import {
+  countFaceConnectedComponents,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   selectSafelyUnifiedSolid,
@@ -1192,6 +1193,19 @@ function isStrictBooleanSolid(kernel: BrepKernel, solid: number): boolean {
   }
 }
 
+function isFaceConnectedSolid(kernel: BrepKernel, solid: number): boolean {
+  try {
+    return (
+      countFaceConnectedComponents(
+        kernel.getSolidFaces(solid),
+        JSON.parse(kernel.edgeToFaceMap(solid)) as Record<string, number[]>
+      ) === 1
+    );
+  } catch {
+    return false;
+  }
+}
+
 function decodeText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
@@ -1656,7 +1670,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   }
                 }
               );
-              if (!connectivity.connected) {
+              solid = fuseUniformSolid(kernel, unionSolids);
+              if (
+                !connectivity.connected &&
+                !isFaceConnectedSolid(kernel, solid)
+              ) {
                 result.warnings.push(
                   `Feature "${feature.name}": ${disconnectedUnionWarning(
                     connectivity,
@@ -1664,7 +1682,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   )}`
                 );
               }
-              solid = fuseUniformSolid(kernel, unionSolids);
             } else {
               solid = collapseShape(kernel, operands[0]!);
               for (const operand of operands.slice(1)) {

@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type PluginOption } from 'vite';
@@ -48,6 +48,35 @@ const workspaceAliases = Object.fromEntries(
     )
   ])
 );
+
+async function brepkitBuildInfo(): Promise<{
+  version: string;
+  commit: string;
+}> {
+  const [packageText, lockfile] = await Promise.all([
+    readFile(
+      fileURLToPath(
+        new URL(
+          '../../packages/kernel-adapter/node_modules/brepkit-wasm/package.json',
+          import.meta.url
+        )
+      ),
+      'utf8'
+    ),
+    readFile(
+      fileURLToPath(new URL('../../pnpm-lock.yaml', import.meta.url)),
+      'utf8'
+    )
+  ]);
+  const packageJson = JSON.parse(packageText) as { version?: unknown };
+  const commit = lockfile.match(
+    /brepkit-wasm@https:\/\/codeload\.github\.com\/esaueng\/brepkit\/tar\.gz\/([0-9a-f]{40})#path:\/crates\/wasm\/pkg/
+  )?.[1];
+  if (typeof packageJson.version !== 'string' || !commit) {
+    throw new Error('Unable to resolve the pinned BrepKit build identity.');
+  }
+  return { version: packageJson.version, commit };
+}
 
 /**
  * Serves the pdf.js runtime data directories in dev and copies them into the
@@ -105,6 +134,7 @@ function pdfjsAssets(): PluginOption {
 }
 
 export default defineConfig(async ({ command, isPreview }) => {
+  const brepkit = await brepkitBuildInfo();
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
   plugins.push(react(), wasm(), pdfjsAssets());
@@ -128,7 +158,9 @@ export default defineConfig(async ({ command, isPreview }) => {
   return {
     plugins,
     define: {
-      'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? '')
+      'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
+      'import.meta.env.OZ_BREPKIT_VERSION': JSON.stringify(brepkit.version),
+      'import.meta.env.OZ_BREPKIT_COMMIT': JSON.stringify(brepkit.commit)
     },
     optimizeDeps: {
       // The exact CAD kernel ships as WebAssembly and must remain a runtime asset.
