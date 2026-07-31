@@ -35,6 +35,7 @@ interface TopBarProps {
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
+  onExportDiagnostics(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
   onOpenSettings(): void;
@@ -57,6 +58,7 @@ export function TopBar({
   onSave,
   onImportFile,
   onExport,
+  onExportDiagnostics,
   onRenameProject,
   onGoHome,
   onOpenSettings
@@ -200,7 +202,10 @@ export function TopBar({
           File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
         </summary>
         <div className="topbar-menu-panel">
-          <label className="topbar-menu-item" title="Import an editable STEP solid or STL mesh">
+          <label
+            className="topbar-menu-item"
+            title="Import an editable STEP solid or STL mesh"
+          >
             <Upload size={13} aria-hidden="true" />
             <span>Import STEP or STL…</span>
             <input
@@ -237,6 +242,16 @@ export function TopBar({
             <Download size={13} aria-hidden="true" />
             <span>Export STL</span>
             <small>{exportScope ?? 'all bodies'}</small>
+          </button>
+          <button
+            type="button"
+            className="topbar-menu-item"
+            title="Export a sanitized feature-history snapshot for troubleshooting"
+            onClick={onExportDiagnostics}
+          >
+            <Download size={13} aria-hidden="true" />
+            <span>Export diagnostics</span>
+            <small>sanitized JSON</small>
           </button>
           <div className="topbar-menu-sep" />
           <strong className="topbar-menu-label">

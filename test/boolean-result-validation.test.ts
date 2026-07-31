@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  countFaceConnectedComponents,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   selectSafelyUnifiedSolid
@@ -9,6 +10,23 @@ const TETRAHEDRON_POSITIONS = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
 const TETRAHEDRON_INDICES = [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3];
 
 describe('boolean result validation', () => {
+  it('counts exact face-connected components from edge adjacency', () => {
+    expect(
+      countFaceConnectedComponents([10, 20, 30, 40], {
+        edgeA: [10, 20],
+        edgeB: [20, 30],
+        edgeC: [30],
+        edgeD: [40]
+      })
+    ).toBe(2);
+    expect(
+      countFaceConnectedComponents([10, 20, 30], {
+        edgeA: [10, 20],
+        edgeB: [20, 30]
+      })
+    ).toBe(1);
+  });
+
   it('accepts only closed, manifold, consistently wound triangle meshes', () => {
     const closed = inspectTriangleMeshClosure(
       TETRAHEDRON_POSITIONS,

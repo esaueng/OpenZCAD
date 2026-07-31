@@ -414,6 +414,54 @@ describe('exact hybrid kernel adapter', () => {
     expect(body.volume).toBeGreaterThan(0);
   });
 
+  it('keeps a face-contact cylinder and circular-extrude union closed', async () => {
+    const withCylinder = addPrimitiveFeature(
+      createProjectDocument(
+        'Face-contact circular union',
+        toUserId('user_exact')
+      ),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 40 }
+      }
+    );
+    const cylinderId = withCylinder.bodyOrder.at(-1)!;
+    const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
+      name: 'Top-face circle',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 40 },
+      objects: [{ objectKind: 'circle', radius: 25, centerX: 10, centerY: 0 }]
+    });
+    const { document: withExtrude, bodyId: extrudeId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Circular extrude',
+        sketchId,
+        distance: 20
+      }
+    );
+    const manager = new CommandManager(withExtrude);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Face-contact circular union',
+        operation: 'union',
+        targetBodyIds: [cylinderId, extrudeId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId]!;
+    const closure = inspectTriangleMeshClosure(
+      body.mesh.vertices,
+      body.mesh.indices
+    );
+
+    expect(derived.warnings).toEqual([]);
+    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
+    expect(body.volume).toBeGreaterThan(0);
+  });
+
   it('attributes a strict Union validation failure to the feature', async () => {
     const validate = vi
       .spyOn(BrepKernel.prototype, 'validateSolid')

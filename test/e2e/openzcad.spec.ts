@@ -1902,6 +1902,58 @@ test('models a parametric part and exports a true STEP file', async ({
   expect(text).toContain('CLOSED_SHELL');
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
 
+  // Export the sanitized support bundle and verify that it preserves native
+  // modeling inputs without leaking account identity or cloud history.
+  await fileMenu.locator('summary').click();
+  const diagnosticDownloadPromise = page.waitForEvent('download');
+  await fileMenu.getByRole('button', { name: /Export diagnostics/ }).click();
+  const diagnosticDownload = await diagnosticDownloadPromise;
+  await fileMenu.locator('summary').click();
+  expect(diagnosticDownload.suggestedFilename()).toBe(
+    'E2E-Part.openzcad-diagnostic.json'
+  );
+  const diagnosticStream = await diagnosticDownload.createReadStream();
+  const diagnosticChunks: Buffer[] = [];
+  for await (const chunk of diagnosticStream) {
+    diagnosticChunks.push(chunk as Buffer);
+  }
+  const diagnosticText = Buffer.concat(diagnosticChunks).toString('utf8');
+  const diagnostic = JSON.parse(diagnosticText) as {
+    format: string;
+    formatVersion: number;
+    kernel: {
+      packageVersion: string;
+      sourceCommit: string;
+    };
+    document: {
+      projectId: string;
+      ownerUserId: string;
+      revisions: unknown[];
+      checkpoints: unknown[];
+      assets: Record<string, unknown>;
+      derived: {
+        bodyRepresentations: Record<string, unknown>;
+      };
+    };
+  };
+  expect(diagnostic).toMatchObject({
+    format: 'openzcad-project-diagnostic',
+    formatVersion: 1,
+    document: {
+      projectId: 'project_diagnostic',
+      ownerUserId: 'user_diagnostic',
+      revisions: [],
+      checkpoints: [],
+      assets: {},
+      derived: {
+        bodyRepresentations: {}
+      }
+    }
+  });
+  expect(diagnostic.kernel.packageVersion).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(diagnostic.kernel.sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+  expect(diagnosticText).not.toContain('user_e2e');
+
   // Parametric regen: change w and confirm the box volume follows (60->80 => 80*18*24).
   const paramInput = page.getByLabel('Expression for w');
   await paramInput.fill('40');
