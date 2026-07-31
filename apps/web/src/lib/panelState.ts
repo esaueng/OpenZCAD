@@ -27,6 +27,16 @@ export interface PanelState {
   /** Section id to open/closed. Absent means open. */
   sidebarSections: Record<SidebarSectionId, boolean>;
   toolPaletteOpen: boolean;
+  /**
+   * The assistant dock, collapsed to its launcher. Remembered because it is a
+   * working habit — someone who models without it should not have to close it
+   * again on every reload — and because collapsing gives its column back to the
+   * viewport, which is a layout decision worth restoring.
+   *
+   * Collapsed to begin with: a new workspace opens on the model, not on a
+   * conversation nobody has started yet.
+   */
+  assistantCollapsed: boolean;
 }
 
 export const DEFAULT_PANEL_STATE: PanelState = {
@@ -37,13 +47,15 @@ export const DEFAULT_PANEL_STATE: PanelState = {
     revisions: true,
     diagnostics: true
   },
-  toolPaletteOpen: true
+  toolPaletteOpen: true,
+  assistantCollapsed: true
 };
 
 function copyDefaults(): PanelState {
   return {
     sidebarSections: { ...DEFAULT_PANEL_STATE.sidebarSections },
-    toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen
+    toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen,
+    assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed
   };
 }
 
@@ -55,6 +67,9 @@ export function normalizePanelState(value: unknown): PanelState {
   const root = value as Record<string, unknown>;
   if (typeof root.toolPaletteOpen === 'boolean') {
     state.toolPaletteOpen = root.toolPaletteOpen;
+  }
+  if (typeof root.assistantCollapsed === 'boolean') {
+    state.assistantCollapsed = root.assistantCollapsed;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {

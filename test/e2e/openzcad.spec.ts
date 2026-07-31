@@ -3500,6 +3500,49 @@ test('a direct mode hides the assistant without ending the conversation', async 
   );
 });
 
+test('collapsing the assistant frees its column and keeps the thread', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  await stubAssistant(page);
+  await createProject(page, 'Collapse Part');
+  await openAssistant(page);
+
+  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
+  await page.getByLabel('CAD change request').press('Enter');
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
+
+  const viewerBefore = await page.locator('.viewer-area').boundingBox();
+  await page.getByRole('button', { name: 'Collapse the assistant' }).click();
+
+  // A collapse has to give the dock's whole column back, not just its contents.
+  await expect(page.locator('.assistant-panel')).toHaveCount(0);
+  await expect(page.locator('.workspace.with-assistant')).toHaveCount(0);
+  const launcher = page.getByRole('button', {
+    name: /Open the modeling assistant/
+  });
+  await expect(launcher).toBeVisible();
+  const viewerAfter = await page.locator('.viewer-area').boundingBox();
+  expect(viewerAfter!.width).toBeGreaterThan(viewerBefore!.width + 100);
+
+  await launcher.click();
+  await expect(page.locator('.assistant-thread')).toContainText(
+    'Add a 10 mm cube'
+  );
+
+  // The thread belongs to the project, not to the tab that was open at the
+  // time: it has to survive a reload, proposal and all.
+  await page.reload();
+  await expect(page.locator('.assistant-thread')).toContainText(
+    'Add a 10 mm cube'
+  );
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
+});
+
 test('releasing an orbit eases out instead of stopping dead', async ({
   page
 }) => {
