@@ -6,6 +6,7 @@ import {
   type FaceResizeCommit,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
+  type OrientationDragControls,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
@@ -22,7 +23,7 @@ import type {
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
@@ -188,6 +189,8 @@ export function ViewerShell({
   onCycleDisplayMode,
   onToggleProjection
 }: ViewerShellProps) {
+  const orientationDragRef = useRef<OrientationDragControls | null>(null);
+
   return (
     <section className="viewer-shell" aria-label="3D viewport">
       <ModelViewer
@@ -209,6 +212,7 @@ export function ViewerShell({
         initialView={initialView}
         onViewChange={onViewChange}
         orientationRef={orientationRef}
+        orientationDragRef={orientationDragRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -251,6 +255,11 @@ export function ViewerShell({
             orientationRef={orientationRef}
             onSelectView={onView}
             onRotateView={onRotateView}
+            onDragStart={() => orientationDragRef.current?.begin()}
+            onDrag={(deltaX, deltaY) =>
+              orientationDragRef.current?.move(deltaX, deltaY)
+            }
+            onDragEnd={() => orientationDragRef.current?.end()}
           />
           <ViewerToolbar
             settings={settings}

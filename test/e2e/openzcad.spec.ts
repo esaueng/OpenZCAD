@@ -203,7 +203,7 @@ async function stubEmailLoginApi(page: Page) {
     email: 'maker@example.com',
     mode: 'email-code' as const
   };
-  const settings = {
+  let settings = {
     settings: DEFAULT_APP_SETTINGS,
     revision: 0,
     synced: false,
@@ -216,6 +216,7 @@ async function stubEmailLoginApi(page: Page) {
       reasoningEffort: 'high'
     }
   };
+  let settingsUpdateCount = 0;
 
   await page.addInitScript(() => {
     const browserWindow = window as typeof window & {
@@ -284,9 +285,23 @@ async function stubEmailLoginApi(page: Page) {
     signedIn = false;
     return route.fulfill({ json: { ok: true } });
   });
-  await page.route('**/api/settings', (route) =>
-    route.fulfill({ json: settings })
-  );
+  await page.route('**/api/settings', (route) => {
+    if (route.request().method() === 'PATCH') {
+      const payload = route.request().postDataJSON() as {
+        settings: typeof DEFAULT_APP_SETTINGS;
+        expectedRevision: number;
+      };
+      expect(payload.expectedRevision).toBe(settings.revision);
+      settings = {
+        ...settings,
+        settings: payload.settings,
+        revision: settings.revision + 1,
+        synced: true
+      };
+      settingsUpdateCount += 1;
+    }
+    return route.fulfill({ json: settings });
+  });
   await page.route('**/api/projects', (route) =>
     route.fulfill({ json: { projects: [] } })
   );
@@ -299,6 +314,9 @@ async function stubEmailLoginApi(page: Page) {
       }
     })
   );
+  return {
+    settingsUpdateCount: () => settingsUpdateCount
+  };
 }
 
 async function stubTurnstileLoadFailureApi(page: Page) {
@@ -558,7 +576,7 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
 test('signs in with an email code only when cloud profile access is requested', async ({
   page
 }) => {
-  await stubEmailLoginApi(page);
+  const emailApi = await stubEmailLoginApi(page);
   await page.addInitScript(() => {
     const browserWindow = window as typeof window & {
       __openZcadUnhandledRejections: number;
@@ -626,7 +644,19 @@ test('signs in with an email code only when cloud profile access is requested', 
   );
   await expect(
     page.getByRole('button', { name: 'Save to account' })
-  ).toBeEnabled();
+  ).toHaveCount(0);
+  await expect(
+    page.locator('.settings-topbar > :last-child')
+  ).toHaveAccessibleName('Back to workspace');
+  await page.getByRole('button', { name: 'General', exact: true }).click();
+  await page
+    .getByRole('checkbox', { name: 'Reopen the last project' })
+    .uncheck();
+  await expect(page.locator('.settings-save-message')).toContainText(
+    'Saved to this device and cloud profile.'
+  );
+  await expect.poll(emailApi.settingsUpdateCount).toBe(1);
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
 });
@@ -2344,19 +2374,23 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   const widget = page.getByRole('group', { name: 'View orientation' });
   await expect(widget).toBeVisible();
 
-  const cameraPosition = async () =>
+  const cameraPose = async () =>
     page.evaluate(() => {
       const raw = localStorage.getItem('openzcad-workspace-session:v1');
       const views = raw
         ? (
             JSON.parse(raw) as {
-              views?: Record<string, { camera: { position: number[] } }>;
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
             }
           ).views
         : undefined;
       const first = views ? Object.values(views)[0] : undefined;
-      return first ? first.camera.position : null;
+      return first ? first.camera : null;
     });
+  const cameraPosition = async () => (await cameraPose())?.position ?? null;
 
   // Bottom has no toolbar shortcut. The cube reaches it in two clicks:
   // face the top, then click the now head-on face to flip to the far side.
@@ -2395,6 +2429,39 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   const rotated = await cameraPosition();
   expect(rotated![0]!).toBeGreaterThan(0);
   expect(rotated![1]!).toBeGreaterThan(0);
+
+  // Dragging a visible cube face continuously orbits the camera. Releasing
+  // must suppress the face's click, or the camera would then glide to the
+  // face's standard view and erase the free rotation.
+  const beforeDrag = await cameraPose();
+  expect(beforeDrag).not.toBeNull();
+  const dragFace = widget.getByRole('button', { name: 'Right view' });
+  const dragFaceBounds = await dragFace.boundingBox();
+  expect(dragFaceBounds).not.toBeNull();
+  const dragStart = {
+    x: dragFaceBounds!.x + dragFaceBounds!.width / 2,
+    y: dragFaceBounds!.y + dragFaceBounds!.height / 2
+  };
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragStart.x - 42, dragStart.y + 24, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(900);
+  const afterDrag = await cameraPose();
+  expect(afterDrag).not.toBeNull();
+  expect(
+    Math.hypot(
+      afterDrag!.position[0]! - beforeDrag!.position[0]!,
+      afterDrag!.position[1]! - beforeDrag!.position[1]!,
+      afterDrag!.position[2]! - beforeDrag!.position[2]!
+    )
+  ).toBeGreaterThan(1);
+  const afterOffset = afterDrag!.position.map(
+    (coordinate, axis) => coordinate - afterDrag!.target[axis]!
+  );
+  // A stray Right-view click would leave only the X offset significant.
+  expect(Math.abs(afterOffset[1]!)).toBeGreaterThan(1);
+  expect(Math.abs(afterOffset[2]!)).toBeGreaterThan(1);
 });
 
 test('a view request interrupts the glide already in flight', async ({

@@ -18,7 +18,6 @@ import {
   Mail,
   Monitor,
   RefreshCcw,
-  Save,
   Search,
   ShieldCheck,
   SlidersHorizontal,
@@ -48,7 +47,6 @@ interface SettingsPageProps {
   busy: boolean;
   message: string;
   onChange(settings: AppSettings): void;
-  onSave(): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
   onTestAssistant(): void;
@@ -340,7 +338,6 @@ export function SettingsPage({
   busy,
   message,
   onChange,
-  onSave,
   onSaveCredential,
   onDeleteCredential,
   onTestAssistant,
@@ -422,23 +419,9 @@ export function SettingsPage({
         <span className="settings-save-message" aria-live="polite">
           {message}
         </span>
-        <button className="secondary" type="button" onClick={onClose}>
+        <button className="primary" type="button" onClick={onClose}>
           <ChevronLeft size={14} aria-hidden="true" />
           Back to workspace
-        </button>
-        <button
-          className="primary"
-          type="button"
-          disabled={busy || !session || !accountState}
-          onClick={onSave}
-          title={
-            session && accountState
-              ? 'Save preferences to your account'
-              : 'Sign in to save preferences to a cloud profile; device settings are already saved'
-          }
-        >
-          <Save size={14} aria-hidden="true" />
-          Save to account
         </button>
       </header>
 

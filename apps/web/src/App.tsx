@@ -206,6 +206,7 @@ import {
 const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
+const SETTINGS_AUTOSAVE_DELAY_MS = 450;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -238,6 +239,8 @@ export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(
     () => bootSettingsRef.current?.settings ?? defaultAppSettings()
   );
+  const appSettingsRef = useRef(appSettings);
+  appSettingsRef.current = appSettings;
   /**
    * The account revision `appSettings` is in step with, or null once edited
    * here without being saved. Persisted with the settings so a reload can tell
@@ -257,6 +260,8 @@ export function App() {
   );
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
+  const accountSettingsRef = useRef(accountSettings);
+  accountSettingsRef.current = accountSettings;
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
@@ -271,6 +276,13 @@ export function App() {
   const [settingsMessage, setSettingsMessage] = useState(
     'Changes save on this device immediately.'
   );
+  const pendingCloudSettingsRef = useRef<AppSettings | null>(null);
+  const cloudSettingsAutosaveTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const cloudSettingsAutosaveQueueRef = useRef<
+    Promise<AppSettingsResponse | null>
+  >(Promise.resolve(null));
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
@@ -332,6 +344,8 @@ export function App() {
   );
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   const loadThumbnailBodies = useCallback(
     async (project: ProjectSummary): Promise<BodyRepresentation[]> => {
       const localDocument = await loadLocalProject(project.projectId).catch(
@@ -576,6 +590,15 @@ export function App() {
     }));
   }, [appSettings]);
 
+  useEffect(
+    () => () => {
+      if (cloudSettingsAutosaveTimeoutRef.current !== null) {
+        clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -627,10 +650,12 @@ export function App() {
         }
         setProjects(merged);
         setCloudAvailable(canUseCloud);
+        sessionRef.current = activeSession;
         setSession(activeSession);
         setAuthConfig(currentAuth.config);
         setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
+          accountSettingsRef.current = remoteSettings;
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
           // it silently — for the assistant switch, that reads as the switch
@@ -640,6 +665,7 @@ export function App() {
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
             syncedRevisionRef.current = remoteSettings.revision;
+            appSettingsRef.current = remoteSettings.settings;
             setAppSettings(remoteSettings.settings);
             saveLocalAppSettings(
               remoteSettings.settings,
@@ -647,8 +673,9 @@ export function App() {
             );
           } else if (remoteSettings.synced) {
             setSettingsMessage(
-              'This device has settings that are not saved to your account yet.'
+              'This device has settings that are not saved to your account yet · saving to cloud profile…'
             );
+            scheduleCloudSettingsAutosave(appSettingsRef.current);
           }
         }
         setSaveState(canUseCloud ? 'saved' : 'offline');
@@ -1582,14 +1609,129 @@ export function App() {
     setStatus('All bodies visible.');
   }
 
+  function scheduleCloudSettingsAutosave(
+    next: AppSettings,
+    delay = SETTINGS_AUTOSAVE_DELAY_MS
+  ) {
+    pendingCloudSettingsRef.current = next;
+    if (cloudSettingsAutosaveTimeoutRef.current !== null) {
+      clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
+      cloudSettingsAutosaveTimeoutRef.current = null;
+    }
+    if (!sessionRef.current || !accountSettingsRef.current) {
+      return;
+    }
+    cloudSettingsAutosaveTimeoutRef.current = setTimeout(() => {
+      cloudSettingsAutosaveTimeoutRef.current = null;
+      void flushCloudSettingsAutosave();
+    }, delay);
+  }
+
+  async function persistCloudSettings(
+    next: AppSettings
+  ): Promise<AppSettingsResponse | null> {
+    const activeUserId = sessionRef.current?.userId;
+    let currentAccount = accountSettingsRef.current;
+    if (!activeUserId || !currentAccount) {
+      return null;
+    }
+
+    try {
+      let response: AppSettingsResponse;
+      try {
+        response = await api.updateSettings({
+          settings: next,
+          expectedRevision: currentAccount.revision
+        });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 409) {
+          throw error;
+        }
+        currentAccount = await api.getSettings();
+        if (sessionRef.current?.userId !== activeUserId) {
+          return null;
+        }
+        accountSettingsRef.current = currentAccount;
+        setAccountSettings(currentAccount);
+        response = await api.updateSettings({
+          settings: next,
+          expectedRevision: currentAccount.revision
+        });
+      }
+
+      if (sessionRef.current?.userId !== activeUserId) {
+        return null;
+      }
+      accountSettingsRef.current = response;
+      setAccountSettings(response);
+      if (
+        appSettingsRef.current === next &&
+        pendingCloudSettingsRef.current === null
+      ) {
+        syncedRevisionRef.current = response.revision;
+        saveLocalAppSettings(next, response.revision);
+        setSettingsMessage('Saved to this device and cloud profile.');
+      }
+      return response;
+    } catch (error) {
+      if (sessionRef.current?.userId === activeUserId) {
+        if (appSettingsRef.current === next) {
+          pendingCloudSettingsRef.current = next;
+        }
+        syncedRevisionRef.current = null;
+        saveLocalAppSettings(appSettingsRef.current, null);
+        setSettingsMessage(
+          errorMessage(
+            error,
+            'Cloud autosave failed · changes remain saved on this device.'
+          )
+        );
+      }
+      return null;
+    }
+  }
+
+  async function flushCloudSettingsAutosave() {
+    if (cloudSettingsAutosaveTimeoutRef.current !== null) {
+      clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
+      cloudSettingsAutosaveTimeoutRef.current = null;
+    }
+    const next = pendingCloudSettingsRef.current;
+    if (!next) {
+      return cloudSettingsAutosaveQueueRef.current;
+    }
+    if (!sessionRef.current || !accountSettingsRef.current) {
+      return null;
+    }
+
+    pendingCloudSettingsRef.current = null;
+    const savePromise = cloudSettingsAutosaveQueueRef.current
+      .catch(() => null)
+      .then(() => persistCloudSettings(next));
+    cloudSettingsAutosaveQueueRef.current = savePromise;
+    const response = await savePromise;
+    const newerPending = pendingCloudSettingsRef.current;
+    if (
+      newerPending &&
+      newerPending !== next &&
+      cloudSettingsAutosaveTimeoutRef.current === null
+    ) {
+      scheduleCloudSettingsAutosave(newerPending);
+    }
+    return response;
+  }
+
   function handleAppSettingsChange(next: AppSettings) {
     syncedRevisionRef.current = null;
+    appSettingsRef.current = next;
     setAppSettings(next);
-    setSettingsMessage(
-      accountSettings?.synced
-        ? 'Saved on this device · not yet saved to your account.'
-        : 'Saved on this device.'
-    );
+    saveLocalAppSettings(next, null);
+    if (sessionRef.current && accountSettingsRef.current) {
+      setSettingsMessage('Saved on this device · saving to cloud profile…');
+      scheduleCloudSettingsAutosave(next);
+    } else {
+      setSettingsMessage('Saved on this device.');
+    }
   }
 
   function focusAssistantPrompt() {
@@ -1610,8 +1752,10 @@ export function App() {
     ]).then(async ([nextAuth, activeSession]) => {
       setAuthConfig(nextAuth.config);
       setAuthConfigStatus(nextAuth.status);
+      sessionRef.current = activeSession;
       setSession(activeSession);
       if (!activeSession) {
+        accountSettingsRef.current = null;
         setAccountSettings(null);
         setSettingsMessage(
           nextAuth.status === 'ready'
@@ -1621,7 +1765,9 @@ export function App() {
         return;
       }
       try {
-        setAccountSettings(await api.getSettings());
+        const remoteSettings = await api.getSettings();
+        accountSettingsRef.current = remoteSettings;
+        setAccountSettings(remoteSettings);
         setSettingsMessage('Cloud profile connected.');
       } catch {
         setSettingsMessage(
@@ -1652,40 +1798,27 @@ export function App() {
     }
   }
 
-  async function handleSaveAppSettings() {
-    if (!session || !accountSettings) {
-      setSettingsMessage('Account sync unavailable · device settings active.');
-      return;
-    }
-    setSettingsBusy(true);
-    setSettingsMessage('Saving account settings…');
-    try {
-      const response = await api.updateSettings({
-        settings: appSettings,
-        expectedRevision: accountSettings.revision
-      });
-      setAccountSettings(response);
-      syncedRevisionRef.current = response.revision;
-      saveLocalAppSettings(appSettings, response.revision);
-      setSettingsMessage('Saved to this device and account.');
-    } catch (error) {
-      setSettingsMessage(errorMessage(error, 'Account settings save failed.'));
-    } finally {
-      setSettingsBusy(false);
-    }
-  }
-
   async function syncSettingsBeforeAssistantAction() {
-    if (!session || !accountSettings) {
+    if (!sessionRef.current || !accountSettingsRef.current) {
       throw new Error('Account settings storage is unavailable.');
     }
-    const response = await api.updateSettings({
-      settings: appSettings,
-      expectedRevision: accountSettings.revision
-    });
-    setAccountSettings(response);
-    syncedRevisionRef.current = response.revision;
-    saveLocalAppSettings(appSettings, response.revision);
+    await flushCloudSettingsAutosave();
+    if (!sessionRef.current || !accountSettingsRef.current) {
+      throw new Error('Account settings storage is unavailable.');
+    }
+    if (
+      pendingCloudSettingsRef.current === null &&
+      syncedRevisionRef.current === accountSettingsRef.current.revision
+    ) {
+      return accountSettingsRef.current;
+    }
+    pendingCloudSettingsRef.current = appSettingsRef.current;
+    const response = await flushCloudSettingsAutosave();
+    if (!response || pendingCloudSettingsRef.current !== null) {
+      throw new Error(
+        'Cloud settings could not be saved. Your device copy is still safe.'
+      );
+    }
     return response;
   }
 
@@ -1772,7 +1905,9 @@ export function App() {
           api.listProjects().catch(() => ({ projects: [] }))
         ]
       );
+      sessionRef.current = activeSession;
       setSession(activeSession);
+      accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
       setProjects(
         mergeProjectSummaries(localProjects, remoteProjects.projects)
@@ -1799,11 +1934,19 @@ export function App() {
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
+      await flushCloudSettingsAutosave();
       await api.logout();
       const localProjects = await listLocalProjects().catch(() => []);
       remoteVersionsRef.current.clear();
+      sessionRef.current = null;
       setSession(null);
+      accountSettingsRef.current = null;
       setAccountSettings(null);
+      pendingCloudSettingsRef.current = null;
+      if (cloudSettingsAutosaveTimeoutRef.current !== null) {
+        clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
+        cloudSettingsAutosaveTimeoutRef.current = null;
+      }
       setCloudAvailable(false);
       setProjects(localProjects);
       setSaveState('offline');
@@ -1828,10 +1971,12 @@ export function App() {
     const defaults = defaultAppSettings();
     // A reset is a local edit like any other: it must survive the next boot
     // rather than being undone by the account copy.
-    syncedRevisionRef.current = null;
-    setAppSettings(defaults);
-    saveLocalAppSettings(defaults, null);
-    setSettingsMessage('Application settings reset on this device.');
+    handleAppSettingsChange(defaults);
+    setSettingsMessage(
+      sessionRef.current && accountSettingsRef.current
+        ? 'Application settings reset · saving to cloud profile…'
+        : 'Application settings reset on this device.'
+    );
   }
 
   function applyViewportDefaults() {
@@ -4424,7 +4569,6 @@ export function App() {
         busy={settingsBusy}
         message={settingsMessage}
         onChange={handleAppSettingsChange}
-        onSave={() => void handleSaveAppSettings()}
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
         onTestAssistant={() => void handleTestAssistantConnection()}
