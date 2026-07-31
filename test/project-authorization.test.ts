@@ -68,7 +68,10 @@ function createAuthorizationDb(options?: { batchChanges?: number }): {
 describe('project authorization', () => {
   it('resolves D1 owner, editor, and viewer roles and hides unrelated users', async () => {
     const { db } = createAuthorizationDb();
-    const service = new D1R2PersistenceService({ DB: db });
+    const service = new D1R2PersistenceService({
+      DB: db,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
     const projectId = 'project_d1_shared';
     const owner = toUserId('user_d1_owner');
     const editor = toUserId('user_d1_editor');
@@ -97,7 +100,10 @@ describe('project authorization', () => {
 
   it('attributes an editor revision while keeping the owner-bound update guard', async () => {
     const { db, batched } = createAuthorizationDb();
-    const service = new D1R2PersistenceService({ DB: db });
+    const service = new D1R2PersistenceService({
+      DB: db,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
     const owner = toUserId('user_d1_owner');
     const editor = toUserId('user_d1_editor');
     const document = createProjectDocument('D1 shared', owner);
@@ -123,7 +129,10 @@ describe('project authorization', () => {
 
   it('rejects an editor-authored document that changes the owner', async () => {
     const { db, batched } = createAuthorizationDb();
-    const service = new D1R2PersistenceService({ DB: db });
+    const service = new D1R2PersistenceService({
+      DB: db,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
     const owner = toUserId('user_d1_owner');
     const editor = toUserId('user_d1_editor');
     const document = createProjectDocument('D1 owned', owner);
