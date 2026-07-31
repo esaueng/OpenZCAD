@@ -758,6 +758,35 @@ test('keeps settings at the far right and dismisses the file menu outside', asyn
   await expect(fileMenu).not.toHaveAttribute('open', '');
 });
 
+test('opens new projects blank with the assistant collapsed', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  await createProject(page, 'First Blank Part');
+
+  const workspace = page.locator('.workspace');
+  await expect(page.locator('.viewer-notice')).toHaveCount(0);
+  await expect(page.getByText('No geometry yet')).toHaveCount(0);
+  await expect(page.locator('.assistant-panel')).toHaveCount(0);
+  await expect(page.locator('.assistant-launcher')).toBeVisible();
+  await expect(workspace).not.toHaveClass(/with-assistant/);
+
+  await openAssistant(page);
+  await expect(workspace).toHaveClass(/with-assistant/);
+
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.getByRole('button', { name: 'Create project' })
+  ).toBeVisible();
+  await page.getByLabel('Project name').fill('Second Blank Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await expect(page.locator('.assistant-panel')).toHaveCount(0);
+  await expect(page.locator('.assistant-launcher')).toBeVisible();
+  await expect(workspace).not.toHaveClass(/with-assistant/);
+  await expect(page.locator('.viewer-notice')).toHaveCount(0);
+});
+
 test('keeps every workspace surface inside a narrow viewport', async ({
   page
 }) => {
@@ -766,6 +795,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('Narrow Part');
   await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
 
   const selectors = [
     '.topbar',
@@ -1503,6 +1533,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Selection Part');
   await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await page
     .getByRole('region', { name: 'Feature inspector' })
@@ -1605,6 +1636,7 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Union Guard');
   await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
@@ -1740,6 +1772,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await page.goto('/');
   await page.getByLabel('Project name').fill('AI Cylinder Rims');
   await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   await page
     .getByRole('region', { name: 'Feature inspector' })
@@ -2187,13 +2220,13 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   await menu.getByRole('menuitem', { name: 'Hide Body' }).click();
   await expect(menu).toBeHidden();
 
-  // Hidden bodies leave the viewport (empty-state notice returns) but stay
-  // in the tree with an eye toggle.
-  await expect(page.locator('.viewer-notice')).toBeVisible();
+  // Hidden bodies leave a blank viewport but stay in the tree with an eye
+  // toggle.
+  await expect(page.locator('.viewer-notice')).toHaveCount(0);
   const showButton = page.getByRole('button', { name: /^Show Box/ });
   await expect(showButton).toBeVisible();
   await showButton.click();
-  await expect(page.locator('.viewer-notice')).toBeHidden();
+  await expect(page.locator('.viewer-notice')).toHaveCount(0);
 });
 
 test('P toggles the camera projection', async ({ page }) => {
@@ -3247,7 +3280,7 @@ test('flicking a direction in the marking menu picks that action', async ({
   await page.mouse.up();
 
   await expect(menu).toBeHidden();
-  await expect(page.locator('.viewer-notice')).toBeVisible();
+  await expect(page.locator('.viewer-notice')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Show Box/ })).toBeVisible();
 });
 
@@ -3316,6 +3349,13 @@ async function createProject(page: Page, name: string) {
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 }
 
+async function openAssistant(page: Page) {
+  const launcher = page.locator('.assistant-launcher');
+  await expect(launcher).toBeVisible();
+  await launcher.click();
+  await expect(page.locator('.assistant-panel')).toBeVisible();
+}
+
 test('settings leave the conversation and its in-flight reply intact', async ({
   page
 }) => {
@@ -3328,6 +3368,7 @@ test('settings leave the conversation and its in-flight reply intact', async ({
     })
   );
   await createProject(page, 'Shell State Part');
+  await openAssistant(page);
 
   await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
   await page.getByLabel('CAD change request').press('Enter');
@@ -3357,6 +3398,7 @@ test('disabling the assistant takes its live preview with it', async ({
   await stubApi(page, { assistantEnabled: true });
   await stubAssistant(page);
   await createProject(page, 'Orphan Preview Part');
+  await openAssistant(page);
 
   await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
   await page.getByLabel('CAD change request').press('Enter');
@@ -3424,6 +3466,7 @@ test('a direct mode hides the assistant without ending the conversation', async 
   await stubApi(page, { assistantEnabled: true });
   await stubAssistant(page);
   await createProject(page, 'Direct Mode Part');
+  await openAssistant(page);
 
   await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
   await page.getByLabel('CAD change request').press('Enter');
