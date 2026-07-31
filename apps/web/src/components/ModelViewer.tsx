@@ -17,7 +17,7 @@ import {
   MOVE_AXIS_COLORS,
   MOVE_AXIS_VECTORS,
   RightClickGestureTracker,
-  VIEW_DIRECTIONS,
+  viewDirectionFor,
   applyDisplayMode,
   CameraController,
   buildCylinderRadiusHandle,
@@ -97,7 +97,7 @@ import {
   type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
-  type StandardView,
+  type ViewTarget,
   type ViewerSettings,
   type FatLineResolution
 } from '@openzcad/viewport';
@@ -253,8 +253,8 @@ interface ModelViewerProps {
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
-  /** Set to move the camera to a standard view; nonce forces re-runs. */
-  viewRequest: { view: StandardView; nonce: number } | null;
+  /** Set to move the camera to a view target; nonce forces re-runs. */
+  viewRequest: { view: ViewTarget; nonce: number } | null;
   /**
    * Set to spin the view a quarter turn about the world up axis; direction is
    * how the model appears to turn on screen. Nonce forces re-runs.
@@ -4593,7 +4593,8 @@ export function ModelViewer({
     });
   }, [fitSignal]);
 
-  // Standard views keep the current zoom and glide the camera to the axis.
+  // View requests keep the current zoom and glide the camera to the axis —
+  // named standard views and the cube's corner diagonals alike.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !viewRequest) {
@@ -4601,7 +4602,7 @@ export function ModelViewer({
     }
     const { camera, controls } = context;
     const distance = Math.max(camera.position.distanceTo(controls.target), 1);
-    const direction = VIEW_DIRECTIONS[viewRequest.view];
+    const direction = viewDirectionFor(viewRequest.view);
     context.startCameraTween({
       position: controls.target.clone().addScaledVector(direction, distance),
       target: controls.target.clone(),
