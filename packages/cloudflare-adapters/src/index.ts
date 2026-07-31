@@ -8,10 +8,17 @@ import {
   type PersistenceService
 } from '@openzcad/persistence';
 import {
+  applyOrganizationUpdate,
+  DEFAULT_PROJECT_ORGANIZATION,
+  duplicateProjectName,
   nowIso,
+  projectOrganization,
+  PROJECT_STATUSES,
   sanitizeFileName,
   toArtifactId,
+  toProjectId,
   toUploadSessionId,
+  TRASH_RETENTION_MS,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
   type CreateProjectRequest,
@@ -22,17 +29,25 @@ import {
   type CollaborationErrorCode,
   type CollaborationMember,
   type CollaborationServerMessage,
+  type DuplicateProjectRequest,
   type FinalizeArtifactRequest,
   type ListArtifactsResponse,
   type ListProjectsResponse,
   type ProjectDocument,
+  type ProjectId,
+  type ProjectOrganization,
+  type ProjectStatus,
+  type ProjectSummary,
+  type ReorderProjectsRequest,
   type SaveRevisionRequest,
+  type UpdateProjectRequest,
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
 import {
   createCheckpoint,
   createProjectDocument,
+  duplicateProjectDocument,
   normalizeDocument
 } from '@openzcad/document-core';
 
@@ -95,43 +110,19 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().listProjects(userId);
     }
     const rows = await this.env.DB.prepare(
-      `SELECT id, name, updated_at, document_json FROM projects WHERE user_id = ? ORDER BY updated_at DESC`
+      `${PROJECT_SUMMARY_COLUMNS} FROM projects WHERE user_id = ? ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
     )
       .bind(userId)
-      .all<{
-        id: string;
-        name: string;
-        updated_at: string;
-        document_json: string;
-      }>();
+      .all<ProjectRow>();
 
     return {
-      projects: (rows.results ?? []).flatMap(
-        (row: {
-          id: string;
-          name: string;
-          updated_at: string;
-          document_json: string;
-        }) => {
-          try {
-            const document = normalizeDocument(
-              JSON.parse(row.document_json) as ProjectDocument
-            );
-            return [
-              {
-                projectId: document.projectId,
-                name: row.name,
-                lastRevisionId: document.revisions.at(-1)?.revisionId,
-                revisionCount: document.revisions.length,
-                updatedAt: row.updated_at
-              }
-            ];
-          } catch {
-            console.error('Skipping corrupt project row.');
-            return [];
-          }
+      projects: (rows.results ?? []).flatMap((row: ProjectRow) => {
+        const summary = summaryFromRow(row);
+        if (!summary) {
+          console.error('Skipping corrupt project row.');
         }
-      )
+        return summary ? [summary] : [];
+      })
     };
   }
 
@@ -143,29 +134,122 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().createProject(userId, request);
     }
     const document = createProjectDocument(request.name, userId, request.units);
-    await this.env.DB.prepare(
-      `INSERT INTO projects (id, user_id, name, document_json, document_version, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        document.projectId,
-        userId,
-        document.name,
-        JSON.stringify(document),
-        document.version,
-        nowIso()
-      )
-      .run();
-
     return {
-      project: {
-        projectId: document.projectId,
-        name: document.name,
-        lastRevisionId: document.revisions.at(-1)?.revisionId,
-        revisionCount: document.revisions.length,
-        updatedAt: nowIso()
-      },
+      project: await this.insertProject(userId, document),
       document
     };
+  }
+
+  async duplicateProject(
+    userId: UserId,
+    request: DuplicateProjectRequest
+  ): Promise<CreateProjectResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().duplicateProject(userId, request);
+    }
+    const source = await this.loadProject(userId, request.projectId);
+    if (!source) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const name = request.name ?? (await this.copyNameFor(userId, source.name));
+    const document = duplicateProjectDocument(source, name, userId);
+    // A copy lands next to its original rather than at the top of the shelf,
+    // which is where you go looking for it. It starts unpinned and active: the
+    // point of a duplicate is to diverge from the original, not to inherit its
+    // place on the desk.
+    const sortOrder = await this.env.DB.prepare(
+      `SELECT sort_order FROM projects WHERE id = ? AND user_id = ?`
+    )
+      .bind(request.projectId, userId)
+      .first<{ sort_order: number }>();
+    return {
+      project: await this.insertProject(userId, document, {
+        status: 'active',
+        pinned: false,
+        sortOrder: sortOrder?.sort_order ?? 0
+      }),
+      document
+    };
+  }
+
+  async updateProject(
+    userId: UserId,
+    request: UpdateProjectRequest
+  ): Promise<ProjectSummary> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().updateProject(userId, request);
+    }
+    const row = await this.env.DB.prepare(
+      `${PROJECT_SUMMARY_COLUMNS} FROM projects WHERE id = ? AND user_id = ?`
+    )
+      .bind(request.projectId, userId)
+      .first<ProjectRow>();
+    const current = row ? summaryFromRow(row) : null;
+    if (!current) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const organization = applyOrganizationUpdate(
+      projectOrganization(current),
+      request
+    );
+    await this.env.DB.prepare(
+      `UPDATE projects SET status = ?, pinned = ?, sort_order = ?, deleted_at = ?, archived_at = ? WHERE id = ? AND user_id = ?`
+    )
+      .bind(
+        organization.status,
+        organization.pinned ? 1 : 0,
+        organization.sortOrder,
+        organization.deletedAt ?? null,
+        organization.archivedAt ?? null,
+        request.projectId,
+        userId
+      )
+      .run();
+    return { ...current, organization };
+  }
+
+  async reorderProjects(
+    userId: UserId,
+    request: ReorderProjectsRequest
+  ): Promise<ListProjectsResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().reorderProjects(userId, request);
+    }
+    if (request.projectIds.length > 0) {
+      await this.env.DB.batch(
+        request.projectIds.map((projectId, index) =>
+          this.env
+            .DB!.prepare(
+              `UPDATE projects SET sort_order = ? WHERE id = ? AND user_id = ?`
+            )
+            .bind(index, projectId, userId)
+        )
+      );
+    }
+    return this.listProjects(userId);
+  }
+
+  async deleteProject(userId: UserId, projectId: string): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().deleteProject(userId, projectId);
+    }
+    await this.assertProjectOwner(userId, projectId);
+    await this.destroyProjects([projectId]);
+  }
+
+  async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().purgeExpiredProjects(userId);
+    }
+    const cutoff = new Date(Date.now() - TRASH_RETENTION_MS).toISOString();
+    const expired = await this.env.DB.prepare(
+      `SELECT id FROM projects WHERE user_id = ? AND status = 'deleted' AND deleted_at IS NOT NULL AND deleted_at <= ? LIMIT 100`
+    )
+      .bind(userId, cutoff)
+      .all<{ id: string }>();
+    const projectIds = (expired.results ?? []).map((row) => row.id);
+    await this.destroyProjects(projectIds);
+    return projectIds.map(toProjectId);
   }
 
   async loadProject(
@@ -426,6 +510,100 @@ export class D1R2PersistenceService implements PersistenceService {
     return stored ? { artifact, body: await stored.arrayBuffer() } : null;
   }
 
+  /** Writes a freshly built document into `projects` and summarizes the row. */
+  private async insertProject(
+    userId: UserId,
+    document: ProjectDocument,
+    organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION
+  ): Promise<ProjectSummary> {
+    const updatedAt = nowIso();
+    await this.env
+      .DB!.prepare(
+        `INSERT INTO projects (id, user_id, name, document_json, document_version, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        document.projectId,
+        userId,
+        document.name,
+        JSON.stringify(document),
+        document.version,
+        updatedAt,
+        organization.status,
+        organization.pinned ? 1 : 0,
+        organization.sortOrder
+      )
+      .run();
+    return {
+      projectId: document.projectId,
+      name: document.name,
+      lastRevisionId: document.revisions.at(-1)?.revisionId,
+      revisionCount: document.revisions.length,
+      updatedAt,
+      organization
+    };
+  }
+
+  /** A "(copy)" name that no other project of this owner already answers to. */
+  private async copyNameFor(userId: UserId, name: string): Promise<string> {
+    const rows = await this.env
+      .DB!.prepare(`SELECT name FROM projects WHERE user_id = ?`)
+      .bind(userId)
+      .all<{ name: string }>();
+    return duplicateProjectName(
+      name,
+      (rows.results ?? []).map((row) => row.name)
+    );
+  }
+
+  /**
+   * Irreversibly removes projects and their stored bytes. Revisions, artifact
+   * rows, and upload sessions cascade from the project row, so only the R2
+   * objects they point at have to be swept by hand — and they are swept first,
+   * because a deleted row would otherwise leave the bytes unreferenced and
+   * unbilled to nobody's knowledge.
+   */
+  private async destroyProjects(projectIds: string[]): Promise<void> {
+    if (projectIds.length === 0) {
+      return;
+    }
+    const placeholders = projectIds.map(() => '?').join(', ');
+    if (this.env.ARTIFACTS) {
+      const objects = await this.env
+        .DB!.prepare(
+          `SELECT object_key FROM artifacts WHERE project_id IN (${placeholders}) UNION SELECT object_key FROM upload_sessions WHERE project_id IN (${placeholders})`
+        )
+        .bind(...projectIds, ...projectIds)
+        .all<{ object_key: string }>();
+      // Keep the database rows when object deletion fails so the operation is
+      // visible, retryable, and cannot strand unreferenced user data in R2.
+      await Promise.all(
+        (objects.results ?? []).map((row) =>
+          this.env.ARTIFACTS!.delete(row.object_key)
+        )
+      );
+    }
+    // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
+    // a per-connection pragma; deleting them explicitly means a purge cannot
+    // leave orphaned revisions behind if it is ever off.
+    await this.env.DB!.batch(
+      [
+        'DELETE FROM upload_sessions WHERE project_id IN',
+        'DELETE FROM artifacts WHERE project_id IN',
+        'DELETE FROM revisions WHERE project_id IN'
+      ]
+        .map((statement) =>
+          this.env
+            .DB!.prepare(`${statement} (${placeholders})`)
+            .bind(...projectIds)
+        )
+        .concat(
+          this.env
+            .DB!.prepare(`DELETE FROM projects WHERE id IN (${placeholders})`)
+            .bind(...projectIds)
+        )
+    );
+  }
+
   private async assertProjectOwner(
     userId: UserId,
     projectId: string
@@ -481,6 +659,61 @@ function createUploadSessionRecord(
   };
   session.uploadUrl = `/api/uploads/${session.uploadSessionId}/content`;
   return session;
+}
+
+/**
+ * Columns every project summary is built from. Kept as one string so the list
+ * and single-row reads cannot drift apart and hand `summaryFromRow` a shape it
+ * does not expect.
+ */
+const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, status, pinned, sort_order, deleted_at, archived_at`;
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  updated_at: string;
+  document_json: string;
+  status: string | null;
+  pinned: number | null;
+  sort_order: number | null;
+  deleted_at: string | null;
+  archived_at: string | null;
+}
+
+function organizationFromRow(row: ProjectRow): ProjectOrganization {
+  const status = PROJECT_STATUSES.includes(row.status as ProjectStatus)
+    ? (row.status as ProjectStatus)
+    : 'active';
+  return {
+    status,
+    pinned: row.pinned === 1,
+    sortOrder: row.sort_order ?? 0,
+    ...(status === 'deleted' && row.deleted_at
+      ? { deletedAt: row.deleted_at }
+      : {}),
+    ...(status === 'archived' && row.archived_at
+      ? { archivedAt: row.archived_at }
+      : {})
+  };
+}
+
+/** Null when the stored document is unreadable, so the caller can skip it. */
+function summaryFromRow(row: ProjectRow): ProjectSummary | null {
+  try {
+    const document = normalizeDocument(
+      JSON.parse(row.document_json) as ProjectDocument
+    );
+    return {
+      projectId: document.projectId,
+      name: row.name,
+      lastRevisionId: document.revisions.at(-1)?.revisionId,
+      revisionCount: document.revisions.length,
+      updatedAt: row.updated_at,
+      organization: organizationFromRow(row)
+    };
+  } catch {
+    return null;
+  }
 }
 
 interface ArtifactRow {
@@ -635,10 +868,9 @@ export class ProjectCollaborationRoom extends DurableObject {
    * interrupted migration re-runs from the original on the next load.
    */
   private async migrateLegacyRoomState(): Promise<void> {
-    const legacy =
-      await this.roomContext.storage.get<LegacyRoomState>(
-        LEGACY_ROOM_STATE_KEY
-      );
+    const legacy = await this.roomContext.storage.get<LegacyRoomState>(
+      LEGACY_ROOM_STATE_KEY
+    );
     if (!legacy) {
       return;
     }

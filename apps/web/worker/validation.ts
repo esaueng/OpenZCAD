@@ -1,15 +1,20 @@
 import {
   MAX_PROJECT_NAME_LENGTH,
+  PROJECT_STATUSES,
   toArtifactId,
   toProjectId,
   toUploadSessionId,
   type ArtifactKind,
   type CreateProjectRequest,
   type CreateUploadSessionRequest,
+  type DuplicateProjectRequest,
   type FinalizeImportRequest,
   type ProjectDocument,
+  type ProjectStatus,
+  type ReorderProjectsRequest,
   type SaveRevisionRequest,
-  type UnitSystem
+  type UnitSystem,
+  type UpdateProjectRequest
 } from '@openzcad/shared';
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TYPES,
@@ -47,6 +52,8 @@ const MAX_NAME_LENGTH = MAX_PROJECT_NAME_LENGTH;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_REASON_LENGTH = 500;
+/** Bound on one reorder: a shelf that large is not being dragged by hand. */
+const MAX_REORDERED_PROJECTS = 1_000;
 const MAX_AI_PROMPT_LENGTH = 4_000;
 const MAX_AI_DIGEST_BYTES = 128_000;
 const MAX_AI_DIGEST_ITEMS = 1_000;
@@ -100,6 +107,92 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     request.units = record.units as UnitSystem;
   }
   return request;
+}
+
+export function parseUpdateProjectRequest(
+  body: unknown,
+  projectIdFromPath: string
+): UpdateProjectRequest {
+  const record = asRecord(body, 'Request body');
+  const request: UpdateProjectRequest = {
+    projectId: toProjectId(projectIdFromPath)
+  };
+  if (record.status !== undefined) {
+    if (!PROJECT_STATUSES.includes(record.status as ProjectStatus)) {
+      throw badRequest(
+        `"status" must be one of: ${PROJECT_STATUSES.join(', ')}.`
+      );
+    }
+    request.status = record.status as ProjectStatus;
+  }
+  if (record.pinned !== undefined) {
+    if (typeof record.pinned !== 'boolean') {
+      throw badRequest('"pinned" must be a boolean.');
+    }
+    request.pinned = record.pinned;
+  }
+  if (record.sortOrder !== undefined) {
+    if (
+      typeof record.sortOrder !== 'number' ||
+      !Number.isFinite(record.sortOrder)
+    ) {
+      throw badRequest('"sortOrder" must be a finite number.');
+    }
+    request.sortOrder = record.sortOrder;
+  }
+  if (
+    request.status === undefined &&
+    request.pinned === undefined &&
+    request.sortOrder === undefined
+  ) {
+    throw badRequest(
+      'Provide at least one of "status", "pinned", or "sortOrder".'
+    );
+  }
+  return request;
+}
+
+export function parseDuplicateProjectRequest(
+  body: unknown,
+  projectIdFromPath: string
+): DuplicateProjectRequest {
+  // An empty body is the common case — the server picks a "(copy)" name.
+  const record =
+    body === undefined || body === null ? {} : asRecord(body, 'Request body');
+  return {
+    projectId: toProjectId(projectIdFromPath),
+    ...(record.name === undefined
+      ? {}
+      : { name: requireString(record, 'name', MAX_NAME_LENGTH) })
+  };
+}
+
+export function parseReorderProjectsRequest(
+  body: unknown
+): ReorderProjectsRequest {
+  const record = asRecord(body, 'Request body');
+  if (!Array.isArray(record.projectIds)) {
+    throw badRequest('"projectIds" must be an array.');
+  }
+  if (record.projectIds.length > MAX_REORDERED_PROJECTS) {
+    throw badRequest(
+      `"projectIds" must contain at most ${MAX_REORDERED_PROJECTS} ids.`
+    );
+  }
+  const seen = new Set<string>();
+  return {
+    projectIds: record.projectIds.map((value, index) => {
+      if (typeof value !== 'string' || value.trim().length === 0) {
+        throw badRequest(`"projectIds[${index}]" must be a non-empty string.`);
+      }
+      const projectId = value.trim();
+      if (seen.has(projectId)) {
+        throw badRequest('"projectIds" must not repeat a project.');
+      }
+      seen.add(projectId);
+      return toProjectId(projectId);
+    })
+  };
 }
 
 /**
