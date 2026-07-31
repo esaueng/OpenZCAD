@@ -20,6 +20,7 @@ import {
   SelectionManager
 } from './SelectionManager';
 import { VIEWPORT_RENDER_ORDER } from '../render/scene';
+import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 
 function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
   const bodyGroup = new THREE.Group();
@@ -64,6 +65,37 @@ function makeEdge(selected: boolean): Line2 {
     ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
     : VIEWPORT_RENDER_ORDER.BODY_EDGE;
   return edge;
+}
+
+function makeBatchedEdge() {
+  const bodyId = toBodyId('body-batch');
+  const overlay = createBodyEdgeOverlay(
+    {
+      bodyId,
+      topology: {
+        faces: [],
+        edges: [
+          {
+            topologyId: 'edge-batch',
+            hash: 42,
+            points: [0, 0, 0, 1, 0, 0, 2, 0, 0]
+          }
+        ]
+      }
+    },
+    { width: 100, height: 100 }
+  );
+  const selection = {
+    bodyId,
+    kind: 'edge' as const,
+    topologyId: 'edge-batch',
+    hash: 42
+  };
+  const hit = {
+    object: overlay.idleEdges,
+    faceIndex: 0
+  } as unknown as PickCandidate['hit'];
+  return { overlay, selection, hit };
 }
 
 function candidate(partial: Partial<PickCandidate>): PickCandidate {
@@ -137,6 +169,30 @@ describe('edge hover styling', () => {
     const after = renders();
     manager.setEdgeHover(edge);
     expect(renders()).toBe(after);
+  });
+
+  it('moves the reusable batched hover overlay to a picked segment', () => {
+    const { manager } = makeManager();
+    const { overlay, selection, hit } = makeBatchedEdge();
+    const hoverGeometry = overlay.hoverEdges.geometry;
+
+    manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    expect(overlay.hoverEdges.visible).toBe(true);
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(2);
+    expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
+
+    manager.applyHover(null);
+    expect(overlay.hoverEdges.visible).toBe(false);
+  });
+
+  it('does not duplicate a selected edge with the batched hover overlay', () => {
+    const { manager } = makeManager();
+    const { overlay, selection, hit } = makeBatchedEdge();
+    overlay.setSelected([selection]);
+
+    manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.hoverEdges.visible).toBe(false);
   });
 });
 

@@ -31,7 +31,6 @@ import {
 import {
   CommandManager,
   commandFactories,
-  commandsForCadPatch,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -47,8 +46,7 @@ import {
   listNodesByKind,
   listParameters,
   normalizeDocument,
-  resolveParamValue,
-  type BooleanInput
+  resolveParamValue
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -57,11 +55,15 @@ import {
   frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
+  type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
+import {
+  resolveFaceAttachment,
+  type FaceAttachmentCandidate
+} from '@openzcad/kernel-adapter/face-attachment';
 import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
   ArtifactKind,
   ArtifactRecord,
@@ -100,6 +102,7 @@ import type {
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
+import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
 import { timed } from './lib/perf';
 import {
   PLANE_LABELS,
@@ -125,6 +128,7 @@ import { ToolBar } from './components/ToolBar';
 import { Sidebar } from './components/Sidebar';
 import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
+import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
@@ -132,6 +136,7 @@ import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AssistantPanel } from './components/assistant/AssistantPanel';
+import { ProjectSharingDialog } from './components/ProjectSharingDialog';
 import {
   ExtrudeOverlay,
   MoveOverlay,
@@ -204,6 +209,14 @@ import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
 import { useCollaboration } from './lib/useCollaboration';
+import { preflightCadPatch } from './lib/aiPatchPreflight';
+import type { ConflictResolutionHandlers } from './lib/conflictRecovery';
+import {
+  modelingFaceOptions,
+  modelingOperationDisabledReason,
+  type ModelingOperationKind,
+  type ModelingOperationSubmission
+} from './lib/modelingOperations';
 import {
   clearActiveProject,
   loadActiveProjectId,
@@ -224,10 +237,8 @@ import {
   type SidebarSectionId
 } from './lib/panelState';
 
-const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
-const SETTINGS_AUTOSAVE_DELAY_MS = 450;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -345,6 +356,87 @@ async function reconcileRemoteOrganizations(
   return mirrorFailures;
 }
 
+function localRecoveryCopy(
+  source: ProjectDocument,
+  label: 'Recovery' | 'Local copy'
+): ProjectDocument {
+  const copy = structuredClone(source);
+  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
+  const name = `${source.name} (${label})`;
+  copy.projectId = projectId;
+  copy.name = name;
+  copy.revisions = [];
+  copy.checkpoints = [];
+  copy.derived.updatedAt = new Date().toISOString();
+  const root = copy.nodes[copy.rootNodeId];
+  if (root?.kind === 'project') {
+    root.projectId = projectId;
+    root.name = name;
+    root.revisionId = null;
+  }
+  return copy;
+}
+
+function resolvedSketchPlaneBasis(
+  document: ProjectDocument,
+  planeRef: SketchPlaneRef,
+  resolveOffset: (value: ParamValue) => number,
+  sketchName: string
+): PlaneBasis {
+  if (planeRef.type !== 'face' || !planeRef.faceReference) {
+    return frameForPlaneRef(planeRef, resolveOffset);
+  }
+  const body = document.derived.bodyRepresentations[planeRef.bodyId];
+  const candidates: FaceAttachmentCandidate[] = (body?.topology?.faces ?? [])
+    .filter(
+      (face) => face.reference?.kind === 'face' && face.geometry !== undefined
+    )
+    .map((face) => {
+      const reference = face.reference!;
+      const geometry = face.geometry!;
+      return {
+        kind: 'face',
+        currentHash: face.hash,
+        witnessVersion: 1,
+        witness: reference.witness,
+        plane:
+          geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
+            ? { center: geometry.center, normal: geometry.normal }
+            : null,
+        lineage: {
+          source: 'derived',
+          identity: {
+            producingFeatureId: reference.producingFeatureId,
+            lineageName: reference.lineageName
+          }
+        }
+      };
+    });
+  const sourceFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.featureId === planeRef.faceReference?.producingFeatureId
+  );
+  const frame = resolveFaceAttachment({
+    reference: planeRef.faceReference,
+    candidates,
+    snapshot: {
+      sourceArea: planeRef.sourceArea,
+      sourceCenter: planeRef.sourceCenter,
+      sourceNormal: planeRef.sourceNormal,
+      frame: planeRef.frame
+    },
+    sketchName,
+    sourceFeatureName:
+      sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
+  });
+  return {
+    origin: frame.origin,
+    u: frame.xAxis,
+    v: frame.yAxis,
+    normal: frame.zAxis
+  };
+}
+
 export function App() {
   /**
    * What was on this device at mount, read once. The account fetch resolves
@@ -391,17 +483,13 @@ export function App() {
     setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
   }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
     'Changes save on this device immediately.'
   );
-  const pendingCloudSettingsRef = useRef<AppSettings | null>(null);
-  const cloudSettingsAutosaveTimeoutRef = useRef<ReturnType<
-    typeof setTimeout
-  > | null>(null);
-  const cloudSettingsAutosaveQueueRef = useRef<
-    Promise<AppSettingsResponse | null>
-  >(Promise.resolve(null));
+  const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
+  const cloudSettingsSessionUserRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
@@ -434,6 +522,15 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
+  const [modelingTargetBodyId, setModelingTargetBodyId] =
+    useState<BodyId | null>(null);
+  const modelingPreflightRef = useRef<{
+    signature: string;
+    command: AnyCommand;
+    resultBodyId: BodyId;
+    featureName: string;
+    baseVersion: number;
+  } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
@@ -462,6 +559,10 @@ export function App() {
     'saving'
   );
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [collaborationRollout, setCollaborationRollout] = useState({
+    sharingEnabled: false,
+    editLeasesEnforced: false
+  });
   const [session, setSession] = useState<AuthSession | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -539,6 +640,16 @@ export function App() {
     },
     onError: setStatus
   });
+  const exactGeometryReady = geometry.isReadyFor(doc);
+  function requireExactGeometryReady(): boolean {
+    const ready = geometry.isReadyFor(managerRef.current?.document ?? null);
+    if (!ready) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+    }
+    return ready;
+  }
   const remoteVersionsRef = useRef(new Map<string, number>());
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -647,10 +758,7 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const {
-    run: executeValidatedFeature,
-    runTransaction: executeValidatedFeatureTransaction
-  } = useValidatedFeatureCommit({
+  const { run: executeValidatedFeature } = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
     commit: (command) => executeCommand(command),
@@ -664,7 +772,8 @@ export function App() {
     // A signed-in user can still be editing a device-only project. Only attach
     // account cookies to a collaboration room after this exact project has
     // been resolved as a cloud-backed document.
-    session: cloudAvailable ? session : null,
+    session:
+      cloudAvailable && collaborationRollout.sharingEnabled ? session : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -689,6 +798,79 @@ export function App() {
     }
   });
 
+  const activeCollaborationLease = Boolean(
+    collaboration.lease &&
+    collaboration.lease.projectId === doc?.projectId &&
+    collaboration.lease.expiresAt > Date.now()
+  );
+  const editDisabledReason =
+    !cloudAvailable || !session || !collaborationRollout.sharingEnabled
+      ? null
+      : collaboration.conflict
+        ? 'Resolve the collaboration conflict before editing'
+        : collaboration.role === 'viewer' ||
+            collaboration.status === 'read-only'
+          ? 'This shared project is read-only'
+          : collaboration.role === null
+            ? 'Waiting for project access'
+            : collaborationRollout.editLeasesEnforced &&
+                !activeCollaborationLease
+              ? collaboration.status === 'lease-denied'
+                ? 'Another collaborator holds the edit lease'
+                : 'Waiting for the project edit lease'
+              : null;
+
+  function ensureCanEdit(action = 'edit this project'): boolean {
+    if (!editDisabledReason) {
+      return true;
+    }
+    setStatus(`Cannot ${action}: ${editDisabledReason}.`);
+    return false;
+  }
+
+  const conflictHandlers: ConflictResolutionHandlers = {
+    async writeRecoveryCopy(source) {
+      const copy = localRecoveryCopy(source, 'Recovery');
+      await saveLocalProject(copy);
+      setProjects((current) =>
+        mergeProjectSummaries(
+          [
+            {
+              projectId: copy.projectId,
+              name: copy.name,
+              updatedAt: copy.derived.updatedAt,
+              revisionCount: 0
+            }
+          ],
+          current
+        )
+      );
+    },
+    useRoomVersion(roomDocument) {
+      if (!collaboration.useRoomVersion(roomDocument.version)) {
+        throw new Error(
+          'The room version changed before recovery could complete.'
+        );
+      }
+      setStatus(
+        'Using the current room version; a local recovery copy was saved.'
+      );
+    },
+    async keepMyVersion({ expectedRoomVersion }) {
+      await collaboration.keepLocalVersion(expectedRoomVersion);
+      setStatus('Submitting the preserved local version to the room.');
+    },
+    saveLocalAsCopy() {
+      setStatus('Saved the divergent document as a local recovery project.');
+    }
+  };
+
+  useEffect(() => {
+    if (collaboration.conflict) {
+      setSharingOpen(true);
+    }
+  }, [collaboration.conflict]);
+
   useEffect(() => {
     savePanelState(panelState);
   }, [panelState]);
@@ -709,14 +891,78 @@ export function App() {
     }));
   }, [appSettings]);
 
-  useEffect(
-    () => () => {
-      if (cloudSettingsAutosaveTimeoutRef.current !== null) {
-        clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
+  useEffect(() => {
+    const controller = new CloudSettingsAutosave({
+      initialSettings: appSettingsRef.current,
+      initialSyncedRevision: syncedRevisionRef.current,
+      api,
+      onAccountSettings(response) {
+        accountSettingsRef.current = response;
+        setAccountSettings(response);
+      },
+      onLocalSettings(settings, syncedRevision) {
+        syncedRevisionRef.current = syncedRevision;
+        saveLocalAppSettings(settings, syncedRevision);
+      },
+      onStatus(status) {
+        switch (status.state) {
+          case 'pending':
+            setSettingsMessage(
+              'Saved on this device · saving to cloud profile…'
+            );
+            break;
+          case 'offline':
+            setSettingsMessage(
+              'Saved on this device · cloud sync paused until you are online.'
+            );
+            break;
+          case 'saved':
+            setSettingsMessage('Saved to this device and cloud profile.');
+            break;
+          case 'error':
+            setSettingsMessage(
+              errorMessage(
+                status.error,
+                'Cloud autosave failed · changes remain saved on this device.'
+              )
+            );
+            break;
+        }
       }
-    },
-    []
-  );
+    });
+    cloudSettingsAutosaveRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (cloudSettingsAutosaveRef.current === controller) {
+        cloudSettingsAutosaveRef.current = null;
+      }
+      cloudSettingsSessionUserRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = cloudSettingsAutosaveRef.current;
+    const userId = session?.userId ?? null;
+    if (!controller) {
+      return;
+    }
+    if (!userId || !accountSettings) {
+      if (cloudSettingsSessionUserRef.current !== null) {
+        controller.endSession();
+        cloudSettingsSessionUserRef.current = null;
+      }
+      return;
+    }
+    if (cloudSettingsSessionUserRef.current !== userId) {
+      if (cloudSettingsSessionUserRef.current !== null) {
+        controller.endSession();
+      }
+      controller.connectSession(userId, accountSettings);
+      cloudSettingsSessionUserRef.current = userId;
+      return;
+    }
+    controller.updateAccountSettings(accountSettings);
+  }, [accountSettings, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -755,6 +1001,12 @@ export function App() {
           rememberedRemote
         );
         const canUseCloud = Boolean(activeSession && rememberedRemote);
+        setCollaborationRollout({
+          sharingEnabled: health?.projectSharingEnabled === true,
+          editLeasesEnforced:
+            health?.projectSharingEnabled === true &&
+            health.projectEditLeasesEnforced === true
+        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -777,18 +1029,26 @@ export function App() {
             remoteSettings.synced &&
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
-            syncedRevisionRef.current = remoteSettings.revision;
             appSettingsRef.current = remoteSettings.settings;
             setAppSettings(remoteSettings.settings);
-            saveLocalAppSettings(
-              remoteSettings.settings,
-              remoteSettings.revision
-            );
-          } else if (remoteSettings.synced) {
+            const controller = cloudSettingsAutosaveRef.current;
+            if (controller) {
+              controller.adoptSyncedSettings(
+                remoteSettings.settings,
+                remoteSettings
+              );
+            } else {
+              syncedRevisionRef.current = remoteSettings.revision;
+              saveLocalAppSettings(
+                remoteSettings.settings,
+                remoteSettings.revision
+              );
+            }
+          } else {
             setSettingsMessage(
               'This device has settings that are not saved to your account yet · saving to cloud profile…'
             );
-            scheduleCloudSettingsAutosave(appSettingsRef.current);
+            cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
         }
         setSaveState(canUseCloud ? 'saved' : 'offline');
@@ -1238,10 +1498,17 @@ export function App() {
       } catch {
         return [];
       }
-      const basis = frameForPlaneRef(
-        sketch.planeRef,
-        (value) => evalParamValue(value, scope) ?? 0
-      );
+      let basis: PlaneBasis;
+      try {
+        basis = resolvedSketchPlaneBasis(
+          doc,
+          sketch.planeRef,
+          (value) => evalParamValue(value, scope) ?? 0,
+          sketch.name
+        );
+      } catch {
+        return [];
+      }
       const points = profile.map((point) => ({
         x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
         y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
@@ -1273,8 +1540,10 @@ export function App() {
   );
 
   const availability: ToolAvailability = {
+    editDisabledReason,
     sketchCount: sketchOptions.length,
     liveBodyCount: viewerBodies.length,
+    exactGeometryReady,
     hasEdgeSelected: selectedEdges.length > 0
   };
 
@@ -1345,7 +1614,7 @@ export function App() {
   }
 
   function executeCommand(command: AnyCommand): boolean {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('run this command')) {
       return false;
     }
     try {
@@ -1360,7 +1629,11 @@ export function App() {
   }
 
   function executeTransaction(label: string, commands: AnyCommand[]): boolean {
-    if (!managerRef.current || commands.length === 0) {
+    if (
+      !managerRef.current ||
+      commands.length === 0 ||
+      !ensureCanEdit('apply this edit')
+    ) {
       return false;
     }
     try {
@@ -1585,6 +1858,18 @@ export function App() {
         return;
       }
     }
+    if (
+      nextTool === 'mirror' ||
+      nextTool === 'shell' ||
+      nextTool === 'solid-offset'
+    ) {
+      setModelingTargetBodyId(
+        selectedTopology?.bodyId ??
+          selectedBodyIds.at(-1) ??
+          viewerBodies[0]?.bodyId ??
+          null
+      );
+    }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
     setExtrudePreview(null);
     setTool(nextTool);
@@ -1722,129 +2007,32 @@ export function App() {
     setStatus('All bodies visible.');
   }
 
-  function scheduleCloudSettingsAutosave(
-    next: AppSettings,
-    delay = SETTINGS_AUTOSAVE_DELAY_MS
-  ) {
-    pendingCloudSettingsRef.current = next;
-    if (cloudSettingsAutosaveTimeoutRef.current !== null) {
-      clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
-      cloudSettingsAutosaveTimeoutRef.current = null;
-    }
-    if (!sessionRef.current || !accountSettingsRef.current) {
-      return;
-    }
-    cloudSettingsAutosaveTimeoutRef.current = setTimeout(() => {
-      cloudSettingsAutosaveTimeoutRef.current = null;
-      void flushCloudSettingsAutosave();
-    }, delay);
-  }
-
-  async function persistCloudSettings(
-    next: AppSettings
-  ): Promise<AppSettingsResponse | null> {
-    const activeUserId = sessionRef.current?.userId;
-    let currentAccount = accountSettingsRef.current;
-    if (!activeUserId || !currentAccount) {
-      return null;
-    }
-
-    try {
-      let response: AppSettingsResponse;
-      try {
-        response = await api.updateSettings({
-          settings: next,
-          expectedRevision: currentAccount.revision
-        });
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 409) {
-          throw error;
-        }
-        currentAccount = await api.getSettings();
-        if (sessionRef.current?.userId !== activeUserId) {
-          return null;
-        }
-        accountSettingsRef.current = currentAccount;
-        setAccountSettings(currentAccount);
-        response = await api.updateSettings({
-          settings: next,
-          expectedRevision: currentAccount.revision
-        });
-      }
-
-      if (sessionRef.current?.userId !== activeUserId) {
-        return null;
-      }
-      accountSettingsRef.current = response;
-      setAccountSettings(response);
-      if (
-        appSettingsRef.current === next &&
-        pendingCloudSettingsRef.current === null
-      ) {
-        syncedRevisionRef.current = response.revision;
-        saveLocalAppSettings(next, response.revision);
-        setSettingsMessage('Saved to this device and cloud profile.');
-      }
-      return response;
-    } catch (error) {
-      if (sessionRef.current?.userId === activeUserId) {
-        if (appSettingsRef.current === next) {
-          pendingCloudSettingsRef.current = next;
-        }
-        syncedRevisionRef.current = null;
-        saveLocalAppSettings(appSettingsRef.current, null);
-        setSettingsMessage(
-          errorMessage(
-            error,
-            'Cloud autosave failed · changes remain saved on this device.'
-          )
-        );
-      }
-      return null;
-    }
-  }
-
-  async function flushCloudSettingsAutosave() {
-    if (cloudSettingsAutosaveTimeoutRef.current !== null) {
-      clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
-      cloudSettingsAutosaveTimeoutRef.current = null;
-    }
-    const next = pendingCloudSettingsRef.current;
-    if (!next) {
-      return cloudSettingsAutosaveQueueRef.current;
-    }
-    if (!sessionRef.current || !accountSettingsRef.current) {
-      return null;
-    }
-
-    pendingCloudSettingsRef.current = null;
-    const savePromise = cloudSettingsAutosaveQueueRef.current
-      .catch(() => null)
-      .then(() => persistCloudSettings(next));
-    cloudSettingsAutosaveQueueRef.current = savePromise;
-    const response = await savePromise;
-    const newerPending = pendingCloudSettingsRef.current;
-    if (
-      newerPending &&
-      newerPending !== next &&
-      cloudSettingsAutosaveTimeoutRef.current === null
-    ) {
-      scheduleCloudSettingsAutosave(newerPending);
-    }
-    return response;
-  }
-
   function handleAppSettingsChange(next: AppSettings) {
-    syncedRevisionRef.current = null;
     appSettingsRef.current = next;
     setAppSettings(next);
-    saveLocalAppSettings(next, null);
+    const controller = cloudSettingsAutosaveRef.current;
+    if (controller) {
+      controller.schedule(next);
+    } else {
+      syncedRevisionRef.current = null;
+      saveLocalAppSettings(next, null);
+    }
     if (sessionRef.current && accountSettingsRef.current) {
       setSettingsMessage('Saved on this device · saving to cloud profile…');
-      scheduleCloudSettingsAutosave(next);
     } else {
       setSettingsMessage('Saved on this device.');
     }
+  }
+
+  function endCloudSettingsSession() {
+    if (cloudSettingsSessionUserRef.current !== null) {
+      cloudSettingsAutosaveRef.current?.endSession();
+      cloudSettingsSessionUserRef.current = null;
+    }
+    sessionRef.current = null;
+    accountSettingsRef.current = null;
+    setSession(null);
+    setAccountSettings(null);
   }
 
   function openSettings() {
@@ -1864,8 +2052,7 @@ export function App() {
       sessionRef.current = activeSession;
       setSession(activeSession);
       if (!activeSession) {
-        accountSettingsRef.current = null;
-        setAccountSettings(null);
+        endCloudSettingsSession();
         setSettingsMessage(
           nextAuth.status === 'ready'
             ? 'Device settings active · sign in for cloud sync.'
@@ -1908,27 +2095,31 @@ export function App() {
   }
 
   async function syncSettingsBeforeAssistantAction() {
-    if (!sessionRef.current || !accountSettingsRef.current) {
-      throw new Error('Account settings storage is unavailable.');
-    }
-    await flushCloudSettingsAutosave();
-    if (!sessionRef.current || !accountSettingsRef.current) {
+    const controller = cloudSettingsAutosaveRef.current;
+    if (!sessionRef.current || !accountSettingsRef.current || !controller) {
       throw new Error('Account settings storage is unavailable.');
     }
     if (
-      pendingCloudSettingsRef.current === null &&
-      syncedRevisionRef.current === accountSettingsRef.current.revision
+      !controller.hasPendingChanges &&
+      controller.syncedRevision === accountSettingsRef.current.revision
     ) {
       return accountSettingsRef.current;
     }
-    pendingCloudSettingsRef.current = appSettingsRef.current;
-    const response = await flushCloudSettingsAutosave();
-    if (!response || pendingCloudSettingsRef.current !== null) {
+    if (!controller.hasPendingChanges) {
+      controller.schedule(appSettingsRef.current, 0);
+    }
+    const response = await controller.flushPending();
+    const currentAccount = accountSettingsRef.current;
+    if (
+      !currentAccount ||
+      controller.hasPendingChanges ||
+      controller.syncedRevision !== currentAccount.revision
+    ) {
       throw new Error(
         'Cloud settings could not be saved. Your device copy is still safe.'
       );
     }
-    return response;
+    return response ?? currentAccount;
   }
 
   async function handleSaveAssistantCredential(token: string) {
@@ -2015,6 +2206,22 @@ export function App() {
       setSession(activeSession);
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
+      if (
+        remoteSettings.synced &&
+        shouldAdoptAccountSettings({
+          settings: appSettingsRef.current,
+          syncedRevision: syncedRevisionRef.current
+        })
+      ) {
+        appSettingsRef.current = remoteSettings.settings;
+        setAppSettings(remoteSettings.settings);
+        cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
+          remoteSettings.settings,
+          remoteSettings
+        );
+      } else {
+        cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
+      }
       setProjects(listed.projects);
       const activeProjectIsCloud = Boolean(
         doc && remoteVersionsRef.current.has(doc.projectId)
@@ -2038,19 +2245,16 @@ export function App() {
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
-      await flushCloudSettingsAutosave();
+      await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
       const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
+      cloudSettingsAutosaveRef.current?.endSession();
+      cloudSettingsSessionUserRef.current = null;
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
       setAccountSettings(null);
-      pendingCloudSettingsRef.current = null;
-      if (cloudSettingsAutosaveTimeoutRef.current !== null) {
-        clearTimeout(cloudSettingsAutosaveTimeoutRef.current);
-        cloudSettingsAutosaveTimeoutRef.current = null;
-      }
       setCloudAvailable(false);
       setProjects(listed.projects);
       setSaveState('offline');
@@ -2136,8 +2340,7 @@ export function App() {
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
         remoteVersionsRef.current.clear();
-        setSession(null);
-        setAccountSettings(null);
+        endCloudSettingsSession();
       }
       const localDocument = createProjectDocument(
         name,
@@ -2513,7 +2716,7 @@ export function App() {
   }
 
   function handleUndo() {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('undo')) {
       return;
     }
     setDoc(managerRef.current.undo());
@@ -2524,7 +2727,7 @@ export function App() {
   }
 
   function handleRedo() {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('redo')) {
       return;
     }
     setDoc(managerRef.current.redo());
@@ -2541,6 +2744,10 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      if (!ensureCanEdit('save a shared revision')) {
+        setSaveState('offline');
+        return;
+      }
       const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
       if (!session || expectedVersion === undefined) {
         setCloudAvailable(false);
@@ -2565,8 +2772,7 @@ export function App() {
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         remoteVersionsRef.current.clear();
-        setSession(null);
-        setAccountSettings(null);
+        endCloudSettingsSession();
       }
       setCloudAvailable(false);
       setSaveState('offline');
@@ -2574,31 +2780,44 @@ export function App() {
     }
   }
 
-  function handlePreviewPatch(proposal: CadPatchProposal | null): boolean {
-    if (!proposal || !doc) {
+  const aiPreviewEpochRef = useRef(0);
+
+  async function handlePreviewPatch(
+    proposal: CadPatchProposal | null
+  ): Promise<boolean> {
+    const epoch = ++aiPreviewEpochRef.current;
+    if (!proposal) {
       setPreviewDoc(null);
       setStatus('Preview cleared.');
       return true;
     }
+    const current = managerRef.current?.document;
+    if (!current) {
+      return false;
+    }
     try {
-      const previewManager = new CommandManager(doc);
-      const preview = previewManager.runTransaction(
-        'Preview AI patch',
-        commandsForCadPatch(doc, proposal)
+      setStatus('Validating AI preview with the exact geometry kernel…');
+      const preflight = await preflightCadPatch(
+        current,
+        proposal,
+        (candidate) => geometry.syncOnce(candidate)
       );
-      // The compat kernel shares the exact kernel's primitive frame, so
-      // placement is faithful, but it cannot build every feature kind. Say so
-      // when it had to skip something rather than showing a quietly partial
-      // model.
-      const derived = kernel.syncDocument(preview);
-      setPreviewDoc({ ...preview, derived });
-      setStatus(
-        derived.warnings.length > 0
-          ? `Previewing proposed patch · ${derived.warnings.length} warning(s) · exact rebuild occurs after apply.`
-          : 'Previewing proposed patch · exact rebuild occurs after apply.'
-      );
+      const live = managerRef.current?.document;
+      if (
+        epoch !== aiPreviewEpochRef.current ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version
+      ) {
+        return false;
+      }
+      setPreviewDoc(preflight.candidate);
+      setStatus('Previewing exact proposed geometry.');
       return true;
     } catch (error) {
+      if (epoch !== aiPreviewEpochRef.current) {
+        return false;
+      }
       setPreviewDoc(null);
       setStatus(errorMessage(error, 'Patch preview failed.'));
       return false;
@@ -2608,29 +2827,32 @@ export function App() {
   async function handleApplyPatch(
     proposal: CadPatchProposal
   ): Promise<boolean> {
-    if (!doc) {
+    if (!ensureCanEdit('apply this AI proposal')) {
       return false;
     }
+    const current = managerRef.current?.document;
+    if (!current) {
+      return false;
+    }
+    setBusy(true);
     try {
-      const commands = commandsForCadPatch(doc, proposal);
-      const unionTargets = commands.flatMap((command) => {
-        if (command.kind !== 'feature.boolean') {
-          return [];
-        }
-        const payload = command.payload as BooleanInput;
-        const resultBodyId = payload.ids?.bodyId;
-        return payload.operation === 'union' && resultBodyId
-          ? [{ featureName: payload.name, resultBodyId }]
-          : [];
-      });
-      const applied =
-        unionTargets.length > 0
-          ? await executeValidatedFeatureTransaction(commands, {
-              label: 'Apply AI patch',
-              targets: unionTargets,
-              successMessage: 'Apply AI patch'
-            })
-          : executeTransaction('Apply AI patch', commands);
+      setStatus('Validating AI patch with the exact geometry kernel…');
+      const preflight = await preflightCadPatch(
+        current,
+        proposal,
+        (candidate) => geometry.syncOnce(candidate)
+      );
+      const live = managerRef.current?.document;
+      if (
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version
+      ) {
+        throw new Error(
+          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+        );
+      }
+      const applied = executeTransaction('Apply AI patch', preflight.commands);
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -2642,6 +2864,8 @@ export function App() {
     } catch (error) {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
       return false;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -2654,6 +2878,9 @@ export function App() {
   }): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
+    }
+    if (!ensureCanEdit('upload a project artifact')) {
+      throw new Error(editDisabledReason ?? 'Project editing is unavailable.');
     }
     const { session: upload } = await api.createUploadSession({
       projectId: doc.projectId,
@@ -2686,7 +2913,7 @@ export function App() {
   }
 
   async function handleImportFile(file: File) {
-    if (!managerRef.current || !doc) {
+    if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
     }
     const contentType = file.type || inferContentType(file.name);
@@ -2911,6 +3138,9 @@ export function App() {
         type: 'face',
         bodyId: target.bodyId as BodyId,
         faceHash: target.hash,
+        ...(faceTopology?.reference
+          ? { faceReference: faceTopology.reference }
+          : {}),
         sourceArea: geometry.area,
         sourceCenter: geometry.center,
         sourceNormal: geometry.normal ?? {
@@ -2956,6 +3186,12 @@ export function App() {
       }
       return;
     }
+    if (selection.kind !== 'body' && !exactGeometryReady) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -2975,6 +3211,9 @@ export function App() {
           bodyId: selection.bodyId,
           topologyId: selection.topologyId,
           hash: selection.hash,
+          ...(selection.reference?.kind === 'face'
+            ? { reference: selection.reference }
+            : {}),
           point: [detail.point.x, detail.point.y, detail.point.z],
           normal: [detail.normal.x, detail.normal.y, detail.normal.z],
           surfaceType: 'planar'
@@ -3016,6 +3255,9 @@ export function App() {
         bodyId: selection.bodyId,
         topologyId: selection.topologyId,
         hash: selection.hash,
+        ...(selection.reference?.kind === 'face'
+          ? { reference: selection.reference }
+          : {}),
         point: [detail.point.x, detail.point.y, detail.point.z],
         normal: [detail.normal.x, detail.normal.y, detail.normal.z],
         surfaceType:
@@ -3241,19 +3483,29 @@ export function App() {
    */
   const sketchSessionPlane =
     interaction.mode === 'sketch' ? interaction.session.plane : null;
+  const sketchSessionName =
+    interaction.mode === 'sketch' && interaction.session.sketchId && doc
+      ? (listNodesByKind(doc, 'sketch').find(
+          (candidate) => candidate.sketchId === interaction.session.sketchId
+        )?.name ?? 'Sketch')
+      : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
-  const sketchBasis = useMemo(
-    () =>
-      sketchSessionPlane
-        ? frameForPlaneRef(
-            sketchSessionPlane,
-            (value) =>
-              evalParamValue(value, parameterScopeRef.current.scope) ?? 0
-          )
-        : null,
-    [sketchSessionPlane]
-  );
+  const sketchBasis = useMemo(() => {
+    if (!sketchSessionPlane || !doc) {
+      return null;
+    }
+    try {
+      return resolvedSketchPlaneBasis(
+        doc,
+        sketchSessionPlane,
+        (value) => evalParamValue(value, parameterScopeRef.current.scope) ?? 0,
+        sketchSessionName
+      );
+    } catch {
+      return null;
+    }
+  }, [doc, sketchSessionName, sketchSessionPlane]);
 
   /** Active in-viewport sketch session for the viewport. */
   const sketchModeState = useMemo(() => {
@@ -3488,7 +3740,17 @@ export function App() {
       if (objects.length === 0) {
         return [];
       }
-      const basis = frameForPlaneRef(sketch.planeRef, resolve);
+      let basis: PlaneBasis;
+      try {
+        basis = resolvedSketchPlaneBasis(
+          doc,
+          sketch.planeRef,
+          resolve,
+          sketch.name
+        );
+      } catch {
+        return [];
+      }
       const curves = active
         ? []
         : objects.flatMap((object) => {
@@ -3986,6 +4248,7 @@ export function App() {
       operation: {
         kind: 'resize-cylindrical-face',
         faceHash: target.hash,
+        ...(target.reference ? { faceReference: target.reference } : {}),
         sourceRadius: target.radius,
         sourceAxisStart: {
           x: target.axisStart[0],
@@ -4023,6 +4286,9 @@ export function App() {
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const current = interactionRef.current;
     if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
       return;
@@ -4076,6 +4342,9 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
+    const edgeReferences = edges.flatMap((edge) =>
+      edge.reference?.kind === 'edge' ? [edge.reference] : []
+    );
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }
@@ -4084,6 +4353,10 @@ export function App() {
         currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
       targetBodyId: bodyId,
       edgeHashes,
+      ...(edges.length === edgeHashes.length &&
+      edgeReferences.length === edges.length
+        ? { edgeReferences }
+        : {}),
       size
     };
     return currentInteraction.op === 'fillet'
@@ -4093,6 +4366,9 @@ export function App() {
 
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
   function handleEdgeCommit(size: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (interaction.mode !== 'edges') {
       return;
     }
@@ -4163,6 +4439,14 @@ export function App() {
   }
 
   function handleSelectionAction(action: SelectionActionId) {
+    if (
+      (action === 'sketch-on-face' ||
+        action === 'fillet' ||
+        action === 'chamfer') &&
+      !requireExactGeometryReady()
+    ) {
+      return;
+    }
     if (action === 'sketch-on-face' && interaction.mode === 'face') {
       startSketchOnFace(interaction.target);
       return;
@@ -4189,6 +4473,9 @@ export function App() {
     if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
       return;
     }
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const target = interaction.target;
     const bodyId = target.bodyId as BodyId;
     const faceTopology = representations[bodyId]?.topology?.faces.find(
@@ -4211,6 +4498,9 @@ export function App() {
         operation: {
           kind: 'offset-face',
           faceHash: target.hash,
+          ...(faceTopology.reference
+            ? { faceReference: faceTopology.reference }
+            : {}),
           sourceSurfaceType: 'plane',
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
@@ -4236,6 +4526,9 @@ export function App() {
     geometry: FaceGeometry,
     diameter: ParamValue
   ) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (
       geometry.diameter === undefined ||
       !geometry.axisStart ||
@@ -4252,6 +4545,9 @@ export function App() {
         operation: {
           kind: 'resize-through-hole',
           faceHash: selection.hash ?? -1,
+          ...(selection.reference?.kind === 'face'
+            ? { faceReference: selection.reference }
+            : {}),
           sourceDiameter: geometry.diameter,
           sourceAxisStart: geometry.axisStart,
           sourceAxisEnd: geometry.axisEnd,
@@ -4268,6 +4564,9 @@ export function App() {
     selection: TopologySelection,
     geometry: FaceGeometry
   ) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const label = 'Remove imported feature';
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
@@ -4276,6 +4575,9 @@ export function App() {
         operation: {
           kind: 'remove-face-feature',
           faceHash: selection.hash ?? -1,
+          ...(selection.reference?.kind === 'face'
+            ? { faceReference: selection.reference }
+            : {}),
           sourceSurfaceType: geometry.surfaceType,
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
@@ -4290,6 +4592,9 @@ export function App() {
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (!doc) {
       return;
     }
@@ -4670,7 +4975,7 @@ export function App() {
    * edit a model the user cannot see. The palette and the shortcut overlay are
    * not listed — they are handled inside the map, which they need to reach.
    */
-  const workspaceInputEnabled = !settingsOpen;
+  const workspaceInputEnabled = !settingsOpen && !sharingOpen;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
@@ -4977,8 +5282,35 @@ export function App() {
     );
   }
 
+  const geometryPhaseLabel: Record<typeof geometry.state.phase, string> = {
+    starting: 'Starting geometry worker',
+    'loading-brepkit': 'Loading exact BrepKit kernel',
+    'loading-occt': 'Loading OpenCascade for STEP geometry',
+    rebuilding: 'Rebuilding exact geometry',
+    ready: 'Exact geometry ready',
+    failed: 'Exact geometry failed'
+  };
+  const staleProjectionLabel =
+    Object.keys(representations).length > 0
+      ? 'showing the last valid projection as stale'
+      : 'no exact projection is available yet';
+  const visibleStatus = exactGeometryReady
+    ? status
+    : `${
+        geometry.state.phase === 'ready'
+          ? 'Waiting for exact geometry for this revision'
+          : geometry.state.phase === 'failed' && geometry.state.error
+            ? `Exact geometry failed: ${geometry.state.error}`
+            : geometryPhaseLabel[geometry.state.phase]
+      } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
-    /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
+    geometry.state.phase === 'failed'
+      ? 'warning'
+      : !exactGeometryReady
+        ? 'running'
+        : /fail|error|invalid|unable|denied/i.test(status)
+          ? 'warning'
+          : 'ready';
 
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
@@ -5173,6 +5505,129 @@ export function App() {
       : baseToolCard;
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
+  const modelingOperation: ModelingOperationKind | null =
+    tool === 'mirror' || tool === 'shell' || tool === 'solid-offset'
+      ? tool
+      : null;
+  const modelingTargetBody = modelingTargetBodyId
+    ? representations[modelingTargetBodyId]
+    : undefined;
+  const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
+  const modelingUnsupportedReason = modelingOperation
+    ? (editDisabledReason ??
+      modelingOperationDisabledReason(modelingOperation, {
+        exactState: exactGeometryReady
+          ? 'ready'
+          : geometry.state.phase === 'failed'
+            ? 'failed'
+            : 'pending',
+        exactFailureReason: geometry.state.error,
+        hasTargetBody: Boolean(modelingTargetBody),
+        openingFaceCount: modelingFaces.length,
+        kernel: features.some(
+          (feature) => feature.data.featureKind === 'imported-step'
+        )
+          ? 'occt'
+          : 'brepkit',
+        offsetTopology: 'unknown'
+      }))
+    : null;
+
+  function commandForModelingSubmission(
+    submission: ModelingOperationSubmission
+  ): AnyCommand {
+    switch (submission.operation) {
+      case 'mirror':
+        return commandFactories.mirrorBody(submission.input);
+      case 'shell':
+        return commandFactories.shellBody(submission.input);
+      case 'solid-offset':
+        return commandFactories.offsetSolidBody(submission.input);
+    }
+  }
+
+  async function preflightModelingSubmission(
+    submission: ModelingOperationSubmission
+  ): Promise<{ status: 'ready' } | { status: 'refused'; reason: string }> {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEdit('preflight this modeling operation')) {
+      return {
+        status: 'refused',
+        reason: editDisabledReason ?? 'Project editing is unavailable.'
+      };
+    }
+    const current = manager.document;
+    const signature = JSON.stringify(submission);
+    try {
+      const command = commandForModelingSubmission(submission);
+      command.validate(current);
+      const candidate = command.apply(current);
+      const derived = await geometry.syncOnce(candidate);
+      const existingWarnings = new Set(current.derived.warnings);
+      const warning = derived.warnings.find(
+        (candidateWarning) => !existingWarnings.has(candidateWarning)
+      );
+      if (warning) {
+        throw new Error(warning);
+      }
+      const ids = (
+        command.payload as unknown as {
+          ids?: { bodyId?: BodyId };
+        }
+      ).ids;
+      const resultBodyId = ids?.bodyId;
+      if (!resultBodyId || !derived.bodyRepresentations[resultBodyId]) {
+        throw new Error(
+          `${submission.input.name} did not produce its expected exact result body.`
+        );
+      }
+      if (
+        managerRef.current !== manager ||
+        manager.document.projectId !== current.projectId ||
+        manager.document.version !== current.version
+      ) {
+        throw new Error(
+          'The document changed during exact preflight. Recheck the operation.'
+        );
+      }
+      modelingPreflightRef.current = {
+        signature,
+        command,
+        resultBodyId,
+        featureName: submission.input.name,
+        baseVersion: current.version
+      };
+      return { status: 'ready' };
+    } catch (error) {
+      modelingPreflightRef.current = null;
+      return {
+        status: 'refused',
+        reason: errorMessage(error, 'Exact preflight failed.')
+      };
+    }
+  }
+
+  function submitModelingOperation(submission: ModelingOperationSubmission) {
+    const approved = modelingPreflightRef.current;
+    const manager = managerRef.current;
+    if (
+      !approved ||
+      !manager ||
+      approved.signature !== JSON.stringify(submission) ||
+      approved.baseVersion !== manager.document.version
+    ) {
+      setStatus(
+        'The modeling preflight is stale. Check the exact result again.'
+      );
+      return;
+    }
+    void executeValidatedFeature(approved.command, {
+      featureName: approved.featureName,
+      resultBodyId: approved.resultBodyId,
+      successMessage: approved.command.label,
+      onSuccess: finishFeatureCreation
+    });
+  }
 
   return (
     <AppShell
@@ -5207,6 +5662,7 @@ export function App() {
             )
           }
           onGoHome={() => void handleGoHome()}
+          onOpenSharing={() => setSharingOpen(true)}
           onOpenSettings={openSettings}
         />
       }
@@ -5616,261 +6072,308 @@ export function App() {
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}
           >
-            <Inspector
-              tool={tool}
-              selectedFeature={selectedFeature}
-              selectedSketch={selectedSketch}
-              selectedSketchObject={selectedSketchObject}
-              selectedBody={selectedBody}
-              selectedTopology={renderedSelectedTopology}
-              selectedEdges={selectedEdges}
-              edgeModifierBody={edgeModifierBody}
-              scope={parameterScope.scope}
-              sketches={sketchOptions}
-              bodies={bodyOptions}
-              units={doc.units}
-              selectedBodyIds={selectedBodyIds}
-              preferredSketchId={selectedSketch?.sketchId ?? null}
-              cylinderRadiusEdit={cylinderRadiusInspectorEdit}
-              cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
-              onLaunchTool={launchTool}
-              onCancel={cancelPanel}
-              onSelectAllEdges={handleSelectAllEdges}
-              onClearSelectedEdges={handleClearSelectedEdges}
-              onCreatePrimitive={(kind, name, dimensions) =>
-                createFeature(
-                  commandFactories.addPrimitive({
-                    name,
-                    primitiveKind: kind,
-                    dimensions
-                  })
-                )
-              }
-              onCreateSketch={(value) =>
-                createFeature(commandFactories.addSketch(value))
-              }
-              onCreateExtrude={(value) =>
-                createFeature(commandFactories.extrudeSketch(value))
-              }
-              onCreateRevolve={(value) =>
-                createFeature(commandFactories.revolveSketch(value))
-              }
-              onCreateBoolean={(value) => {
-                const command = commandFactories.booleanBodies(value);
-                if (value.operation !== 'union') {
-                  createFeature(command);
-                  return;
-                }
-                const resultBodyId = command.payload.ids?.bodyId;
-                if (!resultBodyId) {
-                  setStatus('Union could not reserve a result body.');
-                  return;
-                }
-                void executeValidatedFeature(command, {
-                  featureName: value.name,
-                  resultBodyId,
-                  successMessage: command.label,
-                  onSuccess: finishFeatureCreation
-                });
-              }}
-              onCreateTransform={(value) =>
-                createFeature(
-                  commandFactories.transformBody({
-                    name: value.name,
-                    targetBodyId: value.targetBodyId,
-                    translation: value.translation,
-                    rotationDeg: value.rotationDeg
-                  })
-                )
-              }
-              onCreateEdgeModifier={(kind, value) =>
-                createFeature(
-                  kind === 'fillet'
-                    ? commandFactories.filletEdges(value)
-                    : commandFactories.chamferEdges(value)
-                )
-              }
-              onCreatePattern={(value) =>
-                createFeature(commandFactories.patternBody(value))
-              }
-              onApplyPrimitive={(feature, name, dimensions) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name,
-                      data: { dimensions }
-                    },
-                    `Edit ${name}`
-                  )
-                )
-              }
-              onApplySketch={(feature, value) => {
-                if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
-                  return;
-                }
-                const commands: AnyCommand[] = [
-                  commandFactories.updateSketch(
-                    {
-                      sketchId: feature.data.sketchId,
-                      plane: value.plane,
-                      offset: value.offset,
-                      object: value.object
-                    },
-                    `Edit ${value.name}`
-                  )
-                ];
-                if (value.name !== feature.name) {
-                  commands.push(
-                    commandFactories.renameNode({
-                      nodeId: feature.id,
-                      name: value.name
-                    }),
-                    commandFactories.renameNode({
-                      nodeId: selectedSketch.id,
-                      name: value.name
-                    })
+            {modelingOperation ? (
+              <ModelingOperationsForm
+                key={modelingOperation}
+                operation={modelingOperation}
+                scope={parameterScope.scope}
+                bodies={bodyOptions}
+                faceOptions={modelingFaces}
+                initialTarget={modelingTargetBodyId ?? undefined}
+                unsupportedReason={modelingUnsupportedReason ?? undefined}
+                onPreflight={preflightModelingSubmission}
+                onSubmit={submitModelingOperation}
+                onCancel={cancelPanel}
+                onTargetBodyChange={(bodyId) => {
+                  modelingPreflightRef.current = null;
+                  setModelingTargetBodyId(bodyId);
+                  setSelectedBodyIds([bodyId]);
+                  setSelectedTopology(null);
+                }}
+                onOpeningFaceSelectionChange={(hashes) => {
+                  const selectedHash = hashes.at(-1);
+                  const face = modelingTargetBody?.topology?.faces.find(
+                    (candidate) => candidate.hash === selectedHash
                   );
-                }
-                executeTransaction(`Edit ${value.name}`, commands);
-              }}
-              onApplyExtrude={(feature, value) => {
-                if (
-                  feature.data.featureKind !== 'extrude' ||
-                  value.sketchId !== feature.data.sketchId
-                ) {
-                  setStatus(
-                    'Changing an Extrude source sketch requires profile reselection.'
-                  );
-                  return;
-                }
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        ...feature.data,
-                        distance: value.distance
-                      }
-                    },
-                    `Edit ${value.name}`
-                  )
-                );
-              }}
-              onApplyRevolve={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'revolve',
-                        sketchId: value.sketchId,
-                        axis: value.axis
-                      }
-                    },
-                    `Edit ${value.name}`
-                  )
-                )
-              }
-              onApplyBoolean={(feature, value) => {
-                const command = commandFactories.updateFeature(
-                  {
-                    featureId: feature.featureId,
-                    name: value.name,
-                    data: {
-                      featureKind: 'boolean',
-                      operation: value.operation,
-                      targetBodyIds: value.targetBodyIds
-                    }
-                  },
-                  `Edit ${value.name}`
-                );
-                if (value.operation !== 'union') {
-                  executeCommand(command);
-                  return;
-                }
-                if (!feature.bodyId) {
-                  setStatus('Boolean feature has no result body.');
-                  return;
-                }
-                void executeValidatedFeature(command, {
-                  featureName: value.name,
-                  resultBodyId: feature.bodyId,
-                  successMessage: command.label
-                });
-              }}
-              onApplyTransform={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'transform',
-                        targetBodyId: value.targetBodyId,
-                        transform: {
-                          translation: value.translation,
-                          rotationDeg: value.rotationDeg
+                  setSelectedTopology(
+                    selectedHash !== undefined && face && modelingTargetBodyId
+                      ? {
+                          kind: 'face',
+                          bodyId: modelingTargetBodyId,
+                          topologyId: face.topologyId,
+                          hash: face.hash,
+                          reference: face.reference
                         }
-                      }
-                    },
-                    `Edit ${value.name}`
+                      : null
+                  );
+                }}
+                onRequestOpeningFaceSelection={() => {
+                  setManualSelectionFilter('face');
+                  setStatus(
+                    'Shell: pick an exact opening face, then select it in the face list.'
+                  );
+                }}
+              />
+            ) : (
+              <Inspector
+                tool={tool}
+                selectedFeature={selectedFeature}
+                selectedSketch={selectedSketch}
+                selectedSketchObject={selectedSketchObject}
+                selectedBody={selectedBody}
+                selectedTopology={renderedSelectedTopology}
+                selectedEdges={selectedEdges}
+                edgeModifierBody={edgeModifierBody}
+                scope={parameterScope.scope}
+                sketches={sketchOptions}
+                bodies={bodyOptions}
+                units={doc.units}
+                selectedBodyIds={selectedBodyIds}
+                preferredSketchId={selectedSketch?.sketchId ?? null}
+                cylinderRadiusEdit={cylinderRadiusInspectorEdit}
+                cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
+                onLaunchTool={launchTool}
+                onCancel={cancelPanel}
+                onSelectAllEdges={handleSelectAllEdges}
+                onClearSelectedEdges={handleClearSelectedEdges}
+                onCreatePrimitive={(kind, name, dimensions) =>
+                  createFeature(
+                    commandFactories.addPrimitive({
+                      name,
+                      primitiveKind: kind,
+                      dimensions
+                    })
                   )
-                )
-              }
-              onApplyEdgeModifier={(feature, kind, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
+                }
+                onCreateSketch={(value) =>
+                  createFeature(commandFactories.addSketch(value))
+                }
+                onCreateExtrude={(value) =>
+                  createFeature(commandFactories.extrudeSketch(value))
+                }
+                onCreateRevolve={(value) =>
+                  createFeature(commandFactories.revolveSketch(value))
+                }
+                onCreateBoolean={(value) => {
+                  const command = commandFactories.booleanBodies(value);
+                  if (value.operation !== 'union') {
+                    createFeature(command);
+                    return;
+                  }
+                  const resultBodyId = command.payload.ids?.bodyId;
+                  if (!resultBodyId) {
+                    setStatus('Union could not reserve a result body.');
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: value.name,
+                    resultBodyId,
+                    successMessage: command.label,
+                    onSuccess: finishFeatureCreation
+                  });
+                }}
+                onCreateTransform={(value) =>
+                  createFeature(
+                    commandFactories.transformBody({
                       name: value.name,
-                      data:
-                        kind === 'fillet'
-                          ? {
-                              featureKind: 'fillet',
-                              targetBodyId: value.targetBodyId,
-                              edgeHashes: value.edgeHashes,
-                              radius: value.size
-                            }
-                          : {
-                              featureKind: 'chamfer',
-                              targetBodyId: value.targetBodyId,
-                              edgeHashes: value.edgeHashes,
-                              distance: value.size
-                            }
-                    },
-                    `Edit ${value.name}`
+                      targetBodyId: value.targetBodyId,
+                      translation: value.translation,
+                      rotationDeg: value.rotationDeg
+                    })
                   )
-                )
-              }
-              onApplyPattern={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
+                }
+                onCreateEdgeModifier={(kind, value) =>
+                  createFeature(
+                    kind === 'fillet'
+                      ? commandFactories.filletEdges(value)
+                      : commandFactories.chamferEdges(value)
+                  )
+                }
+                onCreatePattern={(value) =>
+                  createFeature(commandFactories.patternBody(value))
+                }
+                onApplyPrimitive={(feature, name, dimensions) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name,
+                        data: { dimensions }
+                      },
+                      `Edit ${name}`
+                    )
+                  )
+                }
+                onApplySketch={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'sketch' ||
+                    !selectedSketch
+                  ) {
+                    return;
+                  }
+                  const commands: AnyCommand[] = [
+                    commandFactories.updateSketch(
+                      {
+                        sketchId: feature.data.sketchId,
+                        plane: value.plane,
+                        offset: value.offset,
+                        object: value.object
+                      },
+                      `Edit ${value.name}`
+                    )
+                  ];
+                  if (value.name !== feature.name) {
+                    commands.push(
+                      commandFactories.renameNode({
+                        nodeId: feature.id,
+                        name: value.name
+                      }),
+                      commandFactories.renameNode({
+                        nodeId: selectedSketch.id,
+                        name: value.name
+                      })
+                    );
+                  }
+                  executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onApplyExtrude={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'extrude' ||
+                    value.sketchId !== feature.data.sketchId
+                  ) {
+                    setStatus(
+                      'Changing an Extrude source sketch requires profile reselection.'
+                    );
+                    return;
+                  }
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          ...feature.data,
+                          distance: value.distance
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  );
+                }}
+                onApplyRevolve={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'revolve',
+                          sketchId: value.sketchId,
+                          axis: value.axis
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  )
+                }
+                onApplyBoolean={(feature, value) => {
+                  const command = commandFactories.updateFeature(
                     {
                       featureId: feature.featureId,
                       name: value.name,
                       data: {
-                        featureKind: 'pattern',
-                        targetBodyId: value.targetBodyId,
-                        patternKind: value.patternKind,
-                        count: value.count,
-                        axis: value.axis,
-                        spacing: value.spacing,
-                        angleDeg: value.angleDeg
+                        featureKind: 'boolean',
+                        operation: value.operation,
+                        targetBodyIds: value.targetBodyIds
                       }
                     },
                     `Edit ${value.name}`
+                  );
+                  if (value.operation !== 'union') {
+                    executeCommand(command);
+                    return;
+                  }
+                  if (!feature.bodyId) {
+                    setStatus('Boolean feature has no result body.');
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: value.name,
+                    resultBodyId: feature.bodyId,
+                    successMessage: command.label
+                  });
+                }}
+                onApplyTransform={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'transform',
+                          targetBodyId: value.targetBodyId,
+                          transform: {
+                            translation: value.translation,
+                            rotationDeg: value.rotationDeg
+                          }
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onResizeThroughHole={handleResizeThroughHole}
-              onRemoveFaceFeature={handleRemoveFaceFeature}
-              onDeleteFeature={(feature) =>
-                handleDeleteFeature(feature.featureId, feature.name)
-              }
-            />
+                }
+                onApplyEdgeModifier={(feature, kind, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data:
+                          kind === 'fillet'
+                            ? {
+                                featureKind: 'fillet',
+                                targetBodyId: value.targetBodyId,
+                                edgeHashes: value.edgeHashes,
+                                radius: value.size
+                              }
+                            : {
+                                featureKind: 'chamfer',
+                                targetBodyId: value.targetBodyId,
+                                edgeHashes: value.edgeHashes,
+                                distance: value.size
+                              }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  )
+                }
+                onApplyPattern={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'pattern',
+                          targetBodyId: value.targetBodyId,
+                          patternKind: value.patternKind,
+                          count: value.count,
+                          axis: value.axis,
+                          spacing: value.spacing,
+                          angleDeg: value.angleDeg
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  )
+                }
+                onResizeThroughHole={handleResizeThroughHole}
+                onRemoveFaceFeature={handleRemoveFaceFeature}
+                onDeleteFeature={(feature) =>
+                  handleDeleteFeature(feature.featureId, feature.name)
+                }
+              />
+            )}
           </ErrorBoundary>
         ) : null
       }
@@ -5893,7 +6396,7 @@ export function App() {
       assistantCollapsed={assistantCollapsed}
       statusBar={
         <StatusBar
-          status={status}
+          status={visibleStatus}
           tone={tone}
           hint={hint}
           projectName={doc.name}
@@ -5947,6 +6450,18 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
+          {sharingOpen && doc && (
+            <ProjectSharingDialog
+              projectId={doc.projectId}
+              role={collaboration.role}
+              collaborationStatus={collaboration.status}
+              lease={collaboration.lease}
+              liveMembers={collaboration.members}
+              conflict={collaboration.conflict}
+              conflictHandlers={conflictHandlers}
+              onClose={() => setSharingOpen(false)}
+            />
+          )}
           {settingsOverlay}
         </>
       }

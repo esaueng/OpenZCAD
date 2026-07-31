@@ -19,6 +19,9 @@ import {
   type ListArtifactsResponse,
   type ListProjectsResponse,
   type ProjectDocument,
+  type ProjectInvitationSummary,
+  type ProjectMemberRole as SharedProjectMemberRole,
+  type ProjectSharingResponse,
   type ProjectId,
   type ProjectOrganization,
   type ProjectSummary,
@@ -37,7 +40,57 @@ import {
 
 export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
 
-/** Thrown by saveRevision when the target project does not exist. */
+export const PROJECT_ACCESS_ROLES = ['owner', 'editor', 'viewer'] as const;
+export type ProjectAccessRole = (typeof PROJECT_ACCESS_ROLES)[number];
+export type ProjectMemberRole = SharedProjectMemberRole;
+
+export const PROJECT_MEMBER_CAP = 50;
+export const PROJECT_ACTIVE_INVITATION_CAP = 25;
+export const PROJECT_INVITATION_RATE_LIMIT = 10;
+export const PROJECT_INVITATION_RATE_WINDOW_SECONDS = 60 * 60;
+
+export type ProjectSharingErrorCode =
+  | 'INVITATION_NOT_FOUND'
+  | 'INVITATION_EXISTS'
+  | 'INVITATION_LIMIT'
+  | 'INVITATION_RATE_LIMIT'
+  | 'MEMBER_NOT_FOUND'
+  | 'MEMBER_LIMIT'
+  | 'OWNER_IMMUTABLE';
+
+export class ProjectSharingError extends Error {
+  constructor(
+    readonly code: ProjectSharingErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ProjectSharingError';
+  }
+}
+
+export interface CreateProjectInvitationInput {
+  invitationId: string;
+  email: string;
+  role: ProjectMemberRole;
+  tokenHash: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/**
+ * Authorization resolved from the immutable project owner plus any explicit
+ * membership. Callers may forward `role`, but must not accept it from clients.
+ */
+export interface ProjectAccess {
+  projectId: string;
+  ownerUserId: UserId;
+  role: ProjectAccessRole;
+}
+
+/**
+ * Deliberately covers both missing and unauthorized projects so callers can
+ * preserve indistinguishable 404 behavior.
+ */
 export class ProjectNotFoundError extends Error {
   constructor(projectId: string) {
     super(`Project ${projectId} not found.`);
@@ -63,6 +116,47 @@ export class RevisionConflictError extends Error {
 }
 
 export interface PersistenceService {
+  requireProjectRead(userId: UserId, projectId: string): Promise<ProjectAccess>;
+  requireProjectEdit(userId: UserId, projectId: string): Promise<ProjectAccess>;
+  requireProjectOwner(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess>;
+  listProjectSharing(
+    ownerUserId: UserId,
+    projectId: string,
+    now: number
+  ): Promise<ProjectSharingResponse>;
+  createProjectInvitation(
+    ownerUserId: UserId,
+    projectId: string,
+    input: CreateProjectInvitationInput
+  ): Promise<ProjectInvitationSummary>;
+  revokeProjectInvitation(
+    ownerUserId: UserId,
+    projectId: string,
+    invitationId: string,
+    revokedAt: number
+  ): Promise<void>;
+  updateProjectMemberRole(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    role: ProjectMemberRole,
+    updatedAt: number
+  ): Promise<void>;
+  removeProjectMember(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    removedAt: number
+  ): Promise<void>;
+  acceptProjectInvitation(
+    userId: UserId,
+    email: string,
+    tokenHash: string,
+    acceptedAt: number
+  ): Promise<{ projectId: string; role: ProjectMemberRole }>;
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
   createProject(
     userId: UserId,
@@ -134,14 +228,295 @@ export interface PersistenceService {
 
 export class InMemoryPersistenceService implements PersistenceService {
   private readonly projects = new Map<string, ProjectDocument>();
+  private readonly projectMembers = new Map<
+    string,
+    Map<
+      UserId,
+      { role: ProjectMemberRole; createdAt: number; updatedAt: number }
+    >
+  >();
+  private readonly projectInvitations = new Map<
+    string,
+    CreateProjectInvitationInput & {
+      projectId: string;
+      invitedByUserId: UserId;
+      acceptedAt: number | null;
+      acceptedByUserId: UserId | null;
+      revokedAt: number | null;
+    }
+  >();
+  private readonly invitationRateEvents = new Map<string, number[]>();
   private readonly organization = new Map<string, ProjectOrganization>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
 
+  async requireProjectRead(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    return this.resolveProjectAccess(userId, projectId);
+  }
+
+  async requireProjectEdit(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    const access = this.resolveProjectAccess(userId, projectId);
+    if (access.role === 'viewer') {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
+  async requireProjectOwner(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    const access = this.resolveProjectAccess(userId, projectId);
+    if (access.role !== 'owner') {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
+  /**
+   * Additive primitive for invitation/member route work. The immutable owner
+   * is deliberately not represented in the membership map.
+   */
+  async setProjectMemberRole(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    role: ProjectMemberRole | null
+  ): Promise<void> {
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    if (memberUserId === access.ownerUserId) {
+      throw new Error('The project owner cannot be stored as a member.');
+    }
+    let members = this.projectMembers.get(projectId);
+    if (!members) {
+      members = new Map();
+      this.projectMembers.set(projectId, members);
+    }
+    const timestamp = Math.floor(Date.now() / 1000);
+    if (role === null) {
+      members.delete(memberUserId);
+    } else {
+      const existing = members.get(memberUserId);
+      members.set(memberUserId, {
+        role,
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp
+      });
+    }
+  }
+
+  async listProjectSharing(
+    ownerUserId: UserId,
+    projectId: string,
+    now: number
+  ): Promise<ProjectSharingResponse> {
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    const members = Array.from(
+      this.projectMembers.get(projectId)?.entries() ?? []
+    ).map(([userId, member]) => ({
+      userId,
+      email: null,
+      role: member.role,
+      createdAt: member.createdAt,
+      updatedAt: member.updatedAt
+    }));
+    const invitations = Array.from(this.projectInvitations.values())
+      .filter(
+        (invitation) =>
+          invitation.projectId === projectId &&
+          invitation.acceptedAt === null &&
+          invitation.revokedAt === null &&
+          invitation.expiresAt >= now
+      )
+      .map(toInvitationSummary);
+    return {
+      projectId,
+      ownerUserId: access.ownerUserId,
+      members,
+      invitations
+    };
+  }
+
+  async createProjectInvitation(
+    ownerUserId: UserId,
+    projectId: string,
+    input: CreateProjectInvitationInput
+  ): Promise<ProjectInvitationSummary> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const rateKey = `${projectId}:${ownerUserId}`;
+    const windowStart =
+      input.createdAt - PROJECT_INVITATION_RATE_WINDOW_SECONDS;
+    const recent = (this.invitationRateEvents.get(rateKey) ?? []).filter(
+      (timestamp) => timestamp >= windowStart
+    );
+    if (recent.length >= PROJECT_INVITATION_RATE_LIMIT) {
+      throw new ProjectSharingError(
+        'INVITATION_RATE_LIMIT',
+        'Too many project invitations were created recently.'
+      );
+    }
+    const active = Array.from(this.projectInvitations.values()).filter(
+      (invitation) =>
+        invitation.projectId === projectId &&
+        invitation.acceptedAt === null &&
+        invitation.revokedAt === null &&
+        invitation.expiresAt >= input.createdAt
+    );
+    if (active.length >= PROJECT_ACTIVE_INVITATION_CAP) {
+      throw new ProjectSharingError(
+        'INVITATION_LIMIT',
+        'This project has too many active invitations.'
+      );
+    }
+    if (active.some((invitation) => invitation.email === input.email)) {
+      throw new ProjectSharingError(
+        'INVITATION_EXISTS',
+        'An active invitation already exists for that email.'
+      );
+    }
+    const invitation = {
+      ...input,
+      projectId,
+      invitedByUserId: ownerUserId,
+      acceptedAt: null,
+      acceptedByUserId: null,
+      revokedAt: null
+    };
+    this.projectInvitations.set(input.invitationId, invitation);
+    recent.push(input.createdAt);
+    this.invitationRateEvents.set(rateKey, recent);
+    return toInvitationSummary(invitation);
+  }
+
+  async revokeProjectInvitation(
+    ownerUserId: UserId,
+    projectId: string,
+    invitationId: string,
+    revokedAt: number
+  ): Promise<void> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const invitation = this.projectInvitations.get(invitationId);
+    if (
+      !invitation ||
+      invitation.projectId !== projectId ||
+      invitation.acceptedAt !== null ||
+      invitation.revokedAt !== null
+    ) {
+      throw new ProjectSharingError(
+        'INVITATION_NOT_FOUND',
+        'Project invitation not found.'
+      );
+    }
+    invitation.revokedAt = revokedAt;
+  }
+
+  async updateProjectMemberRole(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    role: ProjectMemberRole,
+    updatedAt: number
+  ): Promise<void> {
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    if (memberUserId === access.ownerUserId) {
+      throw new ProjectSharingError(
+        'OWNER_IMMUTABLE',
+        'Project ownership cannot be changed.'
+      );
+    }
+    const member = this.projectMembers.get(projectId)?.get(memberUserId);
+    if (!member) {
+      throw new ProjectSharingError('MEMBER_NOT_FOUND', 'Member not found.');
+    }
+    member.role = role;
+    member.updatedAt = updatedAt;
+  }
+
+  async removeProjectMember(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    _removedAt: number
+  ): Promise<void> {
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    if (memberUserId === access.ownerUserId) {
+      throw new ProjectSharingError(
+        'OWNER_IMMUTABLE',
+        'Project ownership cannot be changed.'
+      );
+    }
+    if (!this.projectMembers.get(projectId)?.delete(memberUserId)) {
+      throw new ProjectSharingError('MEMBER_NOT_FOUND', 'Member not found.');
+    }
+  }
+
+  async acceptProjectInvitation(
+    userId: UserId,
+    email: string,
+    tokenHash: string,
+    acceptedAt: number
+  ): Promise<{ projectId: string; role: ProjectMemberRole }> {
+    const invitation = Array.from(this.projectInvitations.values()).find(
+      (candidate) =>
+        candidate.tokenHash === tokenHash &&
+        candidate.email === email &&
+        candidate.acceptedAt === null &&
+        candidate.revokedAt === null &&
+        candidate.expiresAt >= acceptedAt
+    );
+    if (!invitation) {
+      throw new ProjectSharingError(
+        'INVITATION_NOT_FOUND',
+        'Project invitation is invalid or expired.'
+      );
+    }
+    const access = this.resolveProjectAccess(
+      invitation.invitedByUserId,
+      invitation.projectId
+    );
+    if (access.ownerUserId === userId) {
+      throw new ProjectSharingError(
+        'OWNER_IMMUTABLE',
+        'The project owner cannot accept a membership invitation.'
+      );
+    }
+    let members = this.projectMembers.get(invitation.projectId);
+    if (!members) {
+      members = new Map();
+      this.projectMembers.set(invitation.projectId, members);
+    }
+    const existing = members.get(userId);
+    if (!existing && members.size >= PROJECT_MEMBER_CAP) {
+      throw new ProjectSharingError(
+        'MEMBER_LIMIT',
+        'This project has too many members.'
+      );
+    }
+    invitation.acceptedAt = acceptedAt;
+    invitation.acceptedByUserId = userId;
+    members.set(userId, {
+      role: invitation.role,
+      createdAt: existing?.createdAt ?? acceptedAt,
+      updatedAt: acceptedAt
+    });
+    return { projectId: invitation.projectId, role: invitation.role };
+  }
+
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
     return {
-      projects: this.ownedProjects(userId)
+      projects: Array.from(this.projects.values())
+        .filter(
+          (document) =>
+            document.ownerUserId === userId ||
+            this.projectMembers.get(document.projectId)?.has(userId) === true
+        )
         .map((document) => this.summarize(document))
         .sort(compareProjectSummaries)
     };
@@ -247,9 +622,18 @@ export class InMemoryPersistenceService implements PersistenceService {
     projectId: string
   ): Promise<ProjectDocument | null> {
     const document = this.projects.get(projectId);
-    return document?.ownerUserId === userId
-      ? normalizeDocument(document)
-      : null;
+    if (!document) {
+      return null;
+    }
+    try {
+      await this.requireProjectRead(userId, projectId);
+      return normalizeDocument(document);
+    } catch (error) {
+      if (error instanceof ProjectNotFoundError) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async saveRevision(
@@ -257,14 +641,18 @@ export class InMemoryPersistenceService implements PersistenceService {
     request: SaveRevisionRequest
   ): Promise<ProjectDocument> {
     const existing = this.projects.get(request.projectId);
-    if (!existing || existing.ownerUserId !== userId) {
+    if (!existing) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    const access = await this.requireProjectEdit(userId, request.projectId);
     if (existing.version !== request.expectedVersion) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
     const normalized = normalizeDocument(request.document);
-    if (normalized.ownerUserId !== userId) {
+    if (
+      normalized.projectId !== request.projectId ||
+      normalized.ownerUserId !== access.ownerUserId
+    ) {
       throw new ProjectNotFoundError(request.projectId);
     }
     const document = createCheckpoint(normalized, request.reason);
@@ -276,7 +664,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse> {
-    this.assertProjectOwner(userId, request.projectId);
+    await this.requireProjectEdit(userId, request.projectId);
     this.pruneExpiredUploads();
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
@@ -302,7 +690,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (!upload) {
       throw new ArtifactStorageError('Upload session was not found.');
     }
-    this.assertProjectOwner(userId, upload.projectId);
+    await this.requireProjectEdit(userId, upload.projectId);
     this.uploadBodies.set(upload.objectKey, body);
   }
 
@@ -310,7 +698,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null> {
-    this.assertProjectOwner(userId, request.projectId);
+    await this.requireProjectEdit(userId, request.projectId);
     const upload = this.uploads.get(request.uploadSessionId);
     const body = upload ? this.uploadBodies.get(upload.objectKey) : undefined;
     if (
@@ -343,7 +731,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string
   ): Promise<ListArtifactsResponse> {
-    this.assertProjectOwner(userId, projectId);
+    await this.requireProjectRead(userId, projectId);
     return {
       artifacts: Array.from(this.artifacts.values())
         .filter((artifact) => artifact.projectId === projectId)
@@ -356,13 +744,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     artifactId: string
   ): Promise<ArtifactMetadataResponse> {
     const artifact = this.artifacts.get(artifactId);
-    return {
-      artifact:
-        artifact &&
-        this.projects.get(artifact.projectId)?.ownerUserId === userId
-          ? artifact
-          : null
-    };
+    if (!artifact) {
+      return { artifact: null };
+    }
+    await this.requireProjectRead(userId, artifact.projectId);
+    return { artifact };
   }
 
   async downloadArtifact(
@@ -411,10 +797,30 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
   }
 
-  private assertProjectOwner(userId: UserId, projectId: string): void {
-    if (this.projects.get(projectId)?.ownerUserId !== userId) {
+  private resolveProjectAccess(
+    userId: UserId,
+    projectId: string
+  ): ProjectAccess {
+    const document = this.projects.get(projectId);
+    if (!document) {
       throw new ProjectNotFoundError(projectId);
     }
+    if (document.ownerUserId === userId) {
+      return {
+        projectId,
+        ownerUserId: document.ownerUserId,
+        role: 'owner'
+      };
+    }
+    const member = this.projectMembers.get(projectId)?.get(userId);
+    if (!member) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return {
+      projectId,
+      ownerUserId: document.ownerUserId,
+      role: member.role
+    };
   }
 
   private pruneExpiredUploads(): void {
@@ -425,6 +831,19 @@ export class InMemoryPersistenceService implements PersistenceService {
       }
     }
   }
+}
+
+function toInvitationSummary(
+  invitation: CreateProjectInvitationInput & { projectId: string }
+): ProjectInvitationSummary {
+  return {
+    invitationId: invitation.invitationId,
+    projectId: invitation.projectId,
+    email: invitation.email,
+    role: invitation.role,
+    createdAt: invitation.createdAt,
+    expiresAt: invitation.expiresAt
+  };
 }
 
 function summarizeDocument(document: ProjectDocument): ProjectSummary {

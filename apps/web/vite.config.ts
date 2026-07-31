@@ -177,6 +177,12 @@ export default defineConfig(async ({ command, isPreview }) => {
         '@openzcad/kernel-adapter/exact': fileURLToPath(
           new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
         ),
+        '@openzcad/kernel-adapter/face-attachment': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/face-attachment.ts',
+            import.meta.url
+          )
+        ),
         ...workspaceAliases
       }
     },

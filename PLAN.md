@@ -241,7 +241,7 @@ kernel's evolution surface is narrower than lineage requires:
    as matched geometrically (face normal + centroid) — exactly the
    nearest-geometry matching this plan forbids as a resolution strategy.
    The spike must decide whether kernel-side matching is acceptable lineage
-   *input* when re-verified with ADR-011-style quantized exact comparisons,
+   _input_ when re-verified with ADR-011-style quantized exact comparisons,
    or whether a kernel bridge change is required.
 2. **Coverage gaps.** No evolution API exists for chamfer, pattern, or
    direct edits. Identify which operations need new BrepKit bridge APIs and

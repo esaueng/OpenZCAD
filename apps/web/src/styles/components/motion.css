@@ -179,4 +179,3 @@ textarea {
 .status-pulse {
   animation: oz-status-pulse 600ms var(--ease-out);
 }
-

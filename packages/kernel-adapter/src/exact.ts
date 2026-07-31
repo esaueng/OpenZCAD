@@ -30,11 +30,17 @@ import {
   type BodyTopology,
   type DerivedState,
   type DirectEditOperation,
+  type EdgeWitnessV1,
   type FaceGeometry,
+  type FaceTopologyReferenceV5,
+  type FaceWitnessV1,
   type FeatureNode,
   type ProjectDocument,
+  type SketchId,
+  type QuantizedTopologyPoint,
   type SketchNode,
-  type SketchObjectData
+  type SketchObjectData,
+  type TopologyLineageDiagnostic
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import {
@@ -46,6 +52,7 @@ import {
 } from './boolean-result-validation';
 import { OpenZCADKernel } from './index';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
 import {
   analyzeUnionConnectivity,
@@ -54,14 +61,35 @@ import {
 import {
   ambiguousReferenceError,
   canonicalDirection,
+  canonicalizeDirection,
   cylinderAnalyticSignature,
   edgeFingerprintOf,
   faceFingerprintOf,
   isClosedEdge,
   planeAnalyticSignature,
+  quantizeCoordinate,
   unresolvedReferenceError,
   type EdgeSample
 } from './topology-fingerprint';
+import {
+  brepKitHashOnlyLineage,
+  createBrepKitSemanticLineage,
+  mergeBrepKitLineageStates,
+  propagateBrepKitRigidTransformLineage,
+  type BrepKitLineageState,
+  type BrepKitSemanticAssignment,
+  type BrepKitTopologyCandidate
+} from './brepkit-lineage';
+import {
+  resolveTopologyReference,
+  topologyHashOfWitness,
+  topologyWitnessesEqual,
+  type TopologyResolutionCandidate
+} from './topology-lineage';
+import {
+  resolveFaceAttachment,
+  type FaceAttachmentCandidate
+} from './face-attachment';
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
@@ -73,10 +101,13 @@ const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
+  /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
+  lineage?: BrepKitLineageState;
 }
 
 interface ExactBuildResult {
   shapes: Map<BodyId, ExactShape>;
+  sketchBases: Map<SketchId, PlaneBasis>;
   consumed: Set<BodyId>;
   warnings: string[];
 }
@@ -376,8 +407,7 @@ function tryExactAnalyticCylinderRimFillet(
     if (
       !sample.closed ||
       sample.curveType.toUpperCase() !== 'CIRCLE' ||
-      Math.abs(sample.length - 2 * Math.PI * cylinder.radius) >
-        lengthTolerance
+      Math.abs(sample.length - 2 * Math.PI * cylinder.radius) > lengthTolerance
     ) {
       return null;
     }
@@ -425,8 +455,7 @@ function tryExactAnalyticCylinderRimFillet(
       if (profile.length > 0 && index === 0) {
         continue;
       }
-      const angle =
-        startAngle + ((endAngle - startAngle) * index) / segments;
+      const angle = startAngle + ((endAngle - startAngle) * index) / segments;
       profile.push({
         x: center.x + radius * Math.cos(angle),
         y: center.y + radius * Math.sin(angle)
@@ -941,10 +970,7 @@ function analyticParamsSignature(kernel: BrepKernel, face: number): string {
     const unit = normalized(axis);
     if (unit) {
       // Canonical sign: a surface's axis may flip between rebuilds.
-      const flip =
-        unit.x < 0 ||
-        (unit.x === 0 && (unit.y < 0 || (unit.y === 0 && unit.z < 0)));
-      const canonical = flip ? { x: -unit.x, y: -unit.y, z: -unit.z } : unit;
+      const canonical = canonicalDirection(unit);
       parts.push(
         `ax${quantizeEdgeCoordinate(canonical.x * 1000)}` +
           `,${quantizeEdgeCoordinate(canonical.y * 1000)}` +
@@ -1027,6 +1053,804 @@ function faceFingerprint(kernel: BrepKernel, face: number): number {
   });
 }
 
+function quantizedPoint(point: Vec3): QuantizedTopologyPoint {
+  return [
+    quantizeCoordinate(point.x),
+    quantizeCoordinate(point.y),
+    quantizeCoordinate(point.z)
+  ];
+}
+
+function quantizedDirectionOf(direction: Vec3): QuantizedTopologyPoint | null {
+  const unit = normalized(direction);
+  if (!unit) {
+    return null;
+  }
+  const canonical = canonicalDirection(unit);
+  return [
+    quantizeCoordinate(canonical.x * 1000),
+    quantizeCoordinate(canonical.y * 1000),
+    quantizeCoordinate(canonical.z * 1000)
+  ];
+}
+
+function edgeWitnessOf(kernel: BrepKernel, edge: number): EdgeWitnessV1 {
+  const sample = edgeSampleOf(kernel, edge);
+  if (sample.closed) {
+    return {
+      curveType: sample.curveType,
+      length: quantizeCoordinate(sample.length),
+      closed: true,
+      center: quantizedPoint(sample.center),
+      axis: sample.axis ? quantizedDirectionOf(sample.axis) : null
+    };
+  }
+  const endpoints = sample.endpoints.map(quantizedPoint).sort((left, right) => {
+    for (let index = 0; index < 3; index += 1) {
+      const difference = left[index]! - right[index]!;
+      if (difference !== 0) {
+        return difference;
+      }
+    }
+    return 0;
+  }) as [QuantizedTopologyPoint, QuantizedTopologyPoint];
+  return {
+    curveType: sample.curveType,
+    length: quantizeCoordinate(sample.length),
+    closed: false,
+    endpoints,
+    midpoint: quantizedPoint(sample.midpoint)
+  };
+}
+
+function brepKitFaceClosure(
+  kernel: BrepKernel,
+  face: number,
+  surfaceType: string
+): FaceWitnessV1['closure'] {
+  switch (surfaceType) {
+    case 'plane':
+      return { u: 'open', v: 'open' };
+    case 'cylinder':
+    case 'cone':
+    case 'sphere':
+      return { u: 'closed', v: 'open' };
+    case 'torus':
+      return { u: 'closed', v: 'closed' };
+    case 'bspline':
+    case 'nurbs': {
+      try {
+        const decoded: unknown = JSON.parse(
+          kernel.getNurbsSurfaceDataParity(face)
+        );
+        if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+          return { u: 'unknown', v: 'unknown' };
+        }
+        const record = decoded as Record<string, unknown>;
+        return {
+          u:
+            typeof record.isPeriodicU === 'boolean'
+              ? record.isPeriodicU
+                ? 'closed'
+                : 'open'
+              : 'unknown',
+          v:
+            typeof record.isPeriodicV === 'boolean'
+              ? record.isPeriodicV
+                ? 'closed'
+                : 'open'
+              : 'unknown'
+        };
+      } catch {
+        return { u: 'unknown', v: 'unknown' };
+      }
+    }
+    default:
+      return { u: 'unknown', v: 'unknown' };
+  }
+}
+
+function faceWitnessOf(kernel: BrepKernel, face: number): FaceWitnessV1 {
+  const surfaceType = kernel.getSurfaceType(face);
+  let perimeter = 0;
+  for (const edge of kernel.getFaceEdges(face)) {
+    perimeter += kernel.edgeLength(edge);
+  }
+  let analytic: FaceWitnessV1['analytic'] = { kind: 'none' };
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    parameters = null;
+  }
+  const record = (parameters ?? {}) as Record<string, unknown>;
+  if (surfaceType === 'plane') {
+    const rawNormal = finiteVec3(record.normal);
+    const unit = rawNormal ? normalized(rawNormal) : null;
+    const rawOffset = record.d;
+    if (unit && typeof rawOffset === 'number' && Number.isFinite(rawOffset)) {
+      const { direction: normal, flipped } = canonicalizeDirection(unit);
+      analytic = {
+        kind: 'plane',
+        normal: quantizedDirectionOf(normal)!,
+        offset: quantizeCoordinate(flipped ? -rawOffset : rawOffset)
+      };
+    }
+  } else if (surfaceType === 'cylinder') {
+    const origin = finiteVec3(record.origin);
+    const rawAxis = finiteVec3(record.axis);
+    const unit = rawAxis ? normalized(rawAxis) : null;
+    const radius = record.radius;
+    if (
+      origin &&
+      unit &&
+      typeof radius === 'number' &&
+      Number.isFinite(radius)
+    ) {
+      const axis = canonicalDirection(unit);
+      const along = dot(origin, axis);
+      analytic = {
+        kind: 'cylinder',
+        axis: quantizedDirectionOf(axis)!,
+        axisFoot: quantizedPoint(subtract(origin, scale(axis, along))),
+        radius: quantizeCoordinate(radius)
+      };
+    }
+  }
+  const centroid = faceVertexCentroid(kernel, face);
+  return {
+    surfaceType,
+    perimeter: quantizeCoordinate(perimeter),
+    centroid: centroid ? quantizedPoint(centroid) : null,
+    analytic,
+    closure: brepKitFaceClosure(kernel, face, surfaceType)
+  };
+}
+
+function topologyCandidatesForSolid(
+  kernel: BrepKernel,
+  solid: number
+): BrepKitTopologyCandidate[] {
+  return [
+    ...Array.from(kernel.getSolidFaces(solid), (handle) => ({
+      handle,
+      kind: 'face' as const,
+      witness: faceWitnessOf(kernel, handle)
+    })),
+    ...Array.from(kernel.getSolidEdges(solid), (handle) => ({
+      handle,
+      kind: 'edge' as const,
+      witness: edgeWitnessOf(kernel, handle)
+    }))
+  ];
+}
+
+function samePoint(
+  left: QuantizedTopologyPoint,
+  right: QuantizedTopologyPoint
+): boolean {
+  return left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
+}
+
+function sameAnalyticCarrier(
+  left: FaceWitnessV1['analytic'],
+  right: FaceWitnessV1['analytic']
+): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === 'none' || right.kind === 'none') {
+    return left.kind === right.kind;
+  }
+  if (left.kind === 'plane' && right.kind === 'plane') {
+    return samePoint(left.normal, right.normal) && left.offset === right.offset;
+  }
+  if (left.kind === 'cylinder' && right.kind === 'cylinder') {
+    return (
+      samePoint(left.axis, right.axis) &&
+      samePoint(left.axisFoot, right.axisFoot) &&
+      left.radius === right.radius
+    );
+  }
+  return false;
+}
+
+function addUniqueSemanticAssignment(
+  candidates: readonly BrepKitTopologyCandidate[],
+  kind: 'edge' | 'face',
+  lineageName: string,
+  predicate: (candidate: BrepKitTopologyCandidate) => boolean,
+  assignments: BrepKitSemanticAssignment[],
+  diagnostics: BrepKitLineageState[],
+  operation: 'primitive' | 'sweep'
+) {
+  const matches = candidates.filter(
+    (candidate) => candidate.kind === kind && predicate(candidate)
+  );
+  if (matches.length !== 1) {
+    diagnostics.push(
+      brepKitHashOnlyLineage(
+        operation,
+        `Semantic role ${lineageName} matched ${matches.length} exact candidates.`
+      )
+    );
+    return;
+  }
+  assignments.push({ ...matches[0]!, lineageName });
+}
+
+function primitiveBoxEdgeRole(
+  witness: EdgeWitnessV1,
+  bounds: {
+    min: QuantizedTopologyPoint;
+    max: QuantizedTopologyPoint;
+  }
+): string | null {
+  if (witness.closed) {
+    return null;
+  }
+  const deltas = witness.endpoints[0].map(
+    (value, axis) => witness.endpoints[1][axis]! - value
+  );
+  const varyingAxes = deltas
+    .map((delta, axis) => ({ delta, axis }))
+    .filter(({ delta }) => delta !== 0);
+  if (varyingAxes.length !== 1) {
+    return null;
+  }
+  const axis = varyingAxes[0]!.axis;
+  const labels = ['x', 'y', 'z'] as const;
+  const fixed: string[] = [];
+  for (let fixedAxis = 0; fixedAxis < 3; fixedAxis += 1) {
+    if (fixedAxis === axis) {
+      continue;
+    }
+    const coordinate = witness.endpoints[0][fixedAxis]!;
+    const bound =
+      coordinate === bounds.min[fixedAxis]
+        ? 'min'
+        : coordinate === bounds.max[fixedAxis]
+          ? 'max'
+          : null;
+    if (!bound || witness.endpoints[1][fixedAxis] !== coordinate) {
+      return null;
+    }
+    fixed.push(`${labels[fixedAxis]}-${bound}`);
+  }
+  return `primitive.box.edge.${labels[axis]}.${fixed.join('.')}`;
+}
+
+function buildPrimitiveLineage(
+  kernel: BrepKernel,
+  solid: number,
+  feature: FeatureNode
+): BrepKitLineageState {
+  if (feature.data.featureKind !== 'primitive') {
+    return brepKitHashOnlyLineage(
+      'primitive',
+      'Feature is not a primitive construction.'
+    );
+  }
+  const candidates = topologyCandidatesForSolid(kernel, solid);
+  const assignments: BrepKitSemanticAssignment[] = [];
+  const diagnostics: BrepKitLineageState[] = [];
+  const faces = candidates.filter((candidate) => candidate.kind === 'face');
+  const edges = candidates.filter((candidate) => candidate.kind === 'edge');
+  const boundsValues = Array.from(kernel.boundingBox(solid));
+  const bounds = {
+    min: quantizedPoint({
+      x: boundsValues[0]!,
+      y: boundsValues[1]!,
+      z: boundsValues[2]!
+    }),
+    max: quantizedPoint({
+      x: boundsValues[3]!,
+      y: boundsValues[4]!,
+      z: boundsValues[5]!
+    })
+  };
+
+  switch (feature.data.primitiveKind) {
+    case 'box': {
+      const faceRoles = new Map<number, string>();
+      for (const candidate of faces) {
+        const normal = Array.from(kernel.getFaceNormal(candidate.handle));
+        const unit = normalized(pointAt(normal, 0));
+        if (!unit) {
+          continue;
+        }
+        const direction = [
+          Math.round(unit.x),
+          Math.round(unit.y),
+          Math.round(unit.z)
+        ];
+        const role =
+          direction[0] === -1
+            ? 'x-min'
+            : direction[0] === 1
+              ? 'x-max'
+              : direction[1] === -1
+                ? 'y-min'
+                : direction[1] === 1
+                  ? 'y-max'
+                  : direction[2] === -1
+                    ? 'z-min'
+                    : direction[2] === 1
+                      ? 'z-max'
+                      : null;
+        if (role) {
+          faceRoles.set(candidate.handle, role);
+        }
+      }
+      for (const role of [
+        'x-min',
+        'x-max',
+        'y-min',
+        'y-max',
+        'z-min',
+        'z-max'
+      ]) {
+        addUniqueSemanticAssignment(
+          faces,
+          'face',
+          `primitive.box.face.${role}`,
+          (candidate) => faceRoles.get(candidate.handle) === role,
+          assignments,
+          diagnostics,
+          'primitive'
+        );
+      }
+      const edgeRoles = new Map<number, string>();
+      for (const candidate of edges) {
+        const role = primitiveBoxEdgeRole(
+          candidate.witness as EdgeWitnessV1,
+          bounds
+        );
+        if (role) {
+          edgeRoles.set(candidate.handle, role);
+        }
+      }
+      const expectedEdgeRoles = ['x', 'y', 'z'].flatMap((varyingAxis) => {
+        const fixedAxes = ['x', 'y', 'z'].filter(
+          (axis) => axis !== varyingAxis
+        );
+        return ['min', 'max'].flatMap((firstBound) =>
+          ['min', 'max'].map(
+            (secondBound) =>
+              `primitive.box.edge.${varyingAxis}.${fixedAxes[0]}-${firstBound}.${fixedAxes[1]}-${secondBound}`
+          )
+        );
+      });
+      for (const role of expectedEdgeRoles) {
+        addUniqueSemanticAssignment(
+          edges,
+          'edge',
+          role,
+          (candidate) => edgeRoles.get(candidate.handle) === role,
+          assignments,
+          diagnostics,
+          'primitive'
+        );
+      }
+      break;
+    }
+    case 'cylinder':
+    case 'cone': {
+      const kind = feature.data.primitiveKind;
+      addUniqueSemanticAssignment(
+        faces,
+        'face',
+        `primitive.${kind}.face.wall`,
+        (candidate) =>
+          (candidate.witness as FaceWitnessV1).surfaceType === kind,
+        assignments,
+        diagnostics,
+        'primitive'
+      );
+      for (const [role, coordinate] of [
+        ['start', bounds.min[2]],
+        ['end', bounds.max[2]]
+      ] as const) {
+        addUniqueSemanticAssignment(
+          faces,
+          'face',
+          `primitive.${kind}.face.cap.${role}`,
+          (candidate) => {
+            const witness = candidate.witness as FaceWitnessV1;
+            return (
+              witness.surfaceType === 'plane' &&
+              witness.centroid?.[2] === coordinate
+            );
+          },
+          assignments,
+          diagnostics,
+          'primitive'
+        );
+        addUniqueSemanticAssignment(
+          edges,
+          'edge',
+          `primitive.${kind}.edge.rim.${role}`,
+          (candidate) => {
+            const witness = candidate.witness as EdgeWitnessV1;
+            return witness.closed && witness.center[2] === coordinate;
+          },
+          assignments,
+          diagnostics,
+          'primitive'
+        );
+      }
+      break;
+    }
+    case 'torus':
+      addUniqueSemanticAssignment(
+        faces,
+        'face',
+        'primitive.torus.face.shell',
+        (candidate) =>
+          (candidate.witness as FaceWitnessV1).surfaceType === 'torus',
+        assignments,
+        diagnostics,
+        'primitive'
+      );
+      diagnostics.push(
+        brepKitHashOnlyLineage(
+          'primitive',
+          'Torus seam edges are parameterization artifacts.'
+        )
+      );
+      break;
+    case 'sphere':
+      diagnostics.push(
+        brepKitHashOnlyLineage(
+          'primitive',
+          'BrepKit sphere hemispheres share the same exact witness and cannot be named one-to-one.'
+        )
+      );
+      break;
+  }
+
+  return mergeBrepKitLineageStates([
+    createBrepKitSemanticLineage(feature.featureId, 'primitive', assignments),
+    ...diagnostics
+  ]);
+}
+
+function planeCarrier(
+  normal: Vec3,
+  point: Vec3
+): Extract<FaceWitnessV1['analytic'], { kind: 'plane' }> | null {
+  const unit = normalized(normal);
+  if (!unit) {
+    return null;
+  }
+  const canonical = canonicalDirection(unit);
+  return {
+    kind: 'plane',
+    normal: quantizedDirectionOf(canonical)!,
+    offset: quantizeCoordinate(dot(canonical, point))
+  };
+}
+
+function cylinderCarrier(
+  axisPoint: Vec3,
+  axisDirection: Vec3,
+  radius: number
+): Extract<FaceWitnessV1['analytic'], { kind: 'cylinder' }> | null {
+  const unit = normalized(axisDirection);
+  if (!unit) {
+    return null;
+  }
+  const axis = canonicalDirection(unit);
+  const along = dot(axisPoint, axis);
+  return {
+    kind: 'cylinder',
+    axis: quantizedDirectionOf(axis)!,
+    axisFoot: quantizedPoint(subtract(axisPoint, scale(axis, along))),
+    radius: quantizeCoordinate(radius)
+  };
+}
+
+function expectedLineWitness(start: Vec3, end: Vec3): EdgeWitnessV1 {
+  const endpoints = [quantizedPoint(start), quantizedPoint(end)].sort(
+    (left, right) => {
+      for (let index = 0; index < 3; index += 1) {
+        const difference = left[index]! - right[index]!;
+        if (difference !== 0) {
+          return difference;
+        }
+      }
+      return 0;
+    }
+  ) as [QuantizedTopologyPoint, QuantizedTopologyPoint];
+  return {
+    curveType: 'LINE',
+    length: quantizeCoordinate(
+      Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z)
+    ),
+    closed: false,
+    endpoints,
+    midpoint: quantizedPoint({
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+      z: (start.z + end.z) / 2
+    })
+  };
+}
+
+function expectedCircleWitness(
+  center: Vec3,
+  axis: Vec3,
+  radius: number
+): EdgeWitnessV1 {
+  return {
+    curveType: 'CIRCLE',
+    length: quantizeCoordinate(Math.PI * 2 * radius),
+    closed: true,
+    center: quantizedPoint(center),
+    axis: quantizedDirectionOf(axis)
+  };
+}
+
+function addFaceCarrierRole(
+  candidates: readonly BrepKitTopologyCandidate[],
+  carrier: FaceWitnessV1['analytic'] | null,
+  lineageName: string,
+  assignments: BrepKitSemanticAssignment[],
+  diagnostics: BrepKitLineageState[]
+) {
+  if (!carrier) {
+    diagnostics.push(
+      brepKitHashOnlyLineage(
+        'sweep',
+        `Semantic role ${lineageName} has no exact analytic carrier.`
+      )
+    );
+    return;
+  }
+  addUniqueSemanticAssignment(
+    candidates,
+    'face',
+    lineageName,
+    (candidate) =>
+      sameAnalyticCarrier(
+        (candidate.witness as FaceWitnessV1).analytic,
+        carrier
+      ),
+    assignments,
+    diagnostics,
+    'sweep'
+  );
+}
+
+function addEdgeWitnessRole(
+  candidates: readonly BrepKitTopologyCandidate[],
+  witness: EdgeWitnessV1,
+  lineageName: string,
+  assignments: BrepKitSemanticAssignment[],
+  diagnostics: BrepKitLineageState[]
+) {
+  addUniqueSemanticAssignment(
+    candidates,
+    'edge',
+    lineageName,
+    (candidate) => topologyWitnessesEqual('edge', candidate.witness, witness),
+    assignments,
+    diagnostics,
+    'sweep'
+  );
+}
+
+function buildExtrudeLineage(
+  kernel: BrepKernel,
+  solid: number,
+  feature: FeatureNode,
+  objectId: string,
+  data: SketchObjectData,
+  basis: PlaneBasis,
+  distance: number,
+  scope: Record<string, number>
+): BrepKitLineageState {
+  const candidates = topologyCandidatesForSolid(kernel, solid);
+  const assignments: BrepKitSemanticAssignment[] = [];
+  const diagnostics: BrepKitLineageState[] = [];
+  const startOrigin = basis.origin;
+  const endOrigin = {
+    x: basis.origin.x + basis.normal.x * distance,
+    y: basis.origin.y + basis.normal.y * distance,
+    z: basis.origin.z + basis.normal.z * distance
+  };
+  addFaceCarrierRole(
+    candidates,
+    planeCarrier(basis.normal, startOrigin),
+    `sweep.face.cap.start.${objectId}`,
+    assignments,
+    diagnostics
+  );
+  addFaceCarrierRole(
+    candidates,
+    planeCarrier(basis.normal, endOrigin),
+    `sweep.face.cap.end.${objectId}`,
+    assignments,
+    diagnostics
+  );
+
+  if (data.objectKind === 'circle') {
+    const center = pointOnPlane(
+      basis,
+      {
+        x: resolveParamValue(data.centerX, scope, 'center X'),
+        y: resolveParamValue(data.centerY, scope, 'center Y')
+      },
+      0
+    );
+    const radius = resolveParamValue(data.radius, scope, 'radius');
+    addFaceCarrierRole(
+      candidates,
+      cylinderCarrier(center, basis.normal, radius),
+      `sweep.face.side.${objectId}.circle`,
+      assignments,
+      diagnostics
+    );
+    const endCenter = {
+      x: center.x + basis.normal.x * distance,
+      y: center.y + basis.normal.y * distance,
+      z: center.z + basis.normal.z * distance
+    };
+    addEdgeWitnessRole(
+      candidates,
+      expectedCircleWitness(center, basis.normal, radius),
+      `sweep.edge.cap.start.${objectId}.circle`,
+      assignments,
+      diagnostics
+    );
+    addEdgeWitnessRole(
+      candidates,
+      expectedCircleWitness(endCenter, basis.normal, radius),
+      `sweep.edge.cap.end.${objectId}.circle`,
+      assignments,
+      diagnostics
+    );
+  } else {
+    const localPoints = profilePoints(data, scope);
+    const startPoints = localPoints.map((point) =>
+      pointOnPlane(basis, point, 0)
+    );
+    const endPoints = startPoints.map((point) => ({
+      x: point.x + basis.normal.x * distance,
+      y: point.y + basis.normal.y * distance,
+      z: point.z + basis.normal.z * distance
+    }));
+    const sweepDirection = scale(basis.normal, distance);
+    for (let index = 0; index < startPoints.length; index += 1) {
+      const next = (index + 1) % startPoints.length;
+      const start = startPoints[index]!;
+      const startNext = startPoints[next]!;
+      const end = endPoints[index]!;
+      const endNext = endPoints[next]!;
+      const edgeDirection = subtract(startNext, start);
+      addFaceCarrierRole(
+        candidates,
+        planeCarrier(cross(edgeDirection, sweepDirection), start),
+        `sweep.face.side.${objectId}.${index}`,
+        assignments,
+        diagnostics
+      );
+      addEdgeWitnessRole(
+        candidates,
+        expectedLineWitness(start, startNext),
+        `sweep.edge.cap.start.${objectId}.${index}`,
+        assignments,
+        diagnostics
+      );
+      addEdgeWitnessRole(
+        candidates,
+        expectedLineWitness(end, endNext),
+        `sweep.edge.cap.end.${objectId}.${index}`,
+        assignments,
+        diagnostics
+      );
+      addEdgeWitnessRole(
+        candidates,
+        expectedLineWitness(start, end),
+        `sweep.edge.side.${objectId}.vertex.${index}`,
+        assignments,
+        diagnostics
+      );
+    }
+  }
+
+  return mergeBrepKitLineageStates([
+    createBrepKitSemanticLineage(feature.featureId, 'sweep', assignments),
+    ...diagnostics
+  ]);
+}
+
+function buildRevolveLineage(
+  kernel: BrepKernel,
+  solid: number,
+  feature: FeatureNode,
+  objectId: string,
+  data: SketchObjectData,
+  basis: PlaneBasis,
+  axisDirection: Vec3,
+  axisPoint: Vec3,
+  scope: Record<string, number>
+): BrepKitLineageState {
+  const candidates = topologyCandidatesForSolid(kernel, solid);
+  const assignments: BrepKitSemanticAssignment[] = [];
+  const diagnostics: BrepKitLineageState[] = [];
+  if (data.objectKind === 'circle') {
+    addUniqueSemanticAssignment(
+      candidates,
+      'face',
+      `sweep.face.side.${objectId}.circle`,
+      (candidate) =>
+        (candidate.witness as FaceWitnessV1).surfaceType === 'torus',
+      assignments,
+      diagnostics,
+      'sweep'
+    );
+  } else {
+    const points = profilePoints(data, scope).map((point) =>
+      pointOnPlane(basis, point, 0)
+    );
+    const axis = normalized(axisDirection)!;
+    const axisFoot = subtract(axisPoint, scale(axis, dot(axisPoint, axis)));
+    const decomposition = (point: Vec3) => {
+      const fromAxisPoint = subtract(point, axisPoint);
+      const along = dot(fromAxisPoint, axis);
+      const center = {
+        x: axisPoint.x + axis.x * along,
+        y: axisPoint.y + axis.y * along,
+        z: axisPoint.z + axis.z * along
+      };
+      const radial = subtract(point, center);
+      return {
+        along,
+        center,
+        radial,
+        radius: Math.hypot(radial.x, radial.y, radial.z)
+      };
+    };
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index]!;
+      const next = points[(index + 1) % points.length]!;
+      const a = decomposition(current);
+      const b = decomposition(next);
+      const sameRadial =
+        samePoint(quantizedPoint(a.radial), quantizedPoint(b.radial)) &&
+        quantizeCoordinate(a.radius) > 0;
+      const sameAlong =
+        quantizeCoordinate(a.along) === quantizeCoordinate(b.along);
+      const carrier = sameRadial
+        ? cylinderCarrier(axisFoot, axis, a.radius)
+        : sameAlong
+          ? planeCarrier(axis, a.center)
+          : null;
+      addFaceCarrierRole(
+        candidates,
+        carrier,
+        `sweep.face.side.${objectId}.${index}`,
+        assignments,
+        diagnostics
+      );
+      if (quantizeCoordinate(a.radius) > 0) {
+        addEdgeWitnessRole(
+          candidates,
+          expectedCircleWitness(a.center, axis, a.radius),
+          `sweep.edge.profile.${objectId}.vertex.${index}`,
+          assignments,
+          diagnostics
+        );
+      }
+    }
+  }
+  return mergeBrepKitLineageStates([
+    createBrepKitSemanticLineage(feature.featureId, 'sweep', assignments),
+    ...diagnostics
+  ]);
+}
+
 /** The pre-ADR-011 BrepKit face scheme, kept only for persisted references. */
 function legacyFaceFingerprint(kernel: BrepKernel, face: number): number {
   const centroid = faceVertexCentroid(kernel, face);
@@ -1065,6 +1889,70 @@ function faceHandlesByFingerprint(
     }
   }
   return result;
+}
+
+function resolveShellOpeningFaces(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  hashes: readonly number[],
+  references: readonly FaceTopologyReferenceV5[] | undefined
+): number[] {
+  if (shape.solids.length !== 1) {
+    throw new Error('Shell requires a body containing exactly one solid.');
+  }
+  const solid = shape.solids[0]!;
+  const handles = Array.from(kernel.getSolidFaces(solid));
+  const candidates: TopologyResolutionCandidate[] = handles.map((handle) => {
+    const witness = faceWitnessOf(kernel, handle);
+    const lineageReference = shape.lineage?.faceReferences.get(handle);
+    return {
+      kind: 'face',
+      currentHash: topologyHashOfWitness('face', witness),
+      witnessVersion: 1,
+      witness,
+      ...(lineageReference
+        ? {
+            lineage: {
+              source: 'semantic' as const,
+              identity: {
+                producingFeatureId: lineageReference.producingFeatureId,
+                lineageName: lineageReference.lineageName
+              }
+            }
+          }
+        : {}),
+      value: handle
+    };
+  });
+  const referenceByHash = new Map(
+    references?.map((reference) => [reference.currentHash, reference]) ?? []
+  );
+  const legacyHandles = faceHandlesByFingerprint(kernel, solid);
+  const resolved = hashes.map((hash) => {
+    const reference = referenceByHash.get(hash);
+    if (reference) {
+      const resolution = resolveTopologyReference(reference, candidates);
+      if (resolution.status === 'failed') {
+        throw new Error(`Shell opening face is stale: ${resolution.message}`);
+      }
+      if (typeof resolution.candidate.value !== 'number') {
+        throw new Error('Shell opening face resolved without a kernel handle.');
+      }
+      return resolution.candidate.value;
+    }
+    const matches = legacyHandles.get(hash) ?? [];
+    if (matches.length === 0) {
+      throw unresolvedReferenceError('face', hash, handles.length);
+    }
+    if (matches.length > 1) {
+      throw ambiguousReferenceError('face');
+    }
+    return matches[0]!;
+  });
+  if (new Set(resolved).size !== resolved.length) {
+    throw new Error('Shell opening faces do not resolve to a unique set.');
+  }
+  return resolved;
 }
 
 /** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
@@ -1136,6 +2024,42 @@ function measureFaceGeometry(
   return geometry;
 }
 
+function faceAttachmentCandidatesForShape(
+  kernel: BrepKernel,
+  shape: ExactShape
+): FaceAttachmentCandidate[] {
+  return shape.solids.flatMap((solid) =>
+    Array.from(kernel.getSolidFaces(solid), (handle) => {
+      const witness = faceWitnessOf(kernel, handle);
+      const reference = shape.lineage?.faceReferences.get(handle);
+      const geometry = measureFaceGeometry(kernel, handle);
+      const plane =
+        geometry?.surfaceType.toLowerCase() === 'plane' &&
+        geometry.normal !== undefined
+          ? { center: geometry.center, normal: geometry.normal }
+          : null;
+      return {
+        kind: 'face' as const,
+        currentHash: topologyHashOfWitness('face', witness),
+        witnessVersion: 1 as const,
+        witness,
+        plane,
+        ...(reference
+          ? {
+              lineage: {
+                source: 'derived' as const,
+                identity: {
+                  producingFeatureId: reference.producingFeatureId,
+                  lineageName: reference.lineageName
+                }
+              }
+            }
+          : {})
+      };
+    })
+  );
+}
+
 function copyShape(
   kernel: BrepKernel,
   shape: ExactShape,
@@ -1145,6 +2069,74 @@ function copyShape(
     solids: shape.solids.map((solid) =>
       kernel.copyAndTransformSolid(solid, matrix)
     )
+  };
+}
+
+function copyShapeWithVerifiedLineage(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  matrix: Float64Array
+): ExactShape {
+  const solids: number[] = [];
+  if (!shape.lineage) {
+    return {
+      solids: shape.solids.map((solid) =>
+        kernel.copyAndTransformSolid(solid, matrix)
+      ),
+      lineage: brepKitHashOnlyLineage(
+        'rigid-transform',
+        'The source body has no verified topology lineage.'
+      )
+    };
+  }
+
+  const lineages = shape.solids.map((sourceSolid, index) => {
+    const resultSolid = kernel.copyAndTransformSolid(sourceSolid, matrix);
+    solids.push(resultSolid);
+    const sourceFaces = new Set(kernel.getSolidFaces(sourceSolid));
+    const sourceEdges = new Set(kernel.getSolidEdges(sourceSolid));
+    const source: BrepKitLineageState = {
+      faceReferences: new Map(
+        [...shape.lineage!.faceReferences].filter(([handle]) =>
+          sourceFaces.has(handle)
+        )
+      ),
+      edgeReferences: new Map(
+        [...shape.lineage!.edgeReferences].filter(([handle]) =>
+          sourceEdges.has(handle)
+        )
+      ),
+      diagnostics: index === 0 ? [...shape.lineage!.diagnostics] : []
+    };
+    return propagateBrepKitRigidTransformLineage(
+      source,
+      topologyCandidatesForSolid(kernel, resultSolid),
+      Array.from(matrix)
+    );
+  });
+  return { solids, lineage: mergeBrepKitLineageStates(lineages) };
+}
+
+function projectBrepKitLineageDiagnostic(
+  diagnostic: BrepKitLineageState['diagnostics'][number]
+): TopologyLineageDiagnostic {
+  const status: TopologyLineageDiagnostic['status'] =
+    diagnostic.code === 'hash-only'
+      ? 'hash-only'
+      : diagnostic.code === 'transform-deleted'
+        ? 'deleted'
+        : diagnostic.code === 'transform-split'
+          ? 'split'
+          : diagnostic.code === 'transform-merge'
+            ? 'merged'
+            : diagnostic.code === 'ambiguous-semantic-role'
+              ? 'ambiguous'
+              : 'unsupported';
+  return {
+    kind: diagnostic.topologyKind ?? 'body',
+    status,
+    topologyId: diagnostic.lineageName,
+    message: diagnostic.message
   };
 }
 
@@ -1236,6 +2228,56 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     return this.stepCombiner;
   }
 
+  private resolveSketchBasisAtHistory(
+    kernel: BrepKernel,
+    document: ProjectDocument,
+    sketch: SketchNode,
+    result: ExactBuildResult,
+    scope: Record<string, number>
+  ): PlaneBasis {
+    const planeRef = sketch.planeRef;
+    if (planeRef.type !== 'face' || !planeRef.faceReference) {
+      if (planeRef.type === 'face') {
+        result.warnings.push(
+          `Sketch "${sketch.name}": legacy face attachment has no schema-v5 lineage reference; using its stored migration frame.`
+        );
+      }
+      return frameForPlaneRef(planeRef, (value) =>
+        resolveParamValue(value, scope, 'sketch offset')
+      );
+    }
+
+    const sourceShape = result.shapes.get(planeRef.bodyId);
+    if (!sourceShape) {
+      throw new Error(
+        `Sketch "${sketch.name}" cannot attach because source body ${planeRef.bodyId} is unavailable at the sketch's history position.`
+      );
+    }
+    const sourceFeature = listFeaturesInOrder(document).find(
+      (candidate) =>
+        candidate.featureId === planeRef.faceReference?.producingFeatureId
+    );
+    const frame = resolveFaceAttachment({
+      reference: planeRef.faceReference,
+      candidates: faceAttachmentCandidatesForShape(kernel, sourceShape),
+      snapshot: {
+        sourceArea: planeRef.sourceArea,
+        sourceCenter: planeRef.sourceCenter,
+        sourceNormal: planeRef.sourceNormal,
+        frame: planeRef.frame
+      },
+      sketchName: sketch.name,
+      sourceFeatureName:
+        sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
+    });
+    return {
+      origin: frame.origin,
+      u: frame.xAxis,
+      v: frame.yAxis,
+      normal: frame.zAxis
+    };
+  }
+
   private makeProfileFace(
     kernel: BrepKernel,
     data: SketchObjectData,
@@ -1282,9 +2324,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   private buildPrimitive(
     kernel: BrepKernel,
-    data: Extract<FeatureNode['data'], { featureKind: 'primitive' }>,
+    feature: FeatureNode,
     scope: Record<string, number>
   ): ExactShape {
+    if (feature.data.featureKind !== 'primitive') {
+      throw new Error('Expected a primitive feature.');
+    }
+    const data = feature.data;
     const dimension = (key: string): number =>
       resolveParamValue(data.dimensions[key] ?? 0, scope, key);
     let solid: number;
@@ -1317,7 +2363,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         );
         break;
     }
-    return { solids: [solid] };
+    return {
+      solids: [solid],
+      lineage: buildPrimitiveLineage(kernel, solid, feature)
+    };
   }
 
   /** Lift a sketch-local 2D point into world space on the plane basis. */
@@ -1423,30 +2472,80 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     kernel: BrepKernel,
     document: ProjectDocument,
     sketch: SketchNode,
+    feature: FeatureNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    basis: PlaneBasis
   ): ExactShape {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
-    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
-      resolveParamValue(value, scope, 'sketch offset')
-    );
     const distance = resolveParamValue(data.distance, scope, 'distance');
-    const solids = connectedRegionGroups(regions).map((group) => {
+    const groups = connectedRegionGroups(regions);
+    const lineages: BrepKitLineageState[] = [];
+    const solids = groups.map((group) => {
       const face = this.makeRegionFace(
         kernel,
         mergeAdjacentProfiles(group),
         basis
       );
-      return kernel.extrude(
+      const solid = kernel.extrude(
         face,
         basis.normal.x,
         basis.normal.y,
         basis.normal.z,
         distance
       );
+      const candidates = topologyCandidatesForSolid(kernel, solid);
+      const assignments: BrepKitSemanticAssignment[] = [];
+      const diagnostics: BrepKitLineageState[] = [];
+      const sourceEntityIds = [
+        ...new Set(group.flatMap((region) => region.sourceEntityIds))
+      ].sort();
+      const token = sourceEntityIds.join('+');
+      if (token.length === 0) {
+        diagnostics.push(
+          brepKitHashOnlyLineage(
+            'sweep',
+            'Selected sketch region has no stable authored-entity identity.'
+          )
+        );
+      } else {
+        const endOrigin = {
+          x: basis.origin.x + basis.normal.x * distance,
+          y: basis.origin.y + basis.normal.y * distance,
+          z: basis.origin.z + basis.normal.z * distance
+        };
+        addFaceCarrierRole(
+          candidates,
+          planeCarrier(basis.normal, basis.origin),
+          `sweep.face.cap.start.region.${token}`,
+          assignments,
+          diagnostics
+        );
+        addFaceCarrierRole(
+          candidates,
+          planeCarrier(basis.normal, endOrigin),
+          `sweep.face.cap.end.region.${token}`,
+          assignments,
+          diagnostics
+        );
+        diagnostics.push(
+          brepKitHashOnlyLineage(
+            'sweep',
+            `Selected-region side topology ${token} has no one-to-one semantic curve mapping.`
+          )
+        );
+      }
+      lineages.push(
+        mergeBrepKitLineageStates([
+          createBrepKitSemanticLineage(feature.featureId, 'sweep', assignments),
+          ...diagnostics
+        ])
+      );
+      return solid;
     });
     return {
-      solids
+      solids,
+      lineage: mergeBrepKitLineageStates(lineages)
     };
   }
 
@@ -1454,7 +2553,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     kernel: BrepKernel,
     document: ProjectDocument,
     feature: FeatureNode,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
   ): ExactShape {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -1471,12 +2571,20 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       if (!sketchNode) {
         throw new Error('Referenced sketch no longer exists.');
       }
+      const basis = sketchBases.get(sketchNode.sketchId);
+      if (!basis) {
+        throw new Error(
+          `Sketch "${sketchNode.name}" plane did not resolve at its history position.`
+        );
+      }
       return this.buildRegionExtrude(
         kernel,
         document,
         sketchNode,
+        feature,
         feature.data,
-        scope
+        scope,
+        basis
       );
     }
     const sketch = findSketch(document, feature.data.sketchId);
@@ -1485,9 +2593,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     if (!sketch || !object || object.kind !== 'sketch-object') {
       throw new Error('Referenced sketch has no profile.');
     }
-    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
-      resolveParamValue(value, scope, 'sketch offset')
-    );
+    const basis = sketchBases.get(sketch.sketchId);
+    if (!basis) {
+      throw new Error(
+        `Sketch "${sketch.name}" plane did not resolve at its history position.`
+      );
+    }
     const face = this.makeProfileFace(kernel, object.data, basis, 0, scope);
 
     if (feature.data.featureKind === 'extrude') {
@@ -1496,34 +2607,53 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         scope,
         'distance'
       );
+      const solid = kernel.extrude(
+        face,
+        basis.normal.x,
+        basis.normal.y,
+        basis.normal.z,
+        distance
+      );
       return {
-        solids: [
-          kernel.extrude(
-            face,
-            basis.normal.x,
-            basis.normal.y,
-            basis.normal.z,
-            distance
-          )
-        ]
+        solids: [solid],
+        lineage: buildExtrudeLineage(
+          kernel,
+          solid,
+          feature,
+          String(object.id),
+          object.data,
+          basis,
+          distance,
+          scope
+        )
       };
     }
 
     const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
     const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
+    const solid = kernel.revolve(
+      face,
+      point.x,
+      point.y,
+      point.z,
+      direction.x,
+      direction.y,
+      direction.z,
+      360
+    );
     return {
-      solids: [
-        kernel.revolve(
-          face,
-          point.x,
-          point.y,
-          point.z,
-          direction.x,
-          direction.y,
-          direction.z,
-          360
-        )
-      ]
+      solids: [solid],
+      lineage: buildRevolveLineage(
+        kernel,
+        solid,
+        feature,
+        String(object.id),
+        object.data,
+        basis,
+        direction,
+        point,
+        scope
+      )
     };
   }
 
@@ -1534,6 +2664,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const { scope, errors } = getParameterScope(document);
     const result: ExactBuildResult = {
       shapes: new Map(),
+      sketchBases: new Map(),
       consumed: new Set(),
       warnings: [...errors]
     };
@@ -1541,8 +2672,23 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     for (const feature of listFeaturesInOrder(document)) {
       try {
         switch (feature.data.featureKind) {
-          case 'sketch':
+          case 'sketch': {
+            const sketch = findSketch(document, feature.data.sketchId);
+            if (!sketch) {
+              throw new Error('Referenced sketch no longer exists.');
+            }
+            result.sketchBases.set(
+              sketch.sketchId,
+              this.resolveSketchBasisAtHistory(
+                kernel,
+                document,
+                sketch,
+                result,
+                scope
+              )
+            );
             break;
+          }
           case 'imported-mesh':
             throw new Error('Legacy mesh bodies use the compatibility kernel.');
           case 'direct-edit': {
@@ -1550,15 +2696,17 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (!target) {
               throw new Error('Direct-edit target is unavailable.');
             }
-            result.shapes.set(
-              feature.data.targetBodyId,
-              this.applyDirectEdit(
-                kernel,
-                target,
-                feature.data.operation,
-                scope
-              )
+            const edited = this.applyDirectEdit(
+              kernel,
+              target,
+              feature.data.operation,
+              scope
             );
+            edited.lineage = brepKitHashOnlyLineage(
+              'direct-edit',
+              'BrepKit does not expose a complete direct-edit output relation.'
+            );
+            result.shapes.set(feature.data.targetBodyId, edited);
             break;
           }
           case 'imported-step': {
@@ -1581,7 +2729,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (feature.bodyId) {
               result.shapes.set(
                 feature.bodyId,
-                this.buildPrimitive(kernel, feature.data, scope)
+                this.buildPrimitive(kernel, feature, scope)
               );
             }
             break;
@@ -1590,7 +2738,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (feature.bodyId) {
               result.shapes.set(
                 feature.bodyId,
-                this.buildSweep(kernel, document, feature, scope)
+                this.buildSweep(
+                  kernel,
+                  document,
+                  feature,
+                  scope,
+                  result.sketchBases
+                )
               );
             }
             break;
@@ -1603,7 +2757,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             const rotation = feature.data.transform.rotationDeg;
             result.shapes.set(
               feature.data.targetBodyId,
-              copyShape(
+              copyShapeWithVerifiedLineage(
                 kernel,
                 target,
                 transformMatrix(
@@ -1620,6 +2774,104 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 )
               )
             );
+            break;
+          }
+          case 'mirror': {
+            if (!feature.bodyId) {
+              throw new Error('Mirror has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Mirror target is unavailable.');
+            }
+            const origin = feature.data.plane.origin;
+            const rawNormal = feature.data.plane.normal;
+            const planePoint = {
+              x: resolveParamValue(origin.x, scope, 'mirror origin X'),
+              y: resolveParamValue(origin.y, scope, 'mirror origin Y'),
+              z: resolveParamValue(origin.z, scope, 'mirror origin Z')
+            };
+            const planeNormal = normalized({
+              x: resolveParamValue(rawNormal.x, scope, 'mirror normal X'),
+              y: resolveParamValue(rawNormal.y, scope, 'mirror normal Y'),
+              z: resolveParamValue(rawNormal.z, scope, 'mirror normal Z')
+            });
+            if (!planeNormal) {
+              throw new Error(
+                'Mirror plane normal must be finite and non-zero.'
+              );
+            }
+            const operations = createBrepKitModelingOperations(kernel);
+            result.shapes.set(feature.bodyId, {
+              solids: target.solids.map((targetSolid) =>
+                operations.mirror({ targetSolid, planePoint, planeNormal })
+              ),
+              lineage: brepKitHashOnlyLineage(
+                'mirror',
+                'The pinned bridge does not expose a complete reflected topology relation.'
+              )
+            });
+            break;
+          }
+          case 'shell': {
+            if (!feature.bodyId) {
+              throw new Error('Shell has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Shell target is unavailable.');
+            }
+            const openingFaces = resolveShellOpeningFaces(
+              kernel,
+              target,
+              feature.data.openingFaceHashes,
+              feature.data.openingFaceReferences
+            );
+            const thickness = resolveParamValue(
+              feature.data.thickness,
+              scope,
+              'shell thickness'
+            );
+            const solid = createBrepKitModelingOperations(kernel).shell({
+              targetSolid: target.solids[0]!,
+              thickness,
+              openingFaces
+            });
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, {
+              solids: [solid],
+              lineage: brepKitHashOnlyLineage(
+                'shell',
+                'The pinned bridge does not expose removed, offset, and generated face relations.'
+              )
+            });
+            break;
+          }
+          case 'solid-offset': {
+            if (!feature.bodyId) {
+              throw new Error('Solid offset has no result body.');
+            }
+            const target = result.shapes.get(feature.data.targetBodyId);
+            if (!target) {
+              throw new Error('Solid-offset target is unavailable.');
+            }
+            const distance = resolveParamValue(
+              feature.data.distance,
+              scope,
+              'solid offset distance'
+            );
+            const operations = createBrepKitModelingOperations(kernel);
+            const solids = target.solids.map((targetSolid) =>
+              operations.offsetSolid({ targetSolid, distance })
+            );
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, {
+              solids,
+              lineage: brepKitHashOnlyLineage(
+                'solid-offset',
+                'The pinned bridge does not expose a complete offset topology relation.'
+              )
+            });
             break;
           }
           case 'boolean': {
@@ -1697,7 +2949,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)
             );
-            result.shapes.set(feature.bodyId, { solids: [solid] });
+            result.shapes.set(feature.bodyId, {
+              solids: [solid],
+              lineage: brepKitHashOnlyLineage(
+                'boolean',
+                'The production boolean result may be face-unified after the kernel operation, so no unverified history payload is accepted.'
+              )
+            });
             break;
           }
           case 'fillet':
@@ -1814,7 +3072,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               throw new Error(failureMessage);
             }
             result.consumed.add(feature.data.targetBodyId);
-            result.shapes.set(feature.bodyId, { solids: [modified] });
+            result.shapes.set(feature.bodyId, {
+              solids: [modified],
+              lineage: brepKitHashOnlyLineage(
+                feature.data.featureKind,
+                feature.data.featureKind === 'fillet'
+                  ? 'The final production fillet, including analytic fallback results, has no reverified complete output relation.'
+                  : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
+              )
+            });
             break;
           }
           case 'pattern': {
@@ -2098,6 +3364,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     }
     const vertices: number[] = [];
     const indices: number[] = [];
+    const lineageDiagnostics =
+      shape.lineage?.diagnostics.map(projectBrepKitLineageDiagnostic) ?? [];
     const topology: BodyTopology = { faces: [], edges: [] };
     const bbox = {
       min: { x: Infinity, y: Infinity, z: Infinity },
@@ -2149,10 +3417,28 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           const start = faceOffsets[index]!;
           const end = faceOffsets[index + 1]!;
           const handle = faceHandles[index]!;
-          const hash = faceFingerprint(kernel, handle);
+          const witness = faceWitnessOf(kernel, handle);
+          const hash = topologyHashOfWitness('face', witness);
+          const reference = shape.lineage?.faceReferences.get(handle);
+          const verifiedReference =
+            reference &&
+            reference.currentHash === hash &&
+            topologyWitnessesEqual('face', reference.witness, witness)
+              ? reference
+              : undefined;
+          if (reference && !verifiedReference) {
+            lineageDiagnostics.push({
+              kind: 'face',
+              status: 'unsupported',
+              topologyId: reference.lineageName,
+              featureId: reference.producingFeatureId,
+              message: `BrepKit face lineage ${reference.lineageName} no longer matches its exact measured witness.`
+            });
+          }
           topology.faces.push({
             topologyId: `face:${hash}`,
             hash,
+            reference: verifiedReference,
             triangleStart: (indexOffset + start) / 3,
             triangleCount: (end - start) / 3,
             geometry: measureFaceGeometry(kernel, handle)
@@ -2187,10 +3473,28 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         }
         for (let index = 0; index < edgeHandles.length; index += 1) {
           const edge = edgeHandles[index]!;
-          const hash = edgeFingerprint(kernel, edge);
+          const witness = edgeWitnessOf(kernel, edge);
+          const hash = topologyHashOfWitness('edge', witness);
+          const reference = shape.lineage?.edgeReferences.get(edge);
+          const verifiedReference =
+            reference &&
+            reference.currentHash === hash &&
+            topologyWitnessesEqual('edge', reference.witness, witness)
+              ? reference
+              : undefined;
+          if (reference && !verifiedReference) {
+            lineageDiagnostics.push({
+              kind: 'edge',
+              status: 'unsupported',
+              topologyId: reference.lineageName,
+              featureId: reference.producingFeatureId,
+              message: `BrepKit edge lineage ${reference.lineageName} no longer matches its exact measured witness.`
+            });
+          }
           topology.edges.push({
             topologyId: `edge:${hash}`,
             hash,
+            reference: verifiedReference,
             displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
             points: edgePositions.slice(
               edgeOffsets[index],
@@ -2215,6 +3519,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       }
     }
 
+    if (lineageDiagnostics.length > 0) {
+      topology.lineageDiagnostics = lineageDiagnostics;
+    }
     const meshClosure = strictBooleanValidation
       ? inspectTriangleMeshClosure(vertices, indices)
       : null;

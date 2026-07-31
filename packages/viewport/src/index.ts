@@ -10,6 +10,7 @@ export * from './types';
 
 // Rendering: meshes, materials, lighting, grid, and camera fitting.
 export * from './render/scene';
+export * from './render/edgeOverlay';
 
 // Camera: the controller that owns cameras/controls/projection/glides,
 // plus standard view poses and screen-space projection math.

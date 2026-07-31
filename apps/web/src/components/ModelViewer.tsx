@@ -4,16 +4,12 @@ import { mark, timed } from '../lib/perf';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import {
   CSS2DObject,
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
-  EDGE_IDLE_COLOR,
-  EDGE_IDLE_OPACITY,
-  EDGE_IDLE_WIDTH,
-  EDGE_SELECTED_COLOR,
-  EDGE_SELECTED_WIDTH,
   MOVE_AXIS_COLORS,
   MOVE_AXIS_VECTORS,
   RightClickGestureTracker,
@@ -48,6 +44,7 @@ import {
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
+  createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
   createFatLine,
@@ -73,7 +70,6 @@ import {
   projectToScreen,
   projectedWorldSizePx,
   shouldShowGroundShadow,
-  shouldRenderTopologyEdge,
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
@@ -99,7 +95,8 @@ import {
   type SketchOverlay,
   type ViewTarget,
   type ViewerSettings,
-  type FatLineResolution
+  type FatLineResolution,
+  type BodyEdgeOverlay
 } from '@openzcad/viewport';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -409,6 +406,7 @@ export interface SceneContext {
   keyLight: THREE.DirectionalLight;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
+  edgeOverlaysByBodyId: Map<string, BodyEdgeOverlay>;
   hasFitCamera: boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
@@ -542,10 +540,6 @@ const SKETCH_CURVE_WIDTH = 1.4;
 const PREVIEW_EDGE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
-interface EdgeVisualState {
-  selected: boolean;
-}
-
 export function ModelViewer({
   bodies,
   sketches,
@@ -633,6 +627,8 @@ export function ModelViewer({
   sketchesRef.current = sketches;
   const bodiesRef = useRef(bodies);
   bodiesRef.current = bodies;
+  /** Last body projection installed in Three.js; selection-only renders reuse it. */
+  const renderedBodiesRef = useRef<readonly BodyRepresentation[] | null>(null);
   const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const onContextMenuRef = useRef(onContextMenu);
@@ -871,6 +867,7 @@ export function ModelViewer({
     // Raycasting and topology resolution. The active camera is read per call
     // because the projection toggle swaps it.
     const objectsByBodyId = new Map<string, THREE.Object3D>();
+    const edgeOverlaysByBodyId = new Map<string, BodyEdgeOverlay>();
 
     const selection = new SelectionManager({
       bodyGroup,
@@ -979,6 +976,7 @@ export function ModelViewer({
       keyLight,
       raycaster: picker.raycaster,
       objectsByBodyId,
+      edgeOverlaysByBodyId,
       hasFitCamera: false,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
@@ -1439,7 +1437,7 @@ export function ModelViewer({
           visible: boolean;
         }[] = [];
         root.traverse((child) => {
-          if (child instanceof Line2) {
+          if (child instanceof LineSegments2) {
             states.push({
               depthTest: child.material.depthTest,
               depthWrite: child.material.depthWrite,
@@ -3348,71 +3346,68 @@ export function ModelViewer({
     };
   }, []);
 
-  // Rebuild bodies + selection callout when derived geometry changes.
+  // Body geometry is rebuilt only when the derived body projection changes.
+  // Selection-only renders reuse the installed meshes, materials, edge
+  // batches, and frozen shadow map while refreshing lightweight overlays.
   useEffect(() => {
     const context = contextRef.current;
     if (!context) {
       return;
     }
 
-    mark('viewer.bodies:begin');
-    clearGroup(context.bodyGroup);
+    const bodiesChanged = renderedBodiesRef.current !== bodies;
+    if (bodiesChanged) {
+      mark('viewer.bodies:begin');
+      clearGroup(context.bodyGroup);
+      context.selection.resetForRebuild();
+      context.objectsByBodyId.clear();
+      context.edgeOverlaysByBodyId.clear();
+    }
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
-    context.selection.resetForRebuild();
-    context.objectsByBodyId.clear();
     const edgeResolution = context.fatLineResolution();
-    const selectedEdgeKeys = new Set(
-      selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
-    );
 
     for (const body of bodies) {
-      const object = createObjectForBody(body, edgeResolution);
-      object.userData.bodyId = body.bodyId;
+      const object = bodiesChanged
+        ? createObjectForBody(body, edgeResolution)
+        : context.objectsByBodyId.get(body.bodyId);
+      if (!object) {
+        continue;
+      }
+      if (bodiesChanged) {
+        object.userData.bodyId = body.bodyId;
+      }
+      const previousSelectionOverlay = object.getObjectByName(
+        'body-selection-overlay'
+      );
+      if (previousSelectionOverlay instanceof THREE.Group) {
+        const selectionGroup =
+          previousSelectionOverlay as unknown as THREE.Group;
+        clearGroup(selectionGroup);
+        object.remove(selectionGroup);
+      }
       const isSelected = selectedBodyIds.includes(body.bodyId);
 
       forEachMesh(object, (mesh) => {
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
-        mesh.userData.bodyId = body.bodyId;
-        mesh.userData.topology = body.topology;
-        mesh.castShadow = true;
-        mesh.receiveShadow = false;
+        if (bodiesChanged) {
+          mesh.userData.bodyId = body.bodyId;
+          mesh.userData.topology = body.topology;
+          mesh.castShadow = true;
+          mesh.receiveShadow = false;
+        }
       });
 
-      for (const edge of body.topology?.edges ?? []) {
-        if (!shouldRenderTopologyEdge(edge)) {
-          continue;
-        }
-        const active = selectedEdgeKeys.has(
-          `${body.bodyId}:${edge.topologyId}`
-        );
-
-        // Visible fat line: WebGL ignores LineBasicMaterial linewidth, so
-        // edges render via Line2 with a real screen-space width.
-        const fatGeometry = new LineGeometry();
-        fatGeometry.setPositions(edge.points);
-        const fatMaterial = createFatLineMaterial({
-          color: active ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR,
-          linewidth: active ? EDGE_SELECTED_WIDTH : EDGE_IDLE_WIDTH,
-          opacity: active ? 1 : EDGE_IDLE_OPACITY,
-          resolution: edgeResolution
-        });
-        const visual = new Line2(fatGeometry, fatMaterial);
-        visual.name = 'body-edge';
-        visual.computeLineDistances();
-        visual.userData.bodyId = body.bodyId;
-        visual.userData.topologyKind = 'edge';
-        visual.userData.topologyId = edge.topologyId;
-        visual.userData.topologyHash = edge.hash;
-        visual.userData.visual = visual;
-        (visual.userData as EdgeVisualState).selected = active;
-        visual.renderOrder = active
-          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
-          : VIEWPORT_RENDER_ORDER.BODY_EDGE;
-        object.add(visual);
+      let edgeOverlay = context.edgeOverlaysByBodyId.get(body.bodyId);
+      if (bodiesChanged) {
+        edgeOverlay = createBodyEdgeOverlay(body, edgeResolution);
+        edgeOverlay.setDisplayMode(displayModeRef.current);
+        object.add(edgeOverlay);
+        context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
+      edgeOverlay?.setSelected(selectedEdges);
 
       const selectedFace =
         selectedTopology?.kind === 'face' &&
@@ -3422,6 +3417,9 @@ export function ModelViewer({
             )
           : undefined;
       if (selectedFace) {
+        const selectionOverlay = new THREE.Group();
+        selectionOverlay.name = 'body-selection-overlay';
+        object.add(selectionOverlay);
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute(
           'position',
@@ -3448,7 +3446,7 @@ export function ModelViewer({
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
         highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
         highlight.raycast = () => undefined;
-        object.add(highlight);
+        selectionOverlay.add(highlight);
         context.fadeIns.add(highlightMaterial);
 
         if (editableBodyIds.includes(body.bodyId)) {
@@ -3590,36 +3588,43 @@ export function ModelViewer({
         }
       }
 
-      context.bodyGroup.add(object);
-      context.objectsByBodyId.set(body.bodyId, object);
+      if (bodiesChanged) {
+        context.bodyGroup.add(object);
+        context.objectsByBodyId.set(body.bodyId, object);
+      }
     }
 
-    applyDisplayMode(context.bodyGroup, displayModeRef.current);
+    if (bodiesChanged) {
+      applyDisplayMode(context.bodyGroup, displayModeRef.current);
+    }
 
     // Retune the key light's shadow frustum around the current model so the
     // grounding shadow stays crisp instead of being clipped or pixelated.
-    const sceneBox = new THREE.Box3();
-    for (const child of context.bodyGroup.children) {
-      sceneBox.expandByObject(child);
+    if (bodiesChanged) {
+      const sceneBox = new THREE.Box3();
+      for (const child of context.bodyGroup.children) {
+        sceneBox.expandByObject(child);
+      }
+      if (!sceneBox.isEmpty()) {
+        const sceneSize = sceneBox.getSize(new THREE.Vector3());
+        const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
+        tuneShadowFrustum(
+          context.keyLight,
+          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
+        );
+        context.keyLight.position.set(
+          sceneCenter.x + 90,
+          sceneCenter.y - 100,
+          sceneCenter.z + 140
+        );
+        context.keyLight.target.position.copy(sceneCenter);
+        context.keyLight.target.updateMatrixWorld();
+      }
+      // Bodies are the only dynamic shadow casters; camera and selection-only
+      // frames reuse this map until geometry or the light rig changes again.
+      context.renderer.shadowMap.needsUpdate = true;
+      renderedBodiesRef.current = bodies;
     }
-    if (!sceneBox.isEmpty()) {
-      const sceneSize = sceneBox.getSize(new THREE.Vector3());
-      const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
-      tuneShadowFrustum(
-        context.keyLight,
-        Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
-      );
-      context.keyLight.position.set(
-        sceneCenter.x + 90,
-        sceneCenter.y - 100,
-        sceneCenter.z + 140
-      );
-      context.keyLight.target.position.copy(sceneCenter);
-      context.keyLight.target.updateMatrixWorld();
-    }
-    // Bodies are the only dynamic shadow casters; camera-only frames reuse
-    // this map until geometry or the fitted key-light rig changes again.
-    context.renderer.shadowMap.needsUpdate = true;
 
     // Name callout on the primary (last picked) selected body.
     const primaryId = selectedBodyIds.at(-1);
@@ -3675,7 +3680,9 @@ export function ModelViewer({
       onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
-    performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+    if (bodiesChanged) {
+      performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+    }
   }, [
     bodies,
     editableBodyIds,
@@ -4572,6 +4579,9 @@ export function ModelViewer({
         settings.showGrid
       );
       applyDisplayMode(context.bodyGroup, settings.displayMode);
+      for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
+        edgeOverlay.setDisplayMode(settings.displayMode);
+      }
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode]);
@@ -4624,8 +4634,7 @@ export function ModelViewer({
     const { camera, controls } = context;
     // `direction` names the way the model appears to turn on screen, so the
     // camera swings the opposite way: model clockwise = camera counterclockwise.
-    const angle =
-      rotateRequest.direction === 'cw' ? Math.PI / 2 : -Math.PI / 2;
+    const angle = rotateRequest.direction === 'cw' ? Math.PI / 2 : -Math.PI / 2;
     const offset = camera.position
       .clone()
       .sub(controls.target)

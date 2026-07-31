@@ -531,13 +531,23 @@ describe('projecting a world anchor to the screen', () => {
   }
 
   it('puts a point on the view axis at the centre of the viewport', () => {
-    const screen = projectToScreen(new THREE.Vector3(0, 0, 0), camera(), 800, 600);
+    const screen = projectToScreen(
+      new THREE.Vector3(0, 0, 0),
+      camera(),
+      800,
+      600
+    );
     expect(screen?.x).toBeCloseTo(400, 6);
     expect(screen?.y).toBeCloseTo(300, 6);
   });
 
   it('grows y downward, matching CSS rather than clip space', () => {
-    const above = projectToScreen(new THREE.Vector3(0, 1, 0), camera(), 800, 600);
+    const above = projectToScreen(
+      new THREE.Vector3(0, 1, 0),
+      camera(),
+      800,
+      600
+    );
     expect(above!.y).toBeLessThan(300);
   });
 
@@ -579,11 +589,15 @@ describe('the orbit pivot follows what was picked', () => {
   it('declines a point behind the camera', () => {
     // Clicking through to something behind the viewer would put the pivot
     // at the camera's back and invert the orbit.
-    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 20))).toBeNull();
+    expect(
+      orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(0, 0, 20))
+    ).toBeNull();
   });
 
   it('declines a point on the camera plane, where there is no depth', () => {
-    expect(orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))).toBeNull();
+    expect(
+      orbitPivotForPoint(at(0, 0, 10), at(0, 0, -1), at(5, 5, 10))
+    ).toBeNull();
   });
 });
 
@@ -611,7 +625,12 @@ describe('glide duration follows how far the camera travels', () => {
 
   it('is scale-invariant: the same relative move takes the same time', () => {
     // A bracket and a building should feel identical to fly around.
-    const small = tweenDurationFor(v(0, 0, 10), v(6, 0, 10), v(0, 0, 0), v(0, 0, 0));
+    const small = tweenDurationFor(
+      v(0, 0, 10),
+      v(6, 0, 10),
+      v(0, 0, 0),
+      v(0, 0, 0)
+    );
     const large = tweenDurationFor(
       v(0, 0, 10_000),
       v(6_000, 0, 10_000),

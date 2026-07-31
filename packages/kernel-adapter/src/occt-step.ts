@@ -30,9 +30,12 @@ import {
   type BodyTopology,
   type DirectEditOperation,
   type DerivedState,
+  type FaceAnalyticWitnessV1,
   type FaceGeometry,
+  type FaceWitnessV1,
   type FeatureNode,
   type ProjectDocument,
+  type SketchId,
   type SketchNode,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -45,14 +48,39 @@ import {
 } from './union-connectivity';
 import {
   ambiguousReferenceError,
-  canonicalDirection,
-  cylinderAnalyticSignature,
-  edgeFingerprintOf,
-  faceFingerprintOf,
   isClosedEdge,
-  planeAnalyticSignature,
+  quantizeCoordinate,
   unresolvedReferenceError
 } from './topology-fingerprint';
+import {
+  mirrorOcctSolid,
+  offsetOcctSolid,
+  resizeOcctAnalyticCylinder,
+  shellOcctSolid
+} from './occt-modeling-operations';
+import {
+  canonicalClosedEdgeWitness,
+  canonicalCylinderWitness,
+  canonicalOpenEdgeWitness,
+  canonicalPlaneWitness,
+  edgeCandidate as occtEdgeCandidate,
+  faceCandidate as occtFaceCandidate,
+  hashOnlyOcctLineage,
+  occtSurfaceClosure,
+  propagateRigidTransformLineage,
+  quantizedTopologyPoint,
+  referenceForOcctCandidate,
+  resolveOcctTopologyReference,
+  semanticPrimitiveLineage,
+  semanticSweepLineage,
+  type OcctLineageState,
+  type OcctTopologyCandidate,
+  type SweepSemanticDescriptor
+} from './occt-lineage';
+import {
+  resolveFaceAttachment,
+  type FaceAttachmentCandidate
+} from './face-attachment';
 import { importedStepValidationWarning } from './step-import';
 
 const TESSELLATION_DEFLECTION = 0.08;
@@ -68,6 +96,8 @@ function uniformScaleTransform(factor: number): number[] {
 
 interface OcctBuildResult {
   shapes: Map<BodyId, ShapeHandle>;
+  lineages: Map<BodyId, OcctLineageState>;
+  sketchBases: Map<SketchId, PlaneBasis>;
   consumed: Set<BodyId>;
   warnings: string[];
 }
@@ -184,15 +214,14 @@ const CURVE_TYPE_NAMES: Record<string, string> = {
   bspline: 'BSPLINE_CURVE'
 };
 
-/**
- * ADR-011 edge fingerprint from OpenCascade queries. Every sampled quantity
- * matches what the BrepKit adapter samples for the same geometry, so a hash
- * persisted under either kernel resolves under the other.
- */
-function edgeFingerprint(kernel: OcctKernel, edge: ShapeHandle): number {
+/** Exact ADR-011 edge witness from OpenCascade queries. */
+function edgeTopologyCandidate(
+  kernel: OcctKernel,
+  edge: ShapeHandle
+): Extract<OcctTopologyCandidate, { kind: 'edge' }> {
   const rawType = kernel.curveType(edge);
   const curveType = CURVE_TYPE_NAMES[rawType] ?? rawType.toUpperCase();
-  const length = kernel.curveLength(edge);
+  const curveLength = kernel.curveLength(edge);
   const { first, last } = kernel.curveParameters(edge);
   const span = last - first;
   const vertices = kernel
@@ -201,13 +230,14 @@ function edgeFingerprint(kernel: OcctKernel, edge: ShapeHandle): number {
   const start = vertices[0] ?? kernel.curvePointAtParam(edge, first);
   const end = vertices[1] ?? start;
   if (!isClosedEdge(start, end)) {
-    return edgeFingerprintOf({
-      closed: false,
-      curveType,
-      length,
-      endpoints: [start, end],
-      midpoint: kernel.curvePointAtParam(edge, first + span / 2)
-    });
+    return occtEdgeCandidate(
+      canonicalOpenEdgeWitness({
+        curveType,
+        length: curveLength,
+        endpoints: [start, end],
+        midpoint: kernel.curvePointAtParam(edge, first + span / 2)
+      })
+    );
   }
   const center = { x: 0, y: 0, z: 0 };
   for (let sample = 0; sample < 4; sample += 1) {
@@ -222,17 +252,25 @@ function edgeFingerprint(kernel: OcctKernel, edge: ShapeHandle): number {
       kernel.curveTangent(edge, first + span / 4)
     )
   );
-  return edgeFingerprintOf({
-    closed: true,
-    curveType,
-    length,
-    center,
-    axis: axis ? canonicalDirection(axis) : null
-  });
+  return occtEdgeCandidate(
+    canonicalClosedEdgeWitness({
+      curveType,
+      length: curveLength,
+      center,
+      axis
+    })
+  );
 }
 
-/** ADR-011 face fingerprint from OpenCascade queries; see edgeFingerprint. */
-function faceFingerprint(kernel: OcctKernel, face: ShapeHandle): number {
+function edgeFingerprint(kernel: OcctKernel, edge: ShapeHandle): number {
+  return edgeTopologyCandidate(kernel, edge).currentHash;
+}
+
+/** Exact ADR-011 face witness from OpenCascade queries. */
+function faceTopologyCandidate(
+  kernel: OcctKernel,
+  face: ShapeHandle
+): Extract<OcctTopologyCandidate, { kind: 'face' }> {
   const surfaceType = kernel.surfaceType(face);
   let perimeter = 0;
   for (const edge of kernel.getSubShapes(face, 'edge')) {
@@ -249,14 +287,14 @@ function faceFingerprint(kernel: OcctKernel, face: ShapeHandle): number {
       centroid.z += position.z / vertices.length;
     }
   }
-  let analytic = '';
+  let analytic: FaceAnalyticWitnessV1 = { kind: 'none' };
   if (surfaceType === 'plane') {
     const bounds = kernel.uvBounds(face);
     const u = (bounds.uMin + bounds.uMax) / 2;
     const v = (bounds.vMin + bounds.vMax) / 2;
     const normal = normalized(kernel.surfaceNormal(face, u, v));
     if (normal) {
-      analytic = planeAnalyticSignature(
+      analytic = canonicalPlaneWitness(
         normal,
         dot(normal, kernel.pointOnSurface(face, u, v))
       );
@@ -275,14 +313,39 @@ function faceFingerprint(kernel: OcctKernel, face: ShapeHandle): number {
         bounds.uMin + Math.PI,
         bounds.vMin
       );
-      analytic = cylinderAnalyticSignature(
+      analytic = canonicalCylinderWitness(
         midpoint(base, opposite),
         axis,
         cylinder.radius
       );
     }
   }
-  return faceFingerprintOf({ surfaceType, perimeter, analytic, centroid });
+  const witness: FaceWitnessV1 = {
+    surfaceType,
+    perimeter: quantizeCoordinate(perimeter),
+    centroid: centroid ? quantizedTopologyPoint(centroid) : null,
+    analytic,
+    closure: occtSurfaceClosure(surfaceType)
+  };
+  return occtFaceCandidate(witness);
+}
+
+function faceFingerprint(kernel: OcctKernel, face: ShapeHandle): number {
+  return faceTopologyCandidate(kernel, face).currentHash;
+}
+
+function topologyCandidatesForShape(
+  kernel: OcctKernel,
+  shape: ShapeHandle
+): OcctTopologyCandidate[] {
+  return [
+    ...kernel
+      .getSubShapes(shape, 'face')
+      .map((face) => faceTopologyCandidate(kernel, face)),
+    ...kernel
+      .getSubShapes(shape, 'edge')
+      .map((edge) => edgeTopologyCandidate(kernel, edge))
+  ];
 }
 
 function edgeHandlesByFingerprint(
@@ -335,6 +398,20 @@ function faceGeometry(
     area: kernel.getSurfaceArea(face),
     center: kernel.getSurfaceCenterOfMass(face)
   };
+  if (surfaceType === 'plane') {
+    const bounds = kernel.uvBounds(face);
+    const normal = normalized(
+      kernel.surfaceNormal(
+        face,
+        (bounds.uMin + bounds.uMax) / 2,
+        (bounds.vMin + bounds.vMax) / 2
+      )
+    );
+    if (normal) {
+      geometry.normal = normal;
+    }
+    return geometry;
+  }
   if (surfaceType !== 'cylinder') {
     return geometry;
   }
@@ -403,6 +480,38 @@ function faceGeometry(
     geometry.editableDimension = 'diameter';
   }
   return geometry;
+}
+
+function faceAttachmentCandidatesForShape(
+  kernel: OcctKernel,
+  shape: ShapeHandle,
+  lineage: OcctLineageState | undefined
+): FaceAttachmentCandidate[] {
+  return kernel.getSubShapes(shape, 'face').map((face) => {
+    const candidate = faceTopologyCandidate(kernel, face);
+    const reference = referenceForOcctCandidate(lineage, candidate);
+    const geometry = faceGeometry(kernel, shape, face);
+    const plane =
+      geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
+        ? { center: geometry.center, normal: geometry.normal }
+        : null;
+    return {
+      ...candidate,
+      witnessVersion: 1 as const,
+      plane,
+      ...(reference
+        ? {
+            lineage: {
+              source: 'derived' as const,
+              identity: {
+                producingFeatureId: reference.producingFeatureId,
+                lineageName: reference.lineageName
+              }
+            }
+          }
+        : {})
+    };
+  });
 }
 
 function requireThroughHole(
@@ -593,19 +702,42 @@ function applyDirectEdit(
   kernel: OcctKernel,
   owner: ShapeHandle,
   operation: DirectEditOperation,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  lineage: OcctLineageState | undefined
 ): ShapeHandle {
   const faces = kernel.getSubShapes(owner, 'face');
-  const matches = faces.filter(
-    (candidate) => faceFingerprint(kernel, candidate) === operation.faceHash
-  );
-  if (matches.length === 0) {
-    throw unresolvedReferenceError('face', operation.faceHash, faces.length);
+  let face: ShapeHandle;
+  if (operation.faceReference) {
+    const resolution = resolveOcctTopologyReference(
+      operation.faceReference,
+      lineage,
+      faces.map((candidate) => faceTopologyCandidate(kernel, candidate)),
+      'direct-edit'
+    );
+    if (
+      resolution.status !== 'resolved' ||
+      typeof resolution.candidate.value !== 'number' ||
+      !faces[resolution.candidate.value]
+    ) {
+      throw new Error(
+        resolution.status === 'failed'
+          ? resolution.message
+          : 'Resolved face lineage did not identify an OCCT face.'
+      );
+    }
+    face = faces[resolution.candidate.value]!;
+  } else {
+    const matches = faces.filter(
+      (candidate) => faceFingerprint(kernel, candidate) === operation.faceHash
+    );
+    if (matches.length === 0) {
+      throw unresolvedReferenceError('face', operation.faceHash, faces.length);
+    }
+    if (matches.length > 1) {
+      throw ambiguousReferenceError('face');
+    }
+    face = matches[0]!;
   }
-  if (matches.length > 1) {
-    throw ambiguousReferenceError('face');
-  }
-  const face = matches[0]!;
 
   let output: ShapeHandle;
   if (operation.kind === 'resize-through-hole') {
@@ -639,14 +771,21 @@ function applyDirectEdit(
       extension
     );
     output = kernel.unifySameDomain(kernel.cut(closed, cutter));
+  } else if (operation.kind === 'resize-cylindrical-face') {
+    const radius = resolveParamValue(
+      operation.radius,
+      scope,
+      'cylindrical radius'
+    );
+    output = resizeOcctAnalyticCylinder(kernel, owner, face, {
+      sourceRadius: operation.sourceRadius,
+      sourceAxisStart: operation.sourceAxisStart,
+      sourceAxisEnd: operation.sourceAxisEnd,
+      concavity: operation.concavity,
+      radius
+    });
   } else if (operation.kind === 'offset-face') {
     output = offsetPlanarFace(kernel, owner, face, operation, scope);
-  } else if (operation.kind !== 'remove-face-feature') {
-    // resize-cylindrical-face is implemented natively on the BrepKit
-    // adapter; the OCCT fallback path does not support it.
-    throw new Error(
-      `Direct edit "${operation.kind}" is not supported by the OpenCascade fallback kernel.`
-    );
   } else {
     const geometry = faceGeometry(kernel, owner, face);
     if (geometry.surfaceType !== operation.sourceSurfaceType) {
@@ -791,6 +930,66 @@ function importedMeshStl(
   ]);
 }
 
+function sweepSemanticDescriptor(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): SweepSemanticDescriptor {
+  if (
+    feature.data.featureKind !== 'extrude' &&
+    feature.data.featureKind !== 'revolve'
+  ) {
+    throw new Error('Expected a sweep feature for semantic lineage.');
+  }
+  const sketch = findSketch(document, feature.data.sketchId);
+  const objectId = sketch?.objectIds[0];
+  const object = objectId ? document.nodes[objectId] : undefined;
+  const sourceKey = objectId ? String(objectId) : String(feature.data.sketchId);
+  const sourceKind =
+    object?.kind === 'sketch-object' ? object.data.objectKind : undefined;
+  if (feature.data.featureKind === 'revolve') {
+    return { kind: 'revolve', sourceKey, sourceKind };
+  }
+  const basis = sketch ? (sketchBases.get(sketch.sketchId) ?? null) : null;
+  const distance = resolveParamValue(feature.data.distance, scope, 'distance');
+  const direction = basis
+    ? {
+        x: basis.normal.x * distance,
+        y: basis.normal.y * distance,
+        z: basis.normal.z * distance
+      }
+    : { x: 0, y: 0, z: distance };
+  if (
+    !basis ||
+    !object ||
+    object.kind !== 'sketch-object' ||
+    object.data.objectKind === 'circle' ||
+    feature.data.profile ||
+    (feature.data.profiles && feature.data.profiles.length > 0)
+  ) {
+    return { kind: 'extrude', sourceKey, sourceKind, direction };
+  }
+  const points = profilePoints(object.data, scope);
+  const sideAnchors = points.map((start, index) => {
+    const end = points[(index + 1) % points.length]!;
+    const profileMidpoint = pointOnPlane(
+      basis,
+      { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+      0
+    );
+    return {
+      lineageName: `sweep.face.side.${sourceKey}.${index}`,
+      midpoint: {
+        x: profileMidpoint.x + direction.x / 2,
+        y: profileMidpoint.y + direction.y / 2,
+        z: profileMidpoint.z + direction.z / 2
+      }
+    };
+  });
+  return { kind: 'extrude', sourceKey, sourceKind, direction, sideAnchors };
+}
+
 /**
  * OpenCascade-backed document rebuild used whenever STEP geometry is present.
  * All bodies in that document are built in the same kernel, so imported solids
@@ -812,6 +1011,59 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
         browserWasmUrl ? { wasm: browserWasmUrl } : undefined
       )
     );
+  }
+
+  private resolveSketchBasisAtHistory(
+    document: ProjectDocument,
+    sketch: SketchNode,
+    result: OcctBuildResult,
+    scope: Record<string, number>
+  ): PlaneBasis {
+    const planeRef = sketch.planeRef;
+    if (planeRef.type !== 'face' || !planeRef.faceReference) {
+      if (planeRef.type === 'face') {
+        result.warnings.push(
+          `Sketch "${sketch.name}": legacy face attachment has no schema-v5 lineage reference; using its stored migration frame.`
+        );
+      }
+      return frameForPlaneRef(planeRef, (value) =>
+        resolveParamValue(value, scope, 'sketch offset')
+      );
+    }
+
+    const sourceShape = result.shapes.get(planeRef.bodyId);
+    if (!sourceShape) {
+      throw new Error(
+        `Sketch "${sketch.name}" cannot attach because source body ${planeRef.bodyId} is unavailable at the sketch's history position.`
+      );
+    }
+    const sourceFeature = listFeaturesInOrder(document).find(
+      (candidate) =>
+        candidate.featureId === planeRef.faceReference?.producingFeatureId
+    );
+    const frame = resolveFaceAttachment({
+      reference: planeRef.faceReference,
+      candidates: faceAttachmentCandidatesForShape(
+        this.kernel,
+        sourceShape,
+        result.lineages.get(planeRef.bodyId)
+      ),
+      snapshot: {
+        sourceArea: planeRef.sourceArea,
+        sourceCenter: planeRef.sourceCenter,
+        sourceNormal: planeRef.sourceNormal,
+        frame: planeRef.frame
+      },
+      sketchName: sketch.name,
+      sourceFeatureName:
+        sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
+    });
+    return {
+      origin: frame.origin,
+      u: frame.xAxis,
+      v: frame.yAxis,
+      normal: frame.zAxis
+    };
   }
 
   private makeProfileFace(
@@ -970,12 +1222,10 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     sketch: SketchNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    basis: PlaneBasis
   ): ShapeHandle {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
-    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
-      resolveParamValue(value, scope, 'sketch offset')
-    );
     const distance = resolveParamValue(data.distance, scope, 'distance');
     const solids = connectedRegionGroups(regions).map((group) => {
       return this.kernel.extrude(
@@ -1011,7 +1261,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
   private buildSweep(
     document: ProjectDocument,
     feature: FeatureNode,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
   ): ShapeHandle {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -1028,7 +1279,19 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       if (!sketchNode) {
         throw new Error('Referenced sketch no longer exists.');
       }
-      return this.buildRegionExtrude(document, sketchNode, feature.data, scope);
+      const basis = sketchBases.get(sketchNode.sketchId);
+      if (!basis) {
+        throw new Error(
+          `Sketch "${sketchNode.name}" plane did not resolve at its history position.`
+        );
+      }
+      return this.buildRegionExtrude(
+        document,
+        sketchNode,
+        feature.data,
+        scope,
+        basis
+      );
     }
     const sketch = findSketch(document, feature.data.sketchId);
     const objectId = sketch?.objectIds[0];
@@ -1036,9 +1299,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     if (!sketch || !object || object.kind !== 'sketch-object') {
       throw new Error('Referenced sketch has no profile.');
     }
-    const basis = frameForPlaneRef(sketch.planeRef, (value) =>
-      resolveParamValue(value, scope, 'sketch offset')
-    );
+    const basis = sketchBases.get(sketch.sketchId);
+    if (!basis) {
+      throw new Error(
+        `Sketch "${sketch.name}" plane did not resolve at its history position.`
+      );
+    }
     const face = this.makeProfileFace(object.data, basis, 0, scope);
 
     if (feature.data.featureKind === 'extrude') {
@@ -1070,6 +1336,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     const { scope, errors } = getParameterScope(document);
     const result: OcctBuildResult = {
       shapes: new Map(),
+      lineages: new Map(),
+      sketchBases: new Map(),
       consumed: new Set(),
       warnings: [...errors]
     };
@@ -1077,22 +1345,53 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     for (const feature of listFeaturesInOrder(document)) {
       try {
         switch (feature.data.featureKind) {
-          case 'sketch':
+          case 'sketch': {
+            const sketch = findSketch(document, feature.data.sketchId);
+            if (!sketch) {
+              throw new Error('Referenced sketch no longer exists.');
+            }
+            result.sketchBases.set(
+              sketch.sketchId,
+              this.resolveSketchBasisAtHistory(document, sketch, result, scope)
+            );
             break;
+          }
           case 'primitive':
             if (feature.bodyId) {
-              result.shapes.set(
+              const shape = this.buildPrimitive(feature.data, scope);
+              result.shapes.set(feature.bodyId, shape);
+              result.lineages.set(
                 feature.bodyId,
-                this.buildPrimitive(feature.data, scope)
+                semanticPrimitiveLineage(
+                  feature.featureId,
+                  feature.data.primitiveKind,
+                  topologyCandidatesForShape(this.kernel, shape)
+                )
               );
             }
             break;
           case 'extrude':
           case 'revolve':
             if (feature.bodyId) {
-              result.shapes.set(
+              const shape = this.buildSweep(
+                document,
+                feature,
+                scope,
+                result.sketchBases
+              );
+              result.shapes.set(feature.bodyId, shape);
+              result.lineages.set(
                 feature.bodyId,
-                this.buildSweep(document, feature, scope)
+                semanticSweepLineage(
+                  feature.featureId,
+                  sweepSemanticDescriptor(
+                    document,
+                    feature,
+                    scope,
+                    result.sketchBases
+                  ),
+                  topologyCandidatesForShape(this.kernel, shape)
+                )
               );
             }
             break;
@@ -1115,6 +1414,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
                 throw new Error('STEP file contains no solids.');
               }
               result.shapes.set(feature.bodyId, shape);
+              result.lineages.set(
+                feature.bodyId,
+                hashOnlyOcctLineage(
+                  'STEP imports have no reliable feature provenance; topology remains hash-only.'
+                )
+              );
             }
             break;
           case 'imported-mesh':
@@ -1122,6 +1427,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               result.shapes.set(
                 feature.bodyId,
                 this.kernel.importStl(importedMeshStl(feature.data))
+              );
+              result.lineages.set(
+                feature.bodyId,
+                hashOnlyOcctLineage(
+                  'Imported meshes do not expose exact B-rep lineage.'
+                )
               );
             }
             break;
@@ -1132,22 +1443,156 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
-            result.shapes.set(
+            const matrix = transformMatrix(
+              {
+                x: resolveParamValue(translation.x, scope, 'X'),
+                y: resolveParamValue(translation.y, scope, 'Y'),
+                z: resolveParamValue(translation.z, scope, 'Z')
+              },
+              {
+                x: resolveParamValue(rotation.x, scope, 'rotate X'),
+                y: resolveParamValue(rotation.y, scope, 'rotate Y'),
+                z: resolveParamValue(rotation.z, scope, 'rotate Z')
+              }
+            );
+            const transformed = this.kernel.transform(target, matrix);
+            result.shapes.set(feature.data.targetBodyId, transformed);
+            result.lineages.set(
               feature.data.targetBodyId,
-              this.kernel.transform(
-                target,
-                transformMatrix(
-                  {
-                    x: resolveParamValue(translation.x, scope, 'X'),
-                    y: resolveParamValue(translation.y, scope, 'Y'),
-                    z: resolveParamValue(translation.z, scope, 'Z')
-                  },
-                  {
-                    x: resolveParamValue(rotation.x, scope, 'rotate X'),
-                    y: resolveParamValue(rotation.y, scope, 'rotate Y'),
-                    z: resolveParamValue(rotation.z, scope, 'rotate Z')
-                  }
-                )
+              propagateRigidTransformLineage(
+                result.lineages.get(feature.data.targetBodyId) ??
+                  hashOnlyOcctLineage('Transform source has no lineage.'),
+                topologyCandidatesForShape(this.kernel, transformed),
+                matrix
+              )
+            );
+            break;
+          }
+          case 'mirror': {
+            if (!feature.bodyId) {
+              throw new Error('Mirror has no result body.');
+            }
+            const storedTarget = result.shapes.get(feature.data.targetBodyId);
+            if (!storedTarget) {
+              throw new Error('Mirror target is unavailable.');
+            }
+            const target = this.collapseToSolid(storedTarget);
+            const plane = feature.data.plane;
+            const mirrored = mirrorOcctSolid(this.kernel, target, {
+              planePoint: {
+                x: resolveParamValue(plane.origin.x, scope, 'plane origin X'),
+                y: resolveParamValue(plane.origin.y, scope, 'plane origin Y'),
+                z: resolveParamValue(plane.origin.z, scope, 'plane origin Z')
+              },
+              planeNormal: {
+                x: resolveParamValue(plane.normal.x, scope, 'plane normal X'),
+                y: resolveParamValue(plane.normal.y, scope, 'plane normal Y'),
+                z: resolveParamValue(plane.normal.z, scope, 'plane normal Z')
+              }
+            });
+            result.shapes.set(feature.bodyId, mirrored);
+            result.lineages.set(
+              feature.bodyId,
+              hashOnlyOcctLineage(
+                'Mirror reflection lineage is not published by this adapter yet; topology remains hash-only.'
+              )
+            );
+            break;
+          }
+          case 'shell': {
+            if (!feature.bodyId) {
+              throw new Error('Shell has no result body.');
+            }
+            const storedTarget = result.shapes.get(feature.data.targetBodyId);
+            if (!storedTarget) {
+              throw new Error('Shell target is unavailable.');
+            }
+            const target = this.collapseToSolid(storedTarget);
+            const targetFaces = this.kernel.getSubShapes(target, 'face');
+            const targetCandidates = targetFaces.map((face) =>
+              faceTopologyCandidate(this.kernel, face)
+            );
+            const selected: ShapeHandle[] = [];
+            for (const hash of feature.data.openingFaceHashes) {
+              const reference = feature.data.openingFaceReferences?.find(
+                (candidate) => candidate.currentHash === hash
+              );
+              if (reference) {
+                const resolution = resolveOcctTopologyReference(
+                  reference,
+                  result.lineages.get(feature.data.targetBodyId),
+                  targetCandidates,
+                  'direct-edit'
+                );
+                if (
+                  resolution.status !== 'resolved' ||
+                  typeof resolution.candidate.value !== 'number' ||
+                  !targetFaces[resolution.candidate.value]
+                ) {
+                  throw new Error(
+                    resolution.status === 'failed'
+                      ? resolution.message
+                      : 'Resolved shell lineage did not identify an OCCT face.'
+                  );
+                }
+                selected.push(targetFaces[resolution.candidate.value]!);
+                continue;
+              }
+              const matches = targetFaces.filter(
+                (candidate) => faceFingerprint(this.kernel, candidate) === hash
+              );
+              if (matches.length === 0) {
+                throw unresolvedReferenceError(
+                  'face',
+                  hash,
+                  targetFaces.length
+                );
+              }
+              if (matches.length > 1) {
+                throw ambiguousReferenceError('face');
+              }
+              selected.push(matches[0]!);
+            }
+            const thickness = resolveParamValue(
+              feature.data.thickness,
+              scope,
+              'shell thickness'
+            );
+            const shelled = shellOcctSolid(this.kernel, target, {
+              openingFaces: selected,
+              thickness
+            });
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, shelled);
+            result.lineages.set(
+              feature.bodyId,
+              hashOnlyOcctLineage(
+                'Shell generated-face history is not published by this adapter yet; topology remains hash-only.'
+              )
+            );
+            break;
+          }
+          case 'solid-offset': {
+            if (!feature.bodyId) {
+              throw new Error('Solid offset has no result body.');
+            }
+            const storedTarget = result.shapes.get(feature.data.targetBodyId);
+            if (!storedTarget) {
+              throw new Error('Solid-offset target is unavailable.');
+            }
+            const target = this.collapseToSolid(storedTarget);
+            const distance = resolveParamValue(
+              feature.data.distance,
+              scope,
+              'solid offset'
+            );
+            const offset = offsetOcctSolid(this.kernel, target, { distance });
+            result.consumed.add(feature.data.targetBodyId);
+            result.shapes.set(feature.bodyId, offset);
+            result.lineages.set(
+              feature.bodyId,
+              hashOnlyOcctLineage(
+                'Solid-offset generated-face history is not published by this adapter yet; topology remains hash-only.'
               )
             );
             break;
@@ -1163,7 +1608,14 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
                 this.kernel,
                 target,
                 feature.data.operation,
-                scope
+                scope,
+                result.lineages.get(feature.data.targetBodyId)
+              )
+            );
+            result.lineages.set(
+              feature.data.targetBodyId,
+              hashOnlyOcctLineage(
+                'Direct-edit output history is incomplete; topology remains hash-only.'
               )
             );
             break;
@@ -1209,9 +1661,7 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
                 (left, right) => {
                   try {
                     return (
-                      this.kernel.getVolume(
-                        this.kernel.common(left, right)
-                      ) > 0
+                      this.kernel.getVolume(this.kernel.common(left, right)) > 0
                     );
                   } catch {
                     return false;
@@ -1241,6 +1691,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               result.consumed.add(bodyId)
             );
             result.shapes.set(feature.bodyId, output);
+            result.lineages.set(
+              feature.bodyId,
+              hashOnlyOcctLineage(
+                'Boolean history precedes production same-domain unification; topology remains hash-only.'
+              )
+            );
             break;
           }
           case 'fillet':
@@ -1255,12 +1711,39 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             const target = this.collapseToSolid(storedTarget);
             const requested = new Set(feature.data.edgeHashes);
             const targetEdges = this.kernel.getSubShapes(target, 'edge');
+            const targetCandidates = targetEdges.map((edge) =>
+              edgeTopologyCandidate(this.kernel, edge)
+            );
             const edgesByHash = edgeHandlesByFingerprint(
               this.kernel,
               targetEdges
             );
             const selected: ShapeHandle[] = [];
             for (const hash of requested) {
+              const reference = feature.data.edgeReferences?.find(
+                (candidate) => candidate.currentHash === hash
+              );
+              if (reference) {
+                const resolution = resolveOcctTopologyReference(
+                  reference,
+                  result.lineages.get(feature.data.targetBodyId),
+                  targetCandidates,
+                  feature.data.featureKind
+                );
+                if (
+                  resolution.status !== 'resolved' ||
+                  typeof resolution.candidate.value !== 'number' ||
+                  !targetEdges[resolution.candidate.value]
+                ) {
+                  throw new Error(
+                    resolution.status === 'failed'
+                      ? resolution.message
+                      : 'Resolved edge lineage did not identify an OCCT edge.'
+                  );
+                }
+                selected.push(targetEdges[resolution.candidate.value]!);
+                continue;
+              }
               const matches = edgesByHash.get(hash) ?? [];
               if (matches.length === 0) {
                 throw unresolvedReferenceError(
@@ -1290,6 +1773,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
                 : this.kernel.chamfer(target, selected, size);
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, modified);
+            result.lineages.set(
+              feature.bodyId,
+              hashOnlyOcctLineage(
+                `${feature.data.featureKind} generated-face history is incomplete; topology remains hash-only.`
+              )
+            );
             break;
           }
           case 'pattern': {
@@ -1355,6 +1844,12 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               feature.bodyId,
               this.kernel.makeCompound(instances)
             );
+            result.lineages.set(
+              feature.bodyId,
+              hashOnlyOcctLineage(
+                'Pattern instance lineage is not published by this adapter yet; topology remains hash-only.'
+              )
+            );
             break;
           }
         }
@@ -1372,7 +1867,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyId: BodyId,
     shape: ShapeHandle,
-    consumed: boolean
+    consumed: boolean,
+    lineage: OcctLineageState | undefined
   ): BodyRepresentation | null {
     const body = listNodesByKind(document, 'body').find(
       (candidate) => candidate.bodyId === bodyId
@@ -1416,13 +1912,16 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       const indexStart = faceGroups[index]!;
       const indexCount = faceGroups[index + 1]!;
       const face = faceShapes[index / 3]!;
-      const hash = faceFingerprint(this.kernel, face);
+      const candidate = faceTopologyCandidate(this.kernel, face);
+      const hash = candidate.currentHash;
+      const reference = referenceForOcctCandidate(lineage, candidate);
       faces.push({
         topologyId: `face:${hash}`,
         hash,
         triangleStart: indexStart / 3,
         triangleCount: indexCount / 3,
-        geometry: faceGeometry(this.kernel, shape, face)
+        geometry: faceGeometry(this.kernel, shape, face),
+        ...(reference?.kind === 'face' ? { reference } : {})
       });
     }
 
@@ -1440,21 +1939,38 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     for (let index = 0; index + 2 < wireframe.edgeGroups.length; index += 3) {
       const pointStart = wireframe.edgeGroups[index]!;
       const pointCount = wireframe.edgeGroups[index + 1]!;
-      const hash = edgeFingerprint(this.kernel, edgeShapes[index / 3]!);
+      const edgeShape = edgeShapes[index / 3]!;
+      const candidate = edgeTopologyCandidate(this.kernel, edgeShape);
+      const hash = candidate.currentHash;
+      const reference = referenceForOcctCandidate(lineage, candidate);
       edges.push({
         topologyId: `edge:${hash}`,
         hash,
         displayRole: occtEdgeDisplayRole(
           this.kernel,
-          edgeShapes[index / 3]!,
+          edgeShape,
           edgeToFaces,
           faceTypesByHash
         ),
         points: Array.from(
           wireframe.points.slice(pointStart, pointStart + pointCount)
-        )
+        ),
+        ...(reference?.kind === 'edge' ? { reference } : {})
       });
     }
+
+    const lineageDiagnostics: BodyTopology['lineageDiagnostics'] =
+      lineage?.status === 'hash-only'
+        ? [
+            {
+              kind: 'body',
+              status: 'hash-only',
+              message: lineage.reason
+            }
+          ]
+        : lineage
+          ? [...lineage.diagnostics]
+          : undefined;
 
     return {
       bodyId,
@@ -1478,7 +1994,13 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
         min: { x: bounds.xmin, y: bounds.ymin, z: bounds.zmin },
         max: { x: bounds.xmax, y: bounds.ymax, z: bounds.zmax }
       },
-      topology: { faces, edges }
+      topology: {
+        faces,
+        edges,
+        ...(lineageDiagnostics && lineageDiagnostics.length > 0
+          ? { lineageDiagnostics }
+          : {})
+      }
     };
   }
 
@@ -1522,7 +2044,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
           document,
           bodyId,
           shape,
-          consumed
+          consumed,
+          build.lineages.get(bodyId)
         );
         if (representation) {
           bodyRepresentations[bodyId] = representation;
