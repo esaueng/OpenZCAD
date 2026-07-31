@@ -1,4 +1,9 @@
 import {
+  applyOrganizationUpdate,
+  compareProjectSummaries,
+  DEFAULT_PROJECT_ORGANIZATION,
+  duplicateProjectName,
+  isPurgeDue,
   nowIso,
   sanitizeFileName,
   toArtifactId,
@@ -9,18 +14,24 @@ import {
   type CreateProjectResponse,
   type CreateUploadSessionRequest,
   type CreateUploadSessionResponse,
+  type DuplicateProjectRequest,
   type FinalizeArtifactRequest,
   type ListArtifactsResponse,
   type ListProjectsResponse,
   type ProjectDocument,
+  type ProjectId,
+  type ProjectOrganization,
   type ProjectSummary,
+  type ReorderProjectsRequest,
   type SaveRevisionRequest,
+  type UpdateProjectRequest,
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
 import {
   createCheckpoint,
   createProjectDocument,
+  duplicateProjectDocument,
   normalizeDocument
 } from '@openzcad/document-core';
 
@@ -57,6 +68,34 @@ export interface PersistenceService {
     userId: UserId,
     request: CreateProjectRequest
   ): Promise<CreateProjectResponse>;
+  /**
+   * Copies a project, including its feature history, into a new one.
+   * @throws ProjectNotFoundError when the source does not exist.
+   */
+  duplicateProject(
+    userId: UserId,
+    request: DuplicateProjectRequest
+  ): Promise<CreateProjectResponse>;
+  /**
+   * Moves a project between shelves, pins it, or repositions it.
+   * @throws ProjectNotFoundError when the project does not exist.
+   */
+  updateProject(
+    userId: UserId,
+    request: UpdateProjectRequest
+  ): Promise<ProjectSummary>;
+  /** Renumbers the listed projects into the order they are given. */
+  reorderProjects(
+    userId: UserId,
+    request: ReorderProjectsRequest
+  ): Promise<ListProjectsResponse>;
+  /**
+   * Destroys a project and everything hanging off it, with no recycle bin.
+   * @throws ProjectNotFoundError when the project does not exist.
+   */
+  deleteProject(userId: UserId, projectId: string): Promise<void>;
+  /** Destroys deleted projects whose retention window has run out. */
+  purgeExpiredProjects(userId: UserId): Promise<ProjectId[]>;
   loadProject(
     userId: UserId,
     projectId: string
@@ -95,15 +134,16 @@ export interface PersistenceService {
 
 export class InMemoryPersistenceService implements PersistenceService {
   private readonly projects = new Map<string, ProjectDocument>();
+  private readonly organization = new Map<string, ProjectOrganization>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
     return {
-      projects: Array.from(this.projects.values())
-        .filter((document) => document.ownerUserId === userId)
-        .map((document) => summarizeDocument(document))
+      projects: this.ownedProjects(userId)
+        .map((document) => this.summarize(document))
+        .sort(compareProjectSummaries)
     };
   }
 
@@ -114,9 +154,92 @@ export class InMemoryPersistenceService implements PersistenceService {
     const document = createProjectDocument(request.name, userId, request.units);
     this.projects.set(document.projectId, document);
     return {
-      project: summarizeDocument(document),
+      project: this.summarize(document),
       document
     };
+  }
+
+  async duplicateProject(
+    userId: UserId,
+    request: DuplicateProjectRequest
+  ): Promise<CreateProjectResponse> {
+    const source = this.projects.get(request.projectId);
+    if (!source || source.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const owned = this.ownedProjects(userId);
+    const name =
+      request.name ??
+      duplicateProjectName(
+        source.name,
+        owned.map((document) => document.name)
+      );
+    const document = duplicateProjectDocument(source, name, userId);
+    this.projects.set(document.projectId, document);
+    // A copy lands next to its original rather than at the top of the shelf,
+    // which is where you go looking for it. It starts unpinned and active: the
+    // point of a duplicate is to diverge from the original, not to inherit its
+    // place on the desk.
+    this.organization.set(document.projectId, {
+      ...DEFAULT_PROJECT_ORGANIZATION,
+      sortOrder: this.organizationOf(request.projectId).sortOrder
+    });
+    return { project: this.summarize(document), document };
+  }
+
+  async updateProject(
+    userId: UserId,
+    request: UpdateProjectRequest
+  ): Promise<ProjectSummary> {
+    const document = this.projects.get(request.projectId);
+    if (!document || document.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    this.organization.set(
+      request.projectId,
+      applyOrganizationUpdate(this.organizationOf(request.projectId), request)
+    );
+    return this.summarize(document);
+  }
+
+  async reorderProjects(
+    userId: UserId,
+    request: ReorderProjectsRequest
+  ): Promise<ListProjectsResponse> {
+    request.projectIds.forEach((projectId, index) => {
+      const document = this.projects.get(projectId);
+      if (document?.ownerUserId !== userId) {
+        return;
+      }
+      this.organization.set(projectId, {
+        ...this.organizationOf(projectId),
+        sortOrder: index
+      });
+    });
+    return this.listProjects(userId);
+  }
+
+  async deleteProject(userId: UserId, projectId: string): Promise<void> {
+    const document = this.projects.get(projectId);
+    if (!document || document.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    this.destroyProject(projectId);
+  }
+
+  async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {
+    const purged: ProjectId[] = [];
+    for (const document of this.ownedProjects(userId)) {
+      const organization = this.organizationOf(document.projectId);
+      if (
+        organization.status === 'deleted' &&
+        isPurgeDue(organization.deletedAt)
+      ) {
+        this.destroyProject(document.projectId);
+        purged.push(document.projectId);
+      }
+    }
+    return purged;
   }
 
   async loadProject(
@@ -252,6 +375,40 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     const body = this.uploadBodies.get(artifact.objectKey);
     return body ? { artifact, body } : null;
+  }
+
+  private ownedProjects(userId: UserId): ProjectDocument[] {
+    return Array.from(this.projects.values()).filter(
+      (document) => document.ownerUserId === userId
+    );
+  }
+
+  private organizationOf(projectId: string): ProjectOrganization {
+    return this.organization.get(projectId) ?? DEFAULT_PROJECT_ORGANIZATION;
+  }
+
+  private summarize(document: ProjectDocument): ProjectSummary {
+    return {
+      ...summarizeDocument(document),
+      organization: this.organizationOf(document.projectId)
+    };
+  }
+
+  private destroyProject(projectId: string): void {
+    this.projects.delete(projectId);
+    this.organization.delete(projectId);
+    for (const [artifactId, artifact] of this.artifacts) {
+      if (artifact.projectId === projectId) {
+        this.artifacts.delete(artifactId);
+        this.uploadBodies.delete(artifact.objectKey);
+      }
+    }
+    for (const [sessionId, session] of this.uploads) {
+      if (session.projectId === projectId) {
+        this.uploads.delete(sessionId);
+        this.uploadBodies.delete(session.objectKey);
+      }
+    }
   }
 
   private assertProjectOwner(userId: UserId, projectId: string): void {

@@ -7,16 +7,22 @@ import type {
   CreateProjectResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
+  DuplicateProjectResponse,
   FinalizeArtifactRequest,
   HealthResponse,
   ListProjectsResponse,
   ProjectDocument,
   ListArtifactsResponse,
+  PurgeProjectsResponse,
+  ReorderProjectsRequest,
+  ReorderProjectsResponse,
   SaveAssistantCredentialRequest,
   SaveRevisionRequest,
   StartEmailLoginRequest,
   StartEmailLoginResponse,
   UpdateAppSettingsRequest,
+  UpdateProjectRequest,
+  UpdateProjectResponse,
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
 
@@ -120,6 +126,42 @@ export const api = {
     }),
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
+  duplicateProject: (projectId: string, name?: string) =>
+    requestJson<DuplicateProjectResponse>(
+      `/api/projects/${projectId}/duplicate`,
+      {
+        method: 'POST',
+        body: JSON.stringify(name === undefined ? {} : { name })
+      }
+    ),
+  updateProject: (payload: UpdateProjectRequest) =>
+    requestJson<UpdateProjectResponse>(`/api/projects/${payload.projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    }),
+  reorderProjects: (payload: ReorderProjectsRequest) =>
+    requestJson<ReorderProjectsResponse>('/api/projects/reorder', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  /** Irreversible. Use `updateProject` with status 'deleted' for the bin. */
+  deleteProject: async (projectId: string) => {
+    const response = await fetch(`/api/projects/${projectId}`, {
+      method: 'DELETE',
+      credentials: 'same-origin'
+    });
+    if (!response.ok) {
+      throw new ApiError(
+        response.status,
+        (await response.text()) || `Delete failed (${response.status}).`
+      );
+    }
+  },
+  purgeExpiredProjects: () =>
+    requestJson<PurgeProjectsResponse>('/api/projects/purge', {
+      method: 'POST',
+      body: '{}'
+    }),
   saveRevision: (payload: SaveRevisionRequest) =>
     requestJson<ProjectDocument>(
       `/api/projects/${payload.projectId}/revisions`,
