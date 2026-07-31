@@ -381,10 +381,15 @@ export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
-  const [assistantCollapsed, setAssistantCollapsed] = useState(true);
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
+  // Collapsing the assistant is chrome layout, so it is remembered with the
+  // rest of it rather than reset on every reload.
+  const assistantCollapsed = panelState.assistantCollapsed;
+  const setAssistantCollapsed = useCallback((collapsed: boolean) => {
+    setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
@@ -5884,7 +5889,8 @@ export function App() {
           </ErrorBoundary>
         ) : null
       }
-      assistantHidden={assistantHidden || assistantCollapsed}
+      assistantHidden={assistantHidden}
+      assistantCollapsed={assistantCollapsed}
       statusBar={
         <StatusBar
           status={status}
