@@ -596,19 +596,29 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().listProjects(userId);
     }
-    const rows = await this.env.DB.prepare(
-      `SELECT p.id, p.name, p.updated_at, p.document_json,
-              p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
-       FROM projects p
-       LEFT JOIN project_members pm
-         ON pm.project_id = p.id
-        AND pm.user_id = ?
-        AND pm.role IN ('editor', 'viewer')
-       WHERE p.user_id = ? OR pm.user_id IS NOT NULL
-       ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
+    const statement = isCloudflareFeatureEnabled(
+      this.env,
+      'PROJECT_SHARING_ENABLED'
     )
-      .bind(userId, userId)
-      .all<ProjectRow>();
+      ? this.env.DB.prepare(
+          `SELECT p.id, p.name, p.updated_at, p.document_json,
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+           FROM projects p
+           LEFT JOIN project_members pm
+             ON pm.project_id = p.id
+            AND pm.user_id = ?
+            AND pm.role IN ('editor', 'viewer')
+           WHERE p.user_id = ? OR pm.user_id IS NOT NULL
+           ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
+        ).bind(userId, userId)
+      : this.env.DB.prepare(
+          `SELECT p.id, p.name, p.updated_at, p.document_json,
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+           FROM projects p
+           WHERE p.user_id = ?
+           ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
+        ).bind(userId);
+    const rows = await statement.all<ProjectRow>();
 
     return {
       projects: (rows.results ?? []).flatMap((row: ProjectRow) => {
@@ -1131,6 +1141,24 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string
   ): Promise<ProjectAccess> {
+    if (!isCloudflareFeatureEnabled(this.env, 'PROJECT_SHARING_ENABLED')) {
+      const row = await this.env
+        .DB!.prepare(
+          `SELECT user_id AS owner_user_id
+           FROM projects
+           WHERE id = ? AND user_id = ?`
+        )
+        .bind(projectId, userId)
+        .first<{ owner_user_id: UserId }>();
+      if (!row) {
+        throw new ProjectNotFoundError(projectId);
+      }
+      return {
+        projectId,
+        ownerUserId: row.owner_user_id,
+        role: 'owner'
+      };
+    }
     const row = await this.env
       .DB!.prepare(
         `SELECT p.user_id AS owner_user_id,

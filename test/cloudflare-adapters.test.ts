@@ -154,7 +154,8 @@ describe('cloudflare adapters', () => {
     }));
     const prepare = vi.fn((_query: string) => ({ bind: () => ({ all }) }));
     const service = new D1R2PersistenceService({
-      DB: { prepare } as unknown as D1Database
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
     });
 
     const listed = await service.listProjects(toUserId('user_test'));
@@ -169,6 +170,76 @@ describe('cloudflare adapters', () => {
     expect(prepare.mock.calls[0]?.[0]).toContain(
       'ORDER BY pinned DESC, sort_order ASC, updated_at DESC'
     );
+    expect(prepare.mock.calls[0]?.[0]).toContain('project_members');
+  });
+
+  it('duplicates from D1 without requiring disabled sharing schema', async () => {
+    const userId = toUserId('user_duplicate_owner');
+    const source = createProjectDocument('Bracket', userId);
+    const queries: string[] = [];
+    const run = vi.fn(async () => ({ success: true }));
+    const prepare = vi.fn((query: string) => {
+      queries.push(query);
+      if (query.includes('project_members')) {
+        throw new Error('no such table: project_members');
+      }
+      return {
+        bind: (..._bindings: unknown[]) => ({
+          all: async () => {
+            if (query.includes('SELECT name FROM projects')) {
+              return { results: [{ name: source.name }] };
+            }
+            return {
+              results: [
+                {
+                  id: source.projectId,
+                  name: source.name,
+                  updated_at: source.derived.updatedAt,
+                  document_json: JSON.stringify(source),
+                  status: 'active',
+                  pinned: 0,
+                  sort_order: 7,
+                  deleted_at: null,
+                  archived_at: null
+                }
+              ]
+            };
+          },
+          first: async () => {
+            if (query.includes('SELECT user_id AS owner_user_id')) {
+              return { owner_user_id: userId };
+            }
+            if (query.includes('SELECT document_json FROM projects')) {
+              return { document_json: JSON.stringify(source) };
+            }
+            if (query.includes('SELECT sort_order FROM projects')) {
+              return { sort_order: 7 };
+            }
+            return null;
+          },
+          run
+        })
+      };
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'false'
+    });
+
+    await expect(service.listProjects(userId)).resolves.toMatchObject({
+      projects: [{ projectId: source.projectId, name: 'Bracket' }]
+    });
+    const copy = await service.duplicateProject(userId, {
+      projectId: source.projectId
+    });
+
+    expect(copy.project.projectId).not.toBe(source.projectId);
+    expect(copy.project.name).toBe('Bracket (copy)');
+    expect(copy.document.ownerUserId).toBe(userId);
+    expect(queries).not.toContainEqual(
+      expect.stringContaining('project_members')
+    );
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('destroys a purged project together with everything hanging off it', async () => {
