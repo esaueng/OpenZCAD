@@ -20,30 +20,44 @@
   pointer-events: none;
 }
 
-.cube-face {
+.cube-face,
+.cube-corner {
   pointer-events: auto;
   touch-action: none;
   cursor: grab;
-  /* Dark seams between faces read as the cube's rounded bevels. */
+  /* Dark seams between the opaque facets draw the cube's edges and bevels. */
   stroke: #10151c;
   stroke-width: 2.5;
   stroke-linejoin: round;
   transition: fill var(--dur-fast) ease;
 }
 
-.orientation-cube:active .cube-face {
+.cube-corner {
+  /* Corner facets are small; a thinner seam keeps them from closing up. */
+  stroke-width: 1.8;
+}
+
+.orientation-cube:active .cube-face,
+.orientation-cube:active .cube-corner {
   cursor: grabbing;
 }
 
 /* A CSS rule outranks the presentation attribute the frame loop writes. */
-.cube-face:hover {
+.cube-face:hover,
+.cube-corner:hover {
   fill: #37527a;
 }
 
-.cube-face:focus-visible {
+.cube-face:focus-visible,
+.cube-corner:focus-visible {
   outline: none;
   stroke: var(--color-accent);
   stroke-width: 1.5;
+}
+
+/* The triad is annotation: it must never steal a facet's click. */
+.orientation-triad {
+  pointer-events: none;
 }
 
 .cube-face-label {

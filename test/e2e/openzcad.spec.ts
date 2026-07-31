@@ -2469,6 +2469,27 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   const left = await cameraPosition();
   expect(left![0]!).toBeLessThan(0);
 
+  // The bevelled corner facets reach the diagonal views. From iso the
+  // near corner is almost head-on, so its facet is a large target; landing
+  // on the exact diagonal (|x| = |y| = |z|) separates it from iso's tilt.
+  await page.getByRole('button', { name: /^Isometric view/ }).click();
+  await page.waitForTimeout(900);
+  await widget
+    .getByRole('button', { name: 'Top front right isometric view' })
+    .click();
+  await page.waitForTimeout(900);
+  const diagonalPose = await cameraPose();
+  const diagonal = diagonalPose!.position.map(
+    (coordinate, axis) => coordinate - diagonalPose!.target[axis]!
+  );
+  expect(diagonal[0]!).toBeGreaterThan(0);
+  expect(diagonal[1]!).toBeLessThan(0);
+  expect(diagonal[2]!).toBeGreaterThan(0);
+  expect(Math.abs(diagonal[2]! / diagonal[0]!)).toBeGreaterThan(0.99);
+  expect(Math.abs(diagonal[2]! / diagonal[0]!)).toBeLessThan(1.01);
+  expect(Math.abs(diagonal[1]! / diagonal[0]!)).toBeGreaterThan(0.99);
+  expect(Math.abs(diagonal[1]! / diagonal[0]!)).toBeLessThan(1.01);
+
   // The rotate arrows swing the camera a quarter turn about the world up
   // axis: from iso (x > 0, y < 0), a clockwise model turn lands at y > 0.
   await page.getByRole('button', { name: /^Isometric view/ }).click();

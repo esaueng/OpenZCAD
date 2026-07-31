@@ -22,8 +22,11 @@ import {
   MIN_TWEEN_MS,
   orbitPivotForPoint,
   tweenDurationFor,
+  tweenOrientationFor,
   projectToScreen,
   RightClickGestureTracker,
+  cameraUpForDirection,
+  viewDirectionFor,
   VIEW_DIRECTIONS
 } from './index';
 
@@ -384,6 +387,66 @@ describe('standard views are posed for a Z-up world', () => {
     const normal = new THREE.Vector3(0, 0, 1); // PLANE_BASES.XY
     expect(Math.abs(VIEW_DIRECTIONS.top.dot(normal))).toBeGreaterThan(0.99);
     expect(Math.abs(VIEW_DIRECTIONS.front.dot(normal))).toBeLessThan(0.01);
+  });
+
+  it('agrees on screen-up between top and bottom, so bottom is not rolled', () => {
+    // The original bottom nudge mirrored top's, which arrived at the bottom
+    // view 180° rolled: its face label read upside down.
+    expect(screenBasis(VIEW_DIRECTIONS.top).up.y).toBeCloseTo(1, 3);
+    expect(screenBasis(VIEW_DIRECTIONS.bottom).up.y).toBeCloseTo(1, 3);
+  });
+
+  it('derives camera up as world up projected off the view direction', () => {
+    const front = cameraUpForDirection(VIEW_DIRECTIONS.front);
+    expect(front.z).toBeCloseTo(1, 6);
+    // The derivation must agree with what OrbitControls' lookAt settles on,
+    // or a glide's final frame would roll when the controls take over.
+    for (const direction of Object.values(VIEW_DIRECTIONS)) {
+      const derived = cameraUpForDirection(direction);
+      const settled = screenBasis(direction).up;
+      expect(derived.dot(settled)).toBeGreaterThan(0.999);
+    }
+  });
+
+  it('falls back to +Y screen-up at the exact poles, where both agree', () => {
+    const top = cameraUpForDirection(new THREE.Vector3(0, 0, 1));
+    const bottom = cameraUpForDirection(new THREE.Vector3(0, 0, -1));
+    expect(top.y).toBeCloseTo(1, 6);
+    expect(bottom.y).toBeCloseTo(1, 6);
+  });
+
+  it('builds glide orientations that look along the view with derived roll', () => {
+    for (const direction of Object.values(VIEW_DIRECTIONS)) {
+      const orientation = tweenOrientationFor(direction);
+      const viewAxis = new THREE.Vector3(0, 0, 1).applyQuaternion(orientation);
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
+      expect(viewAxis.dot(direction)).toBeCloseTo(1, 6);
+      expect(up.dot(cameraUpForDirection(direction))).toBeCloseTo(1, 6);
+    }
+  });
+
+  it('keeps the camera on its orbit through a flip to the opposite face', () => {
+    // A straight position lerp between front and back passes through the
+    // model at the midpoint; the slerped orientation keeps the radius.
+    const halfway = tweenOrientationFor(VIEW_DIRECTIONS.front)
+      .clone()
+      .slerp(tweenOrientationFor(VIEW_DIRECTIONS.back), 0.5);
+    const offset = new THREE.Vector3(0, 0, 1).applyQuaternion(halfway);
+    expect(offset.length()).toBeCloseTo(1, 6);
+    expect(Math.abs(offset.y)).toBeLessThan(0.01);
+  });
+
+  it('resolves view targets: named views by table, corners by diagonal', () => {
+    const front = viewDirectionFor('front');
+    expect(front.y).toBeCloseTo(-1, 6);
+    // The table entry is cloned, not handed out to be mutated.
+    front.set(9, 9, 9);
+    expect(VIEW_DIRECTIONS.front.y).toBeCloseTo(-1, 6);
+    const corner = viewDirectionFor({ corner: [1, -1, 1] });
+    const unit = 1 / Math.sqrt(3);
+    expect(corner.x).toBeCloseTo(unit, 6);
+    expect(corner.y).toBeCloseTo(-unit, 6);
+    expect(corner.z).toBeCloseTo(unit, 6);
   });
 });
 

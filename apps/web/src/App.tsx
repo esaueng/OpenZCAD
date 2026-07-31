@@ -181,7 +181,7 @@ import type {
   MoveSnap,
   PickDetail,
   SketchOverlay,
-  StandardView
+  ViewTarget
 } from '@openzcad/viewport';
 import {
   deleteLocalProject,
@@ -488,7 +488,7 @@ export function App() {
   );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
-    view: StandardView;
+    view: ViewTarget;
     nonce: number;
   } | null>(null);
   const [rotateRequest, setRotateRequest] = useState<{
@@ -1677,7 +1677,7 @@ export function App() {
     }
   }
 
-  function requestView(view: StandardView) {
+  function requestView(view: ViewTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
   }
 
