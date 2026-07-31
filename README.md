@@ -60,7 +60,7 @@ Boundaries that hold everywhere:
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
 - Both kernels persist identical topology fingerprints; resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OCCT scheme are rejected with a re-select diagnostic rather than reinterpreted.
-- Schema-v1/v2 documents migrate to v3 on load.
+- Schema-v1 through v3 documents migrate to v4 on load.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
 
@@ -167,12 +167,15 @@ Current assistant limitations:
 
 ## Next milestones
 
-1. Viewport edge-overlay consolidation and selection updates without full scene rebuilds.
-2. Sharing invitations, viewer/editor roles, and edit locks.
-3. Imported-face dimension edits beyond through-holes (blind/counterbored holes, bosses, pockets, tapers); mirror, shell/offset, face-attached sketches.
-4. Persistent naming resilient to upstream topology changes.
-5. Broader AI patch operations as each feature gains a deterministic command contract.
-6. Exact-kernel caching, loading UX, and finer worker bundle splitting.
+Sequencing, ownership, and acceptance gates are detailed in [PLAN.md](PLAN.md); persistent topology lineage is the critical path for modeling, face attachment, and AI.
+
+1. Reliability hardening: cloud-settings offline resume, orientation-cube pointer-lifecycle edges, and component-test infrastructure.
+2. Viewport edge-overlay consolidation and selection updates without full scene rebuilds.
+3. Persistent topology lineage (schema v5): additive lineage references with hash fallback and visible failure, resilient to upstream topology changes.
+4. Sharing invitations, immutable viewer/editor roles enforced server-side, a project-wide edit lease, and conflict recovery with local recovery copies.
+5. Modeling breadth: mirror, shell, uniform solid offset; imported-face dimension edits beyond through-holes (blind/counterbored holes, bosses, pockets, angle-authoritative tapers); true face-attached sketches.
+6. Broader AI patch operations as each feature gains a deterministic command contract, with unified preview/Apply preflight and per-operation flags.
+7. Exact-kernel lazy loading, bounded result caching, and finer worker bundle splitting.
 
 ## License
 
