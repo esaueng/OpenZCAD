@@ -434,6 +434,36 @@ export function cloneDocument(document: ProjectDocument): ProjectDocument {
   return deepClone(document);
 }
 
+/**
+ * An independent copy of `source` under a new project id. The feature tree,
+ * parameters, and command log all come across intact — a duplicate is meant to
+ * be a branching-off point for a variant, so it has to stay as editable and
+ * replayable as the original. Node ids are document-scoped and are therefore
+ * kept, which also keeps every intra-document reference valid.
+ */
+export function duplicateProjectDocument(
+  source: ProjectDocument,
+  name: string,
+  ownerUserId: UserId
+): ProjectDocument {
+  const copy = cloneDocument(normalizeDocument(source));
+  const projectId = toProjectId(createId('proj'));
+  const rootNode = copy.nodes[copy.rootNodeId];
+  if (rootNode?.kind === 'project') {
+    copy.nodes[copy.rootNodeId] = { ...rootNode, projectId, name };
+  }
+  return createCheckpoint(
+    {
+      ...copy,
+      projectId,
+      ownerUserId,
+      name,
+      derived: { ...copy.derived, updatedAt: nowIso() }
+    },
+    `Duplicated from ${source.name}`
+  );
+}
+
 export function getNode<TNode extends DocumentNode>(
   document: ProjectDocument,
   nodeId: string

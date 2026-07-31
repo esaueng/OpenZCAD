@@ -40,6 +40,7 @@ import type {
 } from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
+  duplicateProjectDocument,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -72,6 +73,8 @@ import type {
   FaceGeometry,
   ParamValue,
   ProjectDocument,
+  ProjectOrganization,
+  ProjectStatus,
   ProjectSummary,
   SketchId,
   SketchNode,
@@ -79,6 +82,15 @@ import type {
   SketchPlaneRef,
   TopologySelection,
   UnitSystem
+} from '@openzcad/shared';
+import {
+  applyOrganizationUpdate,
+  compareProjectSummaries,
+  DEFAULT_PROJECT_ORGANIZATION,
+  duplicateProjectName,
+  projectOrganization,
+  toProjectId,
+  TRASH_RETENTION_DAYS
 } from '@openzcad/shared';
 import type {
   AppSettings,
@@ -172,11 +184,19 @@ import type {
   StandardView
 } from '@openzcad/viewport';
 import {
+  deleteLocalProject,
+  listLocalProjectOrganizations,
   listLocalProjects,
   loadLocalProject,
+  purgeExpiredLocalProjects,
+  saveLocalProjectOrganization,
   selectProjectDocument,
   saveLocalProject
 } from './lib/localProjectStore';
+import {
+  applyLocalProjectOrganizations,
+  mergeProjectSummaries
+} from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
 import { errorMessage } from './lib/errors';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
@@ -214,20 +234,115 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'wireframe'
 ];
 
-function mergeProjectSummaries(
-  local: ProjectSummary[],
-  remote: ProjectSummary[]
-): ProjectSummary[] {
-  const merged = new Map(local.map((project) => [project.projectId, project]));
-  for (const project of remote) {
-    const existing = merged.get(project.projectId);
-    if (!existing || project.updatedAt > existing.updatedAt) {
-      merged.set(project.projectId, project);
-    }
-  }
-  return [...merged.values()].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt)
+/** Start-screen summary of a document held on this device. */
+function summarizeLocalDocument(
+  document: ProjectDocument,
+  organization?: ProjectOrganization
+): ProjectSummary {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    ...(organization ? { organization } : {})
+  };
+}
+
+/**
+ * Every project this device can reach. Device shelf state is reconciled before
+ * expired local copies are purged so a temporarily failed cloud mirror cannot
+ * resurrect a project after its local retention window closes.
+ */
+async function loadProjectSummaries(
+  signedIn: boolean
+): Promise<{ projects: ProjectSummary[]; remoteReached: boolean }> {
+  const [local, localOrganizations, remote] = await Promise.all([
+    listLocalProjects().catch(() => []),
+    listLocalProjectOrganizations().catch(
+      () => new Map<string, ProjectOrganization>()
+    ),
+    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+  ]);
+  const remoteProjects = remote?.projects ?? [];
+  const mirrorFailures = remote
+    ? await reconcileRemoteOrganizations(localOrganizations, remoteProjects)
+    : new Set<string>();
+  // While signed in but offline, defer irreversible local purging until the
+  // cloud copy can be reconciled. Otherwise a failed mirror could later make
+  // an active remote row reappear after the local tombstone was destroyed.
+  const purgedProjectIds =
+    !signedIn || remote
+      ? await purgeExpiredLocalProjects(Date.now(), mirrorFailures).catch(
+          () => []
+        )
+      : [];
+  const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
+  const purged = new Set(purgedProjectIds);
+  const projects = applyLocalProjectOrganizations(
+    mergeProjectSummaries(local, remoteProjects),
+    localOrganizations
+  ).filter(
+    (project) =>
+      !purged.has(project.projectId) || remoteIds.has(project.projectId)
   );
+  return { projects, remoteReached: Boolean(remote) };
+}
+
+function sameWritableOrganization(
+  left: ProjectOrganization,
+  right: ProjectOrganization
+): boolean {
+  return (
+    left.status === right.status &&
+    left.pinned === right.pinned &&
+    left.sortOrder === right.sortOrder
+  );
+}
+
+/**
+ * Adopts account metadata only when this device has none. Once the device has
+ * organised a project, its copy stays authoritative and any failed account
+ * mirror is retried on the next successful listing.
+ */
+async function reconcileRemoteOrganizations(
+  local: ReadonlyMap<string, ProjectOrganization>,
+  remote: ProjectSummary[]
+): Promise<Set<string>> {
+  const mirrorFailures = new Set<string>();
+  await Promise.all(
+    remote.map(async (project) => {
+      const localOrganization = local.get(project.projectId);
+      if (!localOrganization) {
+        if (project.organization) {
+          await saveLocalProjectOrganization(
+            project.projectId,
+            project.organization
+          ).catch(() => undefined);
+        }
+        return;
+      }
+      if (
+        sameWritableOrganization(
+          localOrganization,
+          projectOrganization(project)
+        )
+      ) {
+        return;
+      }
+      try {
+        await api.updateProject({
+          projectId: toProjectId(project.projectId),
+          status: localOrganization.status,
+          pinned: localOrganization.pinned,
+          sortOrder: localOrganization.sortOrder
+        });
+      } catch {
+        mirrorFailures.add(project.projectId);
+      }
+    })
+  );
+  return mirrorFailures;
 }
 
 export function App() {
@@ -604,40 +719,34 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
-        const [local, health, rememberedLocal, currentAuth] = await Promise.all(
-          [
-            listLocalProjects().catch(() => []),
-            api.health().catch(() => null),
-            startupProjectId
-              ? loadLocalProject(startupProjectId).catch(() => null)
-              : Promise.resolve(null),
-            api
-              .authConfig()
-              .then((config) => ({
-                config,
-                status: 'ready' as const
-              }))
-              .catch(() => ({
-                config: null,
-                status: 'unavailable' as const
-              }))
-          ]
-        );
+        const [health, rememberedLocal, currentAuth] = await Promise.all([
+          api.health().catch(() => null),
+          startupProjectId
+            ? loadLocalProject(startupProjectId).catch(() => null)
+            : Promise.resolve(null),
+          api
+            .authConfig()
+            .then((config) => ({
+              config,
+              status: 'ready' as const
+            }))
+            .catch(() => ({
+              config: null,
+              status: 'unavailable' as const
+            }))
+        ]);
         const activeSession = await api.session().catch(() => null);
-        const [remote, rememberedRemote, remoteSettings] = activeSession
-          ? await Promise.all([
-              api.listProjects().catch(() => null),
-              startupProjectId
-                ? api.loadProject(startupProjectId).catch(() => null)
-                : Promise.resolve(null),
-              api.getSettings().catch(() => null)
-            ])
-          : [null, null, null];
+        const [listed, rememberedRemote, remoteSettings] = await Promise.all([
+          loadProjectSummaries(Boolean(activeSession)),
+          activeSession && startupProjectId
+            ? api.loadProject(startupProjectId).catch(() => null)
+            : Promise.resolve(null),
+          activeSession ? api.getSettings().catch(() => null) : null
+        ]);
         if (cancelled) {
           return;
         }
-        const remoteProjects = remote?.projects ?? [];
-        const merged = mergeProjectSummaries(local, remoteProjects);
+        const merged = listed.projects;
         const restoredDocument = selectProjectDocument(
           rememberedLocal,
           rememberedRemote
@@ -689,7 +798,7 @@ export function App() {
           clearActiveProject();
         }
         setStatus(
-          activeSession && remote
+          activeSession && listed.remoteReached
             ? `Cloud profile ready · ${merged.length} project(s)`
             : health
               ? `Local workspace · ${merged.length} local project(s)`
@@ -1899,20 +2008,15 @@ export function App() {
         challengeId,
         code
       });
-      const [remoteSettings, localProjects, remoteProjects] = await Promise.all(
-        [
-          api.getSettings(),
-          listLocalProjects().catch(() => []),
-          api.listProjects().catch(() => ({ projects: [] }))
-        ]
-      );
+      const [remoteSettings, listed] = await Promise.all([
+        api.getSettings(),
+        loadProjectSummaries(true)
+      ]);
       sessionRef.current = activeSession;
       setSession(activeSession);
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
-      setProjects(
-        mergeProjectSummaries(localProjects, remoteProjects.projects)
-      );
+      setProjects(listed.projects);
       const activeProjectIsCloud = Boolean(
         doc && remoteVersionsRef.current.has(doc.projectId)
       );
@@ -1937,7 +2041,7 @@ export function App() {
     try {
       await flushCloudSettingsAutosave();
       await api.logout();
-      const localProjects = await listLocalProjects().catch(() => []);
+      const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
       sessionRef.current = null;
       setSession(null);
@@ -1949,7 +2053,7 @@ export function App() {
         cloudSettingsAutosaveTimeoutRef.current = null;
       }
       setCloudAvailable(false);
-      setProjects(localProjects);
+      setProjects(listed.projects);
       setSaveState('offline');
       setSettingsMessage('Signed out · device settings remain active.');
     } catch (error) {
@@ -1999,12 +2103,7 @@ export function App() {
         await saveLocalProject(localDocument);
         hydrateDocument(localDocument);
         setProjects((current) => [
-          {
-            projectId: localDocument.projectId,
-            name: localDocument.name,
-            updatedAt: localDocument.derived.updatedAt,
-            revisionCount: localDocument.checkpoints.length
-          },
+          summarizeLocalDocument(localDocument),
           ...current
         ]);
         setCloudAvailable(false);
@@ -2048,12 +2147,7 @@ export function App() {
       await saveLocalProject(localDocument);
       hydrateDocument(localDocument);
       setProjects((current) => [
-        {
-          projectId: localDocument.projectId,
-          name: localDocument.name,
-          updatedAt: localDocument.derived.updatedAt,
-          revisionCount: localDocument.checkpoints.length
-        },
+        summarizeLocalDocument(localDocument),
         ...current
       ]);
       setCloudAvailable(false);
@@ -2090,12 +2184,7 @@ export function App() {
       hydrateDocument(document);
       setCloudAvailable(false);
       setProjects((current) => [
-        {
-          projectId: document.projectId,
-          name: document.name,
-          updatedAt: document.derived.updatedAt,
-          revisionCount: document.checkpoints.length
-        },
+        summarizeLocalDocument(document),
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
       setStatus(
@@ -2158,16 +2247,268 @@ export function App() {
     setExtrudePreview(null);
     setTool(null);
     try {
-      const [local, remote] = await Promise.all([
-        listLocalProjects(),
-        session ? api.listProjects().catch(() => null) : Promise.resolve(null)
-      ]);
-      const merged = mergeProjectSummaries(local, remote?.projects ?? []);
-      setProjects(merged);
-      setCloudAvailable(Boolean(remote));
-      setStatus(`${merged.length} project(s) available.`);
+      const listed = await loadProjectSummaries(Boolean(session));
+      setProjects(listed.projects);
+      setCloudAvailable(listed.remoteReached);
+      setStatus(`${listed.projects.length} project(s) available.`);
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
+    }
+  }
+
+  /**
+   * Records shelf state in both stores. The device copy is written first and
+   * is the one the UI trusts, so organising a part keeps working with the
+   * cloud unreachable or the project local-only; the account write is a
+   * best-effort mirror for the owner's other devices.
+   */
+  async function persistOrganization(
+    projectId: string,
+    organization: ProjectOrganization
+  ): Promise<void> {
+    // The device copy is authoritative. Do not claim success unless it is
+    // durable locally; a failed account mirror is retried during discovery.
+    await saveLocalProjectOrganization(projectId, organization);
+    setProjects((current) =>
+      current
+        .map((project) =>
+          project.projectId === projectId
+            ? { ...project, organization }
+            : project
+        )
+        .sort(compareProjectSummaries)
+    );
+    if (!session) {
+      return;
+    }
+    await api
+      .updateProject({
+        projectId: toProjectId(projectId),
+        status: organization.status,
+        pinned: organization.pinned,
+        sortOrder: organization.sortOrder
+      })
+      .catch(() => undefined);
+  }
+
+  async function handleMoveProjectToShelf(
+    project: ProjectSummary,
+    status: ProjectStatus
+  ) {
+    try {
+      const organization = applyOrganizationUpdate(
+        projectOrganization(project),
+        { status }
+      );
+      await persistOrganization(project.projectId, organization);
+      setStatus(
+        status === 'deleted'
+          ? `Moved ${project.name} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
+          : status === 'archived'
+            ? `Archived ${project.name}.`
+            : `Restored ${project.name}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not move ${project.name}.`));
+    }
+  }
+
+  async function handleTogglePin(project: ProjectSummary) {
+    try {
+      const current = projectOrganization(project);
+      await persistOrganization(
+        project.projectId,
+        applyOrganizationUpdate(current, { pinned: !current.pinned })
+      );
+      setStatus(
+        current.pinned ? `Unpinned ${project.name}.` : `Pinned ${project.name}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not update ${project.name}.`));
+    }
+  }
+
+  async function handleReorderProjects(projectIds: string[]) {
+    const positions = new Map(projectIds.map((id, index) => [id, index]));
+    const organizations = new Map(
+      projects
+        .filter((project) => positions.has(project.projectId))
+        .map((project) => [
+          project.projectId,
+          {
+            ...projectOrganization(project),
+            sortOrder: positions.get(project.projectId)!
+          }
+        ])
+    );
+    try {
+      await Promise.all(
+        [...organizations].map(([projectId, organization]) =>
+          saveLocalProjectOrganization(projectId, organization)
+        )
+      );
+      setProjects((current) =>
+        current
+          .map((project) => {
+            const organization = organizations.get(project.projectId);
+            return organization ? { ...project, organization } : project;
+          })
+          .sort(compareProjectSummaries)
+      );
+      if (session) {
+        await api
+          .reorderProjects({ projectIds: projectIds.map(toProjectId) })
+          .catch(() => undefined);
+      }
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not reorder the projects.'));
+    }
+  }
+
+  async function handleDuplicateProject(project: ProjectSummary) {
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      if (session) {
+        try {
+          const response = await api.duplicateProject(project.projectId);
+          // Kept on the device too, so the copy opens offline exactly like the
+          // original it was made from.
+          await saveLocalProject(response.document).catch(() => undefined);
+          if (response.project.organization) {
+            await saveLocalProjectOrganization(
+              response.project.projectId,
+              response.project.organization
+            ).catch(() => undefined);
+          }
+          setProjects((current) =>
+            [...current, response.project].sort(compareProjectSummaries)
+          );
+          setStatus(`Duplicated ${project.name} as ${response.project.name}.`);
+          return;
+        } catch (error) {
+          // A project the account has never seen is not a failure — it just
+          // means the device holding it has to make the copy.
+          const missing =
+            error instanceof ApiError &&
+            (error.status === 404 || error.status === 401);
+          if (!missing) {
+            throw error;
+          }
+        }
+      }
+      const source = await loadLocalProject(project.projectId);
+      if (!source) {
+        throw new Error('The project could not be read from this device.');
+      }
+      const copy = duplicateProjectDocument(
+        source,
+        duplicateProjectName(
+          source.name,
+          projects.map((summary) => summary.name)
+        ),
+        session?.userId ?? localUserId
+      );
+      const organization: ProjectOrganization = {
+        ...DEFAULT_PROJECT_ORGANIZATION,
+        sortOrder: projectOrganization(project).sortOrder
+      };
+      await saveLocalProject(copy);
+      await saveLocalProjectOrganization(copy.projectId, organization).catch(
+        () => undefined
+      );
+      setProjects((current) =>
+        [...current, summarizeLocalDocument(copy, organization)].sort(
+          compareProjectSummaries
+        )
+      );
+      setStatus(`Duplicated ${project.name} as ${copy.name}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not duplicate the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Destroys projects in both stores. There is no undo past this point. */
+  async function destroyProjects(targets: ProjectSummary[]): Promise<void> {
+    const outcomes = await Promise.all(
+      targets.map(async (project) => {
+        let failure: unknown;
+        try {
+          await deleteLocalProject(project.projectId);
+        } catch (error) {
+          failure = error;
+        }
+        if (session) {
+          try {
+            await api.deleteProject(project.projectId);
+          } catch (error) {
+            // A signed-in user can still have local-only projects. Missing from
+            // the account is therefore success, but every other failure must be
+            // visible and retryable.
+            if (!(error instanceof ApiError && error.status === 404)) {
+              failure ??= error;
+            }
+          }
+        }
+        return { projectId: project.projectId, failure };
+      })
+    );
+    const destroyed = new Set(
+      outcomes
+        .filter((outcome) => outcome.failure === undefined)
+        .map((outcome) => outcome.projectId)
+    );
+    setProjects((current) =>
+      current.filter((project) => !destroyed.has(project.projectId))
+    );
+    const failed = outcomes.find((outcome) => outcome.failure !== undefined);
+    if (failed) {
+      throw failed.failure;
+    }
+  }
+
+  async function handleDeleteProjectForever(project: ProjectSummary) {
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Permanently delete “${project.name}”? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects([project]);
+      setStatus(`Deleted ${project.name} permanently.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not delete the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEmptyTrash(trashed: ProjectSummary[]) {
+    if (trashed.length === 0) {
+      return;
+    }
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Permanently delete ${trashed.length} project(s) in the trash? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects(trashed);
+      setStatus(`Emptied the trash · ${trashed.length} project(s) deleted.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not empty the trash.'));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -4619,6 +4960,16 @@ export function App() {
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
+          onDuplicate={(project) => void handleDuplicateProject(project)}
+          onMoveToShelf={(project, shelf) =>
+            void handleMoveProjectToShelf(project, shelf)
+          }
+          onTogglePin={(project) => void handleTogglePin(project)}
+          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onDeleteForever={(project) =>
+            void handleDeleteProjectForever(project)
+          }
+          onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
           loadThumbnailBodies={loadThumbnailBodies}
         />
         {settingsOverlay}

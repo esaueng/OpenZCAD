@@ -13,8 +13,11 @@ import {
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
   parseCreateUploadSessionRequest,
+  parseDuplicateProjectRequest,
   parseFinalizeImportRequest,
-  parseSaveRevisionRequest
+  parseReorderProjectsRequest,
+  parseSaveRevisionRequest,
+  parseUpdateProjectRequest
 } from './validation';
 import {
   getAssistantStatus,
@@ -58,6 +61,7 @@ const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
+const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
@@ -353,12 +357,38 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'GET' && pathname === '/api/projects') {
+    // Listing is the one call every client makes on arrival, which makes it
+    // the natural place to collect the bin: retention is measured in days, so
+    // nothing needs a scheduled job to notice a window has closed.
+    await persistence.purgeExpiredProjects(userId);
     return json(await persistence.listProjects(userId));
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
     const payload = parseCreateProjectRequest(await readJsonBody(request));
     return json(await persistence.createProject(userId, payload), 201);
+  }
+
+  // Matched before the single-project routes below, which would otherwise read
+  // "reorder" as a project id.
+  if (request.method === 'POST' && pathname === '/api/projects/reorder') {
+    const payload = parseReorderProjectsRequest(await readJsonBody(request));
+    return json(await persistence.reorderProjects(userId, payload));
+  }
+
+  if (request.method === 'POST' && pathname === '/api/projects/purge') {
+    return json({
+      purgedProjectIds: await persistence.purgeExpiredProjects(userId)
+    });
+  }
+
+  const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);
+  if (request.method === 'POST' && duplicateMatch) {
+    const payload = parseDuplicateProjectRequest(
+      await readJsonBody(request),
+      duplicateMatch[1]!
+    );
+    return json(await persistence.duplicateProject(userId, payload), 201);
   }
 
   if (
@@ -394,6 +424,21 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'GET' && projectMatch) {
     const project = await persistence.loadProject(userId, projectMatch[1]!);
     return project ? json(project) : json({ error: 'Project not found.' }, 404);
+  }
+
+  if (request.method === 'PATCH' && projectMatch) {
+    const payload = parseUpdateProjectRequest(
+      await readJsonBody(request),
+      projectMatch[1]!
+    );
+    return json({ project: await persistence.updateProject(userId, payload) });
+  }
+
+  // DELETE is the irreversible one. Moving a project to the recycle bin is a
+  // PATCH to status='deleted'; this destroys it outright.
+  if (request.method === 'DELETE' && projectMatch) {
+    await persistence.deleteProject(userId, projectMatch[1]!);
+    return new Response(null, { status: 204 });
   }
 
   const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);

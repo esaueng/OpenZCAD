@@ -3,8 +3,10 @@ import worker from '../apps/web/worker/index';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_PROJECT_NAME_LENGTH,
+  projectOrganization,
   type CreateProjectResponse,
-  type ProjectDocument
+  type ProjectDocument,
+  type ProjectSummary
 } from '@openzcad/shared';
 
 const env = {
@@ -60,6 +62,13 @@ function post(path: string, body: unknown): Request {
   });
 }
 
+function patch(path: string, body: unknown): Request {
+  return new Request(`https://example.com${path}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body)
+  });
+}
+
 async function createProject(name: string): Promise<CreateProjectResponse> {
   const response = await worker.fetch(post('/api/projects', { name }), env);
   expect(response.status).toBe(201);
@@ -82,6 +91,132 @@ describe('worker api routes', () => {
         (project) => project.projectId === created.project.projectId
       )
     ).toBe(true);
+  });
+
+  it('duplicates, archives, bins, restores, and destroys a project', async () => {
+    const created = await createProject('Shelf Test');
+    const projectId = created.project.projectId;
+
+    const duplicated = await worker.fetch(
+      post(`/api/projects/${projectId}/duplicate`, {}),
+      env
+    );
+    expect(duplicated.status).toBe(201);
+    const copy = (await duplicated.json()) as CreateProjectResponse;
+    expect(copy.project.projectId).not.toBe(projectId);
+    expect(copy.project.name).toBe('Shelf Test (copy)');
+
+    const archived = await worker.fetch(
+      patch(`/api/projects/${projectId}`, { status: 'archived' }),
+      env
+    );
+    expect(archived.status).toBe(200);
+    const { project: archivedProject } = (await archived.json()) as {
+      project: ProjectSummary;
+    };
+    expect(projectOrganization(archivedProject).status).toBe('archived');
+    expect(projectOrganization(archivedProject).archivedAt).toBeTruthy();
+
+    const binned = await worker.fetch(
+      patch(`/api/projects/${projectId}`, { status: 'deleted', pinned: true }),
+      env
+    );
+    const { project: binnedProject } = (await binned.json()) as {
+      project: ProjectSummary;
+    };
+    expect(projectOrganization(binnedProject).status).toBe('deleted');
+    expect(projectOrganization(binnedProject).pinned).toBe(true);
+    // Binning hides a project; it must still load until it is purged.
+    expect(
+      (
+        await worker.fetch(
+          new Request(`https://example.com/api/projects/${projectId}`),
+          env
+        )
+      ).status
+    ).toBe(200);
+
+    const destroyed = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${copy.project.projectId}`,
+        {
+          method: 'DELETE'
+        }
+      ),
+      env
+    );
+    expect(destroyed.status).toBe(204);
+    expect(
+      (
+        await worker.fetch(
+          new Request(
+            `https://example.com/api/projects/${copy.project.projectId}`
+          ),
+          env
+        )
+      ).status
+    ).toBe(404);
+  });
+
+  it('reorders projects and reads "reorder" as a route rather than a project id', async () => {
+    const first = await createProject('Order A');
+    const second = await createProject('Order B');
+
+    const response = await worker.fetch(
+      post('/api/projects/reorder', {
+        projectIds: [second.project.projectId, first.project.projectId]
+      }),
+      env
+    );
+    expect(response.status).toBe(200);
+    const { projects } = (await response.json()) as {
+      projects: ProjectSummary[];
+    };
+    const ordered = projects
+      .filter((project) =>
+        [first.project.projectId, second.project.projectId].includes(
+          project.projectId
+        )
+      )
+      .map((project) => project.projectId);
+    expect(ordered).toEqual([
+      second.project.projectId,
+      first.project.projectId
+    ]);
+  });
+
+  it('rejects shelf edits that say nothing or say something invalid', async () => {
+    const created = await createProject('Validation');
+    const projectId = created.project.projectId;
+
+    for (const [body, message] of [
+      [{}, 'Provide at least one of "status", "pinned", or "sortOrder".'],
+      [{ status: 'shredded' }, /"status" must be one of/],
+      [{ pinned: 'yes' }, '"pinned" must be a boolean.'],
+      [{ sortOrder: Number.NaN }, '"sortOrder" must be a finite number.']
+    ] as const) {
+      const response = await worker.fetch(
+        patch(`/api/projects/${projectId}`, body),
+        env
+      );
+      expect(response.status).toBe(400);
+      const { error } = (await response.json()) as { error: string };
+      expect(error).toMatch(message);
+    }
+
+    const repeated = await worker.fetch(
+      post('/api/projects/reorder', { projectIds: [projectId, projectId] }),
+      env
+    );
+    expect(repeated.status).toBe(400);
+  });
+
+  it('reports a shelf edit to a project that does not exist as a 404', async () => {
+    const response = await worker.fetch(
+      patch('/api/projects/proj_missing', { pinned: true }),
+      env
+    );
+    expect(response.status).toBe(404);
   });
 
   it('allows development authentication only in an unguarded development environment', async () => {

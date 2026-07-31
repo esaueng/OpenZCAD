@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   InMemoryPersistenceService,
   ProjectNotFoundError
 } from '@openzcad/persistence';
 import type { RevisionConflictError } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
-import { PROJECT_DOCUMENT_SCHEMA_VERSION, toUserId } from '@openzcad/shared';
+import {
+  projectOrganization,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  toUserId,
+  TRASH_RETENTION_MS
+} from '@openzcad/shared';
 
 const userId = toUserId('user_test');
 
@@ -136,5 +141,179 @@ describe('in-memory persistence', () => {
         document: created.document
       })
     ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.updateProject(intruder, {
+        projectId: created.document.projectId,
+        status: 'deleted'
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.duplicateProject(intruder, {
+        projectId: created.document.projectId
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.deleteProject(intruder, created.document.projectId)
+    ).rejects.toThrow(ProjectNotFoundError);
+    await service.reorderProjects(intruder, {
+      projectIds: [created.document.projectId]
+    });
+    expect(
+      projectOrganization(
+        (await service.listProjects(owner)).projects[0]!
+      ).sortOrder
+    ).toBe(0);
+  });
+});
+
+describe('project shelves', () => {
+  it('copies a project with its feature history under a new id', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Bracket' });
+    const copy = await service.duplicateProject(userId, {
+      projectId: created.document.projectId
+    });
+
+    expect(copy.document.projectId).not.toBe(created.document.projectId);
+    expect(copy.document.name).toBe('Bracket (copy)');
+    expect(copy.document.ownerUserId).toBe(userId);
+    expect(Object.keys(copy.document.nodes)).toEqual(
+      Object.keys(created.document.nodes)
+    );
+    expect(copy.document.checkpoints.at(-1)?.reason).toBe(
+      'Duplicated from Bracket'
+    );
+
+    // The copy is independent: editing it leaves the original alone.
+    await service.saveRevision(userId, {
+      projectId: copy.document.projectId,
+      reason: 'Diverge',
+      expectedVersion: copy.document.version,
+      document: { ...copy.document, name: 'Diverged' }
+    });
+    expect((await service.loadProject(userId, created.document.projectId))?.name)
+      .toBe('Bracket');
+  });
+
+  it('moves a project to the bin and back without destroying it', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Recoverable' });
+
+    const binned = await service.updateProject(userId, {
+      projectId: created.document.projectId,
+      status: 'deleted'
+    });
+    expect(projectOrganization(binned).status).toBe('deleted');
+    expect(projectOrganization(binned).deletedAt).toBeTruthy();
+    // Still fully loadable — the bin hides projects, it does not shred them.
+    expect(
+      await service.loadProject(userId, created.document.projectId)
+    ).not.toBeNull();
+
+    const restored = await service.updateProject(userId, {
+      projectId: created.document.projectId,
+      status: 'active'
+    });
+    expect(projectOrganization(restored).status).toBe('active');
+    expect(projectOrganization(restored).deletedAt).toBeUndefined();
+  });
+
+  it('purges only the binned projects whose window has closed', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const service = new InMemoryPersistenceService();
+      const expired = await service.createProject(userId, { name: 'Expired' });
+      const recent = await service.createProject(userId, { name: 'Recent' });
+      const active = await service.createProject(userId, { name: 'Active' });
+
+      await service.updateProject(userId, {
+        projectId: expired.document.projectId,
+        status: 'deleted'
+      });
+
+      // One full retention window later, a second project goes in the bin. The
+      // first is now due; the second has its whole window ahead of it.
+      vi.setSystemTime(new Date(Date.now() + TRASH_RETENTION_MS));
+      await service.updateProject(userId, {
+        projectId: recent.document.projectId,
+        status: 'deleted'
+      });
+
+      const purged = await service.purgeExpiredProjects(userId);
+      expect(purged).toEqual([expired.document.projectId]);
+      expect(
+        await service.loadProject(userId, expired.document.projectId)
+      ).toBeNull();
+      expect(
+        await service.loadProject(userId, recent.document.projectId)
+      ).not.toBeNull();
+      expect(
+        await service.loadProject(userId, active.document.projectId)
+      ).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('destroys a project and its artifacts on a permanent delete', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Doomed' });
+    const projectId = created.document.projectId;
+    const { session } = await service.createUploadSession(userId, {
+      projectId,
+      fileName: 'part.stl',
+      contentType: 'model/stl',
+      kind: 'stl-import'
+    });
+    await service.putUpload(
+      userId,
+      session.uploadSessionId,
+      new TextEncoder().encode('solid part').buffer
+    );
+    const artifact = await service.finalizeArtifact(userId, {
+      projectId,
+      uploadSessionId: session.uploadSessionId,
+      artifactId: session.artifactId
+    });
+
+    await service.deleteProject(userId, projectId);
+    expect(await service.loadProject(userId, projectId)).toBeNull();
+    expect(
+      (await service.getArtifactMetadata(userId, artifact!.artifactId)).artifact
+    ).toBeNull();
+    await expect(service.deleteProject(userId, projectId)).rejects.toThrow(
+      ProjectNotFoundError
+    );
+  });
+
+  it('orders pinned projects first and honours a manual reorder', async () => {
+    const service = new InMemoryPersistenceService();
+    const first = await service.createProject(userId, { name: 'First' });
+    const second = await service.createProject(userId, { name: 'Second' });
+    const third = await service.createProject(userId, { name: 'Third' });
+
+    const listed = await service.reorderProjects(userId, {
+      projectIds: [
+        third.document.projectId,
+        first.document.projectId,
+        second.document.projectId
+      ]
+    });
+    expect(listed.projects.map((project) => project.name)).toEqual([
+      'Third',
+      'First',
+      'Second'
+    ]);
+
+    await service.updateProject(userId, {
+      projectId: second.document.projectId,
+      pinned: true
+    });
+    expect(
+      (await service.listProjects(userId)).projects.map(
+        (project) => project.name
+      )
+    ).toEqual(['Second', 'Third', 'First']);
   });
 });

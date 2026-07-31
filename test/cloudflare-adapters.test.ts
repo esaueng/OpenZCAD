@@ -95,6 +95,95 @@ describe('cloudflare adapters', () => {
     );
   });
 
+  it('reads shelf state out of the D1 project row', async () => {
+    const document = createProjectDocument('Shelved', toUserId('user_test'));
+    const all = vi.fn(async () => ({
+      results: [
+        {
+          id: document.projectId,
+          name: document.name,
+          updated_at: document.derived.updatedAt,
+          document_json: JSON.stringify(document),
+          status: 'deleted',
+          pinned: 1,
+          sort_order: 4,
+          deleted_at: '2026-01-01T00:00:00.000Z',
+          archived_at: null
+        }
+      ]
+    }));
+    const prepare = vi.fn((_query: string) => ({ bind: () => ({ all }) }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database
+    });
+
+    const listed = await service.listProjects(toUserId('user_test'));
+    expect(listed.projects[0]?.organization).toEqual({
+      status: 'deleted',
+      pinned: true,
+      sortOrder: 4,
+      deletedAt: '2026-01-01T00:00:00.000Z'
+    });
+    // Pinned-first, then manual order: the ordering has to come from SQL,
+    // because the list is not re-sorted after it is read.
+    expect(prepare.mock.calls[0]?.[0]).toContain(
+      'ORDER BY pinned DESC, sort_order ASC, updated_at DESC'
+    );
+  });
+
+  it('destroys a purged project together with everything hanging off it', async () => {
+    const statements: string[] = [];
+    const all = vi.fn(async () => ({ results: [{ id: 'proj_expired' }] }));
+    const batch = vi.fn(async () => []);
+    const prepare = vi.fn((query: string) => {
+      statements.push(query);
+      return { bind: () => ({ all, query }) };
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database
+    });
+
+    expect(await service.purgeExpiredProjects(toUserId('user_test'))).toEqual([
+      'proj_expired'
+    ]);
+    expect(statements[0]).toContain("status = 'deleted'");
+    const destroyed = statements.slice(1).join('\n');
+    for (const table of [
+      'upload_sessions',
+      'artifacts',
+      'revisions',
+      'projects'
+    ]) {
+      expect(destroyed).toContain(`DELETE FROM ${table}`);
+    }
+    expect(batch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps project rows retryable when R2 deletion fails', async () => {
+    const batch = vi.fn(async () => []);
+    const deleteObject = vi.fn(async () => {
+      throw new Error('R2 unavailable');
+    });
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        all: async () => ({
+          results: query.includes('SELECT object_key')
+            ? [{ object_key: 'proj_expired/source.step' }]
+            : [{ id: 'proj_expired' }]
+        })
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      ARTIFACTS: { delete: deleteObject } as unknown as R2Bucket
+    });
+
+    await expect(
+      service.purgeExpiredProjects(toUserId('user_test'))
+    ).rejects.toThrow('R2 unavailable');
+    expect(batch).not.toHaveBeenCalled();
+  });
+
   it('accepts newer collaboration documents and rejects divergent peers', () => {
     const base = createProjectDocument('Room', toUserId('user_room'));
     const first = addPrimitiveFeature(base, {
@@ -200,9 +289,7 @@ describe('cloudflare adapters', () => {
 
     // Both clients join on the shared base first; this is what puts the common
     // ancestor into room history so a three-way merge is possible at all.
-    expect(
-      (await room.fetch(submit('client_a', base, null))).status
-    ).toBe(200);
+    expect((await room.fetch(submit('client_a', base, null))).status).toBe(200);
 
     // A lands first and is stored verbatim, so it needs no document echoed back.
     const ackA = (await (
@@ -273,16 +360,14 @@ describe('cloudflare adapters', () => {
     expect(total).toBeGreaterThan(DURABLE_VALUE_LIMIT_BYTES);
     // ...yet no individual key is anywhere near the per-value ceiling.
     for (const [key, bytes] of sizes) {
-      expect(
-        bytes,
-        `${key} is ${bytes} bytes`
-      ).toBeLessThan(DURABLE_VALUE_LIMIT_BYTES);
+      expect(bytes, `${key} is ${bytes} bytes`).toBeLessThan(
+        DURABLE_VALUE_LIMIT_BYTES
+      );
     }
     expect(values.has('room:latest')).toBe(true);
     expect(
-      Array.from(values.keys()).filter((key) =>
-        key.startsWith('room:history:')
-      ).length
+      Array.from(values.keys()).filter((key) => key.startsWith('room:history:'))
+        .length
     ).toBeGreaterThan(0);
   });
 
@@ -328,9 +413,9 @@ describe('cloudflare adapters', () => {
 
     // The rejection has to happen before any mutation, or the room serves a
     // document that storage never took and reverts on the next eviction.
-    expect(
-      (values.get('room:latest') as ProjectDocument).version
-    ).toBe(accepted.version);
+    expect((values.get('room:latest') as ProjectDocument).version).toBe(
+      accepted.version
+    );
     const restored = new ProjectCollaborationRoom(context, {});
     const state = await restored.fetch(
       roomRequest(accepted, {
