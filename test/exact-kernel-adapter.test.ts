@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -25,6 +26,10 @@ import {
 } from '@openzcad/shared';
 import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  inspectTriangleMeshClosure,
+  isClosedConsistentlyOrientedMesh
+} from '../packages/kernel-adapter/src/boolean-result-validation';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
 const CLOSE_PROJECTED_RADIUS_PX = 1200;
@@ -362,6 +367,95 @@ describe('exact hybrid kernel adapter', () => {
       solid: true,
       valid: true
     });
+  });
+
+  it('keeps a shallow cylinder and circular-extrude union closed', async () => {
+    const withCylinder = addPrimitiveFeature(
+      createProjectDocument('Shallow circular union', toUserId('user_exact')),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 40 }
+      }
+    );
+    const cylinderId = withCylinder.bodyOrder.at(-1)!;
+    const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
+      name: 'Offset circle',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 39.999 },
+      objects: [{ objectKind: 'circle', radius: 25, centerX: 10, centerY: 0 }]
+    });
+    const { document: withExtrude, bodyId: extrudeId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Circular extrude',
+        sketchId,
+        distance: 20
+      }
+    );
+    const manager = new CommandManager(withExtrude);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Shallow circular union',
+        operation: 'union',
+        targetBodyIds: [cylinderId, extrudeId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId]!;
+    const closure = inspectTriangleMeshClosure(
+      body.mesh.vertices,
+      body.mesh.indices
+    );
+
+    expect(derived.warnings).toEqual([]);
+    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
+    expect(body.volume).toBeGreaterThan(0);
+  });
+
+  it('attributes a strict Union validation failure to the feature', async () => {
+    const validate = vi
+      .spyOn(BrepKernel.prototype, 'validateSolid')
+      .mockReturnValue(1);
+    try {
+      const withFirst = addPrimitiveFeature(
+        createProjectDocument('Rejected union', toUserId('user_exact')),
+        {
+          name: 'First',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        }
+      );
+      const firstId = withFirst.bodyOrder.at(-1)!;
+      const withSecond = addPrimitiveFeature(withFirst, {
+        name: 'Second',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+      const secondId = withSecond.bodyOrder.at(-1)!;
+      const positioned = transformBody(withSecond, {
+        name: 'Overlap boxes',
+        targetBodyId: secondId,
+        translation: { x: 5, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      }).document;
+      const manager = new CommandManager(positioned);
+      const document = manager.execute(
+        commandFactories.booleanBodies({
+          name: 'Rejected union',
+          operation: 'union',
+          targetBodyIds: [firstId, secondId]
+        })
+      );
+
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toContain(
+        'Feature "Rejected union": Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.'
+      );
+    } finally {
+      validate.mockRestore();
+    }
   });
 
   it('diagnoses a disconnected BrepKit union without rewriting legacy history', async () => {

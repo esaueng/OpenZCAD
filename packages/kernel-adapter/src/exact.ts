@@ -37,6 +37,12 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
+import {
+  inspectTriangleMeshClosure,
+  isClosedConsistentlyOrientedMesh,
+  selectSafelyUnifiedSolid,
+  type TriangleMeshClosure
+} from './boolean-result-validation';
 import { OpenZCADKernel } from './index';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
@@ -81,6 +87,8 @@ interface MeasuredShape {
   faceCount: number;
   volume: number;
   valid: boolean;
+  strictValid: boolean;
+  meshClosure: TriangleMeshClosure | null;
   bbox: {
     min: Vec3;
     max: Vec3;
@@ -1160,9 +1168,28 @@ function unifyBooleanFaces(kernel: BrepKernel, solid: number): number {
   return solid;
 }
 
+function unifyUnionFaces(kernel: BrepKernel, solid: number): number {
+  return selectSafelyUnifiedSolid(kernel, solid, (candidate) =>
+    isStrictBooleanSolid(kernel, candidate)
+  );
+}
+
 function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
   const fused = kernel.fuseAll(Uint32Array.from(solids));
-  return unifyBooleanFaces(kernel, fused);
+  return unifyUnionFaces(kernel, fused);
+}
+
+/**
+ * Face unification is allowed to replace the raw Union only when the copied
+ * result remains a strict topological solid. The final Union acceptance gate
+ * below separately checks its disposable viewport projection.
+ */
+function isStrictBooleanSolid(kernel: BrepKernel, solid: number): boolean {
+  try {
+    return kernel.validateSolid(solid) === 0;
+  } catch {
+    return false;
+  }
 }
 
 function decodeText(bytes: Uint8Array): string {
@@ -2044,7 +2071,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     return { solids: [output] };
   }
 
-  private measureShape(kernel: BrepKernel, shape: ExactShape): MeasuredShape {
+  private measureShape(
+    kernel: BrepKernel,
+    shape: ExactShape,
+    strictBooleanValidation = false
+  ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
     }
@@ -2057,6 +2088,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     };
     let volume = 0;
     let valid = true;
+    let strictValid = true;
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
@@ -2161,8 +2193,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       valid = valid && kernel.validateSolidRelaxed(solid) === 0;
+      if (strictBooleanValidation) {
+        strictValid = kernel.validateSolid(solid) === 0 && strictValid;
+      }
     }
 
+    const meshClosure = strictBooleanValidation
+      ? inspectTriangleMeshClosure(vertices, indices)
+      : null;
     return {
       vertices,
       indices,
@@ -2170,6 +2208,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       faceCount: topology.faces.length,
       volume,
       valid,
+      strictValid,
+      meshClosure,
       bbox
     };
   }
@@ -2199,11 +2239,33 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           continue;
         }
         const feature = features.get(body.featureId);
-        const measured = this.measureShape(kernel, shape);
         const consumed = build.consumed.has(bodyId);
+        const requiresStrictUnionValidation =
+          !consumed &&
+          feature?.data.featureKind === 'boolean' &&
+          feature.data.operation === 'union';
+        const measured = this.measureShape(
+          kernel,
+          shape,
+          requiresStrictUnionValidation
+        );
         if (!measured.valid) {
           build.warnings.push(
             `Body "${body.name}" failed exact B-rep validation.`
+          );
+        }
+        if (
+          requiresStrictUnionValidation &&
+          feature !== undefined &&
+          !build.warnings.some((warning) =>
+            warning.startsWith(`Feature "${feature.name}":`)
+          ) &&
+          (!measured.strictValid ||
+            measured.meshClosure === null ||
+            !isClosedConsistentlyOrientedMesh(measured.meshClosure))
+        ) {
+          build.warnings.push(
+            `Feature "${feature.name}": Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.`
           );
         }
         bodyRepresentations[bodyId] = {
