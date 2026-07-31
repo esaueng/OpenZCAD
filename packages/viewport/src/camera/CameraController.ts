@@ -1,7 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraPose } from '../render/scene';
-import { orbitPivotForPoint, tweenDurationFor } from './views';
+import {
+  orbitPivotForPoint,
+  tweenDurationFor,
+  tweenOrientationFor
+} from './views';
 import { pointerBindingsFor, type MiddleDragAction } from '../input/bindings';
 import type { ProjectionMode } from '../types';
 
@@ -35,13 +39,23 @@ const GLIDE_DAMPING = 0.15;
 /** Keep low-frame-rate devices from stretching a short CAD glide into a coast. */
 const ORBIT_GLIDE_MAX_MS = 800;
 
+/**
+ * A glide is parameterized as orientation + orbit, not as two positions: the
+ * quaternions slerp while the target and orbit radius lerp. A straight
+ * position lerp degrades exactly where view changes are biggest — flipping to
+ * the opposite face drives the camera through the model at the midpoint, and
+ * near a pole the roll that `lookAt` derives from the interpolated position
+ * snaps in the last few frames.
+ */
 interface CameraTween {
   startTime: number;
   duration: number;
-  fromPosition: THREE.Vector3;
-  toPosition: THREE.Vector3;
   fromTarget: THREE.Vector3;
   toTarget: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  toQuaternion: THREE.Quaternion;
+  fromDistance: number;
+  toDistance: number;
   near: number;
   far: number;
   onComplete?: () => void;
@@ -296,9 +310,21 @@ export class CameraController {
       return;
     }
     // Starting from wherever the camera is right now — mid-glide included —
-    // is what lets one view request interrupt another without a jump.
+    // is what lets one view request interrupt another without a jump. The
+    // from-orientation is the camera's live quaternion for the same reason:
+    // re-deriving it from the position would erase an in-flight roll.
     const fromPosition = this.perspective.position.clone();
     const fromTarget = this.orbit.target.clone();
+    const toOffset = pose.position.clone().sub(pose.target);
+    const toDistance = toOffset.length();
+    // A pose that parks the camera on its own target has no view direction;
+    // hold the current one and let the distance collapse express it.
+    const toDirection =
+      toDistance > 1e-9
+        ? toOffset.divideScalar(toDistance)
+        : new THREE.Vector3(0, 0, 1).applyQuaternion(
+            this.perspective.quaternion
+          );
     this.tween = {
       startTime: performance.now(),
       duration: tweenDurationFor(
@@ -307,10 +333,12 @@ export class CameraController {
         fromTarget,
         pose.target
       ),
-      fromPosition,
-      toPosition: pose.position.clone(),
       fromTarget,
       toTarget: pose.target.clone(),
+      fromQuaternion: this.perspective.quaternion.clone(),
+      toQuaternion: tweenOrientationFor(toDirection),
+      fromDistance: Math.max(fromPosition.distanceTo(fromTarget), 1e-6),
+      toDistance,
       near: pose.near,
       far: pose.far,
       onComplete
@@ -319,7 +347,21 @@ export class CameraController {
   }
 
   cancelTween() {
-    this.tween = null;
+    if (this.tween) {
+      this.tween = null;
+      this.restoreWorldUp();
+    }
+  }
+
+  /**
+   * Hands roll authority back to `lookAt`'s world-up projection once a glide
+   * ends. The glide's final frame was built from the same projection, so
+   * nothing moves — but leaving a slerped up vector behind would roll every
+   * subsequent orbit.
+   */
+  private restoreWorldUp() {
+    this.perspective.up.set(0, 0, 1);
+    this.orthographic.up.copy(this.perspective.up);
   }
 
   /**
@@ -433,17 +475,38 @@ export class CameraController {
     }
     const t = Math.min((now - tween.startTime) / tween.duration, 1);
     const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    this.perspective.position.lerpVectors(
-      tween.fromPosition,
-      tween.toPosition,
+    const quaternion = tween.fromQuaternion
+      .clone()
+      .slerp(tween.toQuaternion, eased);
+    const target = new THREE.Vector3().lerpVectors(
+      tween.fromTarget,
+      tween.toTarget,
       eased
     );
-    this.orbit.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
+    const distance = THREE.MathUtils.lerp(
+      tween.fromDistance,
+      tween.toDistance,
+      eased
+    );
+    // The camera sits along its own view axis: local +Z, taken to world.
+    this.perspective.position
+      .copy(target)
+      .addScaledVector(new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion), distance);
+    this.perspective.quaternion.copy(quaternion);
+    // OrbitControls' update() runs right after this and re-derives the
+    // orientation with `lookAt`. Handing both cameras the slerped frame's own
+    // up axis makes that lookAt reproduce the slerp exactly instead of
+    // stomping its roll with a world-up projection of the mid-glide view.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
+    this.perspective.up.copy(up);
+    this.orthographic.up.copy(up);
+    this.orbit.target.copy(target);
     if (this.mode === 'orthographic') {
       this.syncOrthographic(false);
     }
     if (t >= 1) {
       this.tween = null;
+      this.restoreWorldUp();
       this.perspective.near = tween.near;
       this.perspective.far = tween.far;
       this.perspective.updateProjectionMatrix();
