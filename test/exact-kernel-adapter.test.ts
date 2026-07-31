@@ -2290,6 +2290,176 @@ describe('exact hybrid kernel adapter', () => {
     expect(body?.bbox).toEqual(baseBody.bbox);
   });
 
+  it('keeps all-edges box fillet corners exact and seam-smooth', async () => {
+    // Regression for the fillet corner-patch defect (docs/qa/2026-07-31):
+    // the kernel's vertex blends used to sag up to 5% of R below the corner
+    // ball, fold triangles inward, and meet the fillet cylinders at a 105.8
+    // degree crease — rendered as a pinched blob on every corner. Corner
+    // caps are exact analytic spheres since brepkit#33/#34; this pins that
+    // at the display-mesh level the app actually renders.
+    const radius = 2;
+    const [width, height, depth] = [30, 18, 24];
+    const base = addPrimitiveFeature(
+      createProjectDocument('Fillet corner regression', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width, height, depth }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const baseBody = Object.values(baseDerived.bodyRepresentations)[0]!;
+    const edgeHashes = baseBody.topology!.edges.map((edge) => edge.hash);
+    expect(edgeHashes).toHaveLength(12);
+
+    const filleted = filletEdges(base, {
+      name: 'Fillet all edges',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes,
+      size: radius
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!]!;
+
+    // Closed-form rounded-box volume (Minkowski sum of the inner box with a
+    // ball). The pre-fix corner sag measured 0.137% low, so a 0.05%
+    // relative bound separates cleanly.
+    const inner = [width - 2 * radius, height - 2 * radius, depth - 2 * radius];
+    const exactVolume =
+      inner[0]! * inner[1]! * inner[2]! +
+      2 *
+        radius *
+        (inner[0]! * inner[1]! +
+          inner[1]! * inner[2]! +
+          inner[0]! * inner[2]!) +
+      Math.PI * radius ** 2 * (inner[0]! + inner[1]! + inner[2]!) +
+      (4 / 3) * Math.PI * radius ** 3;
+    expect(Math.abs(body.volume - exactVolume) / exactVolume).toBeLessThan(
+      5e-4
+    );
+
+    // 6 trimmed planes + 12 fillet cylinders + 8 spherical corner caps.
+    const faces = body.topology!.faces;
+    expect(faces).toHaveLength(26);
+    const sphereFaces = faces.filter(
+      (face) => face.geometry?.surfaceType === 'sphere'
+    );
+    expect(sphereFaces).toHaveLength(8);
+
+    const positions = body.mesh.vertices;
+    const indices = body.mesh.indices;
+    const point = (index: number): [number, number, number] => [
+      positions[index * 3]!,
+      positions[index * 3 + 1]!,
+      positions[index * 3 + 2]!
+    ];
+    const sub = (a: number[], b: number[]) => [
+      a[0]! - b[0]!,
+      a[1]! - b[1]!,
+      a[2]! - b[2]!
+    ];
+    const cross = (a: number[], b: number[]) => [
+      a[1]! * b[2]! - a[2]! * b[1]!,
+      a[2]! * b[0]! - a[0]! * b[2]!,
+      a[0]! * b[1]! - a[1]! * b[0]!
+    ];
+    const dot3 = (a: number[], b: number[]) =>
+      a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+    const norm = (a: number[]) => Math.hypot(a[0]!, a[1]!, a[2]!);
+
+    // Every corner-cap vertex sits exactly on its corner ball (the ball
+    // centre is the nearest bbox corner pulled inward by R on each axis)
+    // and every cap triangle faces outward — the old patch folded 7
+    // triangles per corner into the body.
+    const { min, max } = body.bbox;
+    for (const face of sphereFaces) {
+      const start = face.triangleStart * 3;
+      const end = start + face.triangleCount * 3;
+      const sample = point(indices[start]!);
+      const center = [
+        sample[0] - min.x < max.x - sample[0] ? min.x + radius : max.x - radius,
+        sample[1] - min.y < max.y - sample[1] ? min.y + radius : max.y - radius,
+        sample[2] - min.z < max.z - sample[2] ? min.z + radius : max.z - radius
+      ];
+      for (let cursor = start; cursor < end; cursor += 3) {
+        const a = point(indices[cursor]!);
+        const b = point(indices[cursor + 1]!);
+        const c = point(indices[cursor + 2]!);
+        for (const p of [a, b, c]) {
+          // Display vertices are float32 across the WASM boundary, so allow
+          // that quantization — still five orders below the 0.1 mm sag the
+          // old approximate corner patch produced.
+          expect(Math.abs(norm(sub(p, center)) - radius)).toBeLessThan(1e-5);
+        }
+        const normal = cross(sub(b, a), sub(c, a));
+        const mid = [
+          (a[0] + b[0] + c[0]) / 3,
+          (a[1] + b[1] + c[1]) / 3,
+          (a[2] + b[2] + c[2]) / 3
+        ];
+        expect(dot3(normal, sub(mid, center))).toBeGreaterThan(0);
+      }
+    }
+
+    // Every adjacency in this model is tangent (plane–cylinder,
+    // cylinder–sphere), so no seam between triangles of different B-rep
+    // faces may crease beyond a few degrees. The old corner patch met its
+    // cylinders at up to 105.8 degrees.
+    const faceOfTriangle = new Int32Array(indices.length / 3).fill(-1);
+    faces.forEach((face, faceIndex) => {
+      for (
+        let triangle = face.triangleStart;
+        triangle < face.triangleStart + face.triangleCount;
+        triangle += 1
+      ) {
+        faceOfTriangle[triangle] = faceIndex;
+      }
+    });
+    const triangleNormals: number[][] = [];
+    const edgeUse = new Map<string, number[]>();
+    for (let triangle = 0; triangle < indices.length / 3; triangle += 1) {
+      const a = indices[triangle * 3]!;
+      const b = indices[triangle * 3 + 1]!;
+      const c = indices[triangle * 3 + 2]!;
+      const normal = cross(sub(point(b), point(a)), sub(point(c), point(a)));
+      const length = norm(normal) || 1;
+      triangleNormals.push([
+        normal[0]! / length,
+        normal[1]! / length,
+        normal[2]! / length
+      ]);
+      for (const [first, second] of [
+        [a, b],
+        [b, c],
+        [c, a]
+      ] as const) {
+        const key =
+          first < second ? `${first}:${second}` : `${second}:${first}`;
+        const users = edgeUse.get(key) ?? [];
+        users.push(triangle);
+        edgeUse.set(key, users);
+      }
+    }
+    let worstSeamDot = 1;
+    for (const users of edgeUse.values()) {
+      // Watertight display mesh: every edge is shared by exactly two
+      // triangles. A count of one is a crack; three is an overlap fold.
+      expect(users).toHaveLength(2);
+      const [first, second] = users as [number, number];
+      if (faceOfTriangle[first] === faceOfTriangle[second]) {
+        continue;
+      }
+      worstSeamDot = Math.min(
+        worstSeamDot,
+        dot3(triangleNormals[first]!, triangleNormals[second]!)
+      );
+    }
+    const worstSeamDegrees =
+      (Math.acos(Math.max(-1, worstSeamDot)) * 180) / Math.PI;
+    expect(worstSeamDegrees).toBeLessThan(8);
+  });
+
   it('allows a fillet radius larger than half the selected edge length', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Short edge fillet', toUserId('user_exact')),
