@@ -115,6 +115,66 @@ export function isClosedConsistentlyOrientedMesh(
   );
 }
 
+/**
+ * Count face-connected components from a solid's exact edge-to-face adjacency.
+ * This is a stronger contact oracle than vertex/face distance for solids that
+ * meet across the interiors of coplanar faces, where neither operand has a
+ * vertex on the other's boundary.
+ */
+export function countFaceConnectedComponents(
+  faceHandles: ArrayLike<number>,
+  edgeToFaces: Readonly<Record<string, readonly number[]>>
+): number {
+  const faces = [...new Set(Array.from(faceHandles))];
+  if (faces.length === 0) {
+    return 0;
+  }
+
+  const faceSet = new Set(faces);
+  const parent = new Map(faces.map((face) => [face, face]));
+  const rank = new Map(faces.map((face) => [face, 0]));
+  const find = (face: number): number => {
+    let root = face;
+    while (parent.get(root) !== root) {
+      root = parent.get(root)!;
+    }
+    let current = face;
+    while (parent.get(current) !== current) {
+      const next = parent.get(current)!;
+      parent.set(current, root);
+      current = next;
+    }
+    return root;
+  };
+  const union = (left: number, right: number): void => {
+    let leftRoot = find(left);
+    let rightRoot = find(right);
+    if (leftRoot === rightRoot) {
+      return;
+    }
+    if (rank.get(leftRoot)! < rank.get(rightRoot)!) {
+      [leftRoot, rightRoot] = [rightRoot, leftRoot];
+    }
+    parent.set(rightRoot, leftRoot);
+    if (rank.get(leftRoot) === rank.get(rightRoot)) {
+      rank.set(leftRoot, rank.get(leftRoot)! + 1);
+    }
+  };
+
+  for (const adjacentFaces of Object.values(edgeToFaces)) {
+    const connectedFaces = adjacentFaces.filter((face) => faceSet.has(face));
+    const first = connectedFaces[0];
+    if (first === undefined) {
+      continue;
+    }
+    for (let index = 1; index < connectedFaces.length; index += 1) {
+      union(first, connectedFaces[index]!);
+    }
+  }
+
+  return new Set(faces.map((face) => find(face))).size;
+}
+
 interface BooleanFaceUnifier {
   copyAndTransformSolid(solid: number, matrix: Float64Array): number;
   unifyFaces(solid: number): number;

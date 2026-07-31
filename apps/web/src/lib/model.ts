@@ -105,8 +105,12 @@ export function inferContentType(fileName: string): string {
   return 'application/octet-stream';
 }
 
-export function downloadText(name: string, value: string): void {
-  const blob = new Blob([value], { type: 'text/plain' });
+export function downloadText(
+  name: string,
+  value: string,
+  contentType = 'text/plain'
+): void {
+  const blob = new Blob([value], { type: contentType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
