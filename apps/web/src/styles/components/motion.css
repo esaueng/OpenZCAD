@@ -146,10 +146,6 @@ textarea {
   animation: oz-rise var(--dur-base) var(--ease-out);
 }
 
-.viewer-notice > div {
-  animation: oz-rise var(--dur-base) var(--ease-out);
-}
-
 .modal-backdrop {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }

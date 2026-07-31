@@ -381,9 +381,7 @@ export function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
-  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
-  /** Bumped to move focus into the assistant prompt, like `viewRequest`. */
-  const [assistantFocusNonce, setAssistantFocusNonce] = useState(0);
+  const [assistantCollapsed, setAssistantCollapsed] = useState(true);
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
@@ -1844,10 +1842,6 @@ export function App() {
     }
   }
 
-  function focusAssistantPrompt() {
-    setAssistantFocusNonce((nonce) => nonce + 1);
-  }
-
   function openSettings() {
     setSettingsOpen(true);
     setPaletteOpen(false);
@@ -2095,6 +2089,7 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    setAssistantCollapsed(true);
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -5295,15 +5290,6 @@ export function App() {
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
-            onStartPrimitive={launchTool}
-            onAskAssistant={
-              assistantAvailable
-                ? () => {
-                    setAssistantCollapsed(false);
-                    focusAssistantPrompt();
-                  }
-                : null
-            }
             initialView={initialView}
             onViewChange={handleViewportChange}
             onMovePreviewChange={(translation, rotationDeg, snap) => {
@@ -5893,13 +5879,12 @@ export function App() {
               onPreview={handlePreviewPatch}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
-              focusNonce={assistantFocusNonce}
               hidden={assistantHidden}
             />
           </ErrorBoundary>
         ) : null
       }
-      assistantHidden={assistantHidden}
+      assistantHidden={assistantHidden || assistantCollapsed}
       statusBar={
         <StatusBar
           status={status}
