@@ -24,7 +24,7 @@ const CX = 56;
 const CY = 56;
 const SCALE = 21;
 /** Fraction of a half-edge cut off each corner for the isometric facets. */
-const BEVEL = 0.34;
+const BEVEL = 0.42;
 /**
  * The triad is anchored on the cube corner the model origin projects to, and
  * its arms run along the cube edges — through the far corners at 2 half-edges
@@ -330,8 +330,10 @@ export function OrientationWidget({
         line.setAttribute('y1', String(py(TRIAD_ORIGIN)));
         line.setAttribute('x2', String(px(tip)));
         line.setAttribute('y2', String(py(tip)));
+        // +3 re-centers the letter vertically: text-anchor handles x, but
+        // SVG has no dominant-baseline shorthand old enough to trust here.
         label.setAttribute('x', String(px(letter)));
-        label.setAttribute('y', String(py(letter) + 2.5));
+        label.setAttribute('y', String(py(letter) + 3));
         // An axis pointing at the camera collapses its arm to a dot on the
         // corner; fade it out rather than leave a letter floating there.
         const dir = axes[key];
@@ -457,7 +459,7 @@ export function OrientationWidget({
                 x2={CX}
                 y2={CY}
                 stroke={AXIS_COLORS[key]}
-                strokeWidth="1.7"
+                strokeWidth="2.2"
                 strokeLinecap="round"
               />
               <text

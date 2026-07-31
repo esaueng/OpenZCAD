@@ -72,7 +72,7 @@
 }
 
 .orientation-axis-label {
-  font-size: 8px;
+  font-size: 10px;
   font-weight: var(--fw-medium);
   text-anchor: middle;
   user-select: none;
