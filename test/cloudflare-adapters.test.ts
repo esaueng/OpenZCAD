@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createPersistenceService,
+  CLOUDFLARE_BOOLEAN_FLAGS,
   D1R2PersistenceService,
+  isCloudflareFeatureEnabled,
   ProjectCollaborationRoom,
   resolveCollaborationDocument
 } from '@openzcad/cloudflare-adapters';
@@ -37,6 +39,44 @@ function roomRequest(
 }
 
 describe('cloudflare adapters', () => {
+  it('keeps typed feature flags off unless explicitly enabled', () => {
+    expect(CLOUDFLARE_BOOLEAN_FLAGS).toEqual([
+      'PROJECT_SHARING_ENABLED',
+      'PROJECT_EDIT_LEASES_ENFORCED',
+      'AI_PATCH_DIRECT_EDIT_ENABLED',
+      'AI_PATCH_FACE_SKETCH_ENABLED',
+      'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
+      'AI_PATCH_MIRROR_ENABLED',
+      'AI_PATCH_SHELL_ENABLED',
+      'AI_PATCH_SOLID_OFFSET_ENABLED'
+    ]);
+    expect(isCloudflareFeatureEnabled({}, 'PROJECT_SHARING_ENABLED')).toBe(
+      false
+    );
+    expect(
+      isCloudflareFeatureEnabled(
+        { PROJECT_SHARING_ENABLED: 'definitely' },
+        'PROJECT_SHARING_ENABLED'
+      )
+    ).toBe(false);
+    for (const value of ['1', 'true', 'TRUE', ' yes ', 'on']) {
+      expect(
+        isCloudflareFeatureEnabled(
+          { PROJECT_SHARING_ENABLED: value },
+          'PROJECT_SHARING_ENABLED'
+        )
+      ).toBe(true);
+    }
+    for (const value of ['', '0', 'false', 'no', 'off']) {
+      expect(
+        isCloudflareFeatureEnabled(
+          { PROJECT_SHARING_ENABLED: value },
+          'PROJECT_SHARING_ENABLED'
+        )
+      ).toBe(false);
+    }
+  });
+
   it('falls back to in-memory persistence when D1 is absent', async () => {
     const service = createPersistenceService({ ENVIRONMENT: 'beta' });
     const created = await service.createProject(toUserId('user_test'), {
@@ -442,6 +482,64 @@ describe('cloudflare adapters', () => {
       })
     );
     expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({
+      type: 'error',
+      code: 'document-too-large'
+    });
+  });
+
+  it.each([
+    ['without content-length', undefined],
+    ['with an underreported content-length', '1']
+  ])('counts streamed snapshot bytes %s', async (_label, contentLength) => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Stream Flood Room',
+      toUserId('user_room')
+    );
+    const room = new ProjectCollaborationRoom(context, {});
+    const chunk = new TextEncoder().encode('😀'.repeat(250_000));
+    let pulls = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 3) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-openzcad-user-id': 'user_room',
+      'x-openzcad-display-name': 'Room user'
+    };
+    if (contentLength !== undefined) {
+      headers['content-length'] = contentLength;
+    }
+    const request = new Request(
+      `https://room.test/?projectId=${base.projectId}`,
+      {
+        method: 'POST',
+        headers,
+        body,
+        duplex: 'half'
+      } as RequestInit & { duplex: 'half' }
+    );
+    expect(request.headers.get('content-length')).toBe(contentLength ?? null);
+
+    const response = await room.fetch(request);
+
+    expect(response.status).toBe(413);
+    // The stream queues one chunk ahead, but cancellation prevents the final
+    // pull that request.text() would need in order to reach EOF.
+    expect(pulls).toBe(3);
+    expect(cancelled).toBe(true);
     await expect(response.json()).resolves.toMatchObject({
       type: 'error',
       code: 'document-too-large'

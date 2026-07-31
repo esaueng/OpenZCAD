@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   type MutableRefObject,
@@ -50,14 +51,50 @@ interface FaceSpec {
 }
 
 const FACES: FaceSpec[] = [
-  { view: 'right', opposite: 'left', normal: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
-  { view: 'left', opposite: 'right', normal: [-1, 0, 0], u: [0, -1, 0], v: [0, 0, 1] },
-  { view: 'back', opposite: 'front', normal: [0, 1, 0], u: [-1, 0, 0], v: [0, 0, 1] },
-  { view: 'front', opposite: 'back', normal: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1] },
-  { view: 'top', opposite: 'bottom', normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+  {
+    view: 'right',
+    opposite: 'left',
+    normal: [1, 0, 0],
+    u: [0, 1, 0],
+    v: [0, 0, 1]
+  },
+  {
+    view: 'left',
+    opposite: 'right',
+    normal: [-1, 0, 0],
+    u: [0, -1, 0],
+    v: [0, 0, 1]
+  },
+  {
+    view: 'back',
+    opposite: 'front',
+    normal: [0, 1, 0],
+    u: [-1, 0, 0],
+    v: [0, 0, 1]
+  },
+  {
+    view: 'front',
+    opposite: 'back',
+    normal: [0, -1, 0],
+    u: [1, 0, 0],
+    v: [0, 0, 1]
+  },
+  {
+    view: 'top',
+    opposite: 'bottom',
+    normal: [0, 0, 1],
+    u: [1, 0, 0],
+    v: [0, 1, 0]
+  },
   // Bottom mirrors top left-to-right: both poles share screen-up +Y (the
   // cameraUpForDirection convention), and looking up flips only screen-right.
-  { view: 'bottom', opposite: 'top', normal: [0, 0, -1], u: [-1, 0, 0], v: [0, 1, 0] }
+  {
+    view: 'bottom',
+    opposite: 'top',
+    normal: [0, 0, -1],
+    u: [-1, 0, 0],
+    v: [0, 1, 0]
+  }
 ];
 
 /**
@@ -209,6 +246,7 @@ export function OrientationWidget({
   const faceActions = useRef<StandardView[]>(FACES.map((face) => face.view));
   const dragRef = useRef<CubeDragState | null>(null);
   const suppressFacetClickRef = useRef(false);
+  const onDragEndRef = useRef(onDragEnd);
   const underLayerRef = useRef<SVGGElement | null>(null);
   const overLayerRef = useRef<SVGGElement | null>(null);
   const armGroupRefs = {
@@ -234,10 +272,58 @@ export function OrientationWidget({
   });
 
   useEffect(() => {
+    onDragEndRef.current = onDragEnd;
+  }, [onDragEnd]);
+
+  const finishPointerDrag = useCallback(
+    (pointerId: number | null, cancelled: boolean, releaseCapture: boolean) => {
+      const drag = dragRef.current;
+      if (!drag || (pointerId !== null && drag.pointerId !== pointerId)) {
+        return;
+      }
+
+      // Clear first so releasing capture cannot re-enter through
+      // lostpointercapture and finish the same camera gesture twice.
+      dragRef.current = null;
+      if (cancelled) {
+        // A cancelled native gesture should not turn into a face click. The
+        // next real pointerdown clears this guard before its click can fire.
+        suppressFacetClickRef.current = true;
+      }
+      if (releaseCapture) {
+        try {
+          if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+            drag.captureTarget.releasePointerCapture(drag.pointerId);
+          }
+        } catch {
+          // Capture may already be gone when a window blur or unmount races
+          // the browser's implicit pointer-capture release.
+        }
+      }
+      if (drag.dragging) {
+        onDragEndRef.current();
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const handleWindowBlur = () => finishPointerDrag(null, true, true);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur);
+      finishPointerDrag(null, true, true);
+    };
+  }, [finishPointerDrag]);
+
+  useEffect(() => {
     orientationRef.current = (axes) => {
-      const sx = (p: Vec3) => p[0] * axes.x.x + p[1] * axes.y.x + p[2] * axes.z.x;
-      const sy = (p: Vec3) => p[0] * axes.x.y + p[1] * axes.y.y + p[2] * axes.z.y;
-      const depth = (p: Vec3) => p[0] * axes.x.z + p[1] * axes.y.z + p[2] * axes.z.z;
+      const sx = (p: Vec3) =>
+        p[0] * axes.x.x + p[1] * axes.y.x + p[2] * axes.z.x;
+      const sy = (p: Vec3) =>
+        p[0] * axes.x.y + p[1] * axes.y.y + p[2] * axes.z.y;
+      const depth = (p: Vec3) =>
+        p[0] * axes.x.z + p[1] * axes.y.z + p[2] * axes.z.z;
       const px = (p: Vec3) => CX + SCALE * sx(p);
       const py = (p: Vec3) => CY + SCALE * sy(p);
       const outline = (points: readonly Vec3[]) =>
@@ -366,7 +452,14 @@ export function OrientationWidget({
       lastY: event.clientY,
       dragging: false
     };
-    captureTarget.setPointerCapture(event.pointerId);
+    try {
+      captureTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // If capture cannot be established, abandon this gesture rather than
+      // retaining a drag that can never receive a reliable finish event.
+      dragRef.current = null;
+      suppressFacetClickRef.current = true;
+    }
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
@@ -396,26 +489,6 @@ export function OrientationWidget({
     event.preventDefault();
   }
 
-  function finishPointerDrag(
-    event: ReactPointerEvent<SVGSVGElement>,
-    cancelled = false
-  ) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-    if (drag.dragging) {
-      onDragEnd();
-    }
-    dragRef.current = null;
-    if (cancelled) {
-      suppressFacetClickRef.current = false;
-    }
-    if (drag.captureTarget.hasPointerCapture(event.pointerId)) {
-      drag.captureTarget.releasePointerCapture(event.pointerId);
-    }
-  }
-
   /** Facet click that respects an orbit drag released over the facet. */
   function selectFacet(target: ViewTarget) {
     if (suppressFacetClickRef.current) {
@@ -424,9 +497,12 @@ export function OrientationWidget({
     }
     onSelectView(target);
   }
-
   return (
-    <div className="orientation-widget" role="group" aria-label="View orientation">
+    <div
+      className="orientation-widget"
+      role="group"
+      aria-label="View orientation"
+    >
       <button
         type="button"
         className="orientation-roll"
@@ -443,8 +519,13 @@ export function OrientationWidget({
         height="112"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={(event) => finishPointerDrag(event)}
-        onPointerCancel={(event) => finishPointerDrag(event, true)}
+        onPointerUp={(event) => finishPointerDrag(event.pointerId, false, true)}
+        onPointerCancel={(event) =>
+          finishPointerDrag(event.pointerId, true, true)
+        }
+        onLostPointerCapture={(event) =>
+          finishPointerDrag(event.pointerId, true, false)
+        }
       >
         <title>Drag to rotate the view</title>
         {/* Occluded triad arms live under the opaque facets, which is what

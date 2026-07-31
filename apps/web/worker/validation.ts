@@ -257,7 +257,9 @@ export function parseCreateUploadSessionRequest(
     throw badRequest(`"kind" must be one of: ${ARTIFACT_KINDS.join(', ')}.`);
   }
   const metadata =
-    record.metadata === undefined ? {} : asRecord(record.metadata, '"metadata"');
+    record.metadata === undefined
+      ? {}
+      : asRecord(record.metadata, '"metadata"');
   if (JSON.stringify(metadata).length > 4_000) {
     throw badRequest('"metadata" is too large.');
   }
@@ -269,7 +271,9 @@ export function parseCreateUploadSessionRequest(
         typeof value !== 'boolean'
     )
   ) {
-    throw badRequest('"metadata" values must be strings, numbers, or booleans.');
+    throw badRequest(
+      '"metadata" values must be strings, numbers, or booleans.'
+    );
   }
   return {
     projectId: toProjectId(requireString(record, 'projectId', MAX_NAME_LENGTH)),

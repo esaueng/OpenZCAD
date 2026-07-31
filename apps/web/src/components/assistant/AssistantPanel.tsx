@@ -77,7 +77,7 @@ interface AssistantPanelProps {
   /** Returns false when the patch could not be applied, so the panel can say so. */
   onApply(proposal: CadPatchProposal): Promise<boolean>;
   /** Returns false when the patch could not be previewed. */
-  onPreview(proposal: CadPatchProposal | null): boolean;
+  onPreview(proposal: CadPatchProposal | null): Promise<boolean>;
   collapsed: boolean;
   onCollapsedChange(collapsed: boolean): void;
   /**
@@ -413,7 +413,7 @@ export function AssistantPanel({
       setNotice(null);
       setProgress({ stage: 'reading', text: '' });
       // Drop any live preview: it belongs to a proposal this turn supersedes.
-      onPreview(null);
+      void onPreview(null);
       dispatch({ type: 'preview', entryId: null });
       dispatch({
         type: 'submit',
@@ -513,7 +513,7 @@ export function AssistantPanel({
 
   function clearThread() {
     stopThinking();
-    onPreview(null);
+    void onPreview(null);
     dispatch({ type: 'reset' });
     clearAssistantThread(projectId);
     setNotice(null);
@@ -561,13 +561,13 @@ export function AssistantPanel({
     }
   }
 
-  function previewProposal(entryId: string, proposal: CadPatchProposal) {
+  async function previewProposal(entryId: string, proposal: CadPatchProposal) {
     if (conversation.previewEntryId === entryId) {
-      onPreview(null);
+      await onPreview(null);
       dispatch({ type: 'preview', entryId: null });
       return;
     }
-    if (!onPreview(proposal)) {
+    if (!(await onPreview(proposal))) {
       setNotice(
         'That patch could not be previewed. See the status bar for details.'
       );
@@ -582,7 +582,7 @@ export function AssistantPanel({
     }
     applyingEntryRef.current = entryId;
     setApplyingEntryId(entryId);
-    onPreview(null);
+    void onPreview(null);
     dispatch({ type: 'preview', entryId: null });
     // A patch can still fail here — an expression that will not evaluate, or a
     // body an earlier operation consumed. Leave the card open when it does
@@ -697,13 +697,15 @@ export function AssistantPanel({
             busy={thinking || applyingEntryId !== null}
             applying={applyingEntryId === entry.id}
             previewing={conversation.previewEntryId === entry.id}
-            onPreview={() => previewProposal(entry.id, entry.proposal)}
+            onPreview={() => {
+              void previewProposal(entry.id, entry.proposal);
+            }}
             onApply={() => {
               void applyProposal(entry.id, entry.proposal);
             }}
             onReject={() => {
               if (conversation.previewEntryId === entry.id) {
-                onPreview(null);
+                void onPreview(null);
               }
               dispatch({
                 type: 'resolve-proposal',

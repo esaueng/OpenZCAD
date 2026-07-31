@@ -38,6 +38,7 @@ interface TopBarProps {
   onExportDiagnostics(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
+  onOpenSharing(): void;
   onOpenSettings(): void;
 }
 
@@ -61,6 +62,7 @@ export function TopBar({
   onExportDiagnostics,
   onRenameProject,
   onGoHome,
+  onOpenSharing,
   onOpenSettings
 }: TopBarProps) {
   const [editingProjectName, setEditingProjectName] = useState(false);
@@ -307,9 +309,13 @@ export function TopBar({
           {session.displayName}
         </span>
       )}
-      <span
+      <button
+        type="button"
         className={`collaboration-state ${collaborationStatus}`}
-        title={`Collaboration: ${collaborationStatus}`}
+        title={`Project sharing · collaboration: ${collaborationStatus}`}
+        aria-label="Open project sharing"
+        disabled={!projectName || !session}
+        onClick={onOpenSharing}
       >
         <Users size={13} aria-hidden="true" />
         {collaborationStatus === 'live'
@@ -323,7 +329,7 @@ export function TopBar({
                 : collaborationStatus === 'update-required'
                   ? 'Update required'
                   : collaborationStatus}
-      </span>
+      </button>
       <button
         className="icon-button"
         type="button"

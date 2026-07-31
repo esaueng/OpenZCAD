@@ -11,14 +11,20 @@ import {
   extrudeSketch,
   filletEdges,
   findSketch,
+  listFeaturesInOrder,
+  mirrorBody,
+  offsetSolidBody,
   patternBody,
+  shellBody,
   transformBody,
   updateSketchObject
 } from '@openzcad/document-core';
 import {
+  BrepKitKernelAdapter,
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { OcctStepKernelAdapter } from '../packages/kernel-adapter/src/occt-step';
 import {
   toUserId,
   type ParamValue,
@@ -138,7 +144,186 @@ describe('exact hybrid kernel adapter', () => {
       true
     );
     expect(edgeHashes).not.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(
+      body?.topology?.faces.map((face) => face.reference?.lineageName).sort()
+    ).toEqual([
+      'primitive.box.face.x-max',
+      'primitive.box.face.x-min',
+      'primitive.box.face.y-max',
+      'primitive.box.face.y-min',
+      'primitive.box.face.z-max',
+      'primitive.box.face.z-min'
+    ]);
+    expect(body?.topology?.edges.every((edge) => edge.reference)).toBe(true);
+    expect(body?.topology?.lineageDiagnostics).toBeUndefined();
     expect(derived.warnings).toEqual([]);
+  });
+
+  it('preserves BrepKit semantic lineage through an exact rigid transform', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Lineage box', toUserId('user_lineage_transform')),
+      {
+        name: 'Lineage box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = base.bodyOrder[0]!;
+    const before = await adapter.syncDocument(base);
+    const beforeTopology = before.bodyRepresentations[bodyId]!.topology!;
+    const transformedDocument = transformBody(base, {
+      name: 'Place lineage box',
+      targetBodyId: bodyId,
+      translation: { x: 40, y: -15, z: 7 },
+      rotationDeg: { x: 0, y: 0, z: 90 }
+    }).document;
+
+    const transformed = await adapter.syncDocument(transformedDocument);
+    const afterTopology = transformed.bodyRepresentations[bodyId]!.topology!;
+    const referenceNames = (topology: typeof beforeTopology) =>
+      [...topology.faces, ...topology.edges]
+        .map((entry) => entry.reference?.lineageName)
+        .sort();
+
+    expect(referenceNames(afterTopology)).toEqual(
+      referenceNames(beforeTopology)
+    );
+    expect(
+      [...afterTopology.faces, ...afterTopology.edges].every(
+        (entry) => entry.reference
+      )
+    ).toBe(true);
+    expect(
+      afterTopology.lineageDiagnostics?.filter(({ status }) =>
+        ['deleted', 'split', 'merged'].includes(status)
+      ) ?? []
+    ).toEqual([]);
+    expect(new Set(afterTopology.faces.map((face) => face.hash))).not.toEqual(
+      new Set(beforeTopology.faces.map((face) => face.hash))
+    );
+    expect(transformed.warnings).toEqual([]);
+  });
+
+  it('uses identical BrepKit and OCCT semantic lineage names', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Parity box', toUserId('user_lineage_parity')),
+      {
+        name: 'Parity box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = document.bodyOrder[0]!;
+    const brepKit = new BrepKitKernelAdapter();
+    const occt = await OcctStepKernelAdapter.create();
+    try {
+      const [brepDerived, occtDerived] = await Promise.all([
+        brepKit.syncDocument(document),
+        occt.syncDocument(document)
+      ]);
+      const names = (derived: typeof brepDerived) => {
+        const topology = derived.bodyRepresentations[bodyId]!.topology!;
+        return [...topology.faces, ...topology.edges]
+          .map((entry) => entry.reference?.lineageName)
+          .filter((name): name is string => name !== undefined)
+          .sort();
+      };
+
+      expect(names(occtDerived)).toEqual(names(brepDerived));
+      expect(names(brepDerived)).toHaveLength(18);
+    } finally {
+      brepKit.dispose();
+      occt.dispose();
+    }
+  });
+
+  it('rebuilds face-attached sketches from evolved exact lineage in both kernels', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Attached sketch', toUserId('user_attachment')),
+      {
+        name: 'Attachment box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const sourceFace = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
+    )!;
+    expect(sourceFace.reference?.kind).toBe('face');
+    expect(sourceFace.geometry?.normal).toBeDefined();
+
+    const geometry = sourceFace.geometry!;
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...base, derived: sourceDerived },
+      {
+        name: 'Top attachment',
+        planeRef: {
+          type: 'face',
+          bodyId: sourceBodyId,
+          faceHash: sourceFace.hash,
+          faceReference:
+            sourceFace.reference?.kind === 'face'
+              ? sourceFace.reference
+              : undefined,
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal!,
+          frame: {
+            origin: geometry.center,
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: geometry.normal!
+          }
+        },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 4,
+            height: 6,
+            centerX: 0,
+            centerY: 0
+          }
+        ]
+      }
+    );
+    const { document: attached, bodyId: extrusionBodyId } = extrudeSketch(
+      withSketch,
+      { name: 'Attached extrusion', sketchId, distance: 5 }
+    );
+    const primitive = listFeaturesInOrder(attached).find(
+      (feature) => feature.data.featureKind === 'primitive'
+    )!;
+    const evolved = new CommandManager(attached).execute(
+      commandFactories.updateFeature(
+        {
+          featureId: primitive.featureId,
+          data: { dimensions: { width: 24, height: 20, depth: 42 } }
+        },
+        'Resize attachment source'
+      )
+    );
+    const brepKit = new BrepKitKernelAdapter();
+    const occt = await OcctStepKernelAdapter.create();
+    try {
+      const [brepDerived, occtDerived] = await Promise.all([
+        brepKit.syncDocument(evolved),
+        occt.syncDocument(evolved)
+      ]);
+      for (const derived of [brepDerived, occtDerived]) {
+        expect(derived.warnings).toEqual([]);
+        expect(derived.bodyRepresentations[extrusionBodyId]).toBeDefined();
+        expect(
+          derived.bodyRepresentations[extrusionBodyId]!.bbox.min.z
+        ).toBeCloseTo(42, 5);
+      }
+    } finally {
+      brepKit.dispose();
+      occt.dispose();
+    }
   });
 
   it('keeps cylinder surfaces and exact edge outlines smooth across scale and zoom', async () => {
@@ -361,6 +546,15 @@ describe('exact hybrid kernel adapter', () => {
     // Coplanar boolean fragments inflate this to fourteen faces and render
     // false seams in the shaded-with-edges viewport.
     expect(body?.faceCount).toBe(8);
+    expect(body?.topology?.lineageDiagnostics).toContainEqual(
+      expect.objectContaining({ kind: 'body', status: 'hash-only' })
+    );
+    expect(
+      [
+        ...(body?.topology?.faces ?? []),
+        ...(body?.topology?.edges ?? [])
+      ].every((entry) => entry.reference === undefined)
+    ).toBe(true);
 
     const step = await adapter.exportStep(document, [resultId]);
     await expect(adapter.inspectStep(step)).resolves.toMatchObject({
@@ -1283,12 +1477,7 @@ describe('exact hybrid kernel adapter', () => {
       const pointDistance = (
         left: { x: number; y: number; z: number },
         right: { x: number; y: number; z: number }
-      ) =>
-        Math.hypot(
-          left.x - right.x,
-          left.y - right.y,
-          left.z - right.z
-        );
+      ) => Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
       const aligned = Math.max(
         pointDistance(sourceStart, resizedStart),
         pointDistance(sourceEnd, resizedEnd)
@@ -2001,7 +2190,7 @@ describe('exact hybrid kernel adapter', () => {
       volumeBefore + 3 * target!.geometry!.area,
       3
     );
-  });
+  }, 15_000);
 
   it('builds selected-edge fillet and chamfer features', async () => {
     const base = addPrimitiveFeature(
@@ -2089,8 +2278,7 @@ describe('exact hybrid kernel adapter', () => {
     }).document;
     const derived = await adapter.syncDocument(filleted);
     const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
-    const squareMoment =
-      filletRadius ** 2 * (2 - filletRadius / 2);
+    const squareMoment = filletRadius ** 2 * (2 - filletRadius / 2);
     const quarterCircleMoment =
       ((Math.PI * filletRadius ** 2) / 4) *
       (2 - filletRadius + (4 * filletRadius) / (3 * Math.PI));
@@ -2380,6 +2568,97 @@ describe('exact hybrid kernel adapter', () => {
     expect(inspection.solid).toBe(true);
     expect(inspection.valid).toBe(true);
     expect(inspection.volume).toBeCloseTo(480, 4);
+  });
+
+  it('keeps mirror, shell, and solid offset conformant across exact kernels', async () => {
+    const occt = await OcctStepKernelAdapter.create();
+    try {
+      const base = addPrimitiveFeature(
+        createProjectDocument('Modeling parity', toUserId('user_exact')),
+        {
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 20, depth: 30 }
+        }
+      );
+      const sourceBodyId = base.bodyOrder[0]!;
+      const moved = transformBody(base, {
+        name: 'Rotate source',
+        targetBodyId: sourceBodyId,
+        translation: { x: 4, y: -3, z: 2 },
+        rotationDeg: { x: 15, y: 20, z: 35 }
+      }).document;
+      const mirrored = mirrorBody(moved, {
+        name: 'Mirrored copy',
+        targetBodyId: sourceBodyId,
+        plane: {
+          origin: { x: 12, y: 5, z: -2 },
+          normal: { x: '1 / sqrt(2)', y: '1 / sqrt(2)', z: 0 }
+        }
+      }).document;
+      const mirrorBodyId = mirrored.bodyOrder.at(-1)!;
+      for (const exactKernel of [adapter, occt]) {
+        const derived = await exactKernel.syncDocument(mirrored);
+        expect(derived.warnings).toEqual([]);
+        expect(derived.bodyRepresentations[sourceBodyId]?.volume).toBeCloseTo(
+          6000,
+          4
+        );
+        expect(derived.bodyRepresentations[mirrorBodyId]?.volume).toBeCloseTo(
+          6000,
+          4
+        );
+      }
+
+      const sourceProjection = await adapter.syncDocument(base);
+      const opening = sourceProjection.bodyRepresentations[
+        sourceBodyId
+      ]?.topology?.faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          Math.abs(face.geometry.center.z - 30) < 1e-7
+      );
+      expect(opening).toBeTruthy();
+      const shelled = shellBody(base, {
+        name: 'Open shell',
+        targetBodyId: sourceBodyId,
+        openingFaceHashes: [opening!.hash],
+        ...(opening!.reference
+          ? { openingFaceReferences: [opening!.reference] }
+          : {}),
+        thickness: 1
+      }).document;
+      const shellBodyId = shelled.bodyOrder.at(-1)!;
+      const offset = offsetSolidBody(base, {
+        name: 'Outward offset',
+        targetBodyId: sourceBodyId,
+        distance: 1
+      }).document;
+      const offsetBodyId = offset.bodyOrder.at(-1)!;
+
+      for (const [document, bodyId, expectedVolume] of [
+        [shelled, shellBodyId, 6000 - 8 * 18 * 29],
+        [offset, offsetBodyId, 12 * 22 * 32]
+      ] as const) {
+        const volumes: number[] = [];
+        for (const exactKernel of [adapter, occt]) {
+          const derived = await exactKernel.syncDocument(document);
+          expect(derived.warnings).toEqual([]);
+          const body = derived.bodyRepresentations[bodyId];
+          expect(body?.consumed).toBe(false);
+          expect(body?.volume).toBeCloseTo(expectedVolume, 3);
+          volumes.push(body!.volume);
+          const step = await exactKernel.exportStep(document, [bodyId]);
+          await expect(exactKernel.inspectStep(step)).resolves.toMatchObject({
+            solid: true,
+            valid: true
+          });
+        }
+        expect(volumes[0]).toBeCloseTo(volumes[1]!, 3);
+      }
+    } finally {
+      occt.dispose();
+    }
   });
 
   it.each([

@@ -20,10 +20,10 @@ describe('in-memory persistence', () => {
     const document = createProjectDocument('Ghost', userId);
     await expect(
       service.saveRevision(userId, {
-      projectId: document.projectId,
-      reason: 'Save',
-      expectedVersion: document.version,
-      document
+        projectId: document.projectId,
+        reason: 'Save',
+        expectedVersion: document.version,
+        document
       })
     ).rejects.toThrow(ProjectNotFoundError);
   });
@@ -47,10 +47,145 @@ describe('in-memory persistence', () => {
     expect(loaded?.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 
+  it('resolves owner, editor, and viewer access without changing ownership', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_owner');
+    const editor = toUserId('user_editor');
+    const viewer = toUserId('user_viewer');
+    const unrelated = toUserId('user_unrelated');
+    const created = await service.createProject(owner, { name: 'Shared' });
+    const projectId = created.document.projectId;
+
+    await service.setProjectMemberRole(owner, projectId, editor, 'editor');
+    await service.setProjectMemberRole(owner, projectId, viewer, 'viewer');
+
+    await expect(
+      service.requireProjectOwner(owner, projectId)
+    ).resolves.toEqual(
+      expect.objectContaining({ ownerUserId: owner, role: 'owner' })
+    );
+    await expect(
+      service.requireProjectEdit(editor, projectId)
+    ).resolves.toEqual(
+      expect.objectContaining({ ownerUserId: owner, role: 'editor' })
+    );
+    await expect(
+      service.requireProjectRead(viewer, projectId)
+    ).resolves.toEqual(
+      expect.objectContaining({ ownerUserId: owner, role: 'viewer' })
+    );
+
+    const edited = await service.saveRevision(editor, {
+      projectId,
+      reason: 'Editor save',
+      expectedVersion: created.document.version,
+      document: { ...created.document, name: 'Edited by member' }
+    });
+    expect(edited.ownerUserId).toBe(owner);
+    expect((await service.loadProject(owner, projectId))?.ownerUserId).toBe(
+      owner
+    );
+    expect((await service.loadProject(viewer, projectId))?.name).toBe(
+      'Edited by member'
+    );
+
+    await expect(
+      service.saveRevision(viewer, {
+        projectId,
+        reason: 'Viewer save',
+        expectedVersion: edited.version,
+        document: edited
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.createUploadSession(viewer, {
+        projectId,
+        fileName: 'viewer.stl',
+        contentType: 'model/stl',
+        kind: 'stl-import'
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+    const { session } = await service.createUploadSession(owner, {
+      projectId,
+      fileName: 'shared.stl',
+      contentType: 'model/stl',
+      kind: 'stl-import'
+    });
+    const body = new TextEncoder().encode('solid shared').buffer;
+    await expect(
+      service.putUpload(viewer, session.uploadSessionId, body)
+    ).rejects.toThrow(ProjectNotFoundError);
+    await service.putUpload(owner, session.uploadSessionId, body);
+    const finalizeRequest = {
+      projectId,
+      uploadSessionId: session.uploadSessionId,
+      artifactId: session.artifactId
+    };
+    await expect(
+      service.finalizeArtifact(viewer, finalizeRequest)
+    ).rejects.toThrow(ProjectNotFoundError);
+    const artifact = await service.finalizeArtifact(owner, finalizeRequest);
+    expect(artifact).not.toBeNull();
+    await expect(service.listArtifacts(viewer, projectId)).resolves.toEqual({
+      artifacts: [artifact]
+    });
+    await expect(
+      service.getArtifactMetadata(viewer, session.artifactId)
+    ).resolves.toEqual({ artifact });
+    await expect(
+      service.downloadArtifact(viewer, session.artifactId)
+    ).resolves.toEqual({ artifact, body });
+    await expect(
+      service.requireProjectOwner(editor, projectId)
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.setProjectMemberRole(editor, projectId, unrelated, 'viewer')
+    ).rejects.toThrow(ProjectNotFoundError);
+
+    expect((await service.listProjects(editor)).projects).toHaveLength(1);
+    expect((await service.listProjects(viewer)).projects).toHaveLength(1);
+    expect(await service.loadProject(unrelated, projectId)).toBeNull();
+    expect((await service.listProjects(unrelated)).projects).toHaveLength(0);
+    await expect(
+      service.requireProjectRead(unrelated, projectId)
+    ).rejects.toThrow(ProjectNotFoundError);
+  });
+
+  it('rejects editor attempts to replace the authoritative document owner', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_owner_immutable');
+    const editor = toUserId('user_editor_immutable');
+    const created = await service.createProject(owner, { name: 'Owned' });
+    await service.setProjectMemberRole(
+      owner,
+      created.document.projectId,
+      editor,
+      'editor'
+    );
+
+    await expect(
+      service.saveRevision(editor, {
+        projectId: created.document.projectId,
+        reason: 'Ownership takeover',
+        expectedVersion: created.document.version,
+        document: { ...created.document, ownerUserId: editor }
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+    expect(
+      (await service.loadProject(owner, created.document.projectId))
+        ?.ownerUserId
+    ).toBe(owner);
+  });
+
   it('rejects stale revision writes without replacing the newer document', async () => {
     const service = new InMemoryPersistenceService();
-    const created = await service.createProject(userId, { name: 'Guarded Save' });
-    const newerDocument = { ...created.document, version: created.document.version + 1 };
+    const created = await service.createProject(userId, {
+      name: 'Guarded Save'
+    });
+    const newerDocument = {
+      ...created.document,
+      version: created.document.version + 1
+    };
 
     await service.saveRevision(userId, {
       projectId: created.document.projectId,
@@ -72,9 +207,9 @@ describe('in-memory persistence', () => {
       })
     );
 
-    expect((await service.loadProject(userId, created.document.projectId))?.version).toBe(
-      newerDocument.version
-    );
+    expect(
+      (await service.loadProject(userId, created.document.projectId))?.version
+    ).toBe(newerDocument.version);
   });
 
   it('sanitizes file names in upload object keys', async () => {
@@ -107,7 +242,7 @@ describe('in-memory persistence', () => {
     const request = {
       projectId,
       uploadSessionId: session.uploadSessionId,
-      artifactId: session.artifactId,
+      artifactId: session.artifactId
     };
 
     await service.putUpload(
@@ -159,9 +294,8 @@ describe('in-memory persistence', () => {
       projectIds: [created.document.projectId]
     });
     expect(
-      projectOrganization(
-        (await service.listProjects(owner)).projects[0]!
-      ).sortOrder
+      projectOrganization((await service.listProjects(owner)).projects[0]!)
+        .sortOrder
     ).toBe(0);
   });
 });
@@ -191,13 +325,16 @@ describe('project shelves', () => {
       expectedVersion: copy.document.version,
       document: { ...copy.document, name: 'Diverged' }
     });
-    expect((await service.loadProject(userId, created.document.projectId))?.name)
-      .toBe('Bracket');
+    expect(
+      (await service.loadProject(userId, created.document.projectId))?.name
+    ).toBe('Bracket');
   });
 
   it('moves a project to the bin and back without destroying it', async () => {
     const service = new InMemoryPersistenceService();
-    const created = await service.createProject(userId, { name: 'Recoverable' });
+    const created = await service.createProject(userId, {
+      name: 'Recoverable'
+    });
 
     const binned = await service.updateProject(userId, {
       projectId: created.document.projectId,

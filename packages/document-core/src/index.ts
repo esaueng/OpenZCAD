@@ -18,6 +18,8 @@ import {
   type BooleanOperation,
   type DocumentNode,
   type DirectEditOperation,
+  type EdgeTopologyReferenceV5,
+  type FaceTopologyReferenceV5,
   type EntityId,
   type FeatureData,
   type FeatureId,
@@ -25,6 +27,7 @@ import {
   type ParameterId,
   type ParameterNode,
   type ParametricVector3,
+  type ParametricPlane,
   type ParamValue,
   type PatternKind,
   type PlaneId,
@@ -221,6 +224,29 @@ export interface TransformInput {
   ids?: FeatureOnlyIds;
 }
 
+export interface MirrorInput {
+  name: string;
+  targetBodyId: BodyId;
+  plane: ParametricPlane;
+  ids?: BodyFeatureIds;
+}
+
+export interface ShellInput {
+  name: string;
+  targetBodyId: BodyId;
+  openingFaceHashes: number[];
+  openingFaceReferences?: FaceTopologyReferenceV5[];
+  thickness: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface SolidOffsetInput {
+  name: string;
+  targetBodyId: BodyId;
+  distance: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
 export interface DirectEditInput {
   name: string;
   targetBodyId: BodyId;
@@ -232,6 +258,7 @@ export interface EdgeModifierInput {
   name: string;
   targetBodyId: BodyId;
   edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
   size: ParamValue;
   ids?: BodyFeatureIds;
 }
@@ -416,6 +443,9 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
       }
     } satisfies SketchNode;
   }
+  // Schema v4 -> v5 topology references and v5 -> v6 modeling feature kinds
+  // are additive. Existing hashes and exact source geometry remain the
+  // fail-closed fallback until a feature writes a lineage reference.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -963,8 +993,15 @@ export function directEditBody(
 function addBodyResultFeature(
   document: ProjectDocument,
   name: string,
-  featureKind: 'fillet' | 'chamfer' | 'pattern',
-  data: Extract<FeatureData, { featureKind: 'fillet' | 'chamfer' | 'pattern' }>,
+  featureKind:
+    'fillet' | 'chamfer' | 'pattern' | 'mirror' | 'shell' | 'solid-offset',
+  data: Extract<
+    FeatureData,
+    {
+      featureKind:
+        'fillet' | 'chamfer' | 'pattern' | 'mirror' | 'shell' | 'solid-offset';
+    }
+  >,
   ids?: BodyFeatureIds
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
@@ -1001,6 +1038,62 @@ function addBodyResultFeature(
   return { document: next, bodyId };
 }
 
+/** Adds an independent mirrored copy; the source body is not consumed. */
+export function mirrorBody(
+  document: ProjectDocument,
+  input: MirrorInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'mirror',
+    {
+      featureKind: 'mirror',
+      targetBodyId: input.targetBodyId,
+      plane: deepClone(input.plane)
+    },
+    input.ids
+  );
+}
+
+export function shellBody(
+  document: ProjectDocument,
+  input: ShellInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'shell',
+    {
+      featureKind: 'shell',
+      targetBodyId: input.targetBodyId,
+      openingFaceHashes: [...new Set(input.openingFaceHashes)],
+      ...(input.openingFaceReferences
+        ? { openingFaceReferences: deepClone(input.openingFaceReferences) }
+        : {}),
+      thickness: input.thickness
+    },
+    input.ids
+  );
+}
+
+export function offsetSolidBody(
+  document: ProjectDocument,
+  input: SolidOffsetInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'solid-offset',
+    {
+      featureKind: 'solid-offset',
+      targetBodyId: input.targetBodyId,
+      distance: input.distance
+    },
+    input.ids
+  );
+}
+
 export function filletEdges(
   document: ProjectDocument,
   input: EdgeModifierInput
@@ -1013,6 +1106,9 @@ export function filletEdges(
       featureKind: 'fillet',
       targetBodyId: input.targetBodyId,
       edgeHashes: [...new Set(input.edgeHashes)],
+      ...(input.edgeReferences
+        ? { edgeReferences: deepClone(input.edgeReferences) }
+        : {}),
       radius: input.size
     },
     input.ids
@@ -1031,6 +1127,9 @@ export function chamferEdges(
       featureKind: 'chamfer',
       targetBodyId: input.targetBodyId,
       edgeHashes: [...new Set(input.edgeHashes)],
+      ...(input.edgeReferences
+        ? { edgeReferences: deepClone(input.edgeReferences) }
+        : {}),
       distance: input.size
     },
     input.ids

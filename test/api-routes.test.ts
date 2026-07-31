@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
+import { getInMemoryPersistence } from '@openzcad/persistence';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
+  toUserId,
   type CreateProjectResponse,
   type ProjectDocument,
   type ProjectSummary
@@ -67,6 +69,31 @@ function patch(path: string, body: unknown): Request {
     method: 'PATCH',
     body: JSON.stringify(body)
   });
+}
+
+function settingsConflictEnv(options: {
+  storedRevision: number;
+  changes: number;
+}) {
+  const run = vi.fn(async () => ({ meta: { changes: options.changes } }));
+  const prepare = vi.fn((query: string) => ({
+    bind: vi.fn(() => ({
+      first: vi.fn(async () =>
+        query.includes('FROM user_settings')
+          ? {
+              settings_json: JSON.stringify(DEFAULT_APP_SETTINGS),
+              revision: options.storedRevision
+            }
+          : null
+      ),
+      run
+    }))
+  }));
+  return {
+    workerEnv: { ...env, DB: { prepare } } as never,
+    prepare,
+    run
+  };
 }
 
 async function createProject(name: string): Promise<CreateProjectResponse> {
@@ -225,6 +252,26 @@ describe('worker api routes', () => {
       env
     );
     expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      projectSharingEnabled: false,
+      projectEditLeasesEnforced: false
+    });
+  });
+
+  it('publishes collaboration rollout capabilities without exposing secrets', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        ...env,
+        PROJECT_SHARING_ENABLED: 'true',
+        PROJECT_EDIT_LEASES_ENFORCED: '1'
+      }
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'ok',
+      projectSharingEnabled: true,
+      projectEditLeasesEnforced: true
+    });
   });
 
   it('refuses development authentication in guarded or non-development environments', async () => {
@@ -343,6 +390,53 @@ describe('worker api routes', () => {
     expect(response.status).toBe(403);
   });
 
+  it('returns 409 before writing when the settings revision is already stale', async () => {
+    const conflictEnv = settingsConflictEnv({
+      storedRevision: 4,
+      changes: 1
+    });
+
+    const response = await worker.fetch(
+      patch('/api/settings', {
+        settings: DEFAULT_APP_SETTINGS,
+        expectedRevision: 3
+      }),
+      conflictEnv.workerEnv
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Settings changed elsewhere. Reload and try again.'
+    });
+    expect(conflictEnv.run).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when a concurrent settings write wins the conditional update', async () => {
+    const conflictEnv = settingsConflictEnv({
+      storedRevision: 4,
+      changes: 0
+    });
+
+    const response = await worker.fetch(
+      patch('/api/settings', {
+        settings: DEFAULT_APP_SETTINGS,
+        expectedRevision: 4
+      }),
+      conflictEnv.workerEnv
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Settings changed elsewhere. Reload and try again.'
+    });
+    expect(conflictEnv.run).toHaveBeenCalledOnce();
+    expect(
+      conflictEnv.prepare.mock.calls.some(([query]) =>
+        query.includes('UPDATE user_settings')
+      )
+    ).toBe(true);
+  });
+
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
@@ -437,7 +531,8 @@ describe('worker api routes', () => {
     const roomFetch = vi.fn(async (request: Request) =>
       Response.json({
         userId: request.headers.get('x-openzcad-user-id'),
-        displayName: request.headers.get('x-openzcad-display-name')
+        displayName: request.headers.get('x-openzcad-display-name'),
+        role: request.headers.get('x-openzcad-project-role')
       })
     );
     env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
@@ -445,16 +540,173 @@ describe('worker api routes', () => {
     const response = await worker.fetch(
       new Request(
         `https://example.com/api/projects/${created.project.projectId}/collaboration`,
-        { headers: { upgrade: 'websocket' } }
+        {
+          headers: {
+            upgrade: 'websocket',
+            // The Worker must replace, never trust, a client-forged role.
+            'x-openzcad-project-role': 'viewer'
+          }
+        }
       ),
       env
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       userId: 'user_beta_dev',
-      displayName: 'Beta developer'
+      displayName: 'Beta developer',
+      role: 'owner'
     });
     expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
+  it('streams collaboration snapshots to the room without buffering them', async () => {
+    const created = await createProject('Streamed collaboration project');
+    const roomFetch = vi.fn(async (request: Request) => {
+      expect(request.body).not.toBeNull();
+      return Response.json({ forwarded: true });
+    });
+    env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"clientId":"streamed"'));
+      },
+      pull() {
+        throw new Error('The outer Worker consumed the collaboration body.');
+      }
+    });
+
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/collaboration`,
+        {
+          method: 'POST',
+          headers: { origin: 'https://example.com' },
+          body,
+          duplex: 'half'
+        } as RequestInit & { duplex: 'half' }
+      ),
+      env
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ forwarded: true });
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
+  it('creates, lists, and revokes viewer invitations behind the sharing flag', async () => {
+    const owner = toUserId('user_sharing_route_owner');
+    const sharingEnv = {
+      ...env,
+      PROJECT_SHARING_ENABLED: 'true'
+    };
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'Sharing routes' })
+      }),
+      sharingEnv
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    const projectId = created.document.projectId;
+
+    const invited = await worker.fetch(
+      new Request(`https://example.com/api/projects/${projectId}/invitations`, {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({
+          email: ' Viewer@Example.com ',
+          role: 'viewer'
+        })
+      }),
+      sharingEnv
+    );
+    expect(invited.status).toBe(201);
+    const invitation = (await invited.json()) as {
+      invitation: { invitationId: string; email: string };
+      token: string;
+    };
+    expect(invitation.invitation.email).toBe('viewer@example.com');
+    expect(invitation.token).toHaveLength(43);
+
+    const listed = await worker.fetch(
+      new Request(`https://example.com/api/projects/${projectId}/sharing`, {
+        headers: { 'x-openzcad-development-user': owner }
+      }),
+      sharingEnv
+    );
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({
+      projectId,
+      ownerUserId: owner,
+      invitations: [
+        {
+          invitationId: invitation.invitation.invitationId,
+          email: 'viewer@example.com',
+          role: 'viewer'
+        }
+      ]
+    });
+
+    const revoked = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${projectId}/invitations/${invitation.invitation.invitationId}`,
+        {
+          method: 'DELETE',
+          headers: { 'x-openzcad-development-user': owner }
+        }
+      ),
+      sharingEnv
+    );
+    expect(revoked.status).toBe(204);
+  });
+
+  it('lets viewers read shared projects but rejects every revision mutation', async () => {
+    const owner = toUserId('user_route_owner');
+    const viewer = toUserId('user_route_viewer');
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'Read-only shared project' })
+      }),
+      env
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    await getInMemoryPersistence().setProjectMemberRole(
+      owner,
+      created.document.projectId,
+      viewer,
+      'viewer'
+    );
+
+    const viewed = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.document.projectId}`,
+        { headers: { 'x-openzcad-development-user': viewer } }
+      ),
+      env
+    );
+    expect(viewed.status).toBe(200);
+
+    const mutated = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.document.projectId}/revisions`,
+        {
+          method: 'POST',
+          headers: { 'x-openzcad-development-user': viewer },
+          body: JSON.stringify({
+            projectId: created.document.projectId,
+            reason: 'Viewer bypass attempt',
+            expectedVersion: created.document.version,
+            document: created.document
+          })
+        }
+      ),
+      env
+    );
+    expect(mutated.status).toBe(404);
   });
 
   it('rejects cross-origin collaboration WebSocket upgrades', async () => {
@@ -846,6 +1098,28 @@ describe('worker api routes', () => {
     );
     expect(downloaded.status).toBe(200);
     expect(await downloaded.text()).toBe('STEP DATA');
+
+    const metadata = await worker.fetch(
+      new Request(`https://example.com/api/artifacts/${session.artifactId}`),
+      env
+    );
+    expect(metadata.status).toBe(200);
+    const hidden = await worker.fetch(
+      new Request(`https://example.com/api/artifacts/${session.artifactId}`, {
+        headers: { 'x-openzcad-development-user': 'user_artifact_intruder' }
+      }),
+      env
+    );
+    expect(hidden.status).toBe(404);
+  });
+
+  it('returns 404 rather than a null metadata envelope for unknown artifacts', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/artifacts/artifact_missing'),
+      env
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Artifact not found.' });
   });
 
   it('rejects oversized request bodies with 413', async () => {
