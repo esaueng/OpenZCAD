@@ -55,8 +55,6 @@ interface AssistantPanelProps {
   onPreview(proposal: CadPatchProposal | null): boolean;
   collapsed: boolean;
   onCollapsedChange(collapsed: boolean): void;
-  /** Bumped by the workspace to move focus into the prompt. */
-  focusNonce: number;
   /**
    * Takes the dock off screen without unmounting it. The conversation and the
    * in-flight request live here, so a direct-manipulation mode hides the panel
@@ -105,7 +103,6 @@ export function AssistantPanel({
   onPreview,
   collapsed,
   onCollapsedChange,
-  focusNonce,
   hidden = false
 }: AssistantPanelProps) {
   const [conversation, dispatch] = useReducer(
@@ -173,12 +170,6 @@ export function AssistantPanel({
       });
     return () => controller.abort();
   }, []);
-
-  useEffect(() => {
-    if (focusNonce > 0 && !collapsed) {
-      promptRef.current?.focus();
-    }
-  }, [collapsed, focusNonce]);
 
   // Keep the newest turn in view; a reply that lands off-screen reads as nothing
   // having happened.
