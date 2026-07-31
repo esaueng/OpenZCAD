@@ -4,6 +4,8 @@
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
+  // Cloudflare does not generate Preview URLs for Workers that implement a DO.
+  "preview_urls": false,
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -24,6 +26,8 @@
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
     "AI_REASONING_EFFORT": "high",
+    "PROJECT_SHARING_ENABLED": "false",
+    "PROJECT_EDIT_LEASES_ENFORCED": "false",
     "AI_GLOBAL_DAILY_REQUEST_LIMIT": "100",
     "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "400"
   },
@@ -48,6 +52,20 @@
     {
       "name": "EMAIL",
       "allowed_sender_addresses": ["login@auth.esau.app"]
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_ROOM",
+        "class_name": "ProjectCollaborationRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectCollaborationRoom"]
     }
   ]
 }

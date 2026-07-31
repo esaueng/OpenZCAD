@@ -43,6 +43,9 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 
+export * from './topology-lineage';
+export * from './face-attachment';
+
 /**
  * The OpenZCAD browser kernel. It rebuilds every body from its parametric
  * feature definition on each sync: parameters are evaluated, profiles are
@@ -432,3 +435,16 @@ export class OpenZCADKernel implements KernelAdapter {
 export function createKernelAdapter(): KernelAdapter {
   return new OpenZCADKernel();
 }
+
+export {
+  DEFAULT_RECOGNITION_LIMITS,
+  recognizeImportedFeature,
+  type ExactFaceAdjacency,
+  type ExactFaceAdjacencyQuery,
+  type ExactRecognitionFace,
+  type ExactRecognitionSurface,
+  type ImportedFeatureProof,
+  type ImportedFeatureRecognition,
+  type RecognitionLimits,
+  type RecognitionRefusalReason
+} from './imported-feature-recognition';

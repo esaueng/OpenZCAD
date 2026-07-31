@@ -1,4 +1,8 @@
-import type { SketchPlaneRef, TopologySelection } from '@openzcad/shared';
+import type {
+  FaceTopologyReferenceV5,
+  SketchPlaneRef,
+  TopologySelection
+} from '@openzcad/shared';
 import {
   preferredCapability,
   selectionCapabilities,
@@ -17,6 +21,8 @@ import {
 export interface FaceTarget extends FaceCapabilityTarget {
   bodyId: string;
   topologyId: string;
+  /** Persistent exact identity when the current kernel projection proves it. */
+  reference?: FaceTopologyReferenceV5;
   /** World-space click point captured at selection. */
   point: [number, number, number];
   /** Outward face normal at the click point. */

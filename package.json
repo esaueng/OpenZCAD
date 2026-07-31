@@ -12,6 +12,7 @@
     "dev": "turbo run dev --parallel",
     "dev:web": "pnpm --filter @openzcad/web dev",
     "build": "pnpm --filter @openzcad/web build",
+    "build:report": "pnpm build && node scripts/report-bundle-sizes.mjs",
     "typecheck": "pnpm exec tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

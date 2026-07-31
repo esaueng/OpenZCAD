@@ -99,6 +99,9 @@ export class CameraController {
   private tween: CameraTween | null = null;
   private settleTimeout: number | null = null;
   private orbitGlideEndsAt: number | null = null;
+  private gestureActive = false;
+  private externalOrbitActive = false;
+  private disposed = false;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -158,7 +161,12 @@ export class CameraController {
 
   /** Restores tight tracking; a grab mid-glide folds the residue into it. */
   private beginGesture = () => {
+    this.gestureActive = true;
     this.orbitGlideEndsAt = null;
+    if (this.settleTimeout !== null) {
+      window.clearTimeout(this.settleTimeout);
+      this.settleTimeout = null;
+    }
     this.orbit.dampingFactor = DRAG_DAMPING;
   };
 
@@ -170,6 +178,7 @@ export class CameraController {
    * kick here is enough to play the whole glide out.
    */
   private settleDamping = () => {
+    this.gestureActive = false;
     if (this.options.reducedMotion()) {
       this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
@@ -196,6 +205,9 @@ export class CameraController {
     }
     this.settleTimeout = window.setTimeout(() => {
       this.settleTimeout = null;
+      if (this.gestureActive || this.disposed) {
+        return;
+      }
       this.orbitGlideEndsAt = null;
       // The glide has decayed below OrbitControls' movement epsilon by now,
       // but a sub-epsilon offset still sits frozen on the controls; thawed
@@ -370,7 +382,11 @@ export class CameraController {
    * DOM events onto the canvas.
    */
   beginOrbitDrag() {
+    if (this.disposed || this.externalOrbitActive) {
+      return;
+    }
     this.cancelTween();
+    this.externalOrbitActive = true;
     this.beginGesture();
   }
 
@@ -380,7 +396,12 @@ export class CameraController {
    * feel identical at every viewport size.
    */
   orbitByPixels(deltaX: number, deltaY: number) {
-    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
+    if (
+      this.disposed ||
+      !this.externalOrbitActive ||
+      !Number.isFinite(deltaX) ||
+      !Number.isFinite(deltaY)
+    ) {
       return;
     }
     const height = Math.max(this.options.domElement.clientHeight, 1);
@@ -392,6 +413,10 @@ export class CameraController {
 
   /** Releases an external orbit into the same short damping tail as canvas. */
   endOrbitDrag() {
+    if (this.disposed || !this.externalOrbitActive) {
+      return;
+    }
+    this.externalOrbitActive = false;
     this.settleDamping();
   }
 
@@ -403,6 +428,9 @@ export class CameraController {
    * longer wall-clock coast and drifts beyond the framing the user released.
    */
   stepOrbit(now: number): boolean {
+    if (this.disposed) {
+      return false;
+    }
     if (this.orbitGlideEndsAt !== null && now >= this.orbitGlideEndsAt) {
       this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
@@ -491,7 +519,10 @@ export class CameraController {
     // The camera sits along its own view axis: local +Z, taken to world.
     this.perspective.position
       .copy(target)
-      .addScaledVector(new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion), distance);
+      .addScaledVector(
+        new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion),
+        distance
+      );
     this.perspective.quaternion.copy(quaternion);
     // OrbitControls' update() runs right after this and re-derives the
     // orientation with `lookAt`. Handing both cameras the slerped frame's own
@@ -576,6 +607,13 @@ export class CameraController {
   }
 
   dispose() {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.gestureActive = false;
+    this.externalOrbitActive = false;
+    this.orbitGlideEndsAt = null;
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;

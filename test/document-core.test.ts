@@ -34,7 +34,9 @@ describe('document-core', () => {
   it('creates a stable project scaffold', () => {
     const document = createProjectDocument('Test', user());
     expect(document.name).toBe('Test');
-    expect(Object.values(document.nodes).some((node) => node.kind === 'project')).toBe(true);
+    expect(
+      Object.values(document.nodes).some((node) => node.kind === 'project')
+    ).toBe(true);
     expect(document.revisions).toHaveLength(1);
     expect(document.checkpoints).toHaveLength(1);
     expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
@@ -80,7 +82,13 @@ describe('document-core', () => {
       name: 'Sketch 1',
       plane: 'XY',
       offset: 0,
-      object: { objectKind: 'rectangle', width: 20, height: 10, centerX: 0, centerY: 0 }
+      object: {
+        objectKind: 'rectangle',
+        width: 20,
+        height: 10,
+        centerX: 0,
+        centerY: 0
+      }
     });
     document = extrudeSketch(sketchResult.document, {
       name: 'Extrude',
@@ -131,6 +139,33 @@ describe('document-core', () => {
     // Idempotent: already-migrated nodes pass through untouched.
     const again = normalizeDocument(migrated);
     expect(again.nodes).toEqual(migrated.nodes);
+  });
+
+  it('replays schema-v4 projects unchanged while upgrading the version tag', () => {
+    const current = createProjectDocument('Schema v4', user());
+    const legacy = structuredClone(current);
+    legacy.schemaVersion = 4 as typeof legacy.schemaVersion;
+
+    const migrated = normalizeDocument(legacy);
+
+    expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    expect(migrated.nodes).toEqual(legacy.nodes);
+    expect(migrated.commandLog).toEqual(legacy.commandLog);
+    expect(migrated.derived).toEqual(legacy.derived);
+  });
+
+  it('upgrades additive schema-v5 projects to v6 without rewriting history', () => {
+    const current = createProjectDocument('Schema v5', user());
+    const legacy = structuredClone(current);
+    legacy.schemaVersion = 5 as typeof legacy.schemaVersion;
+
+    const migrated = normalizeDocument(legacy);
+
+    expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    expect(migrated.nodes).toEqual(legacy.nodes);
+    expect(migrated.featureOrder).toEqual(legacy.featureOrder);
+    expect(migrated.bodyOrder).toEqual(legacy.bodyOrder);
+    expect(migrated.commandLog).toEqual(legacy.commandLog);
   });
 
   it('accepts v4 multi-object sketches and edits objects individually', () => {
@@ -234,7 +269,10 @@ describe('document-core', () => {
 describe('parameters', () => {
   it('upserts parameters and evaluates dependent expressions in any order', () => {
     let document = createProjectDocument('Params', user());
-    document = setParameter(document, { name: 'total', expression: 'width * 2' });
+    document = setParameter(document, {
+      name: 'total',
+      expression: 'width * 2'
+    });
     document = setParameter(document, { name: 'width', expression: '21' });
 
     const { scope, errors } = getParameterScope(document);
@@ -259,16 +297,18 @@ describe('parameters', () => {
 
   it('rejects invalid names and deletes by name', () => {
     let document = createProjectDocument('Params', user());
-    expect(() => setParameter(document, { name: '2bad', expression: '1' })).toThrow(
-      /not a valid parameter name/
-    );
-    expect(() => setParameter(document, { name: 'sin', expression: '1' })).toThrow(
-      /not a valid parameter name/
-    );
+    expect(() =>
+      setParameter(document, { name: '2bad', expression: '1' })
+    ).toThrow(/not a valid parameter name/);
+    expect(() =>
+      setParameter(document, { name: 'sin', expression: '1' })
+    ).toThrow(/not a valid parameter name/);
     document = setParameter(document, { name: 'keep', expression: '5' });
     document = deleteParameter(document, { name: 'keep' });
     expect(listParameters(document)).toHaveLength(0);
-    expect(() => deleteParameter(document, { name: 'keep' })).toThrow(/not found/);
+    expect(() => deleteParameter(document, { name: 'keep' })).toThrow(
+      /not found/
+    );
   });
 
   it('resolves literal and expression ParamValues', () => {
@@ -296,7 +336,11 @@ describe('feature editing', () => {
     expect(updated.name).toBe('Base Block');
     expect(updated.data.featureKind).toBe('primitive');
     if (updated.data.featureKind === 'primitive') {
-      expect(updated.data.dimensions).toEqual({ width: 'w * 2', height: 20, depth: 30 });
+      expect(updated.data.dimensions).toEqual({
+        width: 'w * 2',
+        height: 20,
+        depth: 30
+      });
     }
   });
 
@@ -322,7 +366,13 @@ describe('feature editing', () => {
       name: 'Profile',
       plane: 'XY',
       offset: 0,
-      object: { objectKind: 'rectangle', width: 10, height: 10, centerX: 0, centerY: 0 }
+      object: {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 0,
+        centerY: 0
+      }
     });
     document = updateSketch(withSketch, {
       sketchId,
@@ -330,7 +380,9 @@ describe('feature editing', () => {
       offset: 'lift',
       object: { objectKind: 'circle', radius: 7, centerX: 1, centerY: 2 }
     });
-    const sketch = Object.values(document.nodes).find((node) => node.kind === 'sketch');
+    const sketch = Object.values(document.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
     expect(sketch?.kind).toBe('sketch');
     if (sketch?.kind === 'sketch') {
       expect(sketch.planeRef).toEqual({
@@ -373,9 +425,13 @@ describe('feature editing', () => {
 
     document = deleteFeature(document, { featureId: sketchFeature!.featureId });
     expect(document.sketchOrder).not.toContain(sketchId);
-    expect(Object.values(document.nodes).some((node) => node.kind === 'sketch')).toBe(false);
     expect(
-      Object.values(document.nodes).some((node) => node.kind === 'sketch-object')
+      Object.values(document.nodes).some((node) => node.kind === 'sketch')
+    ).toBe(false);
+    expect(
+      Object.values(document.nodes).some(
+        (node) => node.kind === 'sketch-object'
+      )
     ).toBe(false);
 
     const part = document.nodes[document.activePartId];
@@ -421,14 +477,18 @@ describe('evaluateExpression', () => {
   });
 
   it('rejects unknown identifiers instead of touching globals', () => {
-    expect(() => evaluateExpression('globalThis', scope)).toThrow(/Unknown identifier/);
+    expect(() => evaluateExpression('globalThis', scope)).toThrow(
+      /Unknown identifier/
+    );
     expect(() => evaluateExpression('alert(1)', scope)).toThrow();
   });
 
   it('rejects malformed expressions', () => {
     expect(() => evaluateExpression('1 +', {})).toThrow();
     expect(() => evaluateExpression('(1 + 2', {})).toThrow();
-    expect(() => evaluateExpression('1 ; 2', {})).toThrow(/Unexpected character/);
+    expect(() => evaluateExpression('1 ; 2', {})).toThrow(
+      /Unexpected character/
+    );
     expect(() => evaluateExpression('1 / 0', {})).toThrow(/finite/);
     expect(() => evaluateExpression('sqrt(4, 9)', {})).toThrow(/one argument/);
     expect(() => evaluateExpression('nope(1)', {})).toThrow(/Unknown function/);
@@ -445,6 +505,8 @@ describe('sanitizeFileName', () => {
   });
 
   it('caps the length', () => {
-    expect(sanitizeFileName(`${'a'.repeat(300)}.stl`).length).toBeLessThanOrEqual(128);
+    expect(
+      sanitizeFileName(`${'a'.repeat(300)}.stl`).length
+    ).toBeLessThanOrEqual(128);
   });
 });

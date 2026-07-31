@@ -12,7 +12,7 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 4 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 6 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -26,6 +26,9 @@ export type FeatureKind =
   | 'revolve'
   | 'boolean'
   | 'transform'
+  | 'mirror'
+  | 'shell'
+  | 'solid-offset'
   | 'fillet'
   | 'chamfer'
   | 'pattern'
@@ -52,6 +55,75 @@ export interface Vector3 {
   z: number;
 }
 
+/** Integer coordinates measured in the frozen ADR-011 1e-6 document-unit quantum. */
+export type QuantizedTopologyPoint = [number, number, number];
+
+export type ParametricClosure = 'open' | 'closed' | 'unknown';
+
+/** Exact, phase-independent inputs used to fingerprint one edge. */
+export type EdgeWitnessV1 = {
+  curveType: string;
+  length: number;
+} & (
+  | {
+      closed: false;
+      endpoints: [QuantizedTopologyPoint, QuantizedTopologyPoint];
+      midpoint: QuantizedTopologyPoint;
+    }
+  | {
+      closed: true;
+      center: QuantizedTopologyPoint;
+      /** Canonical direction in the ADR-011 direction quantum, or null when degenerate. */
+      axis: QuantizedTopologyPoint | null;
+    }
+);
+
+/** Exact analytic carrier term used by a face witness. */
+export type FaceAnalyticWitnessV1 =
+  | {
+      kind: 'plane';
+      normal: QuantizedTopologyPoint;
+      offset: number;
+    }
+  | {
+      kind: 'cylinder';
+      axis: QuantizedTopologyPoint;
+      axisFoot: QuantizedTopologyPoint;
+      radius: number;
+    }
+  | { kind: 'none' };
+
+/** Exact, kernel-neutral inputs used to fingerprint one face. */
+export interface FaceWitnessV1 {
+  surfaceType: string;
+  perimeter: number;
+  centroid: QuantizedTopologyPoint | null;
+  analytic: FaceAnalyticWitnessV1;
+  closure: { u: ParametricClosure; v: ParametricClosure };
+}
+
+interface TopologyReferenceBaseV5 {
+  producingFeatureId: FeatureId;
+  /** Stable semantic/evolution name scoped by producingFeatureId. */
+  lineageName: string;
+  /** ADR-011 fingerprint at the time this reference was written. */
+  currentHash: number;
+  witnessVersion: 1;
+}
+
+export interface EdgeTopologyReferenceV5 extends TopologyReferenceBaseV5 {
+  kind: 'edge';
+  witness: EdgeWitnessV1;
+}
+
+export interface FaceTopologyReferenceV5 extends TopologyReferenceBaseV5 {
+  kind: 'face';
+  witness: FaceWitnessV1;
+}
+
+export type TopologyReferenceV5 =
+  EdgeTopologyReferenceV5 | FaceTopologyReferenceV5;
+
 export interface ParametricVector3 {
   x: ParamValue;
   y: ParamValue;
@@ -68,6 +140,13 @@ export interface ParametricTransform3D {
   rotationDeg: ParametricVector3;
 }
 
+/** Parametric plane used by exact mirror features. */
+export interface ParametricPlane {
+  origin: ParametricVector3;
+  /** Resolved and normalized during exact preflight; zero vectors are invalid. */
+  normal: ParametricVector3;
+}
+
 /**
  * History-backed edits applied directly to exact B-Rep topology. The source
  * dimension is a geometric fingerprint: rebuilding fails closed if the face
@@ -78,6 +157,7 @@ export type DirectEditOperation =
   | {
       kind: 'resize-through-hole';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceDiameter: number;
       sourceAxisStart: Vector3;
       sourceAxisEnd: Vector3;
@@ -86,6 +166,7 @@ export type DirectEditOperation =
   | {
       kind: 'remove-face-feature';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceSurfaceType: string;
       sourceArea: number;
       sourceCenter: Vector3;
@@ -96,6 +177,7 @@ export type DirectEditOperation =
   | {
       kind: 'offset-face';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceSurfaceType: 'plane';
       sourceArea: number;
       sourceCenter: Vector3;
@@ -107,6 +189,7 @@ export type DirectEditOperation =
   | {
       kind: 'resize-cylindrical-face';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceRadius: number;
       sourceAxisStart: Vector3;
       sourceAxisEnd: Vector3;
@@ -167,10 +250,11 @@ export interface SketchPlaneFrame {
 /**
  * Where a sketch plane lives. `canonical` is the classic principal plane +
  * normal offset. `frame` is an arbitrary placed plane. `face` records that the
- * plane was taken from a body face: the embedded `frame` snapshot is
- * authoritative for rebuilds (sketch geometry stays well-defined even if the
- * source face is later edited away), while the fingerprint fields let the app
- * re-derive the frame — and warn — when the face still resolves.
+ * plane was taken from a body face. Schema-v5 `faceReference` lineage is
+ * authoritative for exact rebuilds: the frame is re-derived from the evolved
+ * planar face at the sketch's history position and fails closed if that face
+ * is deleted, ambiguous, or non-planar. The embedded frame remains only for
+ * schema-v4 migration and diagnostics; it is never a fallback for a v5 ref.
  */
 export type SketchPlaneRef =
   | { type: 'canonical'; plane: PlaneId; offset: ParamValue }
@@ -179,6 +263,7 @@ export type SketchPlaneRef =
       type: 'face';
       bodyId: BodyId;
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceArea: number;
       sourceCenter: Vector3;
       sourceNormal: Vector3;
@@ -309,15 +394,37 @@ export type FeatureData =
       transform: ParametricTransform3D;
     }
   | {
+      featureKind: 'mirror';
+      targetBodyId: BodyId;
+      /** The original remains live; this feature owns only the mirrored copy. */
+      plane: ParametricPlane;
+    }
+  | {
+      featureKind: 'shell';
+      targetBodyId: BodyId;
+      openingFaceHashes: number[];
+      openingFaceReferences?: FaceTopologyReferenceV5[];
+      /** Positive inward wall thickness; the source outer envelope is retained. */
+      thickness: ParamValue;
+    }
+  | {
+      featureKind: 'solid-offset';
+      targetBodyId: BodyId;
+      /** Positive values offset every face outward. */
+      distance: ParamValue;
+    }
+  | {
       featureKind: 'fillet';
       targetBodyId: BodyId;
       edgeHashes: number[];
+      edgeReferences?: EdgeTopologyReferenceV5[];
       radius: ParamValue;
     }
   | {
       featureKind: 'chamfer';
       targetBodyId: BodyId;
       edgeHashes: number[];
+      edgeReferences?: EdgeTopologyReferenceV5[];
       distance: ParamValue;
     }
   | {
@@ -393,6 +500,7 @@ export interface BoundingBox {
 export interface FaceTopology {
   topologyId: string;
   hash: number;
+  reference?: FaceTopologyReferenceV5;
   triangleStart: number;
   triangleCount: number;
   /** Exact surface measurements supplied by the browser geometry kernel. */
@@ -423,6 +531,7 @@ export interface FaceGeometry {
 export interface EdgeTopology {
   topologyId: string;
   hash: number;
+  reference?: EdgeTopologyReferenceV5;
   /**
    * Periodic B-Rep faces need topological seam edges to close their UV
    * parameterization. They remain available to the kernel for stable topology
@@ -440,6 +549,16 @@ export interface EdgeTopology {
 export interface BodyTopology {
   faces: FaceTopology[];
   edges: EdgeTopology[];
+  lineageDiagnostics?: TopologyLineageDiagnostic[];
+}
+
+export interface TopologyLineageDiagnostic {
+  kind: 'edge' | 'face' | 'body';
+  status:
+    'hash-only' | 'deleted' | 'split' | 'merged' | 'ambiguous' | 'unsupported';
+  featureId?: FeatureId;
+  topologyId?: string;
+  message: string;
 }
 
 export interface TopologySelection {
@@ -447,6 +566,8 @@ export interface TopologySelection {
   kind: 'body' | 'face' | 'edge';
   topologyId?: string;
   hash?: number;
+  /** Present when the kernel can prove a schema-v5 persistent reference. */
+  reference?: TopologyReferenceV5;
 }
 
 /**
@@ -827,6 +948,10 @@ export interface HealthResponse {
   status: 'ok';
   environment: 'development' | 'beta';
   time: string;
+  /** Public rollout capability; absent older Workers are treated as disabled. */
+  projectSharingEnabled?: boolean;
+  /** Public rollout capability; absent older Workers are treated as disabled. */
+  projectEditLeasesEnforced?: boolean;
 }
 
 export interface AuthSession {
@@ -998,6 +1123,61 @@ export interface CollaborationMember {
   status: 'active' | 'idle';
 }
 
+export type ProjectAccessRole = 'owner' | 'editor' | 'viewer';
+export type ProjectMemberRole = Exclude<ProjectAccessRole, 'owner'>;
+
+export interface ProjectSharingMember {
+  userId: UserId;
+  email: string | null;
+  role: ProjectMemberRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectInvitationSummary {
+  invitationId: string;
+  projectId: string;
+  email: string;
+  role: ProjectMemberRole;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ProjectSharingResponse {
+  projectId: string;
+  ownerUserId: UserId;
+  members: ProjectSharingMember[];
+  invitations: ProjectInvitationSummary[];
+}
+
+export interface CreateProjectInvitationRequest {
+  email: string;
+  role: ProjectMemberRole;
+}
+
+export interface CreateProjectInvitationResponse {
+  invitation: ProjectInvitationSummary;
+  /** Returned only once. Persistence stores only its SHA-256 hash. */
+  token: string;
+}
+
+export interface AcceptProjectInvitationRequest {
+  token: string;
+}
+
+export interface AcceptProjectInvitationResponse {
+  projectId: string;
+  role: ProjectMemberRole;
+}
+
+export interface ProjectEditLease {
+  leaseId: string;
+  projectId: string;
+  clientId: string;
+  userId: UserId;
+  expiresAt: number;
+}
+
 export type CollaborationClientMessage =
   | {
       type: 'hello';
@@ -1005,20 +1185,27 @@ export type CollaborationClientMessage =
       displayName: string;
       baseVersion: number | null;
       document: ProjectDocument | null;
+      leaseId?: string;
     }
   | {
       type: 'document';
       clientId: string;
       baseVersion: number | null;
       document: ProjectDocument;
+      leaseId?: string;
     }
-  | { type: 'presence'; clientId: string; status: 'active' | 'idle' };
+  | { type: 'presence'; clientId: string; status: 'active' | 'idle' }
+  | { type: 'lease-acquire'; clientId: string }
+  | { type: 'lease-renew'; clientId: string; leaseId: string }
+  | { type: 'lease-release'; clientId: string; leaseId: string };
 
 export type CollaborationServerMessage =
   | {
       type: 'state';
       members: CollaborationMember[];
       document: ProjectDocument | null;
+      role: ProjectAccessRole;
+      lease: ProjectEditLease | null;
     }
   | { type: 'presence'; members: CollaborationMember[] }
   | { type: 'document'; clientId: string; document: ProjectDocument }
@@ -1030,6 +1217,16 @@ export type CollaborationServerMessage =
    */
   | { type: 'ack'; version: number; document?: ProjectDocument }
   | { type: 'conflict'; document: ProjectDocument }
+  | { type: 'lease-granted'; lease: ProjectEditLease }
+  | {
+      type: 'lease-denied';
+      reason: 'held' | 'read-only';
+      expiresAt?: number;
+    }
+  | {
+      type: 'lease-lost';
+      reason: 'expired' | 'released' | 'role-changed' | 'invalid';
+    }
   /**
    * A submission the room refused outright. Room state is unchanged, so the
    * sender keeps its own document rather than reporting itself synced against
@@ -1044,6 +1241,10 @@ export type CollaborationErrorCode =
   | 'document-too-complex'
   /** Not a document-shaped payload at all. */
   | 'document-invalid'
+  /** The authenticated project role cannot author room state. */
+  | 'permission-denied'
+  /** Lease enforcement is enabled and no matching live lease was supplied. */
+  | 'lease-required'
   /** The room failed while handling an otherwise well-formed message. */
   | 'internal';
 
@@ -1092,6 +1293,9 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   revolve: '#5fb3e8',
   boolean: '#ff7452',
   transform: '#8b80f9',
+  mirror: '#a78bfa',
+  shell: '#14b8a6',
+  'solid-offset': '#06b6d4',
   fillet: '#f59e0b',
   chamfer: '#fb7185',
   pattern: '#38bdf8',
