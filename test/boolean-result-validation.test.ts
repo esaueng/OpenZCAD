@@ -22,6 +22,14 @@ describe('boolean result validation', () => {
     });
     expect(isClosedConsistentlyOrientedMesh(closed)).toBe(true);
 
+    const translatedAndScaled = inspectTriangleMeshClosure(
+      TETRAHEDRON_POSITIONS.map(
+        (value, index) => value * 1e6 + [1e9, -2e9, 5e8][index % 3]!
+      ),
+      TETRAHEDRON_INDICES
+    );
+    expect(isClosedConsistentlyOrientedMesh(translatedAndScaled)).toBe(true);
+
     const open = inspectTriangleMeshClosure(
       TETRAHEDRON_POSITIONS,
       TETRAHEDRON_INDICES.slice(0, 9)
