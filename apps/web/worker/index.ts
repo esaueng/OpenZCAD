@@ -1,11 +1,13 @@
 import {
   ProjectCollaborationRoom,
   createPersistenceService,
+  isCloudflareFeatureEnabled,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import {
   ArtifactStorageError,
   ProjectNotFoundError,
+  ProjectSharingError,
   RevisionConflictError
 } from '@openzcad/persistence';
 import {
@@ -51,6 +53,13 @@ import {
   saveAssistantCredential,
   updateAppSettings
 } from './settings';
+import {
+  acceptInvitation,
+  createInvitation,
+  parseProjectMemberRole,
+  SharingRequestError
+} from './sharing';
+import { toUserId } from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -64,6 +73,12 @@ const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
+const PROJECT_SHARING_ROUTE = /^\/api\/projects\/([^/]+)\/sharing$/;
+const PROJECT_INVITATIONS_ROUTE = /^\/api\/projects\/([^/]+)\/invitations$/;
+const PROJECT_INVITATION_ROUTE =
+  /^\/api\/projects\/([^/]+)\/invitations\/([^/]+)$/;
+const PROJECT_MEMBER_ROUTE = /^\/api\/projects\/([^/]+)\/members\/([^/]+)$/;
+const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
@@ -139,6 +154,32 @@ async function readJsonBody(request: Request): Promise<unknown> {
   }
 }
 
+async function notifyProjectRoleChange(
+  env: Env,
+  projectId: string,
+  memberUserId: string,
+  role: 'editor' | 'viewer' | null
+): Promise<void> {
+  if (!env.PROJECT_ROOM) {
+    return;
+  }
+  const headers = new Headers({
+    'x-openzcad-internal-user-id': memberUserId
+  });
+  if (role) {
+    headers.set('x-openzcad-internal-project-role', role);
+  }
+  const response = await env.PROJECT_ROOM.getByName(projectId).fetch(
+    new Request(`https://project-room.internal/?projectId=${projectId}`, {
+      method: 'PATCH',
+      headers
+    })
+  );
+  if (!response.ok) {
+    throw new Error('Project room rejected an internal role update.');
+  }
+}
+
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const { pathname } = url;
@@ -147,7 +188,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json({
       status: 'ok',
       environment: env.ENVIRONMENT ?? 'beta',
-      time: new Date().toISOString()
+      time: new Date().toISOString(),
+      projectSharingEnabled: isCloudflareFeatureEnabled(
+        env,
+        'PROJECT_SHARING_ENABLED'
+      ),
+      projectEditLeasesEnforced: isCloudflareFeatureEnabled(
+        env,
+        'PROJECT_EDIT_LEASES_ENFORCED'
+      )
     });
   }
 
@@ -156,6 +205,26 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
+  const sharingMatch = PROJECT_SHARING_ROUTE.exec(pathname);
+  const invitationsMatch = PROJECT_INVITATIONS_ROUTE.exec(pathname);
+  const invitationMatch = PROJECT_INVITATION_ROUTE.exec(pathname);
+  const memberMatch = PROJECT_MEMBER_ROUTE.exec(pathname);
+  const isSharingRoute =
+    Boolean(
+      sharingMatch || invitationsMatch || invitationMatch || memberMatch
+    ) || pathname === INVITATION_ACCEPT_ROUTE;
+  if (
+    isSharingRoute &&
+    !isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED')
+  ) {
+    return json(
+      {
+        error: 'Project sharing is disabled for this deployment.',
+        code: 'FEATURE_DISABLED'
+      },
+      501
+    );
+  }
   if (
     (request.method === 'GET' || request.method === 'POST') &&
     collaborationMatch &&
@@ -369,6 +438,102 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.createProject(userId, payload), 201);
   }
 
+  const now = Math.floor(Date.now() / 1000);
+  if (request.method === 'GET' && sharingMatch) {
+    return json(
+      await persistence.listProjectSharing(userId, sharingMatch[1]!, now)
+    );
+  }
+
+  if (request.method === 'POST' && invitationsMatch) {
+    const payload = await readJsonBody(request);
+    const role = parseProjectMemberRole(
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>).role
+        : undefined
+    );
+    if (
+      role === 'editor' &&
+      !isCloudflareFeatureEnabled(env, 'PROJECT_EDIT_LEASES_ENFORCED')
+    ) {
+      throw new SharingRequestError(
+        409,
+        'EDIT_LEASE_REQUIRED',
+        'Editor invitations require project edit lease enforcement.'
+      );
+    }
+    return json(
+      await createInvitation(
+        persistence,
+        userId,
+        invitationsMatch[1]!,
+        payload,
+        now
+      ),
+      201
+    );
+  }
+
+  if (request.method === 'DELETE' && invitationMatch) {
+    await persistence.revokeProjectInvitation(
+      userId,
+      invitationMatch[1]!,
+      invitationMatch[2]!,
+      now
+    );
+    return new Response(null, { status: 204 });
+  }
+
+  if (request.method === 'PATCH' && memberMatch) {
+    const payload = await readJsonBody(request);
+    const role = parseProjectMemberRole(
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>).role
+        : undefined
+    );
+    if (
+      role === 'editor' &&
+      !isCloudflareFeatureEnabled(env, 'PROJECT_EDIT_LEASES_ENFORCED')
+    ) {
+      throw new SharingRequestError(
+        409,
+        'EDIT_LEASE_REQUIRED',
+        'Editor access requires project edit lease enforcement.'
+      );
+    }
+    await persistence.updateProjectMemberRole(
+      userId,
+      memberMatch[1]!,
+      toUserId(memberMatch[2]!),
+      role,
+      now
+    );
+    await notifyProjectRoleChange(env, memberMatch[1]!, memberMatch[2]!, role);
+    return json({ userId: memberMatch[2], role });
+  }
+
+  if (request.method === 'DELETE' && memberMatch) {
+    await persistence.removeProjectMember(
+      userId,
+      memberMatch[1]!,
+      toUserId(memberMatch[2]!),
+      now
+    );
+    await notifyProjectRoleChange(env, memberMatch[1]!, memberMatch[2]!, null);
+    return new Response(null, { status: 204 });
+  }
+
+  if (request.method === 'POST' && pathname === INVITATION_ACCEPT_ROUTE) {
+    const accepted = await acceptInvitation(
+      persistence,
+      userId,
+      session.email,
+      await readJsonBody(request),
+      now
+    );
+    return json(accepted);
+  }
+
   // Matched before the single-project routes below, which would otherwise read
   // "reorder" as a project id.
   if (request.method === 'POST' && pathname === '/api/projects/reorder') {
@@ -400,24 +565,27 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     // before forwarding an authenticated session cookie to the room.
     assertSameOrigin(request);
     const projectId = collaborationMatch[1]!;
-    const project = await persistence.loadProject(userId, projectId);
-    if (!project) {
-      return json({ error: 'Project not found.' }, 404);
-    }
+    const access = await persistence.requireProjectRead(userId, projectId);
     const headers = new Headers(request.headers);
     headers.set('x-openzcad-user-id', userId);
     headers.set('x-openzcad-display-name', session.displayName);
+    headers.set('x-openzcad-project-role', access.role);
     const roomUrl = new URL(request.url);
     roomUrl.searchParams.set('projectId', projectId);
-    return env.PROJECT_ROOM!.getByName(projectId).fetch(
-      new Request(roomUrl, {
-        method: request.method,
-        headers,
-        ...(request.method === 'POST'
-          ? { body: await request.arrayBuffer() }
-          : {})
-      })
-    );
+    const roomRequest =
+      request.method === 'POST'
+        ? new Request(roomUrl, {
+            method: request.method,
+            headers,
+            // Preserve backpressure and let the room enforce its byte limit
+            // before decoding. Buffering here would defeat that boundary.
+            body: request.body,
+            // Node's fetch implementation requires this for streamed request
+            // bodies in the Worker route tests.
+            duplex: 'half'
+          } as RequestInit & { duplex: 'half' })
+        : new Request(roomUrl, { method: request.method, headers });
+    return env.PROJECT_ROOM!.getByName(projectId).fetch(roomRequest);
   }
 
   const projectMatch = PROJECT_ROUTE.exec(pathname);
@@ -521,9 +689,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const artifactMatch = ARTIFACT_ROUTE.exec(pathname);
   if (request.method === 'GET' && artifactMatch) {
-    return json(
-      await persistence.getArtifactMetadata(userId, artifactMatch[1]!)
+    const metadata = await persistence.getArtifactMetadata(
+      userId,
+      artifactMatch[1]!
     );
+    return metadata.artifact
+      ? json(metadata)
+      : json({ error: 'Artifact not found.' }, 404);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -552,6 +724,18 @@ export default {
       }
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);
+      }
+      if (error instanceof SharingRequestError) {
+        return json({ error: error.message, code: error.code }, error.status);
+      }
+      if (error instanceof ProjectSharingError) {
+        const status =
+          error.code === 'INVITATION_RATE_LIMIT'
+            ? 429
+            : error.code.endsWith('_NOT_FOUND')
+              ? 404
+              : 409;
+        return json({ error: error.message, code: error.code }, status);
       }
       if (error instanceof RevisionConflictError) {
         return json(

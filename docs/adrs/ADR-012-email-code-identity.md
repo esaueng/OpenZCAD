@@ -1,9 +1,11 @@
-# ADR-012: Email-code identity and owner-scoped cloud data
+# ADR-012: Email-code identity and role-scoped cloud data
 
 ## Status
 
 Accepted. Supersedes the Cloudflare Access identity portion of
-[ADR-007](ADR-007-access-auth-and-live-rooms.md).
+[ADR-007](ADR-007-access-auth-and-live-rooms.md). Project sharing later extended
+the original owner-only authorization model with explicit owner/editor/viewer
+roles while retaining this identity mechanism.
 
 ## Decision
 
@@ -13,10 +15,13 @@ after ten minutes. Successful verification creates an opaque host-only session;
 D1 stores only the token hash and the verified email associated with the stable
 user ID.
 
-Every project, revision, artifact, setting, credential, and live collaboration
-operation remains owner-scoped. Local development uses the explicit
-`development` mode and isolated `user_beta_dev` identity; the Worker refuses
-that mode in guarded or non-development environments.
+Settings and personal credentials remain scoped to the authenticated user.
+Project documents, revisions, artifacts, and live collaboration require a
+current project role: owners and editors may write, viewers may read, and
+sharing/member/invitation mutations remain owner-only. Edit writes additionally
+require the active project lease when enforcement is enabled. Local development
+uses the explicit `development` mode and isolated `user_beta_dev` identity; the
+Worker refuses that mode in guarded or non-development environments.
 
 Deployment-funded AI is a separate authorization decision: an authenticated
 email must appear in `AI_DEPLOYMENT_ALLOWED_EMAILS`. Public assistant identity

@@ -4,7 +4,10 @@ import {
   type AssistantHistoryTurn,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
-import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import {
+  isCloudflareFeatureEnabled,
+  type CloudflareEnv
+} from '@openzcad/cloudflare-adapters';
 import type {
   AssistantProvider,
   AssistantReasoningEffort
@@ -79,7 +82,7 @@ Rules: declare an alias before referencing it; each alias is unique within the p
 
 # 5. Hollowing, openings, and holes
 
-There is NO shell, offset, or thickness operation. Hollow parts are made by subtracting an inner solid from an outer one — this is the normal, expected technique, not a workaround.
+Use \`add_shell\` or \`add_solid_offset\` only when the rollout-capability block appended to these instructions explicitly enables that operation. Otherwise hollow parts are made by subtracting an inner solid from an outer one.
 
 To hollow a box with wall thickness \`wall\` and floor \`floor_t\`, leaving the top open:
 - cavity size = (width - 2*wall, height - 2*wall, depth - floor_t)
@@ -123,7 +126,7 @@ The governing rule for every opening: material must be removed all the way to th
 - The digest's \`selection\` is the authoritative snapshot of what was picked when the user submitted the request. \`featureIds\`, \`bodyIds\`, and \`topologies\` preserve pick order; the last item is the primary selection. Words such as "selected", "this", "these", "those", and "them" refer to that snapshot, not to a feature you infer from proximity or naming.
 - When the user requests a fillet or chamfer on selected edges, emit one \`add_edge_modifier\` targeting their shared \`bodyId\` and copy every selected edge's numeric \`hash\` into \`edgeHashes\` in selection order. Do not drop all but the last edge. Never guess an edge that is not selected.
 - When the user names selected bodies for a boolean, copy \`selection.bodyIds\` in order because the first body is the base. When the user names a selected feature for an edit, use its selected \`featureId\` rather than choosing another feature with a similar name.
-- A selected face identifies both that exact face and its owning body. Face-specific modeling operations are not currently available; do not invent an edge hash from a selected face.
+- A selected face identifies both that exact face and its owning body. For an enabled face-specific operation, copy its complete schema-v5 \`reference\` and unrounded \`snapshot\` verbatim from the digest; never invent a topology hash, infer an unselected face, or substitute a nearby face.
 - For subtract and intersect the first entry of \`targetBodyIds\` is the target; the rest are tools.
 - Do not delete unrelated features or silently substitute a different operation.
 
@@ -337,17 +340,93 @@ function upstreamUrlForRuntime(
   return runtime?.baseUrl ?? upstreamUrlFor(env, provider);
 }
 
+const ROLLOUT_OPERATION_FLAGS = [
+  ['add_direct_edit', 'AI_PATCH_DIRECT_EDIT_ENABLED'],
+  ['add_face_sketch', 'AI_PATCH_FACE_SKETCH_ENABLED'],
+  ['add_multi_profile_extrude', 'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED'],
+  ['add_mirror', 'AI_PATCH_MIRROR_ENABLED'],
+  ['add_shell', 'AI_PATCH_SHELL_ENABLED'],
+  ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED']
+] as const;
+
+function rolloutCapabilityInstructions(env: CloudflareEnv): string {
+  const enabled = ROLLOUT_OPERATION_FLAGS.filter(([, flag]) =>
+    isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation]) => operation);
+  const disabled = ROLLOUT_OPERATION_FLAGS.filter(
+    ([, flag]) => !isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation]) => operation);
+  return `# Rollout-controlled modeling operations
+
+The base operations described above remain available. The following newer operations are enabled for this deployment: ${enabled.length > 0 ? enabled.map((operation) => `\`${operation}\``).join(', ') : 'none'}.
+
+Never emit a rollout-controlled operation unless it appears in that enabled list. Currently disabled: ${disabled.map((operation) => `\`${operation}\``).join(', ')}.
+
+When enabled:
+- \`add_direct_edit\` copies the selected exact face reference and its complete unrounded source snapshot.
+- \`add_face_sketch\` copies one referenced planar face and its deterministic \`attachmentFrame\`; never choose a face the user did not select or name.
+- \`add_multi_profile_extrude\` uses distinct digest-backed sample points from one existing sketch.
+- \`add_mirror\` creates a separate reflected body and keeps its source.
+- \`add_shell\` requires one or more explicitly referenced opening faces.
+- \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
+
+Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. Topology-dependent operations may target only existing live bodies, never same-proposal body aliases. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
+}
+
+type MutableJsonSchema = Record<string, unknown>;
+
+function schemaRecord(value: unknown): MutableJsonSchema | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as MutableJsonSchema)
+    : undefined;
+}
+
+/**
+ * Strict structured output is the enforcement boundary for rollout flags.
+ * Prompt instructions help the model choose well, but pruning disabled
+ * branches prevents a compliant provider from producing them at all.
+ */
+function assistantReplySchemaFor(env: CloudflareEnv): unknown {
+  const schema = structuredClone(
+    ASSISTANT_REPLY_JSON_SCHEMA
+  ) as unknown as MutableJsonSchema;
+  const properties = schemaRecord(schema.properties);
+  const proposal = schemaRecord(properties?.proposal);
+  const proposalChoices = Array.isArray(proposal?.anyOf) ? proposal.anyOf : [];
+  const patchSchema = proposalChoices.map(schemaRecord).find((choice) => {
+    const patchProperties = schemaRecord(choice?.properties);
+    return schemaRecord(patchProperties?.operations) !== undefined;
+  });
+  const patchProperties = schemaRecord(patchSchema?.properties);
+  const operations = schemaRecord(patchProperties?.operations);
+  const items = schemaRecord(operations?.items);
+  const operationChoices = Array.isArray(items?.anyOf) ? items.anyOf : [];
+  const rolloutFlags = new Map<
+    string,
+    (typeof ROLLOUT_OPERATION_FLAGS)[number][1]
+  >(ROLLOUT_OPERATION_FLAGS);
+
+  items!.anyOf = operationChoices.filter((choice) => {
+    const operation = schemaRecord(choice);
+    const operationProperties = schemaRecord(operation?.properties);
+    const kind = schemaRecord(operationProperties?.kind)?.const;
+    const flag = typeof kind === 'string' ? rolloutFlags.get(kind) : undefined;
+    return flag === undefined || isCloudflareFeatureEnabled(env, flag);
+  });
+  return schema;
+}
+
 function requestInstructions(
+  env: CloudflareEnv,
   runtime: AssistantRuntimeConfig | undefined,
   hasAttachments = false
 ) {
   const custom = runtime?.customInstructions.trim();
-  const base = hasAttachments
+  const baseInstructions = hasAttachments
     ? `${CAD_ASSISTANT_INSTRUCTIONS}\n\n${DRAWING_INSTRUCTIONS}`
     : CAD_ASSISTANT_INSTRUCTIONS;
-  return custom
-    ? `${base}\n\n# User modeling preferences\n${custom}`
-    : base;
+  const base = `${baseInstructions}\n\n${rolloutCapabilityInstructions(env)}`;
+  return custom ? `${base}\n\n# User modeling preferences\n${custom}` : base;
 }
 
 /**
@@ -457,6 +536,7 @@ export async function streamAssistantProposal(
       body: JSON.stringify({
         model: runtime?.model ?? modelFor(env, provider),
         instructions: requestInstructions(
+          env,
           runtime,
           (input.attachments?.length ?? 0) > 0
         ),
@@ -471,7 +551,7 @@ export async function streamAssistantProposal(
             type: 'json_schema',
             name: 'openzcad_reply',
             strict: true,
-            schema: ASSISTANT_REPLY_JSON_SCHEMA
+            schema: assistantReplySchemaFor(env)
           }
         },
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),

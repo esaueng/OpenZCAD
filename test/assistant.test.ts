@@ -251,9 +251,7 @@ describe('assistant integration', () => {
       'user_drawing'
     );
 
-    const request = JSON.parse(
-      fetchMock.mock.calls[0]![1]?.body as string
-    ) as {
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
       instructions: string;
       input: Array<{ role: string; content: unknown }>;
     };
@@ -275,7 +273,9 @@ describe('assistant integration', () => {
     };
     expect(current.role).toBe('user');
     expect(current.content[0]).toMatchObject({ type: 'input_text' });
-    expect(String(current.content[0]!.text)).toContain('Make the bracket wider');
+    expect(String(current.content[0]!.text)).toContain(
+      'Make the bracket wider'
+    );
     expect(current.content[1]).toEqual({
       type: 'input_image',
       image_url: 'data:image/png;base64,QUJD',
@@ -306,9 +306,10 @@ describe('assistant integration', () => {
       },
       'user_text'
     );
-    const request = JSON.parse(
-      fetchMock.mock.calls[0]![1]?.body as string
-    ) as { instructions: string; input: unknown[] };
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+      instructions: string;
+      input: unknown[];
+    };
     expect(request.instructions).not.toContain('Reading the attached drawing');
     // The reply protocol itself is always present.
     expect(request.instructions).toContain('Choose one of three replies');
@@ -428,9 +429,7 @@ describe('assistant integration', () => {
     expect(budgeted.instructions).toContain(
       "A primitive cylinder's raw B-rep also has a smooth periodic seam"
     );
-    expect(budgeted.instructions).toContain(
-      'do not ask them to select edges'
-    );
+    expect(budgeted.instructions).toContain('do not ask them to select edges');
     expect(budgeted.instructions).toContain(
       'ONE LIVE BODY for each physical part'
     );
@@ -445,6 +444,10 @@ describe('assistant integration', () => {
     expect(budgeted.instructions).toContain(
       "A CYLINDER's and a CONE's vertical size is `height`"
     );
+    expect(budgeted.instructions).toContain(
+      'newer operations are enabled for this deployment: none'
+    );
+    expect(budgeted.instructions).toContain('`add_shell`');
 
     const overridden = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -469,6 +472,46 @@ describe('assistant integration', () => {
         }
       ).max_output_tokens
     ).toBe(4096);
+  });
+
+  it('exposes each new AI operation to the model only behind its dark flag', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamAssistantProposal(
+      input,
+      {
+        AI_API_KEY: 'key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_PATCH_FACE_SKETCH_ENABLED: 'true',
+        AI_PATCH_MIRROR_ENABLED: '1'
+      },
+      'user_test'
+    );
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+      instructions: string;
+      text: { format: { schema: unknown } };
+    };
+    const enabledLine = request.instructions
+      .split('\n')
+      .find((line) => line.includes('enabled for this deployment'))!;
+    expect(enabledLine).toContain('`add_face_sketch`');
+    expect(enabledLine).toContain('`add_mirror`');
+    expect(enabledLine).not.toContain('`add_shell`');
+    expect(request.instructions).toContain('Currently disabled:');
+    expect(request.instructions).toContain('`add_shell`');
+    const schema = JSON.stringify(request.text.format.schema);
+    expect(schema).toContain('"const":"add_face_sketch"');
+    expect(schema).toContain('"const":"add_mirror"');
+    expect(schema).toContain('"const":"add_transform"');
+    expect(schema).not.toContain('"const":"add_direct_edit"');
+    expect(schema).not.toContain('"const":"add_shell"');
+    expect(schema).not.toContain('"const":"add_solid_offset"');
   });
 
   it('falls back to the default output budget for unusable overrides', () => {

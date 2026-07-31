@@ -54,7 +54,9 @@ export function cameraUpForDirection(direction: THREE.Vector3): THREE.Vector3 {
  * rather than diving through it, and the roll turns smoothly instead of
  * snapping in the final frames near a pole.
  */
-export function tweenOrientationFor(direction: THREE.Vector3): THREE.Quaternion {
+export function tweenOrientationFor(
+  direction: THREE.Vector3
+): THREE.Quaternion {
   const view = direction.clone().normalize();
   const matrix = new THREE.Matrix4().lookAt(
     view,

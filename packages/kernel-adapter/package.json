@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./exact": "./src/exact.ts"
+    "./exact": "./src/exact.ts",
+    "./face-attachment": "./src/face-attachment.ts"
   },
   "dependencies": {
     "@openzcad/document-core": "workspace:*",

@@ -2,9 +2,17 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactStorageError,
   getInMemoryPersistence,
+  PROJECT_ACTIVE_INVITATION_CAP,
+  PROJECT_INVITATION_RATE_LIMIT,
+  PROJECT_INVITATION_RATE_WINDOW_SECONDS,
+  PROJECT_MEMBER_CAP,
   ProjectNotFoundError,
+  ProjectSharingError,
   RevisionConflictError,
   UPLOAD_SESSION_TTL_MS,
+  type CreateProjectInvitationInput,
+  type ProjectAccess,
+  type ProjectMemberRole,
   type PersistenceService
 } from '@openzcad/persistence';
 import {
@@ -34,6 +42,10 @@ import {
   type ListArtifactsResponse,
   type ListProjectsResponse,
   type ProjectDocument,
+  type ProjectAccessRole as SharedProjectAccessRole,
+  type ProjectEditLease,
+  type ProjectInvitationSummary,
+  type ProjectSharingResponse,
   type ProjectId,
   type ProjectOrganization,
   type ProjectStatus,
@@ -54,6 +66,14 @@ import {
 export interface CloudflareEnv {
   ENVIRONMENT?: 'development' | 'beta';
   AUTH_MODE?: 'development' | 'email-code';
+  PROJECT_SHARING_ENABLED?: string;
+  PROJECT_EDIT_LEASES_ENFORCED?: string;
+  AI_PATCH_DIRECT_EDIT_ENABLED?: string;
+  AI_PATCH_FACE_SKETCH_ENABLED?: string;
+  AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED?: string;
+  AI_PATCH_MIRROR_ENABLED?: string;
+  AI_PATCH_SHELL_ENABLED?: string;
+  AI_PATCH_SOLID_OFFSET_ENABLED?: string;
   PRODUCTION_GUARD?: string;
   AUTH_LEGACY_OWNER_EMAIL?: string;
   AUTH_OTP_PEPPER?: string;
@@ -102,17 +122,492 @@ export interface CloudflareEnv {
   ARTIFACTS?: R2Bucket;
 }
 
+export const CLOUDFLARE_BOOLEAN_FLAGS = [
+  'PROJECT_SHARING_ENABLED',
+  'PROJECT_EDIT_LEASES_ENFORCED',
+  'AI_PATCH_DIRECT_EDIT_ENABLED',
+  'AI_PATCH_FACE_SKETCH_ENABLED',
+  'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
+  'AI_PATCH_MIRROR_ENABLED',
+  'AI_PATCH_SHELL_ENABLED',
+  'AI_PATCH_SOLID_OFFSET_ENABLED'
+] as const;
+
+export type CloudflareBooleanFlag = (typeof CLOUDFLARE_BOOLEAN_FLAGS)[number];
+
+const ENABLED_BOOLEAN_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
+
+/**
+ * Feature flags default closed and opt in only through a recognized true
+ * value. Misspellings and empty bindings therefore cannot accidentally expose
+ * an unfinished route or command path.
+ */
+export function isCloudflareFeatureEnabled(
+  env: CloudflareEnv,
+  flag: CloudflareBooleanFlag
+): boolean {
+  const value = env[flag];
+  return (
+    typeof value === 'string' &&
+    ENABLED_BOOLEAN_ENV_VALUES.has(value.trim().toLowerCase())
+  );
+}
+
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
+
+  async requireProjectRead(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().requireProjectRead(userId, projectId);
+    }
+    return this.resolveProjectAccess(userId, projectId);
+  }
+
+  async requireProjectEdit(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().requireProjectEdit(userId, projectId);
+    }
+    const access = await this.resolveProjectAccess(userId, projectId);
+    if (access.role === 'viewer') {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
+  async requireProjectOwner(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().requireProjectOwner(userId, projectId);
+    }
+    const access = await this.resolveProjectAccess(userId, projectId);
+    if (access.role !== 'owner') {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
+  async listProjectSharing(
+    ownerUserId: UserId,
+    projectId: string,
+    now: number
+  ): Promise<ProjectSharingResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().listProjectSharing(
+        ownerUserId,
+        projectId,
+        now
+      );
+    }
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    const [members, invitations] = await Promise.all([
+      this.env.DB.prepare(
+        `SELECT pm.user_id, u.email, pm.role, pm.created_at, pm.updated_at
+         FROM project_members pm
+         LEFT JOIN users u ON u.id = pm.user_id
+         WHERE pm.project_id = ?
+         ORDER BY pm.created_at ASC`
+      )
+        .bind(projectId)
+        .all<{
+          user_id: UserId;
+          email: string | null;
+          role: ProjectMemberRole;
+          created_at: number;
+          updated_at: number;
+        }>(),
+      this.env.DB.prepare(
+        `SELECT id, project_id, email, role, created_at, expires_at
+         FROM project_invitations
+         WHERE project_id = ?
+           AND accepted_at IS NULL
+           AND revoked_at IS NULL
+           AND expires_at >= ?
+         ORDER BY created_at DESC`
+      )
+        .bind(projectId, now)
+        .all<ProjectInvitationRow>()
+    ]);
+    return {
+      projectId,
+      ownerUserId: access.ownerUserId,
+      members: (members.results ?? []).map((member) => ({
+        userId: member.user_id,
+        email: member.email,
+        role: member.role,
+        createdAt: member.created_at,
+        updatedAt: member.updated_at
+      })),
+      invitations: (invitations.results ?? []).map(invitationFromRow)
+    };
+  }
+
+  async createProjectInvitation(
+    ownerUserId: UserId,
+    projectId: string,
+    input: CreateProjectInvitationInput
+  ): Promise<ProjectInvitationSummary> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().createProjectInvitation(
+        ownerUserId,
+        projectId,
+        input
+      );
+    }
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const windowStart =
+      Math.floor(input.createdAt / PROJECT_INVITATION_RATE_WINDOW_SECONDS) *
+      PROJECT_INVITATION_RATE_WINDOW_SECONDS;
+    const rate = await this.env.DB.prepare(
+      `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
+       VALUES (?, ?, 1)
+       ON CONFLICT(bucket) DO UPDATE SET
+         request_count = CASE
+           WHEN auth_rate_limits.window_start = excluded.window_start
+             THEN auth_rate_limits.request_count + 1
+           ELSE 1
+         END,
+         window_start = excluded.window_start
+       RETURNING request_count`
+    )
+      .bind(`project-invite:${projectId}:${ownerUserId}`, windowStart)
+      .first<{ request_count: number }>();
+    if (!rate || rate.request_count > PROJECT_INVITATION_RATE_LIMIT) {
+      throw new ProjectSharingError(
+        'INVITATION_RATE_LIMIT',
+        'Too many project invitations were created recently.'
+      );
+    }
+    const inserted = await this.env.DB.prepare(
+      `INSERT INTO project_invitations
+         (id, project_id, email, role, token_hash, invited_by_user_id,
+          created_at, expires_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM project_invitations
+         WHERE project_id = ? AND email = ?
+           AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?
+       )
+       AND (
+         SELECT COUNT(*) FROM project_invitations
+         WHERE project_id = ?
+           AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?
+       ) < ?`
+    )
+      .bind(
+        input.invitationId,
+        projectId,
+        input.email,
+        input.role,
+        input.tokenHash,
+        ownerUserId,
+        input.createdAt,
+        input.expiresAt,
+        projectId,
+        input.email,
+        input.createdAt,
+        projectId,
+        input.createdAt,
+        PROJECT_ACTIVE_INVITATION_CAP
+      )
+      .run();
+    if (inserted.meta?.changes !== 1) {
+      const duplicate = await this.env.DB.prepare(
+        `SELECT id FROM project_invitations
+         WHERE project_id = ? AND email = ?
+           AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?`
+      )
+        .bind(projectId, input.email, input.createdAt)
+        .first<{ id: string }>();
+      throw new ProjectSharingError(
+        duplicate ? 'INVITATION_EXISTS' : 'INVITATION_LIMIT',
+        duplicate
+          ? 'An active invitation already exists for that email.'
+          : 'This project has too many active invitations.'
+      );
+    }
+    await this.env.DB.prepare(
+      `INSERT INTO project_access_events
+         (project_id, actor_user_id, invitation_id, event_type, next_role, created_at)
+       VALUES (?, ?, ?, 'invitation-created', ?, ?)`
+    )
+      .bind(
+        projectId,
+        ownerUserId,
+        input.invitationId,
+        input.role,
+        input.createdAt
+      )
+      .run();
+    return {
+      invitationId: input.invitationId,
+      projectId,
+      email: input.email,
+      role: input.role,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt
+    };
+  }
+
+  async revokeProjectInvitation(
+    ownerUserId: UserId,
+    projectId: string,
+    invitationId: string,
+    revokedAt: number
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().revokeProjectInvitation(
+        ownerUserId,
+        projectId,
+        invitationId,
+        revokedAt
+      );
+    }
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const result = await this.env.DB.prepare(
+      `UPDATE project_invitations SET revoked_at = ?
+       WHERE id = ? AND project_id = ?
+         AND accepted_at IS NULL AND revoked_at IS NULL`
+    )
+      .bind(revokedAt, invitationId, projectId)
+      .run();
+    if (result.meta?.changes !== 1) {
+      throw new ProjectSharingError(
+        'INVITATION_NOT_FOUND',
+        'Project invitation not found.'
+      );
+    }
+    await this.env.DB.prepare(
+      `INSERT INTO project_access_events
+         (project_id, actor_user_id, invitation_id, event_type, created_at)
+       VALUES (?, ?, ?, 'invitation-revoked', ?)`
+    )
+      .bind(projectId, ownerUserId, invitationId, revokedAt)
+      .run();
+  }
+
+  async updateProjectMemberRole(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    role: ProjectMemberRole,
+    updatedAt: number
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().updateProjectMemberRole(
+        ownerUserId,
+        projectId,
+        memberUserId,
+        role,
+        updatedAt
+      );
+    }
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    if (memberUserId === access.ownerUserId) {
+      throw new ProjectSharingError(
+        'OWNER_IMMUTABLE',
+        'Project ownership cannot be changed.'
+      );
+    }
+    const existing = await this.env.DB.prepare(
+      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`
+    )
+      .bind(projectId, memberUserId)
+      .first<{ role: ProjectMemberRole }>();
+    if (!existing) {
+      throw new ProjectSharingError('MEMBER_NOT_FOUND', 'Member not found.');
+    }
+    await this.env.DB.batch([
+      this.env.DB.prepare(
+        `UPDATE project_members SET role = ?, updated_at = ?
+         WHERE project_id = ? AND user_id = ?`
+      ).bind(role, updatedAt, projectId, memberUserId),
+      this.env.DB.prepare(
+        `INSERT INTO project_access_events
+           (project_id, actor_user_id, subject_user_id, event_type,
+            previous_role, next_role, created_at)
+         VALUES (?, ?, ?, 'member-role-changed', ?, ?, ?)`
+      ).bind(
+        projectId,
+        ownerUserId,
+        memberUserId,
+        existing.role,
+        role,
+        updatedAt
+      )
+    ]);
+  }
+
+  async removeProjectMember(
+    ownerUserId: UserId,
+    projectId: string,
+    memberUserId: UserId,
+    removedAt: number
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().removeProjectMember(
+        ownerUserId,
+        projectId,
+        memberUserId,
+        removedAt
+      );
+    }
+    const access = await this.requireProjectOwner(ownerUserId, projectId);
+    if (memberUserId === access.ownerUserId) {
+      throw new ProjectSharingError(
+        'OWNER_IMMUTABLE',
+        'Project ownership cannot be changed.'
+      );
+    }
+    const existing = await this.env.DB.prepare(
+      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`
+    )
+      .bind(projectId, memberUserId)
+      .first<{ role: ProjectMemberRole }>();
+    if (!existing) {
+      throw new ProjectSharingError('MEMBER_NOT_FOUND', 'Member not found.');
+    }
+    await this.env.DB.batch([
+      this.env.DB.prepare(
+        `DELETE FROM project_members WHERE project_id = ? AND user_id = ?`
+      ).bind(projectId, memberUserId),
+      this.env.DB.prepare(
+        `INSERT INTO project_access_events
+           (project_id, actor_user_id, subject_user_id, event_type,
+            previous_role, created_at)
+         VALUES (?, ?, ?, 'member-removed', ?, ?)`
+      ).bind(projectId, ownerUserId, memberUserId, existing.role, removedAt)
+    ]);
+  }
+
+  async acceptProjectInvitation(
+    userId: UserId,
+    email: string,
+    tokenHash: string,
+    acceptedAt: number
+  ): Promise<{ projectId: string; role: ProjectMemberRole }> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().acceptProjectInvitation(
+        userId,
+        email,
+        tokenHash,
+        acceptedAt
+      );
+    }
+    const invitation = await this.env.DB.prepare(
+      `SELECT i.id, i.project_id, i.role, p.user_id AS owner_user_id
+       FROM project_invitations i
+       INNER JOIN projects p ON p.id = i.project_id
+       WHERE i.token_hash = ? AND i.email = ?
+         AND i.accepted_at IS NULL AND i.revoked_at IS NULL
+         AND i.expires_at >= ?`
+    )
+      .bind(tokenHash, email, acceptedAt)
+      .first<{
+        id: string;
+        project_id: string;
+        role: ProjectMemberRole;
+        owner_user_id: UserId;
+      }>();
+    if (!invitation) {
+      throw new ProjectSharingError(
+        'INVITATION_NOT_FOUND',
+        'Project invitation is invalid or expired.'
+      );
+    }
+    if (invitation.owner_user_id === userId) {
+      throw new ProjectSharingError(
+        'OWNER_IMMUTABLE',
+        'The project owner cannot accept a membership invitation.'
+      );
+    }
+    const results = await this.env.DB.batch([
+      this.env.DB.prepare(
+        `UPDATE project_invitations
+         SET accepted_at = ?, accepted_by_user_id = ?
+         WHERE id = ? AND token_hash = ? AND email = ?
+           AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?
+           AND (
+             EXISTS (
+               SELECT 1 FROM project_members
+               WHERE project_id = ? AND user_id = ?
+             ) OR (
+               SELECT COUNT(*) FROM project_members WHERE project_id = ?
+             ) < ?
+           )`
+      ).bind(
+        acceptedAt,
+        userId,
+        invitation.id,
+        tokenHash,
+        email,
+        acceptedAt,
+        invitation.project_id,
+        userId,
+        invitation.project_id,
+        PROJECT_MEMBER_CAP
+      ),
+      this.env.DB.prepare(
+        `INSERT INTO project_members
+           (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+         SELECT project_id, ?, role, invited_by_user_id, ?, ?
+         FROM project_invitations
+         WHERE id = ? AND accepted_by_user_id = ? AND accepted_at = ?
+           AND changes() > 0
+         ON CONFLICT(project_id, user_id) DO UPDATE SET
+           role = excluded.role, updated_at = excluded.updated_at`
+      ).bind(userId, acceptedAt, acceptedAt, invitation.id, userId, acceptedAt),
+      this.env.DB.prepare(
+        `INSERT INTO project_access_events
+           (project_id, actor_user_id, subject_user_id, invitation_id,
+            event_type, next_role, created_at)
+         SELECT project_id, ?, ?, id, 'invitation-accepted', role, ?
+         FROM project_invitations
+         WHERE id = ? AND accepted_by_user_id = ? AND accepted_at = ?
+           AND changes() > 0`
+      ).bind(userId, userId, acceptedAt, invitation.id, userId, acceptedAt)
+    ]);
+    if (results[0]?.meta?.changes !== 1) {
+      const members = await this.env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM project_members WHERE project_id = ?`
+      )
+        .bind(invitation.project_id)
+        .first<{ count: number }>();
+      throw new ProjectSharingError(
+        (members?.count ?? 0) >= PROJECT_MEMBER_CAP
+          ? 'MEMBER_LIMIT'
+          : 'INVITATION_NOT_FOUND',
+        (members?.count ?? 0) >= PROJECT_MEMBER_CAP
+          ? 'This project has too many members.'
+          : 'Project invitation is invalid or expired.'
+      );
+    }
+    return { projectId: invitation.project_id, role: invitation.role };
+  }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().listProjects(userId);
     }
     const rows = await this.env.DB.prepare(
-      `${PROJECT_SUMMARY_COLUMNS} FROM projects WHERE user_id = ? ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
+      `SELECT p.id, p.name, p.updated_at, p.document_json,
+              p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+       FROM projects p
+       LEFT JOIN project_members pm
+         ON pm.project_id = p.id
+        AND pm.user_id = ?
+        AND pm.role IN ('editor', 'viewer')
+       WHERE p.user_id = ? OR pm.user_id IS NOT NULL
+       ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
     )
-      .bind(userId)
+      .bind(userId, userId)
       .all<ProjectRow>();
 
     return {
@@ -259,10 +754,18 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().loadProject(userId, projectId);
     }
+    try {
+      await this.requireProjectRead(userId, projectId);
+    } catch (error) {
+      if (error instanceof ProjectNotFoundError) {
+        return null;
+      }
+      throw error;
+    }
     const row = await this.env.DB.prepare(
-      `SELECT document_json FROM projects WHERE id = ? AND user_id = ?`
+      `SELECT document_json FROM projects WHERE id = ?`
     )
-      .bind(projectId, userId)
+      .bind(projectId)
       .first<{ document_json: string }>();
     return row
       ? normalizeDocument(JSON.parse(row.document_json) as ProjectDocument)
@@ -276,8 +779,12 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
+    const access = await this.requireProjectEdit(userId, request.projectId);
     const normalized = normalizeDocument(request.document);
-    if (normalized.ownerUserId !== userId) {
+    if (
+      normalized.projectId !== request.projectId ||
+      normalized.ownerUserId !== access.ownerUserId
+    ) {
       throw new ProjectNotFoundError(request.projectId);
     }
     const document = createCheckpoint(normalized, request.reason);
@@ -295,24 +802,25 @@ export class D1R2PersistenceService implements PersistenceService {
         nowIso(),
         document.name,
         request.projectId,
-        userId,
+        access.ownerUserId,
         request.expectedVersion
       ),
       this.env.DB.prepare(
-        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at) SELECT ?, ?, ?, ?, ? WHERE changes() > 0`
+        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ? WHERE changes() > 0`
       ).bind(
         latestRevision.revisionId,
         request.projectId,
         request.reason,
         documentJson,
-        latestRevision.createdAt
+        latestRevision.createdAt,
+        userId
       )
     ]);
     if (results[0]?.meta?.changes === 0) {
       const current = await this.env.DB.prepare(
         `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
       )
-        .bind(request.projectId, userId)
+        .bind(request.projectId, access.ownerUserId)
         .first<{ document_version: number }>();
       if (!current) {
         throw new ProjectNotFoundError(request.projectId);
@@ -332,7 +840,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createUploadSession(userId, request);
     }
-    await this.assertProjectOwner(userId, request.projectId);
+    await this.requireProjectEdit(userId, request.projectId);
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
@@ -365,15 +873,22 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().putUpload(userId, uploadSessionId, body);
     }
     const upload = await this.env.DB.prepare(
-      `SELECT u.object_key, u.content_type, u.expires_at FROM upload_sessions u INNER JOIN projects p ON p.id = u.project_id WHERE u.id = ? AND p.user_id = ?`
+      `SELECT project_id, object_key, content_type, expires_at FROM upload_sessions WHERE id = ?`
     )
-      .bind(uploadSessionId, userId)
+      .bind(uploadSessionId)
       .first<{
+        project_id: string;
         object_key: string;
         content_type: string;
         expires_at: string;
       }>();
-    if (!upload || Date.parse(upload.expires_at) < Date.now()) {
+    if (!upload) {
+      throw new ArtifactStorageError(
+        'Upload session was not found or expired.'
+      );
+    }
+    await this.requireProjectEdit(userId, upload.project_id);
+    if (Date.parse(upload.expires_at) < Date.now()) {
       throw new ArtifactStorageError(
         'Upload session was not found or expired.'
       );
@@ -393,7 +908,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().finalizeArtifact(userId, request);
     }
-    await this.assertProjectOwner(userId, request.projectId);
+    await this.requireProjectEdit(userId, request.projectId);
     const upload = await this.env.DB.prepare(
       `SELECT artifact_id, object_key, project_id, file_name, content_type, kind, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
     )
@@ -465,7 +980,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().listArtifacts(userId, projectId);
     }
-    await this.assertProjectOwner(userId, projectId);
+    await this.requireProjectRead(userId, projectId);
     const rows = await this.env.DB.prepare(
       `SELECT id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at FROM artifacts WHERE project_id = ? ORDER BY created_at DESC`
     )
@@ -482,14 +997,15 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().getArtifactMetadata(userId, artifactId);
     }
     const row = await this.env.DB.prepare(
-      `SELECT a.id, a.project_id, a.kind, a.name, a.object_key, a.content_type, a.bytes, a.metadata_json, a.created_at FROM artifacts a INNER JOIN projects p ON p.id = a.project_id WHERE a.id = ? AND p.user_id = ?`
+      `SELECT id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at FROM artifacts WHERE id = ?`
     )
-      .bind(artifactId, userId)
+      .bind(artifactId)
       .first<ArtifactRow>();
-
-    return {
-      artifact: row ? artifactFromRow(row) : null
-    };
+    if (!row) {
+      return { artifact: null };
+    }
+    await this.requireProjectRead(userId, row.project_id);
+    return { artifact: artifactFromRow(row) };
   }
 
   async downloadArtifact(
@@ -608,13 +1124,40 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string
   ): Promise<void> {
+    await this.requireProjectOwner(userId, projectId);
+  }
+
+  private async resolveProjectAccess(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
     const row = await this.env
-      .DB!.prepare(`SELECT id FROM projects WHERE id = ? AND user_id = ?`)
-      .bind(projectId, userId)
-      .first<{ id: string }>();
-    if (!row) {
+      .DB!.prepare(
+        `SELECT p.user_id AS owner_user_id,
+                CASE
+                  WHEN p.user_id = ? THEN 'owner'
+                  WHEN pm.role = 'editor' THEN 'editor'
+                  WHEN pm.role = 'viewer' THEN 'viewer'
+                  ELSE NULL
+                END AS resolved_role
+         FROM projects p
+         LEFT JOIN project_members pm
+           ON pm.project_id = p.id AND pm.user_id = ?
+         WHERE p.id = ?`
+      )
+      .bind(userId, userId, projectId)
+      .first<{
+        owner_user_id: UserId;
+        resolved_role: ProjectAccess['role'] | null;
+      }>();
+    if (!row?.resolved_role) {
       throw new ProjectNotFoundError(projectId);
     }
+    return {
+      projectId,
+      ownerUserId: row.owner_user_id,
+      role: row.resolved_role
+    };
   }
 
   private async pruneExpiredUploads(): Promise<void> {
@@ -728,6 +1271,28 @@ interface ArtifactRow {
   created_at: string;
 }
 
+interface ProjectInvitationRow {
+  id: string;
+  project_id: string;
+  email: string;
+  role: ProjectMemberRole;
+  created_at: number;
+  expires_at: number;
+}
+
+function invitationFromRow(
+  row: ProjectInvitationRow
+): ProjectInvitationSummary {
+  return {
+    invitationId: row.id,
+    projectId: row.project_id,
+    email: row.email,
+    role: row.role,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at
+  };
+}
+
 function artifactFromRow(row: ArtifactRow): ArtifactRecord {
   return {
     artifactId: row.id as ArtifactRecord['artifactId'],
@@ -765,6 +1330,7 @@ export function createPersistenceService(
 const ROOM_META_KEY = 'room:meta';
 const ROOM_LATEST_KEY = 'room:latest';
 const ROOM_HISTORY_PREFIX = 'room:history:';
+const ROOM_EDIT_LEASE_KEY = 'room:edit-lease';
 /** Pre-split layout: the whole room under one value. Migrated away on load. */
 const LEGACY_ROOM_STATE_KEY = 'room-state';
 const ROOM_STORAGE_SCHEMA = 1;
@@ -789,6 +1355,47 @@ const MAX_CLIENT_DOCUMENT_VALUES = 500_000;
 
 /** Largest HTTP snapshot body accepted, sized to fit one storable document. */
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
+const PROJECT_EDIT_LEASE_TTL_MS = 30_000;
+
+/**
+ * Reads a bounded request body without trusting Content-Length or decoding
+ * bytes the room will reject. `null` means the caller must return the typed
+ * oversize response; an absent body remains an invalid empty payload.
+ */
+async function readSnapshotBody(request: Request): Promise<string | null> {
+  const contentLength = Number(request.headers.get('content-length') ?? '0');
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > MAX_SNAPSHOT_PAYLOAD_BYTES
+  ) {
+    return null;
+  }
+  const reader = request.body?.getReader();
+  if (!reader) {
+    return '';
+  }
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_SNAPSHOT_PAYLOAD_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  chunks.push(decoder.decode());
+  return chunks.join('');
+}
 
 interface RoomMeta {
   schema: number;
@@ -825,18 +1432,26 @@ export class ProjectCollaborationRoom extends DurableObject {
     blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
   };
   private readonly ready: Promise<void>;
+  private readonly roomEnv: CloudflareEnv;
   private presence = new Map<string, string>();
-  private locks = new Map<string, string>();
   private sockets = new Map<
     WebSocket,
-    { clientId: string; userId: UserId; displayName: string }
+    {
+      clientId: string;
+      userId: UserId;
+      displayName: string;
+      role: SharedProjectAccessRole;
+    }
   >();
+  private editLease: ProjectEditLease | null = null;
+  private leaseQueue: Promise<void> = Promise.resolve();
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
   private projectId: string | null = null;
 
   constructor(ctx: unknown, env: unknown) {
     super(ctx, env);
+    this.roomEnv = env as CloudflareEnv;
     this.roomContext = ctx as typeof this.roomContext;
     this.ready = this.roomContext.blockConcurrencyWhile(async () => {
       await this.migrateLegacyRoomState();
@@ -849,6 +1464,19 @@ export class ProjectCollaborationRoom extends DurableObject {
         (await this.roomContext.storage.get<ProjectDocument>(
           ROOM_LATEST_KEY
         )) ?? null;
+      const storedLease =
+        (await this.roomContext.storage.get<ProjectEditLease>(
+          ROOM_EDIT_LEASE_KEY
+        )) ?? null;
+      if (
+        storedLease &&
+        storedLease.projectId === this.projectId &&
+        storedLease.expiresAt > Date.now()
+      ) {
+        this.editLease = storedLease;
+      } else if (storedLease) {
+        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+      }
       const history = await Promise.all(
         (meta.historyVersions ?? []).map((version) =>
           this.roomContext.storage.get<ProjectDocument>(historyKey(version))
@@ -900,6 +1528,9 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     await this.ready;
+    if (request.method === 'PATCH') {
+      return this.acceptInternalRoleUpdate(request);
+    }
     if (request.method === 'POST') {
       return this.acceptHttpSnapshot(request);
     }
@@ -908,8 +1539,14 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     const userId = request.headers.get('x-openzcad-user-id');
     const displayName = request.headers.get('x-openzcad-display-name');
+    const role = trustedProjectRole(request.headers);
     const projectId = new URL(request.url).searchParams.get('projectId');
-    if (!userId || !displayName || !projectId) {
+    if (
+      !userId ||
+      !displayName ||
+      !projectId ||
+      (this.leaseEnforced() && !role)
+    ) {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
     if (this.projectId && this.projectId !== projectId) {
@@ -933,7 +1570,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           server,
           event.data,
           userId as UserId,
-          displayName
+          displayName,
+          role ?? 'owner'
         ).catch(() => {
           console.error('Collaboration message handling failed.');
           this.send(server, {
@@ -954,7 +1592,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     socket: WebSocket,
     raw: string | ArrayBuffer,
     userId: UserId,
-    displayName: string
+    displayName: string,
+    role: SharedProjectAccessRole
   ): Promise<void> {
     if (typeof raw !== 'string' || raw.length > 950_000) {
       socket.close(1009, 'Collaboration message is too large.');
@@ -975,7 +1614,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.sockets.set(socket, {
         clientId: message.clientId,
         userId,
-        displayName
+        displayName,
+        role
       });
       this.presence.set(message.clientId, 'active');
       if (message.document) {
@@ -984,13 +1624,16 @@ export class ProjectCollaborationRoom extends DurableObject {
           message.clientId,
           message.document,
           message.baseVersion,
-          false
+          false,
+          message.leaseId
         );
       }
       this.send(socket, {
         type: 'state',
         members: this.members(),
-        document: this.latestDocument
+        document: this.latestDocument,
+        role,
+        lease: this.editLease
       });
       this.broadcastPresence();
       return;
@@ -1005,13 +1648,32 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.broadcastPresence();
       return;
     }
+    if (message.type === 'lease-acquire') {
+      await this.enqueueLeaseOperation(() =>
+        this.acquireEditLease(socket, connection)
+      );
+      return;
+    }
+    if (message.type === 'lease-renew') {
+      await this.enqueueLeaseOperation(() =>
+        this.renewEditLease(socket, connection, message.leaseId)
+      );
+      return;
+    }
+    if (message.type === 'lease-release') {
+      await this.enqueueLeaseOperation(() =>
+        this.releaseEditLease(socket, connection, message.leaseId)
+      );
+      return;
+    }
     if (message.type === 'document') {
       await this.acceptDocument(
         socket,
         message.clientId,
         message.document,
         message.baseVersion,
-        true
+        true,
+        message.leaseId
       );
     }
   }
@@ -1021,8 +1683,33 @@ export class ProjectCollaborationRoom extends DurableObject {
     clientId: string,
     rawDocument: ProjectDocument,
     baseVersion: number | null,
-    broadcast: boolean
+    broadcast: boolean,
+    leaseId?: string
   ): Promise<void> {
+    await this.enqueueLeaseOperation(() =>
+      this.acceptDocumentWithCurrentLease(
+        socket,
+        clientId,
+        rawDocument,
+        baseVersion,
+        broadcast,
+        leaseId
+      )
+    );
+  }
+
+  private async acceptDocumentWithCurrentLease(
+    socket: WebSocket,
+    clientId: string,
+    rawDocument: ProjectDocument,
+    baseVersion: number | null,
+    broadcast: boolean,
+    leaseId?: string
+  ): Promise<void> {
+    const connection = this.sockets.get(socket);
+    if (!connection || !(await this.canAuthor(connection, leaseId, socket))) {
+      return;
+    }
     const rejection = checkClientDocument(rawDocument);
     if (rejection) {
       this.send(socket, { type: 'error', ...rejection });
@@ -1061,6 +1748,222 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
+  private leaseEnforced(): boolean {
+    return isCloudflareFeatureEnabled(
+      this.roomEnv,
+      'PROJECT_EDIT_LEASES_ENFORCED'
+    );
+  }
+
+  private async enqueueLeaseOperation<T>(
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const result = this.leaseQueue.then(operation, operation);
+    this.leaseQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async expireEditLease(now = Date.now()): Promise<void> {
+    if (!this.editLease || this.editLease.expiresAt > now) {
+      return;
+    }
+    const expired = this.editLease;
+    await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+    this.editLease = null;
+    this.notifyLeaseHolder(expired, 'expired');
+  }
+
+  private async acquireEditLease(
+    socket: WebSocket,
+    connection: {
+      clientId: string;
+      userId: UserId;
+      role: SharedProjectAccessRole;
+    }
+  ): Promise<void> {
+    if (connection.role === 'viewer') {
+      this.send(socket, { type: 'lease-denied', reason: 'read-only' });
+      return;
+    }
+    await this.expireEditLease();
+    const current = this.editLease;
+    if (
+      current &&
+      (current.userId !== connection.userId ||
+        current.clientId !== connection.clientId)
+    ) {
+      this.send(socket, {
+        type: 'lease-denied',
+        reason: 'held',
+        expiresAt: current.expiresAt
+      });
+      return;
+    }
+    const lease: ProjectEditLease = {
+      leaseId: current?.leaseId ?? `lease_${crypto.randomUUID()}`,
+      projectId: this.projectId!,
+      clientId: connection.clientId,
+      userId: connection.userId,
+      expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
+    };
+    await this.roomContext.storage.put(ROOM_EDIT_LEASE_KEY, lease);
+    this.editLease = lease;
+    this.send(socket, { type: 'lease-granted', lease });
+  }
+
+  private async renewEditLease(
+    socket: WebSocket,
+    connection: { clientId: string; userId: UserId },
+    leaseId: string
+  ): Promise<void> {
+    await this.expireEditLease();
+    if (
+      !this.editLease ||
+      this.editLease.leaseId !== leaseId ||
+      this.editLease.clientId !== connection.clientId ||
+      this.editLease.userId !== connection.userId ||
+      this.editLease.projectId !== this.projectId
+    ) {
+      this.send(socket, { type: 'lease-lost', reason: 'invalid' });
+      return;
+    }
+    const lease = {
+      ...this.editLease,
+      expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
+    };
+    await this.roomContext.storage.put(ROOM_EDIT_LEASE_KEY, lease);
+    this.editLease = lease;
+    this.send(socket, { type: 'lease-granted', lease });
+  }
+
+  private async releaseEditLease(
+    socket: WebSocket,
+    connection: { clientId: string; userId: UserId },
+    leaseId: string
+  ): Promise<void> {
+    await this.expireEditLease();
+    if (
+      !this.editLease ||
+      this.editLease.leaseId !== leaseId ||
+      this.editLease.clientId !== connection.clientId ||
+      this.editLease.userId !== connection.userId
+    ) {
+      this.send(socket, { type: 'lease-lost', reason: 'invalid' });
+      return;
+    }
+    const released = this.editLease;
+    await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+    this.editLease = null;
+    this.notifyLeaseHolder(released, 'released');
+  }
+
+  private matchesActiveLease(
+    userId: UserId,
+    clientId: string,
+    leaseId: string | undefined
+  ): boolean {
+    return Boolean(
+      leaseId &&
+      this.editLease &&
+      this.editLease.expiresAt > Date.now() &&
+      this.editLease.leaseId === leaseId &&
+      this.editLease.projectId === this.projectId &&
+      this.editLease.clientId === clientId &&
+      this.editLease.userId === userId
+    );
+  }
+
+  private async canAuthor(
+    connection: {
+      clientId: string;
+      userId: UserId;
+      role: SharedProjectAccessRole;
+    },
+    leaseId: string | undefined,
+    socket: WebSocket
+  ): Promise<boolean> {
+    if (connection.role === 'viewer') {
+      this.send(socket, {
+        type: 'error',
+        code: 'permission-denied',
+        message: 'Viewers cannot change the collaboration document.'
+      });
+      return false;
+    }
+    if (!this.leaseEnforced()) {
+      return true;
+    }
+    await this.expireEditLease();
+    if (
+      this.matchesActiveLease(connection.userId, connection.clientId, leaseId)
+    ) {
+      return true;
+    }
+    this.send(socket, {
+      type: 'error',
+      code: 'lease-required',
+      message: 'A matching active project edit lease is required.'
+    });
+    return false;
+  }
+
+  private notifyLeaseHolder(
+    lease: ProjectEditLease,
+    reason: 'expired' | 'released' | 'role-changed'
+  ): void {
+    for (const [socket, connection] of this.sockets) {
+      if (
+        connection.userId === lease.userId &&
+        connection.clientId === lease.clientId
+      ) {
+        this.send(socket, { type: 'lease-lost', reason });
+      }
+    }
+  }
+
+  private async acceptInternalRoleUpdate(request: Request): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    const userId = request.headers.get('x-openzcad-internal-user-id');
+    const role = trustedProjectRole(
+      request.headers,
+      'x-openzcad-internal-project-role'
+    );
+    if (
+      !projectId ||
+      !userId ||
+      (this.projectId && this.projectId !== projectId)
+    ) {
+      return new Response('Invalid project role update.', { status: 400 });
+    }
+    await this.enqueueLeaseOperation(async () => {
+      if (
+        this.editLease?.userId === userId &&
+        (role === null || role === 'viewer')
+      ) {
+        const lost = this.editLease;
+        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+        this.editLease = null;
+        this.notifyLeaseHolder(lost, 'role-changed');
+      }
+      for (const [socket, connection] of this.sockets) {
+        if (connection.userId !== userId) {
+          continue;
+        }
+        if (role) {
+          connection.role = role;
+        } else {
+          this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
+          socket.close(1008, 'Project access was removed.');
+          this.removeSocket(socket);
+        }
+      }
+    });
+    return new Response(null, { status: 204 });
+  }
+
   /**
    * Promotes a resolved document to latest and persists it. Callers check
    * {@link checkPersistedSize} first: in-memory state must not move ahead of
@@ -1092,27 +1995,31 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async acceptHttpSnapshot(request: Request): Promise<Response> {
     const userId = request.headers.get('x-openzcad-user-id');
     const displayName = request.headers.get('x-openzcad-display-name');
+    const role = trustedProjectRole(request.headers);
     const projectId = new URL(request.url).searchParams.get('projectId');
-    if (!userId || !displayName || !projectId) {
+    if (
+      !userId ||
+      !displayName ||
+      !projectId ||
+      (this.leaseEnforced() && !role)
+    ) {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
-    const contentLength = Number(request.headers.get('content-length') ?? '0');
-    if (
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_SNAPSHOT_PAYLOAD_BYTES
-    ) {
-      return oversizeSnapshotResponse();
+    if (role === 'viewer') {
+      return rejectionResponse({
+        code: 'permission-denied',
+        message: 'Viewers cannot change the collaboration document.'
+      });
     }
-    // `content-length` is absent on chunked bodies, so the body itself is what
-    // actually has to be measured before anything parses it.
-    const body = await request.text();
-    if (body.length > MAX_SNAPSHOT_PAYLOAD_BYTES) {
+    const body = await readSnapshotBody(request);
+    if (body === null) {
       return oversizeSnapshotResponse();
     }
     let payload: {
       clientId?: string;
       baseVersion?: number | null;
       document?: ProjectDocument;
+      leaseId?: string;
     };
     try {
       payload = JSON.parse(body) as typeof payload;
@@ -1121,6 +2028,39 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     if (!payload.clientId || !payload.document) {
       return new Response('Invalid collaboration snapshot.', { status: 400 });
+    }
+    return this.enqueueLeaseOperation(() =>
+      this.acceptHttpSnapshotPayload(
+        userId as UserId,
+        projectId,
+        payload as {
+          clientId: string;
+          baseVersion?: number | null;
+          document: ProjectDocument;
+          leaseId?: string;
+        }
+      )
+    );
+  }
+
+  private async acceptHttpSnapshotPayload(
+    userId: UserId,
+    projectId: string,
+    payload: {
+      clientId: string;
+      baseVersion?: number | null;
+      document: ProjectDocument;
+      leaseId?: string;
+    }
+  ): Promise<Response> {
+    if (this.leaseEnforced()) {
+      await this.expireEditLease();
+      if (!this.matchesActiveLease(userId, payload.clientId, payload.leaseId)) {
+        return rejectionResponse({
+          code: 'lease-required',
+          message: 'A matching active project edit lease is required.'
+        });
+      }
     }
     if (this.projectId && this.projectId !== projectId) {
       return new Response('Room project mismatch.', { status: 409 });
@@ -1253,26 +2193,22 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.broadcastPresence();
   }
 
-  async joinSession(userId: string, status: string) {
-    this.presence.set(userId, status);
-    return { members: Array.from(this.presence.entries()) };
-  }
-
-  async setLock(path: string, userId: string | null) {
-    if (userId) {
-      this.locks.set(path, userId);
-    } else {
-      this.locks.delete(path);
-    }
-    return { locks: Array.from(this.locks.entries()) };
-  }
-
   async snapshot() {
     return {
       members: Array.from(this.presence.entries()),
-      locks: Array.from(this.locks.entries())
+      lease: this.editLease
     };
   }
+}
+
+function trustedProjectRole(
+  headers: Headers,
+  name = 'x-openzcad-project-role'
+): SharedProjectAccessRole | null {
+  const value = headers.get(name);
+  return value === 'owner' || value === 'editor' || value === 'viewer'
+    ? value
+    : null;
 }
 
 interface CollaborationRejection {
@@ -1284,7 +2220,16 @@ interface CollaborationRejection {
 function rejectionResponse(rejection: CollaborationRejection): Response {
   return Response.json(
     { type: 'error', ...rejection } satisfies CollaborationServerMessage,
-    { status: rejection.code === 'document-invalid' ? 400 : 413 }
+    {
+      status:
+        rejection.code === 'permission-denied'
+          ? 403
+          : rejection.code === 'lease-required'
+            ? 409
+            : rejection.code === 'document-invalid'
+              ? 400
+              : 413
+    }
   );
 }
 
