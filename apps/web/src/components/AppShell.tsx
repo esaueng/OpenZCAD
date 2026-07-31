@@ -19,6 +19,12 @@ interface AppShellProps {
    * any request still streaming, so it has to stay mounted underneath.
    */
   assistantHidden?: boolean;
+  /**
+   * Same deal for a deliberate collapse: the panel renders its launcher instead
+   * of the dock, so the column has to go too — a collapse that left a 360 px
+   * gap behind would not be a collapse.
+   */
+  assistantCollapsed?: boolean;
   statusBar: ReactNode;
   overlays?: ReactNode;
 }
@@ -36,15 +42,17 @@ export function AppShell({
   inspector,
   assistant,
   assistantHidden = false,
+  assistantCollapsed = false,
   statusBar,
   overlays
 }: AppShellProps) {
+  const assistantDocked = Boolean(
+    assistant && !assistantHidden && !assistantCollapsed
+  );
   return (
     <div className="app-shell">
       {topBar}
-      <main
-        className={`workspace${assistant && !assistantHidden ? ' with-assistant' : ''}`}
-      >
+      <main className={`workspace${assistantDocked ? ' with-assistant' : ''}`}>
         {sidebar}
         <div className="viewer-area">
           {viewer}

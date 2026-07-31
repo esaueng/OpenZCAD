@@ -127,6 +127,8 @@ Cloud settings, personal credentials, projects, artifacts, and collaboration req
 
 An optional side panel turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it, and it stays dormant until a provider key is configured.
 
+The dock collapses to a launcher in the bottom-right corner of the viewport, which gives its whole column back to the model; the conversation keeps running behind it, and the launcher counts any reply that lands while it is closed. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
+
 The assistant streams proposals through the OpenAI Responses API. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose a small allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
 
 OpenRouter is the default provider. For local development, export the key in the launching shell or set it in `apps/web/.dev.vars` (git-ignored):

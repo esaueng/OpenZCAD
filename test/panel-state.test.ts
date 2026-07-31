@@ -74,6 +74,19 @@ describe('workspace panel state', () => {
     expect(normalizePanelState([1, 2])).toEqual(defaultPanelState());
   });
 
+  it('remembers the assistant dock across reloads', () => {
+    // Collapsed to begin with — a new workspace opens on the model — but the
+    // choice is a layout habit, so opening it has to survive a reload.
+    expect(defaultPanelState().assistantCollapsed).toBe(true);
+    expect(
+      savePanelState({ ...defaultPanelState(), assistantCollapsed: false })
+    ).toBe(true);
+    expect(loadPanelState().assistantCollapsed).toBe(false);
+    expect(
+      normalizePanelState({ assistantCollapsed: 'yes' }).assistantCollapsed
+    ).toBe(true);
+  });
+
   it('ignores unknown sections and wrong types', () => {
     const normalized = normalizePanelState({
       toolPaletteOpen: 'yes',
