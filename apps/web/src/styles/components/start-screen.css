@@ -244,18 +244,227 @@
   text-align: left;
 }
 
+/* The tile is a container, not a control: the open action fills it, and the
+   pin / reorder / menu affordances sit on top. Nesting those inside the open
+   button would be invalid markup and would make every one of them also open
+   the part. */
 .start-tile-project {
-  grid-template-rows: auto 1fr auto;
-  gap: 6px;
+  position: relative;
+  gap: 0;
+  padding: 0;
   color: var(--color-text-muted);
 }
 
-.start-tile-project:hover:not(:disabled),
-.start-tile-project:focus-visible {
+.start-tile-open {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 6px;
+  padding: var(--sp-3);
+  border-radius: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.start-tile-project:has(.start-tile-open:hover:not(:disabled)),
+.start-tile-project:has(.start-tile-open:focus-visible),
+.start-tile-project.is-drop-target {
   color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-accent-border);
+}
+
+.start-tile-open:focus-visible {
   outline: none;
+}
+
+/* A pinned part keeps a permanent marker so its position reads as deliberate
+   rather than as wherever the sort happened to leave it. */
+.start-tile-project.is-pinned {
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-project.is-dragging {
+  opacity: 0.45;
+}
+
+.start-tile-project.is-drop-target {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* ── Tile actions ────────────────────────────────────────── */
+
+.start-tile-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+/* Hidden until the tile is under the pointer or holds focus, so a wall of
+   tiles stays a wall of parts — but never hidden from the keyboard, and never
+   hidden while it is the thing you are using. */
+.start-tile-project:hover .start-tile-actions,
+.start-tile-project:focus-within .start-tile-actions,
+.start-tile-project.is-pinned .start-tile-actions {
+  opacity: 1;
+}
+
+.start-tile-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.start-tile-action:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.start-tile-action[aria-pressed='true'] {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.start-tile-grip {
+  cursor: grab;
+}
+
+.start-tile-grip:active {
+  cursor: grabbing;
+}
+
+.start-tile-menu {
+  position: absolute;
+  top: 32px;
+  right: 6px;
+  z-index: 2;
+  display: grid;
+  min-width: 168px;
+  padding: 4px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-color: var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.start-tile-menu button,
+.start-tile-footer button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.start-tile-menu button:hover:not(:disabled),
+.start-tile-footer button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-tile-menu button.is-destructive,
+.start-tile-footer button.is-destructive,
+.start-shelf-action.is-destructive {
+  color: var(--color-error);
+}
+
+.start-tile-footer {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.start-tile-footer button {
+  flex: 1;
+  justify-content: center;
+  border: var(--border-thin);
+}
+
+/* ── Shelf tabs ──────────────────────────────────────────── */
+
+.start-shelf-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.start-shelf-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.start-shelf-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 10px;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.start-shelf-tabs button:hover {
+  color: var(--color-text);
+}
+
+.start-shelf-tabs button.is-active {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-shelf-count {
+  min-width: 16px;
+  padding: 0 4px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+  text-align: center;
+}
+
+.start-shelf-hint {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.start-shelf-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
+.start-shelf-action:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 .start-tile-thumb {
@@ -293,7 +502,7 @@
   letter-spacing: 0.04em;
 }
 
-.start-tile-project:hover:not(:disabled) .start-tile-thumb {
+.start-tile-project:hover .start-tile-thumb {
   color: var(--color-accent);
 }
 

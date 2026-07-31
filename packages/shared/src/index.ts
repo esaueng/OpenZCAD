@@ -572,12 +572,169 @@ export interface ArtifactRecord {
 
 export type ArtifactKind = ArtifactRecord['kind'];
 
+/**
+ * Which shelf a project sits on. `deleted` is the recycle bin: the project is
+ * hidden from the parts grid but still fully restorable until it is purged.
+ */
+export type ProjectStatus = 'active' | 'archived' | 'deleted';
+
+export const PROJECT_STATUSES: readonly ProjectStatus[] = [
+  'active',
+  'archived',
+  'deleted'
+];
+
+/**
+ * Shelf state for a project: where it lives and in what order it is shown.
+ * Kept apart from the project itself because it describes the owner's desk,
+ * not the part — nothing here changes the geometry or the revision history.
+ */
+export interface ProjectOrganization {
+  status: ProjectStatus;
+  /** Pinned projects lead their shelf regardless of manual order. */
+  pinned: boolean;
+  /** Manual drag order within a shelf; lower sorts first. */
+  sortOrder: number;
+  /** When the project entered the recycle bin, if it is in there. */
+  deletedAt?: string;
+  /** When the project was archived, if it is archived. */
+  archivedAt?: string;
+}
+
+export const DEFAULT_PROJECT_ORGANIZATION: ProjectOrganization = {
+  status: 'active',
+  pinned: false,
+  sortOrder: 0
+};
+
 export interface ProjectSummary {
   projectId: ProjectId;
   name: string;
   lastRevisionId?: RevisionId;
   revisionCount: number;
   updatedAt: string;
+  /**
+   * Absent when the store holding this summary has no shelf state for the
+   * project — an older row, or a device that has never organised it. Read it
+   * through {@link projectOrganization} so a missing record reads as defaults
+   * instead of silently overwriting one that does exist elsewhere.
+   */
+  organization?: ProjectOrganization;
+}
+
+/**
+ * Folds a partial shelf edit into the current state. The archived/deleted
+ * timestamps are owned by this function rather than by callers so that they
+ * always mean "when it entered this shelf": moving straight from the archive
+ * to the bin restamps `deletedAt`, restoring clears both, and the retention
+ * countdown always measures from the move that put the project there.
+ */
+export function applyOrganizationUpdate(
+  current: ProjectOrganization,
+  update: Pick<UpdateProjectRequest, 'status' | 'pinned' | 'sortOrder'>,
+  now = nowIso()
+): ProjectOrganization {
+  const status = update.status ?? current.status;
+  const next: ProjectOrganization = {
+    status,
+    pinned: update.pinned ?? current.pinned,
+    sortOrder: update.sortOrder ?? current.sortOrder
+  };
+  if (status === 'deleted') {
+    next.deletedAt =
+      current.status === 'deleted' ? (current.deletedAt ?? now) : now;
+  }
+  if (status === 'archived') {
+    next.archivedAt =
+      current.status === 'archived' ? (current.archivedAt ?? now) : now;
+  }
+  return next;
+}
+
+/** Shelf state of a summary, with the defaults applied. */
+export function projectOrganization(
+  summary: Pick<ProjectSummary, 'organization'>
+): ProjectOrganization {
+  return summary.organization ?? DEFAULT_PROJECT_ORGANIZATION;
+}
+
+/** How long a deleted project stays restorable before it is purged. */
+export const TRASH_RETENTION_DAYS = 30;
+export const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+/** When a project deleted at `deletedAt` becomes eligible for purging. */
+export function trashPurgeAt(deletedAt: string): string {
+  return new Date(Date.parse(deletedAt) + TRASH_RETENTION_MS).toISOString();
+}
+
+/** Whole days left before a deleted project is purged; 0 once it is due. */
+export function daysUntilPurge(deletedAt: string, now = Date.now()): number {
+  const remaining = Date.parse(deletedAt) + TRASH_RETENTION_MS - now;
+  return remaining <= 0 ? 0 : Math.ceil(remaining / (24 * 60 * 60 * 1000));
+}
+
+/**
+ * True once a deleted project has outlived the retention window. An unparsable
+ * timestamp is treated as *not* due: a purge is irreversible, so a corrupt
+ * record has to be looked at rather than quietly destroyed.
+ */
+export function isPurgeDue(deletedAt: string | undefined, now = Date.now()) {
+  if (!deletedAt) {
+    return false;
+  }
+  const parsed = Date.parse(deletedAt);
+  return Number.isFinite(parsed) && parsed + TRASH_RETENTION_MS <= now;
+}
+
+/**
+ * Shelf order: pinned first, then the manual drag order, then most recently
+ * touched. The project id breaks the final tie so the sort is total — without
+ * it two projects saved in the same millisecond could swap places per render.
+ */
+export function compareProjectSummaries(
+  left: ProjectSummary,
+  right: ProjectSummary
+): number {
+  const a = projectOrganization(left);
+  const b = projectOrganization(right);
+  if (a.pinned !== b.pinned) {
+    return a.pinned ? -1 : 1;
+  }
+  if (a.sortOrder !== b.sortOrder) {
+    return a.sortOrder - b.sortOrder;
+  }
+  const byUpdated = right.updatedAt.localeCompare(left.updatedAt);
+  return byUpdated !== 0
+    ? byUpdated
+    : left.projectId.localeCompare(right.projectId);
+}
+
+const COPY_SUFFIX_PATTERN = /\s*\(copy(?: (\d+))?\)$/i;
+
+/**
+ * Name for a copy of `baseName` that does not collide with `existingNames`.
+ * Duplicating a duplicate extends the existing counter rather than nesting
+ * another "(copy)", so a part copied five times is not called
+ * "Bracket (copy) (copy) (copy) (copy) (copy)".
+ */
+export function duplicateProjectName(
+  baseName: string,
+  existingNames: Iterable<string>
+): string {
+  const taken = new Set(
+    [...existingNames].map((name) => name.trim().toLowerCase())
+  );
+  const root = baseName.trim().replace(COPY_SUFFIX_PATTERN, '') || 'Untitled';
+  for (let index = 1; ; index += 1) {
+    const suffix = index === 1 ? ' (copy)' : ` (copy ${index})`;
+    // The suffix is what makes the name unique, so the root is what gives way
+    // when the pair would exceed the limit.
+    const candidate =
+      `${root.slice(0, MAX_PROJECT_NAME_LENGTH - suffix.length)}${suffix}`.trim();
+    if (!taken.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
 }
 
 export interface CreateProjectRequest {
@@ -592,6 +749,42 @@ export interface CreateProjectResponse {
 
 export interface ListProjectsResponse {
   projects: ProjectSummary[];
+}
+
+/** Partial shelf-state edit; omitted fields are left as they are. */
+export interface UpdateProjectRequest {
+  projectId: ProjectId;
+  status?: ProjectStatus;
+  pinned?: boolean;
+  sortOrder?: number;
+}
+
+export interface UpdateProjectResponse {
+  project: ProjectSummary;
+}
+
+export interface DuplicateProjectRequest {
+  projectId: ProjectId;
+  /** Defaults to a non-colliding "(copy)" of the source name. */
+  name?: string;
+}
+
+export type DuplicateProjectResponse = CreateProjectResponse;
+
+/**
+ * The projects to renumber, in their new order. Ids the caller leaves out keep
+ * whatever position they had, so one shelf can be reordered without disturbing
+ * the others.
+ */
+export interface ReorderProjectsRequest {
+  projectIds: ProjectId[];
+}
+
+export type ReorderProjectsResponse = ListProjectsResponse;
+
+export interface PurgeProjectsResponse {
+  /** Projects destroyed because their retention window ran out. */
+  purgedProjectIds: ProjectId[];
 }
 
 export interface SaveRevisionRequest {
