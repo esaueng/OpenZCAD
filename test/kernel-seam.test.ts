@@ -15,7 +15,6 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -210,7 +209,9 @@ function fnv(signature: string): number {
   return unsigned === 0 ? 1 : unsigned;
 }
 
-describe('kernel seam correctness', () => {
+// Real-kernel suite: both kernels start up here, well past the 5 s default
+// when the whole test pool is contending for CPU.
+describe('kernel seam correctness', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
   let referenceStep: string;
 
@@ -598,26 +599,7 @@ describe('kernel seam correctness', () => {
     );
   });
 
-  it('scales compatibility-path STL exports to millimetres for inch documents', () => {
-    const compat = createKernelAdapter();
-    const document = addPrimitiveFeature(
-      createProjectDocument('Inch mesh part', user, 'inch'),
-      {
-        name: 'Inch box',
-        primitiveKind: 'box',
-        dimensions: { width: 1, height: 2, depth: 3 }
-      }
-    );
-    const stl = compat.exportStl(document, [document.bodyOrder[0]!]);
-    const vertices = asciiStlVertices(stl);
-    expect(vertices.length).toBeGreaterThan(0);
-    expect(Math.max(...vertices.map((vertex) => vertex[2]!))).toBeCloseTo(
-      76.2,
-      6
-    );
-  });
-
-  it('routes imported-mesh documents through a millimetre-scaled STL export', async () => {
+  it('scales imported-mesh STL exports to millimetres for inch documents', async () => {
     const tetrahedron = {
       vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
       indices: [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]

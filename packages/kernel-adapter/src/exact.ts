@@ -50,7 +50,10 @@ import {
   selectSafelyUnifiedSolid,
   type TriangleMeshClosure
 } from './boolean-result-validation';
-import { OpenZCADKernel } from './index';
+import {
+  importedMeshStl,
+  meshBooleanUnsupportedError
+} from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import { normalizeStepPlaneAnglesForKernel } from './step-import';
@@ -93,6 +96,8 @@ import {
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
+/** Sewing gap for imported meshes, relative to the mesh's largest extent. */
+const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
@@ -111,6 +116,13 @@ interface ExactBuildResult {
   shapes: Map<BodyId, ExactShape>;
   sketchBases: Map<SketchId, PlaneBasis>;
   consumed: Set<BodyId>;
+  /**
+   * Bodies whose geometry originates in an imported mesh, directly or through
+   * a derived feature. Their shells are source-file facets rather than
+   * analytic surfaces, which is what makes booleans against them a typed
+   * refusal instead of a silently poor result.
+   */
+  meshBodies: Set<BodyId>;
   warnings: string[];
 }
 
@@ -847,8 +859,9 @@ function profilePoints(
 }
 
 /**
- * Build the same ZYX Euler transform used by the compatibility kernel and the
- * viewport gizmo. BrepKit accepts row-major matrices and column vectors.
+ * Build the same ZYX Euler transform the viewport's Move gizmo composes, so a
+ * dragged placement and the rebuilt body agree once more than one axis is
+ * non-zero. BrepKit accepts row-major matrices and column vectors.
  */
 function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
   const rx = (rotationDeg.x * Math.PI) / 180;
@@ -2580,6 +2593,98 @@ function projectBrepKitLineageDiagnostic(
   };
 }
 
+/**
+ * Bring an imported mesh into the kernel as a body it can actually model with.
+ *
+ * BrepKit's STL importer emits one face per triangle and does not share edges
+ * between them, so the result fails strict validation and every modeling
+ * operation refuses it. Sewing restores the shared-edge topology, and unifying
+ * same-domain faces recovers the planar faces a tessellator split up — an
+ * imported cube comes back as six faces, not twelve triangles, so a user can
+ * select, mirror, shell and offset it like any other body.
+ *
+ * The repair is topological only: the measured volume and bounds must survive
+ * it unchanged. If they do not, or the mesh cannot be sewn at all, the import
+ * fails by name instead of publishing a body whose geometry silently drifted.
+ */
+function importMeshSolid(kernel: BrepKernel, stlText: string): number {
+  const imported = kernel.importStl(new TextEncoder().encode(stlText));
+  const faces = kernel.getSolidFaces(imported);
+  if (faces.length < 2) {
+    throw new Error(
+      'An imported mesh needs at least two triangles to form a body.'
+    );
+  }
+  const bounds = Array.from(kernel.boundingBox(imported));
+  const volume = kernel.volume(imported, MEASUREMENT_DEFLECTION);
+  const scale = Math.max(
+    1,
+    bounds[3]! - bounds[0]!,
+    bounds[4]! - bounds[1]!,
+    bounds[5]! - bounds[2]!
+  );
+
+  let repaired: number;
+  try {
+    const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
+    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
+      | string
+      | { solid?: number };
+    const parsed = (
+      typeof healed === 'string' ? JSON.parse(healed) : healed
+    ) as { solid?: number };
+    repaired = typeof parsed.solid === 'number' ? parsed.solid : sewn;
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : 'unknown kernel error';
+    throw new Error(
+      `This mesh could not be sewn into a shell the kernel can model with: ${detail}`,
+      { cause: error }
+    );
+  }
+
+  const repairedBounds = Array.from(kernel.boundingBox(repaired));
+  const repairedVolume = kernel.volume(repaired, MEASUREMENT_DEFLECTION);
+  const linearTolerance = Math.max(GEOMETRY_EPSILON, scale * 1e-6);
+  if (
+    repairedBounds.length !== bounds.length ||
+    repairedBounds.some(
+      (coordinate, index) =>
+        Math.abs(coordinate - bounds[index]!) > linearTolerance
+    ) ||
+    Math.abs(repairedVolume - volume) >
+      Math.max(linearTolerance ** 3, Math.abs(volume) * 1e-6)
+  ) {
+    throw new Error(
+      'Sewing this mesh changed its size, so the import was refused rather than publishing altered geometry.'
+    );
+  }
+  return repaired;
+}
+
+function bodyName(document: ProjectDocument, bodyId: BodyId): string {
+  return (
+    listNodesByKind(document, 'body').find(
+      (candidate) => candidate.bodyId === bodyId
+    )?.name ?? String(bodyId)
+  );
+}
+
+/**
+ * Carry the imported-mesh origin onto a body derived from one. Mirroring,
+ * shelling or offsetting a mesh still leaves a facet shell, so the derived
+ * body must refuse booleans for the same reason its source does.
+ */
+function inheritMeshOrigin(
+  result: ExactBuildResult,
+  source: BodyId,
+  derived: BodyId | undefined
+): void {
+  if (derived !== undefined && result.meshBodies.has(source)) {
+    result.meshBodies.add(derived);
+  }
+}
+
 function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
   if (shape.solids.length === 0) {
     throw new Error('Exact body contains no solids.');
@@ -2642,15 +2747,8 @@ function decodeText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-function containsImportedMesh(document: ProjectDocument): boolean {
-  return listFeaturesInOrder(document).some(
-    (feature) => feature.data.featureKind === 'imported-mesh'
-  );
-}
-
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'brepkit' as const;
-  private readonly legacy = new OpenZCADKernel();
 
   private resolveSketchBasisAtHistory(
     kernel: BrepKernel,
@@ -3090,6 +3188,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       shapes: new Map(),
       sketchBases: new Map(),
       consumed: new Set(),
+      meshBodies: new Set(),
       warnings: [...errors]
     };
 
@@ -3113,8 +3212,26 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             break;
           }
-          case 'imported-mesh':
-            throw new Error('Legacy mesh bodies use the compatibility kernel.');
+          case 'imported-mesh': {
+            if (feature.bodyId) {
+              // The kernel's own STL importer owns vertex welding and shell
+              // orientation, so the document's triangle soup goes back through
+              // it rather than being re-derived here.
+              const solid = importMeshSolid(
+                kernel,
+                importedMeshStl(feature.data)
+              );
+              result.meshBodies.add(feature.bodyId);
+              result.shapes.set(feature.bodyId, {
+                solids: [solid],
+                lineage: brepKitHashOnlyLineage(
+                  'imported-mesh',
+                  'Imported meshes carry no feature provenance; every facet is source-file data.'
+                )
+              });
+            }
+            break;
+          }
           case 'direct-edit': {
             const target = result.shapes.get(feature.data.targetBodyId);
             if (!target) {
@@ -3235,6 +3352,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'The pinned bridge does not expose a complete reflected topology relation.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'shell': {
@@ -3269,6 +3391,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'The pinned bridge does not expose removed, offset, and generated face relations.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'solid-offset': {
@@ -3296,11 +3423,24 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'The pinned bridge does not expose a complete offset topology relation.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'boolean': {
             if (!feature.bodyId || feature.data.targetBodyIds.length < 2) {
               throw new Error('Boolean requires at least two bodies.');
+            }
+            const meshOperand = feature.data.targetBodyIds.find((bodyId) =>
+              result.meshBodies.has(bodyId)
+            );
+            if (meshOperand !== undefined) {
+              throw meshBooleanUnsupportedError(
+                bodyName(document, meshOperand)
+              );
             }
             const operands = feature.data.targetBodyIds.map((bodyId) => {
               const shape = result.shapes.get(bodyId);
@@ -3508,6 +3648,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'pattern': {
@@ -3579,6 +3724,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             }
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, { solids });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
         }
@@ -4187,10 +4337,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    if (containsImportedMesh(document)) {
-      return this.legacy.syncDocument(document);
-    }
-
     const kernel = new BrepKernel();
     try {
       const build = this.build(kernel, document);
@@ -4320,9 +4466,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    if (containsImportedMesh(document)) {
-      return this.legacy.exportStl(document, bodyIds);
-    }
     const kernel = new BrepKernel();
     try {
       const build = this.build(kernel, document);

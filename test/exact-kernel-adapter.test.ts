@@ -11,6 +11,7 @@ import {
   extrudeSketch,
   filletEdges,
   findSketch,
+  importMeshBody,
   listFeaturesInOrder,
   mirrorBody,
   offsetSolidBody,
@@ -325,6 +326,87 @@ describe('exact hybrid kernel adapter', { timeout: 30_000 }, () => {
           derived.bodyRepresentations[extrusionBodyId]!.bbox.min.z
         ).toBeCloseTo(42, 5);
       }
+    } finally {
+      brepKit.dispose();
+      occt.dispose();
+    }
+  });
+
+  it('publishes the same imported-mesh body on both kernels', async () => {
+    // A 12-triangle block, the shape a real STL export of a part has.
+    const corners: [number, number, number][] = [
+      [0, 0, 0],
+      [10, 0, 0],
+      [10, 20, 0],
+      [0, 20, 0],
+      [0, 0, 30],
+      [10, 0, 30],
+      [10, 20, 30],
+      [0, 20, 30]
+    ];
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    for (const quad of [
+      [0, 3, 2, 1],
+      [4, 5, 6, 7],
+      [0, 1, 5, 4],
+      [3, 7, 6, 2],
+      [0, 4, 7, 3],
+      [1, 2, 6, 5]
+    ]) {
+      const base = vertices.length / 3;
+      for (const corner of quad) {
+        vertices.push(...corners[corner]!);
+      }
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    const { document, bodyId } = importMeshBody(
+      createProjectDocument('Mesh parity', toUserId('user_mesh_parity')),
+      {
+        name: 'Imported block',
+        artifactId: 'artifact_parity_block',
+        sourceName: 'block.stl',
+        triangleCount: indices.length / 3,
+        vertices,
+        indices
+      }
+    );
+
+    const brepKit = new BrepKitKernelAdapter();
+    const occt = await OcctStepKernelAdapter.create();
+    try {
+      const [brepDerived, occtDerived] = await Promise.all([
+        brepKit.syncDocument(document),
+        occt.syncDocument(document)
+      ]);
+      expect(brepDerived.warnings).toEqual(occtDerived.warnings);
+      expect(brepDerived.exportableBodyIds).toEqual(
+        occtDerived.exportableBodyIds
+      );
+      const brepBody = brepDerived.bodyRepresentations[bodyId]!;
+      const occtBody = occtDerived.bodyRepresentations[bodyId]!;
+      expect(brepBody.source).toBe(occtBody.source);
+      expect(brepBody.name).toBe(occtBody.name);
+      expect(brepBody.consumed).toBe(occtBody.consumed);
+      expect(brepBody.exportableStep).toBe(occtBody.exportableStep);
+      expect(brepBody.volume).toBeCloseTo(occtBody.volume, 6);
+      expect(brepBody.bbox).toEqual(occtBody.bbox);
+      // Both adapters publish one body-level hash-only diagnostic and no
+      // verified topology references; only the wording differs.
+      const lineageShape = (body: typeof brepBody) => ({
+        diagnostics: body.topology!.lineageDiagnostics?.map((diagnostic) => [
+          diagnostic.kind,
+          diagnostic.status
+        ]),
+        references: [...body.topology!.faces, ...body.topology!.edges].filter(
+          (entry) => entry.reference !== undefined
+        ).length
+      });
+      expect(lineageShape(brepBody)).toEqual(lineageShape(occtBody));
+      expect(lineageShape(brepBody)).toEqual({
+        diagnostics: [['body', 'hash-only']],
+        references: 0
+      });
     } finally {
       brepKit.dispose();
       occt.dispose();
