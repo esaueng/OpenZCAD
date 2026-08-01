@@ -17,6 +17,7 @@
 
 .demo-card {
   display: grid;
+  min-width: 0;
   gap: 5px;
   padding: 9px 11px;
   color: var(--color-text-muted);
@@ -80,3 +81,16 @@
   white-space: nowrap;
 }
 
+@media (max-width: 620px) {
+  .demo-list {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .demo-card-head,
+  .demo-card-tagline {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}

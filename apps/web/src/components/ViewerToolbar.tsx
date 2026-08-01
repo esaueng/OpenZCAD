@@ -2,12 +2,12 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Camera, Grid3x3, Maximize2 } from 'lucide-react';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
-  DisplayMode,
   ProjectionMode,
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
+import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
 
 /**
  * Every standard view, in reading order down the flyout. Back, left and
@@ -28,12 +28,6 @@ function viewTitle(view: { id: StandardView; shortcut?: string }): string {
   const label = `${VIEW_LABELS[view.id]} view`;
   return view.shortcut ? `${label} (${view.shortcut})` : label;
 }
-
-export const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
-  'shaded-edges': 'Shaded + edges',
-  shaded: 'Shaded',
-  wireframe: 'Wireframe'
-};
 
 interface ViewerToolbarProps {
   settings: ViewerSettings;

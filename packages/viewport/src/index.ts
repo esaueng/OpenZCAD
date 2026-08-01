@@ -38,6 +38,7 @@ export * from './selection/boxSelect';
 export * from './gizmo/DragRig';
 export * from './gizmo/rigs';
 export * from './gizmo/move';
+export * from './gizmo/moveTransform';
 
 // Input: pointer gesture classification and drag-session bookkeeping.
 export * from './input/bindings';
