@@ -213,6 +213,62 @@
       }
     }
   },
+  "boss-crossing-a-wall": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 10947.94983823075,
+      "faceCount": 57,
+      "edgeCount": 202,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 57
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "6bfe0fcd",
+      "edgeHashDigest": "94d9aed5",
+      "bbox": [
+        -2.996917297204128,
+        0,
+        0,
+        40,
+        24,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 6.64595446790909e-16,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "threw",
+      "warnings": [],
+      "error": "Face handle count 14 does not match tessellation groups 17.",
+      "roundTrip": {
+        "status": "skipped-no-body"
+      }
+    }
+  },
   "pattern-boolean-with-import": {
     "brepkit": {
       "status": "imported",
