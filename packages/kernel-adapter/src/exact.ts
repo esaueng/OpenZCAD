@@ -30,6 +30,7 @@ import {
   type BodyTopology,
   type DerivedState,
   type DirectEditOperation,
+  type EdgeCurve,
   type EdgeWitnessV1,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
@@ -297,6 +298,190 @@ function sameSphereSurface(kernel: BrepKernel, faces: number[]): boolean {
       centers[0].z - centers[1].z
     ) <= tolerance
   );
+}
+
+/**
+ * Bar for accepting a candidate circle as the edge's own geometry, as a
+ * fraction of how far the edge itself reaches.
+ *
+ * The sampled polyline is taken off the exact curve, so a true circle's
+ * residue is a few multiples of double-precision rounding and anything that
+ * clears this bar is a fit rather than a near miss.
+ */
+const EDGE_CIRCLE_MISFIT_TOLERANCE = 1e-6;
+
+/**
+ * How badly a candidate circle misses the edge's own sampled polyline: the
+ * larger of the radial and the out-of-plane error over every sample, divided by
+ * the extent of the polyline.
+ *
+ * Divided by the EDGE's size, never the circle's, and that is the whole point.
+ * Scaling the residue by the candidate radius hands a wrong answer a tolerance
+ * budget proportional to how wrong it is: the kernel's elliptical misreading is
+ * a radius of 7.5e11 for a curve six units across, so against its own radius a
+ * miss of several whole units scores about 4e-12 and sails through. Against the
+ * edge's own six units the same miss scores 1 and is thrown out. Every
+ * mismeasurement worth catching is one where the two scales disagree, which is
+ * exactly the case a self-relative test cannot see.
+ *
+ * This is the only thing standing between a wrong analytic radius and the
+ * published payload, so it fails closed: fewer than two samples, or samples
+ * with no extent, is unverifiable rather than acceptable and returns infinity.
+ * Exported because no fixture in the corpus is an ellipse or a spline, so
+ * nothing in CI otherwise exercises the rejection path this exists for.
+ */
+export function edgeCircleMisfit(
+  circle: { center: Vec3; axis: Vec3; radius: number },
+  points: readonly number[]
+): number {
+  const { center, axis, radius } = circle;
+  if (!Number.isFinite(radius) || radius <= GEOMETRY_EPSILON) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const samples: Vec3[] = [];
+  for (let offset = 0; offset + 2 < points.length; offset += 3) {
+    samples.push({
+      x: points[offset] ?? 0,
+      y: points[offset + 1] ?? 0,
+      z: points[offset + 2] ?? 0
+    });
+  }
+  const first = samples[0];
+  if (samples.length < 2 || !first) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const extent = samples.reduce(
+    (widest, sample) => Math.max(widest, length(subtract(sample, first))),
+    0
+  );
+  if (extent <= GEOMETRY_EPSILON) {
+    return Number.POSITIVE_INFINITY;
+  }
+  let worst = 0;
+  for (const sample of samples) {
+    const toSample = subtract(sample, center);
+    const axial = dot(toSample, axis);
+    const radial = length(subtract(toSample, scale(axis, axial)));
+    worst = Math.max(
+      worst,
+      Math.abs(radial - radius) / extent,
+      Math.abs(axial) / extent
+    );
+  }
+  return worst;
+}
+
+/**
+ * Read the circle a circular edge lies on, or `undefined` when it cannot be
+ * proven.
+ *
+ * Curvature rather than the curve's parameters, deliberately. The obvious
+ * source — `getEdgeCurveParameters` plus `evaluateEdgeCurve` across that range
+ * — reports the UNDERLYING curve's domain rather than the edge's trim of it, so
+ * a quarter fillet arc reads as a full turn. Curvature is constant along a
+ * circle, so an untrimmed parameter cannot contaminate it: the radius is right
+ * whichever point on the circle is asked, and so is the centre, because every
+ * point of the underlying circle is the same distance from it.
+ *
+ * The caller has already gated on the kernel calling this edge a CIRCLE. That
+ * gate matters — the same curvature call is silently wrong for ellipses by
+ * about 1e12 — but it is not trusted on its own: the candidate is accepted only
+ * once it has been checked against the edge's own sampled polyline, which no
+ * mismeasured radius can fit.
+ */
+function brepEdgeCircle(
+  kernel: BrepKernel,
+  edge: number,
+  points: readonly number[]
+): { center: Vec3; axis: Vec3; radius: number } | undefined {
+  let curvature: number[];
+  let position: number[];
+  try {
+    // Any parameter on the underlying circle gives the same circle. The domain
+    // start is simply one the kernel is certain to accept; nothing about the
+    // range itself is used, and nothing about it is published.
+    const parameter = Array.from(kernel.getEdgeCurveParameters(edge))[0] ?? 0;
+    curvature = Array.from(kernel.measureCurvatureAtEdge(edge, parameter));
+    position = Array.from(kernel.evaluateEdgeCurve(edge, parameter));
+  } catch {
+    // Matching `analyticSurfaceRecord`: an invalid handle throws out of the
+    // WASM boundary, and an edge the kernel will not describe is an edge with
+    // no published curve rather than a failed rebuild.
+    return undefined;
+  }
+  const curvatureValue = curvature[0];
+  const measuredTangent = finiteVec3(curvature.slice(1, 4));
+  // Points at the centre of curvature, which is what turns a point on the
+  // circle into the circle's centre.
+  const measuredInward = finiteVec3(curvature.slice(4, 7));
+  const anchor = finiteVec3(position.slice(0, 3));
+  if (
+    typeof curvatureValue !== 'number' ||
+    !Number.isFinite(curvatureValue) ||
+    curvatureValue <= GEOMETRY_EPSILON ||
+    !measuredTangent ||
+    !measuredInward ||
+    !anchor
+  ) {
+    return undefined;
+  }
+  const tangent = normalized(measuredTangent);
+  const inward = normalized(measuredInward);
+  if (!tangent || !inward) {
+    return undefined;
+  }
+  const axis = normalized(cross(tangent, inward));
+  if (!axis) {
+    return undefined;
+  }
+  const radius = 1 / curvatureValue;
+  const circle = {
+    center: add(anchor, scale(inward, radius)),
+    // The Frenet frame's sign follows the parameterization phase, which is not
+    // stable across rebuilds; the published axis is the plane's unoriented
+    // normal, so it is canonicalized like every other direction in a payload.
+    axis: canonicalDirection(axis),
+    radius
+  };
+  return edgeCircleMisfit(circle, points) <= EDGE_CIRCLE_MISFIT_TOLERANCE
+    ? circle
+    : undefined;
+}
+
+/**
+ * Describe the exact curve under an edge: always its type, plus analytic data
+ * for circles.
+ *
+ * Circles only because they are what the viewport needs and what the kernel
+ * can be held to. The type alone is still worth publishing for the rest — it
+ * is how a consumer tells a straight edge from a curved one without measuring
+ * chords.
+ *
+ * Exported for the same reason `edgeCircleMisfit` is: no document primitive
+ * produces an elliptical edge, so the only way to hold the CIRCLE gate against
+ * a real ellipse is to build one on a bare kernel and hand it to this.
+ */
+export function brepEdgeCurve(
+  kernel: BrepKernel,
+  edge: number,
+  points: readonly number[]
+): EdgeCurve | undefined {
+  let type: string;
+  try {
+    type = kernel.getEdgeCurveType(edge);
+  } catch {
+    return undefined;
+  }
+  if (typeof type !== 'string' || type.length === 0) {
+    return undefined;
+  }
+  if (type !== 'CIRCLE') {
+    return { type };
+  }
+  const circle = brepEdgeCircle(kernel, edge, points);
+  // A circle that could not be proven still publishes its type. The field
+  // narrows; it never lies.
+  return circle ? { type, circle } : { type };
 }
 
 /**
@@ -4599,6 +4784,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               message: `BrepKit edge lineage ${reference.lineageName} no longer matches its exact measured witness.`
             });
           }
+          const points = edgePositions.slice(
+            edgeOffsets[index],
+            edgeOffsets[index + 1]
+          );
           topology.edges.push({
             topologyId: `edge:${hash}`,
             hash,
@@ -4609,10 +4798,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               edgeToFaces,
               faceHashByHandle
             ),
-            points: edgePositions.slice(
-              edgeOffsets[index],
-              edgeOffsets[index + 1]
-            )
+            // Given the sampled polyline so a candidate circle is checked
+            // against the edge's own geometry before it is published.
+            curve: brepEdgeCurve(kernel, edge, points),
+            points
           });
         }
       } finally {
