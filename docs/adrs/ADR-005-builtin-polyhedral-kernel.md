@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by ADR-006 as the primary modeling/export path. Retained as the compatibility path for imported mesh bodies and deterministic legacy fixtures.
+Superseded by ADR-006 as the primary modeling/export path, and now fully retired. Imported mesh bodies build on the exact kernel through its STL importer, so `OpenZCADKernel`, the BSP CSG, the faceted primitives and sweeps, and the JavaScript STEP writer have all been deleted. `packages/geometry` keeps only document-side geometry — sketch-plane frames, 2D profiles, sketch regions, tolerances, and mesh welding — and `io-step` keeps only `parseStepMetadata`. This record is kept for history.
 
 ## Decision
 

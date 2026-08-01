@@ -53,7 +53,7 @@ A note on discovered shortcuts (verified in source):
 
 ## 1. M0 — Safety net and free wins
 
-### Z1.1 `inspectStep` → BrepKit — **S**
+### Z1.1 `inspectStep` → BrepKit — **S code, gated on K0.1** ✅ done
 
 *Current:* `HybridExactKernelAdapter.inspectStep` (`exact.ts:3910-3916`)
 unconditionally lazy-loads OCCT; `BrepKitKernelAdapter.inspectStep`
@@ -64,7 +64,15 @@ assert the OCCT route.
 *Acceptance:* existing inspectStep tests pass on the BrepKit
 implementation; no `import('./occt-step')` triggered by inspect.
 
-### Z1.2 `imported-mesh` on BrepKit; delete the legacy JS kernel — **M**
+> **This was not a free win.** The one-line flip failed 4 tests with
+> `unsupported STEP entity: SURFACE_CURVE`. OCCT wraps the 3-D geometry of
+> essentially every edge on a curved face in `SURFACE_CURVE`, and BrepKit's
+> reader had no arm for it — so BrepKit could not read STEP written by any
+> real CAD system, including our own OCCT-produced exports. The flip is
+> therefore gated on K0.1 item 3, which is promoted to the critical path.
+> Landed together with Z2 once the pin carried the fix.
+
+### Z1.2 `imported-mesh` on BrepKit; delete the legacy JS kernel — **M** ✅ done
 
 *Current:* `containsImportedMesh` reroutes whole documents to
 `OpenZCADKernel` (`exact.ts:2293, 3633-3635, 3768-3770`), which silently
@@ -94,7 +102,7 @@ tessellation tolerance; `packages/geometry` no longer exports CSG.
 *Risk:* mesh bodies were never boolean-able with exact bodies on the JS
 path either — behavior parity, not regression.
 
-### Z1.3 STEP + geometry parity corpus — **M** (blocks Z3/Z5)
+### Z1.3 STEP + geometry parity corpus — **M** (blocks Z3/Z5) ✅ done
 
 *Purpose:* once OCCT is gone there is no fallback; this corpus **is** the
 regression harness. It must exist while both kernels are still present so
@@ -118,7 +126,7 @@ pool); OCCT vs BrepKit deltas are recorded, with per-file expected-failure
 pins for known BrepKit gaps (mirroring `EXPECTED_MESH_DEFECTS` style).
 The pin list is the working checklist for K0.1/K0.5/K0.6.
 
-### K0.2 → Z2 Multi-solid STEP export — **S kernel + S app**
+### K0.2 → Z2 Multi-solid STEP export — **S kernel + S app** ✅ done
 
 *Kernel:* add `exportStepMulti(solids: Vec<u32>)` (or widen `exportStep`)
 in `crates/wasm/src/bindings/io.rs:327` — `write_step` already accepts the
@@ -130,13 +138,34 @@ binding; delete `getStepCombiner` (`exact.ts:2312`) and
 OCCT (while it lasts) and BrepKit; no `import('./occt-step')` fires for
 documents without `imported-step`.
 
+*Landed as esaueng/brepkit#36 + the app commit.* It also turned up a latent
+writer bug: the `ADVANCED_BREP_SHAPE_REPRESENTATION` item list was emitted
+with a trailing comma — `(#10, #20,)`, and `(#10,)` in the single-solid
+case. ISO-10303-21 aggregates have no trailing comma, so strict readers
+were entitled to reject **every file BrepKit had ever written**. It stayed
+invisible because the only reader exercising the output was our own, which
+is lenient there. Fixed and pinned.
+
+
+
 ---
 
 ## 2. M1 — Kernel parity (BrepKit work, parallel lanes)
 
-### K0.1 STEP import/export fidelity — **L** (lane A)
+### K0.1 STEP import/export fidelity — **L** (lane A) ✅ done
 
 All in `esaueng/brepkit`, `crates/io/src/step/`.
+
+**Priority correction.** Item 3's `SURFACE_CURVE` arm turned out to be the
+hardest blocker in the whole programme, not a widening nicety: without it
+BrepKit cannot read STEP produced by OpenCascade — which means it could not
+read our *own* exports of imported bodies. Do item 3's `SURFACE_CURVE`
+family first, then units, then the rest.
+
+Also note the existing JS rewriter only rescales `CONICAL_SURFACE`
+half-angles. It does **nothing** for length units, so an inch-authored STEP
+file imports 25.4× wrong today, silently, on the BrepKit path. Item 1 is
+therefore a correctness fix, not only a workaround-retirement.
 
 1. **Units (the OpenZCAD-blocking bug).** Parse
    `GLOBAL_UNIT_ASSIGNED_CONTEXT` → resolve `LENGTH_UNIT` (SI prefix +
@@ -197,55 +226,169 @@ analytic faces destroyed. Torus×(anything but plane) likewise unwired
    list accordingly.
 4. Re-tighten the loosened volume tolerances
    (`boolean/tests.rs:2631,2718`) as part of acceptance.
-*Acceptance:* Z1.3 scenario pins "fillet-on-import", "boolean-with-import"
-flip from mesh-fallback to exact; `brepkit_approx` census shows zero
+*Acceptance:* ~~Z1.3 scenario pins "fillet-on-import", "boolean-with-import"
+flip from mesh-fallback to exact~~; `brepkit_approx` census shows zero
 mesh-fallback events on the corpus; volume assertions at 0.05.
 *Risk:* genuinely hard numerics. Mitigate by keeping the bounded mesh
 fallback as the safety valve (it stays; it just stops being *reached* for
 these classes).
 
-### K0.6 Import validation + lineage parity — **M** (lane A tail)
+*Correction — the stated acceptance is falsified and K0.5 is deprioritized.*
+Two of the three named pins no longer exist, and the premise behind them was
+measured false rather than argued away:
 
-*Current:* `occt-step.ts` provides `importedStepValidationWarning` and
-imported-body topology witnesses; BrepKit path must match before Z3.
-*Steps:* map `kernel.validateSolid` + `meshQuality` to the same warning
-taxonomy; ensure imported bodies publish witness sets (fingerprint parity
-already exists per ADR-011 for analytic faces; closed-B-spline faces stay
-fail-closed as today); port the unit-rescale (`uniformScaleTransform`)
-behavior if K0.1 lands unit handling kernel-side (then it's free).
-*Acceptance:* corpus warning sets match OCCT baselines or are strictly
-better (fewer false warnings, never fewer true ones).
+- `boolean-with-import` never hit the mesh fallback. Both kernels produce 7
+  faces with one cylinder on that scenario, which the pin recorded at the
+  time it was written. K0.5 predicted a fallback there; the corpus says
+  there is none.
+- `boolean-with-import` and `pattern-boolean-with-import` have since been
+  **retired entirely** — BrepKit converged onto their closed forms
+  (`40·24·10 − π·5²·10` to 1e-12) and now agrees with OCCT, so the
+  divergence the pins recorded is gone.
+- `fillet-on-import` survives, but it reads 1.43e-5 *low* against the closed
+  form, which is deflection residue on blended bands — not the
+  analytic-faces-destroyed signature K0.5 exists to fix.
 
-### Z4 Port the two OCCT-only direct edits — **M** (lane D, app-side)
+So the corpus found neither kernel falls back on the analytic×NURBS
+scenario, and on the one file where they do differ BrepKit is the *more*
+accurate of the two (0.1% vs OCCT's 1.38%). The XL numerics work in this
+section is not justified by anything the corpus can currently measure.
+Before restarting it, write a scenario that actually reaches
+`phase_ff.rs:3024`'s `Ok(vec![])` and demonstrates a destroyed analytic
+face — then this section has an acceptance test again.
 
-*Current:* `exact.ts:3298-3301` refuses `resize-through-hole` /
+### K0.6 Import validation + lineage parity — **M** (lane A tail) ✅ done
+
+*Was:* "port OCCT's warning taxonomy and its imported-body topology witnesses
+to BrepKit."
+
+*Correction to the original spec, from Z1.3's measurements:*
+
+1. **There were no imported-body witnesses to port.** `witnessedFaces`,
+   `witnessedEdges` and `lineageNames` read zero and empty in every corpus
+   record on *both* kernels. ADR-013 listed imported STEP alongside blends as
+   `no lineage - hash fallback only`, which conflated a transition (a blend
+   owes an output relation) with a root (an import owes nothing — there is no
+   earlier body). Half of this item was build, not port.
+2. **`meshQuality` is unusable as a validity gate.** It reports
+   `isWatertight: false` with 50 boundary edges for `a-export-cone`, a valid
+   analytic cone whose apex does not weld under independent per-face
+   tessellation, and Euler characteristic 0 for the shipped bracket. Gating on
+   it would refuse valid supplier files.
+3. **Strict `validateSolid` only applies to a single-shell solid.** Its
+   Euler-characteristic check assumes one closed shell, so every voided solid
+   in the corpus reports exactly one error while being exactly what its file
+   declares. Multi-shell solids are held to `validateSolidRelaxed` plus the
+   adapter's own exact closure test.
+
+*Done.* `imported-step-validation.ts` owns the taxonomy; closure and
+manifoldness are read from the exact B-rep (`edgeToFaceMap` face-use counts),
+not from a mesh. A shell that is not closed is rejected **per solid** and never
+becomes a body — `f-hostile-open-shell` no longer imports as 666.67 mm³ — while
+a closed solid that merely fails strict validation is kept and flagged, matching
+OCCT's partial-success taxonomy. A file where some solids survive imports them
+and names the dropped ones; only a file where nothing survives fails outright.
+`inspectStep` answers in every case instead of raising, and carries the reason
+in the value. Both adapters publish schema-v5 references on imported bodies
+under one shared rule (see the ADR-013 amendment), so the corpus can assert the
+two kernels give an imported body the same identity names.
+
+*Acceptance:* met. On the corpus BrepKit produces no warning OCCT does not, and
+where it does warn it names the entity or the defect where OCCT reports
+"contains no solids"; the `f-hostile-open-shell` validity gap is closed in
+BrepKit's favour and its pins are retired.
+
+### Z4 Port the two OCCT-only direct edits — **M** (lane D, app-side) ✅ done
+
+*Was:* `exact.ts:3298-3301` refused `resize-through-hole` /
 `remove-face-feature`; OCCT implements them as compositions
-(`occt-step.ts:517-820`): `requireThroughHole` → `fillThroughHole` (cap
-both rim loops) → optional `cylinderAlongAxis` + `cut`; `defeature` for
-face-feature removal.
-*Steps:* port the composition onto existing BrepKit bindings —
-`edgeToFaceMap`/`getFaceWires` to find the wall + rim loops,
-`removeHolesFromFace` to close the end-face inner loops, solid validation
-gate, then `makeCylinder` + `copyAndTransformSolid` + `cut` for the resize;
-`kernel.defeature` for `remove-face-feature` (planar-only today — keep the
-same refusal OCCT effectively has for non-planar, typed).
-*Acceptance:* the existing OCCT direct-edit tests re-targeted at BrepKit
-pass with identical volumes; refusal messages stay typed and actionable.
+(`occt-step.ts:517-820`).
+
+*Correction to the original spec:* `fillThroughHole` does **not** cap rim
+loops — it builds a cylinder of the hole's own radius along the hole axis,
+**fuses** it in, and merges same-domain faces. No `removeHolesFromFace`
+wire surgery was needed. BrepKit's `unifyFaces` is the `unifySameDomain`
+equivalent, and its `defeature` takes no tolerance argument.
+
+*Done.* Both kinds run on the BrepKit path and agree with OCCT
+volume-for-volume; the cross-kernel agreement test drives the same edit
+sequence on each kernel through that kernel's own fingerprints.
+*How:* `classifyThroughHoleFace` replaces OCCT's face-orientation test with
+point-in-solid probes — BrepKit reports every face as `forward`, so a bore
+wall and an external boss are indistinguishable by normal, and the wall has
+to be classified from which side holds material. `requireThroughHole` ports
+the fail-closed source re-validation and its tolerances unchanged;
+`fillThroughHole` is the plug fuse plus `unifyFaces`; `resizeThroughHole`
+reaches OCCT's `(body ∪ bore) \ newBore` with one boolean instead of two,
+which is the same set and sidesteps a plug fuse BrepKit often declines.
+
+*Residual, both K0.3 — and both are kernel defects worth their own PRs:*
+
+1. **The GFA boolean declines the plug fuse on most plate bodies** and falls
+   back to a co-refined mesh (~100–180 planar faces, ~1e-4 relative volume
+   error — too small for a volume gate to catch). Measured on a 30×30×10
+   plate: degenerate at bore radii 2, 3, 5, 6, 8; survived only at 4. The
+   adapter detects it by face count and refuses.
+2. **`defeature` returns a wrong solid on non-trivial bodies.** Its doc
+   comment says it "heals the resulting gaps by extending adjacent faces",
+   but `crates/operations/src/defeature.rs` actually collects each kept
+   face's polygon and plane and calls `assemble_solid` — a plane-set
+   reassembly that cannot represent a concave body. Verified: on chamfer,
+   pocket, boss, L-notch and plate-face cases it returns a solid that
+   `validateSolid` flags with 2 errors. It is exposed through the wasm
+   surface today. The adapter refuses the unsupported-body case by name and
+   the wrong-solid case via strict `validateSolid`, but **the kernel should
+   not be silently returning a broken solid at all** — this is the exact
+   failure class the single-kernel programme exists to remove.
 
 ---
 
 ## 3. M2 — Single kernel
 
-### Z3 STEP route flip — **M**, gated on K0.1 + K0.6 + Z1.3 green
+### Z3 STEP route flip — **M**, gated on K0.1 + K0.6 + Z1.3 green ✅ done
 
-*Steps:* delete `containsImportedStep` routing (`exact.ts:3862-3908`) so
-`imported-step` documents rebuild on the BrepKit adapter (its
-`imported-step` case at `exact.ts:2800` becomes production); delete
-`normalizeStepPlaneAnglesForKernel` + its tests; keep the corpus running
-both kernels until Z5.
+*Steps:* delete `containsImportedStep` routing so `imported-step` documents
+rebuild on the BrepKit adapter (its `imported-step` case becomes
+production); delete `normalizeStepPlaneAnglesForKernel` + its tests; keep
+the corpus running both kernels until Z5.
 *Soak:* at least one release with corpus + real-project imports green on
 BrepKit while OCCT still exists behind a dev flag (vitest alias mechanism,
 `vitest.config.ts:29-32`, already supports kernel swapping).
+
+*Landed.* `createExactKernelAdapter` now returns `BrepKitKernelAdapter`
+outright — `HybridExactKernelAdapter` had become a pure delegate, so it went
+with the routing rather than surviving as a wrapper. Three findings worth
+carrying forward:
+
+1. **The angle rewriter was already inert.** Deleting
+   `normalizeStepPlaneAnglesForKernel` changed not one number in
+   `baselines/corpus.json`. The kernel reads `b-unit-degree-cone` at
+   1047.1975511965977 mm³ — the closed form, and byte-identical to the
+   radian control — with no JavaScript between the file and the reader.
+   `test/step-import-compat.test.ts` now asserts that directly instead of
+   asserting that the rewriter rewrote.
+2. **The 22 MB was Z3's payoff, not Z5's.** The OCCT import was already
+   dynamic, so once nothing reached it the asset stopped being emitted:
+   `apps/web/dist` is 13 MB. Z5 recovers source lines, not bundle bytes.
+3. **The app mirrored the routing in two places** and both had to move with
+   it: the worker's `documentRequiresOcct`/`loading-occt` phase (it would
+   have announced a kernel load that never happens) and `App.tsx`'s
+   `kernel: 'occt'` capability, which gated solid offset on imported bodies
+   behind `OCCT_SHARP_OFFSET_LIMITATION`. Solid offset on an imported body
+   is now enabled, and correct: 12×22×32 exactly, agreed by both kernels
+   (`test/exact-kernel-adapter.test.ts`, "keeps mirror, shell, and solid
+   offset conformant on an IMPORTED body").
+
+*What the flip costs users, stated plainly.* Blending an imported body now
+goes through BrepKit's blender, which fits corner bands as B-splines where
+the exact answer is a quarter cylinder — 4.63e-4 relative on
+`fillet-on-import`, and the STEP re-export carries
+`B_SPLINE_SURFACE_WITH_KNOTS` instead of `CYLINDRICAL_SURFACE`. This is
+**not** caused by importing: BrepKit does the same on natively modelled
+bodies, so it is a pre-existing K0.4 gap that imported documents have now
+joined rather than a regression Z3 introduced. It is pinned in
+`corpus-pins.ts` (K0.4) and asserted, not tolerated, in the e2e.
+
 
 ### Z5 Delete OCCT — **M**
 
@@ -254,17 +397,52 @@ Deletion inventory (from the usage map):
 `occt-modeling-operations.ts`, `occt-lineage.ts` (27 KB) + their tests,
 `test/step-import-compat.test.ts` and `test/topology-lineage-spike.test.ts`
 (rewrite as BrepKit-only), `occt-wasm` from
-`packages/kernel-adapter/package.json:19`, the vite manual chunk
-(`apps/web/vite.config.ts:196`), `ExactKernelKind = 'brepkit' | 'occt'` +
+`packages/kernel-adapter/package.json:19`, `ExactKernelKind = 'brepkit' | 'occt'` +
 `OCCT_SHARP_OFFSET_LIMITATION` (`apps/web/src/lib/modelingOperations.ts:63-138`)
-and the `App.tsx:5527` branch, the `loading-occt` worker phase
-(`geometryWorker.ts:20-26,134-137`), cross-kernel assertions in
-`exact-kernel-adapter.test.ts`.
-Docs: amend ADR-009/ADR-010, README "Two kernels" section,
-`capability-matrix.md`, `performance-baseline.md`.
-*Payoff:* −22,088 kB wasm (−7,100 kB brotli), one code path.
+and the now-constant `kernel: 'brepkit'` App.tsx capability field,
+cross-kernel assertions in
+`exact-kernel-adapter.test.ts` and `kernel-seam.test.ts`.
+*Inventory correction (Z3):* the `loading-occt` worker phase and
+`documentRequiresOcct` are already gone — they described a reroute Z3
+removed, so leaving them would have had the app announce a kernel load that
+never happens. The `−22,088 kB wasm` payoff below is also already banked:
+the OCCT import was dynamic, so it stopped being emitted the moment nothing
+reached it. What Z5 still recovers is ~4,000 lines of source and one
+behaviour to reason about.
+Docs: amend ADR-009/ADR-010, `capability-matrix.md`,
+`performance-baseline.md`. (README's kernel prose and the architecture
+diagram were corrected in Z3, when they stopped being true.)
+*Inventory correction:* `apps/web/vite.config.ts` no longer carries an OCCT
+manual chunk — that line is already gone. Verified: after Z2, the only
+remaining production importer of `./occt-step` is `getOcct` behind
+`containsImportedStep`, so Z3 is genuinely the last gate and Z5 is then
+mechanical.
+*Payoff:* one code path. The −22,088 kB wasm (−7,100 kB brotli) landed at
+Z3, when the last reachable importer went away.
 *Rule:* this lands only after Z3's soak; revert path is `git revert` of one
 PR (keep the deletion atomic).
+
+*Correction — decide what the corpus becomes before deleting the reference.*
+This inventory removes `occt-wasm` and the cross-kernel assertions, but Z1.3's
+corpus is built on running every file through **both** kernels and comparing.
+Deleting OCCT does not just delete a code path; it deletes the instrument that
+made removing a second kernel safe in the first place, and the pins are the
+record of that comparison.
+
+That is survivable but it must be a decision, not a side effect. After Z5 the
+corpus can still measure BrepKit against **recorded baselines and closed
+forms**, which is what actually caught the defects that mattered: the malformed
+trailing comma, the 25.4× unit error, the dropped voids, the filled bores. None
+of those needed a second kernel — they needed a known-good answer. What is lost
+is the ability to discover an *unknown* divergence, which is what retired the
+three volume pins in this file.
+
+Concretely, Z5 should keep `occt-wasm` as a **devDependency** for the corpus
+job alone, and delete it only from the production adapter. That preserves the
+comparison for as long as it is cheap and keeps the shipped app single-kernel,
+which is the actual goal. If the corpus job later becomes a maintenance cost,
+retiring the comparison is then its own small, reversible decision rather than
+a clause buried in a deletion PR.
 
 ---
 
@@ -274,7 +452,7 @@ PR (keep the deletion atomic).
 
 | Item | Retire when | Work |
 | --- | --- | --- |
-| `tryExactAnalyticCylinderRimFillet` (`exact.ts:385`) | K0.4 phase 2 | delete + keep its tests as kernel regressions — **S** |
+| `tryExactAnalyticCylinderRimFillet` (`exact.ts:440`) | ~~K0.4 phase 2~~ the kernel builds a convex cap-rim blend at f/r ≥ 0.5 — **NO-GO today, see below** | delete + keep its tests as kernel regressions — **S** |
 | `tryExactAnalyticCylinderCapOffset` / `tryExactCoaxialCylinderCut` | K0.5 + a kernel coaxial-cut fast path | delete — **S** each |
 | Boolean distrust harness (`boolean-result-validation.ts`) | after N releases with zero census failures on the corpus post-K0.5 | demote to debug assertion behind a flag — **S** |
 | STEP text rewriter (`step-import.ts`) | K0.1 | delete in Z3 — **S** |
@@ -282,19 +460,87 @@ PR (keep the deletion atomic).
 
 **Adjacency + exact-curve publishing (the one new protocol):** extend the
 worker topology payload so each edge carries `adjacentFaceHashes:
-[number, number]` and `curve: { type, params }` (line/circle/ellipse/nurbs,
-from `getEdgeCurveType` + `getEdgeCurveParameters` — both adapters already
-compute adjacency internally: `exact.ts:252`, `occt-step.ts:115`). Bump the
-worker protocol version; viewport consumes it for edge-run walking, arc
-midpoints, and future measure tools. **M**, kernel-independent, can start
-any time.
+number[]` and `curve: { type, params }` (line/circle, **not** ellipse or
+nurbs) — viewport consumes it for edge-run walking, arc midpoints, and future
+measure tools. Split it: **W1 adjacency = S**, **W2 curve = M**,
+**W3 snaps fix = S after W2**, **W4 `edgeChain` rewrite = M–L**.
+Kernel-independent, can start any time.
+
+*Corrections — five claims in the original wording were measured wrong, two
+of them load-bearing:*
+
+1. **`getEdgeCurveParameters` cannot source the curve record.** It returns the
+   *underlying* curve's domain, not the edge's trim. Measured on a 20×20×10 box
+   filleted at r=3: a quarter arc of `edgeLength` 4.712389 (= 3π/2) reports
+   domain `[0, 6.283185]` — the full period — and evaluating at that domain's
+   midpoint returns the edge's own **end vertex**. Implementing this line
+   literally ships an authoritative-looking curve record that is wrong for
+   every fillet and chamfer arc in the product. Use `measureCurvatureAtEdge`
+   gated on `getEdgeCurveType(edge) === 'CIRCLE'` (14× cheaper than
+   `getNurbsCurveData`, and does not throw on the zero-length degenerate edges
+   a torus carries). Publish nothing analytic for ELLIPSE —
+   `measureCurvatureAtEdge` is wrong for those by a factor of ~1e12.
+2. **`exact.ts:252` is not adjacency.** That is `analyticSurfaceRecord`, a
+   *face* surface-params helper. Real adjacency is `exact.ts:4451`
+   (`kernel.edgeToFaceMap`), and `occt-step.ts:116` (not `:115`). This is good
+   news: adjacency sits two loops above the edge-record push, with face
+   `handle` and `hash` already in scope.
+3. **`[number, number]` is the wrong type.** Seam edges list the same face
+   twice, and flagged non-manifold STEP imports *are* built into bodies
+   (`imported-step-validation.ts` marks them `flagged`, not `not-a-solid`), so
+   a fixed pair truncates silently. Use `number[]`, **sorted** —
+   `edgeToFaceMap`'s order is kernel-determined and the corpus digests hashes
+   after sorting, so a nondeterministic order would pass every existing test
+   while making rebuild output non-reproducible.
+4. **There is no worker protocol version to bump.** The only `version` on
+   worker messages is `document.version`, used as a staleness discard. The
+   worker ships from the same Vite bundle with no service worker, so a
+   mismatched client is structurally impossible. Use optional fields, exactly
+   as `displayRole?` did across 14 files with no schema change. The one real
+   staleness window is a *persisted* `derived` from IndexedDB, which optional
+   fields handle.
+5. **Adjacency alone does not suffice for the `edgeChain` rewrite.** Verified
+   on a plain box: two edges on opposite sides of the top face share that face.
+   The walk also needs vertex incidence, and BrepKit publishes no edge→vertex
+   map — the adapter must derive vertex identity itself. That is publishing
+   work W1 does not deliver, which is why W4 is M–L rather than part of one M.
+
+*Trap, before anyone tidies `edgeChain`:* its 50° cone is **load-bearing for
+chamfers**, not a leftover. A 20×20×10 box chamfered 3 mm on its four vertical
+edges has a worst rim kink of exactly 45°, and the run collapses from 8 edges
+to 1 at a 44° tolerance — while the UI advertises "Fillet or chamfer applies to
+all of them." Pure G1 tangency is the wrong rule. The docstrings in
+`edgeChain.ts` and `topologySnaps.ts` justifying it ("the kernel hands the
+viewport a fillet arc as a two-point polyline") are separately wrong: at the
+app's real display deflection a quarter arc arrives with **28 points**, not 2.
+
+*Z6.1 is NO-GO, and the trigger above pointed at the wrong kernel work.*
+BrepKit's convex cap-rim fillet succeeds iff **f/r < 0.5** and throws
+`partial-result` at f/r ≥ 0.5 — verified scale-invariant at r = 2, 3 and 10,
+with f/r = 0.4999 succeeding and 0.5000 failing in every case. The blend torus
+is `{major: r−f, minor: f}`, so at f = r/2 it degenerates and the kernel cannot
+build a horn or apple torus; `chamfer` is unaffected because its band is a
+cone. The workaround's own guards admit `0 < f < r`, so deleting it converts
+the **entire upper half of the geometrically valid radius range** into a
+user-facing "Try a smaller radius". K0.4 phase 2 was the *concave hole-rim*
+assembler — that landed and is exact (bored plate, f=1 top rim: 8 faces,
+volume 28701.23908 against Pappus 28701.23908) — but it runs on a 7-face body
+that `readAnalyticCylinder`'s 3-face gate rejects, so it is not evidence about
+the case this workaround serves. **Kernel request to file:** build the
+horn/apple torus for a convex circular rim at f ≥ r/2, or at minimum return a
+typed `RadiusTooLarge` rather than a bare `partial-result`.
 
 ### Z7 Feature exposure (each: document-core feature/params + command +
-worker case + UI form + AI-contract op + tests)
+UI form + AI-contract op + tests)
+
+*Correction:* "worker case" was in this checklist and is not a cost —
+`geometryWorker.ts` is document-level sync/export with **zero** per-feature
+branches. The rebuild switch is `exact.ts:3608-3621`.
 
 | Feature | Kernel binding | Extra notes | Est |
 | --- | --- | --- | --- |
-| Partial revolve + axis-by-selection | `revolve(..., angleDeg)` exists; app hard-codes 360 (`exact.ts:2722`) | TODO.md already lists it | **S–M** |
+| Partial revolve **angle** | `revolve(..., angleDeg)` exists; app hard-codes 360 (`exact.ts:3461`) | see below — kernel is fine, *lineage* is the cost | **M** |
+| Revolve axis-by-selection | — | separate item; blocked on giving revolve a region path first | **M–L** |
 | Symmetric / two-sided extrude | compose two `extrude` + `fuse`, or start-offset the profile | document-model change (`distanceBack`) | **M** |
 | Sweep / loft / helix features | `sweep*`, `loft*`, `helicalSweep` bound | needs path/profile selection UX — the real cost | **L** (mostly UI) |
 | Split body | `split` bound | plane from face/datum selection | **M** |
@@ -306,6 +552,42 @@ worker case + UI form + AI-contract op + tests)
 
 AI contracts: every new feature kind needs a schema op + capability flag
 (pattern exists: `AI_PATCH_*_ENABLED` in `cloudflare-adapters`).
+
+**Partial revolve: the kernel is fine; lineage is the cost.** The obvious risk
+— that a partial revolve returns an open shell needing app-side caps — does
+not happen. Measured on an r=2..3, h=1 annulus about +Z: 90° / 180° / 270° /
+359° all give **one closed shell**, `validateSolid` 0, watertight tessellation
+with zero boundary edges and χ=2, and volumes matching the closed form to all
+printed digits (90° → 3.926991). Cap planes are present in the surface params.
+The `(0, 360]` guard is enforced and non-integer angles work.
+
+What is *not* free is ADR-013 semantic lineage, and it breaks two ways:
+
+- `expectedCircleWitness` hard-codes `closed: true` and `length: 2πr`, but a
+  partial revolve's corresponding edges are **arcs** — an `EdgeWitnessV1`
+  variant that can never satisfy it. Every profile-vertex edge role fails at
+  any angle < 360.
+- BrepKit splits swept faces at 90° boundaries — 6 faces at ≤90°, 10 at
+  91–180°, 14 at 181–270°, 18 at 271–359.9°, 4 at 360° — with duplicate
+  analytic params across the pieces, so `addUniqueSemanticAssignment`'s
+  exactly-one-match requirement goes ambiguous above 90° too.
+
+Net: partial-revolve bodies fall back to ADR-011 hash-only references instead
+of ADR-013 names. Circular profiles are exempt (a torus does not
+quadrant-split). **Shipping the angle with hash-only lineage is a legitimate
+call and keeps this at S — but make it deliberately, not by discovering it
+later.** Also gate or warn on fillet: it fails on 12/12 edges of a 90° wedge
+while succeeding on 4/6 of the same full revolve, and users reach for fillet
+immediately after making a wedge.
+
+*Axis-by-selection is separate and starts blocked.* `RevolveAxis` is
+`'horizontal' | 'vertical'` — the sketch basis through the plane origin — and
+nothing in the codebase supplies a *direction* from a selection. The
+cheap-looking route (a construction line as the axis) is unsafe as things
+stand: revolve reads `sketch.objectIds[0]` blindly and never got the region
+path extrude has, so adding a construction line to an existing revolve's
+sketch could **silently change which object is the profile and corrupt saved
+documents**. Give revolve a region path first.
 
 ---
 
@@ -351,3 +633,27 @@ AI contracts: every new feature kind needs a schema op + capability flag
 - Pin-bump discipline: kernel changes reach the app only via
   `chore(wasm): refresh committed package` + lockfile pin bump, with the
   corpus re-run in the bump PR.
+
+### The pin-bump mechanics, concretely
+
+1. Merge the brepkit PR. `publish.yml` then runs `cargo xtask wasm-build
+   --skip-opt` on `main` and auto-commits `crates/wasm/pkg` as
+   `chore(wasm): refresh committed package … [skip ci]`. Wait for that
+   commit — the app pin must point at it, not at the feature merge, or it
+   will install a package built before the change.
+2. In OpenZCAD: `pnpm update brepkit-wasm --lockfile-only --recursive`.
+   A plain `pnpm install` will **not** move the pin: `package.json` says
+   `github:esaueng/brepkit#main`, and an existing lockfile entry keeps the
+   old SHA pinned, which is exactly what a lockfile is for. Expect a diff
+   touching only the four `brepkit-wasm` tarball lines.
+3. Because CI installs from the lockfile, any app commit that calls a new
+   kernel API **must** carry the bump in the same commit, or CI installs a
+   kernel without the API and fails.
+
+For local testing ahead of a merge, `cargo xtask wasm-build --skip-opt` in a
+brepkit checkout and copy `brepkit_wasm_bg.wasm` into
+`node_modules/.pnpm/brepkit-wasm@*/node_modules/brepkit-wasm/`. The `.js`
+and `.d.ts` files are hardlinked by pnpm and update in place; the `.wasm`
+does not, because wasm-pack rewrites it and breaks the link. Symptom of
+getting this wrong: `wasm.brepkernel_<newFn> is not a function`, with the
+new function present in the typings.

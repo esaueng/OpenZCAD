@@ -374,9 +374,9 @@ export function createBodyMaterial(body: BodyRepresentation) {
  * The overlay is a fallback only. Bodies that carry B-rep topology get their
  * edges from the exact curves instead (the viewer draws one fat line per
  * topology edge), and drawing both put two lines along nearly — but not
- * exactly — the same path. Bodies from the compat kernel, which the AI preview
- * uses, have no topology at all, so tessellated feature edges remain their
- * only outline.
+ * exactly — the same path. A body that arrives without topology, such as one
+ * restored from a persisted mesh, has no exact curves to draw, so tessellated
+ * feature edges remain its only outline.
  */
 export function createObjectForBody(
   body: BodyRepresentation,

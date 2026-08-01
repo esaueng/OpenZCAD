@@ -414,11 +414,37 @@ test('a view request interrupts the glide already in flight', async ({
   await page.keyboard.press('2');
   await page.waitForTimeout(60);
   await page.keyboard.press('3');
-  await page.waitForTimeout(1200);
 
-  const settled = await camera();
-  expect(settled).not.toBeNull();
+  // Poll for the resting view itself rather than waiting a fixed span for it.
+  // A blind wait samples a point on the glide once the runner is loaded, and
+  // the reading comes from persisted session state whose write is debounced —
+  // so neither the elapsed time nor two matching reads prove the motion is
+  // over. Arriving at Right is the only thing that does, and a camera that
+  // never gets there times out here instead of being reported as settled.
   // Right looks along +X: the camera ends beside the part, not above it.
+  let settled: { position: number[]; target: number[] } | null = null;
+  await expect
+    .poll(
+      async () => {
+        settled = await camera();
+        if (!settled) {
+          return false;
+        }
+        const x = settled.position[0]! - settled.target[0]!;
+        const z = settled.position[2]! - settled.target[2]!;
+        return x > 1 && Math.abs(z) < 1;
+      },
+      {
+        message:
+          'the interrupting Right request should be where the camera comes to rest',
+        intervals: [100],
+        timeout: 15_000
+      }
+    )
+    .toBe(true);
+  // Restate the resting position as literal numbers, so a failure reports how
+  // far off it was rather than only that a poll expired.
+  expect(settled).not.toBeNull();
   const offsetX = settled!.position[0]! - settled!.target[0]!;
   const offsetZ = settled!.position[2]! - settled!.target[2]!;
   expect(offsetX).toBeGreaterThan(1);
@@ -640,52 +666,77 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
     page.locator('.feature-row', { hasText: 'Fillet' })
   ).toBeVisible();
   await page.keyboard.press('Escape');
+  // Escape has to have actually left the new feature's edit before the rim is
+  // picked: while it is up, the selected edges wear callouts that float over
+  // the canvas and swallow a click aimed at one of them.
+  await expect(page.locator('.inspector-float > *')).toHaveCount(0);
+  await expect(page.locator('.selection-callout')).toHaveCount(0);
 
   const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
   const status = page.getByRole('contentinfo');
 
-  // Hunt for an edge rather than computing where one projects to: the grid
-  // costs a second and survives any change to the fit pose or the layout.
-  let run = 0;
-  for (let y = 0.2; y <= 0.8 && run === 0; y += 0.05) {
-    for (let x = 0.2; x <= 0.8 && run === 0; x += 0.05) {
-      const point = {
-        x: bounds.x + bounds.width * x,
-        y: bounds.y + bounds.height * y
-      };
-      await page.mouse.click(point.x, point.y);
-      // A pick is committed on the next rendered frame. Reading the footer
-      // synchronously can miss a successful hit and burn the whole grid scan.
-      await page.waitForTimeout(32);
-      if (!(await status.textContent())?.includes('exact edge selected')) {
-        continue;
-      }
-      // Selecting the probe edge creates a value chip at that exact point;
-      // a physical double-click can then send its second click to the chip.
-      // Clear the probe and dispatch the measured gesture to the WebGL canvas.
-      await page.getByRole('button', { name: 'Deselect all' }).click();
-      await canvas.dispatchEvent('dblclick', {
-        button: 0,
-        clientX: point.x,
-        clientY: point.y
-      });
-      await expect(status).toContainText('connected edges');
-      const chip = await page.evaluate(
-        () => document.querySelector('.selection-chip-label')?.textContent ?? ''
-      );
-      const match = /^(\d+) edges$/.exec(chip.trim());
-      run = match ? Number(match[1]) : 0;
-    }
-  }
+  // Ask the viewport where one of the rounded rim's edges is instead of
+  // clicking a lattice of screen points hoping to land on a line two pixels
+  // wide. The e2e-only hook projects the exact display polyline through the
+  // live camera and confirms the candidate with the real PickService, so the
+  // point below picks an edge by construction rather than by luck.
+  const locateRim = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<{ x: number; y: number; topologyId: string } | null>(
+          (resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-locate-edge', {
+                detail: { resolve }
+              })
+            );
+          }
+        )
+    );
 
+  // The hook answers from the topology the worker has published, which lands a
+  // frame or more after the feature row appears — the row is the command being
+  // accepted, not the rebuild being drawn. Asking once races that on a slow
+  // runner and reports "no pickable edge" for a body that simply is not there
+  // yet, so poll for the post-condition instead of the proxy.
+  let rim: { x: number; y: number; topologyId: string } | null = null;
+  await expect
+    .poll(
+      async () => {
+        rim = await locateRim();
+        return rim !== null;
+      },
+      {
+        message: 'the filleted body should expose a pickable edge',
+        // Filleting all twelve edges is seconds of WASM geometry on a cold
+        // viewer, and the default 5 s poll window is not enough for it on a
+        // loaded runner. This waits for the rebuild, it does not excuse a
+        // missing one: a body that never publishes still fails here.
+        timeout: 20_000
+      }
+    )
+    .toBe(true);
+
+  await page.mouse.click(rim!.x, rim!.y);
+  await expect(status).toContainText('exact edge selected');
+
+  // Selecting the probe edge creates a value chip at that exact point; a
+  // physical double-click can then send its second click to the chip. Clear
+  // the probe and dispatch the measured gesture to the WebGL canvas.
+  await page.getByRole('button', { name: 'Deselect all' }).click();
+  await canvas.dispatchEvent('dblclick', {
+    button: 0,
+    clientX: rim!.x,
+    clientY: rim!.y
+  });
+
+  await expect(status).toContainText('connected edges');
+  const chip = await page.locator('.selection-chip-label').textContent();
+  const match = /^(\d+) edges$/.exec((chip ?? '').trim());
   // A rounded box has no isolated edges: every boundary continues into the
   // arc beside it, so any edge found belongs to a run of several.
-  expect(run).toBeGreaterThan(1);
-  await expect(status).toContainText('connected edges');
+  expect(match, `selection chip read "${chip}"`).not.toBeNull();
+  expect(Number(match![1])).toBeGreaterThan(1);
 });
 
 test('the selection filter changes what a click takes', async ({ page }) => {
