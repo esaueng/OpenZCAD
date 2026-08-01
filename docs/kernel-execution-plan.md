@@ -462,9 +462,25 @@ a clause buried in a deletion PR.
 worker topology payload so each edge carries `adjacentFaceHashes:
 number[]` and `curve: { type, params }` (line/circle, **not** ellipse or
 nurbs) — viewport consumes it for edge-run walking, arc midpoints, and future
-measure tools. Split it: **W1 adjacency = S**, **W2 curve = M**,
+measure tools. Split it: **W1 adjacency = S ✅ done (#96)**, **W2 curve = M**,
 **W3 snaps fix = S after W2**, **W4 `edgeChain` rewrite = M–L**.
 Kernel-independent, can start any time.
+
+*W1 landed as the S it was estimated at — one field, two files, no protocol
+change — and settled two things by measurement rather than argument:*
+
+- **The sphere witness collision is real and is now pinned by a test.** All of
+  a sphere's faces publish one hash, so *every* sphere edge reports a single
+  distinct adjacent-face hash — including the equator, which genuinely divides
+  two patches. Adjacency therefore cannot distinguish the hemispheres. This was
+  recorded as open question O3; it is closed, and the test turns red if the
+  collision ever goes away so the change gets a deliberate look.
+- **Publishing cost nothing extra.** `edgeToFaceMap` was already parsed per
+  solid and used only to derive `displayRole`, and the face loop already
+  computed each hash, so W1 is a `Map` filled in a loop that was running
+  anyway. The parity baselines did not move: the corpus compares a fixed metric
+  map rather than walking arbitrary `BodyTopology` fields, which also confirms
+  a BrepKit-only payload is corpus-safe and `occt-step.ts` can be skipped.
 
 *Corrections — five claims in the original wording were measured wrong, two
 of them load-bearing:*
