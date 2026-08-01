@@ -1,25 +1,10 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useId, useRef, useState } from 'react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
   type SelectionFilter
 } from '@openzcad/viewport';
-
-type StatusTone = 'ready' | 'warning' | 'running';
-
-interface StatusLogEntry {
-  id: number;
-  message: string;
-  timestamp: number;
-  tone: StatusTone;
-}
-
-const statusTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit'
-});
+import { StatusActivityLog, type StatusTone } from './StatusActivityLog';
 
 interface StatusBarProps {
   status: string;
@@ -56,118 +41,13 @@ export function StatusBar({
 }: StatusBarProps) {
   const logPanelId = useId();
   const [logOpen, setLogOpen] = useState(false);
-  const nextLogIdRef = useRef(1);
-  const previousStatusRef = useRef({ status, tone });
   const statusButtonRef = useRef<HTMLButtonElement | null>(null);
-  const logPanelRef = useRef<HTMLElement | null>(null);
-  const logListRef = useRef<HTMLOListElement | null>(null);
-  const [logEntries, setLogEntries] = useState<StatusLogEntry[]>(() => [
-    { id: 0, message: status, timestamp: Date.now(), tone }
-  ]);
-
-  useEffect(() => {
-    const previous = previousStatusRef.current;
-    if (previous.status === status && previous.tone === tone) {
-      return;
+  const closeLog = useCallback((restoreFocus: boolean) => {
+    setLogOpen(false);
+    if (restoreFocus) {
+      statusButtonRef.current?.focus();
     }
-    previousStatusRef.current = { status, tone };
-    setLogEntries((entries) => [
-      ...entries,
-      {
-        id: nextLogIdRef.current++,
-        message: status,
-        timestamp: Date.now(),
-        tone
-      }
-    ]);
-  }, [status, tone]);
-
-  useEffect(() => {
-    if (!logOpen) {
-      return;
-    }
-
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        !logPanelRef.current?.contains(target) &&
-        !statusButtonRef.current?.contains(target)
-      ) {
-        setLogOpen(false);
-      }
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setLogOpen(false);
-        statusButtonRef.current?.focus();
-      }
-    };
-
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [logOpen]);
-
-  useEffect(() => {
-    if (logOpen && logListRef.current) {
-      logListRef.current.scrollTop = logListRef.current.scrollHeight;
-    }
-  }, [logEntries, logOpen]);
-
-  const logPanel = logOpen
-    ? createPortal(
-        <section
-          ref={logPanelRef}
-          id={logPanelId}
-          className="status-log-panel"
-          role="region"
-          aria-label="Activity log"
-        >
-          <header className="status-log-header">
-            <div>
-              <strong>Activity log</strong>
-              <span>
-                {logEntries.length}{' '}
-                {logEntries.length === 1 ? 'entry' : 'entries'} this session
-              </span>
-            </div>
-            <button
-              type="button"
-              className="status-log-close"
-              onClick={() => {
-                setLogOpen(false);
-                statusButtonRef.current?.focus();
-              }}
-            >
-              Close
-            </button>
-          </header>
-          <ol ref={logListRef} className="status-log-list">
-            {logEntries.map((entry, index) => {
-              const isCurrent = index === logEntries.length - 1;
-              const date = new Date(entry.timestamp);
-              return (
-                <li
-                  key={entry.id}
-                  className={`status-log-entry${isCurrent ? ' current' : ''}`}
-                  aria-current={isCurrent ? 'true' : undefined}
-                >
-                  <i className={entry.tone} aria-hidden="true" />
-                  <time dateTime={date.toISOString()}>
-                    {statusTimeFormatter.format(date)}
-                  </time>
-                  <span>{entry.message}</span>
-                </li>
-              );
-            })}
-          </ol>
-        </section>,
-        document.body
-      )
-    : null;
+  }, []);
 
   return (
     <>
@@ -251,7 +131,14 @@ export function StatusBar({
           </span>
         </div>
       </footer>
-      {logPanel}
+      <StatusActivityLog
+        id={logPanelId}
+        open={logOpen}
+        status={status}
+        tone={tone}
+        triggerRef={statusButtonRef}
+        onClose={closeLog}
+      />
     </>
   );
 }

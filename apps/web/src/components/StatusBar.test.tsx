@@ -69,4 +69,23 @@ describe('StatusBar activity log', () => {
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('keeps Escape from reaching the workspace behind the log', async () => {
+    const user = userEvent.setup();
+    const workspaceKeyDown = vi.fn();
+    window.addEventListener('keydown', workspaceKeyDown);
+
+    try {
+      render(<StatusBar {...defaultProps} />);
+      await user.click(
+        screen.getByRole('button', { name: /Open activity log/ })
+      );
+
+      await user.keyboard('{Escape}');
+
+      expect(workspaceKeyDown).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', workspaceKeyDown);
+    }
+  });
 });
