@@ -8,9 +8,12 @@ function edge(topologyId: string, points: number[][]): EdgeTopology {
 }
 
 /**
- * A quarter arc from `from` to `to` about `centre`, sampled coarsely enough
- * that its end tangents are chords rather than true tangents — the same error
- * the kernel's display polylines carry.
+ * A quarter arc from `from` to `to` about `centre`, sampled coarsely so that a
+ * walk reading directions off the polyline sees chords rather than tangents.
+ *
+ * The kernel does not sample this coarsely — a display arc arrives with 28
+ * points — but coarse sampling is what tells a chord-read direction apart from
+ * one read off `EdgeCurve.circle`, which is what the tests below need.
  */
 function arc(
   topologyId: string,
@@ -147,5 +150,157 @@ describe('a filleted rim', () => {
       edge('wall-se', [[20, 3, 0], [20, 3, -10]])
     ];
     expect(edgeRunFrom(withWall, 'side-s')).not.toContain('wall-se');
+  });
+});
+
+describe('incidence by vertex identity', () => {
+  /** The same edge, with the kernel's vertices attached. */
+  function withVertices(
+    entry: EdgeTopology,
+    vertexIds: [number, number]
+  ): EdgeTopology {
+    return { ...entry, vertexIds };
+  }
+
+  it('refuses two edges that touch in space but name different vertices', () => {
+    // Two solids that merely touch. Coincident to the last bit, and still not
+    // one run: the kernel considers them separate topology, and the vertex
+    // numbering says so.
+    const edges = [
+      withVertices(edge('left', [[0, 0, 0], [10, 0, 0]]), [0, 1]),
+      withVertices(edge('right', [[10, 0, 0], [20, 0, 0]]), [2, 3])
+    ];
+    expect(edgeRunFrom(edges, 'left')).toEqual(['left']);
+  });
+
+  it('joins two edges that name one vertex however far apart their polylines start', () => {
+    // The converse, and the reason identity is not a tighter tolerance: a
+    // sampler is free to start a polyline away from the edge's own vertex, and
+    // the walk must not care.
+    const edges = [
+      withVertices(edge('left', [[0, 0, 0], [10, 0, 0]]), [0, 1]),
+      withVertices(edge('right', [[10.5, 0, 0], [20, 0, 0]]), [1, 2])
+    ];
+    expect(edgeRunFrom(edges, 'left')).toEqual(['left', 'right']);
+  });
+
+  it('answers the same at 1x, 1000x and 0.001x', () => {
+    // Nothing in the topological path has a length in it. The geometric
+    // fallback is relative to the body, so it does not either.
+    for (const scale of [1, 1000, 0.001]) {
+      const geometry = [
+        edge('left', [[0, 0, 0], [10 * scale, 0, 0]]),
+        edge('middle', [[10 * scale, 0, 0], [20 * scale, 0, 0]]),
+        edge('corner', [[20 * scale, 0, 0], [20 * scale, 10 * scale, 0]])
+      ];
+      expect(edgeRunFrom(geometry, 'left'), `${scale}x geometric`).toEqual([
+        'left',
+        'middle'
+      ]);
+      const topological = [
+        withVertices(geometry[0]!, [0, 1]),
+        withVertices(geometry[1]!, [1, 2]),
+        withVertices(geometry[2]!, [2, 3])
+      ];
+      expect(edgeRunFrom(topological, 'left'), `${scale}x topological`).toEqual([
+        'left',
+        'middle'
+      ]);
+    }
+  });
+
+  it('keeps a closed edge a run of one', () => {
+    // A bore rim names one vertex twice. It leaves that vertex and comes back
+    // to it, so a run through it has nowhere to go, and the payload cannot say
+    // which way it leaves anyway.
+    const rim = withVertices(
+      arc('bore-rim', [0, 0], 3, 0, 360, 12),
+      [0, 0]
+    );
+    const stem = withVertices(edge('stem', [[3, 0, 0], [3, 0, -10]]), [0, 1]);
+    expect(edgeRunFrom([rim, stem], 'bore-rim')).toEqual(['bore-rim']);
+    expect(edgeRunFrom([rim, stem], 'stem')).toEqual(['stem']);
+  });
+
+  it('falls back to welding for an edge with no vertices of its own', () => {
+    // A payload written before `vertexIds` existed, or one edge of it the
+    // kernel refused. The rest of the body still walks topologically; this one
+    // is reached the old way.
+    const edges = [
+      withVertices(edge('left', [[0, 0, 0], [10, 0, 0]]), [0, 1]),
+      edge('middle', [[10, 0, 0], [20, 0, 0]]),
+      withVertices(edge('right', [[20, 0, 0], [30, 0, 0]]), [2, 3])
+    ];
+    expect(edgeRunFrom(edges, 'left')).toEqual(['left', 'middle', 'right']);
+  });
+});
+
+describe('directions read from the exact curve', () => {
+  const circle = (radius: number) => ({
+    type: 'CIRCLE',
+    circle: {
+      center: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 },
+      radius
+    }
+  });
+
+  /** A quarter arc sampled so that its end chord is 11.25 degrees off. */
+  const coarse: EdgeTopology = {
+    ...arc('arc', [0, 0], 3, -90, 0, 4),
+    curve: circle(3)
+  };
+  const tangentLine = edge('line', [[3, 0, 0], [3, 10, 0]]);
+
+  it('holds a tangent join that the sampled chord would break', () => {
+    // At a 5 degree cone the chord's 11.25 degrees is a corner and the true
+    // tangent is a straight line. The exact circle is what the walk uses.
+    expect(
+      edgeRunFrom([coarse, tangentLine], 'arc', { tangentToleranceDeg: 5 })
+    ).toEqual(['arc', 'line']);
+    const withoutCurve = { ...coarse, curve: undefined };
+    expect(
+      edgeRunFrom([withoutCurve, tangentLine], 'arc', {
+        tangentToleranceDeg: 5
+      })
+    ).toEqual(['arc']);
+  });
+
+  it('ignores a circle that does not describe the edge it is attached to', () => {
+    // `EdgeCurve.circle.axis` is unoriented by contract, so the tangent it
+    // yields is a line and the polyline picks the direction. A record that
+    // disagrees with the polyline outright is not describing this end, and the
+    // chord is used instead of a confidently wrong answer.
+    const mismatched: EdgeTopology = {
+      ...coarse,
+      curve: {
+        type: 'CIRCLE',
+        circle: {
+          center: { x: 0, y: 0, z: 0 },
+          axis: { x: 0, y: 1, z: 0 },
+          radius: 3
+        }
+      }
+    };
+    expect(
+      edgeRunFrom([mismatched, tangentLine], 'arc', { tangentToleranceDeg: 5 })
+    ).toEqual(['arc']);
+  });
+
+  it('takes the same run whichever way the unoriented axis points', () => {
+    const flipped: EdgeTopology = {
+      ...coarse,
+      curve: {
+        type: 'CIRCLE',
+        circle: {
+          center: { x: 0, y: 0, z: 0 },
+          axis: { x: 0, y: 0, z: -1 },
+          radius: 3
+        }
+      }
+    };
+    expect(
+      edgeRunFrom([flipped, tangentLine], 'arc', { tangentToleranceDeg: 5 })
+    ).toEqual(['arc', 'line']);
   });
 });
