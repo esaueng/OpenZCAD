@@ -453,7 +453,7 @@ a clause buried in a deletion PR.
 | Item | Retire when | Work |
 | --- | --- | --- |
 | `tryExactAnalyticCylinderRimFillet` (`exact.ts:440`) | ~~K0.4 phase 2~~ the kernel builds a convex cap-rim blend at f/r ≥ 0.5 — **NO-GO today, see below** | delete + keep its tests as kernel regressions — **S** |
-| `tryExactAnalyticCylinderCapOffset` / `tryExactCoaxialCylinderCut` | K0.5 + a kernel coaxial-cut fast path | delete — **S** each |
+| `tryExactAnalyticCylinderCapOffset` / `tryExactCoaxialCylinderCut` | ~~K0.5 + a kernel coaxial-cut fast path~~ **GO now — both justifications measured false, see below** | delete — **S** each |
 | Boolean distrust harness (`boolean-result-validation.ts`) | after N releases with zero census failures on the corpus post-K0.5 | demote to debug assertion behind a flag — **S** |
 | STEP text rewriter (`step-import.ts`) | K0.1 | delete in Z3 — **S** |
 | Viewport geometric edge-walk (`edgeChain.ts`) + chord-midpoint snaps (`topologySnaps.ts`) | adjacency/exact-curve publishing (below) | rewrite walk topologically — **M** |
@@ -538,6 +538,34 @@ all of them." Pure G1 tangency is the wrong rule. The docstrings in
 `edgeChain.ts` and `topologySnaps.ts` justifying it ("the kernel hands the
 viewport a fillet arc as a two-point polyline") are separately wrong: at the
 app's real display deflection a quarter arc arrives with **28 points**, not 2.
+
+*The other two cylinder workarounds are GO, and were never really K0.5's to
+gate.* Each carries a docstring making a falsifiable claim about the kernel.
+Both were measured against the current pin and **neither reproduces**:
+
+- `tryExactCoaxialCylinderCut` says the generic boolean "falls back to a
+  triangular B-rep when a smaller coaxial cylinder opens exactly onto either
+  cap". It does not. A through tube comes back with **4 faces — 2 cylinders
+  and 2 planes**, fully analytic, at 5277.875658 against a closed form of
+  `π·10²·20 − π·4²·20 = 5277.875658`. Blind bores opening on either cap give 5
+  faces, equally analytic, at 5780.530483 against `6283.185 − π·4²·10`.
+- `tryExactAnalyticCylinderCapOffset` says repeated cylindrical resizes make
+  the generic cap boolean "accumulate a mismatched circular boundary and fail
+  its exact volume gate". Eight consecutive `pushPullFace` rounds of +1.0 hold
+  at **3 faces throughout**, `validateSolidRelaxed` 0 every round, and gain
+  exactly `π·10² = 314.159` each time with no drift.
+
+**These differ from Z6.1 in a way that matters.** Z6.1's workaround runs only
+*after* `kernel.fillet` throws, so it can never override a kernel success and
+deleting it removes only capability. These two are tried **first** —
+`tryExact… ?? generic` at `exact.ts:3874` and `:4360` — so they *pre-empt* the
+general path wherever they apply. That makes them not merely redundant but a
+second answer to the same question, free to drift from the kernel's. That is a
+reason to retire them sooner rather than later.
+
+Sequencing: the deletion touches `exact.ts`, so it queues behind M3/W2. Treat
+the measurement above as the go-ahead, and let the adapter suite be the
+confirmation.
 
 *Z6.1 is NO-GO, and the trigger above pointed at the wrong kernel work.*
 BrepKit's convex cap-rim fillet succeeds iff **f/r < 0.5** and throws
