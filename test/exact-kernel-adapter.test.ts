@@ -684,6 +684,116 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
   });
 
+  it('publishes the two vertices each edge runs between', async () => {
+    let document = createProjectDocument(
+      'Edge vertices',
+      toUserId('user_vertex_ids')
+    );
+    const ids = new Map<string, (typeof document.bodyOrder)[number]>();
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    ids.set('Box', document.bodyOrder.at(-1)!);
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    ids.set('Cylinder', document.bodyOrder.at(-1)!);
+    // Two solids in one body, spaced exactly their own extent, so they touch
+    // face to face. Coincident geometry, distinct topology.
+    document = addPrimitiveFeature(document, {
+      name: 'Pair',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const pairId = document.bodyOrder.at(-1)!;
+    const patterned = patternBody(document, {
+      name: 'Touching pair',
+      targetBodyId: pairId,
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 10
+    });
+    document = patterned.document;
+    ids.set('Pair', patterned.bodyId);
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const edgesOf = (name: string) =>
+      derived.bodyRepresentations[ids.get(name)!]!.topology!.edges;
+    // Fails rather than defaulting, which would make every count below read
+    // from an empty pair and assert nothing.
+    const verticesOf = (edge: { vertexIds?: [number, number] }) => {
+      expect(edge.vertexIds).toBeDefined();
+      return edge.vertexIds as [number, number];
+    };
+
+    // A box: twelve edges over eight vertices, each edge joining two distinct
+    // ones, each vertex used by exactly three edges.
+    const boxEdges = edgesOf('Box');
+    expect(boxEdges).toHaveLength(12);
+    const boxUse = new Map<number, number>();
+    for (const edge of boxEdges) {
+      const [start, end] = verticesOf(edge);
+      expect(start).not.toBe(end);
+      boxUse.set(start, (boxUse.get(start) ?? 0) + 1);
+      boxUse.set(end, (boxUse.get(end) ?? 0) + 1);
+    }
+    expect(boxUse.size).toBe(8);
+    expect([...boxUse.values()]).toEqual(Array(8).fill(3));
+
+    // The fact that makes this worth publishing next to adjacentFaceHashes:
+    // some pair of box edges shares a face and shares NO vertex, so adjacency
+    // alone would have joined two opposite sides of the top face into one run.
+    const shareFaceNotVertex = boxEdges.some((edge) =>
+      boxEdges.some(
+        (other) =>
+          other !== edge &&
+          !verticesOf(other).some((id) => verticesOf(edge).includes(id)) &&
+          (edge.adjacentFaceHashes ?? []).some((hash) =>
+            (other.adjacentFaceHashes ?? []).includes(hash)
+          )
+      )
+    );
+    expect(shareFaceNotVertex).toBe(true);
+
+    // A closed edge names one vertex twice rather than publishing a single
+    // entry. The cylinder's two rims are the case; its seam is a normal open
+    // edge running between them.
+    const cylinderEdges = edgesOf('Cylinder');
+    const closedRims = cylinderEdges.filter(
+      (edge) => new Set(verticesOf(edge)).size === 1
+    );
+    expect(closedRims).toHaveLength(2);
+    for (const rim of closedRims) {
+      expect(verticesOf(rim)).toHaveLength(2);
+    }
+    expect(
+      cylinderEdges.filter((edge) => new Set(verticesOf(edge)).size === 2)
+    ).toHaveLength(1);
+    // The seam joins the two rims, so between them the three edges use exactly
+    // the two vertices the body has.
+    expect(new Set(cylinderEdges.flatMap(verticesOf)).size).toBe(2);
+
+    // Two solids touching exactly still share no vertex id. The ids are
+    // numbered body-wide but the handle map is per solid, so a run cannot walk
+    // from one solid to the other along coincident geometry.
+    const pairEdges = edgesOf('Pair');
+    expect(pairEdges).toHaveLength(24);
+    expect(new Set(pairEdges.flatMap(verticesOf)).size).toBe(16);
+    const pairUse = new Map<number, number>();
+    for (const edge of pairEdges) {
+      for (const id of verticesOf(edge)) {
+        pairUse.set(id, (pairUse.get(id) ?? 0) + 1);
+      }
+    }
+    expect([...pairUse.values()]).toEqual(Array(16).fill(3));
+  });
+
   it('publishes the exact circle each arc lies on, and a bare type otherwise', async () => {
     let document = createProjectDocument(
       'Edge curves',

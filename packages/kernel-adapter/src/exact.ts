@@ -521,6 +521,44 @@ function brepAdjacentFaceHashes(
 }
 
 /**
+ * The two vertices an edge runs between, renumbered into the body-scoped ids
+ * `EdgeTopology.vertexIds` publishes.
+ *
+ * Read straight from the kernel rather than derived from positions. Quantizing
+ * endpoints at the ADR-011 quantum was measured against these handles and does
+ * not work — `test/vertex-identity.test.ts` carries the numbers, the decisive
+ * one being that a closed edge's display polyline begins a quarter turn away
+ * from its own vertex.
+ *
+ * NOT sorted, unlike the face hashes above. The order is the edge's own
+ * start-then-end, which is the direction `points` is sampled in and is
+ * reproducible for that reason; sorting would discard which end is which. A
+ * closed edge names one vertex twice and keeps both entries.
+ */
+function brepVertexIds(
+  edge: number,
+  handles: Uint32Array,
+  vertexIdByHandle: ReadonlyMap<number, number>
+): [number, number] | undefined {
+  if (handles.length !== 2) {
+    return undefined;
+  }
+  const ids = Array.from(handles, (handle) => {
+    const id = vertexIdByHandle.get(handle);
+    if (id === undefined) {
+      // Same guard as the face owners above: a vertex outside this solid's own
+      // vertex set means two kernel calls disagree about what the solid
+      // contains, and publishing a half-resolved pair would hide it.
+      throw new Error(
+        `Edge ${edge} names vertex handle ${handle}, which is not among this solid's vertices.`
+      );
+    }
+    return id;
+  });
+  return [ids[0]!, ids[1]!];
+}
+
+/**
  * A periodic face references its UV-closing seam twice. BrepKit's sphere is
  * currently built from two same-surface hemispheres, so their smooth equator
  * fragments are display seams too. Neither case is a physical feature edge.
@@ -4660,6 +4698,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     let volume = 0;
     let valid = true;
     let strictValid = true;
+    // Vertex ids are numbered across the whole body while the handle map below
+    // is rebuilt per solid, so two solids that touch exactly — a linear pattern
+    // whose spacing equals its extent — never share an id.
+    let nextVertexId = 0;
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
@@ -4679,6 +4721,18 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // them, and face handles are only observed to be globally unique, not
       // contracted to be.
       const faceHashByHandle = new Map<number, number>();
+      // Vertex handle -> body-scoped id, for the same reason and with the same
+      // scoping: `getSolidVertices` is per solid, and vertex handles are only
+      // observed to be globally unique, not contracted to be. Numbered from
+      // the kernel's own vertex list rather than from the order edges happen
+      // to name them, so the ids do not depend on the edge loop below.
+      const vertexIdByHandle = new Map<number, number>();
+      for (const vertex of kernel.getSolidVertices(solid)) {
+        if (!vertexIdByHandle.has(vertex)) {
+          vertexIdByHandle.set(vertex, nextVertexId);
+          nextVertexId += 1;
+        }
+      }
       const mesh = kernel.tessellateSolidGroupedBinary(
         solid,
         displayTessellation.linearDeflection,
@@ -4801,6 +4855,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             // Given the sampled polyline so a candidate circle is checked
             // against the edge's own geometry before it is published.
             curve: brepEdgeCurve(kernel, edge, points),
+            vertexIds: brepVertexIds(
+              edge,
+              kernel.getEdgeVertexHandles(edge),
+              vertexIdByHandle
+            ),
             points
           });
         }
@@ -4981,9 +5040,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // coincident faces weld). The kernel writes each body as its own
       // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
       // distinct through a round trip.
-      return decodeText(
-        kernel.exportStepMulti(new Uint32Array(exportSolids))
-      );
+      return decodeText(kernel.exportStepMulti(new Uint32Array(exportSolids)));
     } finally {
       kernel.free();
     }

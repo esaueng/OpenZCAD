@@ -24,13 +24,13 @@ import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 
 /** The same quantizer the ADR-011 edge signature and mesh welding both use. */
-function quantizedKey(point: readonly number[]): string {
+function quantizedKey(point: ArrayLike<number>): string {
   const f = (value: number) =>
     String(Math.round((value ?? 0) / GEOMETRY_LINEAR_TOLERANCE));
   return `${f(point[0]!)},${f(point[1]!)},${f(point[2]!)}`;
 }
 
-function distance(a: readonly number[], b: readonly number[]): number {
+function distance(a: ArrayLike<number>, b: ArrayLike<number>): number {
   return Math.hypot(a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!);
 }
 
@@ -50,7 +50,7 @@ function displayPolylines(kernel: BrepKernel, solid: number): number[][] {
     const offsets = [...Array.from(mesh.offsets), values.length];
     return offsets
       .slice(0, -1)
-      .map((from, index) => values.slice(from, offsets[index + 1]!));
+      .map((from, index) => values.slice(from, offsets[index + 1]));
   } finally {
     mesh.free();
   }
