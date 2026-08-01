@@ -3,7 +3,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
   type SelectionFilter
-} from '@openzcad/viewport';
+} from '@openzcad/viewport/types';
 import { StatusActivityLog, type StatusTone } from './StatusActivityLog';
 
 interface StatusBarProps {

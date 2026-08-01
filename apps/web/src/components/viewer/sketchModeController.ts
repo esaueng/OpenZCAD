@@ -10,6 +10,7 @@ import {
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
 import type { SketchPoint } from '../../lib/sketch/session';
+import { objectPolyline } from '../../lib/objectPolyline';
 
 /**
  * Scene-side rig for in-viewport sketching: a tinted plane quad with a
@@ -23,7 +24,6 @@ const TINT_COLOR = 0x0d1b2e;
 const COMMITTED_COLOR = 0x4da3ff;
 const SELECTED_COLOR = 0xf59e0b;
 const IN_PROGRESS_COLOR = 0xf59e0b;
-const CIRCLE_SEGMENTS = 96;
 /** Screen-space width in CSS pixels for the sketch polylines. */
 const SKETCH_LINE_WIDTH = 1.6;
 
@@ -50,83 +50,6 @@ function liftPoint(basis: PlaneBasis, point: SketchPoint): THREE.Vector3 {
     basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
     basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
   );
-}
-
-/** Sampled plane-local polyline for one sketch object; null for unsupported. */
-export function objectPolyline(
-  data: SketchObjectData,
-  resolve: (value: unknown) => number
-): { points: SketchPoint[]; closed: boolean } | null {
-  switch (data.objectKind) {
-    case 'line':
-      return {
-        points: [
-          { x: resolve(data.x1), y: resolve(data.y1) },
-          { x: resolve(data.x2), y: resolve(data.y2) }
-        ],
-        closed: false
-      };
-    case 'rectangle': {
-      const width = resolve(data.width) / 2;
-      const height = resolve(data.height) / 2;
-      const cx = resolve(data.centerX);
-      const cy = resolve(data.centerY);
-      return {
-        points: [
-          { x: cx - width, y: cy - height },
-          { x: cx + width, y: cy - height },
-          { x: cx + width, y: cy + height },
-          { x: cx - width, y: cy + height }
-        ],
-        closed: true
-      };
-    }
-    case 'circle':
-    case 'polygon': {
-      const radius = resolve(data.radius);
-      const cx = resolve(data.centerX);
-      const cy = resolve(data.centerY);
-      const sides =
-        data.objectKind === 'polygon'
-          ? Math.max(3, Math.round(resolve(data.sides)))
-          : CIRCLE_SEGMENTS;
-      const phase = data.objectKind === 'polygon' ? Math.PI / 2 : 0;
-      const points: SketchPoint[] = [];
-      for (let index = 0; index < sides; index += 1) {
-        const angle = (index / sides) * Math.PI * 2 + phase;
-        points.push({
-          x: cx + Math.cos(angle) * radius,
-          y: cy + Math.sin(angle) * radius
-        });
-      }
-      return { points, closed: true };
-    }
-    case 'arc': {
-      const radius = resolve(data.radius);
-      const cx = resolve(data.centerX);
-      const cy = resolve(data.centerY);
-      const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
-      let sweep =
-        ((resolve(data.endAngleDeg) - resolve(data.startAngleDeg)) * Math.PI) /
-        180;
-      if (sweep <= 0) {
-        sweep += Math.PI * 2;
-      }
-      const steps = Math.max(
-        8,
-        Math.ceil((sweep / (Math.PI * 2)) * CIRCLE_SEGMENTS)
-      );
-      const points: SketchPoint[] = [];
-      for (let index = 0; index <= steps; index += 1) {
-        const angle = start + (sweep * index) / steps;
-        points.push({
-          x: cx + Math.cos(angle) * radius,
-          y: cy + Math.sin(angle) * radius
-        });
-      }
-      return { points, closed: false };
-    }
-  }
 }
 
 /**
