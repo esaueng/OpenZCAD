@@ -19,7 +19,6 @@ import {
   type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
-import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
   UNIT_TO_MM,
@@ -41,6 +40,7 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import type { ExactKernelAdapter } from './exact';
+import { importedMeshStl } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   analyzeUnionConnectivity,
@@ -916,18 +916,6 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): number[] {
     cb * ca,
     translation.z
   ];
-}
-
-function importedMeshStl(
-  feature: Extract<FeatureNode['data'], { featureKind: 'imported-mesh' }>
-): string {
-  return writeAsciiStl(feature.sourceName, [
-    {
-      name: feature.sourceName,
-      vertices: feature.vertices,
-      indices: feature.indices
-    }
-  ]);
 }
 
 function sweepSemanticDescriptor(
