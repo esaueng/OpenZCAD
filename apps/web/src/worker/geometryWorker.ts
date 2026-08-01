@@ -20,7 +20,6 @@ export type GeometryWorkerRequest =
 export type GeometryWorkerPhase =
   | 'starting'
   | 'loading-brepkit'
-  | 'loading-occt'
   | 'rebuilding'
   | 'ready'
   | 'failed';
@@ -130,12 +129,6 @@ function emptyDerived(document: ProjectDocument): ProjectDocument['derived'] {
   };
 }
 
-function documentRequiresOcct(document: ProjectDocument): boolean {
-  return Object.values(document.nodes).some(
-    (node) => node.kind === 'feature' && node.featureKind === 'imported-step'
-  );
-}
-
 function stateFor(
   phase: GeometryWorkerPhase,
   request: GeometryWorkerRequest,
@@ -177,9 +170,6 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ? exactKernelError
           : new Error('The exact BrepKit kernel failed to load.');
       }
-      if (documentRequiresOcct(document)) {
-        post(stateFor('loading-occt', request, { stale: true }));
-      }
       post(stateFor('rebuilding', request, { stale: true }));
       const text =
         request.format === 'step'
@@ -217,9 +207,6 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
             }
             if (!broadcastGate.isCurrent(job.broadcastToken)) {
               throw new Error('Superseded geometry broadcast.');
-            }
-            if (documentRequiresOcct(document)) {
-              post(stateFor('loading-occt', request, { stale: true }));
             }
             post(stateFor('rebuilding', request, { stale: true }));
             return exact.syncDocument(document);
