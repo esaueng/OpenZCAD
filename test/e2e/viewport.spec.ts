@@ -733,10 +733,16 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   await expect(status).toContainText('connected edges');
   const chip = await page.locator('.selection-chip-label').textContent();
   const match = /^(\d+) edges$/.exec((chip ?? '').trim());
-  // A rounded box has no isolated edges: every boundary continues into the
-  // arc beside it, so any edge found belongs to a run of several.
+  // Exactly eight, not merely "more than one". The body is the app's default
+  // 30 x 18 x 24 box with all twelve edges filleted at the default radius 2,
+  // which leaves 48 edges in twelve runs of eight — so the probe may land on
+  // any edge and still owes the same answer. `> 1` passed for a walk returning
+  // two edges as readily as for one returning the whole run, which is the
+  // entire behaviour this test exists to defend. The number is measured, not
+  // guessed: `test/edge-chain-characterization.test.ts` builds this same body
+  // through the kernel and pins every edge's run length.
   expect(match, `selection chip read "${chip}"`).not.toBeNull();
-  expect(Number(match![1])).toBeGreaterThan(1);
+  expect(Number(match![1])).toBe(8);
 });
 
 test('the selection filter changes what a click takes', async ({ page }) => {

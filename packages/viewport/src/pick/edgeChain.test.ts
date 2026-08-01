@@ -131,22 +131,14 @@ describe('a filleted rim', () => {
     expect(new Set(steps).size).toBe(1);
   });
 
-  it('walks the rim the kernel actually emits, whose arcs are one chord', () => {
-    // Measured from a filleted box: every edge comes back as two points, so a
-    // quarter arc is a bare chord and meets its neighbours at 45 degrees while
-    // the perpendicular rim edge and the wall below both sit at 90. The
-    // default tolerance has to separate those, not merely pass on well
-    // sampled arcs.
-    const chorded: EdgeTopology[] = [
-      edge('side-s', [[3, 0, 0], [17, 0, 0]]),
-      edge('corner-se', [[17, 0, 0], [20, 3, 0]]),
-      edge('side-e', [[20, 3, 0], [20, 17, 0]]),
-      edge('wall-se', [[20, 3, 0], [20, 3, -10]])
-    ];
-    const run = edgeRunFrom(chorded, 'side-s');
-    expect(run).toEqual(['side-s', 'corner-se', 'side-e']);
-    expect(run).not.toContain('wall-se');
-  });
+  // A test that used to sit here asserted the run on a rim whose arcs were a
+  // single chord, "the rim the kernel actually emits". The kernel does not
+  // emit that: at the app's real display deflection a quarter arc arrives with
+  // 28 points, and it is 28 across three decades of radius because the
+  // deflection is size-relative. Deleted rather than relaxed — it was the only
+  // thing pinning the 50 degree default and it pinned it for a reason that was
+  // never true. What 50 is really holding together is measured against the
+  // kernel in `test/edge-chain-characterization.test.ts`.
 
   it('does not run off the rim onto the wall below it', () => {
     // A vertical edge shares the corner but turns 90 degrees out of the rim.
