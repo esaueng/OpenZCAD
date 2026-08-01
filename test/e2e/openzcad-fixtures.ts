@@ -197,6 +197,42 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   ).toBeVisible();
 }
 
+/**
+ * Waits until the given surfaces have finished their entrance motion.
+ *
+ * A layout assertion is about where a surface comes to rest, but several
+ * surfaces arrive with a short transform — the assistant dock, for one, slides
+ * in from `translateX(12px)` over `--dur-base`. Reading a bounding box the
+ * moment the element becomes visible therefore measures a frame of that
+ * animation rather than the layout, and on a slow machine that frame is a
+ * different one than on a fast machine.
+ *
+ * Looping animations (spinners, the assistant typing dots) never finish, so
+ * they are ignored instead of hanging the wait.
+ */
+export async function waitForSurfacesToSettle(
+  page: Page,
+  selectors: readonly string[]
+) {
+  await page.waitForFunction(
+    (list: string[]) =>
+      list.every((selector) => {
+        const element = document.querySelector(selector);
+        if (!element) {
+          return false;
+        }
+        return element.getAnimations().every((animation) => {
+          const iterations = animation.effect?.getComputedTiming().iterations;
+          return (
+            !Number.isFinite(iterations ?? 1) ||
+            animation.playState === 'finished'
+          );
+        });
+      }),
+    [...selectors]
+  );
+}
+
 export async function stubEmailLoginApi(page: Page) {
   let signedIn = false;
   const session = {
