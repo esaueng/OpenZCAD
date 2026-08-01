@@ -64,6 +64,7 @@ export interface InspectorCallbacks {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
+    angleDeg: ParamValue;
   }): void;
   onCreateBoolean(value: {
     name: string;
@@ -90,7 +91,12 @@ export interface InspectorCallbacks {
   ): void;
   onApplyRevolve(
     feature: FeatureNode,
-    value: { name: string; sketchId: SketchId; axis: RevolveAxis }
+    value: {
+      name: string;
+      sketchId: SketchId;
+      axis: RevolveAxis;
+      angleDeg: ParamValue;
+    }
   ): void;
   onApplyBoolean(
     feature: FeatureNode,
@@ -557,7 +563,8 @@ export function Inspector(props: InspectorProps) {
           initial={{
             name: selectedFeature.name,
             sketchId: data.sketchId,
-            axis: data.axis
+            axis: data.axis,
+            angleDeg: data.angleDeg
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyRevolve(selectedFeature, value)}

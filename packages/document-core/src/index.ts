@@ -206,6 +206,8 @@ export interface RevolveInput {
   name: string;
   sketchId: SketchId;
   axis: RevolveAxis;
+  /** Sweep angle in degrees, `(0, 360]`. Omitted means a full turn. */
+  angleDeg?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -853,7 +855,11 @@ export function revolveSketch(
     data: {
       featureKind: 'revolve',
       sketchId: input.sketchId,
-      axis: input.axis
+      axis: input.axis,
+      // Written only when asked for. An absent field is a full turn, so a
+      // full revolve stays byte-identical to one authored before partial
+      // revolve existed — including its ADR-013 semantic lineage.
+      ...(input.angleDeg === undefined ? {} : { angleDeg: input.angleDeg })
     }
   };
 

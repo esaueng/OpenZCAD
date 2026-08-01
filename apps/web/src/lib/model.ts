@@ -17,6 +17,8 @@ export function paramValueText(value: ParamValue | undefined): string {
 export interface EvalPreview {
   ok: boolean;
   text: string;
+  /** The evaluated number, present exactly when `ok`. */
+  value?: number;
 }
 
 /** Live evaluation preview for expression inputs ("= 42" or the error). */
@@ -29,9 +31,11 @@ export function previewExpression(
     return { ok: false, text: 'required' };
   }
   try {
+    const value = evaluateExpression(trimmed, scope);
     return {
       ok: true,
-      text: `= ${formatNumber(evaluateExpression(trimmed, scope))}`
+      text: `= ${formatNumber(value)}`,
+      value
     };
   } catch (error) {
     return {
