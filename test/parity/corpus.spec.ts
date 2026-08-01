@@ -192,7 +192,42 @@ function metricsAgree(
     }
     return left === right;
   }
+  if (typeof left === 'string' && typeof right === 'string') {
+    return left === right || sameFailureStage(left, right);
+  }
   return left === right;
+}
+
+/**
+ * An error whose message the runtime could not recover, compared by the stage
+ * it failed at rather than by its prose.
+ *
+ * OpenCascade throws a `WebAssembly.Exception`. Whether that arrives carrying
+ * a readable message or stringifies to `[object WebAssembly.Exception]`
+ * depends on the host runtime's wasm exception support, not on the file, the
+ * geometry, or either kernel: CI reads
+ * `importStep: no shapes found in STEP data` where a runtime without that
+ * support reads `importStep: [object WebAssembly.Exception]` for the very same
+ * refusal. Pinning the prose therefore pins the runtime.
+ *
+ * So when one side is opaque, assert only what is actually observable — that
+ * both refused at the same stage. Two recovered messages still compare
+ * exactly, so this never masks a kernel changing its mind about a file.
+ */
+const OPAQUE_EXCEPTION = '[object WebAssembly.Exception]';
+
+function sameFailureStage(left: string, right: string): boolean {
+  const leftOpaque = left.includes(OPAQUE_EXCEPTION);
+  const rightOpaque = right.includes(OPAQUE_EXCEPTION);
+  // Both opaque means both runtimes hid it; plain equality already handled it.
+  if (leftOpaque === rightOpaque) {
+    return false;
+  }
+  const [opaque, recovered] = leftOpaque ? [left, right] : [right, left];
+  // Everything the opaque form still says — which stage, on which feature —
+  // must match. Only the message the runtime swallowed is treated as unknown.
+  const prefix = opaque.slice(0, opaque.indexOf(OPAQUE_EXCEPTION));
+  return prefix.length > 0 && recovered.startsWith(prefix);
 }
 
 /**
