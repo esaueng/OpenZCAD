@@ -106,6 +106,10 @@
     right: 6px;
   }
 
+  .viewer-rail {
+    right: 6px;
+  }
+
   .status-bar {
     gap: 6px;
     padding-inline: 6px;

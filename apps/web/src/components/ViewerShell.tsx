@@ -243,17 +243,19 @@ export function ViewerShell({
         onContextMenu={onContextMenu}
       />
       {!hideViewerToolbar && (
-        <div className="viewer-rail-stack">
-          <OrientationWidget
-            orientationRef={orientationRef}
-            onSelectView={onView}
-            onRotateView={onRotateView}
-            onDragStart={() => orientationDragRef.current?.begin()}
-            onDrag={(deltaX, deltaY) =>
-              orientationDragRef.current?.move(deltaX, deltaY)
-            }
-            onDragEnd={() => orientationDragRef.current?.end()}
-          />
+        <>
+          <div className="viewer-rail-stack">
+            <OrientationWidget
+              orientationRef={orientationRef}
+              onSelectView={onView}
+              onRotateView={onRotateView}
+              onDragStart={() => orientationDragRef.current?.begin()}
+              onDrag={(deltaX, deltaY) =>
+                orientationDragRef.current?.move(deltaX, deltaY)
+              }
+              onDragEnd={() => orientationDragRef.current?.end()}
+            />
+          </div>
           <ViewerToolbar
             settings={settings}
             projection={projection}
@@ -263,7 +265,7 @@ export function ViewerShell({
             onCycleDisplayMode={onCycleDisplayMode}
             onToggleProjection={onToggleProjection}
           />
-        </div>
+        </>
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">
