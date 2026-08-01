@@ -4,19 +4,19 @@
       "status": "imported",
       "warnings": [],
       "bodyCount": 1,
-      "volume": 9518.33214341142,
+      "volume": 9522.60692840917,
       "faceCount": 10,
       "edgeCount": 24,
       "seamEdgeCount": 0,
       "surfaceTypes": {
-        "plane": 6,
-        "bspline": 4
+        "cylinder": 4,
+        "plane": 6
       },
       "witnessedFaces": 0,
       "witnessedEdges": 0,
       "lineageNames": [],
-      "faceHashDigest": "35d76d2e",
-      "edgeHashDigest": "9389207a",
+      "faceHashDigest": "b563a24b",
+      "edgeHashDigest": "4de1dc1b",
       "bbox": [
         0,
         0,
@@ -28,7 +28,7 @@
       "roundTrip": {
         "status": "ok",
         "warnings": [],
-        "volumeRelativeDelta": 0.001748693017046106,
+        "volumeRelativeDelta": 0,
         "faceCountDelta": 0,
         "edgeCountDelta": 0,
         "exportedSolidCount": 1,

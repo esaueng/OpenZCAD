@@ -282,8 +282,32 @@ describe('topology-lineage kernel spike', () => {
         )
       );
       verifyCompleteBrepEvolution(kernel, [primitive], fillet);
-      expect(Object.values(fillet.evolution.generated).flat()).toHaveLength(1);
       expect(kernel.validateSolidRelaxed(fillet.solid)).toBe(0);
+      // The blend band used to arrive as one GENERATED face with no source.
+      // Under GFA face provenance it is reported as a MODIFIED result of both
+      // faces the rounded edge separated, and nothing is generated at all.
+      // Recording the count alone would say nothing about whether the new
+      // attribution is right, so the claim asserted is the attribution: the
+      // band's face is listed under exactly the two source faces that shared
+      // the selected edge, and under no others.
+      const bandFaces = Array.from(kernel.getSolidFaces(fillet.solid)).filter(
+        (face) => kernel.getSurfaceType(face) === 'cylinder'
+      );
+      expect(bandFaces).toHaveLength(1);
+      const band = bandFaces[0]!;
+      const facesOnSelectedEdge = Array.from(
+        kernel.getSolidFaces(primitive)
+      ).filter((face) =>
+        Array.from(kernel.getFaceEdges(face)).includes(selectedEdge)
+      );
+      expect(facesOnSelectedEdge).toHaveLength(2);
+      const bandSources = Object.entries(fillet.evolution.modified)
+        .filter(([, results]) => results.includes(band))
+        .map(([source]) => Number(source));
+      expectSameSet(bandSources, facesOnSelectedEdge);
+      expect(Object.values(fillet.evolution.generated).flat()).toHaveLength(0);
+      // No source face disappears when a single edge is rounded.
+      expect(fillet.evolution.deleted).toEqual([]);
 
       const chamfer = kernel.chamfer(
         primitive,
