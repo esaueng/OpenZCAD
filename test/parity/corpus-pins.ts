@@ -249,14 +249,16 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     occt: 'threw',
     owner: 'OCCT-defect',
     note:
-      'A cylindrical boss fused across a planar wall of the plate. NEITHER ' +
-      'kernel gets this right, in different ways, which is the whole reason ' +
-      'the scenario is here. OCCT builds a body whose face count and ' +
-      'tessellation group count disagree — 14 against 17 — and the adapter ' +
-      'refuses it rather than publish triangle ranges it cannot trust. ' +
-      'BrepKit imports and facets the entire result; see its reference ' +
-      'deviation. Closing the OCCT side needs consistent groups; closing the ' +
-      'BrepKit side needs the analytic curved-planar path.'
+      'A cylindrical boss fused across a planar wall of the plate. OCCT ' +
+      'builds a body whose face count and tessellation group count disagree ' +
+      '— 14 against 17 — and the adapter refuses it rather than publish ' +
+      'triangle ranges it cannot trust. ' +
+      'BrepKit no longer facets it: brepkit#55 landed the analytic ' +
+      'curved-planar path, so the fuse now returns 9 planes and 2 cylinders ' +
+      'with a bounding box that reaches its exact extent, and the SOLID ' +
+      'matches the closed form to 6e-15. What survives is a measurement ' +
+      'defect rather than a geometry one — see the reference deviation. ' +
+      'Closing the OCCT side still needs consistent groups.'
   },
   // --- (a) exports ---------------------------------------------------------
   {
@@ -831,22 +833,35 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10947.94983823075,
+    reported: 10984.864189375206,
     owner: 'K0.5',
     note:
-      'The non-planar coincident-contact defect, measured through the app\'s ' +
-      'own command path rather than the raw kernel. The boss\'s cylindrical ' +
-      'wall crosses the plate\'s x=0 plane, and the fuse returns 57 faces ' +
-      'that are ALL PLANES — every analytic surface destroyed — reading ' +
-      '0.038% low. The bounding box shows it too: x-min comes back -2.996917 ' +
-      'where the construction says exactly -3, an inscribed polygon failing ' +
-      'to reach its own extent. Seated fully INSIDE the wall the same fuse ' +
-      'is exact to 1e-10 with a true cylinder, and shifting the centre by a ' +
-      'tenth of a micron flips between the two — so this is not a tolerance ' +
-      'to widen. At exact tangency the operand is dropped outright and a cut ' +
-      'is ignored outright, neither of which this scenario can show, because ' +
-      'a dropped operand leaves no approximation for a census to notice — ' +
-      'just less geometry. Full sweep in docs/kernel-execution-plan.md.'
+      'THE SOLID IS NOW EXACT; THE MEASUREMENT IS NOT. brepkit#55 fixed the ' +
+      'non-planar coincident-contact defect and this pin changed character ' +
+      'rather than going away — which is why it was not simply retired. ' +
+      'Before: 57 faces, ALL PLANES, every analytic surface destroyed, and ' +
+      'a bounding box whose x-min read -2.996917 where the construction says ' +
+      'exactly -3. Now: 11 faces (9 planes + 2 CYLINDERS) and x-min exactly ' +
+      '-3, so the geometry reaches its own extent. Verified outside the app ' +
+      'entirely, on the raw kernel: massProperties returns ' +
+      '10952.079901041969 against the closed form 10952.079901041901 — ' +
+      'agreement to 6e-15. The body is right. ' +
+      'What is left is that the app does not measure it that way. ' +
+      '`exact.ts` reports body volume through `kernel.volume(solid, ' +
+      'MEASUREMENT_DEFLECTION)`, and that route reads 10984.86 — 0.30% HIGH. ' +
+      'It is not a deflection artefact: it converges to +0.3125% as the ' +
+      'tolerance tightens (1e-3 -> 1e-6), so it is systematic. This is the ' +
+      'residual brepkit#55 documented and declined to chase: a quadric wall ' +
+      'that splits into a tab plus a ring is two rectangles, so the ' +
+      'detector that routes notched walls to the exact integral correctly ' +
+      'declines, and the area route credits the whole cylinder. ' +
+      'Note what this means: a user modelling this body sees a volume 0.3% ' +
+      'wrong on geometry that is exactly correct. Switching the adapter to ' +
+      'massProperties is NOT an obvious fix — that route has its own open ' +
+      'defect, reading a quadric sector wider than pi as its own complement ' +
+      '(4.3% light). Neither route is trustworthy everywhere yet. ' +
+      'Retire this pin when the app-facing volume reaches the closed form, ' +
+      'not before. Exact tangency is separate and still falls back at 0.02%.'
   },
   {
     subject: 'boss-crossing-a-wall',
