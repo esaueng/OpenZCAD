@@ -3836,16 +3836,17 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
 
       if (withRim !== null) {
+        // One measurement, reused. `volume` at 1e-5 is the expensive call in
+        // this test and it was being made twice on the same solid; under load
+        // the whole test ran to 125s against its 120s budget.
+        const measured = kernel.volume(withRim, 1e-5);
         // It took the whole selection, so the rim has to be rounded — a result
         // that matches the perimeter-only solid means the rim went missing.
-        expect(faceTypes(withRim)).toContain('torus');
-        expect(kernel.volume(withRim, 1e-5)).not.toBeCloseTo(
-          perimeterVolume,
-          6
-        );
+        const types = faceTypes(withRim);
+        expect(types).toContain('torus');
+        expect(measured).not.toBeCloseTo(perimeterVolume, 6);
         // Every corner patch survives alongside it: four octants, five
         // cylinders (four bands plus the bore) and the rim's torus.
-        const types = faceTypes(withRim);
         expect(types.filter((type) => type === 'sphere')).toHaveLength(4);
         expect(types.filter((type) => type === 'cylinder')).toHaveLength(5);
         // The perimeter and rim removals are disjoint, so the combined body is
@@ -3855,7 +3856,6 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         // integrated off its inscribed mesh, so this converges from below.
         const combinedClosedForm =
           27712 + 207.625 * Math.PI + 8.5 * Math.PI ** 2;
-        const measured = kernel.volume(withRim, 1e-5);
         expect(measured).toBeLessThan(combinedClosedForm);
         expect(
           (combinedClosedForm - measured) / combinedClosedForm
