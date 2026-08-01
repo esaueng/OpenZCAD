@@ -670,19 +670,34 @@ plate with an r=10, h=16 cylinder, all closed forms exact:
 | Boss tangent to the y=0 wall, `fuseAll` | 70 planes — every analytic surface destroyed | −0.019 % |
 | Bored plate + tangent boss, `fuseAll` | 115 planes — same, on a body that was 7 analytic faces | −0.010 % |
 
-It is a knife-edge, which is what makes it dangerous rather than merely wrong:
-moving the boss centre from x = 10 to **x = 10.0001** — a tenth of a micron —
-takes the fuse from 6 planes at 19200.0000 to 9 faces with a true cylinder at
-21713.2741, matching the closed form to 1e-10.
+Sweeping the boss centre across the wall shows **three regimes**, and the
+faceting one is far wider than "tangency" suggests. With tangency at x = 10 and
+`d` the overlap:
+
+| `d` | Result |
+| --- | --- |
+| `d > 0` — boss fully inside the wall, from 1e-7 to 1 | correct: 9 faces, a true cylinder, 21713.2741 exact to 1e-10 |
+| `d = 0` — exactly tangent | **operand dropped**, 6 planes, 19200.0000 |
+| `d < 0` — boss crosses the wall, from −1e-7 to **−1** | **70–71 planes, no cylinder at all**, −0.019 % |
+
+So only the *dropped-operand* case is a knife-edge. The faceting fires for
+**any** cylinder that crosses a planar face, at any depth — a boss overhanging
+the edge of a plate, a pin protruding through a side wall. That is not an edge
+case, it is a common modelling situation.
+
+What makes it stark: the boss axis is vertical and the wall plane contains that
+direction, so **cylinder ∩ plane is exactly two straight lines** here. This is
+close to the simplest possible curved-planar intersection, and the analytic
+path does not take it.
 
 **Planar-planar coincidence is unaffected**: two boxes sharing a face exactly,
 and a box boss placed tangent, both come back correct. So this is specific to
 the curved-vs-planar contact `boolean/mod.rs:914` names, not to coincidence in
 general.
 
-Why it deserves to lead the lane: a boss placed flush with the edge of a plate,
-or a hole drilled flush with a wall, is ordinary design intent rather than an
-adversarial input — and all three failure modes are silent. The dropped-operand
+Why it deserves to lead the lane: a boss overhanging the edge of a plate, or a
+hole drilled flush with a wall, is ordinary design intent rather than an
+adversarial input — and every failure mode here is silent. The dropped-operand
 and ignored-cut cases are the same class as the fourteen defects M0–M3 closed:
 confident, well-formed, wrong. Note the faceted cases would also be caught by
 the `brepkit_approx` census the Hardening row keeps as a CI metric, but the
