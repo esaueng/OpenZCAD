@@ -9,6 +9,15 @@ import {
 test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
   page
 }) => {
+  // Five gestures on one body, each of which the kernel has to answer
+  // exactly: create, drag the wall out, undo/redo, drag and cancel, then
+  // offset the cap. A trace of a passing run spends ~6 s on the first tool
+  // click alone (viewer cold start behind a software rasteriser) and ~7 s
+  // more inside the two drags, because every intermediate pointermove
+  // rebuilds the exact preview and repaints. That is ~30 s of real work on a
+  // CI runner with no GPU, which leaves the 30 s default with no margin at
+  // all — the same budget the multi-region extrude test already raises.
+  test.setTimeout(90_000);
   await stubApi(page);
   const consoleErrors: string[] = [];
   page.on('console', (message) => {

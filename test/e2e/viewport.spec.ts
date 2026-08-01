@@ -642,50 +642,45 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   await page.keyboard.press('Escape');
 
   const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
   const status = page.getByRole('contentinfo');
 
-  // Hunt for an edge rather than computing where one projects to: the grid
-  // costs a second and survives any change to the fit pose or the layout.
-  let run = 0;
-  for (let y = 0.2; y <= 0.8 && run === 0; y += 0.05) {
-    for (let x = 0.2; x <= 0.8 && run === 0; x += 0.05) {
-      const point = {
-        x: bounds.x + bounds.width * x,
-        y: bounds.y + bounds.height * y
-      };
-      await page.mouse.click(point.x, point.y);
-      // A pick is committed on the next rendered frame. Reading the footer
-      // synchronously can miss a successful hit and burn the whole grid scan.
-      await page.waitForTimeout(32);
-      if (!(await status.textContent())?.includes('exact edge selected')) {
-        continue;
-      }
-      // Selecting the probe edge creates a value chip at that exact point;
-      // a physical double-click can then send its second click to the chip.
-      // Clear the probe and dispatch the measured gesture to the WebGL canvas.
-      await page.getByRole('button', { name: 'Deselect all' }).click();
-      await canvas.dispatchEvent('dblclick', {
-        button: 0,
-        clientX: point.x,
-        clientY: point.y
-      });
-      await expect(status).toContainText('connected edges');
-      const chip = await page.evaluate(
-        () => document.querySelector('.selection-chip-label')?.textContent ?? ''
-      );
-      const match = /^(\d+) edges$/.exec(chip.trim());
-      run = match ? Number(match[1]) : 0;
-    }
-  }
+  // Ask the viewport where one of the rounded rim's edges is instead of
+  // clicking a lattice of screen points hoping to land on a line two pixels
+  // wide. The e2e-only hook projects the exact display polyline through the
+  // live camera and confirms the candidate with the real PickService, so the
+  // point below picks an edge by construction rather than by luck.
+  const rim = await canvas.evaluate(
+    (element) =>
+      new Promise<{ x: number; y: number; topologyId: string } | null>(
+        (resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-locate-edge', { detail: { resolve } })
+          );
+        }
+      )
+  );
+  expect(rim, 'the filleted body should expose a pickable edge').not.toBeNull();
 
+  await page.mouse.click(rim!.x, rim!.y);
+  await expect(status).toContainText('exact edge selected');
+
+  // Selecting the probe edge creates a value chip at that exact point; a
+  // physical double-click can then send its second click to the chip. Clear
+  // the probe and dispatch the measured gesture to the WebGL canvas.
+  await page.getByRole('button', { name: 'Deselect all' }).click();
+  await canvas.dispatchEvent('dblclick', {
+    button: 0,
+    clientX: rim!.x,
+    clientY: rim!.y
+  });
+
+  await expect(status).toContainText('connected edges');
+  const chip = await page.locator('.selection-chip-label').textContent();
+  const match = /^(\d+) edges$/.exec((chip ?? '').trim());
   // A rounded box has no isolated edges: every boundary continues into the
   // arc beside it, so any edge found belongs to a run of several.
-  expect(run).toBeGreaterThan(1);
-  await expect(status).toContainText('connected edges');
+  expect(match, `selection chip read "${chip}"`).not.toBeNull();
+  expect(Number(match![1])).toBeGreaterThan(1);
 });
 
 test('the selection filter changes what a click takes', async ({ page }) => {
