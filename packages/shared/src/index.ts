@@ -561,7 +561,7 @@ export interface EdgeTopology {
    *   spheres are unavailable for the same reason.
    * - **Not sufficient for an edge run on its own.** Two edges on opposite
    *   sides of a box's top face share that face. A run also needs vertex
-   *   incidence, which nothing publishes yet.
+   *   incidence, which `vertexIds` publishes.
    */
   adjacentFaceHashes?: number[];
   /**
@@ -573,6 +573,44 @@ export interface EdgeTopology {
    * is not there.
    */
   curve?: EdgeCurve;
+  /**
+   * The two vertices this edge runs between, as `[start, end]` in the edge's
+   * own direction — the same direction `points` is sampled in.
+   *
+   * These are the kernel's own vertex handles renumbered, not positions
+   * matched to a tolerance. Two edges belong to the same run only if they
+   * share a vertex, and `adjacentFaceHashes` cannot answer that: opposite
+   * sides of a box's top face bound the same face and meet nowhere.
+   *
+   * Deriving this from geometry was measured and rejected — see
+   * `test/vertex-identity.test.ts`. Quantizing display-polyline endpoints at
+   * the ADR-011 1e-6 quantum produced 73 false splits across the parity
+   * corpus, all on closed edges, because a closed edge's polyline is a loop
+   * that begins a quarter turn away from its own vertex.
+   *
+   * Four things it is NOT:
+   *
+   * - **Not two distinct vertices.** A closed edge names one vertex twice: a
+   *   cylinder's rim, a bore rim, and a torus's two zero-length degenerate
+   *   edges all report `[v, v]`. The pair is kept rather than deduplicated
+   *   because it is the kernel's own shape, it keeps start and end
+   *   distinguishable, and `new Set(ids).size === 1` is how the fillet
+   *   dispatcher already recognises a closed rim.
+   * - **Not a persistent identity.** Unlike `hash`, these are dense integers
+   *   assigned while walking one body's solids. They are comparable only
+   *   within the same `BodyTopology`, and a rebuild may renumber them. Do not
+   *   store them, key a document off them, or compare them across bodies.
+   * - **Not shared between solids.** Numbering is body-wide but the handle
+   *   map is rebuilt per solid, so two solids in one body — a linear pattern
+   *   whose spacing equals its extent, say — never share a vertex id even
+   *   where they touch exactly. That is deliberate: they are distinct
+   *   topology that happens to be coincident, and a run must not walk across.
+   * - **Not sufficient for an edge run on its own either.** Twelve box edges
+   *   meet in pairs at eight vertices and are not one run. Shared vertex and
+   *   shared face are both necessary; what makes a run is a product question
+   *   about tangency on top of them.
+   */
+  vertexIds?: [number, number];
   /**
    * XYZ-interleaved display polyline sampled from the exact edge curve.
    * Closed feature edges repeat their first point so the viewport draws the

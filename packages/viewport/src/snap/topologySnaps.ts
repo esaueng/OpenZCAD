@@ -10,10 +10,19 @@ import type { SnapCandidate, Vec3 } from './SnapEngine';
  * of every hole and boss.
  *
  * The honest limit is the polyline. A straight edge is two points and its
- * midpoint is exact. A curved edge is sampled, and the kernel currently emits
- * some arcs as a single chord — a filleted corner among them — so a midpoint
- * on one of those is the chord's, not the arc's. Endpoints and closed-edge
- * centres are unaffected, and those are the ones worth aiming at.
+ * midpoint is exact. A curved edge is sampled, so a midpoint on one is the
+ * polyline's rather than the true curve's — but the sampling is finer than
+ * this once claimed. At the app's display deflection a quarter fillet arc
+ * arrives with 28 points, not as the single chord an earlier version of this
+ * note described, so the error is a chord of about three degrees of arc rather
+ * than a quarter turn. Endpoints are exact.
+ *
+ * There is a sharper limit worth naming, because it is invisible from the
+ * data: a CLOSED edge's polyline does not begin at its vertex. The sampler
+ * starts a quarter turn away, so a bore rim's first point is an arbitrary
+ * point on the circle rather than the model vertex it looks like. That is why
+ * `snapsFromEdges` offers a closed edge only its centre and no endpoints —
+ * the skip below is load-bearing, not a simplification.
  */
 
 function pointAt(points: number[], index: number): Vec3 {
