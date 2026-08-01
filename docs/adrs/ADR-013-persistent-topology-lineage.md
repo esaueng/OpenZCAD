@@ -318,6 +318,43 @@ requirements listed above. In particular, neither kernel's current raw boolean
 history may replace the production unified operation, and BrepKit chamfer or
 direct edit must not synthesize lineage by geometric proximity.
 
+## Amendment (Z7, 2026-08-01): a partial revolve is hash-only on purpose
+
+The coverage table above says "Extrude/revolve sweep — no bridge needed". That
+stays true for a full turn and is **not** true below one. Exposing the revolve
+angle therefore makes a scope decision explicit rather than leaving it to be
+discovered later: a revolve of less than 360 degrees publishes ADR-011
+hash-only references, and the reason is named in code as
+`PARTIAL_REVOLVE_HASH_ONLY_REASON` (`packages/kernel-adapter/src/exact.ts`).
+
+Measured, not assumed. The solid itself is fine at every angle — one closed
+shell, `validateSolid` 0, watertight tessellation, and a volume that matches
+Pappus times `angle/360` to 1e-9. Two separate things break in the *lineage*:
+
+- `expectedCircleWitness` hard-codes `closed: true` and `length: 2*pi*r`. Below
+  a full turn the corresponding edges are **arcs**, an `EdgeWitnessV1` variant
+  that witness can never equal, so every profile-vertex edge role fails at
+  every angle under 360.
+- BrepKit splits a swept face at each 90 degree boundary — measured at 6 faces
+  at <=90, 10 at 91-180, 14 at 181-270, 18 at 271-359.9, and 4 at 360 — and
+  the pieces carry duplicate analytic parameters, so
+  `addUniqueSemanticAssignment`'s exactly-one-match rule goes ambiguous above
+  90 degrees as well.
+
+Two things this amendment does **not** loosen:
+
+- **A full turn is unchanged.** All four swept faces and all four
+  profile-vertex circle edges keep their `sweep.*` names, and the body carries
+  no lineage diagnostic. This is asserted directly, not inferred.
+- **A circular profile is exempt at every angle.** Its role is the single torus
+  surface, named by surface type rather than by an analytic carrier, and a
+  torus does not quadrant-split: a partial revolve of a circle measures three
+  faces (torus plus two caps) and the torus role stays unique. That branch
+  publishes no profile-vertex edge roles either, so neither break applies.
+
+Reversing this needs an arc-capable edge witness and a piece-aware face role.
+It must not be reversed by matching a wedge's faces geometrically.
+
 ## Consequences
 
 - Schema-v5 references are additive inside current schema-v6 documents, and
@@ -328,7 +365,9 @@ direct edit must not synthesize lineage by geometric proximity.
 - Kernel history bugs, hash collisions, ambiguous splits/merges, malformed
   deletion payloads, and unsupported free-form surfaces fail closed.
 - Some operations retain hash-only behavior. This is a visible
-  capability limit, not a silent approximate implementation.
+  capability limit, not a silent approximate implementation. Partial revolve
+  is the first case where that limit was accepted *before* shipping the
+  feature rather than found afterwards; see the Z7 amendment.
 - The original spike remains characterization evidence. Production now uses
   only the separately reviewed safe subset; remaining bridge work does not
   block that subset and must not be bypassed with proximity matching.
