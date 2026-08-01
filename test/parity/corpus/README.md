@@ -83,6 +83,14 @@ Per file, per kernel, in `../baselines/corpus.json`:
   digest of the sorted face and edge hash sets. Hashes are the identity
   substrate stored feature references resolve against, so a digest change means
   a saved edge pick would land differently after the kernel flip.
+
+  Since K0.6 an imported body names every face and edge by its own exact
+  fingerprint — an import has no feature contract to name its topology from —
+  so the name set can be large. The baseline keeps the full sorted list; the
+  *comparison* folds anything over twelve names to a count plus a digest, the
+  same fold the hash sets already use, so a divergence stays a pin literal
+  rather than a 50 KB dump. Equality is unaffected: the digests match iff the
+  name sets do.
 - **`inspectStep`** — the pre-import validity probe the app shows users.
 - **round-trip delta** — re-export through the same kernel, re-import, and
   record the volume/face/edge deltas plus whether the re-export kept its solid
