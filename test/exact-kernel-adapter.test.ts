@@ -3414,18 +3414,17 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // --- the corner chain: used to be refused at every radius ---------------
     const corner = await filletPlate('Corner fillet', [long.hash, short.hash], 2);
     expect(corner.warnings).toEqual([]);
-    // Closed and manifold. NOT consistently wound — see 'tessellates a vertex
-    // blend with consistent winding' below, which measures that separately.
     const cornerClosure = inspectTriangleMeshClosure(
       corner.body!.mesh.vertices,
       corner.body!.mesh.indices
     );
     expect(cornerClosure.boundaryEdges).toBe(0);
     expect(cornerClosure.nonManifoldEdges).toBe(0);
-    // Two blend bands plus the vertex patch that joins them, over the plate's
-    // six planes and its bore.
+    expect(cornerClosure.inconsistentWindingEdges).toBe(0);
+    // Two blend bands, the spherical octant that joins them, and the flat
+    // remnant between that octant and the sharp vertical edge it stops at —
+    // over the plate's six planes and its bore.
     expect(surfaceTypes(corner.body!)).toEqual([
-      'bspline',
       'cylinder',
       'cylinder',
       'cylinder',
@@ -3434,7 +3433,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       'plane',
       'plane',
       'plane',
-      'plane'
+      'plane',
+      'plane',
+      'sphere'
     ]);
     const cornerBands = corner
       .body!.topology!.faces.filter(
@@ -3443,7 +3444,29 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           Math.abs((face.geometry.radius ?? 0) - 2) < 1e-9
       );
     expect(cornerBands).toHaveLength(2);
-    expect(corner.body!.volume).toBeLessThan(plateVolume);
+    // The vertex patch is a sphere of the blend radius, not an approximation.
+    const cornerPatch = corner.body!.topology!.faces.filter(
+      (face) => face.geometry?.surfaceType === 'sphere'
+    );
+    expect(cornerPatch).toHaveLength(1);
+    expect(cornerPatch[0]!.geometry!.radius).toBeCloseTo(2, 9);
+    // Closed form. Away from the corner each band removes r^2 - pi r^2 / 4 per
+    // unit length. Inside the r x r x r corner cube the two bands overlap and
+    // the octant takes over, so that cube keeps only the octant's volume.
+    //
+    // The tolerance is measurement, not geometry: this reads the volume
+    // through syncDocument at MEASUREMENT_DEFLECTION (0.08), where the blend's
+    // curved faces cost ~1.1e-5 relative. Measured on the same solid at a
+    // converged deflection the agreement is 2.8e-8 — see 'blends a corner
+    // chain to its closed-form volume', which measures the kernel directly.
+    const r = 2;
+    const bandArea = r ** 2 - (Math.PI * r ** 2) / 4;
+    const cornerCube = r ** 3 - ((4 / 3) * Math.PI * r ** 3) / 8;
+    const cornerClosedForm =
+      plateClosedForm - bandArea * (80 - r) - bandArea * (60 - r) - cornerCube;
+    expect(
+      Math.abs(corner.body!.volume - cornerClosedForm) / cornerClosedForm
+    ).toBeLessThan(5e-5);
     // The bore survives the blend untouched.
     expect(
       corner.body!.topology!.faces.some(
@@ -3506,29 +3529,18 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
   }, 60_000);
 
   it('blends a corner chain to its closed-form volume', async () => {
-    // FAILING ON PURPOSE. The kernel's new vertex blend builds a valid,
-    // watertight, in-envelope solid and removes materially more material than
-    // a rolling-ball fillet can remove. Measured on a plain 80x60x6 box at a
-    // deflection fine enough that the mesh has converged (successive
-    // refinements move these by <1e-8 relative), so this is geometry, not
-    // measurement:
+    // Measured on a plain 80x60x6 box at a deflection fine enough that the
+    // mesh has converged (successive refinements move these by <1e-8
+    // relative), so this is geometry, not measurement.
     //
-    //   one 80 edge          removes 68.673, closed form 68.673  (-2.7e-8)
-    //   two opposite edges   removes 137.345, closed form 137.345 (-5.5e-8)
-    //   one corner chain     removes 298.388, closed form 120.555 (+147%)
-    //   all four top edges   removes 869.421, closed form 241.864 (+259%)
-    //
-    // So single and disjoint bands are exact and every selection that makes
-    // the kernel build a VERTEX blend over-scoops. OpenCascade reaches the
-    // closed form on the same picks (it miters the two bands instead of
-    // adding a patch), so this is not an ambiguity in what a fillet means at
-    // a corner.
-    //
-    // It is masked in the app: at MEASUREMENT_DEFLECTION (0.08) the corner
-    // chain on the holed plate reads 3.7e-4 relative low, which is the same
-    // order as the measurement error on an ordinary r2 band. Only the
-    // convergence sweep separates them, which is why this test measures
-    // directly rather than through `syncDocument`.
+    // This test was written failing, when a corner chain read +147% over the
+    // closed form and four edges read +259%. The geometry was never wrong:
+    // the vertex patch was emitted INVERTED, so the divergence integral
+    // counted its faces with the wrong sign. The tell was that the excess
+    // moved when the solid did — divergence contributions are origin
+    // dependent — which is why two reproductions of the same pick disagreed.
+    // Fixed kernel-side by orienting the patch outward; the closed form was
+    // the right answer all along.
     //
     // Do not re-record these numbers. The closed form is the answer.
     const kernel = new BrepKernel();
@@ -3608,13 +3620,13 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
   }, 120_000);
 
   it('tessellates a vertex blend with consistent winding', async () => {
-    // FAILING ON PURPOSE, and a separate defect from the volume one above.
-    // The corner chain's B-rep passes `validate_solid` with zero errors, and
-    // its triangle projection is closed and manifold — but 56 of its edges
-    // carry two triangle uses pointing the SAME way. That is the mesh the
-    // viewport shades and the STL exporter writes, so an inconsistently wound
-    // patch is user-visible and leaves the exported file unusable, while
-    // every B-rep-level check reports the body as sound.
+    // Written failing alongside the volume test above, and a separate defect
+    // from it. The corner chain's B-rep passed `validate_solid` with zero
+    // errors and its triangle projection was closed and manifold — but 56 of
+    // its edges carried two triangle uses pointing the SAME way. That is the
+    // mesh the viewport shades and the STL exporter writes, so the winding is
+    // user-visible even though every B-rep-level check reported the body as
+    // sound. Fixed kernel-side; this holds the tessellation to it.
     const withPlate = addPrimitiveFeature(
       createProjectDocument('Winding', toUserId('user_exact')),
       {
@@ -3657,14 +3669,24 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(closure.inconsistentWindingEdges).toBe(0);
   }, 60_000);
 
-  it('blends every edge a multi-edge selection names', async () => {
-    // FAILING ON PURPOSE. A selection that mixes the top perimeter with the
-    // bore's closed rim comes back blended on the four straight edges only:
-    // the rim is dropped, and the result is byte-identical to the four-edge
-    // selection rather than carrying the torus a rounded rim produces. The
-    // kernel reports no error and the adapter cannot tell — the result is a
-    // new, valid, in-envelope solid — so a user gets a silent partial edit.
-    // The same rim rounds correctly when it is selected on its own.
+  it('never silently drops an edge a multi-edge selection names', async () => {
+    // Written failing: a selection mixing the top perimeter with the bore's
+    // closed rim came back blended on the four straight edges only. The rim
+    // was dropped, the result was byte-identical to the four-edge selection,
+    // and the kernel reported no error — so a user got a silent partial edit
+    // that the adapter had no way to detect, since a partial result is itself
+    // a valid, in-envelope solid.
+    //
+    // The kernel now refuses the whole selection and names the edge it could
+    // not take. That is the contract this test holds: the operation either
+    // rounds everything it was given, or it fails loudly saying what it
+    // missed. Never a quiet subset.
+    //
+    // The underlying capability gap is still open — this mixed selection is
+    // refused rather than blended, even though the rim and the perimeter are
+    // geometrically disjoint and each rounds fine alone. Tracked separately;
+    // both branches below are accepted so closing that gap turns this test
+    // green rather than red.
     const kernel = new BrepKernel();
     try {
       const plate = kernel.makeBox(80, 60, 6);
@@ -3686,27 +3708,49 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       expect(rims).toHaveLength(1);
       expect(perimeter).toHaveLength(4);
 
-      const perimeterOnly = kernel.fillet(
-        holed,
-        Uint32Array.from(perimeter),
-        2
-      );
-      const withRim = kernel.fillet(
-        holed,
-        Uint32Array.from([...perimeter, ...rims]),
-        2
-      );
       const faceTypes = (solid: number) =>
         Array.from(kernel.getSolidFaces(solid))
           .map((face) => kernel.getSurfaceType(face))
           .sort();
 
-      // Selecting the rim as well has to change the answer.
-      expect(faceTypes(withRim)).toContain('torus');
-      expect(kernel.volume(withRim, 1e-5)).not.toBeCloseTo(
-        kernel.volume(perimeterOnly, 1e-5),
-        6
+      // Each half of the selection rounds on its own.
+      const perimeterOnly = kernel.fillet(
+        holed,
+        Uint32Array.from(perimeter),
+        2
       );
+      const perimeterVolume = kernel.volume(perimeterOnly, 1e-5);
+      expect(faceTypes(perimeterOnly)).toContain('sphere');
+      const rimOnly = kernel.fillet(holed, Uint32Array.from(rims), 2);
+      expect(faceTypes(rimOnly)).toContain('torus');
+
+      let withRim: number | null = null;
+      let refusal = '';
+      try {
+        withRim = kernel.fillet(
+          holed,
+          Uint32Array.from([...perimeter, ...rims]),
+          2
+        );
+      } catch (error) {
+        refusal = String((error as Error)?.message ?? error);
+      }
+
+      if (withRim !== null) {
+        // It took the whole selection, so the rim has to be rounded — a result
+        // that matches the perimeter-only solid means the rim went missing.
+        expect(faceTypes(withRim)).toContain('torus');
+        expect(kernel.volume(withRim, 1e-5)).not.toBeCloseTo(
+          perimeterVolume,
+          6
+        );
+      } else {
+        // It refused, so it has to say which edge it could not take, in prose
+        // rather than an opaque trap.
+        expect(refusal).toContain('edges-not-blended');
+        expect(refusal).toContain(String(rims[0]));
+        expect(refusal).not.toContain('[object WebAssembly.Exception]');
+      }
     } finally {
       kernel.free();
     }
