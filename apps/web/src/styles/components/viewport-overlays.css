@@ -160,10 +160,11 @@
 }
 
 /* ── Marking menu ──
-   Laid out around the point that summoned it, so the sectors are already
+   Laid out around the point that summoned it, so the slots are already
    where the hand will flick. The container has no box of its own: the
-   sectors are the menu, and a panel drawn behind them would fight the
-   model they are meant to be acting on. ── */
+   ring is the menu, and a panel drawn behind it would fight the model it
+   is meant to be acting on. Names live in the hub rather than beside each
+   slot, so what covers the model is one readout instead of eight. ── */
 
 .marking-menu {
   position: fixed;
@@ -180,85 +181,120 @@
   pointer-events: auto;
 }
 
-/* Marks the dead zone, so it is visible that a small wobble picks nothing. */
+/* The hub is drawn at the dead zone's radius, so the rule it stands for is
+   visible: while the pointer is still on the readout, nothing is chosen. */
 .marking-menu-hub {
   position: absolute;
   transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
   border: 1px dashed var(--color-border-strong);
   border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    rgba(11, 15, 20, 0.94) 55%,
+    rgba(11, 15, 20, 0) 100%
+  );
+  color: var(--color-text);
+  text-align: center;
+  line-height: var(--lh-tight);
+  /* The name is wider than the disc that backs it, so the part hanging over
+     bare geometry carries its own contrast — a pale body would swallow it. */
+  text-shadow:
+    0 1px 3px var(--color-bg),
+    0 0 6px var(--color-bg);
   pointer-events: none;
 }
 
-.marking-menu-sector {
+/* Naming what a release would run is the hub's whole job, so it says so as
+   soon as there is something to name. */
+.marking-menu-hub.armed {
+  border-style: solid;
+  border-color: var(--color-accent);
+}
+
+.marking-menu-hub.armed.danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.marking-menu-rest {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+/* The name is allowed past the hub's edge: the ring is wide enough to clear
+   it, and shrinking every label to fit the widest one would cost more. */
+.marking-menu-read {
+  display: block;
+  width: 116px;
+  margin: 0 auto;
+  font-size: var(--fs-xs);
+}
+
+.marking-menu-hub small {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-text-subtle);
+}
+
+.marking-menu-slot {
   position: absolute;
+  width: 38px;
+  height: 38px;
   transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  padding: 4px 9px;
+  display: grid;
+  place-items: center;
   color: var(--color-text-muted);
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border-radius: 999px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   font-size: var(--fs-sm);
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
-.marking-menu-sector:hover:not(:disabled),
-.marking-menu-sector.aimed:not(:disabled) {
+.marking-menu-slot:hover:not(:disabled),
+.marking-menu-slot.aimed:not(:disabled) {
   color: var(--color-text);
   border-color: var(--color-accent);
   background: var(--color-surface-hover);
 }
 
-/* The aimed sector is what a release would take, so it reads as committed
+/* The aimed slot is what a release would take, so it reads as committed
    rather than merely hovered. */
-.marking-menu-sector.aimed:not(:disabled) {
+.marking-menu-slot.aimed:not(:disabled) {
   box-shadow: 0 0 0 2px var(--color-accent);
+  transform: translate(-50%, -50%) scale(1.12);
 }
 
-.marking-menu-sector:disabled {
+.marking-menu-slot:disabled {
   opacity: 0.45;
 }
 
-.marking-menu-sector.danger {
+/* Destructive at rest as well as under the pointer: with no label beside it,
+   the colour is the only warning the slot carries until it is aimed at. */
+.marking-menu-slot.danger {
   color: var(--color-error);
 }
 
-.marking-menu-overflow {
-  position: absolute;
-  left: 0;
-  top: 104px;
-  transform: translateX(-50%);
-  min-width: 176px;
-  padding: 4px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
-}
-
-.marking-menu-more {
-  width: 100%;
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 3px 8px;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
-  text-align: left;
-  font-size: var(--fs-sm);
-}
-
-.marking-menu-more:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.marking-menu-more.danger {
+.marking-menu-slot.danger:hover:not(:disabled),
+.marking-menu-slot.danger.aimed:not(:disabled) {
   color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.marking-menu-slot.danger.aimed:not(:disabled) {
+  box-shadow: 0 0 0 2px var(--color-error);
 }
 
 .marking-menu-icon {
