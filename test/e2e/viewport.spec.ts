@@ -654,17 +654,42 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   // wide. The e2e-only hook projects the exact display polyline through the
   // live camera and confirms the candidate with the real PickService, so the
   // point below picks an edge by construction rather than by luck.
-  const rim = await canvas.evaluate(
-    (element) =>
-      new Promise<{ x: number; y: number; topologyId: string } | null>(
-        (resolve) => {
-          element.dispatchEvent(
-            new CustomEvent('openzcad:e2e-locate-edge', { detail: { resolve } })
-          );
-        }
-      )
-  );
-  expect(rim, 'the filleted body should expose a pickable edge').not.toBeNull();
+  const locateRim = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<{ x: number; y: number; topologyId: string } | null>(
+          (resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-locate-edge', {
+                detail: { resolve }
+              })
+            );
+          }
+        )
+    );
+
+  // The hook answers from the topology the worker has published, which lands a
+  // frame or more after the feature row appears — the row is the command being
+  // accepted, not the rebuild being drawn. Asking once races that on a slow
+  // runner and reports "no pickable edge" for a body that simply is not there
+  // yet, so poll for the post-condition instead of the proxy.
+  let rim: { x: number; y: number; topologyId: string } | null = null;
+  await expect
+    .poll(
+      async () => {
+        rim = await locateRim();
+        return rim !== null;
+      },
+      {
+        message: 'the filleted body should expose a pickable edge',
+        // Filleting all twelve edges is seconds of WASM geometry on a cold
+        // viewer, and the default 5 s poll window is not enough for it on a
+        // loaded runner. This waits for the rebuild, it does not excuse a
+        // missing one: a body that never publishes still fails here.
+        timeout: 20_000
+      }
+    )
+    .toBe(true);
 
   await page.mouse.click(rim!.x, rim!.y);
   await expect(status).toContainText('exact edge selected');
