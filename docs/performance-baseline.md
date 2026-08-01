@@ -193,8 +193,9 @@ was never exercised here. It needs a durable project against the real API.
 ### P-03 — bundle size
 
 The kernels remain off the UI thread and are now lazy at both boundaries: an
-empty project does not import the exact adapter/BrepKit, while OCCT loads only
-for STEP/OCCT work (or compound STEP export). A fresh Vite 8.1.5
+empty project does not import the exact adapter/BrepKit. (OCCT was a second
+lazy boundary for STEP work when this was measured; Z3 removed it — see the
+note under the table.) A fresh Vite 8.1.5
 production build on 2026-07-31 emitted the following current entry and worker
 chunks (decimal kB, using Vite's gzip report):
 
@@ -207,6 +208,13 @@ chunks (decimal kB, using Vite's gzip report):
 | Topology fingerprint worker chunk |     42.14 kB |    14.98 kB |
 | BrepKit WASM (lazy worker asset)  |  5,221.62 kB | 1,881.73 kB |
 | OCCT WASM (lazy STEP asset)       | 22,088.41 kB | 7,099.78 kB |
+
+> **Superseded for OCCT (Z3, 2026-08-01).** The STEP route flip removed the
+> last reachable importer of `occt-step.ts`, and because that import was
+> already dynamic the 22,088.41 kB asset simply stopped being emitted —
+> `apps/web/dist` now totals about 13 MB. The row is kept so the size that
+> was removed stays on the record. Every other line predates the flip and
+> is unaffected by it; re-measure with `pnpm build:report`.
 
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
