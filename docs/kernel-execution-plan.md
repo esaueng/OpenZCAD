@@ -567,8 +567,29 @@ Sequencing: the deletion touches `exact.ts`, so it queues behind M3/W2. Treat
 the measurement above as the go-ahead, and let the adapter suite be the
 confirmation.
 
-*Z6.1 is NO-GO, and the trigger above pointed at the wrong kernel work.*
-BrepKit's convex cap-rim fillet succeeds iff **f/r < 0.5** and throws
+*Z6.1 was NO-GO and is now **GO** — the kernel gap it waited on is closed by
+brepkit#50.* The cap rim now builds at every `0 < f < r` (minus a
+vertex-tolerance sliver), so the workaround's own `0 < f < r` guard is fully
+covered; `f = r` returns a typed `RadiusTooLarge` rather than a partial result.
+Retire it once a pin bump carries #50. The diagnosis below is kept because it
+is what the retirement trigger should have said all along, and because the
+K0.4-phase-2 correction in it still stands.
+
+The fix was smaller than the diagnosis implied, and worth recording: the guard
+capped the inward case at `r_c/2` on the reasoning that a horn or spindle torus
+"is invalid as a fillet surface". The torus is; **the face cut from it is not.**
+The band spans only `|v| ≤ π/2`, and a spindle crosses its own axis only where
+`major + minor·cos v < 0`, i.e. `|v| > arccos(−major/minor) ≥ π/2` for every
+`major ≥ 0` — disjoint from the quarter actually used. No trimming work was
+needed. Deleting one line made every radius work, exact to 1e-15 across the
+sweep. **Two new defects came out of it**, both left for their own lanes: a
+blind hole's floor rim (the *other* geometry `inward` covers) LOSES 7.933 mm³
+where it must ADD 3.744 while passing `validate_solid`, and a cone cap rim has
+no analytic path at all because `plane_cone_fillet`'s convex branch needs the
+apex on the material side, which a frustum's small end never satisfies.
+
+*The original NO-GO measurement, for the record.*
+BrepKit's convex cap-rim fillet succeeded iff **f/r < 0.5** and threw
 `partial-result` at f/r ≥ 0.5 — verified scale-invariant at r = 2, 3 and 10,
 with f/r = 0.4999 succeeding and 0.5000 failing in every case. The blend torus
 is `{major: r−f, minor: f}`, so at f = r/2 it degenerates and the kernel cannot
@@ -579,9 +600,10 @@ user-facing "Try a smaller radius". K0.4 phase 2 was the *concave hole-rim*
 assembler — that landed and is exact (bored plate, f=1 top rim: 8 faces,
 volume 28701.23908 against Pappus 28701.23908) — but it runs on a 7-face body
 that `readAnalyticCylinder`'s 3-face gate rejects, so it is not evidence about
-the case this workaround serves. **Kernel request to file:** build the
+the case this workaround serves. ~~**Kernel request to file:** build the
 horn/apple torus for a convex circular rim at f ≥ r/2, or at minimum return a
-typed `RadiusTooLarge` rather than a bare `partial-result`.
+typed `RadiusTooLarge` rather than a bare `partial-result`.~~ **Both landed in
+brepkit#50.**
 
 ### Z7 Feature exposure (each: document-core feature/params + command +
 UI form + AI-contract op + tests)
@@ -648,7 +670,7 @@ documents**. Give revolve a region path first.
 
 | Lane | Work | Key sites | Est |
 | --- | --- | --- | --- |
-| Blend | chamfer walker (`chamfer_builder.rs:377` "walker not yet integrated"); torus/NURBS blend pairs (`analytic.rs:31-36,192-343`); trimming beyond planes (`builder_utils.rs:203`); setbacks, face-face, full-round; promote variable radius off deprecated v1 sampling | `crates/blend` | **XL** |
+| Blend | chamfer walker (`chamfer_builder.rs:377` "walker not yet integrated"); torus/NURBS blend pairs (`analytic.rs:31-36,192-343`); trimming beyond planes (`builder_utils.rs:203`); setbacks, face-face, full-round; promote variable radius off deprecated v1 sampling. **Cap-rim radius range and the seam-chord defect landed in #50** — see Z6.1. Two new items it surfaced: the concave blind-hole floor rim, and cone cap rims having no analytic path | `crates/blend` | **XL** |
 | Offset | cavity shells (`offset/lib.rs:90`), arc joints (`arc_joint.rs:16`), self-intersection removal (`self_int.rs:20`), NURBS intersection (`inter3d.rs:156`) — this also lifts shell/thicken quality | `crates/offset` | **L–XL** |
 | Boolean | same-domain full merge (`same_domain.rs:14`), off-axis cones (`boolean/mod.rs:1413`), **non-planar coincident contact (`:914`) — reproduction below, do this first**, volume-accuracy fix | `crates/algo`, `operations/boolean` | **L** |
 | Types | add `EdgeCurve::{Hyperbola, Parabola}` (unblocks `convert_to_elementary`), `FaceSurface::{OffsetSurface, SurfaceOfRevolution, SurfaceOfExtrusion}`; give `Plane` a UV parameterization to kill plane special-casing | `crates/topology`, ripple across algo/blend/io | **XL**, stage by variant |
@@ -713,10 +735,27 @@ approximation at all, just less geometry.
   volume, both bound); STEP assembly round-trip (K0.1 step 5 grows into
   real structure). OpenZCAD side: multi-part documents (the
   `AssemblyNode`/`PartNode` schema already exists but is fixed at 1×1).
-- **Evolution/persistent naming:** promote `evolution.rs` from Beta,
+- **Evolution/persistent naming:** ~~promote `evolution.rs` from Beta,~~
   extend to blends/patterns/direct edits so the adapter's hash-only
   lineage classes (boolean, fillet, chamfer, pattern, offset) become
   tracked; this directly upgrades OpenZCAD's fail-closed reference UX.
+  **Substantially landed in brepkit#51**, and deliberately NOT promoted off
+  Beta — the evidence supports "exact for three operation families,
+  scale-invariant and fail-closed elsewhere", not "stable", which would imply
+  coverage six operations lack. What landed: the matcher was scale-dependent
+  (an absolute `centroid_dist_sq_max = 100.0`, and `UnitSystem` includes
+  metres), so at 1000× it reported four *surviving* faces as **deleted** and at
+  0.001× reported the two walls a fuse *consumes* as modified into the other
+  body's far end caps — a saved pick silently relocating onto different
+  geometry, with `deleted` empty so nothing signalled it. Budget is now a
+  fraction of the centroids' own bounding diagonal. Ambiguity gets an
+  `unresolved` bucket instead of a coin toss, which caught a live case: a
+  box-edge fillet's blend face was being recorded as a modified version of
+  *both* faces the rounded edge separated. Fillet/chamfer and patterns now
+  carry **construction-derived** provenance — the blend builders already held
+  it and were discarding it — and `EvolutionMap::origin` lets a consumer tell
+  fact from inference. Offset, shell, draft, split, defeature and the direct
+  edits still carry none, each stated rather than implied.
 - **Drawings/PMI:** dimensions over `projectEdges` HLR; STEP colors/PMI
   (reader/writer entities are greenfield).
 - **Sheet metal:** greenfield; only on product demand.
