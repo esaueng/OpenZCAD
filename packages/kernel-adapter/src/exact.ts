@@ -300,6 +300,42 @@ function sameSphereSurface(kernel: BrepKernel, faces: number[]): boolean {
 }
 
 /**
+ * Translate the kernel's edge-to-face map into the face hashes the topology
+ * payload publishes, sorted ascending.
+ *
+ * Sorted because `edgeToFaceMap`'s order is kernel-determined: the parity
+ * corpus digests hashes only after sorting, so an unsorted array would pass
+ * every existing test while making rebuild output non-reproducible.
+ *
+ * Multiplicity is preserved — a seam edge lists its one face twice. Returns
+ * `undefined` rather than an empty array when the kernel reports no owners, so
+ * the field is simply absent instead of asserting an edge bounds nothing.
+ */
+function brepAdjacentFaceHashes(
+  edge: number,
+  edgeToFaces: Record<string, number[]>,
+  faceHashByHandle: ReadonlyMap<number, number>
+): number[] | undefined {
+  const owners = edgeToFaces[String(edge)];
+  if (!Array.isArray(owners) || owners.length === 0) {
+    return undefined;
+  }
+  const hashes = owners.map((handle) => {
+    const hash = faceHashByHandle.get(handle);
+    if (hash === undefined) {
+      // Guarded like the face/tessellation coupling above: an owner outside
+      // this solid's own face set means the two kernel calls disagree about
+      // what the solid contains, and publishing a partial array would hide it.
+      throw new Error(
+        `Edge ${edge} names face handle ${handle}, which is not among this solid's faces.`
+      );
+    }
+    return hash;
+  });
+  return hashes.sort((left, right) => left - right);
+}
+
+/**
  * A periodic face references its UV-closing seam twice. BrepKit's sphere is
  * currently built from two same-surface hemispheres, so their smooth equator
  * fragments are display seams too. Neither case is a physical feature edge.
@@ -4452,6 +4488,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         string,
         number[]
       >;
+      // Face handle -> ADR-011 hash, for translating the kernel's edge-to-face
+      // map when the edge records are built below. Scoped to this solid:
+      // `edgeToFaces` is per solid while `topology.faces` accumulates across
+      // them, and face handles are only observed to be globally unique, not
+      // contracted to be.
+      const faceHashByHandle = new Map<number, number>();
       const mesh = kernel.tessellateSolidGroupedBinary(
         solid,
         displayTessellation.linearDeflection,
@@ -4500,6 +4542,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               message: `BrepKit face lineage ${reference.lineageName} no longer matches its exact measured witness.`
             });
           }
+          faceHashByHandle.set(handle, hash);
           topology.faces.push({
             topologyId: `face:${hash}`,
             hash,
@@ -4561,6 +4604,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             hash,
             reference: verifiedReference,
             displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
+            adjacentFaceHashes: brepAdjacentFaceHashes(
+              edge,
+              edgeToFaces,
+              faceHashByHandle
+            ),
             points: edgePositions.slice(
               edgeOffsets[index],
               edgeOffsets[index + 1]
