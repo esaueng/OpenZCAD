@@ -3,48 +3,29 @@
  *
  * A marking menu is worth having because direction is easier to remember
  * than position in a list: after a few uses the hand learns "up-left is
- * fillet" and stops reading. That only holds while the ring is small — eight
- * directions is about the limit before the sectors stop being distinct
- * enough to flick at blind. The viewport's menu can carry more actions than
- * that, so anything past the ring goes to a plain list underneath rather
- * than being crammed into a sector nobody could aim for.
+ * fillet" and stops reading. Holding that up asks the ring to read as one
+ * instrument rather than a scatter of boxes, so the slots carry icons only
+ * and the hub in the middle names whatever is being aimed at.
+ *
+ * That readout is also why every action can stay on the ring. Aiming one
+ * slot wide used to be silent; now the hub says which action a release would
+ * run, so an overshoot is caught before the button comes up and a list
+ * hanging off the ring for the leftovers buys nothing. The ring is still
+ * only as legible as it is small — callers should keep a selection's set to
+ * roughly eight, not because the layout breaks past that but because
+ * direction stops being memorable.
  */
-
-/** Directions a hand can aim at without looking. */
-export const RADIAL_SLOTS = 8;
 
 /**
  * Pixels the pointer must travel before a direction is taken as meant.
  *
  * The menu opens under the pointer, so without this the tiny drift between
  * pressing and releasing would pick whichever sector the hand happened to
- * wobble toward.
+ * wobble toward. The hub is drawn at exactly this radius, which is what
+ * makes the rule visible: while the pointer is still on the readout, nothing
+ * is chosen.
  */
-export const MARKING_DEAD_ZONE_PX = 18;
-
-export interface RadialSplit<T> {
-  /** Items placed around the ring, in clockwise order from the top. */
-  radial: T[];
-  /** Items that did not fit, listed rather than crammed into a sector. */
-  overflow: T[];
-}
-
-/**
- * Splits actions between the ring and the list.
- *
- * One item alone in the overflow is the worst of both — a list holding a
- * single row, and a ring that gave up a slot for nothing — so a set that
- * only just overflows keeps a sector free and sends two items down instead.
- */
-export function splitRadial<T>(items: T[]): RadialSplit<T> {
-  if (items.length <= RADIAL_SLOTS) {
-    return { radial: items, overflow: [] };
-  }
-  return {
-    radial: items.slice(0, RADIAL_SLOTS - 1),
-    overflow: items.slice(RADIAL_SLOTS - 1)
-  };
-}
+export const MARKING_DEAD_ZONE_PX = 40;
 
 /**
  * Where a sector's label sits, in pixels from the menu's centre.
