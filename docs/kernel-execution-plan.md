@@ -452,7 +452,7 @@ a clause buried in a deletion PR.
 
 | Item | Retire when | Work |
 | --- | --- | --- |
-| `tryExactAnalyticCylinderRimFillet` (`exact.ts:385`) | K0.4 phase 2 | delete + keep its tests as kernel regressions — **S** |
+| `tryExactAnalyticCylinderRimFillet` (`exact.ts:440`) | ~~K0.4 phase 2~~ the kernel builds a convex cap-rim blend at f/r ≥ 0.5 — **NO-GO today, see below** | delete + keep its tests as kernel regressions — **S** |
 | `tryExactAnalyticCylinderCapOffset` / `tryExactCoaxialCylinderCut` | K0.5 + a kernel coaxial-cut fast path | delete — **S** each |
 | Boolean distrust harness (`boolean-result-validation.ts`) | after N releases with zero census failures on the corpus post-K0.5 | demote to debug assertion behind a flag — **S** |
 | STEP text rewriter (`step-import.ts`) | K0.1 | delete in Z3 — **S** |
@@ -460,19 +460,87 @@ a clause buried in a deletion PR.
 
 **Adjacency + exact-curve publishing (the one new protocol):** extend the
 worker topology payload so each edge carries `adjacentFaceHashes:
-[number, number]` and `curve: { type, params }` (line/circle/ellipse/nurbs,
-from `getEdgeCurveType` + `getEdgeCurveParameters` — both adapters already
-compute adjacency internally: `exact.ts:252`, `occt-step.ts:115`). Bump the
-worker protocol version; viewport consumes it for edge-run walking, arc
-midpoints, and future measure tools. **M**, kernel-independent, can start
-any time.
+number[]` and `curve: { type, params }` (line/circle, **not** ellipse or
+nurbs) — viewport consumes it for edge-run walking, arc midpoints, and future
+measure tools. Split it: **W1 adjacency = S**, **W2 curve = M**,
+**W3 snaps fix = S after W2**, **W4 `edgeChain` rewrite = M–L**.
+Kernel-independent, can start any time.
+
+*Corrections — five claims in the original wording were measured wrong, two
+of them load-bearing:*
+
+1. **`getEdgeCurveParameters` cannot source the curve record.** It returns the
+   *underlying* curve's domain, not the edge's trim. Measured on a 20×20×10 box
+   filleted at r=3: a quarter arc of `edgeLength` 4.712389 (= 3π/2) reports
+   domain `[0, 6.283185]` — the full period — and evaluating at that domain's
+   midpoint returns the edge's own **end vertex**. Implementing this line
+   literally ships an authoritative-looking curve record that is wrong for
+   every fillet and chamfer arc in the product. Use `measureCurvatureAtEdge`
+   gated on `getEdgeCurveType(edge) === 'CIRCLE'` (14× cheaper than
+   `getNurbsCurveData`, and does not throw on the zero-length degenerate edges
+   a torus carries). Publish nothing analytic for ELLIPSE —
+   `measureCurvatureAtEdge` is wrong for those by a factor of ~1e12.
+2. **`exact.ts:252` is not adjacency.** That is `analyticSurfaceRecord`, a
+   *face* surface-params helper. Real adjacency is `exact.ts:4451`
+   (`kernel.edgeToFaceMap`), and `occt-step.ts:116` (not `:115`). This is good
+   news: adjacency sits two loops above the edge-record push, with face
+   `handle` and `hash` already in scope.
+3. **`[number, number]` is the wrong type.** Seam edges list the same face
+   twice, and flagged non-manifold STEP imports *are* built into bodies
+   (`imported-step-validation.ts` marks them `flagged`, not `not-a-solid`), so
+   a fixed pair truncates silently. Use `number[]`, **sorted** —
+   `edgeToFaceMap`'s order is kernel-determined and the corpus digests hashes
+   after sorting, so a nondeterministic order would pass every existing test
+   while making rebuild output non-reproducible.
+4. **There is no worker protocol version to bump.** The only `version` on
+   worker messages is `document.version`, used as a staleness discard. The
+   worker ships from the same Vite bundle with no service worker, so a
+   mismatched client is structurally impossible. Use optional fields, exactly
+   as `displayRole?` did across 14 files with no schema change. The one real
+   staleness window is a *persisted* `derived` from IndexedDB, which optional
+   fields handle.
+5. **Adjacency alone does not suffice for the `edgeChain` rewrite.** Verified
+   on a plain box: two edges on opposite sides of the top face share that face.
+   The walk also needs vertex incidence, and BrepKit publishes no edge→vertex
+   map — the adapter must derive vertex identity itself. That is publishing
+   work W1 does not deliver, which is why W4 is M–L rather than part of one M.
+
+*Trap, before anyone tidies `edgeChain`:* its 50° cone is **load-bearing for
+chamfers**, not a leftover. A 20×20×10 box chamfered 3 mm on its four vertical
+edges has a worst rim kink of exactly 45°, and the run collapses from 8 edges
+to 1 at a 44° tolerance — while the UI advertises "Fillet or chamfer applies to
+all of them." Pure G1 tangency is the wrong rule. The docstrings in
+`edgeChain.ts` and `topologySnaps.ts` justifying it ("the kernel hands the
+viewport a fillet arc as a two-point polyline") are separately wrong: at the
+app's real display deflection a quarter arc arrives with **28 points**, not 2.
+
+*Z6.1 is NO-GO, and the trigger above pointed at the wrong kernel work.*
+BrepKit's convex cap-rim fillet succeeds iff **f/r < 0.5** and throws
+`partial-result` at f/r ≥ 0.5 — verified scale-invariant at r = 2, 3 and 10,
+with f/r = 0.4999 succeeding and 0.5000 failing in every case. The blend torus
+is `{major: r−f, minor: f}`, so at f = r/2 it degenerates and the kernel cannot
+build a horn or apple torus; `chamfer` is unaffected because its band is a
+cone. The workaround's own guards admit `0 < f < r`, so deleting it converts
+the **entire upper half of the geometrically valid radius range** into a
+user-facing "Try a smaller radius". K0.4 phase 2 was the *concave hole-rim*
+assembler — that landed and is exact (bored plate, f=1 top rim: 8 faces,
+volume 28701.23908 against Pappus 28701.23908) — but it runs on a 7-face body
+that `readAnalyticCylinder`'s 3-face gate rejects, so it is not evidence about
+the case this workaround serves. **Kernel request to file:** build the
+horn/apple torus for a convex circular rim at f ≥ r/2, or at minimum return a
+typed `RadiusTooLarge` rather than a bare `partial-result`.
 
 ### Z7 Feature exposure (each: document-core feature/params + command +
-worker case + UI form + AI-contract op + tests)
+UI form + AI-contract op + tests)
+
+*Correction:* "worker case" was in this checklist and is not a cost —
+`geometryWorker.ts` is document-level sync/export with **zero** per-feature
+branches. The rebuild switch is `exact.ts:3608-3621`.
 
 | Feature | Kernel binding | Extra notes | Est |
 | --- | --- | --- | --- |
-| Partial revolve + axis-by-selection | `revolve(..., angleDeg)` exists; app hard-codes 360 (`exact.ts:2722`) | TODO.md already lists it | **S–M** |
+| Partial revolve **angle** | `revolve(..., angleDeg)` exists; app hard-codes 360 (`exact.ts:3461`) | see below — kernel is fine, *lineage* is the cost | **M** |
+| Revolve axis-by-selection | — | separate item; blocked on giving revolve a region path first | **M–L** |
 | Symmetric / two-sided extrude | compose two `extrude` + `fuse`, or start-offset the profile | document-model change (`distanceBack`) | **M** |
 | Sweep / loft / helix features | `sweep*`, `loft*`, `helicalSweep` bound | needs path/profile selection UX — the real cost | **L** (mostly UI) |
 | Split body | `split` bound | plane from face/datum selection | **M** |
@@ -484,6 +552,42 @@ worker case + UI form + AI-contract op + tests)
 
 AI contracts: every new feature kind needs a schema op + capability flag
 (pattern exists: `AI_PATCH_*_ENABLED` in `cloudflare-adapters`).
+
+**Partial revolve: the kernel is fine; lineage is the cost.** The obvious risk
+— that a partial revolve returns an open shell needing app-side caps — does
+not happen. Measured on an r=2..3, h=1 annulus about +Z: 90° / 180° / 270° /
+359° all give **one closed shell**, `validateSolid` 0, watertight tessellation
+with zero boundary edges and χ=2, and volumes matching the closed form to all
+printed digits (90° → 3.926991). Cap planes are present in the surface params.
+The `(0, 360]` guard is enforced and non-integer angles work.
+
+What is *not* free is ADR-013 semantic lineage, and it breaks two ways:
+
+- `expectedCircleWitness` hard-codes `closed: true` and `length: 2πr`, but a
+  partial revolve's corresponding edges are **arcs** — an `EdgeWitnessV1`
+  variant that can never satisfy it. Every profile-vertex edge role fails at
+  any angle < 360.
+- BrepKit splits swept faces at 90° boundaries — 6 faces at ≤90°, 10 at
+  91–180°, 14 at 181–270°, 18 at 271–359.9°, 4 at 360° — with duplicate
+  analytic params across the pieces, so `addUniqueSemanticAssignment`'s
+  exactly-one-match requirement goes ambiguous above 90° too.
+
+Net: partial-revolve bodies fall back to ADR-011 hash-only references instead
+of ADR-013 names. Circular profiles are exempt (a torus does not
+quadrant-split). **Shipping the angle with hash-only lineage is a legitimate
+call and keeps this at S — but make it deliberately, not by discovering it
+later.** Also gate or warn on fillet: it fails on 12/12 edges of a 90° wedge
+while succeeding on 4/6 of the same full revolve, and users reach for fillet
+immediately after making a wedge.
+
+*Axis-by-selection is separate and starts blocked.* `RevolveAxis` is
+`'horizontal' | 'vertical'` — the sketch basis through the plane origin — and
+nothing in the codebase supplies a *direction* from a selection. The
+cheap-looking route (a construction line as the axis) is unsafe as things
+stand: revolve reads `sketch.objectIds[0]` blindly and never got the region
+path extrude has, so adding a construction line to an existing revolve's
+sketch could **silently change which object is the profile and corrupt saved
+documents**. Give revolve a region path first.
 
 ---
 
