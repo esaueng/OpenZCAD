@@ -494,8 +494,8 @@ a clause buried in a deletion PR.
 
 | Item | Retire when | Work |
 | --- | --- | --- |
-| `tryExactAnalyticCylinderRimFillet` (`exact.ts:440`) | ~~K0.4 phase 2~~ the kernel builds a convex cap-rim blend at f/r ≥ 0.5 — **NO-GO today, see below** | delete + keep its tests as kernel regressions — **S** |
-| `tryExactAnalyticCylinderCapOffset` / `tryExactCoaxialCylinderCut` | ~~K0.5 + a kernel coaxial-cut fast path~~ **GO now — both justifications measured false, see below** | delete — **S** each |
+| ~~`tryExactAnalyticCylinderRimFillet`~~ | ~~K0.4 phase 2~~ ~~the kernel builds a convex cap-rim blend at f/r ≥ 0.5~~ | **✅ done** — deleted once the pin carried brepkit#50; its test survives as a kernel regression |
+| `tryExactAnalyticCylinderCapOffset` / `tryExactCoaxialCylinderCut` | ~~K0.5 + a kernel coaxial-cut fast path~~ ~~**GO now — both justifications measured false**~~ **NO-GO — both are load-bearing; the "measured false" reading was a sampling error, see below** | leave in place; file the two kernel defects — **S** each once fixed |
 | Boolean distrust harness (`boolean-result-validation.ts`) | after N releases with zero census failures on the corpus post-K0.5 | demote to debug assertion behind a flag — **S** |
 | STEP text rewriter (`step-import.ts`) | K0.1 | delete in Z3 — **S** |
 | Viewport geometric edge-walk (`edgeChain.ts`) + chord-midpoint snaps (`topologySnaps.ts`) | adjacency/exact-curve publishing (below) | rewrite walk topologically — **M** |
@@ -606,41 +606,105 @@ all of them." Pure G1 tangency is the wrong rule. The docstrings in
 viewport a fillet arc as a two-point polyline") are separately wrong: at the
 app's real display deflection a quarter arc arrives with **28 points**, not 2.
 
-*The other two cylinder workarounds are GO, and were never really K0.5's to
-gate.* Each carries a docstring making a falsifiable claim about the kernel.
-Both were measured against the current pin and **neither reproduces**:
+~~*The other two cylinder workarounds are GO, and were never really K0.5's to
+gate.*~~ **Both are NO-GO. Each docstring claim reproduces on the current pin;
+the "neither reproduces" reading came from probing one point per claim, and in
+both cases that point was on the working side of a sharp boundary.** The
+original wording is kept below with the correction under each, because the
+shape of the mistake is the lesson: a single passing sample is not a sweep.
 
-- `tryExactCoaxialCylinderCut` says the generic boolean "falls back to a
+- ~~`tryExactCoaxialCylinderCut` says the generic boolean "falls back to a
   triangular B-rep when a smaller coaxial cylinder opens exactly onto either
-  cap". It does not. A through tube comes back with **4 faces — 2 cylinders
-  and 2 planes**, fully analytic, at 5277.875658 against a closed form of
-  `π·10²·20 − π·4²·20 = 5277.875658`. Blind bores opening on either cap give 5
-  faces, equally analytic, at 5780.530483 against `6283.185 − π·4²·10`.
-- `tryExactAnalyticCylinderCapOffset` says repeated cylindrical resizes make
+  cap". It does not.~~ **It does — the old probe was a thick-walled tube.**
+  The through tube at `r_out 10 / r_in 4` does come back analytic: 4 faces —
+  2 cylinders and 2 planes — at 5277.875658 against
+  `π·10²·20 − π·4²·20 = 5277.875658`, and blind bores give 5 analytic faces at
+  5780.530483 against `6283.185 − π·4²·10`. Both numbers reproduce exactly.
+  But that tube has `wall/r_out = 0.6`. Scanning the wall ratio on a blind
+  bore (`r_out 32.9, h 25, depth 21.5`) finds three regimes, scale-invariant
+  from 1e-3 to 1e3 — it is the *ratio* that decides, not the size:
+  - `wall/r_out ≳ 0.09`: clean. 5 faces, 6 edges, watertight, exact to 3e-16.
+  - `0.018 ≲ wall/r_out ≲ 0.088`: **5 analytic faces but 7 edges.** The outer
+    wall's seam is split in two at the bore-floor height (`3.5` and `21.5`
+    against a `25` wall), leaving a T-vertex that no face on the other side
+    matches. `validateSolidRelaxed` is 0 and `volume()` is right to ~1e-12, so
+    both of the adapter's gates pass — but the tessellation carries **8
+    boundary edges and is not watertight at any deflection**, which is an STL
+    export defect the B-rep checks cannot see.
+  - `wall/r_out ≲ 0.015`: the triangular fallback the docstring names, alive
+    and well — **500+ planar faces**, volume off by 5.1e-4 relative.
+
+  The shipped bottle-cap fixture is `wall/r_out = 2.5/32.9 = 0.076`, in the
+  middle of the T-vertex band. Deleting the workaround turns that test red on
+  edge count (7 against 6) and ships a leaking mesh. The workaround's revolved
+  section is watertight, 6 edges, and exact to 9.7e-16 on the same fixture.
+- ~~`tryExactAnalyticCylinderCapOffset` says repeated cylindrical resizes make
   the generic cap boolean "accumulate a mismatched circular boundary and fail
   its exact volume gate". Eight consecutive `pushPullFace` rounds of +1.0 hold
-  at **3 faces throughout**, `validateSolidRelaxed` 0 every round, and gain
-  exactly `π·10² = 314.159` each time with no drift.
+  at 3 faces throughout.~~ **They do — and every one of them grows the solid.**
+  The eight `+1.0` rounds reproduce exactly: 3 faces, `validateSolidRelaxed` 0,
+  `π·10² = 314.159265359` gained per round with no drift, `volume()` equal to
+  `π·r²·h` to 0.0e+0 at every step. **Negative offsets on the top cap are
+  broken across the board**, and the shipped `offset-face` test uses `-4.5`:
+  - `r 6.5, h 30.25`, top cap: every offset in `+0.001 … +100` is exact and
+    3-faced; every offset in `−0.1 … −20` **throws the kernel's own gate** —
+    `push/pull produced volume 3409.2168829885813, expected 3417.916423495011`
+    at `−4.5`. Same at `r 5 h 20`, `r 2 h 10`, `r 6.5 h 20`, `r 6.5 h 30`.
+  - `r 10, h 30`, top cap, offsets `−0.001 … −20`: no throw, but the result is
+    **65 planar faces and no cylinder at all** — silently faceted, 1.66e-3
+    relative error, and `validateSolidRelaxed` 0 and watertight, so nothing in
+    the adapter notices. `r 50 h 100` gives 422 planar faces. This is the
+    failure mode the retirement rule exists to catch.
+  - It is not scale-invariant either: `r 6.5s, h 30.25s, offset −4.5s` throws
+    at s = 1e-3, 0.1 and 1, returns 482 planar faces at s = 10, and hits
+    `mesh boolean work limit exceeded` at s = 1e3.
+  - The **bottom** cap is fine in both signs (3 faces, exact), so this is an
+    asymmetry between the two caps of a `makeCylinder`, not a shrink/grow rule.
 
-**These differ from Z6.1 in a way that matters.** Z6.1's workaround runs only
-*after* `kernel.fillet` throws, so it can never override a kernel success and
-deleting it removes only capability. These two are tried **first** —
-`tryExact… ?? generic` at `exact.ts:3874` and `:4360` — so they *pre-empt* the
-general path wherever they apply. That makes them not merely redundant but a
-second answer to the same question, free to drift from the kernel's. That is a
-reason to retire them sooner rather than later.
+  Deleting the workaround turns the shipped test red with a user-facing
+  `Feature "Lower top": invalid input: push/pull produced volume …` warning.
 
-Sequencing: the deletion touches `exact.ts`, so it queues behind M3/W2. Treat
-the measurement above as the go-ahead, and let the adapter suite be the
-confirmation.
+**Two kernel defects to file, both blocking their retirement:** (1) `cut`
+leaves a T-vertex on the outer wall's seam when a coaxial bore opens on a cap
+of a thin-walled cylinder — analytic and B-rep-valid, but not mesh-watertight;
+(2) `pushPullFace` on the **top** cap of an analytic cylinder with a negative
+offset either fails its own volume gate or returns a faceted body, where the
+bottom cap is exact for the same move.
 
-*Z6.1 was NO-GO and is now **GO** — the kernel gap it waited on is closed by
-brepkit#50.* The cap rim now builds at every `0 < f < r` (minus a
-vertex-tolerance sliver), so the workaround's own `0 < f < r` guard is fully
-covered; `f = r` returns a typed `RadiusTooLarge` rather than a partial result.
-Retire it once a pin bump carries #50. The diagnosis below is kept because it
-is what the retirement trigger should have said all along, and because the
-K0.4-phase-2 correction in it still stands.
+**These differ from Z6.1 in a way that matters.** Z6.1's workaround ran only
+*after* `kernel.fillet` failed, so it could never override a kernel success and
+deleting it removed only capability. These two are tried **first** —
+`tryExact… ?? generic` — so they *pre-empt* the general path wherever they
+apply. That is still a reason to want them gone: they are a second answer to
+the same question, free to drift. It is not a reason to delete them while the
+first answer is wrong, and right now it is.
+
+Sequencing: gate both on the two kernel defects above, then re-run the wall
+ratio and offset sign sweeps rather than a single point.
+
+*Z6.1 was NO-GO, then GO, and is now **done** — the kernel gap it waited on was
+closed by brepkit#50 and the workaround is deleted.* Re-verified against the
+pin before deleting, one rim and both rims, at r = 2, 3 and 10 with f/r from
+0.1 to 0.99 and at scales 1e-3, 1 and 1e3:
+
+- One rim builds for every `0 < f < min(r, h)`, both rims for every
+  `0 < f < min(r, h/2)` — wider than the workaround's own guard, which also
+  required `f < h` (resp. `2f < h`). Outside that the kernel throws
+  `radius-too-large: … max=<value>`, carrying the limit, so `f = r`, `f = h`
+  and `2f = h` all refuse in a form the adapter can dress up.
+- Every success is analytic and watertight: **4 faces {2 plane, 1 cylinder,
+  1 torus}** for one rim, **5 faces {2 plane, 1 cylinder, 2 torus}** for both,
+  χ = 2, zero free and zero non-manifold edges, matching the Pappus closed form
+  to ≤ 2.4e-16 at all 30-plus sample points.
+- The workaround was already unreachable on this pin — bypassing it changes
+  nothing in the suite — and its output was *worse*: a 64-segment polyline
+  revolve, i.e. a fan of cone faces standing in for the blend.
+
+Its test survived as a kernel regression and gained face-count and
+surface-type assertions, plus two new regressions covering the previously
+NO-GO upper half of the range and the typed refusal at `f = r`. The diagnosis
+below is kept because it is what the retirement trigger should have said all
+along, and because the K0.4-phase-2 correction in it still stands.
 
 The fix was smaller than the diagnosis implied, and worth recording: the guard
 capped the inward case at `r_c/2` on the reasoning that a horn or spindle torus
@@ -671,6 +735,34 @@ the case this workaround serves. ~~**Kernel request to file:** build the
 horn/apple torus for a convex circular rim at f ≥ r/2, or at minimum return a
 typed `RadiusTooLarge` rather than a bare `partial-result`.~~ **Both landed in
 brepkit#50.**
+
+*Which volume to trust, measured — the standing note said `volume()` reads
+0.3% high on a boss crossing a wall while `massProperties` matches. **That does
+not reproduce on this pin**: a `r5 h40` boss through a `60×60×10` plate gives
+38356.194490192 from both routes against a closed form of 38356.194490192,
+1.9e-16 and 9.3e-15 respectively. The disagreement is real but sits elsewhere,
+and in the opposite direction.*
+
+- **`massProperties` is wrong on a trimmed torus face.** On a cylinder with one
+  cap rim filleted it under-reports by 2%–12%, growing with f. The error has a
+  clean closed form of its own: it books the removed corner as `(2πr_c²/3)·f`,
+  linear in f, where the true removal is `O(f²)` — confirmed at r_c = 2 and 10.
+  `volume()` matches Pappus to ≤ 2.4e-16 across the whole sweep and is
+  **deflection-invariant** (identical to 12 digits from deflection 1 down to
+  1e-4), so it is not tessellating. Untrimmed primitives are fine through both
+  routes, *including a whole torus* (1776.528792 against `2π²Rr²`, 7.3e-15).
+- **`volume()` ignores an inner shell.** A `r4 h8` cavity fully enclosed inside
+  a `r10 h20` cylinder reads 6283.185307 — exactly `π·10²·20`, the outer solid
+  as if it were solid — against a closed form of 5881.061448. `massProperties`
+  gets it right to 2e-13. Scale-invariant at 1e-3, 1 and 1e3. The adapter reads
+  `kernel.volume` everywhere and never calls `massProperties`, so **any body
+  with a fully internal void currently reports its volume as if the void were
+  filled.** Not this lane's to fix, but it is a live product bug.
+
+So neither route is a default. Use `volume()` against a closed form for
+anything with a blend band; use `massProperties` for anything with an internal
+void; and never use their agreement as evidence, since on the two cases above
+they disagree by 9% and 7% respectively and each is right exactly once.
 
 ### Z7 Feature exposure (each: document-core feature/params + command +
 UI form + AI-contract op + tests)
