@@ -19,7 +19,7 @@ import { OcctStepKernelAdapter } from './occt-step';
 import {
   importedStepLineageName,
   inspectTopologyWitness
-} from './topology-lineage';
+} from '../../../packages/kernel-adapter/src/topology-lineage';
 import {
   canonicalPlaneWitness,
   edgeCandidate,
