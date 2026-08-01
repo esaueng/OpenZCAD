@@ -3677,16 +3677,22 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // that the adapter had no way to detect, since a partial result is itself
     // a valid, in-envelope solid.
     //
-    // The kernel now refuses the whole selection and names the edge it could
-    // not take. That is the contract this test holds: the operation either
-    // rounds everything it was given, or it fails loudly saying what it
-    // missed. Never a quiet subset.
+    // The contract this test holds is that the operation either rounds
+    // everything it was given, or it fails loudly saying what it missed.
+    // Never a quiet subset.
     //
-    // The underlying capability gap is still open — this mixed selection is
-    // refused rather than blended, even though the rim and the perimeter are
-    // geometrically disjoint and each rounds fine alone. Tracked separately;
-    // both branches below are accepted so closing that gap turns this test
-    // green rather than red.
+    // Both defects behind it are now fixed kernel-side. The silence went
+    // first: the kernel began refusing the whole selection and naming the
+    // dropped edge. Then the refusal itself went — it turned out the rim
+    // never reached the corner the error blamed. The dispatcher chose ONE
+    // engine for the whole selection, and only the planar rebuild closes a
+    // vertex blend while only the walking builder assembles a closed rim, so
+    // one circle in the selection sent the four straight edges to a builder
+    // whose first guard refuses any two-chain vertex. Those corners failed in
+    // that builder with no rim present at all.
+    //
+    // Both branches stay accepted. The refusal branch is the one that must
+    // never regress into silence, and keeping it costs nothing.
     const kernel = new BrepKernel();
     try {
       const plate = kernel.makeBox(80, 60, 6);
@@ -3744,6 +3750,23 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           perimeterVolume,
           6
         );
+        // Every corner patch survives alongside it: four octants, five
+        // cylinders (four bands plus the bore) and the rim's torus.
+        const types = faceTypes(withRim);
+        expect(types.filter((type) => type === 'sphere')).toHaveLength(4);
+        expect(types.filter((type) => type === 'cylinder')).toHaveLength(5);
+        // The perimeter and rim removals are disjoint, so the combined body is
+        // the bored plate less both. 28800 - 30.375pi of plate, less
+        // 1088 - 808pi/3 for the perimeter and 94pi/3 - 17pi^2/2 for the rim,
+        // which collects to 27712 + 207.625pi + 8.5pi^2. A holed body is
+        // integrated off its inscribed mesh, so this converges from below.
+        const combinedClosedForm =
+          27712 + 207.625 * Math.PI + 8.5 * Math.PI ** 2;
+        const measured = kernel.volume(withRim, 1e-5);
+        expect(measured).toBeLessThan(combinedClosedForm);
+        expect(
+          (combinedClosedForm - measured) / combinedClosedForm
+        ).toBeLessThan(1e-6);
       } else {
         // It refused, so it has to say which edge it could not take, in prose
         // rather than an opaque trap.
