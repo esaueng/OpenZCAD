@@ -50,6 +50,7 @@ export interface TopologyLineageIdentity {
 export type TopologyLineageOperation =
   | 'primitive'
   | 'sweep'
+  | 'imported-step'
   | 'imported-mesh'
   | 'rigid-transform'
   | 'mirror'
@@ -76,6 +77,16 @@ const OPERATION_CAPABILITIES: Readonly<
 > = {
   primitive: { status: 'semantic' },
   sweep: { status: 'semantic' },
+  /**
+   * K0.6. An imported B-rep is the ROOT of its own lineage rather than a
+   * transition out of an earlier one, so ADR-013's "imported STEP provenance is
+   * hash-only" applies to provenance THROUGH the import, not to identity within
+   * it. The name is derived from the import feature plus the face's own
+   * independently measured exact witness — document data and geometry, never a
+   * kernel handle or a traversal ordinal — which is exactly the `derived`
+   * contract that rigid transforms and patterns already use.
+   */
+  'imported-step': { status: 'derived' },
   'imported-mesh': {
     status: 'unsupported',
     fallback: 'hash-only',
@@ -430,6 +441,30 @@ export function topologyHashOfWitness(
       ? edgeSignatureOfWitness(witness as EdgeWitnessV1)
       : faceSignatureOfWitness(witness as FaceWitnessV1)
   );
+}
+
+/**
+ * The lineage name an imported STEP face or edge carries (K0.6).
+ *
+ * A modelled body names its topology from the feature contract — a box has an
+ * `x.min` face because the command said so. An import has no such contract: the
+ * file is the whole of the semantic input, and the only kernel-neutral thing
+ * that identifies one face within it is the face's own exact ADR-011 witness.
+ * So the name IS the fingerprint, in hex.
+ *
+ * That satisfies ADR-013's prohibition — this is neither a kernel handle nor a
+ * traversal ordinal nor a viewport id, it is a deterministic function of exact
+ * geometry — and it makes the name cross-kernel stable everywhere ADR-011
+ * fingerprints already are. Uniqueness is not assumed: the callers publish a
+ * reference only when the name and the candidate are both one-to-one, so two
+ * faces with identical witnesses (a sphere's two hemispheres) publish nothing
+ * rather than something ambiguous.
+ */
+export function importedStepLineageName(
+  kind: TopologyKind,
+  hash: number
+): string {
+  return `import.step.${kind}.${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function witnessKey(kind: TopologyKind, witness: TopologyWitnessV1): string {
