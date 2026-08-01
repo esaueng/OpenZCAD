@@ -321,16 +321,50 @@ which is the same set and sidesteps a plug fuse BrepKit often declines.
 
 ## 3. M2 — Single kernel
 
-### Z3 STEP route flip — **M**, gated on K0.1 + K0.6 + Z1.3 green
+### Z3 STEP route flip — **M**, gated on K0.1 + K0.6 + Z1.3 green ✅ done
 
-*Steps:* delete `containsImportedStep` routing (`exact.ts:3862-3908`) so
-`imported-step` documents rebuild on the BrepKit adapter (its
-`imported-step` case at `exact.ts:2800` becomes production); delete
-`normalizeStepPlaneAnglesForKernel` + its tests; keep the corpus running
-both kernels until Z5.
+*Steps:* delete `containsImportedStep` routing so `imported-step` documents
+rebuild on the BrepKit adapter (its `imported-step` case becomes
+production); delete `normalizeStepPlaneAnglesForKernel` + its tests; keep
+the corpus running both kernels until Z5.
 *Soak:* at least one release with corpus + real-project imports green on
 BrepKit while OCCT still exists behind a dev flag (vitest alias mechanism,
 `vitest.config.ts:29-32`, already supports kernel swapping).
+
+*Landed.* `createExactKernelAdapter` now returns `BrepKitKernelAdapter`
+outright — `HybridExactKernelAdapter` had become a pure delegate, so it went
+with the routing rather than surviving as a wrapper. Three findings worth
+carrying forward:
+
+1. **The angle rewriter was already inert.** Deleting
+   `normalizeStepPlaneAnglesForKernel` changed not one number in
+   `baselines/corpus.json`. The kernel reads `b-unit-degree-cone` at
+   1047.1975511965977 mm³ — the closed form, and byte-identical to the
+   radian control — with no JavaScript between the file and the reader.
+   `test/step-import-compat.test.ts` now asserts that directly instead of
+   asserting that the rewriter rewrote.
+2. **The 22 MB was Z3's payoff, not Z5's.** The OCCT import was already
+   dynamic, so once nothing reached it the asset stopped being emitted:
+   `apps/web/dist` is 13 MB. Z5 recovers source lines, not bundle bytes.
+3. **The app mirrored the routing in two places** and both had to move with
+   it: the worker's `documentRequiresOcct`/`loading-occt` phase (it would
+   have announced a kernel load that never happens) and `App.tsx`'s
+   `kernel: 'occt'` capability, which gated solid offset on imported bodies
+   behind `OCCT_SHARP_OFFSET_LIMITATION`. Solid offset on an imported body
+   is now enabled, and correct: 12×22×32 exactly, agreed by both kernels
+   (`test/exact-kernel-adapter.test.ts`, "keeps mirror, shell, and solid
+   offset conformant on an IMPORTED body").
+
+*What the flip costs users, stated plainly.* Blending an imported body now
+goes through BrepKit's blender, which fits corner bands as B-splines where
+the exact answer is a quarter cylinder — 4.63e-4 relative on
+`fillet-on-import`, and the STEP re-export carries
+`B_SPLINE_SURFACE_WITH_KNOTS` instead of `CYLINDRICAL_SURFACE`. This is
+**not** caused by importing: BrepKit does the same on natively modelled
+bodies, so it is a pre-existing K0.4 gap that imported documents have now
+joined rather than a regression Z3 introduced. It is pinned in
+`corpus-pins.ts` (K0.4) and asserted, not tolerated, in the e2e.
+
 
 ### Z5 Delete OCCT — **M**
 
@@ -341,17 +375,26 @@ Deletion inventory (from the usage map):
 (rewrite as BrepKit-only), `occt-wasm` from
 `packages/kernel-adapter/package.json:19`, `ExactKernelKind = 'brepkit' | 'occt'` +
 `OCCT_SHARP_OFFSET_LIMITATION` (`apps/web/src/lib/modelingOperations.ts:63-138`)
-and the `App.tsx:5527` branch, the `loading-occt` worker phase
-(`geometryWorker.ts:20-26,134-137`), cross-kernel assertions in
-`exact-kernel-adapter.test.ts`.
-Docs: amend ADR-009/ADR-010, README "Two kernels" section,
-`capability-matrix.md`, `performance-baseline.md`.
+and the now-constant `kernel: 'brepkit'` App.tsx capability field,
+cross-kernel assertions in
+`exact-kernel-adapter.test.ts` and `kernel-seam.test.ts`.
+*Inventory correction (Z3):* the `loading-occt` worker phase and
+`documentRequiresOcct` are already gone — they described a reroute Z3
+removed, so leaving them would have had the app announce a kernel load that
+never happens. The `−22,088 kB wasm` payoff below is also already banked:
+the OCCT import was dynamic, so it stopped being emitted the moment nothing
+reached it. What Z5 still recovers is ~4,000 lines of source and one
+behaviour to reason about.
+Docs: amend ADR-009/ADR-010, `capability-matrix.md`,
+`performance-baseline.md`. (README's kernel prose and the architecture
+diagram were corrected in Z3, when they stopped being true.)
 *Inventory correction:* `apps/web/vite.config.ts` no longer carries an OCCT
 manual chunk — that line is already gone. Verified: after Z2, the only
 remaining production importer of `./occt-step` is `getOcct` behind
 `containsImportedStep`, so Z3 is genuinely the last gate and Z5 is then
 mechanical.
-*Payoff:* −22,088 kB wasm (−7,100 kB brotli), one code path.
+*Payoff:* one code path. The −22,088 kB wasm (−7,100 kB brotli) landed at
+Z3, when the last reachable importer went away.
 *Rule:* this lands only after Z3's soak; revert path is `git revert` of one
 PR (keep the deletion atomic).
 
