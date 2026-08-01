@@ -701,7 +701,62 @@ documents**. Give revolve a region path first.
 | Types | add `EdgeCurve::{Hyperbola, Parabola}` (unblocks `convert_to_elementary`), `FaceSurface::{OffsetSurface, SurfaceOfRevolution, SurfaceOfExtrusion}`; give `Plane` a UV parameterization to kill plane special-casing | `crates/topology`, ripple across algo/blend/io | **XL**, stage by variant |
 | Sweep/loft | implement `SweepCornerMode::Round` (today silently degrades, `sweep.rs:1185`); non-planar caps with holes / >4 edges (`cap.rs:141-146`); draft on non-planar faces | `crates/operations` | **L** |
 | Tessellation | close the planar inner-wire TODO (`tessellate/planar.rs:18` — verify against `tessellate_watertight.rs` first; may be stale) | | **S** |
-| Hardening | fuzz booleans/blends with **structured generators** (random primitive trees + transforms; invariants: closed shell, volume ⊆ operand bounds, determinism, fuse/cut idempotence) — I/O readers are fuzzed, engines are not; extend `mutants.toml` to `blend`/`offset`/`operations`; keep the `brepkit_approx` census as a CI metric | `fuzz/`, `mutants.toml` | **M–L** |
+| Hardening | fuzz booleans/blends with **structured generators** (random primitive trees + transforms; invariants: closed shell, volume ⊆ operand bounds, determinism, fuse/cut idempotence) — I/O readers are fuzzed, engines are not; extend `mutants.toml` to `blend`/`offset`/`operations`; ~~keep the `brepkit_approx` census as a CI metric~~ — **it is not one today, see below** | `fuzz/`, `mutants.toml` | **M–L** landed, see below |
+
+**The Hardening lane landed as brepkit#54, and corrected two things this row
+asserted.**
+
+*`brepkit_approx` was never a CI metric.* Checked rather than assumed:
+`approx_census.rs` exists in `crates/operations/examples/`, its probes are
+live at 7 sites across blend, offset and operations, and 4 `.claude/skills`
+documents tell you to run it — but **nothing in `.github/workflows/` or
+`scripts/` invokes it.** It is a manual local tool. "Keep it as a CI metric"
+was wishful; wiring it is its own worthwhile change.
+
+*Extending `mutants.toml` alone would have been inert.* `mutants.yml` passes
+explicit `--package` flags and cargo-mutants **intersects** those with
+`examine_globs`, so a glob for an unnamed package is never reached. The
+workflow has to name the crates too. Examined surface goes from ~48k lines to
+~122k; job budget 60 → 180 min.
+
+*The measurement oracle was also wrong in the original design*, in the same
+way it was wrong everywhere else in this document: route agreement between
+`mass_properties` and `solid_volume` was to be the primary check, on the
+grounds that the routes are independent. **They are not** — they meet in
+`integrate_face`. #53's open-arc chord error moved both by the same 2.0 % and
+the check saw nothing. The primary oracle is now a closed form derived
+outside the kernel; route agreement is kept and documented as a weak
+secondary signal that catches a defect confined to one route (#46) and
+nothing in the shared integrator.
+
+Two defects came out of the first bounded runs, both open:
+
+- **A point-tipped cone tessellates to a mesh that is not closed.**
+  `make_cone(r=3, top=0, h=1)` at `diag*4e-5`: 416 triangles, **418 boundary
+  edges**, 420 vertices where 210 suffice. The cone face and the base plane
+  each emit their own copy of the 209-point base circle and the two are never
+  merged. A frustum at the same deflection is watertight, so the shared-edge
+  pool works for an ordinary circle and not this one. `MERGE_GRID` is a fixed
+  absolute `1e-7` whose comment calls grid-boundary splits "possible but
+  rare" — here **209 of 209** split. Watertight at 0.001×, open at 1× and
+  1000×. **No measurement oracle catches it:** `solid_volume` returns
+  9.42477796076938 against an exact `πr²h/3` of 9.42477796076938. The volume
+  is right and the mesh is wrong — the mirror image of #52, which passed
+  watertightness with the bore filled *and* the bore walls absent, two errors
+  cancelling. This is why both rungs are checked.
+- **A fillet reads 55.6 % apart between the two routes** (312.932080729 vs
+  704.367776927). Because they share their integrator, a gap that size means
+  one route alone is badly wrong; #53 accounts for a couple of percent. Plus
+  five not-watertight artifacts across `draft`, `fillet` and `shell`, one with
+  2 non-manifold edges. Not triaged — the PR is the harness.
+
+*A false positive worth recording, because it was the harness's and not the
+kernel's.* The first campaign reported `V−E+F = 4, genus −1` on a fuse of two
+boxes. Euler's formula is **per closed surface**: a fuse of operands that do
+not touch is a correct two-shell result whose aggregate is `2n`, not 2. The
+census now partitions faces into connected components by shared edge and
+tests each — also strictly sharper, since summing lets a genus error in one
+shell cancel against another.
 
 ### Offset lane: what #53 landed, and the one measurement it corrected
 
