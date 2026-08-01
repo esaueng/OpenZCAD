@@ -36,6 +36,7 @@ import { BrepKitKernelAdapter } from '../../packages/kernel-adapter/src/exact';
 import { OcctStepKernelAdapter } from '../../packages/kernel-adapter/src/occt-step';
 
 import {
+  fnv1a,
   measureDocument,
   measureStepFile,
   type CorpusMeasurement,
@@ -90,6 +91,37 @@ function surfaceTypeSignature(types: Record<string, number>): string {
 }
 
 /**
+ * Lineage names, folded once they stop being a readable list.
+ *
+ * A modelled body carries a handful of semantic role names — `primitive.box.
+ * face.x.min` and friends — and reading them IS the point. An imported body
+ * carries one CONTENT-ADDRESSED name per face and edge (K0.6): an import has no
+ * feature contract to name its topology from, so the only kernel-neutral
+ * identity available is the face's own exact witness, and the shipped bracket
+ * sample therefore publishes 2,543 of them. Joining those would put a 50 KB
+ * literal into every pin and every failure message, which is how a measurement
+ * harness gets its assertions loosened.
+ *
+ * So above the readable threshold this folds to a count plus an FNV-1a digest,
+ * exactly as the face and edge hash SETS already do. The fold is lossless for
+ * comparison — two digests are equal iff the sorted name sets are identical, so
+ * it still answers "do both kernels give this imported body the same identity
+ * names" — and the full sorted list stays in `baselines/corpus.json` for the
+ * diff to show which name moved.
+ */
+const READABLE_LINEAGE_NAMES = 12;
+
+function lineageNameSignature(names: readonly string[]): string {
+  if (names.length === 0) {
+    return 'none';
+  }
+  const joined = names.join(',');
+  return names.length <= READABLE_LINEAGE_NAMES
+    ? joined
+    : `${names.length} names · ${fnv1a(joined)}`;
+}
+
+/**
  * The flat metric map the parity bar compares. Every value is a string or a
  * number so a divergence can be written into a pin literally.
  *
@@ -115,7 +147,7 @@ export function comparableMetrics(
     surfaceTypes: surfaceTypeSignature(measurement.surfaceTypes),
     witnessedFaces: measurement.witnessedFaces,
     witnessedEdges: measurement.witnessedEdges,
-    lineageNames: measurement.lineageNames.join(',') || 'none',
+    lineageNames: lineageNameSignature(measurement.lineageNames),
     faceHashDigest: measurement.faceHashDigest,
     edgeHashDigest: measurement.edgeHashDigest,
     roundTripStatus: measurement.roundTrip.status,

@@ -66,6 +66,7 @@ import {
   edgeCandidate as occtEdgeCandidate,
   faceCandidate as occtFaceCandidate,
   hashOnlyOcctLineage,
+  importedStepLineage,
   occtSurfaceClosure,
   propagateRigidTransformLineage,
   quantizedTopologyPoint,
@@ -81,7 +82,7 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from './face-attachment';
-import { importedStepValidationWarning } from './step-import';
+import { importedStepValidationWarning } from './imported-step-validation';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
@@ -1404,8 +1405,9 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               result.shapes.set(feature.bodyId, shape);
               result.lineages.set(
                 feature.bodyId,
-                hashOnlyOcctLineage(
-                  'STEP imports have no reliable feature provenance; topology remains hash-only.'
+                importedStepLineage(
+                  feature.featureId,
+                  topologyCandidatesForShape(this.kernel, shape)
                 )
               );
             }
@@ -2023,7 +2025,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               ? importedStepValidationWarning(
                   body.name,
                   invalidStepSolids.length,
-                  this.kernel.subShapeCount(shape, 'solid')
+                  this.kernel.subShapeCount(shape, 'solid'),
+                  'OpenCascade'
                 )
               : `Body "${body.name}" failed OpenCascade B-rep validation.`
           );
