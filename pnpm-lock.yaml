@@ -44,6 +44,9 @@ importers:
       eslint-config-prettier:
         specifier: ^10.1.1
         version: 10.1.8(eslint@10.8.0)
+      occt-wasm:
+        specifier: 3.8.1
+        version: 3.8.1
       prettier:
         specifier: ^3.9.6
         version: 3.9.6
@@ -224,9 +227,6 @@ importers:
       brepkit-wasm:
         specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
         version: https://codeload.github.com/esaueng/brepkit/tar.gz/f3defc3ff20bba513cf6751c2fab2dfc14095f9d#path:/crates/wasm/pkg
-      occt-wasm:
-        specifier: 3.8.1
-        version: 3.8.1
 
   packages/persistence:
     dependencies:

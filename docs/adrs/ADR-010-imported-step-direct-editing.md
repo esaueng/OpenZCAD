@@ -20,3 +20,14 @@ Persist deterministic face ordinals together with geometric fingerprints: surfac
 - Successful direct edits remain exact and exportable as STEP; viewport meshes are still disposable projections.
 - STEP does not contain the originating CAD system's sketch/constraint/feature history. OpenZCAD therefore exposes only operations proven from current B-Rep topology and labels unsupported combinations instead of inventing parameters.
 - Complete through-hole diameter editing and validated single-face defeaturing are implemented. Blind holes, counterbores/countersinks, bosses, pockets, ribs, tapers, and coordinated multi-face recognition remain explicit future direct-edit operations.
+
+## Amendment (Z5, 2026-08-01) — the kernel named above is no longer the one doing this
+
+This ADR was written against OpenCascade and still names it twice. Both readings are now historical, and neither describes a behaviour change:
+
+- "measures selected OCCT faces" — the geometry worker measures selected faces through BrepKit. Z3 made BrepKit build every document including imported STEP; Z5 deleted the OpenCascade adapter from `packages/kernel-adapter`.
+- "OCCT defeaturing otherwise" — **Remove selected feature** still uses the dedicated through-hole closure when applicable and the kernel's defeaturing pass otherwise; that pass is now BrepKit's `defeature`.
+
+Everything the decision actually turns on is unchanged: an imported STEP file is still an immutable exact B-Rep source, edits are still replayable `direct-edit` features, recognition still requires the same proofs, and rebuilds still fail closed when a persisted reference resolves to different geometry. The identity scheme those rebuilds resolve against is content-addressed rather than kernel-specific (ADR-011), which is why the kernel could be swapped underneath this ADR and then removed without changing it.
+
+One capability changed with the flip, and it changed in the user's favour: solid offset on an imported body used to be refused outright in the UI, because OpenCascade's sharp offset was limited to proven convex planar bodies. BrepKit has no such limit, so the refusal, its `kernel`/`offsetTopology` capability fields, and its message were deleted rather than reworded.

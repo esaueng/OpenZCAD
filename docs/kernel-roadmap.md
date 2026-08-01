@@ -32,9 +32,10 @@ The status bar says one kernel; routing in
 > `inspectStep`, Z1.2 deleted the legacy JS kernel, Z2 moved multi-solid
 > export, and Z3 removed the `imported-step` reroute — so `createExactKernelAdapter`
 > returns `BrepKitKernelAdapter` and nothing in `apps/` or the production
-> adapter path imports `occt-step` at all. OCCT survives as the parity
-> corpus's reference kernel until Z5 deletes the source. The table is kept
-> because it is the diagnosis the rest of this document argues from.
+> adapter path imports `occt-step` at all. Z5 then removed OCCT from the
+> package entirely; it survives only as the parity corpus's reference kernel
+> in `test/parity/occt-reference/`. The table is kept because it is the
+> diagnosis the rest of this document argues from.
 
 Every document feature now has a BrepKit implementation. The two that were
 OCCT-only — `resize-through-hole` and `remove-face-feature` — were ported in
@@ -252,17 +253,35 @@ Two cases still refuse, both waiting on K0.3 rather than on adapter work:
   `validateSolid`). The adapter refuses both the unsupported-body case up
   front and the wrong-solid case after the call.
 
-### Z5 — Delete OCCT
+### Z5 — Delete OCCT — **done (2026-08-01)**
 
-Remove `occt-step.ts` (2,150 lines), `occt-modeling-operations.ts`,
-`occt-lineage.ts`, the `occt-wasm` dependency, the vite manual chunk, and
-the `ExactKernelKind = 'brepkit' | 'occt'` UI union with its
-`OCCT_SHARP_OFFSET_LIMITATION` branch. (The `loading-occt` worker phase went
-with Z3.) Rewrite cross-kernel parity tests as BrepKit-vs-corpus-baseline
-tests.
+`occt-step.ts` (2,130 lines), `occt-modeling-operations.ts`, `occt-lineage.ts`
+and their tests are gone from `packages/kernel-adapter`; `occt-wasm` is a root
+**devDependency** rather than an adapter dependency; the
+`ExactKernelKind = 'brepkit' | 'occt'` union, `OCCT_SHARP_OFFSET_LIMITATION`,
+the `offsetTopology` capability field, and the constant `kernel: 'brepkit'`
+argument in `App.tsx` are deleted. `ExactKernelAdapter.kind` is now the literal
+`'brepkit'` with one implementation.
+
+Two inventory items above were already absent and needed no work: the
+`loading-occt` worker phase (Z3) and the vite manual chunk. `step-import-compat`
+was already BrepKit-only.
+
+The cluster was **relocated, not destroyed** — `test/parity/occt-reference/`,
+where the parity corpus still runs it against BrepKit file by file, and where
+`generate.spec.ts` still needs it to author the two OCCT-written fixtures. It
+no longer implements `ExactKernelAdapter`, so it is not a kernel the app can be
+pointed at. Retiring the comparison is now its own reversible decision.
+
+Cross-kernel assertions in `exact-kernel-adapter.test.ts`, `kernel-seam.test.ts`
+and `topology-lineage-spike.test.ts` were replaced by the absolute claims they
+stood in for — closed-form volumes, pinned counts, named refusals — not deleted.
+
 **Payoff: one code path, one behavior.** The −22 MB wasm (−7.1 MB brotli)
-already landed at Z3 — the OCCT import was dynamic, so the asset stopped
-being emitted as soon as nothing reached it.
+landed at Z3, because the OCCT import was dynamic. Z5's own bundle delta is
+321 bytes: the dead `OCCT_SHARP_OFFSET_LIMITATION` string and its unreachable
+branch were still being emitted into `assets/index-*.js`. What Z5 recovers is
+~4,460 lines of source moved out of the shipped package.
 
 ### Z6 — Retire the JS workaround ring (paced by Track K)
 

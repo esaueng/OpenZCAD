@@ -7,7 +7,7 @@ the current branch; production enablement is a separate rollout decision.
 
 - Schema-v6 canonical documents with v1–v5 normalization, checkpoints, asset
   references, command replay, transactions, undo/redo, and local-first autosave.
-- Browser-worker BrepKit and OCCT exact adapters with primitives, multi-profile
+- A browser-worker BrepKit exact adapter with primitives, multi-profile
   sweeps, transforms, booleans, finishing, patterns, mirror-copy, shell, solid
   offset, validity checks, measurements, and exact STEP/STL export.
 - Exact schema-v5 topology witnesses plus semantic lineage for the proved
@@ -19,10 +19,10 @@ the current branch; production enablement is a separate rollout decision.
   unsupported faces stop the rebuild; legacy attachments use their stored
   migration frame with a warning.
 - Modeling UI and command preflight for mirror, shell opening-face selection,
-  and positive-outward solid offset. OCCT sharp offset is limited to proved
-  convex planar bodies; other OCCT topology is refused. BrepKit mirror also
-  refuses dense blended/boolean bodies when the pinned kernel does not preserve
-  measured solid volume.
+  and positive-outward solid offset. BrepKit mirror refuses dense
+  blended/boolean bodies when the pinned kernel does not preserve measured
+  solid volume. (The OpenCascade convex-planar solid-offset refusal is gone
+  with the kernel — Z5.)
 - A bounded, kernel-neutral imported-feature recognizer for blind holes,
   counterbores, countersinks, bosses, prismatic pockets, and conical tapers.
   This is a tested read-only proof module, not live product editing yet.
@@ -35,7 +35,7 @@ the current branch; production enablement is a separate rollout decision.
   validated direct edits. The six newer families are independently dark behind
   rollout flags; recognized imported-feature operations remain explicitly
   disabled.
-- Lazy exact-adapter/BrepKit loading in the geometry worker, lazy OCCT loading,
+- Lazy exact-adapter/BrepKit loading in the geometry worker,
   tagged loading/rebuild lifecycle, coalesced broadcasts, and a canonical
   rebuild LRU bounded to 8 entries, 32 MiB, and 4 in-flight loads.
 - CAD workspace, selection/topology labels, on-model direct manipulation,
@@ -56,7 +56,7 @@ the current branch; production enablement is a separate rollout decision.
 - Run the collaboration recovery-copy reload E2E against a real beta session;
   apply the sharing migration and verify revocation/lease expiry before enabling
   viewer sharing, then editor sharing.
-- Connect the imported-feature proof query to live OCCT face adjacency and add
+- Connect the imported-feature proof query to live kernel face adjacency and add
   deterministic coordinated edit commands before enabling those UI or AI paths.
 - Extend verified lineage through production boolean post-processing, blends,
   patterns, direct edits, and STEP provenance. Do not substitute nearest-face
