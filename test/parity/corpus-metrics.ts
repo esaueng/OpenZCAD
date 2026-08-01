@@ -21,8 +21,13 @@
  *     one value per body. Hash sets are the identity substrate every feature
  *     reference is resolved against, so a digest change means stored edge
  *     picks would move even when every count matches.
- *   - `witnessedFaces` / `lineageNames` are K0.6's acceptance surface: OCCT
- *     publishes schema-v5 references on imported bodies, BrepKit must too.
+ *   - `witnessedFaces` / `lineageNames` are K0.6's acceptance surface. The
+ *     original premise — that OCCT already published schema-v5 references on
+ *     imported bodies and BrepKit had to catch up — was measured and found
+ *     false: neither kernel published any. K0.6 built it on BOTH adapters
+ *     against one shared rule, so these metrics now answer the question the Z3
+ *     flip actually turns on: does a face pick stored on an imported body carry
+ *     the same identity on either kernel.
  *   - `roundTrip` re-exports and re-imports through the SAME kernel. It is the
  *     only metric that catches writer defects — BrepKit's `write_solid`
  *     dropping inner shells is invisible until the file comes back.
@@ -121,7 +126,7 @@ export function importDocument(
   return { document: manager.document, bodyId: ids.bodyId };
 }
 
-function fnv1a(text: string): string {
+export function fnv1a(text: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
