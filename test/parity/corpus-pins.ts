@@ -59,6 +59,27 @@
  *      with a message that names the defect and counts the boundary edges.
  *      Both kernels refuse it; only the wording differs, which is the one pin
  *      left on that file and BrepKit is the better side of it.
+ *   5. Blend surfaces. CLOSED (K0.4). `fillet-on-import` fitted its four
+ *      corner bands as B-splines just inside the true quarter cylinder. They
+ *      are exact cylinders now, so THREE pins retire together: `surfaceTypes`
+ *      (both kernels read `cylinder x4, plane x6`), `faceHashDigest` (both
+ *      reach b563a24b, which is also what OCCT reads for the same shape
+ *      imported as `e-analytic-fillet-plate` — the fingerprint stability that
+ *      pin predicted), and `roundTripVolumeDelta` (BrepKit read its own
+ *      filleted export back 0.175% heavy; it now round-trips to 0, because an
+ *      analytic cylinder survives the writer where a spline did not). The
+ *      volume and edge-hash pins survive with new values and new owners; see
+ *      their notes. K0.4 no longer owns anything in this list.
+ *
+ *      Not everything the blend work landed is right, and the corpus does not
+ *      cover the part that is not: a fillet over a subset of the edges meeting
+ *      at a corner builds a B-spline vertex patch that removes far more
+ *      material than a rolling ball can (+147% on one corner chain, +259% over
+ *      a four-edge perimeter) and tessellates with inconsistent winding. Both
+ *      are held failing in `test/exact-kernel-adapter.test.ts`. Fillets where
+ *      EVERY edge at a vertex is selected come back as exact spheres and hit
+ *      the closed form, which is why this corpus — whose blend scenario
+ *      selects four parallel vertical edges — sees none of it.
  *
  * What remains, in rough order of how much it costs:
  *
@@ -138,7 +159,11 @@ export type PinOwner =
   | 'K0.1'
   /** Multi-solid STEP export. */
   | 'K0.2'
-  /** Blend phases: holed-cap corners, vertex blends, hole-rim fillets. */
+  /**
+   * Blend phases: holed-cap corners, vertex blends, hole-rim fillets. Landed,
+   * and no pin is owned by it any more — kept because the notes on the pins it
+   * used to own refer to it, and deleting the name would make them unreadable.
+   */
   | 'K0.4'
   /** Boolean: analytic x NURBS SSI + torus pairs. */
   | 'K0.5'
@@ -679,68 +704,41 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   // --- import-modeling scenarios ------------------------------------------
   {
     subject: 'fillet-on-import',
-    metric: 'surfaceTypes',
-    brepkit: 'bspline x4, plane x6',
-    occt: 'cylinder x4, plane x6',
-    owner: 'K0.4',
-    note:
-      'The headline blend delta, and NOT the one the plan predicts. K0.5 ' +
-      'expects fillet-on-import to show mesh fallback; it does not — BrepKit ' +
-      'produces an exact 10-face body with no warnings. What it does instead ' +
-      'is fit the four corner bands as B-splines where the exact answer is a ' +
-      'quarter cylinder. Face count and topology are right; the surface type ' +
-      'is not, which costs 4.4 mm3 of volume (see the volume pin) and makes ' +
-      'the result unrecognisable to any downstream analytic fast path. K0.4 ' +
-      'phase 2 (walking-builder vertex blends) is the owner.'
-  },
-  {
-    subject: 'fillet-on-import',
     metric: 'volume',
-    brepkit: 9518.33214341142,
+    brepkit: 9522.60692840917,
     occt: 9522.74333882308,
-    owner: 'K0.4',
+    owner: 'brepkit-measurement',
     note:
-      'Quantifies the B-spline-vs-cylinder pin above: 4.63e-4 relative, and ' +
-      'the closed-form answer 9522.7433388 is exactly what OCCT reports. The ' +
-      'B-spline bands are slightly UNDER the true quarter cylinder. Retire ' +
-      'together with the surfaceTypes pin; if the surface type is fixed and ' +
-      'this stays, the residue is brepkit-measurement rather than K0.4.'
-  },
-  {
-    subject: 'fillet-on-import',
-    metric: 'faceHashDigest',
-    brepkit: '35d76d2e',
-    occt: 'b563a24b',
-    owner: 'K0.4',
-    note:
-      'Different surface types produce different face fingerprints. Note ' +
-      "that OCCT's digest here (b563a24b) is byte-identical to its digest " +
-      'for e-analytic-fillet-plate — the imported OCCT-authored file of the ' +
-      'same shape — which is a good sign for fingerprint stability once the ' +
-      'surface types agree.'
+      MEASUREMENT_NOTE +
+      ' This pin used to read 9518.3321434 and belong to K0.4: BrepKit fitted ' +
+      "the four corner bands as B-splines just inside the true quarter " +
+      'cylinder and lost 4.4 mm3 (4.63e-4 relative). The bands are now exact ' +
+      'cylinders — the surfaceTypes and faceHashDigest pins that recorded ' +
+      'that gap are retired — and what is left is 1.43e-5, the same ' +
+      'deflection residue every other curved body in this corpus carries. ' +
+      'The reassignment is corroborated rather than assumed: BrepKit now ' +
+      'reads this scenario within 2e-15 relative of its own import of ' +
+      'e-analytic-fillet-plate (9522.6069284092), the OCCT-authored file of ' +
+      'the same nominal shape, so the blend and the import agree on the ' +
+      'geometry and only the integrator is short.'
   },
   {
     subject: 'fillet-on-import',
     metric: 'edgeHashDigest',
-    brepkit: '9389207a',
+    brepkit: '4de1dc1b',
     occt: '26f53b2e',
-    owner: 'K0.4',
+    owner: 'K0.6',
     note:
-      'Edge counterpart of the fingerprint divergence; same cause. OCCT ' +
-      'again matches its own e-analytic-fillet-plate digest (26f53b2e).'
-  },
-  {
-    subject: 'fillet-on-import',
-    metric: 'roundTripVolumeDelta',
-    brepkit: 0.001748693017046106,
-    occt: 7.831626128295643e-15,
-    owner: 'K0.1',
-    note:
-      'A separate defect from the blend itself: BrepKit exports the filleted ' +
-      'body and reads its own file back 0.175% heavier. OCCT round-trips to ' +
-      '8e-15. So the B-spline WRITER and READER disagree with each other, ' +
-      'not only with OCCT — which is why e-nurbs-fillet-plate reads high ' +
-      'too. Fix the spline round trip before trusting any NURBS volume.'
+      'Was 9389207a under K0.4, when the divergence was that BrepKit bounded ' +
+      'B-spline bands and OCCT bounded cylinders. The bands agree now — the ' +
+      'faces do too, both kernels reaching b563a24b — so what is left is the ' +
+      'seam class, and this becomes the third instance of it alongside ' +
+      'a-export-cone and e-analytic-fillet-plate. Measured element-wise the ' +
+      'two kernels publish 24 edges each and 16 of the 24 carry the SAME ' +
+      'hash, so a stored edge pick on this body usually survives and fails ' +
+      'closed when it does not. Note BrepKit does not reach its own ' +
+      'e-analytic-fillet-plate digest (2cf1303e) either, so the remaining ' +
+      'difference is in how a blended edge is represented, not in importing.'
   },
   {
     subject: 'boolean-with-import',
@@ -887,12 +885,17 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     subject: 'fillet-on-import',
     kernel: 'brepkit',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
-    reported: 9518.33214341142,
-    owner: 'K0.4',
+    reported: 9522.60692840917,
+    owner: 'brepkit-measurement',
     note:
-      'B-spline corner bands sit inside the true quarter cylinder, costing ' +
-      '4.4 mm3 (4.63e-4 relative). OCCT reaches the arithmetic exactly, so ' +
-      'this pin measures the blend, not the measurement.'
+      MEASUREMENT_NOTE +
+      ' Was 9518.3321434 under K0.4 — B-spline corner bands sitting inside ' +
+      'the true quarter cylinder, 4.63e-4 relative low. The bands are exact ' +
+      'cylinders now and the deviation from the arithmetic fell 32x, to ' +
+      '1.43e-5, which is the same residue a-export-bored-plate and ' +
+      'e-analytic-fillet-plate carry. This entry is the one that says the ' +
+      'move is an improvement rather than a different answer: it is measured ' +
+      "against the scenario's own construction, not against OCCT."
   },
   {
     subject: 'boolean-with-import',
