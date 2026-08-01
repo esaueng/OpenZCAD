@@ -2115,16 +2115,6 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     }
   }
 
-  /** Reassemble separately exported STEP solids into one compound document. */
-  combineStepSolids(parts: string[]): string {
-    try {
-      const shapes = parts.map((part) => this.kernel.importStep(part));
-      return this.kernel.exportStep(this.kernel.makeCompound(shapes));
-    } finally {
-      this.kernel.releaseAll();
-    }
-  }
-
   async inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
