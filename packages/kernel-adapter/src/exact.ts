@@ -2299,22 +2299,6 @@ function containsImportedMesh(document: ProjectDocument): boolean {
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'brepkit' as const;
   private readonly legacy = new OpenZCADKernel();
-  private stepCombiner: Promise<{
-    combineStepSolids(parts: string[]): string;
-    dispose(): void;
-  }> | null = null;
-
-  /**
-   * BrepKit's STEP writer serializes exactly one solid, so multi-body exports
-   * are assembled into a compound document by OpenCascade — loaded lazily,
-   * only when a multi-body export happens.
-   */
-  private getStepCombiner(): NonNullable<typeof this.stepCombiner> {
-    this.stepCombiner ??= import('./occt-step').then(
-      ({ OcctStepKernelAdapter }) => OcctStepKernelAdapter.create()
-    );
-    return this.stepCombiner;
-  }
 
   private resolveSketchBasisAtHistory(
     kernel: BrepKernel,
@@ -3747,15 +3731,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 uniformScaleMatrix(millimeterScale)
               )
             );
-      if (exportSolids.length === 1) {
-        return decodeText(kernel.exportStep(exportSolids[0]!));
-      }
       // Never fuse: a boolean union changes the geometry (overlaps merge,
-      // coincident faces weld). Export each solid and compound them.
-      const parts = exportSolids.map((solid) =>
-        decodeText(kernel.exportStep(solid))
+      // coincident faces weld). The kernel writes each body as its own
+      // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
+      // distinct through a round trip.
+      return decodeText(
+        kernel.exportStepMulti(new Uint32Array(exportSolids))
       );
-      return (await this.getStepCombiner()).combineStepSolids(parts);
     } finally {
       kernel.free();
     }
@@ -3849,9 +3831,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
-    // Each operation owns and releases a short-lived BrepKernel instance.
-    void this.stepCombiner?.then((combiner) => combiner.dispose());
-    this.stepCombiner = null;
+    // Each operation owns and releases a short-lived BrepKernel instance, so
+    // there is nothing adapter-scoped left to release.
   }
 }
 
@@ -3912,7 +3893,9 @@ class HybridExactKernelAdapter implements ExactKernelAdapter {
     valid: boolean;
     volume: number;
   }> {
-    return (await this.getOcct()).inspectStep(data);
+    // Inspection reads a STEP payload in isolation, so it never needs the
+    // document-wide OCCT reroute that `syncDocument` applies.
+    return this.brepkit.inspectStep(data);
   }
 
   dispose(): void {
