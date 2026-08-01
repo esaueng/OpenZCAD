@@ -242,6 +242,22 @@ const MEASUREMENT_NOTE =
 // ---------------------------------------------------------------------------
 
 export const KERNEL_DELTAS: KernelDeltaPin[] = [
+  {
+    subject: 'boss-crossing-a-wall',
+    metric: 'status',
+    brepkit: 'imported',
+    occt: 'threw',
+    owner: 'OCCT-defect',
+    note:
+      'A cylindrical boss fused across a planar wall of the plate. NEITHER ' +
+      'kernel gets this right, in different ways, which is the whole reason ' +
+      'the scenario is here. OCCT builds a body whose face count and ' +
+      'tessellation group count disagree — 14 against 17 — and the adapter ' +
+      'refuses it rather than publish triangle ranges it cannot trust. ' +
+      'BrepKit imports and facets the entire result; see its reference ' +
+      'deviation. Closing the OCCT side needs consistent groups; closing the ' +
+      'BrepKit side needs the analytic curved-planar path.'
+  },
   // --- (a) exports ---------------------------------------------------------
   {
     subject: 'a-sample-parametric-bracket',
@@ -808,6 +824,53 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
 // ---------------------------------------------------------------------------
 
 export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
+  {
+    subject: 'boss-crossing-a-wall',
+    kernel: 'brepkit',
+    referenceMm3:
+      40 * 24 * 10 +
+      Math.PI * 36 * 20 -
+      (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
+    reported: 10947.94983823075,
+    owner: 'K0.5',
+    note:
+      'The non-planar coincident-contact defect, measured through the app\'s ' +
+      'own command path rather than the raw kernel. The boss\'s cylindrical ' +
+      'wall crosses the plate\'s x=0 plane, and the fuse returns 57 faces ' +
+      'that are ALL PLANES — every analytic surface destroyed — reading ' +
+      '0.038% low. The bounding box shows it too: x-min comes back -2.996917 ' +
+      'where the construction says exactly -3, an inscribed polygon failing ' +
+      'to reach its own extent. Seated fully INSIDE the wall the same fuse ' +
+      'is exact to 1e-10 with a true cylinder, and shifting the centre by a ' +
+      'tenth of a micron flips between the two — so this is not a tolerance ' +
+      'to widen. At exact tangency the operand is dropped outright and a cut ' +
+      'is ignored outright, neither of which this scenario can show, because ' +
+      'a dropped operand leaves no approximation for a census to notice — ' +
+      'just less geometry. Full sweep in docs/kernel-execution-plan.md.'
+  },
+  {
+    subject: 'boss-crossing-a-wall',
+    kernel: 'occt',
+    referenceMm3:
+      40 * 24 * 10 +
+      Math.PI * 36 * 20 -
+      (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
+    // 0 is the literal measurement: the build threw, so no volume was
+    // produced. The refusal itself is pinned as a `status` divergence in
+    // KERNEL_DELTAS, which carries the error text; this entry exists so the
+    // nominal-volume check has something to compare against. `reported` is
+    // typed to allow 'threw', but the scenario assertion path requires a
+    // number, so the two pins split the fact between them.
+    reported: 0,
+    owner: 'OCCT-defect',
+    note:
+      'OCCT builds 14 faces but 17 tessellation groups for the same body, ' +
+      'and the adapter refuses that rather than publish face triangle ranges ' +
+      'it cannot trust — the same guard that protects the fingerprint hash. ' +
+      'Worth recording because it means this scenario has NO correct kernel ' +
+      'to defer to: the hand-computed nominal is the only truth available, ' +
+      'which is exactly why the corpus insists on one.'
+  },
   {
     subject: 'b-unit-no-global-context',
     kernel: 'brepkit',
