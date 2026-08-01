@@ -13,8 +13,8 @@
 .icon-button,
 .topbar-action,
 .palette-item,
-.rail-row,
-.rail-views button,
+.rail-button,
+.rail-views-panel button,
 .feature-row-main,
 .body-row-main,
 .param-add button,
@@ -40,7 +40,7 @@
 .secondary:active:not(:disabled),
 .icon-button:active:not(:disabled),
 .palette-item:active:not(:disabled),
-.rail-views button:active:not(:disabled),
+.rail-views-panel button:active:not(:disabled),
 .context-menu-item:active:not(:disabled),
 .assistant-card-actions button:active:not(:disabled) {
   transform: translateY(1px);

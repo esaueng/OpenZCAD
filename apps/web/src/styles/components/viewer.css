@@ -23,7 +23,8 @@
   inset: 0;
 }
 
-/* Right-hand utility stack: orientation widget on top, labeled rail below. */
+/* Top-right orientation widget. The utility rail used to stack beneath it;
+   it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {
   position: absolute;
   top: 10px;
@@ -39,47 +40,74 @@
   position: static;
 }
 
+/* Utility rail: viewport state as icons, centred on the right edge so it
+   clears the orientation widget instead of stacking under it. */
 .viewer-rail {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  z-index: var(--z-viewer-overlay);
   display: flex;
   flex-direction: column;
-  align-items: stretch;
   gap: 2px;
-  padding: 5px;
+  padding: 4px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
 }
 
-.rail-views {
-  display: flex;
-  gap: 2px;
-  justify-content: flex-end;
-  margin-bottom: 2px;
-}
-
-.rail-views button {
-  min-width: 26px;
-  min-height: 22px;
-  padding: 0 5px;
+.rail-button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
 }
 
-.rail-views button:hover {
+.rail-button:hover,
+.rail-button.open {
   color: var(--color-text);
   background: var(--color-surface-2);
 }
 
-.rail-row {
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 7px;
-  padding: 2px 6px;
+.rail-button.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.rail-divider {
+  height: 1px;
+  margin: 3px 2px;
+  background: var(--color-border);
+}
+
+.rail-views-anchor {
+  position: relative;
+}
+
+/* Opens to the left of the rail and grows upward, so it never covers the
+   rail itself and stays clear of the status bar. */
+.rail-views-panel {
+  position: absolute;
+  right: calc(100% + 7px);
+  bottom: -4px;
+  display: grid;
+  grid-template-columns: repeat(2, 66px);
+  gap: 2px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+.rail-views-panel button {
+  min-height: 22px;
+  padding: 0 6px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -87,27 +115,13 @@
   white-space: nowrap;
 }
 
-.rail-row:hover {
+.rail-views-panel button:hover {
   color: var(--color-text);
   background: var(--color-surface-2);
 }
 
-.rail-row.active {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.rail-icon {
-  display: inline-grid;
-  place-items: center;
-  font-style: normal;
-}
-
-.rail-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.rail-view-wide {
+  grid-column: 1 / -1;
 }
 
 .selection-callout {

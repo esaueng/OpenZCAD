@@ -1,4 +1,15 @@
 import { test, expect, stubApi } from './openzcad-fixtures';
+import type { Page } from '@playwright/test';
+
+/**
+ * Standard views live behind the viewer rail's flyout rather than each having
+ * a button of their own — the orientation cube is the primary way to navigate.
+ * Opens the flyout and picks a view; the flyout closes on selection.
+ */
+async function selectRailView(page: Page, name: RegExp | string) {
+  await page.getByRole('button', { name: 'Standard views' }).click();
+  await page.getByRole('button', { name }).click();
+}
 
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
   page
@@ -264,7 +275,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
 
   // Left works the same way from the right face, after resetting to iso so
   // the right face is visible again.
-  await page.getByRole('button', { name: /^Isometric view/ }).click();
+  await selectRailView(page, /^Isometric view/);
   await page.waitForTimeout(900);
   await widget.getByRole('button', { name: 'Right view' }).click();
   await page.waitForTimeout(900);
@@ -275,7 +286,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
 
   // Ordinary pointer wobble below the 4 px drag threshold remains one face
   // activation. This boundary is easy to regress when capture cleanup changes.
-  await page.getByRole('button', { name: /^Isometric view/ }).click();
+  await selectRailView(page, /^Isometric view/);
   await page.waitForTimeout(900);
   const wobbleFace = widget.getByRole('button', { name: 'Right view' });
   await wobbleFace.evaluate((element) => {
@@ -320,7 +331,7 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
 
   // The rotate arrows swing the camera a quarter turn about the world up
   // axis: from iso (x > 0, y < 0), a clockwise model turn lands at y > 0.
-  await page.getByRole('button', { name: /^Isometric view/ }).click();
+  await selectRailView(page, /^Isometric view/);
   await page.waitForTimeout(900);
   const iso = await cameraPosition();
   expect(iso![0]!).toBeGreaterThan(0);
@@ -775,7 +786,7 @@ test('shift-dragging a box selects several bodies at once', async ({
 
   await page.getByRole('button', { name: 'Fit' }).click();
   await page.waitForTimeout(700);
-  await page.getByRole('button', { name: 'Top view (2)' }).click();
+  await selectRailView(page, 'Top view (2)');
   await page.waitForTimeout(900);
   await page.keyboard.press('Escape');
 
