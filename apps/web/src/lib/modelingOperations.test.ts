@@ -6,7 +6,6 @@ import {
   type FaceTopologyReferenceV5
 } from '@openzcad/shared';
 import {
-  OCCT_SHARP_OFFSET_LIMITATION,
   buildModelingOperationSubmission,
   modelingFaceOptions,
   modelingFormValidationReason,
@@ -155,15 +154,15 @@ describe('modeling operation form contracts', () => {
     expect(imported[0]?.label).toBe('Plane face 1 · #0000002a');
   });
 
-  it('states the OCCT sharp-offset limitation explicitly', () => {
+  it('allows solid offset on any ready body with one kernel', () => {
+    // The OpenCascade convex-planar refusal used to answer here. Z5 deleted
+    // the kernel that needed it, so a ready body with a live target is now
+    // simply offsettable; the assertion is that nothing refuses it silently.
     expect(
       modelingOperationDisabledReason('solid-offset', {
         exactState: 'ready',
-        hasTargetBody: true,
-        kernel: 'occt',
-        offsetTopology: 'curved'
+        hasTargetBody: true
       })
-    ).toBe(OCCT_SHARP_OFFSET_LIMITATION);
-    expect(OCCT_SHARP_OFFSET_LIMITATION).toContain('rounded joins');
+    ).toBeNull();
   });
 });
