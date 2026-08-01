@@ -50,6 +50,7 @@ export interface TopologyLineageIdentity {
 export type TopologyLineageOperation =
   | 'primitive'
   | 'sweep'
+  | 'imported-mesh'
   | 'rigid-transform'
   | 'mirror'
   | 'shell'
@@ -75,6 +76,12 @@ const OPERATION_CAPABILITIES: Readonly<
 > = {
   primitive: { status: 'semantic' },
   sweep: { status: 'semantic' },
+  'imported-mesh': {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason:
+      'An imported mesh has no feature provenance: its facets come from the source file, not from an OpenZCAD operation.'
+  },
   'rigid-transform': { status: 'derived' },
   mirror: {
     status: 'unsupported',
