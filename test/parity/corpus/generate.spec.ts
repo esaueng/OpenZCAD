@@ -662,8 +662,8 @@ describe('parity corpus files', () => {
     const entities = (step: string) => stripCorpusComment(step);
     expect(entities(degree)).toContain('GLOBAL_UNIT_ASSIGNED_CONTEXT');
     expect(entities(degree)).toContain("CONVERSION_BASED_UNIT('DEGREE'");
-    // The whole point of the -unassigned variant: no assigned context, so the
-    // adapter's rewriter cannot prove a scale and leaves the file alone.
+    // The whole point of the -unassigned variant: no assigned context, so
+    // nothing in the file binds a unit and no reader can prove a scale.
     expect(entities(unassigned)).not.toContain('GLOBAL_UNIT_ASSIGNED_CONTEXT');
     expect(entities(unassigned)).toContain("CONVERSION_BASED_UNIT('DEGREE'");
   });

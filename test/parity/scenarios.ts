@@ -262,12 +262,13 @@ export const PARITY_SCENARIOS: ParityScenario[] = [
 /**
  * Modeling operations layered on top of an IMPORTED body.
  *
- * These are separate from `PARITY_SCENARIOS` on purpose. A document containing
- * an `imported-step` feature routes the whole hybrid adapter to OpenCascade,
- * so running these in the default vitest pool would add an OCCT WASM
- * instantiation to the fast suite for no signal. The corpus job runs them
- * against BrepKit and OCCT *directly*, side by side, which is the only way the
- * delta these scenarios exist to measure is visible at all.
+ * These are separate from `PARITY_SCENARIOS` on purpose. They are measured on
+ * BrepKit and OCCT *directly*, side by side, which is the only way the delta
+ * they exist to record is visible at all — and running two WASM kernels per
+ * scenario does not belong in the fast pool. Before Z3 an `imported-step`
+ * feature rerouted the whole production adapter to OpenCascade; that is no
+ * longer true, so these scenarios are now the measurement of what the app
+ * actually does, against the kernel it no longer uses.
  *
  * Every scenario carries a `nominalVolumeMm3` computed from the design intent
  * by hand, not read from a kernel. That is deliberate: when the two kernels

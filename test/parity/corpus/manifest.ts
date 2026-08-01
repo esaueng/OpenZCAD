@@ -174,9 +174,10 @@ export const CORPUS: CorpusEntry[] = [
     category: 'b-units',
     purpose:
       "The r10 h10 cone with its plane-angle unit redeclared as DEGREE and " +
-      'the CONICAL_SURFACE half-angle written as 45. The exact case ' +
-      'normalizeStepPlaneAnglesForKernel rewrites before handing it to ' +
-      'BrepKit — so this file measures the workaround, not the kernel.',
+      'the CONICAL_SURFACE half-angle written as 45. Byte-derived from ' +
+      'a-export-cone, so it is provably the same cone in a different unit ' +
+      'and must read the same volume. A kernel that ignores ' +
+      'PLANE_ANGLE_UNIT reads 45 radians and produces a wildly wrong cone.',
     path: 'test/parity/corpus/b-unit-degree-cone.step',
     referenceVolumeMm3: (Math.PI * 10 * 10 * 10) / 3,
     referenceSolidCount: 1
@@ -185,10 +186,10 @@ export const CORPUS: CorpusEntry[] = [
     id: 'b-unit-degree-cone-unassigned',
     category: 'b-units',
     purpose:
-      'The degree cone with its GLOBAL_UNIT_ASSIGNED_CONTEXT removed, so the ' +
-      'adapter rewriter provably does NOT fire (it requires an assigned ' +
-      'context). This is the only file in the corpus that shows what BrepKit ' +
-      'does with raw degree angles, with the workaround held inert.',
+      'The degree cone with its GLOBAL_UNIT_ASSIGNED_CONTEXT removed, so ' +
+      'nothing in the file binds a unit to the model at all. Both kernels ' +
+      'refuse it rather than guess a scale, which is the answer this file ' +
+      'exists to hold them to.',
     path: 'test/parity/corpus/b-unit-degree-cone-unassigned.step',
     referenceSolidCount: 1,
     expectNoSolids: true
