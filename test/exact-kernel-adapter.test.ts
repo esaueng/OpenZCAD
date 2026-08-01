@@ -588,6 +588,99 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(importedDerived.warnings).toEqual([]);
   });
 
+  it('publishes the faces each edge bounds, agreeing with displayRole', async () => {
+    let document = createProjectDocument(
+      'Edge adjacency',
+      toUserId('user_adjacency')
+    );
+    const ids = new Map<string, (typeof document.bodyOrder)[number]>();
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    ids.set('Box', document.bodyOrder.at(-1)!);
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    ids.set('Cylinder', document.bodyOrder.at(-1)!);
+    document = addPrimitiveFeature(document, {
+      name: 'Sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 10 }
+    });
+    ids.set('Sphere', document.bodyOrder.at(-1)!);
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const edgesOf = (name: string) =>
+      derived.bodyRepresentations[ids.get(name)!]!.topology!.edges;
+    const faceHashesOf = (name: string) =>
+      new Set(
+        derived.bodyRepresentations[ids.get(name)!]!.topology!.faces.map(
+          (face) => face.hash
+        )
+      );
+    // Fails rather than silently building an empty Set, which would make every
+    // `.size` assertion below read 0 and pass nothing.
+    const adjacencyOf = (edge: { adjacentFaceHashes?: number[] }): number[] => {
+      expect(edge.adjacentFaceHashes).toBeDefined();
+      return edge.adjacentFaceHashes as number[];
+    };
+
+    for (const name of ids.keys()) {
+      const published = faceHashesOf(name);
+      for (const edge of edgesOf(name)) {
+        // Present on every edge, sorted, and naming only faces this body
+        // actually published — an unsorted array would pass the corpus digests
+        // (which sort first) while making rebuild output non-reproducible.
+        const hashes = adjacencyOf(edge);
+        expect(hashes.length).toBeGreaterThan(0);
+        expect([...hashes].sort((a, b) => a - b)).toEqual(hashes);
+        for (const hash of hashes) {
+          expect(published.has(hash)).toBe(true);
+        }
+      }
+    }
+
+    // A box is the clean case: every edge divides two distinct faces, and
+    // nothing is a seam.
+    const boxEdges = edgesOf('Box');
+    expect(boxEdges).toHaveLength(12);
+    for (const edge of boxEdges) {
+      expect(edge.displayRole).toBe('feature');
+      expect(new Set(adjacencyOf(edge)).size).toBe(2);
+    }
+
+    // The cylinder's seam closes one face's UV parameterization, so that face
+    // is listed twice. This is the fact `displayRole` already derives, and the
+    // two must not be able to disagree.
+    const cylinderSeams = edgesOf('Cylinder').filter(
+      (edge) => edge.displayRole === 'seam'
+    );
+    expect(cylinderSeams).toHaveLength(1);
+    expect(new Set(adjacencyOf(cylinderSeams[0]!)).size).toBe(1);
+    expect(adjacencyOf(cylinderSeams[0]!)).toHaveLength(2);
+    for (const edge of edgesOf('Cylinder').filter(
+      (edge) => edge.displayRole === 'feature'
+    )) {
+      expect(new Set(adjacencyOf(edge)).size).toBe(2);
+    }
+
+    // The sphere pins the limit rather than hiding it. BrepKit builds it from
+    // two same-surface hemispheres that share one exact witness, so BOTH
+    // patches hash identically and every edge reports a single distinct hash —
+    // even the equator, which genuinely divides two faces. A consumer cannot
+    // use these hashes to tell the hemispheres apart. That collision is why
+    // face picks on spheres are unavailable, and if it ever stops being true
+    // this assertion should turn red and be revisited deliberately.
+    expect(faceHashesOf('Sphere').size).toBe(1);
+    for (const edge of edgesOf('Sphere')) {
+      expect(new Set(adjacencyOf(edge)).size).toBe(1);
+    }
+  });
+
   it('removes boolean seams from a unioned physical part', async () => {
     const withBase = addPrimitiveFeature(
       createProjectDocument('Uniform bracket', toUserId('user_exact')),
