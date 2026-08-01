@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
@@ -12,7 +12,10 @@ import {
   getParameterScope,
   normalizeDocument
 } from '@openzcad/document-core';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
+import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
 import {
   toFeatureId,
   toUserId,
@@ -21,6 +24,16 @@ import {
 } from '@openzcad/shared';
 
 describe('command-system', () => {
+  let kernel: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    kernel = await createExactKernelAdapter();
+  });
+
+  afterAll(() => {
+    kernel.dispose();
+  });
+
   const edgeReference = {
     kind: 'edge' as const,
     producingFeatureId: toFeatureId('feat_box'),
@@ -58,7 +71,7 @@ describe('command-system', () => {
     }
   };
 
-  it('supports execute and undo/redo around replayable commands', () => {
+  it('supports execute and undo/redo around replayable commands', async () => {
     const manager = new CommandManager(
       createProjectDocument('Command Test', toUserId('user_test'))
     );
@@ -88,8 +101,7 @@ describe('command-system', () => {
     expect(manager.document.revisions).toHaveLength(executedRevisionCount + 2);
     expect(manager.document.revisions.at(-1)?.reason).toBe('Redo Add box');
 
-    const kernel = createKernelAdapter();
-    const derived = kernel.syncDocument(manager.document);
+    const derived = await kernel.syncDocument(manager.document);
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
   });
 
@@ -371,7 +383,7 @@ describe('command-system', () => {
     expect(manager.document.name).toBe('Renamed Part');
   });
 
-  it('replays a full parametric command log into an identical entity graph', () => {
+  it('replays a full parametric command log into an identical entity graph', async () => {
     const base = createProjectDocument('Replay Test', toUserId('user_test'));
     const manager = new CommandManager(base);
 
@@ -435,9 +447,8 @@ describe('command-system', () => {
     );
     expect(getParameterScope(replayed).scope).toEqual({ depth: 24 });
 
-    const kernel = createKernelAdapter();
-    const fromLive = kernel.syncDocument(manager.document);
-    const fromReplay = kernel.syncDocument(replayed);
+    const fromLive = await kernel.syncDocument(manager.document);
+    const fromReplay = await kernel.syncDocument(replayed);
     expect(fromReplay.warnings).toEqual([]);
     const live = fromLive.bodyRepresentations[bodyId]!;
     const replay = fromReplay.bodyRepresentations[bodyId]!;
