@@ -735,8 +735,8 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   const match = /^(\d+) edges$/.exec((chip ?? '').trim());
   // Exactly eight, not merely "more than one". The body is the app's default
   // 30 x 18 x 24 box with all twelve edges filleted at the default radius 2,
-  // which leaves 48 edges in twelve runs of eight — so the probe may land on
-  // any edge and still owes the same answer. `> 1` passed for a walk returning
+  // which leaves 48 edges in six runs of eight — so the probe may land on any
+  // edge and still owes the same answer. `> 1` passed for a walk returning
   // two edges as readily as for one returning the whole run, which is the
   // entire behaviour this test exists to defend. The number is measured, not
   // guessed: `test/edge-chain-characterization.test.ts` builds this same body
