@@ -31,8 +31,9 @@ Several roadmap items already have working foundations:
 - Planar face offsets work through BrepKit and OpenCascade.
 - BrepKit supports cylindrical hole and boss radius edits (BrepKit-only; the
   OCCT adapter rejects them).
-- Imported complete through-holes support recognition, resize, and removal
-  (OCCT-only; BrepKit refuses them).
+- Complete through-holes support recognition, resize, and removal on both
+  kernels. BrepKit refuses the hole-closing fill where its boolean falls back
+  to a mesh, and refuses `defeature` on any body that is not all-planar.
 - ADR-011 cross-kernel fingerprints are implemented and fail closed on
   zero-or-many matches. The closed-B-spline/NURBS exclusion is emergent
   (weak signatures fail only on ambiguous twins), not an explicit guard.
@@ -538,7 +539,7 @@ agents do not collide in it.
 
 Note the current adapter asymmetry, which this wave's parity work must
 resolve deliberately rather than assume: cylindrical hole/boss resize is
-BrepKit-only, and imported through-hole operations are OCCT-only.
+BrepKit-only.
 
 ### Agent A: BrepKit mirror, shell, and solid offset
 
