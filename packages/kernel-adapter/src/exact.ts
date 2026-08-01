@@ -56,7 +56,6 @@ import {
 } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
-import { normalizeStepPlaneAnglesForKernel } from './step-import';
 import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
@@ -816,7 +815,7 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 export interface ExactKernelAdapter {
-  readonly kind: 'brepkit' | 'occt' | 'hybrid';
+  readonly kind: 'brepkit' | 'occt';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
@@ -3332,9 +3331,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (feature.bodyId) {
               const declared = Array.from(
                 kernel.importStep(
-                  new TextEncoder().encode(
-                    normalizeStepPlaneAnglesForKernel(feature.data.stepText)
-                  )
+                  new TextEncoder().encode(feature.data.stepText)
                 )
               );
               if (declared.length === 0) {
@@ -4673,11 +4670,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }> {
     const kernel = new BrepKernel();
     try {
-      const sourceText =
-        typeof data === 'string' ? data : decodeText(new Uint8Array(data));
-      const bytes = new TextEncoder().encode(
-        normalizeStepPlaneAnglesForKernel(sourceText)
-      );
+      const bytes =
+        typeof data === 'string'
+          ? new TextEncoder().encode(data)
+          : new Uint8Array(data);
       let declared: number[];
       try {
         declared = Array.from(kernel.importStep(bytes));
@@ -4732,70 +4728,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 }
 
-export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
-  return new HybridExactKernelAdapter();
-}
-
-function containsImportedStep(document: ProjectDocument): boolean {
-  return listFeaturesInOrder(document).some(
-    (feature) => feature.data.featureKind === 'imported-step'
-  );
-}
-
 /**
- * BrepKit remains the fast native modeling kernel. Documents containing STEP
- * sources switch as a whole to OpenCascade so every downstream operation uses
- * the same faithful imported B-rep instead of mixing exact and reconstructed
- * geometry.
+ * BrepKit builds every document, imported STEP included.
+ *
+ * Until Z3 a document carrying an `imported-step` feature rerouted WHOLE to
+ * OpenCascade, so an import and everything modelled on top of it were built by
+ * a second kernel. That reroute is gone: there is one kernel on the production
+ * path, and `occt-step.ts` survives only as the cross-kernel reference the
+ * parity corpus measures against until Z5 deletes it.
  */
-class HybridExactKernelAdapter implements ExactKernelAdapter {
-  readonly kind = 'hybrid' as const;
-  private readonly brepkit = new BrepKitKernelAdapter();
-  private occt: Promise<ExactKernelAdapter> | null = null;
-
-  private getOcct(): Promise<ExactKernelAdapter> {
-    this.occt ??= import('./occt-step').then(({ OcctStepKernelAdapter }) =>
-      OcctStepKernelAdapter.create()
-    );
-    return this.occt;
-  }
-
-  async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    return containsImportedStep(document)
-      ? (await this.getOcct()).syncDocument(document)
-      : this.brepkit.syncDocument(document);
-  }
-
-  async exportStep(
-    document: ProjectDocument,
-    bodyIds: BodyId[]
-  ): Promise<string> {
-    return containsImportedStep(document)
-      ? (await this.getOcct()).exportStep(document, bodyIds)
-      : this.brepkit.exportStep(document, bodyIds);
-  }
-
-  async exportStl(
-    document: ProjectDocument,
-    bodyIds: BodyId[]
-  ): Promise<string> {
-    return containsImportedStep(document)
-      ? (await this.getOcct()).exportStl(document, bodyIds)
-      : this.brepkit.exportStl(document, bodyIds);
-  }
-
-  async inspectStep(data: string | ArrayBuffer): Promise<{
-    solid: boolean;
-    valid: boolean;
-    volume: number;
-  }> {
-    // Inspection reads a STEP payload in isolation, so it never needs the
-    // document-wide OCCT reroute that `syncDocument` applies.
-    return this.brepkit.inspectStep(data);
-  }
-
-  dispose(): void {
-    this.brepkit.dispose();
-    void this.occt?.then((adapter) => adapter.dispose());
-  }
+export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
+  return new BrepKitKernelAdapter();
 }

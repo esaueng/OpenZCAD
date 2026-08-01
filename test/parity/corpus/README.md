@@ -152,7 +152,8 @@ from the construction by hand, plus a `nominalRtol`. A loose tolerance must be
 explained on the scenario — an unexplained loose tolerance is how a real defect
 hides.
 
-These deliberately do **not** join `PARITY_SCENARIOS`: a document containing an
-`imported-step` feature routes the whole hybrid adapter to OpenCascade, so
-running them in the default pool would add an OCCT instantiation to the fast
-suite and still not show the delta they exist to measure.
+These deliberately do **not** join `PARITY_SCENARIOS`: each scenario is built
+twice, once per kernel, so running them in the default pool would add an OCCT
+instantiation to the fast suite. Since Z3 the BrepKit column is what the app
+itself produces for these documents, and the OCCT column is the reference it
+is checked against until Z5.
