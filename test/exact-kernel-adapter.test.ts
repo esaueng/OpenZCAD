@@ -3209,6 +3209,46 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
   });
 
+  // Convex cap-rim fillets on a plain cylinder. This began life as the test
+  // for an adapter workaround that rebuilt the rims from a 64-segment revolved
+  // profile, because the kernel refused the blend at f/r >= 0.5. The kernel
+  // builds the rim torus itself at every 0 < f < r now, the workaround is
+  // gone, and these are kernel regressions: they pin the behaviour the
+  // deletion depends on.
+  //
+  // Volume is checked against Pappus, which is independent of the kernel.
+  // Surface types are checked because the failure mode that matters here is a
+  // silent downgrade from an analytic torus band to a faceted approximation —
+  // that keeps the volume and loses the geometry.
+  const rimFilletVolume = (
+    radius: number,
+    height: number,
+    fillet: number,
+    rims: number
+  ): number => {
+    const squareMoment = fillet ** 2 * (radius - fillet / 2);
+    const quarterCircleMoment =
+      ((Math.PI * fillet ** 2) / 4) *
+      (radius - fillet + (4 * fillet) / (3 * Math.PI));
+    return (
+      Math.PI * radius ** 2 * height -
+      rims * (2 * Math.PI * (squareMoment - quarterCircleMoment))
+    );
+  };
+
+  const surfaceTypeCounts = (
+    body:
+      | { topology?: { faces: { geometry?: { surfaceType?: string } }[] } }
+      | undefined
+  ): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    for (const face of body?.topology?.faces ?? []) {
+      const type = face.geometry?.surfaceType ?? 'unknown';
+      counts[type] = (counts[type] ?? 0) + 1;
+    }
+    return counts;
+  };
+
   it('fillets both rims of a small circular sketch extrusion together', async () => {
     const { document: withSketch, sketchId } = addSketchFeature(
       createProjectDocument(
@@ -3234,6 +3274,8 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         .map((edge) => edge.hash) ?? [];
 
     expect(rimHashes).toHaveLength(2);
+    // f/r is exactly 0.5 here — the radius at which the kernel used to throw
+    // `partial-result` and hand the case to the workaround.
     const filletRadius = 1;
     const filleted = filletEdges(extruded, {
       name: 'Both rim fillets',
@@ -3243,16 +3285,98 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }).document;
     const derived = await adapter.syncDocument(filleted);
     const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
-    const squareMoment = filletRadius ** 2 * (2 - filletRadius / 2);
-    const quarterCircleMoment =
-      ((Math.PI * filletRadius ** 2) / 4) *
-      (2 - filletRadius + (4 * filletRadius) / (3 * Math.PI));
-    const expectedVolume =
-      Math.PI * 2 ** 2 * 6 -
-      2 * (2 * Math.PI * (squareMoment - quarterCircleMoment));
     expect(derived.warnings).toEqual([]);
-    expect(body?.volume).toBeCloseTo(expectedVolume, 2);
+    expect(body?.volume).toBeCloseTo(rimFilletVolume(2, 6, filletRadius, 2), 2);
     expect(body?.bbox).toEqual(baseBody.bbox);
+    // One wall, two caps, two rim bands — all analytic.
+    expect(body?.faceCount).toBe(5);
+    expect(surfaceTypeCounts(body)).toEqual({
+      cylinder: 1,
+      plane: 2,
+      torus: 2
+    });
+  });
+
+  it('fillets a cylinder cap rim across the whole radius range', async () => {
+    // The upper half of this range (f/r >= 0.5) is the part the deleted
+    // workaround existed to serve. Every ratio has to build the same analytic
+    // body and hit its closed form, or the deletion was premature.
+    const radius = 2;
+    const height = 6;
+    for (const ratio of [0.1, 0.25, 0.4999, 0.5, 0.5001, 0.75, 0.9, 0.99]) {
+      const filletRadius = radius * ratio;
+      const base = addPrimitiveFeature(
+        createProjectDocument(`Rim ${ratio}`, toUserId('user_exact')),
+        {
+          name: 'Post',
+          primitiveKind: 'cylinder',
+          dimensions: { radius, height }
+        }
+      );
+      const bodyId = base.bodyOrder.at(-1)!;
+      const baseDerived = await adapter.syncDocument(base);
+      const rims =
+        baseDerived.bodyRepresentations[bodyId]?.topology?.edges.filter(
+          (edge) => edge.displayRole !== 'seam'
+        ) ?? [];
+      expect(rims).toHaveLength(2);
+
+      const filleted = filletEdges(base, {
+        name: 'Rim fillet',
+        targetBodyId: bodyId,
+        edgeHashes: [rims[0]!.hash],
+        size: filletRadius
+      }).document;
+      const derived = await adapter.syncDocument(filleted);
+      const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+
+      expect(derived.warnings, `f/r = ${ratio}`).toEqual([]);
+      expect(body?.faceCount, `f/r = ${ratio}`).toBe(4);
+      expect(surfaceTypeCounts(body), `f/r = ${ratio}`).toEqual({
+        cylinder: 1,
+        plane: 2,
+        torus: 1
+      });
+      expect(body?.volume, `f/r = ${ratio}`).toBeCloseTo(
+        rimFilletVolume(radius, height, filletRadius, 1),
+        6
+      );
+    }
+  });
+
+  it('refuses a cap-rim fillet at f = r with an actionable message', async () => {
+    // f = r is the one radius in the workaround's old guard range the kernel
+    // still will not build. It has to refuse in a way the adapter can dress
+    // up, rather than returning a body.
+    const radius = 3;
+    const base = addPrimitiveFeature(
+      createProjectDocument('Rim at f = r', toUserId('user_exact')),
+      {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius, height: 9 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    const baseDerived = await adapter.syncDocument(base);
+    const rim = baseDerived.bodyRepresentations[bodyId]?.topology?.edges.find(
+      (edge) => edge.displayRole !== 'seam'
+    );
+    expect(rim).toBeTruthy();
+
+    const filleted = filletEdges(base, {
+      name: 'Rim fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [rim!.hash],
+      size: radius
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toContain(
+      `Fillet could not be created on 1 selected edge with radius ${radius}.`
+    );
+    expect(derived.warnings[0]).not.toContain('WebAssembly.Exception');
   });
 
   it('keeps all-edges box fillet corners exact and seam-smooth', async () => {
