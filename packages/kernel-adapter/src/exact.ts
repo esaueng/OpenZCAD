@@ -2379,7 +2379,7 @@ function measureFaceGeometry(
     }
     return geometry;
   }
-  if (surfaceType !== 'cylinder') {
+  if (surfaceType !== 'cylinder' && surfaceType !== 'sphere') {
     return geometry;
   }
   let parameters: unknown;
@@ -2389,17 +2389,26 @@ function measureFaceGeometry(
     return geometry;
   }
   const record = (parameters ?? {}) as Record<string, unknown>;
+  const rawRadius = record.radius;
+  const radius =
+    typeof rawRadius === 'number' &&
+    Number.isFinite(rawRadius) &&
+    rawRadius > GEOMETRY_EPSILON
+      ? rawRadius
+      : null;
+  if (surfaceType === 'sphere') {
+    // The corner patch a vertex blend leaves behind is a sphere of the blend
+    // radius. It has no axis, so the radius is all that carries over.
+    if (radius !== null) {
+      geometry.radius = radius;
+      geometry.diameter = radius * 2;
+    }
+    return geometry;
+  }
   const origin = finiteVec3(record.origin);
   const rawAxis = finiteVec3(record.axis);
   const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = record.radius;
-  if (
-    !origin ||
-    !axis ||
-    typeof radius !== 'number' ||
-    !Number.isFinite(radius) ||
-    radius <= GEOMETRY_EPSILON
-  ) {
+  if (!origin || !axis || radius === null) {
     return geometry;
   }
   geometry.radius = radius;

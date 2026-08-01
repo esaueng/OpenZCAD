@@ -229,10 +229,13 @@ const IMPORT_NAME_NOTE =
 
 const MEASUREMENT_NOTE =
   "BrepKit's volume() integrates a tessellation at MEASUREMENT_DEFLECTION " +
-  '(0.08) while OCCT uses exact BRepGProp, so any body with a curved wall ' +
-  'reads slightly high. The closed-form answer is on OCCT\'s side here. This ' +
-  'is a measurement gap, not a geometry gap: the B-rep is correct and the ' +
-  'meshes agree.';
+  '(0.08) while OCCT uses exact BRepGProp, so a body with a curved wall can ' +
+  'carry a small residue. This is a measurement gap, not a geometry gap: the ' +
+  'B-rep is correct and the meshes agree. Note the residue is NOT simply ' +
+  'proportional to curved-wall area, and it is not signed one way — the ' +
+  'plain-bore scenarios that once read 1.88e-5 high now hit the closed form ' +
+  'to 1e-12, while the blended plates below still read low. Treat each ' +
+  'entry as its own measurement rather than as an instance of a rule.';
 
 // ---------------------------------------------------------------------------
 // BrepKit vs OpenCascade
@@ -453,18 +456,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       ' 32 edge names on BrepKit and no face names; 36 edge plus 2 face names ' +
       'on OCCT. Retires with the sphere hash pins.'
   },
-  {
-    subject: 'a-export-bored-plate',
-    metric: 'volume',
-    brepkit: 8814.767373332443,
-    occt: 8814.601836602551,
-    owner: 'brepkit-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' The file\'s closed-form volume is 8814.6018366 mm3 (40x24x10 minus a ' +
-      'r5 bore); OCCT hits it to 1e-12, BrepKit reads 1.88e-5 relative high. ' +
-      'One cylindrical wall is enough to produce it.'
-  },
 
   // --- (b) units -----------------------------------------------------------
   {
@@ -620,8 +611,10 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       ' New measurement, only possible because K0.1 taught BrepKit to read ' +
       'SURFACE_CURVE: this OCCT-authored file used to be refused outright. ' +
       'BrepKit now reads it 1.43e-5 relative LOW against the closed-form ' +
-      '9522.7433388, which OCCT hits to 1e-12. Four quarter-cylinder bands, ' +
-      'the same deflection-driven residue as a-export-bored-plate.'
+      '9522.7433388, which OCCT hits to 1e-12. Four quarter-cylinder bands. ' +
+      'The plain-bore scenarios that used to sit beside this one have since ' +
+      'converged on the closed form exactly, so this residue is specific to ' +
+      'the blended bands rather than a general curved-wall effect.'
   },
   {
     subject: 'e-analytic-fillet-plate',
@@ -714,8 +707,8 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       "the four corner bands as B-splines just inside the true quarter " +
       'cylinder and lost 4.4 mm3 (4.63e-4 relative). The bands are now exact ' +
       'cylinders — the surfaceTypes and faceHashDigest pins that recorded ' +
-      'that gap are retired — and what is left is 1.43e-5, the same ' +
-      'deflection residue every other curved body in this corpus carries. ' +
+      'that gap are retired — and what is left is 1.43e-5, the residue the ' +
+      'other blended plates in this corpus carry. ' +
       'The reassignment is corroborated rather than assumed: BrepKit now ' +
       'reads this scenario within 2e-15 relative of its own import of ' +
       'e-analytic-fillet-plate (9522.6069284092), the OCCT-authored file of ' +
@@ -739,31 +732,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'closed when it does not. Note BrepKit does not reach its own ' +
       'e-analytic-fillet-plate digest (2cf1303e) either, so the remaining ' +
       'difference is in how a blended edge is represented, not in importing.'
-  },
-  {
-    subject: 'boolean-with-import',
-    metric: 'volume',
-    brepkit: 8814.767373332443,
-    occt: 8814.601836602551,
-    owner: 'brepkit-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' Same body and same 1.88e-5 gap as a-export-bored-plate, reached by a ' +
-      'boolean against an imported body rather than by importing the result. ' +
-      'Both kernels produce 7 faces with one cylinder — no mesh fallback, ' +
-      'contrary to what K0.5 predicts for this scenario.'
-  },
-  {
-    subject: 'pattern-boolean-with-import',
-    metric: 'volume',
-    brepkit: 9011.200497119044,
-    occt: 9010.951377451911,
-    owner: 'brepkit-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' Three r2.5 bores cut in one multi-tool boolean; 2.76e-5 relative, ' +
-      'scaling with the number of cylindrical walls exactly as a ' +
-      'deflection-driven error should. Topology agrees completely.'
   },
   {
     subject: 'boolean-on-nurbs-import',
@@ -816,17 +784,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
 // ---------------------------------------------------------------------------
 
 export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
-  {
-    subject: 'a-export-bored-plate',
-    kernel: 'brepkit',
-    referenceMm3: 8814.601836602551,
-    reported: 8814.767373332443,
-    owner: 'brepkit-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' 1.88e-5 relative high on a body with one cylindrical bore wall. OCCT ' +
-      'matches the arithmetic to 1e-12.'
-  },
   {
     subject: 'b-unit-no-global-context',
     kernel: 'brepkit',
@@ -892,34 +849,10 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       ' Was 9518.3321434 under K0.4 — B-spline corner bands sitting inside ' +
       'the true quarter cylinder, 4.63e-4 relative low. The bands are exact ' +
       'cylinders now and the deviation from the arithmetic fell 32x, to ' +
-      '1.43e-5, which is the same residue a-export-bored-plate and ' +
-      'e-analytic-fillet-plate carry. This entry is the one that says the ' +
+      '1.43e-5, which is the same residue e-analytic-fillet-plate carries. ' +
+      'This entry is the one that says the ' +
       'move is an improvement rather than a different answer: it is measured ' +
       "against the scenario's own construction, not against OCCT."
-  },
-  {
-    subject: 'boolean-with-import',
-    kernel: 'brepkit',
-    referenceMm3: 40 * 24 * 10 - Math.PI * 25 * 10,
-    reported: 8814.767373332443,
-    owner: 'brepkit-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' Identical body and identical 1.88e-5 gap to a-export-bored-plate, ' +
-      'confirming the residue is measurement rather than anything the ' +
-      'boolean did.'
-  },
-  {
-    subject: 'pattern-boolean-with-import',
-    kernel: 'brepkit',
-    referenceMm3: 40 * 24 * 10 - 3 * Math.PI * 2.5 * 2.5 * 10,
-    reported: 9011.200497119044,
-    owner: 'brepkit-measurement',
-    note:
-      MEASUREMENT_NOTE +
-      ' Three bores rather than one, and the relative error grows from ' +
-      '1.88e-5 to 2.76e-5 — proportional to cylindrical wall area, as a ' +
-      'deflection-driven measurement error should be.'
   },
   {
     subject: 'boolean-on-nurbs-import',
