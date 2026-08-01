@@ -245,6 +245,7 @@ describe('assistant integration', () => {
         ]
       },
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses'
       },
@@ -301,6 +302,7 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses'
       },
@@ -409,6 +411,7 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses'
       },
@@ -459,6 +462,7 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses',
         AI_MAX_OUTPUT_TOKENS: '4096'
@@ -605,6 +609,7 @@ describe('assistant integration', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'responses-compatible',
       AI_API_KEY: 'key',
       AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
@@ -639,7 +644,7 @@ describe('assistant integration', () => {
   it('reports configuration state without returning the API key', () => {
     const status = getAssistantStatus({
       ENVIRONMENT: 'beta',
-      AI_API_KEY: 'never-return-this',
+      OPENROUTER_API_KEY: 'never-return-this',
       AI_MODEL: 'configured-model'
     });
     expect(status).toEqual({
@@ -649,6 +654,24 @@ describe('assistant integration', () => {
       reasoningEffort: 'high'
     });
     expect(JSON.stringify(status)).not.toContain('never-return-this');
+  });
+
+  it('fails closed instead of sending a generic key to OpenRouter', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const env = {
+      AI_PROVIDER: 'openrouter' as const,
+      AI_API_KEY: 'legacy-openai-key'
+    };
+
+    expect(getAssistantStatus(env)).toMatchObject({ configured: false });
+    const response = await streamAssistantProposal(input, env, 'user_test');
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'AI_NOT_CONFIGURED'
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('uses an OpenRouter key, endpoint, headers, and balanced model default', async () => {
