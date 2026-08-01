@@ -565,11 +565,75 @@ export interface EdgeTopology {
    */
   adjacentFaceHashes?: number[];
   /**
+   * The exact curve underlying this edge, so a consumer can draw and measure
+   * true geometry instead of the chords `points` samples.
+   *
+   * Absent when the kernel refuses the edge. Absent rather than approximate is
+   * the rule for every part of this record: it is either exactly right or it
+   * is not there.
+   */
+  curve?: EdgeCurve;
+  /**
    * XYZ-interleaved display polyline sampled from the exact edge curve.
    * Closed feature edges repeat their first point so the viewport draws the
    * closing segment.
    */
   points: number[];
+}
+
+/**
+ * Exact geometry for one edge's underlying curve.
+ *
+ * Only `type` is always present. Analytic data is published for circles alone,
+ * and only after it has been checked against the edge's own sampled polyline,
+ * so a consumer that finds `circle` may use it without further validation.
+ *
+ * Four things this record is NOT:
+ *
+ * - **Not a parameter range.** No `t` domain is published, and none should be
+ *   added without re-measuring. The kernel's `getEdgeCurveParameters` reports
+ *   the domain of the UNDERLYING curve, not the edge's trim of it: a quarter
+ *   fillet arc of length 3pi/2 reports `[0, 2pi]`, and evaluating at that
+ *   range's midpoint lands on the edge's own end vertex rather than its
+ *   middle. A consumer handed that range would mis-draw every fillet and
+ *   chamfer arc in the product. `circle` describes the full circle the edge
+ *   lies on; where the edge starts and stops on it is recoverable only from
+ *   `points` or the edge's vertices.
+ * - **Not a swept direction.** `circle.axis` is the unoriented normal of the
+ *   arc's plane, canonically signed so it does not flip between rebuilds. It
+ *   says nothing about which way the edge runs, and crossing it with anything
+ *   to recover a winding is meaningless.
+ * - **Not a claim about the surfaces meeting at the edge.** A circular edge
+ *   bounds whatever `adjacentFaceHashes` names; the curve is the intersection
+ *   geometry, not either face's own axis or radius, and a fillet arc's radius
+ *   is the fillet's only where the blend is tangent to both walls.
+ * - **Not a completeness guarantee.** An edge with no `curve` means the kernel
+ *   would not answer, not that the edge is degenerate; an edge whose `curve`
+ *   has no `circle` means only that no analytic form is published for it.
+ */
+export interface EdgeCurve {
+  /**
+   * The kernel's curve-type vocabulary: `LINE`, `CIRCLE`, `ELLIPSE`,
+   * `BSPLINE_CURVE`. Left open rather than closed to a union because it is the
+   * kernel's word, matching `FaceGeometry.surfaceType`; a consumer should
+   * compare against the case it handles and treat anything else as unknown.
+   */
+  type: string;
+  /**
+   * The full circle this edge lies on — never a subtended arc, see above.
+   *
+   * Published only for `type === 'CIRCLE'`. That gate is load-bearing rather
+   * than cosmetic: the kernel's edge curvature measurement is silently wrong
+   * for ellipses by roughly twelve orders of magnitude, reporting a radius of
+   * 1.4999e12 for a true 1.5, and a record built without the gate would carry
+   * plausible-shaped garbage rather than fail.
+   */
+  circle?: {
+    center: Vector3;
+    /** Unit normal of the arc's plane; unoriented, see above. */
+    axis: Vector3;
+    radius: number;
+  };
 }
 
 export interface BodyTopology {
