@@ -514,6 +514,68 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_solid_offset"');
   });
 
+  it('prunes a rollout-flagged operation FIELD without withdrawing the operation', async () => {
+    const requestFor = async (env: Record<string, string>) => {
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response('data: {"type":"response.completed"}\n\n', {
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      await streamAssistantProposal(
+        input,
+        {
+          AI_API_KEY: 'key',
+          AI_BASE_URL: 'https://models.example.test/v1/responses',
+          ...env
+        },
+        'user_test'
+      );
+      return JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+        instructions: string;
+        text: { format: { schema: unknown } };
+      };
+    };
+    const revolveBranch = (schema: unknown) => {
+      const found: Record<string, unknown>[] = [];
+      const visit = (value: unknown): void => {
+        if (!value || typeof value !== 'object') {
+          return;
+        }
+        const candidate = value as Record<string, unknown>;
+        const properties = candidate.properties as
+          Record<string, { const?: unknown }> | undefined;
+        if (properties?.kind?.const === 'add_revolve') {
+          found.push(candidate);
+        }
+        Object.values(candidate).forEach((child) =>
+          Array.isArray(child) ? child.forEach(visit) : visit(child)
+        );
+      };
+      visit(schema);
+      expect(found).toHaveLength(1);
+      return found[0]!;
+    };
+
+    const off = await requestFor({});
+    const offBranch = revolveBranch(off.text.format.schema);
+    // The operation itself is never withdrawn — only the field.
+    expect(Object.keys(offBranch.properties as object)).not.toContain(
+      'angleDeg'
+    );
+    expect(offBranch.required).not.toContain('angleDeg');
+    expect(offBranch.required).toContain('axis');
+    expect(off.instructions).toContain('Disabled: `add_revolve.angleDeg`');
+
+    const on = await requestFor({ AI_PATCH_PARTIAL_REVOLVE_ENABLED: 'yes' });
+    const onBranch = revolveBranch(on.text.format.schema);
+    expect(Object.keys(onBranch.properties as object)).toContain('angleDeg');
+    // Strict structured output rejects a property missing from `required`.
+    expect(onBranch.required).toContain('angleDeg');
+    expect(on.instructions).toContain('Enabled: `add_revolve.angleDeg`');
+  });
+
   it('falls back to the default output budget for unusable overrides', () => {
     // A declared-but-blank Worker var reads as '', which Number() would turn
     // into 0 and make the provider reject every request.
