@@ -109,6 +109,15 @@ const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
+/** Relative bar for proving a plane runs tangent to a cylindrical band. */
+const BLEND_TANGENCY_TOLERANCE = 1e-6;
+/**
+ * Fractions of a refused fillet/chamfer size retried to tell a size-bound
+ * failure from a structural one. A ladder rather than one probe because the
+ * kernel has a small-feature floor as well as a large-feature limit, so a
+ * single deep probe can fail on a selection that a halved size would carry.
+ */
+const EDGE_MODIFIER_PROBE_RATIOS = [1 / 2, 1 / 8, 1 / 64] as const;
 const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
 const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
@@ -563,8 +572,91 @@ function selectedEdgesShareVertex(
 }
 
 /**
- * True when a selected edge touches a freeform (blend) face of the target —
- * either bordering it directly or ending on one of its boundary vertices.
+ * True when `face` is a rolling-ball blend band rather than a modelled wall.
+ *
+ * Surface type alone used to answer this: every fillet BrepKit produced was
+ * fitted as a `bspline`, so a free-form face WAS a blend. The kernel now
+ * returns an exact `cylinder` for a fillet along a straight edge between two
+ * planes, which makes a blend band and a drilled bore wall the same surface
+ * type. They are still distinguishable by tangency, which is what a blend
+ * IS: a band runs tangent into the face it meets along their shared edge,
+ * where a bore wall meets its caps at a right angle. So a cylinder counts as
+ * a blend only when some adjacent planar face is parallel to its axis and
+ * stands exactly one radius off it.
+ */
+function isBlendFace(
+  kernel: BrepKernel,
+  solid: number,
+  face: number
+): boolean {
+  const surfaceType = kernel.getSurfaceType(face);
+  if (surfaceType === 'bspline') {
+    return true;
+  }
+  if (surfaceType !== 'cylinder') {
+    return false;
+  }
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    return false;
+  }
+  const record = (parameters ?? {}) as Record<string, unknown>;
+  const origin = finiteVec3(record.origin);
+  const rawAxis = finiteVec3(record.axis);
+  const axis = rawAxis ? normalized(rawAxis) : null;
+  const radius = record.radius;
+  if (
+    !origin ||
+    !axis ||
+    typeof radius !== 'number' ||
+    !Number.isFinite(radius) ||
+    radius <= GEOMETRY_EPSILON
+  ) {
+    return false;
+  }
+  const bandEdges = new Set(kernel.getFaceEdges(face));
+  const tolerance = Math.max(BLEND_TANGENCY_TOLERANCE * radius, GEOMETRY_EPSILON);
+  for (const neighbour of kernel.getSolidFaces(solid)) {
+    if (
+      neighbour === face ||
+      kernel.getSurfaceType(neighbour) !== 'plane' ||
+      !Array.from(kernel.getFaceEdges(neighbour)).some((edge) =>
+        bandEdges.has(edge)
+      )
+    ) {
+      continue;
+    }
+    const onPlane = faceVertexCentroid(kernel, neighbour);
+    let normal: Vec3 | null;
+    try {
+      const raw = kernel.getFaceNormal(neighbour);
+      normal = normalized({ x: raw[0]!, y: raw[1]!, z: raw[2]! });
+    } catch {
+      // NURBS-backed planes have no analytic normal; they cannot be proven
+      // tangent, so they do not make their neighbour a blend.
+      normal = null;
+    }
+    if (!onPlane || !normal) {
+      continue;
+    }
+    if (Math.abs(dot(normal, axis)) > BLEND_TANGENCY_TOLERANCE) {
+      continue;
+    }
+    if (
+      Math.abs(Math.abs(dot(subtract(origin, onPlane), normal)) - radius) <=
+      tolerance
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when a selected edge touches a blend face of the target — either
+ * bordering it directly or ending on one of its boundary vertices.
  */
 function selectionTouchesBlendFace(
   kernel: BrepKernel,
@@ -573,7 +665,7 @@ function selectionTouchesBlendFace(
 ): boolean {
   const blendVertices = new Set<number>();
   for (const face of kernel.getSolidFaces(solid)) {
-    if (kernel.getSurfaceType(face) !== 'bspline') {
+    if (!isBlendFace(kernel, solid, face)) {
       continue;
     }
     for (const edge of kernel.getFaceEdges(face)) {
@@ -593,13 +685,128 @@ function selectionTouchesBlendFace(
 }
 
 /**
- * Cause-aware failure message for an edge modifier that every kernel engine
- * refused. BrepKit's `try_fillet` collapses all-engine failure into a silent
- * input-handle return, discarding the typed engine errors
- * (docs/qa/2026-08-01/plate-second-fillet-investigation.md), so the cause is
- * inferred from the selection's topology instead. Closed rims and corner
- * chains on boolean-result bodies fail at every size — steering the user
- * toward a smaller radius for those is a dead end.
+ * Run one edge modifier and apply every acceptance rule the adapter ships a
+ * result under, returning `null` when the kernel refused or produced a body
+ * this adapter will not accept.
+ *
+ * This is the single definition of "the edit worked". The failure classifier
+ * probes through it too, so a probe can never accept a result the real edit
+ * would have rejected — which is exactly how a truthful "try a smaller size"
+ * turns into a lie.
+ */
+function applyEdgeModifier(
+  kernel: BrepKernel,
+  target: number,
+  selected: number[],
+  featureKind: 'fillet' | 'chamfer',
+  size: number
+): number | null {
+  const targetBounds = kernel.boundingBox(target);
+  const handles = Uint32Array.from(selected);
+  let modified: number;
+  if (featureKind === 'fillet') {
+    try {
+      modified = kernel.fillet(target, handles, size);
+    } catch {
+      modified = target;
+    }
+    if (modified === target) {
+      try {
+        modified =
+          tryExactAnalyticCylinderRimFillet(kernel, target, selected, size) ??
+          target;
+      } catch {
+        modified = target;
+      }
+    }
+  } else {
+    try {
+      modified = kernel.chamfer(target, handles, size);
+    } catch {
+      return null;
+    }
+  }
+  // When a blend cannot be attached at all, BrepKit falls back to returning
+  // the input handle. That is a failed feature, not a successful no-op.
+  if (modified === target || kernel.validateSolidRelaxed(modified) !== 0) {
+    return null;
+  }
+  if (featureKind === 'fillet') {
+    // A fillet rounds material inside the target envelope. BrepKit can return
+    // a closed but severely distorted fallback for an oversized radius,
+    // expanding the body to the requested size. Reject that result rather
+    // than guessing a radius limit from the selected edge's length: the valid
+    // limit is set by its adjacent faces, and can be larger than half the
+    // edge length.
+    const modifiedBounds = kernel.boundingBox(modified);
+    const boundsScale = [0, 1, 2].reduce(
+      (maximum, axis) =>
+        Math.max(maximum, targetBounds[axis + 3]! - targetBounds[axis]!),
+      1
+    );
+    const tolerance = Math.max(
+      GEOMETRY_EPSILON,
+      boundsScale * GEOMETRY_LINEAR_TOLERANCE
+    );
+    if (
+      modifiedBounds[0]! < targetBounds[0]! - tolerance ||
+      modifiedBounds[1]! < targetBounds[1]! - tolerance ||
+      modifiedBounds[2]! < targetBounds[2]! - tolerance ||
+      modifiedBounds[3]! > targetBounds[3]! + tolerance ||
+      modifiedBounds[4]! > targetBounds[4]! + tolerance ||
+      modifiedBounds[5]! > targetBounds[5]! + tolerance
+    ) {
+      return null;
+    }
+  }
+  return modified;
+}
+
+/**
+ * True when the same selection is ACCEPTED at some size below the one that
+ * failed, which is the only sound evidence that a failure is size-bound
+ * rather than structural. Runs on the failure path only.
+ */
+function edgeModifierSucceedsSmaller(
+  kernel: BrepKernel,
+  target: number,
+  selected: number[],
+  featureKind: 'fillet' | 'chamfer',
+  size: number
+): boolean {
+  return EDGE_MODIFIER_PROBE_RATIOS.some((ratio) => {
+    const probe = size * ratio;
+    if (!Number.isFinite(probe) || probe <= GEOMETRY_EPSILON) {
+      return false;
+    }
+    try {
+      return (
+        applyEdgeModifier(kernel, target, selected, featureKind, probe) !== null
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Cause-aware failure message for an edge modifier the kernel refused.
+ *
+ * The kernel reports why its blender stopped, but not whether the selection
+ * could ever work, so that question is answered the only way that is sound:
+ * by retrying the same selection at a ladder of smaller sizes. A probe that
+ * is accepted means the failure is size-bound and the actionable advice is a
+ * smaller size. A ladder that fails everywhere means the cause is structural,
+ * and it is named from the selection's topology — a closed rim, a corner
+ * chain, or an edge ending on an existing blend.
+ *
+ * The probe is what keeps those structural messages true. They used to be
+ * unconditional because corner chains and closed rims on a boolean-result
+ * body failed at EVERY size (docs/qa/2026-08-01). The kernel's blend phases
+ * changed that: on the plate from that investigation the hole rim now rounds
+ * up to r2.24 and the corner chain up to r2, so an unconditional "cannot be
+ * rounded at any radius" would now be false, and would bury the advice that
+ * actually works.
  */
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
@@ -613,11 +820,16 @@ function edgeModifierFailureMessage(
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
   const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
   try {
+    if (
+      edgeModifierSucceedsSmaller(kernel, target, selected, featureKind, size)
+    ) {
+      return `${prefix} Try a smaller ${dimension}.`;
+    }
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
-      return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body yet at any ${dimension} — deselect the rim edge and try again.`;
+      return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
     }
     if (selectedEdgesShareVertex(kernel, selected)) {
-      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body yet at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
+      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
@@ -3666,78 +3878,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
-            let modified: number;
-            try {
-              const targetBounds = kernel.boundingBox(target);
-              if (feature.data.featureKind === 'fillet') {
-                try {
-                  modified = kernel.fillet(
-                    target,
-                    Uint32Array.from(selected),
-                    size
-                  );
-                } catch {
-                  modified = target;
-                }
-                if (modified === target) {
-                  modified =
-                    tryExactAnalyticCylinderRimFillet(
-                      kernel,
-                      target,
-                      selected,
-                      size
-                    ) ?? target;
-                }
-              } else {
-                modified = kernel.chamfer(
-                  target,
-                  Uint32Array.from(selected),
-                  size
-                );
-              }
-              // When a second blend cannot be attached to an existing NURBS
-              // blend, BrepKit intentionally falls back to the input handle.
-              // Treat that as a failed feature instead of reporting success.
-              if (modified === target) {
-                throw new Error('Edge modifier produced no geometric change.');
-              }
-              if (kernel.validateSolidRelaxed(modified) !== 0) {
-                throw new Error('Edge modifier produced an invalid solid.');
-              }
-              if (feature.data.featureKind === 'fillet') {
-                // A fillet rounds material inside the target envelope. BrepKit
-                // can return a closed but severely distorted fallback for an
-                // oversized radius, expanding the body to the requested size.
-                // Reject that result rather than guessing a radius limit from
-                // the selected edge's length: the valid limit is set by its
-                // adjacent faces, and can be larger than half the edge length.
-                const modifiedBounds = kernel.boundingBox(modified);
-                const boundsScale = [0, 1, 2].reduce(
-                  (maximum, axis) =>
-                    Math.max(
-                      maximum,
-                      targetBounds[axis + 3]! - targetBounds[axis]!
-                    ),
-                  1
-                );
-                const tolerance = Math.max(
-                  GEOMETRY_EPSILON,
-                  boundsScale * GEOMETRY_LINEAR_TOLERANCE
-                );
-                if (
-                  modifiedBounds[0]! < targetBounds[0]! - tolerance ||
-                  modifiedBounds[1]! < targetBounds[1]! - tolerance ||
-                  modifiedBounds[2]! < targetBounds[2]! - tolerance ||
-                  modifiedBounds[3]! > targetBounds[3]! + tolerance ||
-                  modifiedBounds[4]! > targetBounds[4]! + tolerance ||
-                  modifiedBounds[5]! > targetBounds[5]! + tolerance
-                ) {
-                  throw new Error(
-                    'Fillet expanded beyond the target body bounds.'
-                  );
-                }
-              }
-            } catch {
+            const modified = applyEdgeModifier(
+              kernel,
+              target,
+              selected,
+              feature.data.featureKind,
+              size
+            );
+            if (modified === null) {
               throw new Error(
                 edgeModifierFailureMessage(
                   kernel,
