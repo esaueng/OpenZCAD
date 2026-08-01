@@ -539,6 +539,32 @@ export interface EdgeTopology {
    */
   displayRole?: 'feature' | 'seam';
   /**
+   * Hashes of the faces this edge bounds, sorted ascending.
+   *
+   * This is the kernel's own edge-to-face map translated from face handles to
+   * the ADR-011 hashes `FaceTopology.hash` publishes, so a consumer can ask
+   * which faces meet at an edge without a second kernel round trip. It exists
+   * for topological edge-run walking and measure tools, which currently infer
+   * adjacency from geometry.
+   *
+   * Three things it is NOT:
+   *
+   * - **Not a pair.** A seam edge lists its one face twice, and a non-manifold
+   *   edge on a flagged STEP import lists three or more. Multiplicity is kept
+   *   rather than deduplicated, because it is the raw fact and a consumer can
+   *   always narrow it.
+   * - **Not unique per face.** BrepKit builds a sphere from two same-surface
+   *   hemispheres that share one exact witness, so both patches hash
+   *   identically. Two edges reporting a common hash therefore do not
+   *   necessarily touch the same face. This is the identity scheme failing
+   *   closed as designed, and it is a live product limit — face picks on
+   *   spheres are unavailable for the same reason.
+   * - **Not sufficient for an edge run on its own.** Two edges on opposite
+   *   sides of a box's top face share that face. A run also needs vertex
+   *   incidence, which nothing publishes yet.
+   */
+  adjacentFaceHashes?: number[];
+  /**
    * XYZ-interleaved display polyline sampled from the exact edge curve.
    * Closed feature edges repeat their first point so the viewport draws the
    * closing segment.
