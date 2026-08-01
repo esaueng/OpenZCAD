@@ -101,6 +101,7 @@
 }
 
 .start-header-name {
+  margin: 0;
   font-size: var(--fs-md);
   font-weight: var(--fw-medium);
   letter-spacing: 0.01em;
