@@ -650,11 +650,46 @@ documents**. Give revolve a region path first.
 | --- | --- | --- | --- |
 | Blend | chamfer walker (`chamfer_builder.rs:377` "walker not yet integrated"); torus/NURBS blend pairs (`analytic.rs:31-36,192-343`); trimming beyond planes (`builder_utils.rs:203`); setbacks, face-face, full-round; promote variable radius off deprecated v1 sampling | `crates/blend` | **XL** |
 | Offset | cavity shells (`offset/lib.rs:90`), arc joints (`arc_joint.rs:16`), self-intersection removal (`self_int.rs:20`), NURBS intersection (`inter3d.rs:156`) — this also lifts shell/thicken quality | `crates/offset` | **L–XL** |
-| Boolean | same-domain full merge (`same_domain.rs:14`), off-axis cones (`boolean/mod.rs:1413`), non-planar coincident contact (`:914`), volume-accuracy fix | `crates/algo`, `operations/boolean` | **L** |
+| Boolean | same-domain full merge (`same_domain.rs:14`), off-axis cones (`boolean/mod.rs:1413`), **non-planar coincident contact (`:914`) — reproduction below, do this first**, volume-accuracy fix | `crates/algo`, `operations/boolean` | **L** |
 | Types | add `EdgeCurve::{Hyperbola, Parabola}` (unblocks `convert_to_elementary`), `FaceSurface::{OffsetSurface, SurfaceOfRevolution, SurfaceOfExtrusion}`; give `Plane` a UV parameterization to kill plane special-casing | `crates/topology`, ripple across algo/blend/io | **XL**, stage by variant |
 | Sweep/loft | implement `SweepCornerMode::Round` (today silently degrades, `sweep.rs:1185`); non-planar caps with holes / >4 edges (`cap.rs:141-146`); draft on non-planar faces | `crates/operations` | **L** |
 | Tessellation | close the planar inner-wire TODO (`tessellate/planar.rs:18` — verify against `tessellate_watertight.rs` first; may be stale) | | **S** |
 | Hardening | fuzz booleans/blends with **structured generators** (random primitive trees + transforms; invariants: closed shell, volume ⊆ operand bounds, determinism, fuse/cut idempotence) — I/O readers are fuzzed, engines are not; extend `mutants.toml` to `blend`/`offset`/`operations`; keep the `brepkit_approx` census as a CI metric | `fuzz/`, `mutants.toml` | **M–L** |
+
+### Boolean lane: non-planar coincident contact, reproduced
+
+A **cylindrical face exactly tangent to a planar face of the other operand**
+makes a boolean go wrong silently. Every result below is a well-formed solid
+that `validateSolid` accepts. Measured against the current pin on a 60×40×8
+plate with an r=10, h=16 cylinder, all closed forms exact:
+
+| Case | Result | Error |
+| --- | --- | --- |
+| Boss tangent to the x=0 wall, `fuseAll` | 6 planes — **the plate alone; the boss is dropped entirely** | −11.57 % |
+| `cut` with a tool tangent to the x=0 wall | 6 planes — **the cut is silently ignored, body unchanged** | −15.06 % |
+| Boss tangent to the y=0 wall, `fuseAll` | 70 planes — every analytic surface destroyed | −0.019 % |
+| Bored plate + tangent boss, `fuseAll` | 115 planes — same, on a body that was 7 analytic faces | −0.010 % |
+
+It is a knife-edge, which is what makes it dangerous rather than merely wrong:
+moving the boss centre from x = 10 to **x = 10.0001** — a tenth of a micron —
+takes the fuse from 6 planes at 19200.0000 to 9 faces with a true cylinder at
+21713.2741, matching the closed form to 1e-10.
+
+**Planar-planar coincidence is unaffected**: two boxes sharing a face exactly,
+and a box boss placed tangent, both come back correct. So this is specific to
+the curved-vs-planar contact `boolean/mod.rs:914` names, not to coincidence in
+general.
+
+Why it deserves to lead the lane: a boss placed flush with the edge of a plate,
+or a hole drilled flush with a wall, is ordinary design intent rather than an
+adversarial input — and all three failure modes are silent. The dropped-operand
+and ignored-cut cases are the same class as the fourteen defects M0–M3 closed:
+confident, well-formed, wrong. Note the faceted cases would also be caught by
+the `brepkit_approx` census the Hardening row keeps as a CI metric, but the
+dropped-operand and ignored-cut cases would **not** — they produce no
+approximation at all, just less geometry.
+
+---
 
 ## 6. M5 — Platform (K2, product-sequenced)
 
