@@ -649,6 +649,13 @@ documents**. Give revolve a region path first.
 - Pin-bump discipline: kernel changes reach the app only via
   `chore(wasm): refresh committed package` + lockfile pin bump, with the
   corpus re-run in the bump PR.
+- **M3's remaining slices (W2, W3, W4) land as merge commits, not squashes.**
+  They come off one long-lived branch in sequence, and a squash makes the
+  merged commit a non-ancestor of `main` — so each following slice needs a
+  branch restart and a force-push before it can be pushed at all. A merge
+  commit keeps the branch fast-forwardable and the slices stackable. This is
+  also why Z3 was merged rather than squashed, though for the different reason
+  that it advertised `git revert -m 1 1f35ae1` as its revert path.
 
 ### The pin-bump mechanics, concretely
 
