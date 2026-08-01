@@ -22,13 +22,16 @@ import {
 } from '@openzcad/document-core';
 import {
   BrepKitKernelAdapter,
+  brepEdgeCurve,
   createExactKernelAdapter,
+  edgeCircleMisfit,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { OcctStepKernelAdapter } from '../packages/kernel-adapter/src/occt-step';
 import {
   toUserId,
   type DirectEditOperation,
+  type EdgeTopology,
   type ParamValue,
   type PrimitiveKind
 } from '@openzcad/shared';
@@ -678,6 +681,251 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(faceHashesOf('Sphere').size).toBe(1);
     for (const edge of edgesOf('Sphere')) {
       expect(new Set(adjacencyOf(edge)).size).toBe(1);
+    }
+  });
+
+  it('publishes the exact circle each arc lies on, and a bare type otherwise', async () => {
+    let document = createProjectDocument(
+      'Edge curves',
+      toUserId('user_edge_curve')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    const boxId = document.bodyOrder.at(-1)!;
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    const cylinderId = document.bodyOrder.at(-1)!;
+    const base = await adapter.syncDocument(document);
+    expect(base.warnings).toEqual([]);
+    const boxEdges = base.bodyRepresentations[boxId]!.topology!.edges;
+    const filleted = filletEdges(document, {
+      name: 'Filleted box',
+      targetBodyId: boxId,
+      edgeHashes: boxEdges.map((edge) => edge.hash),
+      size: 3
+    });
+    const derived = await adapter.syncDocument(filleted.document);
+    expect(derived.warnings).toEqual([]);
+    const curveOf = (edge: EdgeTopology) => {
+      expect(edge.curve).toBeDefined();
+      return edge.curve!;
+    };
+
+    // A box is straight everywhere: every edge names its type and carries no
+    // analytic payload, because there is no circle to publish.
+    expect(boxEdges).toHaveLength(12);
+    for (const edge of boxEdges) {
+      expect(curveOf(edge).type).toBe('LINE');
+      expect(curveOf(edge).circle).toBeUndefined();
+      // The record is a type plus, for circles, a circle — nothing else. This
+      // pins what the shape deliberately omits: the kernel's parameter range
+      // describes the UNDERLYING curve rather than the edge's trim of it, so a
+      // quarter fillet arc reports a full turn. A range here would be a wrong
+      // answer published in a field that looks authoritative.
+      expect(Object.keys(curveOf(edge))).toEqual(['type']);
+    }
+
+    // The cylinder's two rims are exact circles at the ends of its axis, and
+    // its seam is a straight line up the wall.
+    const cylinderEdges = base.bodyRepresentations[cylinderId]!.topology!.edges;
+    const rims = cylinderEdges.filter((edge) => curveOf(edge).circle);
+    expect(rims).toHaveLength(2);
+    for (const rim of rims) {
+      const circle = curveOf(rim).circle!;
+      expect(circle.radius).toBeCloseTo(10, 9);
+      expect(circle.center.x).toBeCloseTo(0, 9);
+      expect(circle.center.y).toBeCloseTo(0, 9);
+      expect(Math.abs(circle.axis.z)).toBeCloseTo(1, 9);
+    }
+    expect(
+      rims.map((rim) => curveOf(rim).circle!.center.z).sort((a, b) => a - b)
+    ).toEqual([0, 20]);
+    for (const seam of cylinderEdges.filter(
+      (edge) => edge.displayRole === 'seam'
+    )) {
+      expect(curveOf(seam).type).toBe('LINE');
+      expect(curveOf(seam).circle).toBeUndefined();
+    }
+
+    // Rounding all twelve edges of the box at radius 3 leaves a quarter arc at
+    // each of the 8 corners about each of the 3 axes: 24 arcs of radius 3,
+    // each centred where that corner's three offset fillet axes meet. Those
+    // centres are the corner points pulled 3 inboard, so they are enumerable
+    // in closed form rather than recorded from a run.
+    const filletedEdges =
+      derived.bodyRepresentations[filleted.bodyId]!.topology!.edges;
+    const arcs = filletedEdges.filter(
+      (edge) => curveOf(edge).type === 'CIRCLE'
+    );
+    expect(filletedEdges).toHaveLength(48);
+    expect(arcs).toHaveLength(24);
+    const round = (value: number) => Number(value.toFixed(6));
+    const placements = new Set<string>();
+    for (const arc of arcs) {
+      const circle = curveOf(arc).circle;
+      expect(circle).toBeDefined();
+      expect(circle!.radius).toBeCloseTo(3, 9);
+      expect([3, 17]).toContain(round(circle!.center.x));
+      expect([3, 17]).toContain(round(circle!.center.y));
+      expect([3, 7]).toContain(round(circle!.center.z));
+      // The axis is the arc plane's normal, canonically signed — one of the
+      // three positive basis directions here and never their negatives,
+      // because the Frenet sign the kernel hands back follows its
+      // parameterization phase and is not stable across rebuilds.
+      const axis = [circle!.axis.x, circle!.axis.y, circle!.axis.z].map(round);
+      expect([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ]).toContainEqual(axis);
+      placements.add(
+        `${round(circle!.center.x)},${round(circle!.center.y)},${round(circle!.center.z)}|${axis.join(',')}`
+      );
+      // Re-derived from the edge's own sampled points rather than from the
+      // kernel call that produced the circle: every sample sits at the
+      // published radius from the published centre, in the published plane.
+      for (let offset = 0; offset + 2 < arc.points.length; offset += 3) {
+        const toPoint = {
+          x: arc.points[offset]! - circle!.center.x,
+          y: arc.points[offset + 1]! - circle!.center.y,
+          z: arc.points[offset + 2]! - circle!.center.z
+        };
+        const axial =
+          toPoint.x * circle!.axis.x +
+          toPoint.y * circle!.axis.y +
+          toPoint.z * circle!.axis.z;
+        expect(axial).toBeCloseTo(0, 9);
+        expect(Math.hypot(toPoint.x, toPoint.y, toPoint.z)).toBeCloseTo(3, 9);
+      }
+    }
+    // 8 corners x 3 axes, all distinct. A collapsed or duplicated centre would
+    // otherwise pass every per-arc assertion above.
+    expect(placements.size).toBe(24);
+    for (const straight of filletedEdges.filter(
+      (edge) => curveOf(edge).type === 'LINE'
+    )) {
+      expect(curveOf(straight).circle).toBeUndefined();
+    }
+  });
+
+  it('publishes no analytic circle for a curve the kernel measures wrongly', () => {
+    // Nothing the document model can build is an ellipse, and the parity
+    // corpus holds no elliptical or spline edge either, so the gate that keeps
+    // garbage out of the payload has no fixture that reaches it. Build one on
+    // a bare kernel instead, rather than leave the branch untested.
+    const kernel = new BrepKernel();
+    try {
+      // Semi-major 3, semi-minor 1.5 in the z = 0 plane.
+      const ellipse = kernel.makeEllipseEdge(0, 0, 0, 0, 0, 1, 3, 1.5);
+      const ellipsePoints = Array.from(kernel.tessellateEdge(ellipse, 1e-3));
+      const published = brepEdgeCurve(kernel, ellipse, ellipsePoints);
+      // The type is still worth publishing. The analytic payload is not.
+      expect(published?.type).toBe('ELLIPSE');
+      expect(published?.circle).toBeUndefined();
+
+      // Why it must not be: the kernel's edge curvature reading is silently
+      // wrong for ellipses by about twelve orders of magnitude. At the
+      // major-axis end the true curvature radius is b^2/a = 0.75. Pinned so a
+      // kernel bump that fixes it turns this red and gets the gate revisited,
+      // rather than leaving a branch guarding nothing.
+      const measured = Array.from(kernel.measureCurvatureAtEdge(ellipse, 0));
+      const impliedRadius = 1 / measured[0]!;
+      expect(impliedRadius).toBeGreaterThan(1e11);
+
+      // The second line of defence, independent of the type gate: score the
+      // circle that reading implies against the ellipse's own polyline. Note
+      // the misfit is measured against the EDGE's extent, not the candidate
+      // radius — scaled by its own 7.5e11 radius this miss would read as about
+      // 1e-12 and sail through a relative test.
+      const anchor = Array.from(kernel.evaluateEdgeCurve(ellipse, 0));
+      const implied = {
+        center: {
+          x: anchor[0]! + measured[4]! * impliedRadius,
+          y: anchor[1]! + measured[5]! * impliedRadius,
+          z: anchor[2]! + measured[6]! * impliedRadius
+        },
+        axis: { x: 0, y: 0, z: 1 },
+        radius: impliedRadius
+      };
+      expect(edgeCircleMisfit(implied, ellipsePoints)).toBeGreaterThan(0.1);
+
+      // Controls, so that rejection is not just a function that always
+      // rejects: an honest circle scores at rounding level, the same circle
+      // with a micron of error in its radius or centre does not, and a
+      // candidate with nothing to check against fails closed rather than
+      // passing vacuously.
+      const circle = kernel.makeCircleEdge(1, 2, 3, 0, 1, 0, 7);
+      const circlePoints = Array.from(kernel.tessellateEdge(circle, 1e-3));
+      const truth = {
+        center: { x: 1, y: 2, z: 3 },
+        axis: { x: 0, y: 1, z: 0 },
+        radius: 7
+      };
+      expect(edgeCircleMisfit(truth, circlePoints)).toBeLessThan(1e-9);
+      expect(
+        edgeCircleMisfit({ ...truth, radius: 7.001 }, circlePoints)
+      ).toBeGreaterThan(1e-6);
+      expect(
+        edgeCircleMisfit(
+          { ...truth, center: { x: 1, y: 2, z: 3.001 } },
+          circlePoints
+        )
+      ).toBeGreaterThan(1e-6);
+      expect(edgeCircleMisfit(truth, [])).toBe(Number.POSITIVE_INFINITY);
+
+      // And the published circle for that edge agrees with a truth it was
+      // never told.
+      const publishedCircle = brepEdgeCurve(kernel, circle, circlePoints);
+      expect(publishedCircle?.type).toBe('CIRCLE');
+      expect(publishedCircle?.circle?.radius).toBeCloseTo(7, 9);
+      expect(publishedCircle?.circle?.center.x).toBeCloseTo(1, 9);
+      expect(publishedCircle?.circle?.center.y).toBeCloseTo(2, 9);
+      expect(publishedCircle?.circle?.center.z).toBeCloseTo(3, 9);
+      expect(Math.abs(publishedCircle!.circle!.axis.y)).toBeCloseTo(1, 9);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('survives a torus, whose only edges are zero length, and a dead handle', async () => {
+    // BrepKit's torus closes in both directions, so its two edges are
+    // degenerate: LINE type, a domain of [0, 0], start vertex equal to end
+    // vertex. The trim-aware NURBS curve reader throws on exactly these, which
+    // is why the record is not built from it — one unguarded call would take
+    // measurement down for every torus in a document rather than for one edge.
+    const document = addPrimitiveFeature(
+      createProjectDocument('Torus', toUserId('user_edge_curve_torus')),
+      {
+        name: 'Torus',
+        primitiveKind: 'torus',
+        dimensions: { majorRadius: 20, minorRadius: 5 }
+      }
+    );
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const edges =
+      derived.bodyRepresentations[document.bodyOrder.at(-1)!]!.topology!.edges;
+    expect(edges).toHaveLength(2);
+    for (const edge of edges) {
+      expect(edge.curve?.type).toBe('LINE');
+      expect(edge.curve?.circle).toBeUndefined();
+    }
+
+    // An edge the kernel will not describe leaves the record absent — not
+    // wrong, and not fatal. Same discipline the analytic surface reader
+    // already applies to a face it cannot read.
+    const kernel = new BrepKernel();
+    try {
+      expect(() => kernel.getEdgeCurveType(999_999)).toThrow();
+      expect(brepEdgeCurve(kernel, 999_999, [])).toBeUndefined();
+    } finally {
+      kernel.free();
     }
   });
 
