@@ -247,29 +247,46 @@ better (fewer false warnings, never fewer true ones).
 
 ### Z4 Port the two OCCT-only direct edits — **M** (lane D, app-side)
 
-*Current:* `exact.ts:3298-3301` refuses `resize-through-hole` /
+*Was:* `exact.ts:3298-3301` refused `resize-through-hole` /
 `remove-face-feature`; OCCT implements them as compositions
-(`occt-step.ts:517-820`): `requireThroughHole` → `fillThroughHole` →
-optional `cylinderAlongAxis` + `cut`; `defeature` for face-feature removal.
+(`occt-step.ts:517-820`).
 
-*Correction (read the source):* `fillThroughHole` does **not** cap rim
+*Correction to the original spec:* `fillThroughHole` does **not** cap rim
 loops — it builds a cylinder of the hole's own radius along the hole axis,
-**fuses** it into the body, and merges same-domain faces. That makes the
-port simpler than assumed: no `removeHolesFromFace` wire surgery is needed.
+**fuses** it in, and merges same-domain faces. No `removeHolesFromFace`
+wire surgery was needed. BrepKit's `unifyFaces` is the `unifySameDomain`
+equivalent, and its `defeature` takes no tolerance argument.
 
-*Steps:* port the composition onto existing BrepKit bindings —
-`makeCylinder` + `copyAndTransformSolid` to place the filler/cutter,
-`fuse`/`cut`, then `unifyFaces` (BrepKit's `unifySameDomain` equivalent);
-`kernel.defeature(solid, faceHandles)` for `remove-face-feature` — note it
-takes **no tolerance argument**, unlike OCCT's, and is planar-only today, so
-keep the same refusal OCCT effectively has for non-planar, typed. Port
-`requireThroughHole`'s re-validation against the recorded source diameter
-and axis faithfully: that is the fail-closed guard that stops a drifted
-rebuild editing the wrong face.
-*Acceptance:* the existing OCCT direct-edit tests re-targeted at BrepKit
-pass with identical volumes; refusal messages stay typed and actionable.
-Keep the OCCT assertions alongside while OCCT still exists — a cross-kernel
-volume agreement test is exactly the evidence this port needs.
+*Done.* Both kinds run on the BrepKit path and agree with OCCT
+volume-for-volume; the cross-kernel agreement test drives the same edit
+sequence on each kernel through that kernel's own fingerprints.
+*How:* `classifyThroughHoleFace` replaces OCCT's face-orientation test with
+point-in-solid probes — BrepKit reports every face as `forward`, so a bore
+wall and an external boss are indistinguishable by normal, and the wall has
+to be classified from which side holds material. `requireThroughHole` ports
+the fail-closed source re-validation and its tolerances unchanged;
+`fillThroughHole` is the plug fuse plus `unifyFaces`; `resizeThroughHole`
+reaches OCCT's `(body ∪ bore) \ newBore` with one boolean instead of two,
+which is the same set and sidesteps a plug fuse BrepKit often declines.
+
+*Residual, both K0.3 — and both are kernel defects worth their own PRs:*
+
+1. **The GFA boolean declines the plug fuse on most plate bodies** and falls
+   back to a co-refined mesh (~100–180 planar faces, ~1e-4 relative volume
+   error — too small for a volume gate to catch). Measured on a 30×30×10
+   plate: degenerate at bore radii 2, 3, 5, 6, 8; survived only at 4. The
+   adapter detects it by face count and refuses.
+2. **`defeature` returns a wrong solid on non-trivial bodies.** Its doc
+   comment says it "heals the resulting gaps by extending adjacent faces",
+   but `crates/operations/src/defeature.rs` actually collects each kept
+   face's polygon and plane and calls `assemble_solid` — a plane-set
+   reassembly that cannot represent a concave body. Verified: on chamfer,
+   pocket, boss, L-notch and plate-face cases it returns a solid that
+   `validateSolid` flags with 2 errors. It is exposed through the wasm
+   surface today. The adapter refuses the unsupported-body case by name and
+   the wrong-solid case via strict `validateSolid`, but **the kernel should
+   not be silently returning a broken solid at all** — this is the exact
+   failure class the single-kernel programme exists to remove.
 
 ---
 
