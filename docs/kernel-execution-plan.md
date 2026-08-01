@@ -53,7 +53,7 @@ A note on discovered shortcuts (verified in source):
 
 ## 1. M0 — Safety net and free wins
 
-### Z1.1 `inspectStep` → BrepKit — **S**
+### Z1.1 `inspectStep` → BrepKit — **S code, gated on K0.1** ✅ done
 
 *Current:* `HybridExactKernelAdapter.inspectStep` (`exact.ts:3910-3916`)
 unconditionally lazy-loads OCCT; `BrepKitKernelAdapter.inspectStep`
@@ -63,6 +63,14 @@ exists (tests + a worker mock only).
 assert the OCCT route.
 *Acceptance:* existing inspectStep tests pass on the BrepKit
 implementation; no `import('./occt-step')` triggered by inspect.
+
+> **This was not a free win.** The one-line flip failed 4 tests with
+> `unsupported STEP entity: SURFACE_CURVE`. OCCT wraps the 3-D geometry of
+> essentially every edge on a curved face in `SURFACE_CURVE`, and BrepKit's
+> reader had no arm for it — so BrepKit could not read STEP written by any
+> real CAD system, including our own OCCT-produced exports. The flip is
+> therefore gated on K0.1 item 3, which is promoted to the critical path.
+> Landed together with Z2 once the pin carried the fix.
 
 ### Z1.2 `imported-mesh` on BrepKit; delete the legacy JS kernel — **M**
 
@@ -118,7 +126,7 @@ pool); OCCT vs BrepKit deltas are recorded, with per-file expected-failure
 pins for known BrepKit gaps (mirroring `EXPECTED_MESH_DEFECTS` style).
 The pin list is the working checklist for K0.1/K0.5/K0.6.
 
-### K0.2 → Z2 Multi-solid STEP export — **S kernel + S app**
+### K0.2 → Z2 Multi-solid STEP export — **S kernel + S app** ✅ done
 
 *Kernel:* add `exportStepMulti(solids: Vec<u32>)` (or widen `exportStep`)
 in `crates/wasm/src/bindings/io.rs:327` — `write_step` already accepts the
@@ -130,6 +138,16 @@ binding; delete `getStepCombiner` (`exact.ts:2312`) and
 OCCT (while it lasts) and BrepKit; no `import('./occt-step')` fires for
 documents without `imported-step`.
 
+*Landed as esaueng/brepkit#36 + the app commit.* It also turned up a latent
+writer bug: the `ADVANCED_BREP_SHAPE_REPRESENTATION` item list was emitted
+with a trailing comma — `(#10, #20,)`, and `(#10,)` in the single-solid
+case. ISO-10303-21 aggregates have no trailing comma, so strict readers
+were entitled to reject **every file BrepKit had ever written**. It stayed
+invisible because the only reader exercising the output was our own, which
+is lenient there. Fixed and pinned.
+
+
+
 ---
 
 ## 2. M1 — Kernel parity (BrepKit work, parallel lanes)
@@ -137,6 +155,17 @@ documents without `imported-step`.
 ### K0.1 STEP import/export fidelity — **L** (lane A)
 
 All in `esaueng/brepkit`, `crates/io/src/step/`.
+
+**Priority correction.** Item 3's `SURFACE_CURVE` arm turned out to be the
+hardest blocker in the whole programme, not a widening nicety: without it
+BrepKit cannot read STEP produced by OpenCascade — which means it could not
+read our *own* exports of imported bodies. Do item 3's `SURFACE_CURVE`
+family first, then units, then the rest.
+
+Also note the existing JS rewriter only rescales `CONICAL_SURFACE`
+half-angles. It does **nothing** for length units, so an inch-authored STEP
+file imports 25.4× wrong today, silently, on the BrepKit path. Item 1 is
+therefore a correctness fix, not only a workaround-retirement.
 
 1. **Units (the OpenZCAD-blocking bug).** Parse
    `GLOBAL_UNIT_ASSIGNED_CONTEXT` → resolve `LENGTH_UNIT` (SI prefix +
@@ -220,17 +249,27 @@ better (fewer false warnings, never fewer true ones).
 
 *Current:* `exact.ts:3298-3301` refuses `resize-through-hole` /
 `remove-face-feature`; OCCT implements them as compositions
-(`occt-step.ts:517-820`): `requireThroughHole` → `fillThroughHole` (cap
-both rim loops) → optional `cylinderAlongAxis` + `cut`; `defeature` for
-face-feature removal.
+(`occt-step.ts:517-820`): `requireThroughHole` → `fillThroughHole` →
+optional `cylinderAlongAxis` + `cut`; `defeature` for face-feature removal.
+
+*Correction (read the source):* `fillThroughHole` does **not** cap rim
+loops — it builds a cylinder of the hole's own radius along the hole axis,
+**fuses** it into the body, and merges same-domain faces. That makes the
+port simpler than assumed: no `removeHolesFromFace` wire surgery is needed.
+
 *Steps:* port the composition onto existing BrepKit bindings —
-`edgeToFaceMap`/`getFaceWires` to find the wall + rim loops,
-`removeHolesFromFace` to close the end-face inner loops, solid validation
-gate, then `makeCylinder` + `copyAndTransformSolid` + `cut` for the resize;
-`kernel.defeature` for `remove-face-feature` (planar-only today — keep the
-same refusal OCCT effectively has for non-planar, typed).
+`makeCylinder` + `copyAndTransformSolid` to place the filler/cutter,
+`fuse`/`cut`, then `unifyFaces` (BrepKit's `unifySameDomain` equivalent);
+`kernel.defeature(solid, faceHandles)` for `remove-face-feature` — note it
+takes **no tolerance argument**, unlike OCCT's, and is planar-only today, so
+keep the same refusal OCCT effectively has for non-planar, typed. Port
+`requireThroughHole`'s re-validation against the recorded source diameter
+and axis faithfully: that is the fail-closed guard that stops a drifted
+rebuild editing the wrong face.
 *Acceptance:* the existing OCCT direct-edit tests re-targeted at BrepKit
 pass with identical volumes; refusal messages stay typed and actionable.
+Keep the OCCT assertions alongside while OCCT still exists — a cross-kernel
+volume agreement test is exactly the evidence this port needs.
 
 ---
 
@@ -254,14 +293,18 @@ Deletion inventory (from the usage map):
 `occt-modeling-operations.ts`, `occt-lineage.ts` (27 KB) + their tests,
 `test/step-import-compat.test.ts` and `test/topology-lineage-spike.test.ts`
 (rewrite as BrepKit-only), `occt-wasm` from
-`packages/kernel-adapter/package.json:19`, the vite manual chunk
-(`apps/web/vite.config.ts:196`), `ExactKernelKind = 'brepkit' | 'occt'` +
+`packages/kernel-adapter/package.json:19`, `ExactKernelKind = 'brepkit' | 'occt'` +
 `OCCT_SHARP_OFFSET_LIMITATION` (`apps/web/src/lib/modelingOperations.ts:63-138`)
 and the `App.tsx:5527` branch, the `loading-occt` worker phase
 (`geometryWorker.ts:20-26,134-137`), cross-kernel assertions in
 `exact-kernel-adapter.test.ts`.
 Docs: amend ADR-009/ADR-010, README "Two kernels" section,
 `capability-matrix.md`, `performance-baseline.md`.
+*Inventory correction:* `apps/web/vite.config.ts` no longer carries an OCCT
+manual chunk — that line is already gone. Verified: after Z2, the only
+remaining production importer of `./occt-step` is `getOcct` behind
+`containsImportedStep`, so Z3 is genuinely the last gate and Z5 is then
+mechanical.
 *Payoff:* −22,088 kB wasm (−7,100 kB brotli), one code path.
 *Rule:* this lands only after Z3's soak; revert path is `git revert` of one
 PR (keep the deletion atomic).
@@ -351,3 +394,27 @@ AI contracts: every new feature kind needs a schema op + capability flag
 - Pin-bump discipline: kernel changes reach the app only via
   `chore(wasm): refresh committed package` + lockfile pin bump, with the
   corpus re-run in the bump PR.
+
+### The pin-bump mechanics, concretely
+
+1. Merge the brepkit PR. `publish.yml` then runs `cargo xtask wasm-build
+   --skip-opt` on `main` and auto-commits `crates/wasm/pkg` as
+   `chore(wasm): refresh committed package … [skip ci]`. Wait for that
+   commit — the app pin must point at it, not at the feature merge, or it
+   will install a package built before the change.
+2. In OpenZCAD: `pnpm update brepkit-wasm --lockfile-only --recursive`.
+   A plain `pnpm install` will **not** move the pin: `package.json` says
+   `github:esaueng/brepkit#main`, and an existing lockfile entry keeps the
+   old SHA pinned, which is exactly what a lockfile is for. Expect a diff
+   touching only the four `brepkit-wasm` tarball lines.
+3. Because CI installs from the lockfile, any app commit that calls a new
+   kernel API **must** carry the bump in the same commit, or CI installs a
+   kernel without the API and fails.
+
+For local testing ahead of a merge, `cargo xtask wasm-build --skip-opt` in a
+brepkit checkout and copy `brepkit_wasm_bg.wasm` into
+`node_modules/.pnpm/brepkit-wasm@*/node_modules/brepkit-wasm/`. The `.js`
+and `.d.ts` files are hardlinked by pnpm and update in place; the `.wasm`
+does not, because wasm-pack rewrites it and breaks the link. Symptom of
+getting this wrong: `wasm.brepkernel_<newFn> is not a function`, with the
+new function present in the typings.
