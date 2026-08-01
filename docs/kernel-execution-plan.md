@@ -235,15 +235,44 @@ these classes).
 
 ### K0.6 Import validation + lineage parity — **M** (lane A tail)
 
-*Current:* `occt-step.ts` provides `importedStepValidationWarning` and
-imported-body topology witnesses; BrepKit path must match before Z3.
-*Steps:* map `kernel.validateSolid` + `meshQuality` to the same warning
-taxonomy; ensure imported bodies publish witness sets (fingerprint parity
-already exists per ADR-011 for analytic faces; closed-B-spline faces stay
-fail-closed as today); port the unit-rescale (`uniformScaleTransform`)
-behavior if K0.1 lands unit handling kernel-side (then it's free).
-*Acceptance:* corpus warning sets match OCCT baselines or are strictly
-better (fewer false warnings, never fewer true ones).
+*Was:* "port OCCT's warning taxonomy and its imported-body topology witnesses
+to BrepKit."
+
+*Correction to the original spec, from Z1.3's measurements:*
+
+1. **There were no imported-body witnesses to port.** `witnessedFaces`,
+   `witnessedEdges` and `lineageNames` read zero and empty in every corpus
+   record on *both* kernels. ADR-013 listed imported STEP alongside blends as
+   `no lineage - hash fallback only`, which conflated a transition (a blend
+   owes an output relation) with a root (an import owes nothing — there is no
+   earlier body). Half of this item was build, not port.
+2. **`meshQuality` is unusable as a validity gate.** It reports
+   `isWatertight: false` with 50 boundary edges for `a-export-cone`, a valid
+   analytic cone whose apex does not weld under independent per-face
+   tessellation, and Euler characteristic 0 for the shipped bracket. Gating on
+   it would refuse valid supplier files.
+3. **Strict `validateSolid` only applies to a single-shell solid.** Its
+   Euler-characteristic check assumes one closed shell, so every voided solid
+   in the corpus reports exactly one error while being exactly what its file
+   declares. Multi-shell solids are held to `validateSolidRelaxed` plus the
+   adapter's own exact closure test.
+
+*Done.* `imported-step-validation.ts` owns the taxonomy; closure and
+manifoldness are read from the exact B-rep (`edgeToFaceMap` face-use counts),
+not from a mesh. A shell that is not closed is rejected **per solid** and never
+becomes a body — `f-hostile-open-shell` no longer imports as 666.67 mm³ — while
+a closed solid that merely fails strict validation is kept and flagged, matching
+OCCT's partial-success taxonomy. A file where some solids survive imports them
+and names the dropped ones; only a file where nothing survives fails outright.
+`inspectStep` answers in every case instead of raising, and carries the reason
+in the value. Both adapters publish schema-v5 references on imported bodies
+under one shared rule (see the ADR-013 amendment), so the corpus can assert the
+two kernels give an imported body the same identity names.
+
+*Acceptance:* met. On the corpus BrepKit produces no warning OCCT does not, and
+where it does warn it names the entity or the defect where OCCT reports
+"contains no solids"; the `f-hostile-open-shell` validity gap is closed in
+BrepKit's favour and its pins are retired.
 
 ### Z4 Port the two OCCT-only direct edits — **M** (lane D, app-side)
 

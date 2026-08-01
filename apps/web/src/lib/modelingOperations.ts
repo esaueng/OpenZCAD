@@ -80,7 +80,21 @@ function titleCase(value: string): string {
     : `${value[0]!.toUpperCase()}${value.slice(1)}`;
 }
 
-function readableLineageName(value: string): string {
+/**
+ * Lineage names worth showing a user are the SEMANTIC ones. A box face is
+ * called `primitive.box.face.x.min` because the command said so, and "box ·
+ * face · x · min" reads as what it is.
+ *
+ * Imported topology is named `import.step.face.<fingerprint>` (K0.6): an
+ * import has no feature contract, so the fingerprint IS the name. Spelling
+ * that out would print the hash twice in a label that already ends in
+ * `· #hash`, so it is deliberately not a readable identity and the caller
+ * falls back to the position, exactly as it did before imports were named.
+ */
+function readableLineageName(value: string): string | null {
+  if (value.startsWith('import.step.')) {
+    return null;
+  }
   return value
     .replace(/^(?:primitive|sweep)\./, '')
     .split('.')
@@ -95,9 +109,9 @@ export function topologyFaceLabel(
   const carrier = face.geometry?.surfaceType
     ? `${titleCase(face.geometry.surfaceType)} face`
     : 'Face';
-  const identity = face.reference?.lineageName
-    ? readableLineageName(face.reference.lineageName)
-    : `${index + 1}`;
+  const lineageName = face.reference?.lineageName;
+  const identity =
+    (lineageName ? readableLineageName(lineageName) : null) ?? `${index + 1}`;
   const hash = (face.hash >>> 0).toString(16).padStart(8, '0');
   return `${carrier} ${identity} · #${hash}`;
 }

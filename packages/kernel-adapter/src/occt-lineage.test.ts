@@ -16,7 +16,10 @@ import {
 } from '@openzcad/shared';
 
 import { OcctStepKernelAdapter } from './occt-step';
-import { inspectTopologyWitness } from './topology-lineage';
+import {
+  importedStepLineageName,
+  inspectTopologyWitness
+} from './topology-lineage';
 import {
   canonicalPlaneWitness,
   edgeCandidate,
@@ -484,7 +487,16 @@ describe('OCCT lineage adapter integration', () => {
     ).toBe(true);
   });
 
-  it('keeps imported STEP topology explicitly hash-only', async () => {
+  /**
+   * K0.6 changed this contract. An imported B-rep is the ROOT of its own
+   * lineage rather than a transition out of an earlier one, so the ADR-013
+   * rule that imported STEP provenance is hash-only governs provenance THROUGH
+   * the import, not identity within it. Every face and edge is named by its own
+   * exact ADR-011 witness — the same rule the BrepKit adapter uses, so a pick
+   * stored on an imported body resolves to the same identity on either kernel
+   * across the Z3 route flip.
+   */
+  it('names imported STEP topology by its own exact fingerprint', async () => {
     const source = addPrimitiveFeature(
       createProjectDocument('STEP source', toUserId('user_step_source')),
       {
@@ -506,10 +518,20 @@ describe('OCCT lineage adapter integration', () => {
     const body = (await adapter.syncDocument(imported)).bodyRepresentations[
       imported.bodyOrder[0]!
     ]!;
-    expect(body.topology?.lineageDiagnostics).toEqual([
-      expect.objectContaining({ kind: 'body', status: 'hash-only' })
-    ]);
-    expect(body.topology?.faces.every((face) => !face.reference)).toBe(true);
-    expect(body.topology?.edges.every((edge) => !edge.reference)).toBe(true);
+    expect(body.topology?.lineageDiagnostics).toBeUndefined();
+    expect(body.topology?.faces).toHaveLength(6);
+    for (const face of body.topology?.faces ?? []) {
+      expect(face.reference?.producingFeatureId).toBeTruthy();
+      expect(face.reference?.currentHash).toBe(face.hash);
+      expect(face.reference?.lineageName).toBe(
+        importedStepLineageName('face', face.hash)
+      );
+    }
+    for (const edge of body.topology?.edges ?? []) {
+      expect(edge.reference?.currentHash).toBe(edge.hash);
+      expect(edge.reference?.lineageName).toBe(
+        importedStepLineageName('edge', edge.hash)
+      );
+    }
   });
 });
