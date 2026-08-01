@@ -1088,13 +1088,16 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => 
   expect(text.startsWith('ISO-10303-21;')).toBe(true);
   expect(text).toContain('MANIFOLD_SOLID_BREP');
   expect(text).toContain('CLOSED_SHELL');
-  // The twelve blend bands are in the file. BrepKit writes them as B-splines
-  // where the exact answer is a quarter cylinder — a pinned kernel gap
-  // (`fillet-on-import` / surfaceTypes, owner K0.4, in corpus-pins.ts), not
-  // an artefact of importing: BrepKit fits B-splines for blends on natively
-  // modelled bodies too. Asserted rather than tolerated, so the day K0.4
-  // lands this fails and gets corrected to CYLINDRICAL_SURFACE.
-  expect(text).toContain('B_SPLINE_SURFACE');
+  // The twelve blend bands and eight corner patches are in the file, and they
+  // are exact. This used to assert B_SPLINE_SURFACE and say "the day K0.4
+  // lands this fails and gets corrected to CYLINDRICAL_SURFACE". K0.4's blend
+  // phases landed, the `fillet-on-import` / surfaceTypes pin is retired from
+  // corpus-pins.ts, and the file now carries no spline at all. Measured on
+  // this exact construction: 12 CYLINDRICAL_SURFACE, 8 SPHERICAL_SURFACE, 6
+  // planes, 5804.3375 mm3 against the Minkowski closed form 5804.6961.
+  expect(text).toContain('CYLINDRICAL_SURFACE');
+  expect(text).toContain('SPHERICAL_SURFACE');
+  expect(text).not.toContain('B_SPLINE_SURFACE');
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
   // Only the two artifact-archive uploads (import and export) may fail, and
   // only because the preview host has no /api/uploads. Anything else is a
