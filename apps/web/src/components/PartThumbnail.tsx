@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import type { BodyRepresentation, ProjectSummary } from '@openzcad/shared';
-import { renderPartThumbnail } from '../lib/partThumbnail';
 
 interface PartThumbnailProps {
   project: ProjectSummary;
@@ -30,7 +29,19 @@ function thumbnailFor(
     }
   }
   const pending = loadBodies(project)
-    .then(renderPartThumbnail)
+    .then(async (bodies) => {
+      const hasGeometry = bodies.some(
+        (body) =>
+          !body.consumed &&
+          body.mesh.vertices.length >= 9 &&
+          body.mesh.indices.length >= 3
+      );
+      if (!hasGeometry) {
+        return null;
+      }
+      const { renderPartThumbnail } = await import('../lib/partThumbnail');
+      return renderPartThumbnail(bodies);
+    })
     .catch(() => {
       thumbnailPromises.delete(cacheKey);
       return undefined;
