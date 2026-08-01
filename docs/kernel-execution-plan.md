@@ -496,6 +496,15 @@ of them load-bearing:*
    `getNurbsCurveData`, and does not throw on the zero-length degenerate edges
    a torus carries). Publish nothing analytic for ELLIPSE —
    `measureCurvatureAtEdge` is wrong for those by a factor of ~1e12.
+   *Scope settled by census:* every edge in all 18 corpus fixtures is `LINE`
+   or `CIRCLE`. **There is not one `BSPLINE_CURVE` edge in the corpus**, so
+   the curve record needs no spline branch for anything we currently measure —
+   carry the type and stop there. `getEdgeCurveType` itself is trustworthy:
+   every `LINE`-typed edge across the corpus has arclength equal to its chord
+   to 1e-6 relative, so it does not under-report curvature. (Worth stating
+   because the census *looks* alarming at a glance — `a-export-sphere`
+   reports 32 `LINE` edges and no arcs, and `e-nurbs-fillet-plate` reports 24
+   `LINE`. Both are real: those edges are genuinely straight.)
 2. **`exact.ts:252` is not adjacency.** That is `analyticSurfaceRecord`, a
    *face* surface-params helper. Real adjacency is `exact.ts:4451`
    (`kernel.edgeToFaceMap`), and `occt-step.ts:116` (not `:115`). This is good
