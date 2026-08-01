@@ -27,6 +27,7 @@ import {
 import { OcctStepKernelAdapter } from '../packages/kernel-adapter/src/occt-step';
 import {
   toUserId,
+  type DirectEditOperation,
   type ParamValue,
   type PrimitiveKind
 } from '@openzcad/shared';
@@ -2010,6 +2011,360 @@ describe('exact hybrid kernel adapter', { timeout: 30_000 }, () => {
       4
     );
   });
+
+  it('resizes and removes a through hole identically on BrepKit and OpenCascade', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Cross-kernel hole', toUserId('user_direct_edit')),
+      {
+        name: 'Outer cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 15, height: 10 }
+      }
+    );
+    const outerId = withOuter.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withOuter, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 4, height: 20 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Pass tool through part',
+      targetBodyId: toolId,
+      translation: { x: 0, y: 0, z: -5 }
+    }).document;
+    const tube = new CommandManager(positioned).execute(
+      commandFactories.booleanBodies({
+        name: 'Tube',
+        operation: 'subtract',
+        targetBodyIds: [outerId, toolId]
+      })
+    );
+    const bodyId = tube.bodyOrder.at(-1)!;
+
+    /**
+     * Drive the same edit sequence on one kernel, always addressing the hole
+     * through that kernel's own face fingerprints and its own recorded source
+     * measurements. Comparing the readings across kernels is then a statement
+     * about the geometry the two produce, not about their hashes agreeing.
+     */
+    async function editSequence(kernelAdapter: ExactKernelAdapter) {
+      const manager = new CommandManager(tube);
+      const readings: {
+        volume: number;
+        faceCount: number;
+        holeDiameter?: number;
+        holeCount: number;
+      }[] = [];
+      const read = async () => {
+        const derived = await kernelAdapter.syncDocument(manager.document);
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[bodyId]!;
+        const holes = (body.topology?.faces ?? []).filter(
+          (face) => face.geometry?.featureType === 'through-hole'
+        );
+        readings.push({
+          volume: body.volume,
+          faceCount: body.faceCount,
+          holeDiameter: holes[0]?.geometry?.diameter,
+          holeCount: holes.length
+        });
+        return holes[0];
+      };
+
+      const source = await read();
+      expect(source?.geometry).toMatchObject({
+        surfaceType: 'cylinder',
+        editableDimension: 'diameter'
+      });
+
+      for (const diameter of [12, 4]) {
+        const hole = (await read())!;
+        manager.execute(
+          commandFactories.directEditBody({
+            name: `Resize to ${diameter}`,
+            targetBodyId: bodyId,
+            operation: {
+              kind: 'resize-through-hole',
+              faceHash: hole.hash,
+              sourceDiameter: hole.geometry!.diameter!,
+              sourceAxisStart: hole.geometry!.axisStart!,
+              sourceAxisEnd: hole.geometry!.axisEnd!,
+              diameter
+            }
+          })
+        );
+      }
+
+      const remaining = (await read())!;
+      manager.execute(
+        commandFactories.directEditBody({
+          name: 'Remove the hole',
+          targetBodyId: bodyId,
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: remaining.hash,
+            sourceSurfaceType: 'cylinder',
+            sourceArea: remaining.geometry!.area,
+            sourceCenter: remaining.geometry!.center,
+            sourceDiameter: remaining.geometry!.diameter,
+            sourceAxisStart: remaining.geometry!.axisStart,
+            sourceAxisEnd: remaining.geometry!.axisEnd
+          }
+        })
+      );
+      await read();
+      return readings;
+    }
+
+    const brepKit = new BrepKitKernelAdapter();
+    const occt = await OcctStepKernelAdapter.create();
+    try {
+      const [brepReadings, occtReadings] = await Promise.all([
+        editSequence(brepKit),
+        editSequence(occt)
+      ]);
+
+      // Every stage: the source tube, the same tube re-read before each edit,
+      // the 12 mm hole, the 4 mm hole and finally the filled body.
+      const expected = [
+        { hole: 8, radius: 4 },
+        { hole: 8, radius: 4 },
+        { hole: 12, radius: 6 },
+        { hole: 4, radius: 2 },
+        { hole: undefined, radius: 0 }
+      ];
+      for (const readings of [brepReadings, occtReadings]) {
+        expect(readings).toHaveLength(expected.length);
+        readings.forEach((reading, index) => {
+          const stage = expected[index]!;
+          expect(reading.volume).toBeCloseTo(
+            Math.PI * (15 ** 2 - stage.radius ** 2) * 10,
+            4
+          );
+          expect(reading.holeDiameter).toBe(
+            stage.hole === undefined ? undefined : stage.hole
+          );
+        });
+        expect(readings.at(-1)).toMatchObject({ faceCount: 3, holeCount: 0 });
+      }
+
+      // The point of the port: the two kernels agree on the solid, not just
+      // on each producing something valid.
+      occtReadings.forEach((occtReading, index) => {
+        const brepReading = brepReadings[index]!;
+        expect(brepReading.volume).toBeCloseTo(occtReading.volume, 4);
+        expect(brepReading.faceCount).toBe(occtReading.faceCount);
+        expect(brepReading.holeCount).toBe(occtReading.holeCount);
+        if (occtReading.holeDiameter !== undefined) {
+          expect(brepReading.holeDiameter).toBeCloseTo(
+            occtReading.holeDiameter,
+            6
+          );
+        }
+      });
+    } finally {
+      brepKit.dispose();
+      occt.dispose();
+    }
+  }, 60_000);
+
+  it('refuses BrepKit through-hole edits it cannot prove correct', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Refusal source', toUserId('user_direct_edit')),
+      {
+        name: 'Outer cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 15, height: 10 }
+      }
+    );
+    const outerId = withOuter.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withOuter, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 4, height: 20 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Pass tool through part',
+      targetBodyId: toolId,
+      translation: { x: 0, y: 0, z: -5 }
+    }).document;
+    const tube = new CommandManager(positioned).execute(
+      commandFactories.booleanBodies({
+        name: 'Tube',
+        operation: 'subtract',
+        targetBodyIds: [outerId, toolId]
+      })
+    );
+    const bodyId = tube.bodyOrder.at(-1)!;
+
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(tube);
+      const faces = derived.bodyRepresentations[bodyId]!.topology!.faces;
+      const bore = faces.find(
+        (face) => face.geometry?.featureType === 'through-hole'
+      )!;
+      // The tube's outer wall shares the bore's void axis and open ends, so
+      // it is exactly the face the classifier has to keep out.
+      const outerWall = faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'cylinder' &&
+          face.geometry.featureType === undefined
+      )!;
+      expect(outerWall.geometry?.radius).toBeCloseTo(15, 6);
+      const cap = faces.find((face) => face.geometry?.surfaceType === 'plane')!;
+
+      const refusals: { name: string; operation: DirectEditOperation }[] = [
+        {
+          name: 'Outer wall is not a hole',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: outerWall.hash,
+            sourceDiameter: outerWall.geometry!.diameter!,
+            sourceAxisStart: outerWall.geometry!.axisStart!,
+            sourceAxisEnd: outerWall.geometry!.axisEnd!,
+            diameter: 20
+          }
+        },
+        {
+          name: 'Stale diameter',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: 9,
+            sourceAxisStart: bore.geometry!.axisStart!,
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 6
+          }
+        },
+        {
+          name: 'Stale axis',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: bore.geometry!.diameter!,
+            sourceAxisStart: {
+              ...bore.geometry!.axisStart!,
+              x: bore.geometry!.axisStart!.x + 1
+            },
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 6
+          }
+        },
+        {
+          name: 'Diameter breaks the body',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: bore.geometry!.diameter!,
+            sourceAxisStart: bore.geometry!.axisStart!,
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 40
+          }
+        },
+        {
+          name: 'Unchanged diameter',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: bore.geometry!.diameter!,
+            sourceAxisStart: bore.geometry!.axisStart!,
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 8
+          }
+        },
+        {
+          name: 'Defeature needs planar faces',
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: cap.hash,
+            sourceSurfaceType: 'plane',
+            sourceArea: cap.geometry!.area,
+            sourceCenter: cap.geometry!.center
+          }
+        }
+      ];
+
+      const messages: string[] = [];
+      for (const refusal of refusals) {
+        const manager = new CommandManager(tube);
+        manager.execute(
+          commandFactories.directEditBody({
+            name: refusal.name,
+            targetBodyId: bodyId,
+            operation: refusal.operation
+          })
+        );
+        const failed = await brepKit.syncDocument(manager.document);
+        expect(failed.warnings).toHaveLength(1);
+        messages.push(failed.warnings[0]!);
+        // A refused edit leaves the body exactly as the history built it.
+        expect(failed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+          Math.PI * (15 ** 2 - 4 ** 2) * 10,
+          4
+        );
+      }
+
+      expect(messages).toEqual([
+        'Feature "Outer wall is not a hole": The selected cylindrical face has material only on its inside, so it is an external wall rather than a bore.',
+        'Feature "Stale diameter": Selected face no longer matches its recorded source diameter.',
+        'Feature "Stale axis": Selected face no longer matches its recorded hole axis.',
+        expect.stringContaining(
+          'Feature "Diameter breaks the body": Through-hole diameter 40 does not fit this body'
+        ),
+        'Feature "Unchanged diameter": Through-hole diameter must differ from its current diameter.',
+        'Feature "Defeature needs planar faces": Removing a plane face needs BrepKit\'s defeature operation, which only supports bodies whose every remaining face is planar; this body still has cylinder faces.'
+      ]);
+    } finally {
+      brepKit.dispose();
+    }
+  }, 60_000);
+
+  it('holds BrepKit defeature to strict solid validation', async () => {
+    // BrepKit reassembles a defeatured body from the planes of the faces it
+    // keeps. That reassembly can return a closed-looking body with the wrong
+    // walls, so the result is validated strictly: a wrong solid is refused
+    // rather than shipped as a successful edit.
+    const document = addPrimitiveFeature(
+      createProjectDocument('Defeature gate', toUserId('user_direct_edit')),
+      {
+        name: 'Notched plate',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 30, depth: 10 }
+      }
+    );
+    const bodyId = document.bodyOrder[0]!;
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(document);
+      const target = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
+        (face) => Math.abs((face.geometry?.area ?? 0) - 900) < 1e-6
+      )!;
+      const manager = new CommandManager(document);
+      manager.execute(
+        commandFactories.directEditBody({
+          name: 'Remove a plate face',
+          targetBodyId: bodyId,
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: target.hash,
+            sourceSurfaceType: 'plane',
+            sourceArea: target.geometry!.area,
+            sourceCenter: target.geometry!.center
+          }
+        })
+      );
+      const failed = await brepKit.syncDocument(manager.document);
+      expect(failed.warnings).toEqual([
+        'Feature "Remove a plate face": Removing the selected face did not produce a valid solid.'
+      ]);
+      expect(failed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(9000, 4);
+    } finally {
+      brepKit.dispose();
+    }
+  }, 60_000);
 
   it('offsets a planar face of an imported STEP body in both directions', async () => {
     const source = addPrimitiveFeature(
