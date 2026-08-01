@@ -68,18 +68,37 @@
  *      edge hash set differs and a stored edge pick on a curved face would not
  *      resolve after the flip. Now visible in three metrics rather than one:
  *      the edge counts, the edge hash digest, and the imported-body lineage
- *      names those hashes generate. K0.6 has to settle which representation
- *      the app sees before Z3.
+ *      names those hashes generate.
+ *
+ *      **Z3 landed without settling this**, deliberately, because measuring
+ *      it changed what it was. BrepKit's edge set is a strict SUBSET of
+ *      OCCT's on both bodies, so a stored pick either resolves unchanged or
+ *      has no counterpart at all — it can never land on a different edge.
+ *      The no-counterpart case fails closed by name ('A selected edge no
+ *      longer exists.'), the imported body still builds at its correct size,
+ *      and `test/kernel-seam.test.ts` pins that. The cost is therefore a
+ *      re-select on seam picks, not a silently wrong body, which is a cost
+ *      the flip could carry. K0.6 still owns closing it.
  *   2. **Sphere face identity.** BrepKit's two spherical patches share one
  *      exact witness, so neither can be named one-to-one and the body publishes
  *      NO face references at all (`witnessedFaces` 0 vs OCCT's 2). This is the
  *      identity scheme failing closed exactly as designed — but it means a face
  *      pick on an imported sphere cannot be stored on BrepKit, which is a
- *      product limit, not a formality.
+ *      product limit, not a formality. Since Z3 it is a LIVE product limit
+ *      rather than a corpus observation: BrepKit is the only kernel building
+ *      these documents, so face picks on imported spheres are unavailable in
+ *      the app today. Highest-value K0.6 item for that reason.
  *   3. **Tessellated-body identity.** `a-sample-parametric-bracket` has 821
  *      faces and 1722 edges agreeing exactly in count and to 1.5e-9 in volume,
- *      and a different hash set on each kernel. Any feature referencing a face
- *      of an imported tessellated body breaks at the Z3 flip.
+ *      and a different hash DIGEST on each kernel. Measured element-wise
+ *      during Z3 the overlap is large: 739 of 821 faces and 1646 of 1722 edges
+ *      carry the same hash on both kernels. So a stored pick on an imported
+ *      tessellated body usually survives the flip, and where it does not it
+ *      fails closed by name — see `test/kernel-seam.test.ts`, "keeps most
+ *      identities on an imported tessellated body across kernels" and "fails
+ *      closed on a pick stored against the other kernel's topology". The
+ *      digest still differs and the pin stands; what changed is the claim
+ *      about consequence.
  *   4. **Volume measurement.** BrepKit's `volume()` integrates a tessellation;
  *      OCCT's is exact. Shows up as ~1e-5 relative on every body with a curved
  *      wall, now including `e-analytic-fillet-plate`, which BrepKit could not
@@ -204,11 +223,12 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     owner: 'K0.6',
     note:
       'Same 821 faces, same 1722 edges, volumes agreeing to 1.5e-9 — and a ' +
-      'different face hash set. ADR-011 makes fingerprints cross-kernel ' +
+      'different face hash DIGEST. ADR-011 makes fingerprints cross-kernel ' +
       'stable for analytic faces; this body is fully tessellated, so every ' +
-      'face is a small plane and the fingerprints still diverge. Any feature ' +
-      'referencing a face of an imported tessellated body breaks at the Z3 ' +
-      'flip. Diagnose alongside edgeHashDigest below.'
+      'face is a small plane, and 82 of the 821 still fingerprint ' +
+      'differently. The other 739 agree, so a stored face pick on an ' +
+      'imported tessellated body survives the Z3 flip about 90% of the time ' +
+      'and fails closed the rest. Diagnose alongside edgeHashDigest below.'
   },
   {
     subject: 'a-sample-parametric-bracket',
@@ -218,9 +238,9 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     owner: 'K0.6',
     note:
       'Edge-hash counterpart of the face divergence above, same body and the ' +
-      'same consequence: stored edge picks on an imported tessellated body ' +
-      'do not survive the kernel flip. The counts match exactly (1722), so ' +
-      'this is a hashing/ordering difference rather than a topology one.'
+      'same cause. 1646 of the 1722 edges carry the same hash on both ' +
+      'kernels; 76 do not. The counts match exactly, so this is a hashing ' +
+      'difference on particular edges rather than a topology one.'
   },
   {
     subject: 'a-sample-parametric-bracket',
@@ -231,10 +251,10 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     note:
       IMPORT_NAME_NOTE +
       ' Both kernels publish a reference for every one of the 2543 faces and ' +
-      'edges — the counts agree exactly — and not one name matches. This is ' +
-      'the sharpest statement of the bracket divergence: a user who picks a ' +
-      'face on this sample today has stored an identity the other kernel has ' +
-      'never heard of.'
+      'edges and the counts agree exactly. The DIGESTS differ, but the name ' +
+      'sets largely coincide — a name is the hash, and 2385 of the 2543 ' +
+      'hashes match. The bracket divergence is 158 sub-shapes out of 2543, ' +
+      'not the whole body.'
   },
   {
     subject: 'a-sample-simple-assembly',

@@ -447,11 +447,11 @@ const DEGREES_IN_RADIAN = 180 / Math.PI;
  * in degrees.
  *
  * Lifted from `test/step-import-compat.test.ts`'s `declareDegrees`, which is
- * where this case was first pinned: BrepKit reads `CONICAL_SURFACE`
+ * where this case was first pinned. BrepKit used to read `CONICAL_SURFACE`
  * half-angles as radians regardless of the declared unit, so the adapter
- * rewrites the transient kernel input (`normalizeStepPlaneAnglesForKernel`).
- * The corpus keeps a real file in that shape so the workaround's removal in
- * Z3 has something to be measured against.
+ * rewrote the transient kernel input in JavaScript. K0.1 taught the kernel to
+ * read the declared unit and Z3 deleted the rewriter; this file is what made
+ * that deletion measurable rather than assumed.
  */
 export function declareDegreePlaneAngles(step: string): string {
   const radianUnit =
