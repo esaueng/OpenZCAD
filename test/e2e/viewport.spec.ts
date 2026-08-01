@@ -640,6 +640,11 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
     page.locator('.feature-row', { hasText: 'Fillet' })
   ).toBeVisible();
   await page.keyboard.press('Escape');
+  // Escape has to have actually left the new feature's edit before the rim is
+  // picked: while it is up, the selected edges wear callouts that float over
+  // the canvas and swallow a click aimed at one of them.
+  await expect(page.locator('.inspector-float > *')).toHaveCount(0);
+  await expect(page.locator('.selection-callout')).toHaveCount(0);
 
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');

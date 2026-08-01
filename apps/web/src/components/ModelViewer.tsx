@@ -1408,6 +1408,15 @@ export function ModelViewer({
           ) {
             continue;
           }
+          // Selection chips, callouts, and the floating inspector are DOM
+          // overlays on top of the canvas. A point one of them covers is
+          // pickable in the scene but unreachable by a pointer, so it is not
+          // an answer to "where can this edge be clicked".
+          if (
+            document.elementFromPoint(clientX, clientY) !== renderer.domElement
+          ) {
+            continue;
+          }
           const picked = picker.pick(
             new MouseEvent('mousemove', { clientX, clientY })
           );
