@@ -494,6 +494,94 @@ function tryExactAnalyticCylinderRimFillet(
   return revolveRadialProfile(kernel, profile, cylinder);
 }
 
+/** True when two of the selected edges meet at a shared model vertex. */
+function selectedEdgesShareVertex(
+  kernel: BrepKernel,
+  selectedEdges: number[]
+): boolean {
+  if (selectedEdges.length < 2) {
+    return false;
+  }
+  const seen = new Set<number>();
+  for (const edge of selectedEdges) {
+    // Deduplicate per edge: a closed edge reports the same vertex handle at
+    // both ends, which is not a corner between two selected edges.
+    for (const vertex of new Set(kernel.getEdgeVertexHandles(edge))) {
+      if (seen.has(vertex)) {
+        return true;
+      }
+      seen.add(vertex);
+    }
+  }
+  return false;
+}
+
+/**
+ * True when a selected edge touches a freeform (blend) face of the target —
+ * either bordering it directly or ending on one of its boundary vertices.
+ */
+function selectionTouchesBlendFace(
+  kernel: BrepKernel,
+  solid: number,
+  selectedEdges: number[]
+): boolean {
+  const blendVertices = new Set<number>();
+  for (const face of kernel.getSolidFaces(solid)) {
+    if (kernel.getSurfaceType(face) !== 'bspline') {
+      continue;
+    }
+    for (const edge of kernel.getFaceEdges(face)) {
+      for (const vertex of kernel.getEdgeVertexHandles(edge)) {
+        blendVertices.add(vertex);
+      }
+    }
+  }
+  if (blendVertices.size === 0) {
+    return false;
+  }
+  return selectedEdges.some((edge) =>
+    Array.from(kernel.getEdgeVertexHandles(edge)).some((vertex) =>
+      blendVertices.has(vertex)
+    )
+  );
+}
+
+/**
+ * Cause-aware failure message for an edge modifier that every kernel engine
+ * refused. BrepKit's `try_fillet` collapses all-engine failure into a silent
+ * input-handle return, discarding the typed engine errors
+ * (docs/qa/2026-08-01/plate-second-fillet-investigation.md), so the cause is
+ * inferred from the selection's topology instead. Closed rims and corner
+ * chains on boolean-result bodies fail at every size — steering the user
+ * toward a smaller radius for those is a dead end.
+ */
+function edgeModifierFailureMessage(
+  kernel: BrepKernel,
+  target: number,
+  selected: number[],
+  featureKind: 'fillet' | 'chamfer',
+  size: number
+): string {
+  const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
+  const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
+  const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
+  const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
+  try {
+    if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
+      return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body yet at any ${dimension} — deselect the rim edge and try again.`;
+    }
+    if (selectedEdgesShareVertex(kernel, selected)) {
+      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body yet at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
+    }
+    if (selectionTouchesBlendFace(kernel, target, selected)) {
+      return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
+    }
+  } catch {
+    // Diagnosis is best-effort; fall through to the generic message.
+  }
+  return `${prefix} Try a smaller ${dimension}.`;
+}
+
 /**
  * Move either cap of a simple analytic cylinder by rebuilding the equivalent
  * primitive in the cylinder's world-space frame. Repeated cylindrical
@@ -2992,11 +3080,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
-            const label =
-              feature.data.featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
-            const dimension =
-              feature.data.featureKind === 'fillet' ? 'radius' : 'distance';
-            const failureMessage = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}. Try a smaller ${dimension}. Edges that end on an existing fillet or chamfer usually cannot be rounded afterwards — edit that earlier feature and add this edge to it instead.`;
             let modified: number;
             try {
               const targetBounds = kernel.boundingBox(target);
@@ -3069,7 +3152,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 }
               }
             } catch {
-              throw new Error(failureMessage);
+              throw new Error(
+                edgeModifierFailureMessage(
+                  kernel,
+                  target,
+                  selected,
+                  feature.data.featureKind,
+                  size
+                )
+              );
             }
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
