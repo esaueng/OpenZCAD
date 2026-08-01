@@ -758,6 +758,37 @@ census now partitions faces into connected components by shared edge and
 tests each — also strictly sharper, since summing lets a genus error in one
 shell cancel against another.
 
+*A third finding, and the sharpest one, came from the lane auditing its own
+oracle rather than the kernel.* **`transform_solid` refuses every uniform
+scale ≤ 0.00464.** It rejects any matrix whose *determinant* falls under
+`Tolerance.linear` (1e-7) — but a determinant is a **volume** ratio and that
+tolerance is a **length**. The comparison is dimensionally wrong. For uniform
+scale it collapses to `s³ ≤ 1e-7`. Measured: 0.0047× transforms, 0.0046× and
+0.001× are refused — a millimetres-to-metres conversion sits squarely in the
+refused band. Same absolute-tolerance pattern as #51, with a dimensional
+error on top. It also meant the lane's own scale oracle was **silently inert
+on half of every case**: the exact failure mode it was built to hunt, living
+inside the hunter.
+
+*OpenZCAD's exposure is nil today, and that was checked rather than assumed.*
+Every `copyAndTransformSolid` call site in `exact.ts` (683, 1182, 2958, 3079,
+3093, 3103, 5034, 5071) is a pattern or a mirror — rigid, `det = ±1`. The
+`× 1000` occurrences at 1587–1589 and 1683–1685 are hash coordinate
+quantization, not transforms. STEP unit conversions are inch→mm (25.4) and
+m→mm (1000), both greater than 1. It would bite a future **scale-body**
+feature or any mm→m export path, so it must be fixed upstream before either
+ships.
+
+**A decision this lane surfaced, recorded so it is deliberate.** Adding the
+engine targets to the scheduled `fuzz.yml` matrix makes that job **red**,
+because the cone defect is real and open. Landing it red is the right call —
+hiding a live defect to keep a dashboard green is precisely the habit this
+whole effort exists to break — but a permanently red scheduled job trains
+people to ignore it. So the cone fix is queued as the next kernel lane rather
+than left open indefinitely; the window of red is meant to be short, and if
+it stops being short the honest move is to fix the tessellator, not to
+exclude the target.
+
 ### Offset lane: what #53 landed, and the one measurement it corrected
 
 `offset_solid` refused any solid with inner shells; two sites read only the
