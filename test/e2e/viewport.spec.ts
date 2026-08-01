@@ -414,11 +414,37 @@ test('a view request interrupts the glide already in flight', async ({
   await page.keyboard.press('2');
   await page.waitForTimeout(60);
   await page.keyboard.press('3');
-  await page.waitForTimeout(1200);
 
-  const settled = await camera();
-  expect(settled).not.toBeNull();
+  // Poll for the resting view itself rather than waiting a fixed span for it.
+  // A blind wait samples a point on the glide once the runner is loaded, and
+  // the reading comes from persisted session state whose write is debounced —
+  // so neither the elapsed time nor two matching reads prove the motion is
+  // over. Arriving at Right is the only thing that does, and a camera that
+  // never gets there times out here instead of being reported as settled.
   // Right looks along +X: the camera ends beside the part, not above it.
+  let settled: { position: number[]; target: number[] } | null = null;
+  await expect
+    .poll(
+      async () => {
+        settled = await camera();
+        if (!settled) {
+          return false;
+        }
+        const x = settled.position[0]! - settled.target[0]!;
+        const z = settled.position[2]! - settled.target[2]!;
+        return x > 1 && Math.abs(z) < 1;
+      },
+      {
+        message:
+          'the interrupting Right request should be where the camera comes to rest',
+        intervals: [100],
+        timeout: 15_000
+      }
+    )
+    .toBe(true);
+  // Restate the resting position as literal numbers, so a failure reports how
+  // far off it was rather than only that a poll expired.
+  expect(settled).not.toBeNull();
   const offsetX = settled!.position[0]! - settled!.target[0]!;
   const offsetZ = settled!.position[2]! - settled!.target[2]!;
   expect(offsetX).toBeGreaterThan(1);
