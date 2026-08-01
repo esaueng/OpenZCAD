@@ -459,7 +459,7 @@ export function StartScreen({
     <div className="start-screen">
       <header className="start-header">
         <BrandMark />
-        <span className="start-header-name">OpenZCAD</span>
+        <h1 className="start-header-name">OpenZCAD</h1>
         <span className="start-tagline">parametric cad in the browser</span>
         <button
           className="start-settings-button icon-button"
@@ -644,14 +644,16 @@ export function StartScreen({
             </p>
           )}
 
-          {search && matchingProjects.length === 0 && (
-            <p className="start-no-matches" role="status">
-              No parts match “{query.trim()}”.
-              <button type="button" onClick={() => setQuery('')}>
-                Clear search
-              </button>
-            </p>
-          )}
+          {search &&
+            shelfProjects.length > 0 &&
+            matchingProjects.length === 0 && (
+              <p className="start-no-matches" role="status">
+                No parts match “{query.trim()}”.
+                <button type="button" onClick={() => setQuery('')}>
+                  Clear search
+                </button>
+              </p>
+            )}
 
           {overflowCount > 0 && (
             <button

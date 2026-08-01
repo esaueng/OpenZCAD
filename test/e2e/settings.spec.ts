@@ -185,8 +185,13 @@ test('settings name their sections and search individual settings', async ({
 }) => {
   await stubApi(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settingsTrigger = page.getByRole('button', { name: 'Open settings' });
+  await settingsTrigger.click();
 
+  const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settingsDialog).toBeVisible();
+  await expect(settingsDialog.locator(':focus')).toHaveCount(1);
+  await expect(page.locator('.start-screen')).toHaveAttribute('inert', '');
   await expect(
     page.getByRole('heading', { level: 1, name: 'Settings' })
   ).toBeVisible();
@@ -224,6 +229,10 @@ test('settings name their sections and search individual settings', async ({
   await expect(
     page.getByRole('button', { name: 'Viewport', exact: true })
   ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await expect(settingsTrigger).toBeFocused();
+  await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
 test('command palette and shortcut overlay behave as modal dialogs', async ({
@@ -235,7 +244,10 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
-  await page.keyboard.press('Control+k');
+  const paletteTrigger = page.getByRole('button', {
+    name: 'Search commands (Ctrl+K)'
+  });
+  await paletteTrigger.click();
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   await expect(palette).toHaveAttribute('aria-modal', 'true');
   // The highlighted row is now exposed, not merely styled.
@@ -247,13 +259,59 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
     'aria-activedescendant',
     /command-palette-option-\d+/
   );
+  await expect(page.getByLabel('Search commands')).toBeFocused();
   await page.keyboard.press('Escape');
+  await expect(paletteTrigger).toBeFocused();
 
   await page.keyboard.press('?');
   const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
   await expect(shortcuts).toHaveAttribute('aria-modal', 'true');
   // Focus used to stay on BODY, leaving the dialog unreachable by keyboard.
   await expect(shortcuts.locator(':focus')).toHaveCount(1);
+});
+
+test('launcher semantics, empty states, and demo cards hold at mobile width', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubApi(page);
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'OpenZCAD' })
+  ).toBeVisible();
+  await page.getByLabel('Project name').fill('Search Fixture');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^OpenZCAD/ }).click();
+  await page.getByLabel('Search parts').fill('no-match');
+  await page.getByRole('tab', { name: 'Archive 0' }).click();
+
+  await expect(
+    page.getByText('Nothing archived.', { exact: false })
+  ).toBeVisible();
+  await expect(page.getByText('No parts match', { exact: false })).toHaveCount(
+    0
+  );
+
+  const widths = await page.evaluate(() => {
+    const body = document.querySelector<HTMLElement>('.start-body');
+    const demos = document.querySelector<HTMLElement>('.demo-list');
+    return {
+      body: body
+        ? { client: body.clientWidth, scroll: body.scrollWidth }
+        : null,
+      demos: demos
+        ? { client: demos.clientWidth, scroll: demos.scrollWidth }
+        : null,
+      document: {
+        client: document.documentElement.clientWidth,
+        scroll: document.documentElement.scrollWidth
+      }
+    };
+  });
+  expect(widths.body?.scroll).toBeLessThanOrEqual(widths.body?.client ?? 0);
+  expect(widths.demos?.scroll).toBeLessThanOrEqual(widths.demos?.client ?? 0);
+  expect(widths.document.scroll).toBeLessThanOrEqual(widths.document.client);
 });
 
 test('settings leave the conversation and its in-flight reply intact', async ({
