@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
-import { timed } from '../lib/perf';
+import { mark, measure, timed } from '../lib/perf';
 import type {
   GeometryExportResult,
   GeometryWorkerState,
@@ -70,6 +70,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   const lastSyncedKey = useRef<string | null>(null);
+  const firstReadyMarkedRef = useRef(false);
   const [state, setState] = useState<GeometryWorkerState>({
     type: 'state',
     phase: 'starting',
@@ -82,6 +83,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   hostRef.current = host;
 
   useEffect(() => {
+    mark('worker.requested');
     const worker = timed(
       'worker.create',
       () =>
@@ -92,6 +94,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     workerRef.current = worker;
     worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
       if (event.data.type === 'state') {
+        if (event.data.phase === 'loading-brepkit') {
+          mark('kernel.loading');
+        } else if (
+          event.data.phase === 'ready' &&
+          !firstReadyMarkedRef.current
+        ) {
+          firstReadyMarkedRef.current = true;
+          mark('worker.ready');
+          measure('worker.firstReady', 'worker.requested', 'worker.ready');
+          measure('kernel.ready', 'kernel.loading', 'worker.ready');
+        }
         // One-off previews and exports have their own promises and must not
         // make the live document look stale or ready out of order.
         if (!event.data.requestId) {

@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -6,7 +8,8 @@ import {
   useReducer,
   useRef,
   useState,
-  type ChangeEvent
+  type ChangeEvent,
+  type ComponentProps
 } from 'react';
 import {
   Camera,
@@ -103,7 +106,8 @@ import type {
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
 import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
-import { timed } from './lib/perf';
+import { mark, measure, timed, timedAsync } from './lib/perf';
+import { useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
   downloadText,
@@ -126,7 +130,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { Sidebar } from './components/Sidebar';
-import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
 import { StatusBar } from './components/StatusBar';
@@ -142,7 +145,8 @@ import {
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
+import { composeMoveTransform } from '@openzcad/viewport/move-transform';
+import { SELECTION_FILTERS } from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
@@ -164,14 +168,14 @@ import { frameFromFace } from './lib/sketch/session';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
 import { SketchToolRail } from './components/SketchToolRail';
 import { SketchEntityEditor } from './components/SketchEntityEditor';
-import { objectPolyline } from './components/viewer/sketchModeController';
+import { objectPolyline } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
   CommandPalette,
   type PaletteCommand
 } from './components/CommandPalette';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
-import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
+import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
 import type {
@@ -182,12 +186,31 @@ import type {
   SelectionFilter,
   AxisProjection,
   DisplayMode,
-  MovePreview,
-  MoveSnap,
   PickDetail,
   SketchOverlay,
   ViewTarget
-} from '@openzcad/viewport';
+} from '@openzcad/viewport/types';
+import type { MovePreview, MoveSnap } from '@openzcad/viewport';
+
+const LazyViewerShell = lazy(() =>
+  import('./components/ViewerShell').then((module) => ({
+    default: module.ViewerShell
+  }))
+);
+
+function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
+  return (
+    <Suspense
+      fallback={
+        <div className="viewer" role="status" aria-live="polite">
+          Loading 3D viewport…
+        </div>
+      }
+    >
+      <LazyViewerShell {...props} />
+    </Suspense>
+  );
+}
 import {
   deleteLocalProject,
   listLocalProjectOrganizations,
@@ -466,6 +489,15 @@ export function App() {
   const [startupState, setStartupState] = useState<'restoring' | 'ready'>(() =>
     startupProjectId ? 'restoring' : 'ready'
   );
+  const shellMarkedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (shellMarkedRef.current) {
+      return;
+    }
+    shellMarkedRef.current = true;
+    mark('app.mounted');
+    measure('startup.shell', 'bundle.evaluated', 'app.mounted');
+  }, []);
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
   const accountSettingsRef = useRef(accountSettings);
@@ -483,6 +515,11 @@ export function App() {
     setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
   }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsDialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(settingsDialogRef, {
+    enabled: settingsOpen,
+    autoFocus: true
+  });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
@@ -966,12 +1003,15 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
     void (async () => {
       try {
         const [health, rememberedLocal, currentAuth] = await Promise.all([
           api.health().catch(() => null),
           startupProjectId
-            ? loadLocalProject(startupProjectId).catch(() => null)
+            ? timedAsync('startup.localProject', () =>
+                loadLocalProject(startupProjectId).catch(() => null)
+              )
             : Promise.resolve(null),
           api
             .authConfig()
@@ -984,9 +1024,13 @@ export function App() {
               status: 'unavailable' as const
             }))
         ]);
-        const activeSession = await api.session().catch(() => null);
+        const activeSession = await timedAsync('startup.session', () =>
+          api.session().catch(() => null)
+        );
         const [listed, rememberedRemote, remoteSettings] = await Promise.all([
-          loadProjectSummaries(Boolean(activeSession)),
+          timedAsync('startup.projectList', () =>
+            loadProjectSummaries(Boolean(activeSession))
+          ),
           activeSession && startupProjectId
             ? api.loadProject(startupProjectId).catch(() => null)
             : Promise.resolve(null),
@@ -1074,6 +1118,9 @@ export function App() {
         }
       } finally {
         if (!cancelled) {
+          mark('startup.ready');
+          measure('startup.restore', 'startup.begin', 'startup.ready');
+          measure('startup.total', 'bundle.evaluated', 'startup.ready');
           setStartupState('ready');
         }
       }
@@ -5224,10 +5271,12 @@ export function App() {
   // it the assistant's conversation and any request still streaming.
   const settingsOverlay = settingsOpen ? (
     <div
+      ref={settingsDialogRef}
       className="settings-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      tabIndex={-1}
     >
       <SettingsPage
         settings={appSettings}

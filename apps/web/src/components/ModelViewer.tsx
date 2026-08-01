@@ -1,6 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
-import { mark, timed } from '../lib/perf';
+import { mark, measure, timed } from '../lib/perf';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
@@ -3311,6 +3311,12 @@ export function ModelViewer({
         firstFrame = false;
         timed('viewer.firstFrame', () =>
           renderer.render(scene, context.activeCamera)
+        );
+        mark('viewer.firstFrame.ready');
+        measure(
+          'viewer.interactive',
+          'viewer.init:begin',
+          'viewer.firstFrame.ready'
         );
       } else {
         renderer.render(scene, context.activeCamera);

@@ -4,7 +4,12 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./input-bindings": "./src/input/bindings.ts",
+    "./move-transform": "./src/gizmo/moveTransform.ts",
+    "./types": "./src/types.ts"
+  },
   "dependencies": {
     "@openzcad/shared": "workspace:*",
     "three": "^0.185.1"

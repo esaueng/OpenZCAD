@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { cp, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { defineConfig, type PluginOption } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import {
@@ -78,6 +79,54 @@ async function brepkitBuildInfo(): Promise<{
   return { version: packageJson.version, commit };
 }
 
+function sourceCommit(): string {
+  const supplied =
+    process.env.OPENZCAD_BUILD_COMMIT ??
+    process.env.GITHUB_SHA ??
+    process.env.CF_PAGES_COMMIT_SHA;
+  if (supplied?.trim()) {
+    return supplied.trim();
+  }
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: fileURLToPath(new URL('../..', import.meta.url)),
+      encoding: 'utf8'
+    }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+function buildMetadata(
+  commit: string,
+  brepkit: { version: string; commit: string }
+): PluginOption {
+  return {
+    name: 'openzcad-build-metadata',
+    generateBundle(_options, bundle) {
+      const assets = Object.values(bundle)
+        .map((entry) => entry.fileName)
+        .filter((fileName) => /\.(?:css|js|mjs|wasm)$/.test(fileName))
+        .sort();
+      this.emitFile({
+        type: 'asset',
+        fileName: 'build-meta.json',
+        source: `${JSON.stringify(
+          {
+            format: 'openzcad-build-metadata',
+            formatVersion: 1,
+            commit,
+            brepkit,
+            assets
+          },
+          null,
+          2
+        )}\n`
+      });
+    }
+  };
+}
+
 /**
  * Serves the pdf.js runtime data directories in dev and copies them into the
  * build. They are plain data, not importable modules, so pdf.js is given a URL
@@ -135,9 +184,10 @@ function pdfjsAssets(): PluginOption {
 
 export default defineConfig(async ({ command, isPreview }) => {
   const brepkit = await brepkitBuildInfo();
+  const commit = sourceCommit();
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
-  plugins.push(react(), wasm(), pdfjsAssets());
+  plugins.push(react(), wasm(), pdfjsAssets(), buildMetadata(commit, brepkit));
 
   const nodeMajor = Number.parseInt(
     process.versions.node.split('.')[0] ?? '0',
@@ -159,6 +209,7 @@ export default defineConfig(async ({ command, isPreview }) => {
     plugins,
     define: {
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
+      'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),
       'import.meta.env.OZ_BREPKIT_VERSION': JSON.stringify(brepkit.version),
       'import.meta.env.OZ_BREPKIT_COMMIT': JSON.stringify(brepkit.commit)
     },
@@ -183,6 +234,21 @@ export default defineConfig(async ({ command, isPreview }) => {
             import.meta.url
           )
         ),
+        '@openzcad/viewport/move-transform': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/gizmo/moveTransform.ts',
+            import.meta.url
+          )
+        ),
+        '@openzcad/viewport/input-bindings': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/input/bindings.ts',
+            import.meta.url
+          )
+        ),
+        '@openzcad/viewport/types': fileURLToPath(
+          new URL('../../packages/viewport/src/types.ts', import.meta.url)
+        ),
         ...workspaceAliases
       }
     },
@@ -193,8 +259,25 @@ export default defineConfig(async ({ command, isPreview }) => {
           // Rolldown accepts functional chunk routing. three.js dominates the
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
-          manualChunks: (id: string) =>
-            id.includes('/node_modules/three/') ? 'three' : undefined
+          manualChunks: (id: string) => {
+            if (id.includes('/node_modules/three/examples/')) {
+              return 'three-addons';
+            }
+            if (id.includes('/node_modules/three/')) {
+              return 'three';
+            }
+            if (
+              id.includes('/node_modules/react/') ||
+              id.includes('/node_modules/react-dom/') ||
+              id.includes('/node_modules/scheduler/')
+            ) {
+              return 'react';
+            }
+            if (id.includes('/node_modules/lucide-react/')) {
+              return 'icons';
+            }
+            return undefined;
+          }
         }
       }
     }
