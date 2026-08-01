@@ -1345,6 +1345,97 @@ export function ModelViewer({
       );
     };
     /**
+     * Where on screen a pickable exact edge currently is.
+     *
+     * Browser regressions that click an edge have to aim at a line a couple of
+     * pixels wide, and scanning a lattice of screen points hoping to land on
+     * one is both slow and dependent on the fit pose. This projects the exact
+     * display polyline through the active camera and then confirms the
+     * candidate with the real PickService, so the reported point is one the
+     * application itself resolves to that edge. Occluded samples fail that
+     * confirmation, so only a visible edge is ever reported.
+     */
+    const handleE2ELocateEdge = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          bodyId?: string;
+          resolve?: (
+            value: { x: number; y: number; topologyId: string } | null
+          ) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const body = bodiesRef.current.find(
+        (candidate) =>
+          !candidate.consumed &&
+          (!detail.bodyId || candidate.bodyId === detail.bodyId)
+      );
+      const edges = (body?.topology?.edges ?? []).filter(
+        (edge) => edge.displayRole !== 'seam'
+      );
+      const rect = renderer.domElement.getBoundingClientRect();
+      const sample = new THREE.Vector3();
+      for (const edge of edges) {
+        for (let index = 0; index + 5 < edge.points.length; index += 3) {
+          // Segment midpoints, not vertices: a vertex sits on two edges at
+          // once, so which one a click there takes is an arbitrary tie-break.
+          sample
+            .set(
+              (edge.points[index]! + edge.points[index + 3]!) / 2,
+              (edge.points[index + 1]! + edge.points[index + 4]!) / 2,
+              (edge.points[index + 2]! + edge.points[index + 5]!) / 2
+            )
+            .project(context.activeCamera);
+          // Client coordinates are integers, so round before confirming: the
+          // caller must click the exact point that was proven pickable.
+          const clientX = Math.round(
+            rect.left + ((sample.x + 1) / 2) * rect.width
+          );
+          const clientY = Math.round(
+            rect.top + ((1 - sample.y) / 2) * rect.height
+          );
+          if (
+            sample.z > 1 ||
+            clientX <= rect.left ||
+            clientX >= rect.right ||
+            clientY <= rect.top ||
+            clientY >= rect.bottom
+          ) {
+            continue;
+          }
+          // Selection chips, callouts, and the floating inspector are DOM
+          // overlays on top of the canvas. A point one of them covers is
+          // pickable in the scene but unreachable by a pointer, so it is not
+          // an answer to "where can this edge be clicked".
+          if (
+            document.elementFromPoint(clientX, clientY) !== renderer.domElement
+          ) {
+            continue;
+          }
+          const picked = picker.pick(
+            new MouseEvent('mousemove', { clientX, clientY })
+          );
+          if (
+            picked?.selection?.kind === 'edge' &&
+            picked.selection.topologyId === edge.topologyId
+          ) {
+            detail.resolve({
+              x: clientX,
+              y: clientY,
+              topologyId: edge.topologyId
+            });
+            return;
+          }
+        }
+      }
+      detail.resolve(null);
+    };
+    /**
      * Select a detected profile by stable index in browser regressions. The
      * picker itself has focused unit coverage; this avoids racing the camera
      * tween while exercising the full application selection lifecycle.
@@ -1467,6 +1558,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-profile',
         handleE2EProfileSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-locate-edge',
+        handleE2ELocateEdge
       );
     }
 
@@ -3309,6 +3404,10 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'openzcad:e2e-select-profile',
         handleE2EProfileSelection
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-locate-edge',
+        handleE2ELocateEdge
       );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);

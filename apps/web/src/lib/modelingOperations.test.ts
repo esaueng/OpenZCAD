@@ -133,6 +133,28 @@ describe('modeling operation form contracts', () => {
     ).toBe('Solid offset distance must resolve to a positive value.');
   });
 
+  /**
+   * K0.6 gave imported bodies persistent references, and their lineage name IS
+   * the fingerprint because an import has no feature contract to name faces
+   * from. Spelling it out would read "Plane face import · step · face ·
+   * 3f2a1b7c · #3f2a1b7c", so an imported face keeps the positional label.
+   */
+  it('does not render a content-addressed import name as an identity', () => {
+    const imported = modelingFaceOptions({
+      ...topology,
+      faces: [
+        {
+          ...topology.faces[0]!,
+          reference: {
+            ...reference,
+            lineageName: 'import.step.face.0000002a'
+          }
+        }
+      ]
+    });
+    expect(imported[0]?.label).toBe('Plane face 1 · #0000002a');
+  });
+
   it('states the OCCT sharp-offset limitation explicitly', () => {
     expect(
       modelingOperationDisabledReason('solid-offset', {

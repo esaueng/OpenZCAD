@@ -4,7 +4,8 @@ import {
   createProject,
   openAssistant,
   stubApi,
-  stubAssistant
+  stubAssistant,
+  waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
@@ -97,6 +98,10 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     '.assistant-panel',
     '.status-bar'
   ];
+  // What has to hold is where these surfaces come to rest. The dock opens with
+  // a 200 ms slide from `translateX(12px)`, which deliberately starts it past
+  // the right edge (the shell clips it), so measure once that has landed.
+  await waitForSurfacesToSettle(page, selectors);
   for (const selector of selectors) {
     const bounds = await page.locator(selector).boundingBox();
     expect(bounds, `${selector} should be laid out`).not.toBeNull();
