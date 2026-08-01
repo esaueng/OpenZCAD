@@ -462,9 +462,31 @@ a clause buried in a deletion PR.
 worker topology payload so each edge carries `adjacentFaceHashes:
 number[]` and `curve: { type, params }` (line/circle, **not** ellipse or
 nurbs) — viewport consumes it for edge-run walking, arc midpoints, and future
-measure tools. Split it: **W1 adjacency = S ✅ done (#96)**, **W2 curve = M**,
-**W3 snaps fix = S after W2**, **W4 `edgeChain` rewrite = M–L**.
-Kernel-independent, can start any time.
+measure tools. Split it: **W1 adjacency = S ✅ done (#96)**, **W2 curve = M
+✅ done**, **W3 snaps fix = S after W2 — in flight**, **W4 `edgeChain`
+rewrite = M–L — in flight**. Kernel-independent, can start any time.
+
+*W4's prep slice landed ahead of the rewrite and changed what the rewrite has
+to do.* It publishes `vertexIds: [number, number]` — the kernel's own vertex
+handles renumbered, start then end in the edge's own direction, deliberately
+**not** sorted. Three things it settled:
+
+- **The premise blocking W4 was false.** `getEdgeVertexHandles` already exists
+  on `BrepKernel` and is already used in production in `exact.ts`
+  (`selectedEdgesShareVertex`, `selectionTouchesBlendFace`). There was no
+  vertex identity to derive and no kernel request to file. The claim at item 5
+  below — "BrepKit publishes no edge→vertex map" — was wrong.
+- **Deriving identity from geometry was measured and rejected.** Across 78
+  solids, 1,767 vertices and 2,977 edges: quantizing the *exact* positions at
+  the ADR-011 1e-6 quantum gave **zero** false splits, but quantizing the
+  *display polyline* — the only derivation the viewport could actually run —
+  gave **73**, every one on a closed edge. A closed edge's polyline begins a
+  quarter turn from its own vertex: 10√2 on an r10 cylinder, **63.64 units**
+  on the flange's r45 rim. That is missing information, not a tolerance.
+- **The chamfer trap below is confirmed to the decimal.** Worst rim kink on a
+  3 mm chamfered 20×20×10 box is exactly **45.000000°**, and the run collapses
+  from 8 edges to 1 at 45°. The 50° cone stays; whether a chamfer band is one
+  run is a product decision, and the rewrite preserves today's answer.
 
 *W1 landed as the S it was estimated at — one field, two files, no protocol
 change — and settled two things by measurement rather than argument:*
@@ -526,9 +548,12 @@ of them load-bearing:*
    fields handle.
 5. **Adjacency alone does not suffice for the `edgeChain` rewrite.** Verified
    on a plain box: two edges on opposite sides of the top face share that face.
-   The walk also needs vertex incidence, and BrepKit publishes no edge→vertex
-   map — the adapter must derive vertex identity itself. That is publishing
-   work W1 does not deliver, which is why W4 is M–L rather than part of one M.
+   The walk also needs vertex incidence, which W1 does not deliver — which is
+   why W4 is M–L rather than part of one M. ~~BrepKit publishes no edge→vertex
+   map, so the adapter must derive vertex identity itself.~~ **False, and the
+   correction is above:** `getEdgeVertexHandles` exists and the adapter was
+   already calling it. The derivation this predicted would have been the wrong
+   thing to build, not merely extra work.
 
 *Trap, before anyone tidies `edgeChain`:* its 50° cone is **load-bearing for
 chamfers**, not a leftover. A 20×20×10 box chamfered 3 mm on its four vertical
@@ -671,12 +696,56 @@ documents**. Give revolve a region path first.
 | Lane | Work | Key sites | Est |
 | --- | --- | --- | --- |
 | Blend | chamfer walker (`chamfer_builder.rs:377` "walker not yet integrated"); torus/NURBS blend pairs (`analytic.rs:31-36,192-343`); trimming beyond planes (`builder_utils.rs:203`); setbacks, face-face, full-round; promote variable radius off deprecated v1 sampling. **Cap-rim radius range and the seam-chord defect landed in #50** — see Z6.1. Two new items it surfaced: the concave blind-hole floor rim, and cone cap rims having no analytic path | `crates/blend` | **XL** |
-| Offset | cavity shells (`offset/lib.rs:90`), arc joints (`arc_joint.rs:16`), self-intersection removal (`self_int.rs:20`), NURBS intersection (`inter3d.rs:156`) — this also lifts shell/thicken quality | `crates/offset` | **L–XL** |
+| Offset | ~~cavity shells (`offset/lib.rs:90`)~~ and ~~arc joints (`arc_joint.rs:16`)~~ **both landed in #53**; self-intersection removal (`self_int.rs:20`) and NURBS intersection (`inter3d.rs:156`) still refuse — see below | `crates/offset` | **M** remaining |
 | Boolean | same-domain full merge (`same_domain.rs:14`), off-axis cones (`boolean/mod.rs:1413`), **non-planar coincident contact (`:914`) — reproduction below, do this first**, volume-accuracy fix | `crates/algo`, `operations/boolean` | **L** |
 | Types | add `EdgeCurve::{Hyperbola, Parabola}` (unblocks `convert_to_elementary`), `FaceSurface::{OffsetSurface, SurfaceOfRevolution, SurfaceOfExtrusion}`; give `Plane` a UV parameterization to kill plane special-casing | `crates/topology`, ripple across algo/blend/io | **XL**, stage by variant |
 | Sweep/loft | implement `SweepCornerMode::Round` (today silently degrades, `sweep.rs:1185`); non-planar caps with holes / >4 edges (`cap.rs:141-146`); draft on non-planar faces | `crates/operations` | **L** |
 | Tessellation | close the planar inner-wire TODO (`tessellate/planar.rs:18` — verify against `tessellate_watertight.rs` first; may be stale) | | **S** |
 | Hardening | fuzz booleans/blends with **structured generators** (random primitive trees + transforms; invariants: closed shell, volume ⊆ operand bounds, determinism, fuse/cut idempotence) — I/O readers are fuzzed, engines are not; extend `mutants.toml` to `blend`/`offset`/`operations`; keep the `brepkit_approx` census as a CI metric | `fuzz/`, `mutants.toml` | **M–L** |
+
+### Offset lane: what #53 landed, and the one measurement it corrected
+
+`offset_solid` refused any solid with inner shells; two sites read only the
+outer shell. Both now carry the source's shell partition through. A 6-cube
+with a concentric 2-cube void offsets outward 0.5 to `7³ − 1³ = 342` and
+inward 0.5 to `5³ − 3³ = 98`, exact to 1e-9. No sign special-case was needed —
+a cavity's outward normal already points into the void.
+
+`arc_joint.rs` was a 19-line stub; it now builds true Minkowski joints for
+convex polyhedra and refuses everything else with its own reason. Box ⊕ ball
+gives exactly 6 planes, 12 cylinders and 8 spheres, `V−E+F = 24−48+26 = 2`,
+zero free and zero non-manifold edges. A 2×2×2 at d=0.5 measures
+25.2359600939 against a closed form of 25.2359877560 (1.1e-6); **the mitred
+fallback it replaces reads 27.0 — 7 % high.** Holds at 1×/1000×/0.001×.
+
+Also fixed a scale-dependent `1e-20` in `loops.rs` that carried the *fourth*
+power of model units and killed every corner of a micron-scale body. Five
+further hardcoded absolute tolerances remain in `crates/offset`
+(`analyse.rs:17`, `assemble.rs:337`, `inter2d.rs:116/127/147/184`,
+`inter3d.rs:401/418`); every one **fails closed**, and none trips at 1e-3
+scale.
+
+**Self-intersection removal was deliberately not attempted.** Excising a fold
+correctly needs the boolean engine's co-refinement, and a partial
+implementation would return a closed, oriented, plausible body enclosing the
+wrong volume — exactly the failure this whole effort exists to catch.
+
+*The correction, and it is the third time this class has bitten:*
+`wire_polygon_sampled` laid a **closed** circle edge down as a polyline but
+contributed only one endpoint for an **open** arc — one chord for the whole
+arc. A rolling-ball corner patch is bounded by three quarter great circles and
+nothing else, so it measured 0.29289322 against `π/2·r² = 0.39269908`,
+**25 % low**, and the whole rounded 2×2×2 body 2.0 % low — through *both*
+`solid_volume` and `mass_properties`. Fixed in `build_face_uv`.
+
+**Note what this means for the `mass_properties == solid_volume` cross-check:
+it would not have caught this, and it never could.** Both routes share
+`integrate_face`. They agree exactly for the all-planar mitred results the
+existing tests use, and diverge only once a face is bounded by open arcs. The
+agreement is structurally blind — use hand-derived closed forms instead. That
+fix in turn exposed a fixture bug in #49's regression, where `uv_rect_wire`
+built both constant-`v` arcs about `+z` and so declared the **major** arc,
+4.283 rad where the test names 2.0; the chord approximation had been hiding it.
 
 ### Boolean lane: non-planar coincident contact, reproduced
 
@@ -775,6 +844,30 @@ approximation at all, just less geometry.
 - Pin-bump discipline: kernel changes reach the app only via
   `chore(wasm): refresh committed package` + lockfile pin bump, with the
   corpus re-run in the bump PR.
+- **The corpus is not the whole gate — the full suite is.** The bump to
+  `70fb561` (kernel #50–#53) was tried and **held**. The parity corpus was
+  perfect: 151 passed, `test/parity/baselines/` completely unmoved, so the
+  #50 seam-chord change moved no edge hashes and the movement predicted as
+  possible did not happen. But `topology-lineage-spike` caught a regression
+  the corpus structurally cannot see: `filletWithEvolution` stopped
+  attributing the cylindrical blend band to anything, leaving a result face
+  claimed by neither `modified` nor `generated`. Before, the band was a
+  modified result of **both** faces the rounded edge separated
+  (`{"0":[6,7],…,"2":[6,9],…}`); now it is dropped from both. `generated`
+  is `{}` and `deleted` is `[]` in both. Almost certainly #51,
+  "scale-dependent face provenance", whose underlying scale fix is real and
+  must not simply be reverted.
+
+  Three things worth keeping from this. **A count-based assertion would have
+  passed** — the face count never changed, only the attribution; set equality
+  is the check, not counts. **No topological or geometric check sees it** —
+  `validateSolidRelaxed` is 0, the geometry and volume are right. And it
+  lands squarely on ADR-013: a blend band with no lineage cannot be
+  persistently named, and fails silently when M5 tries. Pin holds at
+  `f3defc3` until it is fixed; **Z6.1 stays blocked**, since it needs #50's
+  cap-rim radius range. Fix is in flight on `claude/fillet-evolution-provenance`.
+  Note that brepkit has **issues disabled**, so kernel defects are recorded in
+  the PR that fixes them, not in a tracker.
 - **M3's remaining slices (W2, W3, W4) land as merge commits, not squashes.**
   They come off one long-lived branch in sequence, and a squash makes the
   merged commit a non-ancestor of `main` — so each following slice needs a
