@@ -275,6 +275,44 @@ direct-edit output, and imported STEP provenance remain explicitly `no lineage
 - hash fallback only` where complete evolution is not available. Unsupported
   or ambiguous transitions stay visible diagnostics.
 
+## Amendment (K0.6, 2026-08-01): imported STEP topology is named
+
+The clause above listed "imported STEP provenance" alongside blends and direct
+edits as `no lineage - hash fallback only`. That grouping conflated two
+different things, and the parity corpus made the difference measurable.
+
+A blend or a direct edit is a **transition**: it consumes an earlier body and
+the kernel owes an output relation OpenZCAD cannot currently verify, so it fails
+closed. An import is not a transition at all — it is the **root** of its own
+lineage. There is no earlier body whose names could be carried across, so there
+is nothing to fail closed about. The original clause therefore governs
+provenance *through* an import, which remains unavailable, not identity *within*
+one, which is exactly what a stored face pick on a supplier file needs.
+
+So an `imported-step` body publishes schema-v5 references with capability
+`derived`:
+
+- the **name** is `import.step.{face,edge}.<hash>`, the topology's own frozen
+  ADR-011 fingerprint in hex. An import has no feature contract to name its
+  topology from — the file is the whole semantic input — and the only
+  kernel-neutral identity inside it is the exact witness. This is neither a
+  kernel handle nor a traversal ordinal nor a viewport id, which are the three
+  things this ADR prohibits; it is a deterministic function of exact geometry;
+- the **witness** is measured independently at import and stored with the
+  reference, so recomputing the hash from it reproduces `currentHash`;
+- publication is one-to-one or nothing. Two faces sharing a witness — the two
+  hemispherical patches of a BrepKit sphere are the corpus case — publish no
+  reference at all rather than an ambiguous one;
+- the closed B-spline/NURBS guard is unchanged and still fail-closed. Nothing
+  was loosened to make an import publish more.
+
+Both exact adapters implement the same rule rather than a kernel-specific one.
+That is deliberate and time-limited: while OpenCascade still exists, the parity
+corpus can assert that both kernels give an imported body the *same* lineage
+names, which is the evidence the Z3 STEP route flip needs that a pick stored
+today survives the flip. Before K0.6 neither adapter published any reference on
+an imported body, so the question could not be asked.
+
 Full boolean, fillet, chamfer, and direct-edit lineage is blocked on the bridge
 requirements listed above. In particular, neither kernel's current raw boolean
 history may replace the production unified operation, and BrepKit chamfer or
