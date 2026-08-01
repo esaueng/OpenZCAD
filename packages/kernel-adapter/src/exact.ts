@@ -96,6 +96,8 @@ const STL_EXPORT_DEFLECTION = 0.08;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
+const DIRECT_EDIT_TOLERANCE = 1e-6;
+const FULL_REVOLUTION = Math.PI * 2;
 const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
 interface ExactShape {
@@ -144,6 +146,14 @@ function subtract(left: Vec3, right: Vec3): Vec3 {
     x: left.x - right.x,
     y: left.y - right.y,
     z: left.z - right.z
+  };
+}
+
+function add(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.x + right.x,
+    y: left.y + right.y,
+    z: left.z + right.z
   };
 }
 
@@ -2112,6 +2122,348 @@ function measureFaceGeometry(
   return geometry;
 }
 
+/** A cylindrical face the kernel has proven to be an open internal bore. */
+interface ThroughHoleGeometry extends FaceGeometry {
+  radius: number;
+  diameter: number;
+  axisStart: Vec3;
+  axisEnd: Vec3;
+  axialLength: number;
+  featureType: 'through-hole';
+  editableDimension: 'diameter';
+}
+
+type ThroughHoleClassification =
+  { status: 'through-hole' } | { status: 'refused'; message: string };
+
+function refuseThroughHole(message: string): ThroughHoleClassification {
+  return { status: 'refused', message };
+}
+
+/** Point-in-solid classification, treating any kernel failure as unknown. */
+function classifySolidPoint(
+  kernel: BrepKernel,
+  solid: number,
+  point: Vec3
+): 'inside' | 'outside' | 'boundary' | 'unknown' {
+  let classification: string;
+  try {
+    classification = kernel.classifyPoint(
+      solid,
+      point.x,
+      point.y,
+      point.z,
+      DIRECT_EDIT_TOLERANCE
+    );
+  } catch {
+    return 'unknown';
+  }
+  return classification === 'inside' ||
+    classification === 'outside' ||
+    classification === 'boundary'
+    ? classification
+    : 'unknown';
+}
+
+/**
+ * Decide whether a cylindrical face is a through-hole: an internal bore that
+ * opens at both ends, as opposed to a blind pocket or an external wall.
+ *
+ * OpenCascade answers the bore/wall half of that question from the face's
+ * orientation flag — a hollow tube's outer wall and its bore share the same
+ * void axis and the same two open ends, and only the orientation separates
+ * them. BrepKit has no such flag (`getShapeOrientation` documents that every
+ * face reports `forward`, and a cylinder's parametric normal points away from
+ * the axis whether it walls a bore or a boss), so the same distinction is
+ * taken from the material itself: just outside a bore's wall is solid, just
+ * outside an outer wall is air. Everything else — full revolution, void
+ * along the axis, both ends open — mirrors the OpenCascade classifier.
+ *
+ * A case that cannot be settled is refused by name rather than guessed at.
+ */
+function classifyThroughHoleFace(
+  kernel: BrepKernel,
+  solid: number,
+  face: number,
+  geometry: FaceGeometry | undefined
+): ThroughHoleClassification {
+  if (!geometry) {
+    return refuseThroughHole('The selected face could not be measured.');
+  }
+  if (geometry.surfaceType !== 'cylinder') {
+    return refuseThroughHole(
+      `The selected face is a ${geometry.surfaceType} surface, not a cylindrical through-hole.`
+    );
+  }
+  if (
+    geometry.radius === undefined ||
+    geometry.diameter === undefined ||
+    !geometry.axisStart ||
+    !geometry.axisEnd ||
+    geometry.axialLength === undefined
+  ) {
+    return refuseThroughHole(
+      'The selected cylindrical face has no analytic axis, so it cannot be measured as a through-hole.'
+    );
+  }
+  const domain = Array.from(kernel.getSurfaceDomain(face));
+  if (
+    domain.length !== 4 ||
+    !domain.every(Number.isFinite) ||
+    Math.abs(Math.abs(domain[1]! - domain[0]!) - FULL_REVOLUTION) > 1e-5
+  ) {
+    return refuseThroughHole(
+      'The selected face covers only part of its cylinder, so it is not a complete through-hole bore.'
+    );
+  }
+  const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+  if (!axis || geometry.axialLength <= GEOMETRY_EPSILON) {
+    return refuseThroughHole(
+      'The selected cylindrical face has a degenerate axis.'
+    );
+  }
+
+  // The same probe distance OpenCascade uses to step off each end of the bore.
+  const axialProbe = Math.max(
+    DIRECT_EDIT_TOLERANCE * 10,
+    geometry.radius * 0.02,
+    geometry.axialLength * 0.01
+  );
+  const center = scale(add(geometry.axisStart, geometry.axisEnd), 0.5);
+  if (classifySolidPoint(kernel, solid, center) !== 'outside') {
+    return refuseThroughHole(
+      'The selected cylindrical face encloses material along its axis, so it is a boss rather than a hole.'
+    );
+  }
+  if (
+    classifySolidPoint(
+      kernel,
+      solid,
+      subtract(geometry.axisStart, scale(axis, axialProbe))
+    ) !== 'outside' ||
+    classifySolidPoint(
+      kernel,
+      solid,
+      add(geometry.axisEnd, scale(axis, axialProbe))
+    ) !== 'outside'
+  ) {
+    return refuseThroughHole(
+      'The selected cylindrical face does not open at both ends, so it is a blind pocket rather than a through-hole.'
+    );
+  }
+
+  // Radial probe: far enough off the wall for the kernel to resolve which side
+  // of it the point sits on, and small enough that any real wall still
+  // contains it. Sampling four bearings rather than one keeps a single
+  // intersecting feature from deciding the answer on its own.
+  const radialProbe = Math.max(
+    DIRECT_EDIT_TOLERANCE * 100,
+    geometry.radius * 1e-3
+  );
+  const reference =
+    Math.abs(axis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const bearingU = normalized(cross(reference, axis));
+  if (!bearingU) {
+    return refuseThroughHole(
+      'The selected cylindrical face has no measurable radial direction.'
+    );
+  }
+  const bearingV = cross(axis, bearingU);
+  const outsideWall = [0, 0.25, 0.5, 0.75].map((turn) => {
+    const angle = turn * FULL_REVOLUTION;
+    const offset = geometry.radius! + radialProbe;
+    return classifySolidPoint(
+      kernel,
+      solid,
+      add(
+        center,
+        add(
+          scale(bearingU, Math.cos(angle) * offset),
+          scale(bearingV, Math.sin(angle) * offset)
+        )
+      )
+    );
+  });
+  if (outsideWall.every((classification) => classification === 'inside')) {
+    return { status: 'through-hole' };
+  }
+  if (outsideWall.every((classification) => classification === 'outside')) {
+    return refuseThroughHole(
+      'The selected cylindrical face has material only on its inside, so it is an external wall rather than a bore.'
+    );
+  }
+  return refuseThroughHole(
+    'The selected cylindrical face is not surrounded by material around its whole circumference, so it cannot be classified as a through-hole.'
+  );
+}
+
+/** Face measurements plus the editable feature semantics the UI offers. */
+function measureOwnedFaceGeometry(
+  kernel: BrepKernel,
+  solid: number,
+  face: number
+): FaceGeometry | undefined {
+  const geometry = measureFaceGeometry(kernel, face);
+  if (
+    geometry?.surfaceType === 'cylinder' &&
+    classifyThroughHoleFace(kernel, solid, face, geometry).status ===
+      'through-hole'
+  ) {
+    geometry.featureType = 'through-hole';
+    geometry.editableDimension = 'diameter';
+  }
+  return geometry;
+}
+
+/**
+ * Re-validate that the resolved face is still the through-hole the operation
+ * was recorded against. A rebuild that drifted must fail here rather than
+ * resize whichever face happened to inherit the fingerprint.
+ */
+function requireThroughHole(
+  kernel: BrepKernel,
+  solid: number,
+  face: number,
+  sourceDiameter?: number,
+  sourceAxisStart?: Vec3,
+  sourceAxisEnd?: Vec3
+): ThroughHoleGeometry {
+  const geometry = measureFaceGeometry(kernel, face);
+  const classification = classifyThroughHoleFace(kernel, solid, face, geometry);
+  if (classification.status !== 'through-hole' || !geometry) {
+    throw new Error(
+      classification.status === 'refused'
+        ? classification.message
+        : 'Selected face is not a complete through-hole cylinder.'
+    );
+  }
+  geometry.featureType = 'through-hole';
+  geometry.editableDimension = 'diameter';
+  const hole = geometry as ThroughHoleGeometry;
+  if (
+    sourceDiameter !== undefined &&
+    Math.abs(hole.diameter - sourceDiameter) >
+      Math.max(DIRECT_EDIT_TOLERANCE, sourceDiameter * 1e-6)
+  ) {
+    throw new Error(
+      'Selected face no longer matches its recorded source diameter.'
+    );
+  }
+  if (sourceAxisStart && sourceAxisEnd) {
+    const axisTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      hole.axialLength * 1e-6,
+      hole.radius * 1e-6
+    );
+    const sameDirection =
+      length(subtract(hole.axisStart, sourceAxisStart)) <= axisTolerance &&
+      length(subtract(hole.axisEnd, sourceAxisEnd)) <= axisTolerance;
+    const reversedDirection =
+      length(subtract(hole.axisStart, sourceAxisEnd)) <= axisTolerance &&
+      length(subtract(hole.axisEnd, sourceAxisStart)) <= axisTolerance;
+    if (!sameDirection && !reversedDirection) {
+      throw new Error(
+        'Selected face no longer matches its recorded hole axis.'
+      );
+    }
+  }
+  return hole;
+}
+
+/** Solid cylinder between two world points, optionally extended past both. */
+function cylinderAlongAxis(
+  kernel: BrepKernel,
+  start: Vec3,
+  end: Vec3,
+  radius: number,
+  extension = 0
+): number {
+  const vector = subtract(end, start);
+  const axis = normalized(vector);
+  const axialLength = length(vector);
+  if (!axis || axialLength <= GEOMETRY_EPSILON) {
+    throw new Error('Cylindrical feature has a degenerate axis.');
+  }
+  const origin = subtract(start, scale(axis, extension));
+  const local = kernel.makeCylinder(radius, axialLength + extension * 2);
+  return kernel.copyAndTransformSolid(
+    local,
+    coordinateFrameMatrix(origin, axis)
+  );
+}
+
+/**
+ * Close exactly the selected through-hole span by fusing a plug of the bore's
+ * own radius and merging the seams the fuse leaves behind.
+ *
+ * BrepKit's boolean drops to a co-refined mesh when its general face assembly
+ * will not accept the result, and closing a hole — collapsing a handle in the
+ * body — is a configuration it declines often enough to matter. A mesh result
+ * still encloses roughly the right space, so it is caught by counting faces
+ * instead of measuring volume: a real fill deletes the bore and merges its two
+ * openings back into their host faces, while the mesh fallback replaces every
+ * analytic surface with a fan of triangles and multiplies the face count.
+ */
+function fillThroughHole(
+  kernel: BrepKernel,
+  solid: number,
+  geometry: ThroughHoleGeometry
+): number {
+  const facesBefore = kernel.getSolidFaces(solid).length;
+  const filler = cylinderAlongAxis(
+    kernel,
+    geometry.axisStart,
+    geometry.axisEnd,
+    geometry.radius
+  );
+  let filled: number;
+  try {
+    filled = kernel.fuse(solid, filler);
+  } catch (error) {
+    throw new Error(
+      `Filling the through-hole failed: ${
+        error instanceof Error ? error.message : 'the kernel rejected the fuse'
+      }.`,
+      { cause: error }
+    );
+  }
+  kernel.unifyFaces(filled);
+  if (kernel.validateSolid(filled) !== 0) {
+    throw new Error('Filling the through-hole did not produce a valid solid.');
+  }
+  if (kernel.getSolidFaces(filled).length >= facesBefore) {
+    throw new Error(
+      "Filling the through-hole fell back to a faceted mesh boolean, which would replace the body's exact surfaces with triangles."
+    );
+  }
+  return filled;
+}
+
+/** Radii of every analytic cylinder in `solid` sharing the given axis line. */
+function coaxialCylinderRadii(
+  kernel: BrepKernel,
+  solid: number,
+  axisPoint: Vec3,
+  axisDirection: Vec3,
+  tolerance: number
+): number[] {
+  return Array.from(kernel.getSolidFaces(solid)).flatMap((handle) => {
+    const measured = measureFaceGeometry(kernel, handle);
+    if (
+      measured?.surfaceType !== 'cylinder' ||
+      measured.radius === undefined ||
+      !measured.axisStart
+    ) {
+      return [];
+    }
+    const toAxis = subtract(measured.axisStart, axisPoint);
+    const along = dot(toAxis, axisDirection);
+    return length(subtract(toAxis, scale(axisDirection, along))) <= tolerance
+      ? [measured.radius]
+      : [];
+  });
+}
+
 function faceAttachmentCandidatesForShape(
   kernel: BrepKernel,
   shape: ExactShape
@@ -3260,14 +3612,238 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
+   * Replace a through-hole's bore with one at the requested diameter.
+   *
+   * OpenCascade plugs the bore and then cuts the new one through the closed
+   * body. That is `(body ∪ bore) \ newBore`, and because the bore is void in
+   * `body` and the extension past each end sits outside it, the same set is
+   * reached with a single boolean: cutting the new bore straight through when
+   * it is wider, or fusing the annulus between the two radii when it is
+   * narrower. Both forms are exact and produce identical volumes — see the
+   * cross-kernel agreement test — but the single boolean skips the plug fuse,
+   * which BrepKit frequently declines to do analytically. The extension past
+   * both ends is OpenCascade's, so a hole through a slanted opening is trimmed
+   * identically on either kernel.
+   */
+  private resizeThroughHole(
+    kernel: BrepKernel,
+    solid: number,
+    face: number,
+    operation: Extract<DirectEditOperation, { kind: 'resize-through-hole' }>,
+    scope: Record<string, number>
+  ): number {
+    const geometry = requireThroughHole(
+      kernel,
+      solid,
+      face,
+      operation.sourceDiameter,
+      operation.sourceAxisStart,
+      operation.sourceAxisEnd
+    );
+    const diameter = resolveParamValue(
+      operation.diameter,
+      scope,
+      'through-hole diameter'
+    );
+    if (!Number.isFinite(diameter) || diameter <= DIRECT_EDIT_TOLERANCE) {
+      throw new Error('Through-hole diameter must be greater than zero.');
+    }
+    const radius = diameter / 2;
+    const radiusTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      geometry.radius * 1e-6
+    );
+    if (Math.abs(radius - geometry.radius) <= radiusTolerance) {
+      throw new Error(
+        'Through-hole diameter must differ from its current diameter.'
+      );
+    }
+    const extension = Math.max(
+      DIRECT_EDIT_TOLERANCE * 10,
+      geometry.axialLength * 0.02,
+      diameter * 0.01
+    );
+    const newBore = cylinderAlongAxis(
+      kernel,
+      geometry.axisStart,
+      geometry.axisEnd,
+      radius,
+      extension
+    );
+    let output: number;
+    try {
+      output =
+        radius > geometry.radius
+          ? kernel.cut(solid, newBore)
+          : kernel.fuse(
+              solid,
+              kernel.cut(
+                cylinderAlongAxis(
+                  kernel,
+                  geometry.axisStart,
+                  geometry.axisEnd,
+                  geometry.radius
+                ),
+                newBore
+              )
+            );
+    } catch (error) {
+      throw new Error(
+        `Through-hole diameter ${diameter} does not fit this body: ${
+          error instanceof Error ? error.message : 'the kernel rejected the cut'
+        }.`,
+        { cause: error }
+      );
+    }
+    kernel.unifyFaces(output);
+    if (kernel.validateSolid(output) !== 0) {
+      throw new Error(
+        `Resizing the through-hole to diameter ${diameter} does not produce a valid solid.`
+      );
+    }
+    // The kernel can clear its own gates and still hand back a degraded
+    // result: a boolean that meets a coaxial cylindrical face may return the
+    // untouched original, and the mesh fallback encloses the right space with
+    // a wall of triangles instead of a cylinder. Read the bore back and insist
+    // it is an analytic cylinder at the new radius, so either failure surfaces
+    // as a failed feature rather than a gesture that looked like it worked.
+    const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+    if (!axis) {
+      throw new Error('The selected face has a degenerate axis.');
+    }
+    const axisTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      geometry.axialLength * 1e-5,
+      geometry.radius * 1e-5
+    );
+    const coaxialRadii = coaxialCylinderRadii(
+      kernel,
+      output,
+      geometry.axisStart,
+      axis,
+      axisTolerance
+    );
+    const atRadius = (candidate: number): boolean =>
+      coaxialRadii.some(
+        (measured) => Math.abs(measured - candidate) <= radiusTolerance
+      );
+    if (!atRadius(radius)) {
+      throw new Error(
+        atRadius(geometry.radius)
+          ? `The kernel left the hole at its original diameter instead of resizing it to ${diameter}.`
+          : `The kernel returned no analytic bore at diameter ${diameter} — the wall came back as a mesh approximation.`
+      );
+    }
+    return output;
+  }
+
+  /**
+   * Remove the feature the selected face belongs to.
+   *
+   * A through-hole is closed by fusing a plug of its own radius, exactly as
+   * OpenCascade does. Anything else goes to BrepKit's `defeature`, which
+   * rebuilds the body from the planes of the faces it keeps and therefore
+   * only accepts a body whose every remaining face is planar. That
+   * precondition is checked before the call so an unsupported selection is
+   * named rather than silently reassembled, and the reassembly itself is held
+   * to strict solid validation because its failure mode is a closed-looking
+   * body with the wrong walls.
+   */
+  private removeFaceFeature(
+    kernel: BrepKernel,
+    solid: number,
+    face: number,
+    geometry: FaceGeometry | undefined,
+    operation: Extract<DirectEditOperation, { kind: 'remove-face-feature' }>
+  ): number {
+    if (geometry?.surfaceType !== operation.sourceSurfaceType) {
+      throw new Error('Selected face no longer matches its recorded surface.');
+    }
+    // Face area comes from BrepKit's bounded-deflection integration rather
+    // than an exact surface integral, so it is compared at the same relative
+    // tolerance the planar offset uses. The centre is a vertex centroid and
+    // is exact, so it keeps the direct-edit tolerance.
+    const areaTolerance = Math.max(operation.sourceArea * 1e-5, 1e-9);
+    const centerTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      Math.sqrt(Math.max(operation.sourceArea, 1)) * 1e-6
+    );
+    if (
+      Math.abs(geometry.area - operation.sourceArea) > areaTolerance ||
+      length(subtract(geometry.center, operation.sourceCenter)) >
+        centerTolerance
+    ) {
+      throw new Error('Selected face no longer matches its recorded geometry.');
+    }
+
+    const isThroughHole =
+      classifyThroughHoleFace(kernel, solid, face, geometry).status ===
+      'through-hole';
+    if (isThroughHole) {
+      return fillThroughHole(
+        kernel,
+        solid,
+        requireThroughHole(
+          kernel,
+          solid,
+          face,
+          operation.sourceDiameter,
+          operation.sourceAxisStart,
+          operation.sourceAxisEnd
+        )
+      );
+    }
+
+    const keptFaces = Array.from(kernel.getSolidFaces(solid)).filter(
+      (handle) => handle !== face
+    );
+    const nonPlanar = new Set(
+      keptFaces
+        .map((handle) => kernel.getSurfaceType(handle))
+        .filter((surfaceType) => surfaceType !== 'plane')
+    );
+    if (nonPlanar.size > 0) {
+      throw new Error(
+        `Removing a ${geometry.surfaceType} face needs BrepKit's defeature operation, which only supports bodies whose every remaining face is planar; this body still has ${[...nonPlanar].sort().join(', ')} faces.`
+      );
+    }
+    if (keptFaces.length < 4) {
+      throw new Error(
+        'Removing the selected face would leave too few faces to bound a solid.'
+      );
+    }
+    let output: number;
+    try {
+      output = kernel.defeature(solid, Uint32Array.from([face]));
+    } catch (error) {
+      throw new Error(
+        `Removing the selected face failed: ${
+          error instanceof Error
+            ? error.message
+            : 'the kernel rejected the defeature'
+        }.`,
+        { cause: error }
+      );
+    }
+    kernel.unifyFaces(output);
+    if (kernel.validateSolid(output) !== 0) {
+      throw new Error(
+        'Removing the selected face did not produce a valid solid.'
+      );
+    }
+    return output;
+  }
+
+  /**
    * History-backed direct edits on the BrepKit path. Planar offsets and
    * cylindrical resizes are the kernel's own `pushPullFace` and
-   * `resizeCylindricalFace`: each derives its tool from the selected face's
-   * geometry, merges the seams the boolean leaves behind, and refuses any
-   * result whose shell is not closed or whose volume is not the one the edit
-   * is defined to produce. Every source measurement is re-validated against
-   * the rebuilt body first, so a drifted rebuild fails closed instead of
-   * editing the wrong face.
+   * `resizeCylindricalFace`; through-hole resizes and feature removals build
+   * their own tools from the selected face's analytic geometry. Each derives
+   * its tool from the selected face, merges the seams the boolean leaves
+   * behind, and refuses any result whose shell is not closed or whose surfaces
+   * are not the ones the edit is defined to produce. Every source measurement
+   * is re-validated against the rebuilt body first, so a drifted rebuild fails
+   * closed instead of editing the wrong face.
    */
   private applyDirectEdit(
     kernel: BrepKernel,
@@ -3275,20 +3851,27 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     operation: DirectEditOperation,
     scope: Record<string, number>
   ): ExactShape {
-    if (
-      operation.kind !== 'offset-face' &&
-      operation.kind !== 'resize-cylindrical-face'
-    ) {
-      // resize-through-hole / remove-face-feature remain OCCT-only.
-      throw new Error('Direct B-rep edits require the OpenCascade kernel.');
-    }
     const solid = collapseShape(kernel, target);
     const face = this.resolveFaceByFingerprint(
       kernel,
       solid,
       operation.faceHash
     );
+    if (operation.kind === 'resize-through-hole') {
+      return {
+        solids: [this.resizeThroughHole(kernel, solid, face, operation, scope)]
+      };
+    }
+
     const geometry = measureFaceGeometry(kernel, face);
+
+    if (operation.kind === 'remove-face-feature') {
+      return {
+        solids: [
+          this.removeFaceFeature(kernel, solid, face, geometry, operation)
+        ]
+      };
+    }
 
     if (operation.kind === 'offset-face') {
       if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
@@ -3398,22 +3981,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     // back and insist it is an analytic cylinder at the new radius, so either
     // failure surfaces as a failed feature rather than a gesture that looked
     // like it worked.
-    const coaxialRadii = Array.from(kernel.getSolidFaces(output)).flatMap(
-      (handle) => {
-        const measured = measureFaceGeometry(kernel, handle);
-        if (
-          measured?.surfaceType !== 'cylinder' ||
-          measured.radius === undefined ||
-          !measured.axisStart
-        ) {
-          return [];
-        }
-        const toAxis = subtract(measured.axisStart, geometry.axisStart!);
-        const along = dot(toAxis, axisDir);
-        return length(subtract(toAxis, scale(axisDir, along))) <= axisTolerance
-          ? [measured.radius]
-          : [];
-      }
+    const coaxialRadii = coaxialCylinderRadii(
+      kernel,
+      output,
+      geometry.axisStart,
+      axisDir,
+      axisTolerance
     );
     const atRadius = (radius: number): boolean =>
       coaxialRadii.some(
@@ -3516,7 +4089,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             reference: verifiedReference,
             triangleStart: (indexOffset + start) / 3,
             triangleCount: (end - start) / 3,
-            geometry: measureFaceGeometry(kernel, handle)
+            geometry: measureOwnedFaceGeometry(kernel, solid, handle)
           });
         }
       } finally {

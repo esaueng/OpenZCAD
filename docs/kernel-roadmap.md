@@ -28,9 +28,10 @@ The status bar says one kernel; routing in
 | **OCCT** (`occt-wasm@3.8.0`) | The **whole document** reroutes to `OcctStepKernelAdapter` if it contains one `imported-step` feature; also pulled into pure-BrepKit docs for multi-body STEP export (`combineStepSolids`), and `inspectStep` is unconditionally OCCT | 22 MB wasm |
 | **Legacy JS polyhedral kernel** (`OpenZCADKernel` + `packages/geometry` BSP CSG) | The whole document reroutes here if it contains an `imported-mesh` feature (and no STEP) | — |
 
-Two document features are **OCCT-only** — BrepKit refuses them outright
-(`exact.ts` ≈ 3298: "resize-through-hole / remove-face-feature remain
-OCCT-only"). Everything else has a BrepKit implementation.
+Every document feature now has a BrepKit implementation. The two that were
+OCCT-only — `resize-through-hole` and `remove-face-feature` — were ported in
+Z4; what remains is not a missing implementation but two BrepKit boolean and
+defeature limitations those edits fail closed on (see Z4 below).
 
 Around the kernels sits a ring of JS that either works around BrepKit
 defects or substitutes for data BrepKit doesn't publish:
@@ -210,10 +211,28 @@ on BrepKit. Delete `step-import.ts`'s angle rewriter (superseded by kernel
 unit handling). Gate on the Z1.3 corpus: identical-or-better warnings,
 volumes within tolerance, witnesses stable across a save/reload.
 
-### Z4 — Port the OCCT-only direct edits (needs K0.3)
+### Z4 — Port the OCCT-only direct edits — **done, with two K0.3 gaps**
 
-Implement `resize-through-hole` and `remove-face-feature` on the BrepKit
-path using the new kernel ops; remove the refusal in `exact.ts`.
+`resize-through-hole` and `remove-face-feature` run on the BrepKit path and
+agree with OCCT volume-for-volume (`test/exact-kernel-adapter.test.ts`,
+"resizes and removes a through hole identically on BrepKit and
+OpenCascade"). Through-hole classification is derived from point-in-solid
+probes because BrepKit faces carry no orientation flag.
+
+Two cases still refuse, both waiting on K0.3 rather than on adapter work:
+
+- **Closing a hole** (`remove-face-feature` on a through-hole) is a plug
+  fuse, and BrepKit's GFA boolean often declines the handle-collapsing
+  configuration and falls back to a co-refined mesh. It succeeds on a
+  cylindrical body and frequently fails on a plate. The adapter detects the
+  fallback by face count and refuses rather than shipping a faceted body.
+  `resize-through-hole` is unaffected: it reaches the same set with one
+  boolean instead of two and never needs the plug.
+- **`defeature`** rebuilds a body from the planes of the faces it keeps, so
+  it accepts only all-planar bodies and returns a wrong solid on every
+  non-trivial one tried (chamfer, pocket, boss, notch — each fails
+  `validateSolid`). The adapter refuses both the unsupported-body case up
+  front and the wrong-solid case after the call.
 
 ### Z5 — Delete OCCT
 
