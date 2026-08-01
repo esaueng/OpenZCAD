@@ -83,7 +83,11 @@ function circularMeshRing(
   return [...ordered, ordered[0]!].flat();
 }
 
-describe('exact hybrid kernel adapter', () => {
+// Real-kernel suite: several tests run seconds of WASM geometry and have
+// tripped the 5 s default one at a time on slow CI runners (three different
+// victims across three runs). Give every test here the same generous budget;
+// individual tests may still raise it further.
+describe('exact hybrid kernel adapter', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
 
   beforeAll(async () => {
@@ -606,7 +610,9 @@ describe('exact hybrid kernel adapter', () => {
     expect(derived.warnings).toEqual([]);
     expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
     expect(body.volume).toBeGreaterThan(0);
-  });
+    // Runs in under a second locally but has tripped the 5 s default on slow
+    // CI runners; give it the same headroom as the other kernel-heavy tests.
+  }, 30_000);
 
   it('keeps a face-contact cylinder and circular-extrude union closed', async () => {
     const withCylinder = addPrimitiveFeature(
@@ -2190,7 +2196,9 @@ describe('exact hybrid kernel adapter', () => {
       volumeBefore + 3 * target!.geometry!.area,
       3
     );
-  }, 15_000);
+    // 17 s has been observed on slow CI runners against the previous 15 s
+    // cap; the dense bracket legitimately takes that long to fuse twice.
+  }, 60_000);
 
   it('builds selected-edge fillet and chamfer features', async () => {
     const base = addPrimitiveFeature(
@@ -2673,6 +2681,132 @@ describe('exact hybrid kernel adapter', () => {
     );
     expect(derived.warnings[0]).toContain('Try a smaller radius');
     expect(derived.warnings[0]).not.toContain('WebAssembly.Exception');
+  });
+
+  it('names the real blocker when fillets fail on a boolean-result plate', async () => {
+    // Regression for docs/qa/2026-08-01: on a boolean-subtract body the
+    // kernel refuses corner chains and closed rims at EVERY radius, so the
+    // failure message must not steer the user toward a smaller radius (nor,
+    // for corner chains, toward merging edges into one feature — that is the
+    // same failing call).
+    const withPlate = addPrimitiveFeature(
+      createProjectDocument('Holed plate fillets', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 80, height: 60, depth: 6 }
+      }
+    );
+    const plateId = withPlate.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withPlate, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 2.25, height: 6 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Place hole',
+      targetBodyId: toolId,
+      translation: { x: 10, y: 10, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Holed plate',
+        operation: 'subtract',
+        targetBodyIds: [plateId, toolId]
+      })
+    );
+    const bodyId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+
+    const edges = derived.bodyRepresentations[bodyId]!.topology!.edges;
+    const polylineLength = (points: number[]): number => {
+      let total = 0;
+      for (let index = 0; index + 5 < points.length; index += 3) {
+        total += Math.hypot(
+          points[index + 3]! - points[index]!,
+          points[index + 4]! - points[index + 1]!,
+          points[index + 5]! - points[index + 2]!
+        );
+      }
+      return total;
+    };
+    const onTop = (points: number[]): boolean =>
+      points.every(
+        (value, index) => index % 3 !== 2 || Math.abs(value - 6) < 1e-6
+      );
+    const topOfLength = (length: number) =>
+      edges.filter(
+        (edge) =>
+          onTop(edge.points) &&
+          Math.abs(polylineLength(edge.points) - length) < 1e-3
+      );
+    const long = topOfLength(80)[0]!;
+    const sharesEndpoint = (a: number[], b: number[]): boolean => {
+      const ends = (points: number[]) => [
+        points.slice(0, 3),
+        points.slice(-3)
+      ];
+      return ends(a).some((p) =>
+        ends(b).some((q) => Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!) < 1e-6)
+      );
+    };
+    const short = topOfLength(60).find((edge) =>
+      sharesEndpoint(edge.points, long.points)
+    )!;
+    const rim = edges.find(
+      (edge) =>
+        onTop(edge.points) &&
+        Math.abs(polylineLength(edge.points) - 2 * Math.PI * 2.25) < 0.05
+    )!;
+    expect(long).toBeTruthy();
+    expect(short).toBeTruthy();
+    expect(rim).toBeTruthy();
+
+    const corner = filletEdges(document, {
+      name: 'Corner fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [long.hash, short.hash],
+      size: 2
+    }).document;
+    const cornerDerived = await adapter.syncDocument(corner);
+    expect(cornerDerived.warnings).toHaveLength(1);
+    expect(cornerDerived.warnings[0]).toContain('meet at a shared corner');
+    expect(cornerDerived.warnings[0]).not.toContain('Try a smaller');
+
+    const rimFillet = filletEdges(document, {
+      name: 'Rim fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [rim.hash],
+      size: 1
+    }).document;
+    const rimDerived = await adapter.syncDocument(rimFillet);
+    expect(rimDerived.warnings).toHaveLength(1);
+    expect(rimDerived.warnings[0]).toContain('Closed rim edges');
+    expect(rimDerived.warnings[0]).not.toContain('Try a smaller');
+
+    // A single straight edge still fillets, and radius advice survives for
+    // the genuinely radius-bound failure on the same body.
+    const single = filletEdges(document, {
+      name: 'Single fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [long.hash],
+      size: 2
+    }).document;
+    const singleDerived = await adapter.syncDocument(single);
+    expect(singleDerived.warnings).toEqual([]);
+    const oversized = filletEdges(document, {
+      name: 'Oversized fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [long.hash],
+      size: 50
+    }).document;
+    const oversizedDerived = await adapter.syncDocument(oversized);
+    expect(oversizedDerived.warnings).toHaveLength(1);
+    expect(oversizedDerived.warnings[0]).toContain('Try a smaller radius');
   });
 
   it('builds linear and circular exact body patterns', async () => {
