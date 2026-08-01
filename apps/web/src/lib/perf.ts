@@ -25,6 +25,23 @@ export function mark(name: string, detail?: unknown): void {
   }
 }
 
+/** Measures between two named OpenZCAD marks without affecting app behavior. */
+export function measure(name: string, start: string, end?: string): void {
+  if (!supported) {
+    return;
+  }
+  try {
+    performance.measure(
+      `${PREFIX}${name}`,
+      `${PREFIX}${start}`,
+      end ? `${PREFIX}${end}` : undefined
+    );
+  } catch {
+    // Missing marks are expected when a phase is skipped (for example, an
+    // empty document never loads the exact kernel).
+  }
+}
+
 /** Times a synchronous phase, recording it even if it throws. */
 export function timed<T>(name: string, run: () => T): T {
   if (!supported) {

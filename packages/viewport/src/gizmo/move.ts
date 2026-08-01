@@ -95,26 +95,9 @@ export function chooseRotateSnapStep(pixelsPerDegree: number): number {
 }
 
 /**
- * The Move feature rotates about the world origin (X, then Y, then Z — the
- * exact kernel applies the axes in that order, i.e. Euler 'ZYX'), then
- * translates. To make the gizmo rotate the body about its own center, fold
- * the difference into the committed translation: T = t + c − R·c.
+ * Three.js Euler matching the exact kernel's world-axis X, then Y, then Z
+ * application order (represented as Euler order 'ZYX').
  */
-export function composeMoveTransform(
-  center: { x: number; y: number; z: number },
-  translation: { x: number; y: number; z: number },
-  rotationDeg: { x: number; y: number; z: number }
-): { x: number; y: number; z: number } {
-  const rotated = new THREE.Vector3(center.x, center.y, center.z).applyEuler(
-    moveEuler(rotationDeg)
-  );
-  return {
-    x: translation.x + center.x - rotated.x,
-    y: translation.y + center.y - rotated.y,
-    z: translation.z + center.z - rotated.z
-  };
-}
-
 export function moveEuler(rotationDeg: {
   x: number;
   y: number;

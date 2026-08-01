@@ -1,4 +1,4 @@
-import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport';
+import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport/input-bindings';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Accessibility,
