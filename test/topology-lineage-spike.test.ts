@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+// Note this reaches the kernel by relative path rather than by the
+// `brepkit-wasm` specifier, so `vitest.config.ts`'s `BREPKIT_WASM_PKG`
+// override does NOT apply here — running this file against a candidate pin
+// needs the pin actually installed. Worth knowing before trusting a green
+// run as evidence about a pin you thought you had swapped in.
 import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
 import { OcctKernel } from '../packages/kernel-adapter/node_modules/occt-wasm/dist/index.js';
 
@@ -10,6 +15,21 @@ interface BrepEvolution {
     modified: Record<string, number[]>;
     generated: Record<string, number[]>;
     deleted: number[];
+    /**
+     * Result faces the kernel declined to attribute, mapped to the source
+     * faces it could not choose between. Optional because it postdates the
+     * three fields above.
+     *
+     * Decoding it is not optional, and that is the point. This file once
+     * reported a blend band as attributed by nothing, when the kernel had in
+     * fact recorded `unresolved: {band: [both parents]}` — an explicit
+     * refusal naming both candidates. Reading only the original three fields
+     * turned "refused, with the fact available" into "silently absent", which
+     * is a different defect with a different fix. A completeness check must
+     * read every field the record has, or it reports the right failure for
+     * the wrong reason.
+     */
+    unresolved?: Record<string, number[]>;
   };
 }
 
@@ -61,7 +81,13 @@ function parseBrepEvolution(value: unknown): BrepEvolution {
       generated: handleMap(evolution.generated, 'generated'),
       // This is deliberately required. Missing `deleted` is a contract error,
       // not evidence that every source face survived.
-      deleted: integerArray(evolution.deleted, 'deleted')
+      deleted: integerArray(evolution.deleted, 'deleted'),
+      // Optional because it postdates the three above, but decoded whenever
+      // present — see the field's doc comment for why reading it matters.
+      unresolved:
+        evolution.unresolved === undefined
+          ? undefined
+          : handleMap(evolution.unresolved, 'unresolved')
     }
   };
 }
@@ -88,6 +114,22 @@ function verifyCompleteBrepEvolution(
   const modifiedSources = Object.keys(payload.evolution.modified).map(Number);
   const modifiedResults = Object.values(payload.evolution.modified).flat();
   const generatedResults = Object.values(payload.evolution.generated).flat();
+
+  // Checked before the set equality below, so a refusal reports itself as a
+  // refusal. Without this, an unresolved face reaches the equality as a
+  // result nothing claims, and the failure reads as "attributed by nothing"
+  // when the kernel in fact recorded which sources it could not choose
+  // between. Those are different defects with different fixes.
+  const unresolved = payload.evolution.unresolved ?? {};
+  expect(
+    Object.keys(unresolved).every((handle) => resultFaces.has(Number(handle)))
+  ).toBe(true);
+  expect(
+    Object.values(unresolved)
+      .flat()
+      .every((handle) => sourceFaces.has(handle))
+  ).toBe(true);
+  expect(unresolved).toEqual({});
 
   expect(modifiedSources.every((handle) => sourceFaces.has(handle))).toBe(true);
   expect(
