@@ -5571,12 +5571,7 @@ export function App() {
             : 'pending',
         exactFailureReason: geometry.state.error,
         hasTargetBody: Boolean(modelingTargetBody),
-        openingFaceCount: modelingFaces.length,
-        // Z3: BrepKit builds every document, imported STEP included, so an
-        // `imported-step` feature no longer switches the kernel — and no
-        // longer gates solid offset behind OpenCascade's convex-planar limit.
-        kernel: 'brepkit',
-        offsetTopology: 'unknown'
+        openingFaceCount: modelingFaces.length
       }))
     : null;
 

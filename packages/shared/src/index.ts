@@ -508,7 +508,7 @@ export interface FaceTopology {
 }
 
 export interface FaceGeometry {
-  /** Underlying OCCT surface class (plane, cylinder, cone, B-spline, ...). */
+  /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
   area: number;
   /** Exact surface center of mass, used as a topology fingerprint. */
