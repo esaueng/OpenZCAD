@@ -870,9 +870,10 @@ Two defects came out of the first bounded runs, both open:
   edges**, 420 vertices where 210 suffice. The cone face and the base plane
   each emit their own copy of the 209-point base circle and the two are never
   merged. A frustum at the same deflection is watertight, so the shared-edge
-  pool works for an ordinary circle and not this one. `MERGE_GRID` is a fixed
-  absolute `1e-7` whose comment calls grid-boundary splits "possible but
-  rare" — here **209 of 209** split. Watertight at 0.001×, open at 1× and
+  pool works for an ordinary circle and not this one. ~~`MERGE_GRID` is a
+  fixed absolute `1e-7` … here 209 of 209 split.~~ **That was the wrong
+  suspect and the fix lane said so — see the correction below.** Watertight
+  at 0.001×, open at 1× and
   1000×. **No measurement oracle catches it:** `solid_volume` returns
   9.42477796076938 against an exact `πr²h/3` of 9.42477796076938. The volume
   is right and the mesh is wrong — the mirror image of #52, which passed
@@ -914,14 +915,65 @@ feature or any mm→m export path, so it must be fixed upstream before either
 ships.
 
 **A decision this lane surfaced, recorded so it is deliberate.** Adding the
-engine targets to the scheduled `fuzz.yml` matrix makes that job **red**,
-because the cone defect is real and open. Landing it red is the right call —
-hiding a live defect to keep a dashboard green is precisely the habit this
-whole effort exists to break — but a permanently red scheduled job trains
-people to ignore it. So the cone fix is queued as the next kernel lane rather
-than left open indefinitely; the window of red is meant to be short, and if
-it stops being short the honest move is to fix the tessellator, not to
-exclude the target.
+engine targets to the scheduled `fuzz.yml` matrix makes that job **red**.
+Landing it red is the right call — hiding a live defect to keep a dashboard
+green is precisely the habit this whole effort exists to break — but a
+permanently red scheduled job trains people to ignore it, so the cone fix was
+queued as the next kernel lane rather than left open indefinitely.
+
+*Correction, and it undercuts the reason I gave rather than the decision.*
+I wrote that the job is red **because the cone defect is real and open**, and
+that landing the cone fix would shorten the window. **Both are false.** The
+scheduled job's only recorded run (2026-07-26, `df532ee`) **predates #54**:
+the matrix then held seven reader targets and no `boolean_tree` at all, and
+what failed was **`ply_reader` and `glb_reader` crash artifacts**. So that
+job was already red for unrelated reasons, the cone was never its cause, and
+the cone fix does not turn it green. Those two reader crashes need their own
+lane. The decision to land red still stands; the justification I attached to
+it was simply wrong, and was asserted rather than checked.
+
+### The cone defect: the mechanism, which was not the one suspected
+
+Worth recording in full, because the framing pointed **one stage too early**
+for the third time in this effort, and the real chain is instructive.
+
+It is **not `MERGE_GRID`**, and not any merge tolerance: the closest pair of
+vertices in the broken mesh is **2.25e-2** apart — four orders of magnitude
+beyond `snap_tol`. There were no near-coincident vertices failing to merge.
+What actually happens:
+
+1. A pointed cone's lateral face has **one** closed rim circle plus a doubled
+   degenerate seam to the apex, so `tessellate_revolution_band_shared`, which
+   needs two rims, declines.
+2. `tessellate_nonplanar_cdt` then returns `Ok` having emitted **zero**
+   triangles — the seam collapses the UV boundary — so the caller rolls back
+   to `tessellate_nonplanar_snap`.
+3. Snap tessellates from the cone's **own** parametric grid and reconciles
+   with the shared pool by proximity afterwards.
+4. The cone surface's `u = 0` ray and the base circle's `t = 0` ray are
+   **half a turn apart**: `make_cone` gives the base circle normal `+z` while
+   the cone's axis runs apex→base (`−z`), and `Frame3::from_normal` derives
+   opposite reference directions from those.
+
+So the two rings coincide **only when the segment count is even**. At r=3,
+h=1 and `diag*4e-5` the count is **209 — odd**, and every rim sample lands
+exactly half a step (0.045) from its counterpart.
+
+**The apparent scale-dependence was a second absolute constant, and it was
+luck.** `tessellate::face` floors the segment count with
+`max_radius.max(0.01)`, so the 0.001× copy takes 380 segments — even — and
+closes by coincidence rather than by correctness. That is worth remembering
+whenever a scale sweep shows one scale passing: passing can be an accident of
+parity.
+
+Fixed by `tessellate_cone_apex_fan_shared`, the one-rim sibling of the
+two-rim band path, fanning the shared rim to the shared apex with no
+length-carrying constants. Cone at 1× and 1000× goes 418 boundary edges → 0,
+and a 1,800-case fuzz lattice goes **254 leaking → 0**, with the minimum
+vertex separation unchanged at 2.25e-2 (so nothing was over-merged). Four
+boolean combinations on pointed cones that returned `Err` on `main` now
+succeed — the open cone had been denying the mesh fallback a watertight
+operand.
 
 ### Offset lane: what #53 landed, and the one measurement it corrected
 
