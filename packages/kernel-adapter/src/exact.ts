@@ -76,6 +76,7 @@ import {
 } from './topology-fingerprint';
 import {
   brepKitHashOnlyLineage,
+  createBrepKitImportedStepLineage,
   createBrepKitSemanticLineage,
   mergeBrepKitLineageStates,
   propagateBrepKitRigidTransformLineage,
@@ -93,6 +94,14 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from './face-attachment';
+import {
+  classifyImportedSolid,
+  importedStepDroppedSolidWarning,
+  importedStepNoSolidError,
+  importedStepRejectedSolidSummary,
+  importedStepValidationWarning,
+  type ImportedSolidDiagnosis
+} from './imported-step-validation';
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
@@ -112,10 +121,26 @@ interface ExactShape {
   lineage?: BrepKitLineageState;
 }
 
+/** What the K0.6 import validator found on one `imported-step` feature. */
+interface ImportedStepDiagnostics {
+  /** Solids the file declared, before any were rejected. */
+  declaredSolidCount: number;
+  /** Reasons for each solid dropped as not being a closed manifold shell. */
+  rejections: string[];
+  /** Reasons for each solid kept but failing strict validation. */
+  flagged: string[];
+}
+
 interface ExactBuildResult {
   shapes: Map<BodyId, ExactShape>;
   sketchBases: Map<SketchId, PlaneBasis>;
   consumed: Set<BodyId>;
+  /**
+   * Per-body import validation, recorded where the import happens rather than
+   * re-derived later: it describes the file the user opened, not whatever the
+   * body became after the features layered on top of it.
+   */
+  importedStepDiagnostics: Map<BodyId, ImportedStepDiagnostics>;
   /**
    * Bodies whose geometry originates in an imported mesh, directly or through
    * a derived feature. Their shells are source-file facets rather than
@@ -799,6 +824,12 @@ export interface ExactKernelAdapter {
     solid: boolean;
     valid: boolean;
     volume: number;
+    /**
+     * Why the probe answered as it did, when there is something to say. K0.6:
+     * the probe never raises, so a parse error or a rejected open shell has to
+     * come back through the value.
+     */
+    reason?: string;
   }>;
   dispose(): void;
 }
@@ -1315,6 +1346,52 @@ function faceWitnessOf(kernel: BrepKernel, face: number): FaceWitnessV1 {
     centroid: centroid ? quantizedPoint(centroid) : null,
     analytic,
     closure: brepKitFaceClosure(kernel, face, surfaceType)
+  };
+}
+
+/**
+ * Measure one imported solid for the K0.6 validator.
+ *
+ * Closure and manifoldness are read from the EXACT B-rep — `edgeToFaceMap`
+ * lists one entry per face use of an edge, so a closed manifold shell uses
+ * every edge exactly twice. This is deliberately not `meshQuality`, which
+ * reports `isWatertight: false` for a valid analytic cone because the apex
+ * does not weld; see `imported-step-validation.ts` for that measurement.
+ *
+ * The strict validator is used rather than the relaxed one because the
+ * relaxation exists for booleans and blends, and an import has not been
+ * through either — it is what the file declares.
+ */
+function diagnoseImportedSolid(
+  kernel: BrepKernel,
+  solid: number,
+  index: number
+): ImportedSolidDiagnosis {
+  const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
+    string,
+    number[]
+  >;
+  let openEdgeCount = 0;
+  let nonManifoldEdgeCount = 0;
+  let edgeCount = 0;
+  for (const uses of Object.values(edgeToFaces)) {
+    edgeCount += 1;
+    const count = Array.isArray(uses) ? uses.length : 0;
+    if (count < 2) {
+      openEdgeCount += 1;
+    } else if (count > 2) {
+      nonManifoldEdgeCount += 1;
+    }
+  }
+  return {
+    index,
+    faceCount: Array.from(kernel.getSolidFaces(solid)).length,
+    edgeCount,
+    openEdgeCount,
+    nonManifoldEdgeCount,
+    shellCount: Array.from(kernel.getSolidShells(solid)).length,
+    strictErrorCount: kernel.validateSolid(solid),
+    relaxedErrorCount: kernel.validateSolidRelaxed(solid)
   };
 }
 
@@ -3188,6 +3265,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       shapes: new Map(),
       sketchBases: new Map(),
       consumed: new Set(),
+      importedStepDiagnostics: new Map(),
       meshBodies: new Set(),
       warnings: [...errors]
     };
@@ -3252,17 +3330,52 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           }
           case 'imported-step': {
             if (feature.bodyId) {
-              const solids = Array.from(
+              const declared = Array.from(
                 kernel.importStep(
                   new TextEncoder().encode(
                     normalizeStepPlaneAnglesForKernel(feature.data.stepText)
                   )
                 )
               );
-              if (solids.length === 0) {
+              if (declared.length === 0) {
                 throw new Error('STEP file contains no solids.');
               }
-              result.shapes.set(feature.bodyId, { solids });
+              // K0.6. A shell that is not closed is not a solid, whatever
+              // volume a divergence integral over its faces happens to
+              // produce. Reject those before they become a body; keep the
+              // rest and say which ones went, because an unreadable solid
+              // that vanishes silently is the worst failure mode the parity
+              // corpus records.
+              const verdicts = declared.map((solid, index) =>
+                classifyImportedSolid(
+                  diagnoseImportedSolid(kernel, solid, index + 1)
+                )
+              );
+              const solids = declared.filter(
+                (_, index) => verdicts[index]!.kind !== 'not-a-solid'
+              );
+              const rejections = verdicts.flatMap((verdict) =>
+                verdict.kind === 'not-a-solid' ? [verdict.reason] : []
+              );
+              if (solids.length === 0) {
+                throw new Error(importedStepNoSolidError(rejections));
+              }
+              result.importedStepDiagnostics.set(feature.bodyId, {
+                declaredSolidCount: declared.length,
+                rejections,
+                flagged: verdicts.flatMap((verdict) =>
+                  verdict.kind === 'flagged' ? [verdict.reason] : []
+                )
+              });
+              result.shapes.set(feature.bodyId, {
+                solids,
+                lineage: createBrepKitImportedStepLineage(
+                  feature.featureId,
+                  solids.flatMap((solid) =>
+                    topologyCandidatesForSolid(kernel, solid)
+                  )
+                )
+              });
             }
             break;
           }
@@ -4372,6 +4485,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             `Body "${body.name}" failed exact B-rep validation.`
           );
         }
+        // K0.6 import taxonomy. Both warnings describe the imported FILE, so
+        // they are driven by what the import measured rather than by the
+        // body's state after later features edited it.
+        const imported = build.importedStepDiagnostics.get(bodyId);
+        if (imported && imported.rejections.length > 0) {
+          build.warnings.push(
+            importedStepDroppedSolidWarning(
+              body.name,
+              imported.rejections,
+              imported.declaredSolidCount
+            )
+          );
+        }
+        if (imported && imported.flagged.length > 0) {
+          build.warnings.push(
+            importedStepValidationWarning(
+              body.name,
+              imported.flagged.length,
+              imported.declaredSolidCount,
+              'BrepKit'
+            )
+          );
+        }
         if (
           requiresStrictUnionValidation &&
           feature !== undefined &&
@@ -4517,10 +4653,23 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     }
   }
 
+  /**
+   * The pre-import probe the app shows before a user commits to an import.
+   *
+   * K0.6 makes it answer in every case rather than raising in some of them:
+   * the caller is asking "should I offer this import at all", and a thrown
+   * parse error is a worse SHAPE of answer than `{solid: false}` even when its
+   * text is better. The text is not lost — it comes back as `reason`.
+   *
+   * `solid` and `volume` count only shells the importer would actually accept,
+   * so a file whose only shell is open reports no solid and no volume instead
+   * of the divergence integral over the faces it happens to have.
+   */
   async inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
     volume: number;
+    reason?: string;
   }> {
     const kernel = new BrepKernel();
     try {
@@ -4529,17 +4678,48 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       const bytes = new TextEncoder().encode(
         normalizeStepPlaneAnglesForKernel(sourceText)
       );
-      const solids = Array.from(kernel.importStep(bytes));
+      let declared: number[];
+      try {
+        declared = Array.from(kernel.importStep(bytes));
+      } catch (error) {
+        return {
+          solid: false,
+          valid: false,
+          volume: 0,
+          reason: error instanceof Error ? error.message : String(error)
+        };
+      }
+      const verdicts = declared.map((solid, index) =>
+        classifyImportedSolid(diagnoseImportedSolid(kernel, solid, index + 1))
+      );
+      const accepted = declared.filter(
+        (_, index) => verdicts[index]!.kind !== 'not-a-solid'
+      );
+      const rejections = verdicts.flatMap((verdict) =>
+        verdict.kind === 'not-a-solid' ? [verdict.reason] : []
+      );
       return {
-        solid: solids.length > 0,
+        solid: accepted.length > 0,
         valid:
-          solids.length > 0 &&
-          solids.every((solid) => kernel.validateSolidRelaxed(solid) === 0),
-        volume: solids.reduce(
+          declared.length > 0 &&
+          verdicts.every((verdict) => verdict.kind === 'solid'),
+        volume: accepted.reduce(
           (total, solid) =>
             total + kernel.volume(solid, MEASUREMENT_DEFLECTION),
           0
-        )
+        ),
+        ...(declared.length === 0
+          ? { reason: 'STEP file contains no solids.' }
+          : accepted.length === 0
+            ? { reason: importedStepNoSolidError(rejections) }
+            : rejections.length > 0
+              ? {
+                  reason: importedStepRejectedSolidSummary(
+                    rejections,
+                    declared.length
+                  )
+                }
+              : {})
       };
     } finally {
       kernel.free();

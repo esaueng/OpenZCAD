@@ -9,6 +9,7 @@ import type {
 } from '@openzcad/shared';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
+  importedStepLineageName,
   inspectTopologyWitness,
   topologyHashOfWitness,
   topologyWitnessesEqual,
@@ -97,7 +98,7 @@ function semanticReference(
  */
 export function createBrepKitSemanticLineage(
   producingFeatureId: FeatureId,
-  operation: 'primitive' | 'sweep',
+  operation: 'primitive' | 'sweep' | 'imported-step',
   assignments: readonly BrepKitSemanticAssignment[]
 ): BrepKitLineageState {
   const state = emptyLineageState();
@@ -151,6 +152,35 @@ export function createBrepKitSemanticLineage(
     }
   }
   return state;
+}
+
+/**
+ * Publishes schema-v5 references for an imported STEP body (K0.6).
+ *
+ * Imported topology has no feature contract to name it, so every candidate is
+ * named by its own exact witness (see `importedStepLineageName`) and handed to
+ * the same one-to-one, witness-inspected publisher modelled geometry uses.
+ * Nothing is loosened for imports: an ambiguous name, a duplicate handle, or a
+ * closed B-spline face publishes no reference and the topology stays hash-only,
+ * exactly as ADR-013 requires.
+ */
+export function createBrepKitImportedStepLineage(
+  producingFeatureId: FeatureId,
+  candidates: readonly BrepKitTopologyCandidate[]
+): BrepKitLineageState {
+  return createBrepKitSemanticLineage(
+    producingFeatureId,
+    'imported-step',
+    candidates.map((candidate) => ({
+      ...candidate,
+      lineageName: importedStepLineageName(
+        candidate.kind,
+        candidate.kind === 'edge'
+          ? topologyHashOfWitness('edge', candidate.witness as EdgeWitnessV1)
+          : topologyHashOfWitness('face', candidate.witness as FaceWitnessV1)
+      )
+    }))
+  );
 }
 
 export function brepKitHashOnlyLineage(

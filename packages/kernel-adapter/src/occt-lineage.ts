@@ -14,6 +14,7 @@ import {
 } from '@openzcad/shared';
 
 import {
+  importedStepLineageName,
   inspectTopologyWitness,
   resolveTopologyReference,
   topologyHashOfWitness,
@@ -470,6 +471,33 @@ function rotationalPrimitiveProposals(
     );
   }
   return proposals;
+}
+
+/**
+ * Publishes schema-v5 references for an imported STEP body (K0.6).
+ *
+ * The OpenCascade half of `createBrepKitImportedStepLineage`, deliberately the
+ * same rule rather than a kernel-specific one: both adapters name imported
+ * topology by its own exact ADR-011 witness, so the parity corpus can prove
+ * that a face pick stored on an imported body resolves to the same identity on
+ * either kernel. That is the question the Z3 route flip turns on, and it is
+ * only answerable while both kernels are still here.
+ */
+export function importedStepLineage(
+  producingFeatureId: FeatureId,
+  candidates: readonly OcctTopologyCandidate[]
+): OcctLineageState {
+  return {
+    status: 'lineage',
+    references: uniqueNamedReferences(
+      candidates.map((candidate) => ({
+        candidate,
+        name: importedStepLineageName(candidate.kind, candidate.currentHash)
+      })),
+      producingFeatureId
+    ),
+    diagnostics: []
+  };
 }
 
 export function semanticPrimitiveLineage(
