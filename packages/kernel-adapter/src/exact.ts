@@ -22,6 +22,7 @@ import {
 import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
+  FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
   featureColor,
   nowIso,
@@ -39,6 +40,7 @@ import {
   type ProjectDocument,
   type SketchId,
   type QuantizedTopologyPoint,
+  type ParamValue,
   type SketchNode,
   type SketchObjectData,
   type TopologyLineageDiagnostic
@@ -123,6 +125,76 @@ const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
 const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
+/**
+ * Why a partial revolve of a non-circular profile publishes no ADR-013
+ * semantic names, spelled out here so a reader finds a decision rather than an
+ * unexplained empty reference set.
+ *
+ * Two independent breaks, both measured (docs/kernel-execution-plan.md, "Z7
+ * Feature exposure"), neither of them a kernel defect — the solid itself is
+ * one closed shell with `validateSolid` 0, correct caps, watertight
+ * tessellation and an exact volume at every angle:
+ *
+ * 1. `buildRevolveLineage` names each profile vertex's swept edge with
+ *    `expectedCircleWitness`, which is `closed: true` with `length: 2*pi*r`.
+ *    Below a full turn those edges are ARCS — an `EdgeWitnessV1` variant that
+ *    witness can never equal — so every profile-vertex edge role fails.
+ * 2. BrepKit splits a swept face at each 90 degree boundary, and the pieces
+ *    carry duplicate analytic parameters, so the exactly-one-match rule in
+ *    `addUniqueSemanticAssignment` goes ambiguous above 90 degrees.
+ *
+ * Shipping the angle with ADR-011 hash-only references is the deliberate
+ * call: hashes still resolve a wedge's faces and edges for selection and for
+ * downstream features, they simply do not survive a topology-changing edit
+ * the way a named role does. Reversing this needs an arc-capable edge witness
+ * and a piece-aware face role, not a change here.
+ */
+const PARTIAL_REVOLVE_HASH_ONLY_REASON =
+  'A revolve below 360 degrees publishes hash-only references by design: its swept edges are arcs rather than the closed circles ADR-013 profile-vertex roles witness, and BrepKit splits its swept faces at 90 degree boundaries into pieces with duplicate analytic parameters.';
+
+/**
+ * A revolve keeps ADR-013 semantic lineage for a full turn, and for a
+ * circular profile at any angle.
+ *
+ * The circular exemption is not a special case bolted on. A circle's revolve
+ * role is the single torus surface, named by surface type rather than by an
+ * analytic carrier, and a torus does not quadrant-split: a partial revolve of
+ * a circle measures three faces (torus plus two caps) at every angle below
+ * 360 and one at 360, so the role stays unique. That branch also publishes no
+ * profile-vertex edge roles, so neither break above applies to it.
+ */
+function revolveKeepsSemanticLineage(
+  angleDeg: number,
+  data: SketchObjectData
+): boolean {
+  return angleDeg >= FULL_REVOLVE_ANGLE_DEG || data.objectKind === 'circle';
+}
+
+/**
+ * Resolve a revolve's sweep angle and enforce the kernel's `(0, 360]` domain
+ * here rather than letting the WASM boundary throw. The kernel's own refusal
+ * is a generic operation failure naming no parameter; a rebuild warning has
+ * to say which field is out of range and what the range is.
+ *
+ * An absent field means a full turn, so a document written before partial
+ * revolve existed resolves to exactly 360 and rebuilds unchanged.
+ */
+function resolveRevolveAngleDeg(
+  angleDeg: ParamValue | undefined,
+  scope: Record<string, number>
+): number {
+  if (angleDeg === undefined) {
+    return FULL_REVOLVE_ANGLE_DEG;
+  }
+  const resolved = resolveParamValue(angleDeg, scope, 'angle');
+  if (!(resolved > 0) || resolved > FULL_REVOLVE_ANGLE_DEG) {
+    throw new Error(
+      `Revolve angle must be greater than 0 and at most ${FULL_REVOLVE_ANGLE_DEG} degrees.`
+    );
+  }
+  return resolved;
+}
+
 interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
@@ -157,6 +229,13 @@ interface ExactBuildResult {
    * refusal instead of a silently poor result.
    */
   meshBodies: Set<BodyId>;
+  /**
+   * Bodies swept by a revolve below a full turn, directly or through a
+   * derived feature. Recorded at the sweep rather than re-derived later
+   * because it is what makes an edge-modifier refusal on a wedge explainable
+   * instead of a bare "try a smaller radius" that is false at every radius.
+   */
+  partialRevolveBodies: Set<BodyId>;
   warnings: string[];
 }
 
@@ -1066,13 +1145,20 @@ function edgeModifierSucceedsSmaller(
  * up to r2.24 and the corner chain up to r2, so an unconditional "cannot be
  * rounded at any radius" would now be false, and would bury the advice that
  * actually works.
+ *
+ * `partialRevolveTarget` is the one cause the selection's own topology cannot
+ * reveal, because a wedge's edges look ordinary — plain lines and arcs, no
+ * closed rim, no blend face. It is passed in from the build, where the
+ * feature that produced the body is known. It is still reported only after
+ * the size ladder has failed, so it never buries a working smaller size.
  */
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
-  size: number
+  size: number,
+  partialRevolveTarget: boolean
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -1083,6 +1169,13 @@ function edgeModifierFailureMessage(
       edgeModifierSucceedsSmaller(kernel, target, selected, featureKind, size)
     ) {
       return `${prefix} Try a smaller ${dimension}.`;
+    }
+    // Named before the topology causes because it explains the whole body
+    // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
+    // degree wedge refuses all 12 of its edges at every radius from 0.4 down
+    // to 0.002, while the same profile at 360 rounds 4 of its 6.
+    if (partialRevolveTarget) {
+      return `${prefix} This body is a partial revolve, and the kernel cannot blend the edges of a revolved wedge at any ${dimension} yet — revolve a full turn and ${featureKind} the result, or apply the ${label.toLowerCase()} before the body is cut back to a wedge.`;
     }
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
       return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
@@ -1535,11 +1628,23 @@ function edgeHandlesByFingerprint(
 ): Map<number, number[]> {
   const result = new Map<number, number[]>();
   for (const edge of kernel.getSolidEdges(solid)) {
-    const hash = edgeFingerprint(kernel, edge);
-    registerHandle(result, hash, edge);
-    const legacy = legacyEdgeFingerprint(kernel, edge);
-    if (legacy !== hash) {
-      registerHandle(result, legacy, edge);
+    // Three schemes, registered together because a persisted selection may
+    // hold any of them. The witness hash is the one `BodyTopology` publishes
+    // and therefore the one a user's selection actually stores; registering
+    // it is not redundant with the fingerprint, because the two order an open
+    // edge's endpoints by different keys — `edgeSignatureOf` sorts the raw
+    // coordinates and `edgeWitnessOf` sorts the quantized ones. They agree
+    // until two endpoints tie after quantization on the leading axis, which
+    // is exactly what a partial revolve produces: its cut-plane edges sit at
+    // a numerical zero of ~1e-16, so 2 of a 90 degree wedge's 12 edges hashed
+    // one way when published and another way when resolved, and were
+    // unselectable for every downstream feature.
+    for (const hash of new Set([
+      edgeFingerprint(kernel, edge),
+      legacyEdgeFingerprint(kernel, edge),
+      topologyHashOfWitness('edge', edgeWitnessOf(kernel, edge))
+    ])) {
+      registerHandle(result, hash, edge);
     }
   }
   return result;
@@ -3239,6 +3344,11 @@ function inheritMeshOrigin(
   if (derived !== undefined && result.meshBodies.has(source)) {
     result.meshBodies.add(derived);
   }
+  // A wedge stays a wedge through a transform, mirror, pattern or shell, so
+  // the edge-modifier advice below has to travel with it.
+  if (derived !== undefined && result.partialRevolveBodies.has(source)) {
+    result.partialRevolveBodies.add(derived);
+  }
 }
 
 function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
@@ -3709,6 +3819,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
     const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
     const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
+    const angleDeg = resolveRevolveAngleDeg(feature.data.angleDeg, scope);
     const solid = kernel.revolve(
       face,
       point.x,
@@ -3717,21 +3828,25 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       direction.x,
       direction.y,
       direction.z,
-      360
+      angleDeg
     );
     return {
       solids: [solid],
-      lineage: buildRevolveLineage(
-        kernel,
-        solid,
-        feature,
-        String(object.id),
-        object.data,
-        basis,
-        direction,
-        point,
-        scope
-      )
+      // A partial revolve of a non-circular profile is a deliberate ADR-011
+      // hash-only body, not a lineage builder that quietly matched nothing.
+      lineage: revolveKeepsSemanticLineage(angleDeg, object.data)
+        ? buildRevolveLineage(
+            kernel,
+            solid,
+            feature,
+            String(object.id),
+            object.data,
+            basis,
+            direction,
+            point,
+            scope
+          )
+        : brepKitHashOnlyLineage('sweep', PARTIAL_REVOLVE_HASH_ONLY_REASON)
     };
   }
 
@@ -3746,6 +3861,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       consumed: new Set(),
       importedStepDiagnostics: new Map(),
       meshBodies: new Set(),
+      partialRevolveBodies: new Set(),
       warnings: [...errors]
     };
 
@@ -3877,6 +3993,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   result.sketchBases
                 )
               );
+              if (
+                feature.data.featureKind === 'revolve' &&
+                resolveRevolveAngleDeg(feature.data.angleDeg, scope) <
+                  FULL_REVOLVE_ANGLE_DEG
+              ) {
+                result.partialRevolveBodies.add(feature.bodyId);
+              }
             }
             break;
           case 'transform': {
@@ -4160,7 +4283,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   target,
                   selected,
                   feature.data.featureKind,
-                  size
+                  size,
+                  result.partialRevolveBodies.has(feature.data.targetBodyId)
                 )
               );
             }
