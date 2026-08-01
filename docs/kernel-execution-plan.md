@@ -72,7 +72,7 @@ implementation; no `import('./occt-step')` triggered by inspect.
 > therefore gated on K0.1 item 3, which is promoted to the critical path.
 > Landed together with Z2 once the pin carried the fix.
 
-### Z1.2 `imported-mesh` on BrepKit; delete the legacy JS kernel — **M**
+### Z1.2 `imported-mesh` on BrepKit; delete the legacy JS kernel — **M** ✅ done
 
 *Current:* `containsImportedMesh` reroutes whole documents to
 `OpenZCADKernel` (`exact.ts:2293, 3633-3635, 3768-3770`), which silently
@@ -102,7 +102,7 @@ tessellation tolerance; `packages/geometry` no longer exports CSG.
 *Risk:* mesh bodies were never boolean-able with exact bodies on the JS
 path either — behavior parity, not regression.
 
-### Z1.3 STEP + geometry parity corpus — **M** (blocks Z3/Z5)
+### Z1.3 STEP + geometry parity corpus — **M** (blocks Z3/Z5) ✅ done
 
 *Purpose:* once OCCT is gone there is no fallback; this corpus **is** the
 regression harness. It must exist while both kernels are still present so
@@ -152,7 +152,7 @@ is lenient there. Fixed and pinned.
 
 ## 2. M1 — Kernel parity (BrepKit work, parallel lanes)
 
-### K0.1 STEP import/export fidelity — **L** (lane A)
+### K0.1 STEP import/export fidelity — **L** (lane A) ✅ done
 
 All in `esaueng/brepkit`, `crates/io/src/step/`.
 
@@ -226,14 +226,38 @@ analytic faces destroyed. Torus×(anything but plane) likewise unwired
    list accordingly.
 4. Re-tighten the loosened volume tolerances
    (`boolean/tests.rs:2631,2718`) as part of acceptance.
-*Acceptance:* Z1.3 scenario pins "fillet-on-import", "boolean-with-import"
-flip from mesh-fallback to exact; `brepkit_approx` census shows zero
+*Acceptance:* ~~Z1.3 scenario pins "fillet-on-import", "boolean-with-import"
+flip from mesh-fallback to exact~~; `brepkit_approx` census shows zero
 mesh-fallback events on the corpus; volume assertions at 0.05.
 *Risk:* genuinely hard numerics. Mitigate by keeping the bounded mesh
 fallback as the safety valve (it stays; it just stops being *reached* for
 these classes).
 
-### K0.6 Import validation + lineage parity — **M** (lane A tail)
+*Correction — the stated acceptance is falsified and K0.5 is deprioritized.*
+Two of the three named pins no longer exist, and the premise behind them was
+measured false rather than argued away:
+
+- `boolean-with-import` never hit the mesh fallback. Both kernels produce 7
+  faces with one cylinder on that scenario, which the pin recorded at the
+  time it was written. K0.5 predicted a fallback there; the corpus says
+  there is none.
+- `boolean-with-import` and `pattern-boolean-with-import` have since been
+  **retired entirely** — BrepKit converged onto their closed forms
+  (`40·24·10 − π·5²·10` to 1e-12) and now agrees with OCCT, so the
+  divergence the pins recorded is gone.
+- `fillet-on-import` survives, but it reads 1.43e-5 *low* against the closed
+  form, which is deflection residue on blended bands — not the
+  analytic-faces-destroyed signature K0.5 exists to fix.
+
+So the corpus found neither kernel falls back on the analytic×NURBS
+scenario, and on the one file where they do differ BrepKit is the *more*
+accurate of the two (0.1% vs OCCT's 1.38%). The XL numerics work in this
+section is not justified by anything the corpus can currently measure.
+Before restarting it, write a scenario that actually reaches
+`phase_ff.rs:3024`'s `Ok(vec![])` and demonstrates a destroyed analytic
+face — then this section has an acceptance test again.
+
+### K0.6 Import validation + lineage parity — **M** (lane A tail) ✅ done
 
 *Was:* "port OCCT's warning taxonomy and its imported-body topology witnesses
 to BrepKit."
@@ -274,7 +298,7 @@ where it does warn it names the entity or the defect where OCCT reports
 "contains no solids"; the `f-hostile-open-shell` validity gap is closed in
 BrepKit's favour and its pins are retired.
 
-### Z4 Port the two OCCT-only direct edits — **M** (lane D, app-side)
+### Z4 Port the two OCCT-only direct edits — **M** (lane D, app-side) ✅ done
 
 *Was:* `exact.ts:3298-3301` refused `resize-through-hole` /
 `remove-face-feature`; OCCT implements them as compositions
@@ -397,6 +421,28 @@ mechanical.
 Z3, when the last reachable importer went away.
 *Rule:* this lands only after Z3's soak; revert path is `git revert` of one
 PR (keep the deletion atomic).
+
+*Correction — decide what the corpus becomes before deleting the reference.*
+This inventory removes `occt-wasm` and the cross-kernel assertions, but Z1.3's
+corpus is built on running every file through **both** kernels and comparing.
+Deleting OCCT does not just delete a code path; it deletes the instrument that
+made removing a second kernel safe in the first place, and the pins are the
+record of that comparison.
+
+That is survivable but it must be a decision, not a side effect. After Z5 the
+corpus can still measure BrepKit against **recorded baselines and closed
+forms**, which is what actually caught the defects that mattered: the malformed
+trailing comma, the 25.4× unit error, the dropped voids, the filled bores. None
+of those needed a second kernel — they needed a known-good answer. What is lost
+is the ability to discover an *unknown* divergence, which is what retired the
+three volume pins in this file.
+
+Concretely, Z5 should keep `occt-wasm` as a **devDependency** for the corpus
+job alone, and delete it only from the production adapter. That preserves the
+comparison for as long as it is cheap and keeps the shipped app single-kernel,
+which is the actual goal. If the corpus job later becomes a maintenance cost,
+retiring the comparison is then its own small, reversible decision rather than
+a clause buried in a deletion PR.
 
 ---
 
