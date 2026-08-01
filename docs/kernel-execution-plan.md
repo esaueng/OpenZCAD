@@ -934,24 +934,51 @@ approximation at all, just less geometry.
   `70fb561` (kernel #50–#53) was tried and **held**. The parity corpus was
   perfect: 151 passed, `test/parity/baselines/` completely unmoved, so the
   #50 seam-chord change moved no edge hashes and the movement predicted as
-  possible did not happen. But `topology-lineage-spike` caught a regression
-  the corpus structurally cannot see: `filletWithEvolution` stopped
-  attributing the cylindrical blend band to anything, leaving a result face
-  claimed by neither `modified` nor `generated`. Before, the band was a
-  modified result of **both** faces the rounded edge separated
-  (`{"0":[6,7],…,"2":[6,9],…}`); now it is dropped from both. `generated`
-  is `{}` and `deleted` is `[]` in both. Almost certainly #51,
-  "scale-dependent face provenance", whose underlying scale fix is real and
-  must not simply be reverted.
+  possible did not happen. But `topology-lineage-spike` caught something the
+  corpus structurally cannot see: `filletWithEvolution` no longer attributes
+  the cylindrical blend band, and the set equality failed with the band in
+  the result and in neither `modified` nor `generated`.
 
-  Three things worth keeping from this. **A count-based assertion would have
-  passed** — the face count never changed, only the attribution; set equality
-  is the check, not counts. **No topological or geometric check sees it** —
-  `validateSolidRelaxed` is 0, the geometry and volume are right. And it
-  lands squarely on ADR-013: a blend band with no lineage cannot be
-  persistently named, and fails silently when M5 tries. Pin holds at
-  `f3defc3` until it is fixed; **Z6.1 stays blocked**, since it needs #50's
-  cap-rim radius range. Fix is in flight on `claude/fillet-evolution-provenance`.
+  **My first reading of that was wrong, and the correction is the useful
+  part.** I reported the band as having "lost its provenance entirely". It
+  had not. #51 also **added two fields**, `unresolved` and `origin`, and the
+  band sits in `unresolved: {"6":[0,2]}` — explicitly refused, with *both*
+  candidate sources named. My probe printed only
+  `modified`/`generated`/`deleted` because I wrote it against the old
+  three-field schema, and `verifyCompleteBrepEvolution` read the same three,
+  which is exactly why it presented as claimed-by-nothing. Verified by
+  re-probing both pins and dumping every key.
+
+  Two further corrections, both from the lane that fixed it:
+
+  - **The old answer was not correct-and-deliberate, and must not be
+    restored.** `modified: {"0":[6,7], "2":[6,9]}` was an artefact of a
+    near-tie rule and actively harmful — a selection stored against face 0
+    silently acquired the cylinder, which is the very thing #51's commit
+    message documents catching.
+  - **`generated` is the right model and never was a contract change.** The
+    walking builder always recorded `created: (band, [base_a, base_b])`, the
+    cylinder-rim fillet already returned `generated`, and the WASM binding
+    already documented that blend faces appear there. The two engines behind
+    one operation were disagreeing. The fix makes the geometric matcher reach
+    the record's answer: `generated: {"0":[6], "2":[6]}`, `unresolved: {}`.
+    Root cause was that the matcher read *every* unresolvable tie as
+    ambiguity, when a rolling-ball band ties against both its parents **by
+    construction** — that tie is the signature of a face built from both.
+
+  So the defect was a refusal where a fact was available, not silence — and
+  weaker than I first described, though still worth fixing, since a consumer
+  cannot tell the two apart. **The same gap hit `chamfer`, not just
+  `fillet`.**
+
+  Three things to keep. **A count-based assertion would have passed** — the
+  face count never changed, only the attribution; set equality is the check,
+  not counts. **No topological or geometric check sees it** —
+  `validateSolidRelaxed` is 0 and the geometry is right. And **a
+  completeness assertion must read every field the record has**: mine was
+  written against a schema the kernel had since extended, so it reported the
+  right failure for the wrong reason. Pin holds at `f3defc3` until the fix
+  lands; **Z6.1 stays blocked**, since it needs #50's cap-rim radius range.
   Note that brepkit has **issues disabled**, so kernel defects are recorded in
   the PR that fixes them, not in a tracker.
 - **M3's remaining slices (W2, W3, W4) land as merge commits, not squashes.**
