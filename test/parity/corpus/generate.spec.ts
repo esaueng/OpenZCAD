@@ -31,7 +31,7 @@ import {
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 
 import { BrepKitKernelAdapter } from '../../../packages/kernel-adapter/src/exact';
-import { OcctStepKernelAdapter } from '../../../packages/kernel-adapter/src/occt-step';
+import { OcctStepKernelAdapter } from '../occt-reference/occt-step';
 
 import { CORPUS, MODELING_BASE, REPO_ROOT } from './manifest';
 import {
