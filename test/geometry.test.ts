@@ -1,262 +1,167 @@
 import { describe, expect, it } from 'vitest';
 import {
   PLANE_BASES,
-  booleanSolids,
   circleProfile,
-  extrudeProfile,
-  healTJunctions,
-  makeBox,
-  makeCone,
-  makeCylinder,
-  makeSphere,
-  makeTorus,
+  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
-  revolveProfile,
-  solidBounds,
+  solidFromTriangles,
   solidVolume,
-  transformSolid,
-  triangulateSolid,
   validateSolid,
   type Solid
 } from '@openzcad/geometry';
 
-function expectClosed(solid: Solid): void {
-  const validation = validateSolid(solid);
-  expect(validation.openEdgeCount).toBe(0);
-  expect(validation.nonManifoldEdgeCount).toBe(0);
-  expect(validation.closed).toBe(true);
+/**
+ * What the geometry package still owns after the kernel took over solids:
+ * sketch-plane frames, closed 2D profiles, and mesh welding. Solids, sweeps
+ * and booleans are the exact kernel's job and are covered by the kernel suites.
+ */
+
+function signedArea(points: { x: number; y: number }[]): number {
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]!;
+    const b = points[(i + 1) % points.length]!;
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area / 2;
 }
 
-describe('primitive solids', () => {
-  it('builds an exact box', () => {
-    const box = makeBox(10, 20, 30);
-    expectClosed(box);
-    expect(box.faces).toHaveLength(6);
-    expect(box.vertices).toHaveLength(8);
-    expect(solidVolume(box)).toBeCloseTo(6000, 6);
-    const bounds = solidBounds(box);
-    // Corner at the origin, matching BrepKit — not centred on it.
-    expect(bounds.min).toEqual({ x: 0, y: 0, z: 0 });
-    expect(bounds.max).toEqual({ x: 10, y: 20, z: 30 });
-  });
-
-  it('builds a watertight cylinder within 1% of the analytic volume', () => {
-    const cylinder = makeCylinder(10, 20);
-    expectClosed(cylinder);
-    const analytic = Math.PI * 100 * 20;
-    expect(solidVolume(cylinder)).toBeGreaterThan(analytic * 0.99);
-    expect(solidVolume(cylinder)).toBeLessThan(analytic);
-  });
-
-  it('builds cones, including pointed ones', () => {
-    const frustum = makeCone(10, 5, 12);
-    expectClosed(frustum);
-    const pointed = makeCone(10, 0, 12);
-    expectClosed(pointed);
-    const analyticPointed = (Math.PI * 100 * 12) / 3;
-    expect(solidVolume(pointed)).toBeGreaterThan(analyticPointed * 0.98);
-    expect(solidVolume(pointed)).toBeLessThan(analyticPointed);
-  });
-
-  it('builds a watertight sphere within 3% of the analytic volume', () => {
-    const sphere = makeSphere(10);
-    expectClosed(sphere);
-    const analytic = (4 / 3) * Math.PI * 1000;
-    expect(solidVolume(sphere)).toBeGreaterThan(analytic * 0.97);
-    expect(solidVolume(sphere)).toBeLessThan(analytic);
-  });
-
-  it('builds a watertight torus', () => {
-    const torus = makeTorus(20, 5);
-    expectClosed(torus);
-    const analytic = 2 * Math.PI * Math.PI * 20 * 25;
-    expect(solidVolume(torus)).toBeGreaterThan(analytic * 0.95);
-    expect(solidVolume(torus)).toBeLessThan(analytic);
-  });
-
-  it('rejects nonsense dimensions', () => {
-    expect(() => makeBox(0, 1, 1)).toThrow(/positive/);
-    expect(() => makeTorus(5, 9)).toThrow(/smaller/);
-  });
-});
-
-describe('profile sweeps', () => {
-  it('extrudes a rectangle into an exact prism on every plane', () => {
+describe('sketch plane frames', () => {
+  it('keeps every canonical basis right-handed (u x v = normal)', () => {
     for (const plane of ['XY', 'XZ', 'YZ'] as const) {
-      const solid = extrudeProfile(rectangleProfile(20, 10), PLANE_BASES[plane], 5);
-      expectClosed(solid);
-      expect(solidVolume(solid)).toBeCloseTo(1000, 6);
+      const { u, v, normal } = PLANE_BASES[plane];
+      const cross = {
+        x: u.y * v.z - u.z * v.y,
+        y: u.z * v.x - u.x * v.z,
+        z: u.x * v.y - u.y * v.x
+      };
+      expect(cross.x).toBeCloseTo(normal.x, 12);
+      expect(cross.y).toBeCloseTo(normal.y, 12);
+      expect(cross.z).toBeCloseTo(normal.z, 12);
     }
   });
 
-  it('respects sketch offsets and negative distances', () => {
-    const up = extrudeProfile(rectangleProfile(4, 4), PLANE_BASES.XZ, 6, 10);
-    const bounds = solidBounds(up);
-    expect(bounds.min.y).toBeCloseTo(10, 6);
-    expect(bounds.max.y).toBeCloseTo(16, 6);
-
-    const down = extrudeProfile(rectangleProfile(4, 4), PLANE_BASES.XZ, -6, 10);
-    const downBounds = solidBounds(down);
-    expect(downBounds.min.y).toBeCloseTo(4, 6);
-    expect(downBounds.max.y).toBeCloseTo(10, 6);
-    expect(solidVolume(down)).toBeCloseTo(96, 6);
+  it('offsets a canonical plane along its own normal', () => {
+    const basis = frameForPlaneRef(
+      { type: 'canonical', plane: 'XZ', offset: 'h' },
+      () => 7
+    );
+    // XZ's normal is +Y, so the frame slides up Y and nothing else moves.
+    expect(basis.origin).toEqual({ x: 0, y: 7, z: 0 });
+    expect(basis.u).toEqual(PLANE_BASES.XZ.u);
+    expect(basis.v).toEqual(PLANE_BASES.XZ.v);
+    expect(basis.normal).toEqual(PLANE_BASES.XZ.normal);
   });
 
-  it('extrudes circles and polygons', () => {
-    const disc = extrudeProfile(circleProfile(10), PLANE_BASES.XZ, 8);
-    expectClosed(disc);
-    expect(solidVolume(disc)).toBeGreaterThan(Math.PI * 100 * 8 * 0.99);
-
-    const hex = extrudeProfile(polygonProfile(6, 10), PLANE_BASES.XY, 8);
-    expectClosed(hex);
-    const hexArea = ((3 * Math.sqrt(3)) / 2) * 100;
-    expect(solidVolume(hex)).toBeCloseTo(hexArea * 8, 4);
-  });
-
-  it('revolves an offset rectangle into a watertight ring', () => {
-    // Rectangle spanning u in [5, 15], v in [-10, 10], revolved about the v axis.
-    const profile = rectangleProfile(10, 20, 10, 0);
-    const ring = revolveProfile(profile, PLANE_BASES.XZ, 'vertical');
-    expectClosed(ring);
-    const analytic = Math.PI * (15 * 15 - 5 * 5) * 20;
-    expect(solidVolume(ring)).toBeGreaterThan(analytic * 0.98);
-    expect(solidVolume(ring)).toBeLessThan(analytic);
-  });
-
-  it('refuses to revolve a profile crossing the axis', () => {
-    const profile = rectangleProfile(10, 20, 0, 0);
-    expect(() => revolveProfile(profile, PLANE_BASES.XY, 'vertical')).toThrow(/axis/);
-  });
-});
-
-describe('transforms', () => {
-  it('translates vertices in place', () => {
-    const moved = transformSolid(makeBox(2, 2, 2), {
-      translation: { x: 5, y: 6, z: 7 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-    const bounds = solidBounds(moved);
-    expect(bounds.min).toEqual({ x: 5, y: 6, z: 7 });
-    expect(bounds.max).toEqual({ x: 7, y: 8, z: 9 });
-    expect(solidVolume(moved)).toBeCloseTo(8, 6);
-  });
-
-  it('rotates 90 degrees about Z, about the world origin', () => {
-    const rotated = transformSolid(makeBox(10, 2, 2), {
-      translation: { x: 0, y: 0, z: 0 },
-      rotationDeg: { x: 0, y: 0, z: 90 }
-    });
-    const bounds = solidBounds(rotated);
-    // The box spans x 0..10, so rotating about the origin sweeps it onto +Y.
-    expect(bounds.max.y).toBeCloseTo(10, 6);
-    expect(bounds.max.x).toBeCloseTo(0, 6);
-    expect(bounds.min.x).toBeCloseTo(-2, 6);
-    expect(solidVolume(rotated)).toBeCloseTo(40, 6);
-  });
-
-  it('applies rotations in the exact kernel order (X, then Y, then Z)', () => {
-    // Under the previous XYZ order this landed on a different axis entirely,
-    // so the preview disagreed with the applied model.
-    const rotated = transformSolid(makeBox(10, 2, 2), {
-      translation: { x: 0, y: 0, z: 0 },
-      rotationDeg: { x: 0, y: 90, z: 90 }
-    });
-    const bounds = solidBounds(rotated);
-    // Ry(90) sends +X to -Z; Rz(90) leaves -Z alone.
-    expect(bounds.min.z).toBeCloseTo(-10, 6);
-    expect(bounds.max.z).toBeCloseTo(0, 6);
-    expect(solidVolume(rotated)).toBeCloseTo(40, 6);
-  });
-});
-
-describe('booleans', () => {
-  const boxA = () => makeBox(10, 10, 10);
-  const boxB = () =>
-    transformSolid(makeBox(10, 10, 10), {
-      translation: { x: 5, y: 0, z: 0 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-
-  it('unions overlapping boxes with the exact combined volume', () => {
-    const union = booleanSolids('union', boxA(), boxB());
-    expectClosed(union);
-    expect(solidVolume(union)).toBeCloseTo(1500, 4);
-  });
-
-  it('subtracts with the exact remaining volume', () => {
-    const cut = booleanSolids('subtract', boxA(), boxB());
-    expectClosed(cut);
-    expect(solidVolume(cut)).toBeCloseTo(500, 4);
-  });
-
-  it('intersects with the exact common volume', () => {
-    const common = booleanSolids('intersect', boxA(), boxB());
-    expectClosed(common);
-    expect(solidVolume(common)).toBeCloseTo(500, 4);
-  });
-
-  it('drills a cylinder through a box and stays watertight', () => {
-    const plate = makeBox(30, 10, 30);
-    // The plate's corner is on the origin and the drill runs along +Z, so
-    // centre the drill in XY and start it below the face it enters. Radius 3
-    // keeps the hole strictly inside the plate's 10 of Y: a radius of 5 would
-    // sit tangent to both side faces, which is a degenerate cut.
-    const drill = transformSolid(makeCylinder(3, 40), {
-      translation: { x: 15, y: 5, z: -5 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-    const result = booleanSolids('subtract', plate, drill);
-    expectClosed(result);
-    // The hole runs the full 30 of the plate's Z thickness.
-    const plugVolume = solidVolume(makeCylinder(3, 30));
-    expect(solidVolume(result)).toBeCloseTo(9000 - plugVolume, 1);
-  });
-
-  it('returns an empty solid for disjoint intersection', () => {
-    const far = transformSolid(makeBox(4, 4, 4), {
-      translation: { x: 100, y: 0, z: 0 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-    const result = booleanSolids('intersect', boxA(), far);
-    expect(result.faces).toHaveLength(0);
-  });
-
-  it('handles coplanar contact without producing an open solid', () => {
-    const touching = transformSolid(makeBox(10, 10, 10), {
-      translation: { x: 10, y: 0, z: 0 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-    const result = booleanSolids('union', boxA(), touching);
-    expectClosed(result);
-    expect(solidVolume(result)).toBeCloseTo(2000, 4);
-  });
-});
-
-describe('topology healing', () => {
-  it('splits an edge when another face contributes a T-junction vertex', () => {
-    const solid: Solid = {
-      vertices: [
-        { x: 0, y: 0, z: 0 },
-        { x: 2, y: 0, z: 0 },
-        { x: 2, y: 1, z: 0 },
-        { x: 0, y: 1, z: 0 },
-        { x: 1, y: 0, z: 0 }
-      ],
-      faces: [
-        [0, 1, 2, 3],
-        [0, 4, 3]
-      ]
+  it('uses a stored frame verbatim for non-canonical plane references', () => {
+    const frame = {
+      origin: { x: 1, y: 2, z: 3 },
+      xAxis: { x: 0, y: 1, z: 0 },
+      yAxis: { x: 0, y: 0, z: 1 },
+      zAxis: { x: 1, y: 0, z: 0 }
     };
-    expect(healTJunctions(solid).faces[0]).toEqual([0, 4, 1, 2, 3]);
+    const basis = frameForPlaneRef({ type: 'frame', frame }, () => {
+      throw new Error('a stored frame must not consult the offset evaluator');
+    });
+    expect(basis.origin).toEqual(frame.origin);
+    expect(basis.u).toEqual(frame.xAxis);
+    expect(basis.v).toEqual(frame.yAxis);
+    expect(basis.normal).toEqual(frame.zAxis);
   });
 });
 
-describe('triangulation', () => {
-  it('produces a flat-shaded triangle mesh covering every face', () => {
-    const box = makeBox(2, 2, 2);
-    const mesh = triangulateSolid(box);
-    expect(mesh.indices.length).toBe(6 * 2 * 3);
-    expect(mesh.vertices.length).toBe(6 * 4 * 3);
+describe('sketch profiles', () => {
+  it('centres a rectangle on its centre point and winds it counter-clockwise', () => {
+    const profile = rectangleProfile(20, 10, 3, -4);
+    expect(profile).toHaveLength(4);
+    expect(Math.min(...profile.map((point) => point.x))).toBeCloseTo(-7, 12);
+    expect(Math.max(...profile.map((point) => point.x))).toBeCloseTo(13, 12);
+    expect(Math.min(...profile.map((point) => point.y))).toBeCloseTo(-9, 12);
+    expect(Math.max(...profile.map((point) => point.y))).toBeCloseTo(1, 12);
+    expect(signedArea(profile)).toBeCloseTo(200, 9);
+  });
+
+  it('approximates a circle within a fraction of a percent of its area', () => {
+    const profile = circleProfile(10);
+    expect(profile).toHaveLength(48);
+    const area = signedArea(profile);
+    const analytic = Math.PI * 100;
+    expect(area).toBeGreaterThan(analytic * 0.995);
+    expect(area).toBeLessThan(analytic);
+  });
+
+  it('inscribes a polygon in its radius with a flat-symmetric first vertex', () => {
+    const hex = polygonProfile(6, 10);
+    expect(hex).toHaveLength(6);
+    // The first point sits at the top so the shape is symmetric about x = 0.
+    expect(hex[0]!.x).toBeCloseTo(0, 9);
+    expect(hex[0]!.y).toBeCloseTo(10, 9);
+    expect(signedArea(hex)).toBeCloseTo(((3 * Math.sqrt(3)) / 2) * 100, 9);
+  });
+
+  it('rejects nonsense profile dimensions', () => {
+    expect(() => rectangleProfile(0, 10)).toThrow(/positive/);
+    expect(() => circleProfile(-1)).toThrow(/positive/);
+    expect(() => polygonProfile(6, 0)).toThrow(/positive/);
+  });
+
+  it('clamps segment counts to a usable range', () => {
+    expect(circleProfile(5, 0, 0, 2)).toHaveLength(8);
+    expect(circleProfile(5, 0, 0, 4096)).toHaveLength(128);
+    expect(polygonProfile(2, 5)).toHaveLength(3);
+  });
+});
+
+describe('mesh welding', () => {
+  const tetrahedron = {
+    // Four triangles, each with its own copy of the shared corners.
+    vertices: [
+      0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+      0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0
+    ],
+    indices: [...Array(12).keys()]
+  };
+
+  it('welds duplicated triangle corners into shared vertices', () => {
+    const solid = solidFromTriangles(
+      tetrahedron.vertices,
+      tetrahedron.indices
+    );
+    expect(solid.vertices).toHaveLength(4);
+    expect(solid.faces).toHaveLength(4);
+    expect(validateSolid(solid).closed).toBe(true);
+    expect(Math.abs(solidVolume(solid))).toBeCloseTo(1 / 6, 9);
+  });
+
+  it('drops degenerate triangles rather than emitting zero-area faces', () => {
+    const solid = solidFromTriangles(
+      [0, 0, 0, 1, 0, 0, 0, 0, 0],
+      [0, 1, 2]
+    );
+    expect(solid.faces).toHaveLength(0);
+  });
+
+  it('counts the open edges of a mesh that is not a closed shell', () => {
+    // One triangle: three boundary edges, used once each.
+    const open = solidFromTriangles([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 2]);
+    const validation = validateSolid(open);
+    expect(validation.closed).toBe(false);
+    expect(validation.openEdgeCount).toBe(3);
+    expect(validation.nonManifoldEdgeCount).toBe(0);
+  });
+
+  it('signs the volume by winding, so an inside-out mesh is detectable', () => {
+    const solid = solidFromTriangles(
+      tetrahedron.vertices,
+      tetrahedron.indices
+    );
+    const flipped: Solid = {
+      vertices: solid.vertices,
+      faces: solid.faces.map((face) => [...face].reverse())
+    };
+    // Volume is signed, not absolute: reversing every loop reverses the sign.
+    expect(solidVolume(flipped)).toBeCloseTo(-solidVolume(solid), 12);
+    expect(Math.sign(solidVolume(flipped))).toBe(-Math.sign(solidVolume(solid)));
   });
 });

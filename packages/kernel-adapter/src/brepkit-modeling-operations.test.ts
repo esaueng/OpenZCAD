@@ -131,6 +131,61 @@ describe('BrepKit modeling operations', () => {
     });
   });
 
+  it('refuses a mirror whose output does not preserve the input volume', () => {
+    // A reflection is rigid, so this preflight only ever fires on a broken
+    // kernel — which is why nothing built from real geometry can exercise it.
+    // `test/modeling-operation-preflight.test.ts` used to, on a heat sink the
+    // old tessellator measured differently before and after reflecting; that
+    // was a measurement defect and it is fixed, so the guard needs its own
+    // cover or retiring it becomes invisible. A kernel that answers `mirror`
+    // with a differently sized solid must be refused by name.
+    const source = kernel.makeBox(10, 20, 30);
+    const wrong = kernel.makeBox(10, 20, 29);
+    const brokenKernel = {
+      ...kernel,
+      mirror: () => wrong,
+      shell: kernel.shell.bind(kernel),
+      offsetSolidV2: kernel.offsetSolidV2.bind(kernel),
+      boundingBox: kernel.boundingBox.bind(kernel),
+      getSolidFaces: kernel.getSolidFaces.bind(kernel),
+      getSolidShells: kernel.getSolidShells.bind(kernel),
+      validateSolid: kernel.validateSolid.bind(kernel),
+      volume: kernel.volume.bind(kernel)
+    };
+    const operations = createBrepKitModelingOperations(brokenKernel);
+
+    expect(() =>
+      operations.mirror({
+        targetSolid: source,
+        planePoint: { x: 0, y: 0, z: 0 },
+        planeNormal: { x: 1, y: 0, z: 0 }
+      })
+    ).toThrow(/did not preserve exact solid volume/);
+    // A kernel that returns the input handle is refused before the volume
+    // gate, so the two failure modes stay distinguishable.
+    expect(() =>
+      createBrepKitModelingOperations({
+        ...brokenKernel,
+        mirror: () => source
+      }).mirror({
+        targetSolid: source,
+        planePoint: { x: 0, y: 0, z: 0 },
+        planeNormal: { x: 1, y: 0, z: 0 }
+      })
+    ).toThrow(/did not return a new solid handle/);
+    // The real kernel passes the same gate on the same box.
+    expect(
+      readSolid(
+        kernel,
+        createBrepKitModelingOperations(kernel).mirror({
+          targetSolid: source,
+          planePoint: { x: 0, y: 0, z: 0 },
+          planeNormal: { x: 1, y: 0, z: 0 }
+        })
+      ).volume
+    ).toBeCloseTo(6000, 8);
+  });
+
   it('rejects invalid mirror planes and zero or non-finite distances', () => {
     const source = kernel.makeBox(10, 20, 30);
     const operations = createBrepKitModelingOperations(kernel);

@@ -19,7 +19,6 @@ import {
   type Vec2Like,
   type Vec3
 } from '@openzcad/geometry';
-import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
   UNIT_TO_MM,
@@ -41,6 +40,7 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import type { ExactKernelAdapter } from './exact';
+import { importedMeshStl } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   analyzeUnionConnectivity,
@@ -66,6 +66,7 @@ import {
   edgeCandidate as occtEdgeCandidate,
   faceCandidate as occtFaceCandidate,
   hashOnlyOcctLineage,
+  importedStepLineage,
   occtSurfaceClosure,
   propagateRigidTransformLineage,
   quantizedTopologyPoint,
@@ -81,7 +82,7 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from './face-attachment';
-import { importedStepValidationWarning } from './step-import';
+import { importedStepValidationWarning } from './imported-step-validation';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
@@ -918,18 +919,6 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): number[] {
   ];
 }
 
-function importedMeshStl(
-  feature: Extract<FeatureNode['data'], { featureKind: 'imported-mesh' }>
-): string {
-  return writeAsciiStl(feature.sourceName, [
-    {
-      name: feature.sourceName,
-      vertices: feature.vertices,
-      indices: feature.indices
-    }
-  ]);
-}
-
 function sweepSemanticDescriptor(
   document: ProjectDocument,
   feature: FeatureNode,
@@ -1416,8 +1405,9 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               result.shapes.set(feature.bodyId, shape);
               result.lineages.set(
                 feature.bodyId,
-                hashOnlyOcctLineage(
-                  'STEP imports have no reliable feature provenance; topology remains hash-only.'
+                importedStepLineage(
+                  feature.featureId,
+                  topologyCandidatesForShape(this.kernel, shape)
                 )
               );
             }
@@ -2035,7 +2025,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               ? importedStepValidationWarning(
                   body.name,
                   invalidStepSolids.length,
-                  this.kernel.subShapeCount(shape, 'solid')
+                  this.kernel.subShapeCount(shape, 'solid'),
+                  'OpenCascade'
                 )
               : `Body "${body.name}" failed OpenCascade B-rep validation.`
           );
@@ -2110,16 +2101,6 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
         TESSELLATION_DEFLECTION,
         true
       );
-    } finally {
-      this.kernel.releaseAll();
-    }
-  }
-
-  /** Reassemble separately exported STEP solids into one compound document. */
-  combineStepSolids(parts: string[]): string {
-    try {
-      const shapes = parts.map((part) => this.kernel.importStep(part));
-      return this.kernel.exportStep(this.kernel.makeCompound(shapes));
     } finally {
       this.kernel.releaseAll();
     }

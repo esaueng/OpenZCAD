@@ -10,9 +10,9 @@ OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling
 
 **Direct manipulation.** Shapr3D-style modeling straight on the model: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching with snapping and live dimensions, box select, selection filters, a marking menu, an Esc ladder, and a live orientation widget with perspective/orthographic switching.
 
-**Two kernels, one topology language.** BrepKit is the primary kernel; documents containing STEP imports rebuild through OCCT. Both kernels publish the same exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
+**One kernel, one topology language.** BrepKit builds every document, imported STEP included. OpenCascade is retained only as the cross-kernel reference the parity corpus measures against, and no longer ships in the app bundle. Both kernels publish the same exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
 
-**Import and export.** Editable STEP import is stored in replayable document history and rebuilt through OCCT. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded read-only recognizer proves blind holes, counterbores, countersinks, bosses, prismatic pockets, and conical tapers in isolation, but those broader coordinated edits are not wired into the product yet. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
+**Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded read-only recognizer proves blind holes, counterbores, countersinks, bosses, prismatic pockets, and conical tapers in isolation, but those broader coordinated edits are not wired into the product yet. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
 
 **Local-first, optionally cloud.** IndexedDB autosave works with no account; when local and cloud copies diverge, the newer version wins instead of discarding work. Optional passwordless profiles unlock cloud projects, synced settings, and live per-project collaboration with owner/editor/viewer roles and one project-wide edit lease. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. Sharing and lease enforcement remain disabled in checked-in deployment configuration pending controlled rollout.
 
@@ -43,9 +43,8 @@ React workspace (apps/web)
   ├─ IndexedDB autosave
   ├─ Three.js viewport                            (disposable projection)
   └─ geometry Web Worker
-       ├─ brepkit-wasm  — primary exact B-rep kernel
-       └─ occt-wasm     — STEP import/export; documents with STEP
-                          features rebuild through OCCT
+       └─ brepkit-wasm  — the exact B-rep kernel, for every document
+                           including STEP imports
 
 Cloudflare Worker (beta orchestration only)
   ├─ D1 project metadata, documents, sessions, settings
@@ -59,7 +58,7 @@ Boundaries that hold everywhere:
 
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
-- Both kernels persist identical topology fingerprints; resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OCCT scheme are rejected with a re-select diagnostic rather than reinterpreted.
+- Both kernels persist identical topology fingerprints — checked in `test/kernel-seam.test.ts` and the parity corpus while OpenCascade is still present — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OCCT scheme are rejected with a re-select diagnostic rather than reinterpreted.
 - Schema-v1 through schema-v5 documents migrate to additive schema v6 on load.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
@@ -92,7 +91,7 @@ Interaction and startup performance are measured, not guessed — see [docs/perf
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and BrepKit WASM load lazily inside the geometry worker on the first non-empty rebuild or export; OCCT (~22 MB) remains a second lazy boundary used for STEP documents and compound STEP export. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+The exact adapter and BrepKit WASM load lazily inside the geometry worker on the first non-empty rebuild or export. OCCT is no longer reachable from any production path, so its ~22 MB WASM is no longer emitted into the bundle at all. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
 ## Beta deployment
 
@@ -176,7 +175,7 @@ Current assistant limitations and gates:
 ## Known limitations
 
 - Editable STEP sources are embedded in the canonical document (capped at 12 MB) for deterministic offline replay; large documents get expensive to save, sync, and undo (history snapshots clone the full document).
-- Imported STL stays a mesh body on the compatibility path; no parametric reconstruction is attempted.
+- Imported STL builds on the exact kernel through its STL importer, sewn into a shell so it can be mirrored, shelled, and offset. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
 - Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented, but both checked-in sharing flags remain `false` pending controlled beta rollout.
 - BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not cross-kernel fingerprint-stable — they fail closed rather than mis-resolve.
 - True face attachment requires a schema-v5 lineage reference and an exact planar face at the sketch's history position. Legacy face attachments retain their stored migration frame with a warning; deleted, ambiguous, non-planar, and unsupported current references fail visibly.

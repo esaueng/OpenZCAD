@@ -1,6 +1,6 @@
 # OpenZCAD Architecture
 
-OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by BrepKit or, for STEP documents, OCCT in a browser Web Worker. The Cloudflare Worker coordinates persistence, collaboration, and AI, but never owns interactive geometry.
+OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument` and its command history live in the browser. Exact geometry is a derived projection rebuilt by BrepKit in a browser Web Worker, for every document including STEP imports. The Cloudflare Worker coordinates persistence, collaboration, and AI, but never owns interactive geometry.
 
 ## Layers
 
@@ -8,8 +8,9 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 - `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern/modeling features, v1–v5 normalization, and checkpoint creation.
 - `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
-- `kernel-adapter/exact`: the lazy `brepkit-wasm` adapter. It owns native exact primitives, sweeps, transforms, booleans, mirror/shell/offset, edge finishing, patterns, face-attachment resolution, tessellation/topology projection, validity checks, measurements, and STEP/STL export. Documents containing STEP imports route to the lazy OCCT adapter.
-- `kernel-adapter` and `geometry`: compatibility support for imported mesh bodies and deterministic legacy tests. They are not the primary exact modeling path.
+- `kernel-adapter/exact`: the lazy `brepkit-wasm` adapter. It owns native exact primitives, sweeps, transforms, booleans, mirror/shell/offset, edge finishing, patterns, imported meshes, face-attachment resolution, tessellation/topology projection, validity checks, measurements, and STEP/STL export, and the exact import of STEP sources. There is no second kernel on this path: `occt-step.ts` is retained only as the parity corpus's reference implementation.
+- `kernel-adapter` (root): the synchronous helpers both adapters and the app share — topology lineage, face attachment, imported-feature recognition, and the mesh-to-STL handoff. No kernel runs here.
+- `geometry`: document-side geometry only — sketch-plane frames, 2D profiles, sketch regions, shared tolerances, and mesh welding. It builds no solids.
 - `viewport`: Three.js projection and picking only. It never mutates canonical geometry or document state. It renders Z-up to match the kernel, so a part's vertical axis is +Z on screen exactly as it is in the solid.
 - `persistence` and `cloudflare-adapters`: local/in-memory and D1/R2 implementations, schema normalization, revisions/checkpoints, upload sessions, and artifact coordination.
 - `apps/web`: React workspace, IndexedDB autosave, geometry worker, and Cloudflare Worker routes.
@@ -19,7 +20,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 1. A UI form or approved AI proposal creates validated commands.
 2. `CommandManager` applies one command or transaction, appends serialized replay data, and advances the document version.
 3. The React app autosaves the canonical document to IndexedDB.
-4. The geometry worker receives `{ type: "sync", document }`. Empty documents avoid loading a kernel; other documents lazy-load the exact adapter and route STEP histories through OCCT.
+4. The geometry worker receives `{ type: "sync", document }`. Empty documents avoid loading a kernel; other documents lazy-load the exact adapter.
 5. The worker keys the rebuild by canonical project content (excluding derived output), deduplicates matching in-flight work, and may return a structured clone from its bounded LRU. A miss replays the full exact feature history.
 6. The worker returns derived meshes, bounds, volume, face counts, validity warnings, and exportable body IDs tagged with project/version.
 7. The app rejects stale results and attaches only matching derived state without advancing model history.
@@ -38,11 +39,11 @@ When opening a project, local and remote copies are loaded together. The higher 
 
 ## Exact export lifecycle
 
-STEP/STL buttons send an export request to the existing geometry worker with the current document and selected live body IDs. The worker rebuilds the exact shapes through the same document-selected adapter and exports them; BrepKit may lazy-load OCCT to assemble multi-body STEP compounds. The main thread only creates the download and records best-effort export metadata with the Worker API. The viewport and export therefore share the same exact build path, although exports deliberately bypass the rebuild-result cache.
+STEP/STL buttons send an export request to the existing geometry worker with the current document and selected live body IDs. The worker rebuilds the exact shapes through the same adapter and exports them, multi-body STEP compounds included. The main thread only creates the download and records best-effort export metadata with the Worker API. The viewport and export therefore share the same exact build path, although exports deliberately bypass the rebuild-result cache.
 
 ## Editable STEP lifecycle
 
-The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. The presence of that feature routes the document through OCCT, which imports the exact shape on every replay; later transforms, booleans, finishing, patterns, selection, and export therefore share one exact B-rep path. The Cloudflare Worker archives the source best-effort; replay does not depend on that network artifact.
+The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. The kernel imports the exact shape on every replay, honouring the file's own declared length and plane-angle units; later transforms, booleans, finishing, patterns, selection, and export therefore share one exact B-rep path. The Cloudflare Worker archives the source best-effort; replay does not depend on that network artifact.
 
 ## Collaboration lifecycle
 

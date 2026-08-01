@@ -50,10 +50,12 @@ import {
   selectSafelyUnifiedSolid,
   type TriangleMeshClosure
 } from './boolean-result-validation';
-import { OpenZCADKernel } from './index';
+import {
+  importedMeshStl,
+  meshBooleanUnsupportedError
+} from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
-import { normalizeStepPlaneAnglesForKernel } from './step-import';
 import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
@@ -73,6 +75,7 @@ import {
 } from './topology-fingerprint';
 import {
   brepKitHashOnlyLineage,
+  createBrepKitImportedStepLineage,
   createBrepKitSemanticLineage,
   mergeBrepKitLineageStates,
   propagateBrepKitRigidTransformLineage,
@@ -90,12 +93,33 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from './face-attachment';
+import {
+  classifyImportedSolid,
+  importedStepDroppedSolidWarning,
+  importedStepNoSolidError,
+  importedStepRejectedSolidSummary,
+  importedStepValidationWarning,
+  type ImportedSolidDiagnosis
+} from './imported-step-validation';
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
+/** Sewing gap for imported meshes, relative to the mesh's largest extent. */
+const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
+/** Relative bar for proving a plane runs tangent to a cylindrical band. */
+const BLEND_TANGENCY_TOLERANCE = 1e-6;
+/**
+ * Fractions of a refused fillet/chamfer size retried to tell a size-bound
+ * failure from a structural one. A ladder rather than one probe because the
+ * kernel has a small-feature floor as well as a large-feature limit, so a
+ * single deep probe can fail on a selection that a halved size would carry.
+ */
+const EDGE_MODIFIER_PROBE_RATIOS = [1 / 2, 1 / 8, 1 / 64] as const;
+const DIRECT_EDIT_TOLERANCE = 1e-6;
+const FULL_REVOLUTION = Math.PI * 2;
 const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
 interface ExactShape {
@@ -105,10 +129,33 @@ interface ExactShape {
   lineage?: BrepKitLineageState;
 }
 
+/** What the K0.6 import validator found on one `imported-step` feature. */
+interface ImportedStepDiagnostics {
+  /** Solids the file declared, before any were rejected. */
+  declaredSolidCount: number;
+  /** Reasons for each solid dropped as not being a closed manifold shell. */
+  rejections: string[];
+  /** Reasons for each solid kept but failing strict validation. */
+  flagged: string[];
+}
+
 interface ExactBuildResult {
   shapes: Map<BodyId, ExactShape>;
   sketchBases: Map<SketchId, PlaneBasis>;
   consumed: Set<BodyId>;
+  /**
+   * Per-body import validation, recorded where the import happens rather than
+   * re-derived later: it describes the file the user opened, not whatever the
+   * body became after the features layered on top of it.
+   */
+  importedStepDiagnostics: Map<BodyId, ImportedStepDiagnostics>;
+  /**
+   * Bodies whose geometry originates in an imported mesh, directly or through
+   * a derived feature. Their shells are source-file facets rather than
+   * analytic surfaces, which is what makes booleans against them a typed
+   * refusal instead of a silently poor result.
+   */
+  meshBodies: Set<BodyId>;
   warnings: string[];
 }
 
@@ -144,6 +191,14 @@ function subtract(left: Vec3, right: Vec3): Vec3 {
     x: left.x - right.x,
     y: left.y - right.y,
     z: left.z - right.z
+  };
+}
+
+function add(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: left.x + right.x,
+    y: left.y + right.y,
+    z: left.z + right.z
   };
 }
 
@@ -517,8 +572,91 @@ function selectedEdgesShareVertex(
 }
 
 /**
- * True when a selected edge touches a freeform (blend) face of the target —
- * either bordering it directly or ending on one of its boundary vertices.
+ * True when `face` is a rolling-ball blend band rather than a modelled wall.
+ *
+ * Surface type alone used to answer this: every fillet BrepKit produced was
+ * fitted as a `bspline`, so a free-form face WAS a blend. The kernel now
+ * returns an exact `cylinder` for a fillet along a straight edge between two
+ * planes, which makes a blend band and a drilled bore wall the same surface
+ * type. They are still distinguishable by tangency, which is what a blend
+ * IS: a band runs tangent into the face it meets along their shared edge,
+ * where a bore wall meets its caps at a right angle. So a cylinder counts as
+ * a blend only when some adjacent planar face is parallel to its axis and
+ * stands exactly one radius off it.
+ */
+function isBlendFace(
+  kernel: BrepKernel,
+  solid: number,
+  face: number
+): boolean {
+  const surfaceType = kernel.getSurfaceType(face);
+  if (surfaceType === 'bspline') {
+    return true;
+  }
+  if (surfaceType !== 'cylinder') {
+    return false;
+  }
+  let parameters: unknown;
+  try {
+    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
+  } catch {
+    return false;
+  }
+  const record = (parameters ?? {}) as Record<string, unknown>;
+  const origin = finiteVec3(record.origin);
+  const rawAxis = finiteVec3(record.axis);
+  const axis = rawAxis ? normalized(rawAxis) : null;
+  const radius = record.radius;
+  if (
+    !origin ||
+    !axis ||
+    typeof radius !== 'number' ||
+    !Number.isFinite(radius) ||
+    radius <= GEOMETRY_EPSILON
+  ) {
+    return false;
+  }
+  const bandEdges = new Set(kernel.getFaceEdges(face));
+  const tolerance = Math.max(BLEND_TANGENCY_TOLERANCE * radius, GEOMETRY_EPSILON);
+  for (const neighbour of kernel.getSolidFaces(solid)) {
+    if (
+      neighbour === face ||
+      kernel.getSurfaceType(neighbour) !== 'plane' ||
+      !Array.from(kernel.getFaceEdges(neighbour)).some((edge) =>
+        bandEdges.has(edge)
+      )
+    ) {
+      continue;
+    }
+    const onPlane = faceVertexCentroid(kernel, neighbour);
+    let normal: Vec3 | null;
+    try {
+      const raw = kernel.getFaceNormal(neighbour);
+      normal = normalized({ x: raw[0]!, y: raw[1]!, z: raw[2]! });
+    } catch {
+      // NURBS-backed planes have no analytic normal; they cannot be proven
+      // tangent, so they do not make their neighbour a blend.
+      normal = null;
+    }
+    if (!onPlane || !normal) {
+      continue;
+    }
+    if (Math.abs(dot(normal, axis)) > BLEND_TANGENCY_TOLERANCE) {
+      continue;
+    }
+    if (
+      Math.abs(Math.abs(dot(subtract(origin, onPlane), normal)) - radius) <=
+      tolerance
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when a selected edge touches a blend face of the target — either
+ * bordering it directly or ending on one of its boundary vertices.
  */
 function selectionTouchesBlendFace(
   kernel: BrepKernel,
@@ -527,7 +665,7 @@ function selectionTouchesBlendFace(
 ): boolean {
   const blendVertices = new Set<number>();
   for (const face of kernel.getSolidFaces(solid)) {
-    if (kernel.getSurfaceType(face) !== 'bspline') {
+    if (!isBlendFace(kernel, solid, face)) {
       continue;
     }
     for (const edge of kernel.getFaceEdges(face)) {
@@ -547,13 +685,128 @@ function selectionTouchesBlendFace(
 }
 
 /**
- * Cause-aware failure message for an edge modifier that every kernel engine
- * refused. BrepKit's `try_fillet` collapses all-engine failure into a silent
- * input-handle return, discarding the typed engine errors
- * (docs/qa/2026-08-01/plate-second-fillet-investigation.md), so the cause is
- * inferred from the selection's topology instead. Closed rims and corner
- * chains on boolean-result bodies fail at every size — steering the user
- * toward a smaller radius for those is a dead end.
+ * Run one edge modifier and apply every acceptance rule the adapter ships a
+ * result under, returning `null` when the kernel refused or produced a body
+ * this adapter will not accept.
+ *
+ * This is the single definition of "the edit worked". The failure classifier
+ * probes through it too, so a probe can never accept a result the real edit
+ * would have rejected — which is exactly how a truthful "try a smaller size"
+ * turns into a lie.
+ */
+function applyEdgeModifier(
+  kernel: BrepKernel,
+  target: number,
+  selected: number[],
+  featureKind: 'fillet' | 'chamfer',
+  size: number
+): number | null {
+  const targetBounds = kernel.boundingBox(target);
+  const handles = Uint32Array.from(selected);
+  let modified: number;
+  if (featureKind === 'fillet') {
+    try {
+      modified = kernel.fillet(target, handles, size);
+    } catch {
+      modified = target;
+    }
+    if (modified === target) {
+      try {
+        modified =
+          tryExactAnalyticCylinderRimFillet(kernel, target, selected, size) ??
+          target;
+      } catch {
+        modified = target;
+      }
+    }
+  } else {
+    try {
+      modified = kernel.chamfer(target, handles, size);
+    } catch {
+      return null;
+    }
+  }
+  // When a blend cannot be attached at all, BrepKit falls back to returning
+  // the input handle. That is a failed feature, not a successful no-op.
+  if (modified === target || kernel.validateSolidRelaxed(modified) !== 0) {
+    return null;
+  }
+  if (featureKind === 'fillet') {
+    // A fillet rounds material inside the target envelope. BrepKit can return
+    // a closed but severely distorted fallback for an oversized radius,
+    // expanding the body to the requested size. Reject that result rather
+    // than guessing a radius limit from the selected edge's length: the valid
+    // limit is set by its adjacent faces, and can be larger than half the
+    // edge length.
+    const modifiedBounds = kernel.boundingBox(modified);
+    const boundsScale = [0, 1, 2].reduce(
+      (maximum, axis) =>
+        Math.max(maximum, targetBounds[axis + 3]! - targetBounds[axis]!),
+      1
+    );
+    const tolerance = Math.max(
+      GEOMETRY_EPSILON,
+      boundsScale * GEOMETRY_LINEAR_TOLERANCE
+    );
+    if (
+      modifiedBounds[0]! < targetBounds[0]! - tolerance ||
+      modifiedBounds[1]! < targetBounds[1]! - tolerance ||
+      modifiedBounds[2]! < targetBounds[2]! - tolerance ||
+      modifiedBounds[3]! > targetBounds[3]! + tolerance ||
+      modifiedBounds[4]! > targetBounds[4]! + tolerance ||
+      modifiedBounds[5]! > targetBounds[5]! + tolerance
+    ) {
+      return null;
+    }
+  }
+  return modified;
+}
+
+/**
+ * True when the same selection is ACCEPTED at some size below the one that
+ * failed, which is the only sound evidence that a failure is size-bound
+ * rather than structural. Runs on the failure path only.
+ */
+function edgeModifierSucceedsSmaller(
+  kernel: BrepKernel,
+  target: number,
+  selected: number[],
+  featureKind: 'fillet' | 'chamfer',
+  size: number
+): boolean {
+  return EDGE_MODIFIER_PROBE_RATIOS.some((ratio) => {
+    const probe = size * ratio;
+    if (!Number.isFinite(probe) || probe <= GEOMETRY_EPSILON) {
+      return false;
+    }
+    try {
+      return (
+        applyEdgeModifier(kernel, target, selected, featureKind, probe) !== null
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Cause-aware failure message for an edge modifier the kernel refused.
+ *
+ * The kernel reports why its blender stopped, but not whether the selection
+ * could ever work, so that question is answered the only way that is sound:
+ * by retrying the same selection at a ladder of smaller sizes. A probe that
+ * is accepted means the failure is size-bound and the actionable advice is a
+ * smaller size. A ladder that fails everywhere means the cause is structural,
+ * and it is named from the selection's topology — a closed rim, a corner
+ * chain, or an edge ending on an existing blend.
+ *
+ * The probe is what keeps those structural messages true. They used to be
+ * unconditional because corner chains and closed rims on a boolean-result
+ * body failed at EVERY size (docs/qa/2026-08-01). The kernel's blend phases
+ * changed that: on the plate from that investigation the hole rim now rounds
+ * up to r2.24 and the corner chain up to r2, so an unconditional "cannot be
+ * rounded at any radius" would now be false, and would bury the advice that
+ * actually works.
  */
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
@@ -567,11 +820,16 @@ function edgeModifierFailureMessage(
   const verb = featureKind === 'fillet' ? 'rounded' : 'chamfered';
   const prefix = `${label} could not be created on ${selected.length} selected edge${selected.length === 1 ? '' : 's'} with ${dimension} ${size}.`;
   try {
+    if (
+      edgeModifierSucceedsSmaller(kernel, target, selected, featureKind, size)
+    ) {
+      return `${prefix} Try a smaller ${dimension}.`;
+    }
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
-      return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body yet at any ${dimension} — deselect the rim edge and try again.`;
+      return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
     }
     if (selectedEdgesShareVertex(kernel, selected)) {
-      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body yet at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
+      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
@@ -769,7 +1027,7 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 export interface ExactKernelAdapter {
-  readonly kind: 'brepkit' | 'occt' | 'hybrid';
+  readonly kind: 'brepkit' | 'occt';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
@@ -777,6 +1035,12 @@ export interface ExactKernelAdapter {
     solid: boolean;
     valid: boolean;
     volume: number;
+    /**
+     * Why the probe answered as it did, when there is something to say. K0.6:
+     * the probe never raises, so a parse error or a rejected open shell has to
+     * come back through the value.
+     */
+    reason?: string;
   }>;
   dispose(): void;
 }
@@ -837,8 +1101,9 @@ function profilePoints(
 }
 
 /**
- * Build the same ZYX Euler transform used by the compatibility kernel and the
- * viewport gizmo. BrepKit accepts row-major matrices and column vectors.
+ * Build the same ZYX Euler transform the viewport's Move gizmo composes, so a
+ * dragged placement and the rebuilt body agree once more than one axis is
+ * non-zero. BrepKit accepts row-major matrices and column vectors.
  */
 function transformMatrix(translation: Vec3, rotationDeg: Vec3): Float64Array {
   const rx = (rotationDeg.x * Math.PI) / 180;
@@ -1292,6 +1557,52 @@ function faceWitnessOf(kernel: BrepKernel, face: number): FaceWitnessV1 {
     centroid: centroid ? quantizedPoint(centroid) : null,
     analytic,
     closure: brepKitFaceClosure(kernel, face, surfaceType)
+  };
+}
+
+/**
+ * Measure one imported solid for the K0.6 validator.
+ *
+ * Closure and manifoldness are read from the EXACT B-rep — `edgeToFaceMap`
+ * lists one entry per face use of an edge, so a closed manifold shell uses
+ * every edge exactly twice. This is deliberately not `meshQuality`, which
+ * reports `isWatertight: false` for a valid analytic cone because the apex
+ * does not weld; see `imported-step-validation.ts` for that measurement.
+ *
+ * The strict validator is used rather than the relaxed one because the
+ * relaxation exists for booleans and blends, and an import has not been
+ * through either — it is what the file declares.
+ */
+function diagnoseImportedSolid(
+  kernel: BrepKernel,
+  solid: number,
+  index: number
+): ImportedSolidDiagnosis {
+  const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
+    string,
+    number[]
+  >;
+  let openEdgeCount = 0;
+  let nonManifoldEdgeCount = 0;
+  let edgeCount = 0;
+  for (const uses of Object.values(edgeToFaces)) {
+    edgeCount += 1;
+    const count = Array.isArray(uses) ? uses.length : 0;
+    if (count < 2) {
+      openEdgeCount += 1;
+    } else if (count > 2) {
+      nonManifoldEdgeCount += 1;
+    }
+  }
+  return {
+    index,
+    faceCount: Array.from(kernel.getSolidFaces(solid)).length,
+    edgeCount,
+    openEdgeCount,
+    nonManifoldEdgeCount,
+    shellCount: Array.from(kernel.getSolidShells(solid)).length,
+    strictErrorCount: kernel.validateSolid(solid),
+    relaxedErrorCount: kernel.validateSolidRelaxed(solid)
   };
 }
 
@@ -2068,7 +2379,7 @@ function measureFaceGeometry(
     }
     return geometry;
   }
-  if (surfaceType !== 'cylinder') {
+  if (surfaceType !== 'cylinder' && surfaceType !== 'sphere') {
     return geometry;
   }
   let parameters: unknown;
@@ -2078,17 +2389,26 @@ function measureFaceGeometry(
     return geometry;
   }
   const record = (parameters ?? {}) as Record<string, unknown>;
+  const rawRadius = record.radius;
+  const radius =
+    typeof rawRadius === 'number' &&
+    Number.isFinite(rawRadius) &&
+    rawRadius > GEOMETRY_EPSILON
+      ? rawRadius
+      : null;
+  if (surfaceType === 'sphere') {
+    // The corner patch a vertex blend leaves behind is a sphere of the blend
+    // radius. It has no axis, so the radius is all that carries over.
+    if (radius !== null) {
+      geometry.radius = radius;
+      geometry.diameter = radius * 2;
+    }
+    return geometry;
+  }
   const origin = finiteVec3(record.origin);
   const rawAxis = finiteVec3(record.axis);
   const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = record.radius;
-  if (
-    !origin ||
-    !axis ||
-    typeof radius !== 'number' ||
-    !Number.isFinite(radius) ||
-    radius <= GEOMETRY_EPSILON
-  ) {
+  if (!origin || !axis || radius === null) {
     return geometry;
   }
   geometry.radius = radius;
@@ -2110,6 +2430,348 @@ function measureFaceGeometry(
     geometry.axialLength = axialMax - axialMin;
   }
   return geometry;
+}
+
+/** A cylindrical face the kernel has proven to be an open internal bore. */
+interface ThroughHoleGeometry extends FaceGeometry {
+  radius: number;
+  diameter: number;
+  axisStart: Vec3;
+  axisEnd: Vec3;
+  axialLength: number;
+  featureType: 'through-hole';
+  editableDimension: 'diameter';
+}
+
+type ThroughHoleClassification =
+  { status: 'through-hole' } | { status: 'refused'; message: string };
+
+function refuseThroughHole(message: string): ThroughHoleClassification {
+  return { status: 'refused', message };
+}
+
+/** Point-in-solid classification, treating any kernel failure as unknown. */
+function classifySolidPoint(
+  kernel: BrepKernel,
+  solid: number,
+  point: Vec3
+): 'inside' | 'outside' | 'boundary' | 'unknown' {
+  let classification: string;
+  try {
+    classification = kernel.classifyPoint(
+      solid,
+      point.x,
+      point.y,
+      point.z,
+      DIRECT_EDIT_TOLERANCE
+    );
+  } catch {
+    return 'unknown';
+  }
+  return classification === 'inside' ||
+    classification === 'outside' ||
+    classification === 'boundary'
+    ? classification
+    : 'unknown';
+}
+
+/**
+ * Decide whether a cylindrical face is a through-hole: an internal bore that
+ * opens at both ends, as opposed to a blind pocket or an external wall.
+ *
+ * OpenCascade answers the bore/wall half of that question from the face's
+ * orientation flag — a hollow tube's outer wall and its bore share the same
+ * void axis and the same two open ends, and only the orientation separates
+ * them. BrepKit has no such flag (`getShapeOrientation` documents that every
+ * face reports `forward`, and a cylinder's parametric normal points away from
+ * the axis whether it walls a bore or a boss), so the same distinction is
+ * taken from the material itself: just outside a bore's wall is solid, just
+ * outside an outer wall is air. Everything else — full revolution, void
+ * along the axis, both ends open — mirrors the OpenCascade classifier.
+ *
+ * A case that cannot be settled is refused by name rather than guessed at.
+ */
+function classifyThroughHoleFace(
+  kernel: BrepKernel,
+  solid: number,
+  face: number,
+  geometry: FaceGeometry | undefined
+): ThroughHoleClassification {
+  if (!geometry) {
+    return refuseThroughHole('The selected face could not be measured.');
+  }
+  if (geometry.surfaceType !== 'cylinder') {
+    return refuseThroughHole(
+      `The selected face is a ${geometry.surfaceType} surface, not a cylindrical through-hole.`
+    );
+  }
+  if (
+    geometry.radius === undefined ||
+    geometry.diameter === undefined ||
+    !geometry.axisStart ||
+    !geometry.axisEnd ||
+    geometry.axialLength === undefined
+  ) {
+    return refuseThroughHole(
+      'The selected cylindrical face has no analytic axis, so it cannot be measured as a through-hole.'
+    );
+  }
+  const domain = Array.from(kernel.getSurfaceDomain(face));
+  if (
+    domain.length !== 4 ||
+    !domain.every(Number.isFinite) ||
+    Math.abs(Math.abs(domain[1]! - domain[0]!) - FULL_REVOLUTION) > 1e-5
+  ) {
+    return refuseThroughHole(
+      'The selected face covers only part of its cylinder, so it is not a complete through-hole bore.'
+    );
+  }
+  const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+  if (!axis || geometry.axialLength <= GEOMETRY_EPSILON) {
+    return refuseThroughHole(
+      'The selected cylindrical face has a degenerate axis.'
+    );
+  }
+
+  // The same probe distance OpenCascade uses to step off each end of the bore.
+  const axialProbe = Math.max(
+    DIRECT_EDIT_TOLERANCE * 10,
+    geometry.radius * 0.02,
+    geometry.axialLength * 0.01
+  );
+  const center = scale(add(geometry.axisStart, geometry.axisEnd), 0.5);
+  if (classifySolidPoint(kernel, solid, center) !== 'outside') {
+    return refuseThroughHole(
+      'The selected cylindrical face encloses material along its axis, so it is a boss rather than a hole.'
+    );
+  }
+  if (
+    classifySolidPoint(
+      kernel,
+      solid,
+      subtract(geometry.axisStart, scale(axis, axialProbe))
+    ) !== 'outside' ||
+    classifySolidPoint(
+      kernel,
+      solid,
+      add(geometry.axisEnd, scale(axis, axialProbe))
+    ) !== 'outside'
+  ) {
+    return refuseThroughHole(
+      'The selected cylindrical face does not open at both ends, so it is a blind pocket rather than a through-hole.'
+    );
+  }
+
+  // Radial probe: far enough off the wall for the kernel to resolve which side
+  // of it the point sits on, and small enough that any real wall still
+  // contains it. Sampling four bearings rather than one keeps a single
+  // intersecting feature from deciding the answer on its own.
+  const radialProbe = Math.max(
+    DIRECT_EDIT_TOLERANCE * 100,
+    geometry.radius * 1e-3
+  );
+  const reference =
+    Math.abs(axis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+  const bearingU = normalized(cross(reference, axis));
+  if (!bearingU) {
+    return refuseThroughHole(
+      'The selected cylindrical face has no measurable radial direction.'
+    );
+  }
+  const bearingV = cross(axis, bearingU);
+  const outsideWall = [0, 0.25, 0.5, 0.75].map((turn) => {
+    const angle = turn * FULL_REVOLUTION;
+    const offset = geometry.radius! + radialProbe;
+    return classifySolidPoint(
+      kernel,
+      solid,
+      add(
+        center,
+        add(
+          scale(bearingU, Math.cos(angle) * offset),
+          scale(bearingV, Math.sin(angle) * offset)
+        )
+      )
+    );
+  });
+  if (outsideWall.every((classification) => classification === 'inside')) {
+    return { status: 'through-hole' };
+  }
+  if (outsideWall.every((classification) => classification === 'outside')) {
+    return refuseThroughHole(
+      'The selected cylindrical face has material only on its inside, so it is an external wall rather than a bore.'
+    );
+  }
+  return refuseThroughHole(
+    'The selected cylindrical face is not surrounded by material around its whole circumference, so it cannot be classified as a through-hole.'
+  );
+}
+
+/** Face measurements plus the editable feature semantics the UI offers. */
+function measureOwnedFaceGeometry(
+  kernel: BrepKernel,
+  solid: number,
+  face: number
+): FaceGeometry | undefined {
+  const geometry = measureFaceGeometry(kernel, face);
+  if (
+    geometry?.surfaceType === 'cylinder' &&
+    classifyThroughHoleFace(kernel, solid, face, geometry).status ===
+      'through-hole'
+  ) {
+    geometry.featureType = 'through-hole';
+    geometry.editableDimension = 'diameter';
+  }
+  return geometry;
+}
+
+/**
+ * Re-validate that the resolved face is still the through-hole the operation
+ * was recorded against. A rebuild that drifted must fail here rather than
+ * resize whichever face happened to inherit the fingerprint.
+ */
+function requireThroughHole(
+  kernel: BrepKernel,
+  solid: number,
+  face: number,
+  sourceDiameter?: number,
+  sourceAxisStart?: Vec3,
+  sourceAxisEnd?: Vec3
+): ThroughHoleGeometry {
+  const geometry = measureFaceGeometry(kernel, face);
+  const classification = classifyThroughHoleFace(kernel, solid, face, geometry);
+  if (classification.status !== 'through-hole' || !geometry) {
+    throw new Error(
+      classification.status === 'refused'
+        ? classification.message
+        : 'Selected face is not a complete through-hole cylinder.'
+    );
+  }
+  geometry.featureType = 'through-hole';
+  geometry.editableDimension = 'diameter';
+  const hole = geometry as ThroughHoleGeometry;
+  if (
+    sourceDiameter !== undefined &&
+    Math.abs(hole.diameter - sourceDiameter) >
+      Math.max(DIRECT_EDIT_TOLERANCE, sourceDiameter * 1e-6)
+  ) {
+    throw new Error(
+      'Selected face no longer matches its recorded source diameter.'
+    );
+  }
+  if (sourceAxisStart && sourceAxisEnd) {
+    const axisTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      hole.axialLength * 1e-6,
+      hole.radius * 1e-6
+    );
+    const sameDirection =
+      length(subtract(hole.axisStart, sourceAxisStart)) <= axisTolerance &&
+      length(subtract(hole.axisEnd, sourceAxisEnd)) <= axisTolerance;
+    const reversedDirection =
+      length(subtract(hole.axisStart, sourceAxisEnd)) <= axisTolerance &&
+      length(subtract(hole.axisEnd, sourceAxisStart)) <= axisTolerance;
+    if (!sameDirection && !reversedDirection) {
+      throw new Error(
+        'Selected face no longer matches its recorded hole axis.'
+      );
+    }
+  }
+  return hole;
+}
+
+/** Solid cylinder between two world points, optionally extended past both. */
+function cylinderAlongAxis(
+  kernel: BrepKernel,
+  start: Vec3,
+  end: Vec3,
+  radius: number,
+  extension = 0
+): number {
+  const vector = subtract(end, start);
+  const axis = normalized(vector);
+  const axialLength = length(vector);
+  if (!axis || axialLength <= GEOMETRY_EPSILON) {
+    throw new Error('Cylindrical feature has a degenerate axis.');
+  }
+  const origin = subtract(start, scale(axis, extension));
+  const local = kernel.makeCylinder(radius, axialLength + extension * 2);
+  return kernel.copyAndTransformSolid(
+    local,
+    coordinateFrameMatrix(origin, axis)
+  );
+}
+
+/**
+ * Close exactly the selected through-hole span by fusing a plug of the bore's
+ * own radius and merging the seams the fuse leaves behind.
+ *
+ * BrepKit's boolean drops to a co-refined mesh when its general face assembly
+ * will not accept the result, and closing a hole — collapsing a handle in the
+ * body — is a configuration it declines often enough to matter. A mesh result
+ * still encloses roughly the right space, so it is caught by counting faces
+ * instead of measuring volume: a real fill deletes the bore and merges its two
+ * openings back into their host faces, while the mesh fallback replaces every
+ * analytic surface with a fan of triangles and multiplies the face count.
+ */
+function fillThroughHole(
+  kernel: BrepKernel,
+  solid: number,
+  geometry: ThroughHoleGeometry
+): number {
+  const facesBefore = kernel.getSolidFaces(solid).length;
+  const filler = cylinderAlongAxis(
+    kernel,
+    geometry.axisStart,
+    geometry.axisEnd,
+    geometry.radius
+  );
+  let filled: number;
+  try {
+    filled = kernel.fuse(solid, filler);
+  } catch (error) {
+    throw new Error(
+      `Filling the through-hole failed: ${
+        error instanceof Error ? error.message : 'the kernel rejected the fuse'
+      }.`,
+      { cause: error }
+    );
+  }
+  kernel.unifyFaces(filled);
+  if (kernel.validateSolid(filled) !== 0) {
+    throw new Error('Filling the through-hole did not produce a valid solid.');
+  }
+  if (kernel.getSolidFaces(filled).length >= facesBefore) {
+    throw new Error(
+      "Filling the through-hole fell back to a faceted mesh boolean, which would replace the body's exact surfaces with triangles."
+    );
+  }
+  return filled;
+}
+
+/** Radii of every analytic cylinder in `solid` sharing the given axis line. */
+function coaxialCylinderRadii(
+  kernel: BrepKernel,
+  solid: number,
+  axisPoint: Vec3,
+  axisDirection: Vec3,
+  tolerance: number
+): number[] {
+  return Array.from(kernel.getSolidFaces(solid)).flatMap((handle) => {
+    const measured = measureFaceGeometry(kernel, handle);
+    if (
+      measured?.surfaceType !== 'cylinder' ||
+      measured.radius === undefined ||
+      !measured.axisStart
+    ) {
+      return [];
+    }
+    const toAxis = subtract(measured.axisStart, axisPoint);
+    const along = dot(toAxis, axisDirection);
+    return length(subtract(toAxis, scale(axisDirection, along))) <= tolerance
+      ? [measured.radius]
+      : [];
+  });
 }
 
 function faceAttachmentCandidatesForShape(
@@ -2228,6 +2890,98 @@ function projectBrepKitLineageDiagnostic(
   };
 }
 
+/**
+ * Bring an imported mesh into the kernel as a body it can actually model with.
+ *
+ * BrepKit's STL importer emits one face per triangle and does not share edges
+ * between them, so the result fails strict validation and every modeling
+ * operation refuses it. Sewing restores the shared-edge topology, and unifying
+ * same-domain faces recovers the planar faces a tessellator split up — an
+ * imported cube comes back as six faces, not twelve triangles, so a user can
+ * select, mirror, shell and offset it like any other body.
+ *
+ * The repair is topological only: the measured volume and bounds must survive
+ * it unchanged. If they do not, or the mesh cannot be sewn at all, the import
+ * fails by name instead of publishing a body whose geometry silently drifted.
+ */
+function importMeshSolid(kernel: BrepKernel, stlText: string): number {
+  const imported = kernel.importStl(new TextEncoder().encode(stlText));
+  const faces = kernel.getSolidFaces(imported);
+  if (faces.length < 2) {
+    throw new Error(
+      'An imported mesh needs at least two triangles to form a body.'
+    );
+  }
+  const bounds = Array.from(kernel.boundingBox(imported));
+  const volume = kernel.volume(imported, MEASUREMENT_DEFLECTION);
+  const scale = Math.max(
+    1,
+    bounds[3]! - bounds[0]!,
+    bounds[4]! - bounds[1]!,
+    bounds[5]! - bounds[2]!
+  );
+
+  let repaired: number;
+  try {
+    const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
+    const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
+      | string
+      | { solid?: number };
+    const parsed = (
+      typeof healed === 'string' ? JSON.parse(healed) : healed
+    ) as { solid?: number };
+    repaired = typeof parsed.solid === 'number' ? parsed.solid : sewn;
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : 'unknown kernel error';
+    throw new Error(
+      `This mesh could not be sewn into a shell the kernel can model with: ${detail}`,
+      { cause: error }
+    );
+  }
+
+  const repairedBounds = Array.from(kernel.boundingBox(repaired));
+  const repairedVolume = kernel.volume(repaired, MEASUREMENT_DEFLECTION);
+  const linearTolerance = Math.max(GEOMETRY_EPSILON, scale * 1e-6);
+  if (
+    repairedBounds.length !== bounds.length ||
+    repairedBounds.some(
+      (coordinate, index) =>
+        Math.abs(coordinate - bounds[index]!) > linearTolerance
+    ) ||
+    Math.abs(repairedVolume - volume) >
+      Math.max(linearTolerance ** 3, Math.abs(volume) * 1e-6)
+  ) {
+    throw new Error(
+      'Sewing this mesh changed its size, so the import was refused rather than publishing altered geometry.'
+    );
+  }
+  return repaired;
+}
+
+function bodyName(document: ProjectDocument, bodyId: BodyId): string {
+  return (
+    listNodesByKind(document, 'body').find(
+      (candidate) => candidate.bodyId === bodyId
+    )?.name ?? String(bodyId)
+  );
+}
+
+/**
+ * Carry the imported-mesh origin onto a body derived from one. Mirroring,
+ * shelling or offsetting a mesh still leaves a facet shell, so the derived
+ * body must refuse booleans for the same reason its source does.
+ */
+function inheritMeshOrigin(
+  result: ExactBuildResult,
+  source: BodyId,
+  derived: BodyId | undefined
+): void {
+  if (derived !== undefined && result.meshBodies.has(source)) {
+    result.meshBodies.add(derived);
+  }
+}
+
 function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
   if (shape.solids.length === 0) {
     throw new Error('Exact body contains no solids.');
@@ -2290,31 +3044,8 @@ function decodeText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
-function containsImportedMesh(document: ProjectDocument): boolean {
-  return listFeaturesInOrder(document).some(
-    (feature) => feature.data.featureKind === 'imported-mesh'
-  );
-}
-
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'brepkit' as const;
-  private readonly legacy = new OpenZCADKernel();
-  private stepCombiner: Promise<{
-    combineStepSolids(parts: string[]): string;
-    dispose(): void;
-  }> | null = null;
-
-  /**
-   * BrepKit's STEP writer serializes exactly one solid, so multi-body exports
-   * are assembled into a compound document by OpenCascade — loaded lazily,
-   * only when a multi-body export happens.
-   */
-  private getStepCombiner(): NonNullable<typeof this.stepCombiner> {
-    this.stepCombiner ??= import('./occt-step').then(
-      ({ OcctStepKernelAdapter }) => OcctStepKernelAdapter.create()
-    );
-    return this.stepCombiner;
-  }
 
   private resolveSketchBasisAtHistory(
     kernel: BrepKernel,
@@ -2754,6 +3485,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       shapes: new Map(),
       sketchBases: new Map(),
       consumed: new Set(),
+      importedStepDiagnostics: new Map(),
+      meshBodies: new Set(),
       warnings: [...errors]
     };
 
@@ -2777,8 +3510,26 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             break;
           }
-          case 'imported-mesh':
-            throw new Error('Legacy mesh bodies use the compatibility kernel.');
+          case 'imported-mesh': {
+            if (feature.bodyId) {
+              // The kernel's own STL importer owns vertex welding and shell
+              // orientation, so the document's triangle soup goes back through
+              // it rather than being re-derived here.
+              const solid = importMeshSolid(
+                kernel,
+                importedMeshStl(feature.data)
+              );
+              result.meshBodies.add(feature.bodyId);
+              result.shapes.set(feature.bodyId, {
+                solids: [solid],
+                lineage: brepKitHashOnlyLineage(
+                  'imported-mesh',
+                  'Imported meshes carry no feature provenance; every facet is source-file data.'
+                )
+              });
+            }
+            break;
+          }
           case 'direct-edit': {
             const target = result.shapes.get(feature.data.targetBodyId);
             if (!target) {
@@ -2799,17 +3550,50 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           }
           case 'imported-step': {
             if (feature.bodyId) {
-              const solids = Array.from(
+              const declared = Array.from(
                 kernel.importStep(
-                  new TextEncoder().encode(
-                    normalizeStepPlaneAnglesForKernel(feature.data.stepText)
-                  )
+                  new TextEncoder().encode(feature.data.stepText)
                 )
               );
-              if (solids.length === 0) {
+              if (declared.length === 0) {
                 throw new Error('STEP file contains no solids.');
               }
-              result.shapes.set(feature.bodyId, { solids });
+              // K0.6. A shell that is not closed is not a solid, whatever
+              // volume a divergence integral over its faces happens to
+              // produce. Reject those before they become a body; keep the
+              // rest and say which ones went, because an unreadable solid
+              // that vanishes silently is the worst failure mode the parity
+              // corpus records.
+              const verdicts = declared.map((solid, index) =>
+                classifyImportedSolid(
+                  diagnoseImportedSolid(kernel, solid, index + 1)
+                )
+              );
+              const solids = declared.filter(
+                (_, index) => verdicts[index]!.kind !== 'not-a-solid'
+              );
+              const rejections = verdicts.flatMap((verdict) =>
+                verdict.kind === 'not-a-solid' ? [verdict.reason] : []
+              );
+              if (solids.length === 0) {
+                throw new Error(importedStepNoSolidError(rejections));
+              }
+              result.importedStepDiagnostics.set(feature.bodyId, {
+                declaredSolidCount: declared.length,
+                rejections,
+                flagged: verdicts.flatMap((verdict) =>
+                  verdict.kind === 'flagged' ? [verdict.reason] : []
+                )
+              });
+              result.shapes.set(feature.bodyId, {
+                solids,
+                lineage: createBrepKitImportedStepLineage(
+                  feature.featureId,
+                  solids.flatMap((solid) =>
+                    topologyCandidatesForSolid(kernel, solid)
+                  )
+                )
+              });
             }
             break;
           }
@@ -2899,6 +3683,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'The pinned bridge does not expose a complete reflected topology relation.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'shell': {
@@ -2933,6 +3722,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'The pinned bridge does not expose removed, offset, and generated face relations.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'solid-offset': {
@@ -2960,11 +3754,24 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 'The pinned bridge does not expose a complete offset topology relation.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'boolean': {
             if (!feature.bodyId || feature.data.targetBodyIds.length < 2) {
               throw new Error('Boolean requires at least two bodies.');
+            }
+            const meshOperand = feature.data.targetBodyIds.find((bodyId) =>
+              result.meshBodies.has(bodyId)
+            );
+            if (meshOperand !== undefined) {
+              throw meshBooleanUnsupportedError(
+                bodyName(document, meshOperand)
+              );
             }
             const operands = feature.data.targetBodyIds.map((bodyId) => {
               const shape = result.shapes.get(bodyId);
@@ -3080,78 +3887,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
-            let modified: number;
-            try {
-              const targetBounds = kernel.boundingBox(target);
-              if (feature.data.featureKind === 'fillet') {
-                try {
-                  modified = kernel.fillet(
-                    target,
-                    Uint32Array.from(selected),
-                    size
-                  );
-                } catch {
-                  modified = target;
-                }
-                if (modified === target) {
-                  modified =
-                    tryExactAnalyticCylinderRimFillet(
-                      kernel,
-                      target,
-                      selected,
-                      size
-                    ) ?? target;
-                }
-              } else {
-                modified = kernel.chamfer(
-                  target,
-                  Uint32Array.from(selected),
-                  size
-                );
-              }
-              // When a second blend cannot be attached to an existing NURBS
-              // blend, BrepKit intentionally falls back to the input handle.
-              // Treat that as a failed feature instead of reporting success.
-              if (modified === target) {
-                throw new Error('Edge modifier produced no geometric change.');
-              }
-              if (kernel.validateSolidRelaxed(modified) !== 0) {
-                throw new Error('Edge modifier produced an invalid solid.');
-              }
-              if (feature.data.featureKind === 'fillet') {
-                // A fillet rounds material inside the target envelope. BrepKit
-                // can return a closed but severely distorted fallback for an
-                // oversized radius, expanding the body to the requested size.
-                // Reject that result rather than guessing a radius limit from
-                // the selected edge's length: the valid limit is set by its
-                // adjacent faces, and can be larger than half the edge length.
-                const modifiedBounds = kernel.boundingBox(modified);
-                const boundsScale = [0, 1, 2].reduce(
-                  (maximum, axis) =>
-                    Math.max(
-                      maximum,
-                      targetBounds[axis + 3]! - targetBounds[axis]!
-                    ),
-                  1
-                );
-                const tolerance = Math.max(
-                  GEOMETRY_EPSILON,
-                  boundsScale * GEOMETRY_LINEAR_TOLERANCE
-                );
-                if (
-                  modifiedBounds[0]! < targetBounds[0]! - tolerance ||
-                  modifiedBounds[1]! < targetBounds[1]! - tolerance ||
-                  modifiedBounds[2]! < targetBounds[2]! - tolerance ||
-                  modifiedBounds[3]! > targetBounds[3]! + tolerance ||
-                  modifiedBounds[4]! > targetBounds[4]! + tolerance ||
-                  modifiedBounds[5]! > targetBounds[5]! + tolerance
-                ) {
-                  throw new Error(
-                    'Fillet expanded beyond the target body bounds.'
-                  );
-                }
-              }
-            } catch {
+            const modified = applyEdgeModifier(
+              kernel,
+              target,
+              selected,
+              feature.data.featureKind,
+              size
+            );
+            if (modified === null) {
               throw new Error(
                 edgeModifierFailureMessage(
                   kernel,
@@ -3172,6 +3915,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
               )
             });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
           case 'pattern': {
@@ -3243,6 +3991,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             }
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, { solids });
+            inheritMeshOrigin(
+              result,
+              feature.data.targetBodyId,
+              feature.bodyId
+            );
             break;
           }
         }
@@ -3276,14 +4029,238 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
+   * Replace a through-hole's bore with one at the requested diameter.
+   *
+   * OpenCascade plugs the bore and then cuts the new one through the closed
+   * body. That is `(body ∪ bore) \ newBore`, and because the bore is void in
+   * `body` and the extension past each end sits outside it, the same set is
+   * reached with a single boolean: cutting the new bore straight through when
+   * it is wider, or fusing the annulus between the two radii when it is
+   * narrower. Both forms are exact and produce identical volumes — see the
+   * cross-kernel agreement test — but the single boolean skips the plug fuse,
+   * which BrepKit frequently declines to do analytically. The extension past
+   * both ends is OpenCascade's, so a hole through a slanted opening is trimmed
+   * identically on either kernel.
+   */
+  private resizeThroughHole(
+    kernel: BrepKernel,
+    solid: number,
+    face: number,
+    operation: Extract<DirectEditOperation, { kind: 'resize-through-hole' }>,
+    scope: Record<string, number>
+  ): number {
+    const geometry = requireThroughHole(
+      kernel,
+      solid,
+      face,
+      operation.sourceDiameter,
+      operation.sourceAxisStart,
+      operation.sourceAxisEnd
+    );
+    const diameter = resolveParamValue(
+      operation.diameter,
+      scope,
+      'through-hole diameter'
+    );
+    if (!Number.isFinite(diameter) || diameter <= DIRECT_EDIT_TOLERANCE) {
+      throw new Error('Through-hole diameter must be greater than zero.');
+    }
+    const radius = diameter / 2;
+    const radiusTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      geometry.radius * 1e-6
+    );
+    if (Math.abs(radius - geometry.radius) <= radiusTolerance) {
+      throw new Error(
+        'Through-hole diameter must differ from its current diameter.'
+      );
+    }
+    const extension = Math.max(
+      DIRECT_EDIT_TOLERANCE * 10,
+      geometry.axialLength * 0.02,
+      diameter * 0.01
+    );
+    const newBore = cylinderAlongAxis(
+      kernel,
+      geometry.axisStart,
+      geometry.axisEnd,
+      radius,
+      extension
+    );
+    let output: number;
+    try {
+      output =
+        radius > geometry.radius
+          ? kernel.cut(solid, newBore)
+          : kernel.fuse(
+              solid,
+              kernel.cut(
+                cylinderAlongAxis(
+                  kernel,
+                  geometry.axisStart,
+                  geometry.axisEnd,
+                  geometry.radius
+                ),
+                newBore
+              )
+            );
+    } catch (error) {
+      throw new Error(
+        `Through-hole diameter ${diameter} does not fit this body: ${
+          error instanceof Error ? error.message : 'the kernel rejected the cut'
+        }.`,
+        { cause: error }
+      );
+    }
+    kernel.unifyFaces(output);
+    if (kernel.validateSolid(output) !== 0) {
+      throw new Error(
+        `Resizing the through-hole to diameter ${diameter} does not produce a valid solid.`
+      );
+    }
+    // The kernel can clear its own gates and still hand back a degraded
+    // result: a boolean that meets a coaxial cylindrical face may return the
+    // untouched original, and the mesh fallback encloses the right space with
+    // a wall of triangles instead of a cylinder. Read the bore back and insist
+    // it is an analytic cylinder at the new radius, so either failure surfaces
+    // as a failed feature rather than a gesture that looked like it worked.
+    const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+    if (!axis) {
+      throw new Error('The selected face has a degenerate axis.');
+    }
+    const axisTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      geometry.axialLength * 1e-5,
+      geometry.radius * 1e-5
+    );
+    const coaxialRadii = coaxialCylinderRadii(
+      kernel,
+      output,
+      geometry.axisStart,
+      axis,
+      axisTolerance
+    );
+    const atRadius = (candidate: number): boolean =>
+      coaxialRadii.some(
+        (measured) => Math.abs(measured - candidate) <= radiusTolerance
+      );
+    if (!atRadius(radius)) {
+      throw new Error(
+        atRadius(geometry.radius)
+          ? `The kernel left the hole at its original diameter instead of resizing it to ${diameter}.`
+          : `The kernel returned no analytic bore at diameter ${diameter} — the wall came back as a mesh approximation.`
+      );
+    }
+    return output;
+  }
+
+  /**
+   * Remove the feature the selected face belongs to.
+   *
+   * A through-hole is closed by fusing a plug of its own radius, exactly as
+   * OpenCascade does. Anything else goes to BrepKit's `defeature`, which
+   * rebuilds the body from the planes of the faces it keeps and therefore
+   * only accepts a body whose every remaining face is planar. That
+   * precondition is checked before the call so an unsupported selection is
+   * named rather than silently reassembled, and the reassembly itself is held
+   * to strict solid validation because its failure mode is a closed-looking
+   * body with the wrong walls.
+   */
+  private removeFaceFeature(
+    kernel: BrepKernel,
+    solid: number,
+    face: number,
+    geometry: FaceGeometry | undefined,
+    operation: Extract<DirectEditOperation, { kind: 'remove-face-feature' }>
+  ): number {
+    if (geometry?.surfaceType !== operation.sourceSurfaceType) {
+      throw new Error('Selected face no longer matches its recorded surface.');
+    }
+    // Face area comes from BrepKit's bounded-deflection integration rather
+    // than an exact surface integral, so it is compared at the same relative
+    // tolerance the planar offset uses. The centre is a vertex centroid and
+    // is exact, so it keeps the direct-edit tolerance.
+    const areaTolerance = Math.max(operation.sourceArea * 1e-5, 1e-9);
+    const centerTolerance = Math.max(
+      DIRECT_EDIT_TOLERANCE,
+      Math.sqrt(Math.max(operation.sourceArea, 1)) * 1e-6
+    );
+    if (
+      Math.abs(geometry.area - operation.sourceArea) > areaTolerance ||
+      length(subtract(geometry.center, operation.sourceCenter)) >
+        centerTolerance
+    ) {
+      throw new Error('Selected face no longer matches its recorded geometry.');
+    }
+
+    const isThroughHole =
+      classifyThroughHoleFace(kernel, solid, face, geometry).status ===
+      'through-hole';
+    if (isThroughHole) {
+      return fillThroughHole(
+        kernel,
+        solid,
+        requireThroughHole(
+          kernel,
+          solid,
+          face,
+          operation.sourceDiameter,
+          operation.sourceAxisStart,
+          operation.sourceAxisEnd
+        )
+      );
+    }
+
+    const keptFaces = Array.from(kernel.getSolidFaces(solid)).filter(
+      (handle) => handle !== face
+    );
+    const nonPlanar = new Set(
+      keptFaces
+        .map((handle) => kernel.getSurfaceType(handle))
+        .filter((surfaceType) => surfaceType !== 'plane')
+    );
+    if (nonPlanar.size > 0) {
+      throw new Error(
+        `Removing a ${geometry.surfaceType} face needs BrepKit's defeature operation, which only supports bodies whose every remaining face is planar; this body still has ${[...nonPlanar].sort().join(', ')} faces.`
+      );
+    }
+    if (keptFaces.length < 4) {
+      throw new Error(
+        'Removing the selected face would leave too few faces to bound a solid.'
+      );
+    }
+    let output: number;
+    try {
+      output = kernel.defeature(solid, Uint32Array.from([face]));
+    } catch (error) {
+      throw new Error(
+        `Removing the selected face failed: ${
+          error instanceof Error
+            ? error.message
+            : 'the kernel rejected the defeature'
+        }.`,
+        { cause: error }
+      );
+    }
+    kernel.unifyFaces(output);
+    if (kernel.validateSolid(output) !== 0) {
+      throw new Error(
+        'Removing the selected face did not produce a valid solid.'
+      );
+    }
+    return output;
+  }
+
+  /**
    * History-backed direct edits on the BrepKit path. Planar offsets and
    * cylindrical resizes are the kernel's own `pushPullFace` and
-   * `resizeCylindricalFace`: each derives its tool from the selected face's
-   * geometry, merges the seams the boolean leaves behind, and refuses any
-   * result whose shell is not closed or whose volume is not the one the edit
-   * is defined to produce. Every source measurement is re-validated against
-   * the rebuilt body first, so a drifted rebuild fails closed instead of
-   * editing the wrong face.
+   * `resizeCylindricalFace`; through-hole resizes and feature removals build
+   * their own tools from the selected face's analytic geometry. Each derives
+   * its tool from the selected face, merges the seams the boolean leaves
+   * behind, and refuses any result whose shell is not closed or whose surfaces
+   * are not the ones the edit is defined to produce. Every source measurement
+   * is re-validated against the rebuilt body first, so a drifted rebuild fails
+   * closed instead of editing the wrong face.
    */
   private applyDirectEdit(
     kernel: BrepKernel,
@@ -3291,20 +4268,27 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     operation: DirectEditOperation,
     scope: Record<string, number>
   ): ExactShape {
-    if (
-      operation.kind !== 'offset-face' &&
-      operation.kind !== 'resize-cylindrical-face'
-    ) {
-      // resize-through-hole / remove-face-feature remain OCCT-only.
-      throw new Error('Direct B-rep edits require the OpenCascade kernel.');
-    }
     const solid = collapseShape(kernel, target);
     const face = this.resolveFaceByFingerprint(
       kernel,
       solid,
       operation.faceHash
     );
+    if (operation.kind === 'resize-through-hole') {
+      return {
+        solids: [this.resizeThroughHole(kernel, solid, face, operation, scope)]
+      };
+    }
+
     const geometry = measureFaceGeometry(kernel, face);
+
+    if (operation.kind === 'remove-face-feature') {
+      return {
+        solids: [
+          this.removeFaceFeature(kernel, solid, face, geometry, operation)
+        ]
+      };
+    }
 
     if (operation.kind === 'offset-face') {
       if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
@@ -3414,22 +4398,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     // back and insist it is an analytic cylinder at the new radius, so either
     // failure surfaces as a failed feature rather than a gesture that looked
     // like it worked.
-    const coaxialRadii = Array.from(kernel.getSolidFaces(output)).flatMap(
-      (handle) => {
-        const measured = measureFaceGeometry(kernel, handle);
-        if (
-          measured?.surfaceType !== 'cylinder' ||
-          measured.radius === undefined ||
-          !measured.axisStart
-        ) {
-          return [];
-        }
-        const toAxis = subtract(measured.axisStart, geometry.axisStart!);
-        const along = dot(toAxis, axisDir);
-        return length(subtract(toAxis, scale(axisDir, along))) <= axisTolerance
-          ? [measured.radius]
-          : [];
-      }
+    const coaxialRadii = coaxialCylinderRadii(
+      kernel,
+      output,
+      geometry.axisStart,
+      axisDir,
+      axisTolerance
     );
     const atRadius = (radius: number): boolean =>
       coaxialRadii.some(
@@ -3532,7 +4506,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             reference: verifiedReference,
             triangleStart: (indexOffset + start) / 3,
             triangleCount: (end - start) / 3,
-            geometry: measureFaceGeometry(kernel, handle)
+            geometry: measureOwnedFaceGeometry(kernel, solid, handle)
           });
         }
       } finally {
@@ -3630,10 +4604,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    if (containsImportedMesh(document)) {
-      return this.legacy.syncDocument(document);
-    }
-
     const kernel = new BrepKernel();
     try {
       const build = this.build(kernel, document);
@@ -3667,6 +4637,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         if (!measured.valid) {
           build.warnings.push(
             `Body "${body.name}" failed exact B-rep validation.`
+          );
+        }
+        // K0.6 import taxonomy. Both warnings describe the imported FILE, so
+        // they are driven by what the import measured rather than by the
+        // body's state after later features edited it.
+        const imported = build.importedStepDiagnostics.get(bodyId);
+        if (imported && imported.rejections.length > 0) {
+          build.warnings.push(
+            importedStepDroppedSolidWarning(
+              body.name,
+              imported.rejections,
+              imported.declaredSolidCount
+            )
+          );
+        }
+        if (imported && imported.flagged.length > 0) {
+          build.warnings.push(
+            importedStepValidationWarning(
+              body.name,
+              imported.flagged.length,
+              imported.declaredSolidCount,
+              'BrepKit'
+            )
           );
         }
         if (
@@ -3747,15 +4740,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 uniformScaleMatrix(millimeterScale)
               )
             );
-      if (exportSolids.length === 1) {
-        return decodeText(kernel.exportStep(exportSolids[0]!));
-      }
       // Never fuse: a boolean union changes the geometry (overlaps merge,
-      // coincident faces weld). Export each solid and compound them.
-      const parts = exportSolids.map((solid) =>
-        decodeText(kernel.exportStep(solid))
+      // coincident faces weld). The kernel writes each body as its own
+      // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
+      // distinct through a round trip.
+      return decodeText(
+        kernel.exportStepMulti(new Uint32Array(exportSolids))
       );
-      return (await this.getStepCombiner()).combineStepSolids(parts);
     } finally {
       kernel.free();
     }
@@ -3765,9 +4756,6 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    if (containsImportedMesh(document)) {
-      return this.legacy.exportStl(document, bodyIds);
-    }
     const kernel = new BrepKernel();
     try {
       const build = this.build(kernel, document);
@@ -3819,29 +4807,72 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     }
   }
 
+  /**
+   * The pre-import probe the app shows before a user commits to an import.
+   *
+   * K0.6 makes it answer in every case rather than raising in some of them:
+   * the caller is asking "should I offer this import at all", and a thrown
+   * parse error is a worse SHAPE of answer than `{solid: false}` even when its
+   * text is better. The text is not lost — it comes back as `reason`.
+   *
+   * `solid` and `volume` count only shells the importer would actually accept,
+   * so a file whose only shell is open reports no solid and no volume instead
+   * of the divergence integral over the faces it happens to have.
+   */
   async inspectStep(data: string | ArrayBuffer): Promise<{
     solid: boolean;
     valid: boolean;
     volume: number;
+    reason?: string;
   }> {
     const kernel = new BrepKernel();
     try {
-      const sourceText =
-        typeof data === 'string' ? data : decodeText(new Uint8Array(data));
-      const bytes = new TextEncoder().encode(
-        normalizeStepPlaneAnglesForKernel(sourceText)
+      const bytes =
+        typeof data === 'string'
+          ? new TextEncoder().encode(data)
+          : new Uint8Array(data);
+      let declared: number[];
+      try {
+        declared = Array.from(kernel.importStep(bytes));
+      } catch (error) {
+        return {
+          solid: false,
+          valid: false,
+          volume: 0,
+          reason: error instanceof Error ? error.message : String(error)
+        };
+      }
+      const verdicts = declared.map((solid, index) =>
+        classifyImportedSolid(diagnoseImportedSolid(kernel, solid, index + 1))
       );
-      const solids = Array.from(kernel.importStep(bytes));
+      const accepted = declared.filter(
+        (_, index) => verdicts[index]!.kind !== 'not-a-solid'
+      );
+      const rejections = verdicts.flatMap((verdict) =>
+        verdict.kind === 'not-a-solid' ? [verdict.reason] : []
+      );
       return {
-        solid: solids.length > 0,
+        solid: accepted.length > 0,
         valid:
-          solids.length > 0 &&
-          solids.every((solid) => kernel.validateSolidRelaxed(solid) === 0),
-        volume: solids.reduce(
+          declared.length > 0 &&
+          verdicts.every((verdict) => verdict.kind === 'solid'),
+        volume: accepted.reduce(
           (total, solid) =>
             total + kernel.volume(solid, MEASUREMENT_DEFLECTION),
           0
-        )
+        ),
+        ...(declared.length === 0
+          ? { reason: 'STEP file contains no solids.' }
+          : accepted.length === 0
+            ? { reason: importedStepNoSolidError(rejections) }
+            : rejections.length > 0
+              ? {
+                  reason: importedStepRejectedSolidSummary(
+                    rejections,
+                    declared.length
+                  )
+                }
+              : {})
       };
     } finally {
       kernel.free();
@@ -3849,74 +4880,20 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
-    // Each operation owns and releases a short-lived BrepKernel instance.
-    void this.stepCombiner?.then((combiner) => combiner.dispose());
-    this.stepCombiner = null;
+    // Each operation owns and releases a short-lived BrepKernel instance, so
+    // there is nothing adapter-scoped left to release.
   }
-}
-
-export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
-  return new HybridExactKernelAdapter();
-}
-
-function containsImportedStep(document: ProjectDocument): boolean {
-  return listFeaturesInOrder(document).some(
-    (feature) => feature.data.featureKind === 'imported-step'
-  );
 }
 
 /**
- * BrepKit remains the fast native modeling kernel. Documents containing STEP
- * sources switch as a whole to OpenCascade so every downstream operation uses
- * the same faithful imported B-rep instead of mixing exact and reconstructed
- * geometry.
+ * BrepKit builds every document, imported STEP included.
+ *
+ * Until Z3 a document carrying an `imported-step` feature rerouted WHOLE to
+ * OpenCascade, so an import and everything modelled on top of it were built by
+ * a second kernel. That reroute is gone: there is one kernel on the production
+ * path, and `occt-step.ts` survives only as the cross-kernel reference the
+ * parity corpus measures against until Z5 deletes it.
  */
-class HybridExactKernelAdapter implements ExactKernelAdapter {
-  readonly kind = 'hybrid' as const;
-  private readonly brepkit = new BrepKitKernelAdapter();
-  private occt: Promise<ExactKernelAdapter> | null = null;
-
-  private getOcct(): Promise<ExactKernelAdapter> {
-    this.occt ??= import('./occt-step').then(({ OcctStepKernelAdapter }) =>
-      OcctStepKernelAdapter.create()
-    );
-    return this.occt;
-  }
-
-  async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    return containsImportedStep(document)
-      ? (await this.getOcct()).syncDocument(document)
-      : this.brepkit.syncDocument(document);
-  }
-
-  async exportStep(
-    document: ProjectDocument,
-    bodyIds: BodyId[]
-  ): Promise<string> {
-    return containsImportedStep(document)
-      ? (await this.getOcct()).exportStep(document, bodyIds)
-      : this.brepkit.exportStep(document, bodyIds);
-  }
-
-  async exportStl(
-    document: ProjectDocument,
-    bodyIds: BodyId[]
-  ): Promise<string> {
-    return containsImportedStep(document)
-      ? (await this.getOcct()).exportStl(document, bodyIds)
-      : this.brepkit.exportStl(document, bodyIds);
-  }
-
-  async inspectStep(data: string | ArrayBuffer): Promise<{
-    solid: boolean;
-    valid: boolean;
-    volume: number;
-  }> {
-    return (await this.getOcct()).inspectStep(data);
-  }
-
-  dispose(): void {
-    this.brepkit.dispose();
-    void this.occt?.then((adapter) => adapter.dispose());
-  }
+export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
+  return new BrepKitKernelAdapter();
 }

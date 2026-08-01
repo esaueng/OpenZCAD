@@ -16,7 +16,7 @@ Represent a document body inside the adapter as one or more BrepKit solid handle
 
 ## Consequences
 
-- The exact adapter dependency and runtime identity change from `occt-wasm` to the fork-built `brepkit-wasm`; the compatibility kernel remains available for imported mesh bodies.
+- The exact adapter dependency and runtime identity change from `occt-wasm` to the fork-built `brepkit-wasm`. Imported mesh bodies now build on BrepKit too, through its STL importer: the compatibility kernel has been deleted (see ADR-005).
 - The git dependency targets `main` plus the WASM package subdirectory, while the lockfile identifies the exact resolved `main` commit and its recorded fork source commit. Updating the fork does not silently change existing OpenZCAD builds; publish the refreshed package on `main`, update the lockfile, and rerun the geometry gates.
 - Viewport meshes and topology polylines remain disposable projections of exact worker-owned B-reps.
 - BrepKit can return the unchanged input when a blend-on-blend fillet is unsupported. The adapter converts that no-op into an actionable feature warning and rejects clearly oversized selected-edge fillets.
