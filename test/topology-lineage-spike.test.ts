@@ -250,13 +250,25 @@ describe('topology-lineage kernel spike', () => {
       );
       verifyCompleteBrepEvolution(kernel, [primitive], fillet);
       expect(kernel.validateSolidRelaxed(fillet.solid)).toBe(0);
-      // The blend band used to arrive as one GENERATED face with no source.
-      // Under GFA face provenance it is reported as a MODIFIED result of both
-      // faces the rounded edge separated, and nothing is generated at all.
-      // Recording the count alone would say nothing about whether the new
-      // attribution is right, so the claim asserted is the attribution: the
-      // band's face is listed under exactly the two source faces that shared
-      // the selected edge, and under no others.
+      // The band is GENERATED from both faces the rounded edge separated, and
+      // nothing is modified into it. This assertion has now been through three
+      // shapes, and the middle one was wrong:
+      //
+      // 1. Originally generated with NO source — a face from nowhere.
+      // 2. Then MODIFIED from both parents. That looked like an improvement
+      //    and this test pinned it, but it was an artefact of a near-tie rule
+      //    and actively harmful: a selection stored against one parent
+      //    silently acquired the cylinder.
+      // 3. Now generated from both parents, which is what the walking builder
+      //    and the wasm binding's own documentation always said. The two
+      //    engines behind one operation had simply been disagreeing.
+      //
+      // Counting faces would say nothing about which of the three is right, so
+      // what is asserted is the attribution: the band is listed under exactly
+      // the two source faces that shared the selected edge, and under no
+      // others. `unresolved` being empty is enforced by
+      // verifyCompleteBrepEvolution above — a refusal here is a defect, and
+      // is how the regression that held the pin was found.
       const bandFaces = Array.from(kernel.getSolidFaces(fillet.solid)).filter(
         (face) => kernel.getSurfaceType(face) === 'cylinder'
       );
@@ -268,11 +280,18 @@ describe('topology-lineage kernel spike', () => {
         Array.from(kernel.getFaceEdges(face)).includes(selectedEdge)
       );
       expect(facesOnSelectedEdge).toHaveLength(2);
-      const bandSources = Object.entries(fillet.evolution.modified)
+      const bandSources = Object.entries(fillet.evolution.generated)
         .filter(([, results]) => results.includes(band))
         .map(([source]) => Number(source));
       expectSameSet(bandSources, facesOnSelectedEdge);
-      expect(Object.values(fillet.evolution.generated).flat()).toHaveLength(0);
+      // The band is the only generated face, and no source is modified INTO
+      // it — each surviving plane maps to its own single survivor.
+      expectSameSet(Object.values(fillet.evolution.generated).flat(), [band]);
+      expect(
+        Object.values(fillet.evolution.modified)
+          .flat()
+          .includes(band)
+      ).toBe(false);
       // No source face disappears when a single edge is rounded.
       expect(fillet.evolution.deleted).toEqual([]);
 
