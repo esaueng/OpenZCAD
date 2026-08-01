@@ -323,102 +323,111 @@ describe('topology-lineage kernel spike', () => {
     }
   });
 
-  it('characterizes primitive, sweep, transform, boolean, fillet, and chamfer history in OCCT', async () => {
-    const kernel = await OcctKernel.init();
-    try {
-      const primitive = kernel.makeBox(10, 10, 10);
-      expect(kernel.subShapeCount(primitive, 'face')).toBe(6);
-      expect(kernel.getVolume(primitive)).toBeCloseTo(1_000, 6);
+  // The only test here that instantiates OCCT, and the WASM init dominates it.
+  // The work itself is ~1.4s in isolation, but against the default 5s budget
+  // that margin does not survive a loaded box, and this timed out in a full
+  // run while three other suites were building. Widened rather than left to
+  // flake: a timeout here says nothing about the kernel behaviour it pins.
+  it(
+    'characterizes primitive, sweep, transform, boolean, fillet, and chamfer history in OCCT',
+    { timeout: 30_000 },
+    async () => {
+      const kernel = await OcctKernel.init();
+      try {
+        const primitive = kernel.makeBox(10, 10, 10);
+        expect(kernel.subShapeCount(primitive, 'face')).toBe(6);
+        expect(kernel.getVolume(primitive)).toBeCloseTo(1_000, 6);
 
-      const profile = kernel.makeRectangle(4, 5);
-      const sweep = kernel.extrude(profile, 0, 0, 6);
-      expect(kernel.subShapeCount(sweep, 'face')).toBe(6);
-      expect(kernel.getVolume(sweep)).toBeCloseTo(120, 6);
+        const profile = kernel.makeRectangle(4, 5);
+        const sweep = kernel.extrude(profile, 0, 0, 6);
+        expect(kernel.subShapeCount(sweep, 'face')).toBe(6);
+        expect(kernel.getVolume(sweep)).toBeCloseTo(120, 6);
 
-      const primitiveHashes = kernel.subShapeHashes(
-        primitive,
-        'face',
-        HASH_UPPER_BOUND
-      );
-      const translated = kernel.translateWithHistory(
-        primitive,
-        6,
-        0,
-        0,
-        primitiveHashes,
-        HASH_UPPER_BOUND
-      );
-      const transformCoverage = inspectOcctCoverage(
-        kernel,
-        primitiveHashes,
-        translated
-      );
-      expect(transformCoverage.modified.size).toBe(6);
-      expect(transformCoverage.unclaimedResults).toEqual([]);
-      expect(translated.deleted).toEqual([]);
+        const primitiveHashes = kernel.subShapeHashes(
+          primitive,
+          'face',
+          HASH_UPPER_BOUND
+        );
+        const translated = kernel.translateWithHistory(
+          primitive,
+          6,
+          0,
+          0,
+          primitiveHashes,
+          HASH_UPPER_BOUND
+        );
+        const transformCoverage = inspectOcctCoverage(
+          kernel,
+          primitiveHashes,
+          translated
+        );
+        expect(transformCoverage.modified.size).toBe(6);
+        expect(transformCoverage.unclaimedResults).toEqual([]);
+        expect(translated.deleted).toEqual([]);
 
-      const translatedHashes = kernel.subShapeHashes(
-        translated.result,
-        'face',
-        HASH_UPPER_BOUND
-      );
-      const fused = kernel.fuseWithHistory(
-        primitive,
-        translated.result,
-        [...primitiveHashes, ...translatedHashes],
-        HASH_UPPER_BOUND
-      );
-      const booleanCoverage = inspectOcctCoverage(
-        kernel,
-        [...primitiveHashes, ...translatedHashes],
-        fused
-      );
-      expect(booleanCoverage.unclaimedResults).toEqual([]);
-      expect(fused.deleted.length).toBeGreaterThan(0);
-      expect(kernel.isValid(fused.result)).toBe(true);
+        const translatedHashes = kernel.subShapeHashes(
+          translated.result,
+          'face',
+          HASH_UPPER_BOUND
+        );
+        const fused = kernel.fuseWithHistory(
+          primitive,
+          translated.result,
+          [...primitiveHashes, ...translatedHashes],
+          HASH_UPPER_BOUND
+        );
+        const booleanCoverage = inspectOcctCoverage(
+          kernel,
+          [...primitiveHashes, ...translatedHashes],
+          fused
+        );
+        expect(booleanCoverage.unclaimedResults).toEqual([]);
+        expect(fused.deleted.length).toBeGreaterThan(0);
+        expect(kernel.isValid(fused.result)).toBe(true);
 
-      // The history result precedes the same-domain unification that the
-      // current adapter applies. Lineage therefore also needs propagation
-      // through unification; the history call is not a drop-in replacement.
-      const plainUnion = kernel.fuse(primitive, translated.result);
-      const productionUnion = kernel.unifySameDomain(plainUnion);
-      expect(kernel.subShapeCount(fused.result, 'face')).toBe(14);
-      expect(kernel.subShapeCount(productionUnion, 'face')).toBe(6);
+        // The history result precedes the same-domain unification that the
+        // current adapter applies. Lineage therefore also needs propagation
+        // through unification; the history call is not a drop-in replacement.
+        const plainUnion = kernel.fuse(primitive, translated.result);
+        const productionUnion = kernel.unifySameDomain(plainUnion);
+        expect(kernel.subShapeCount(fused.result, 'face')).toBe(14);
+        expect(kernel.subShapeCount(productionUnion, 'face')).toBe(6);
 
-      const selectedEdge = kernel.getSubShapes(primitive, 'edge')[0]!;
-      const fillet = kernel.filletWithHistory(
-        primitive,
-        [selectedEdge],
-        1,
-        primitiveHashes,
-        HASH_UPPER_BOUND
-      );
-      const filletCoverage = inspectOcctCoverage(
-        kernel,
-        primitiveHashes,
-        fillet
-      );
-      expect(kernel.isValid(fillet.result)).toBe(true);
-      expect(fillet.generated).toEqual([]);
-      expect(filletCoverage.unclaimedResults).toHaveLength(1);
+        const selectedEdge = kernel.getSubShapes(primitive, 'edge')[0]!;
+        const fillet = kernel.filletWithHistory(
+          primitive,
+          [selectedEdge],
+          1,
+          primitiveHashes,
+          HASH_UPPER_BOUND
+        );
+        const filletCoverage = inspectOcctCoverage(
+          kernel,
+          primitiveHashes,
+          fillet
+        );
+        expect(kernel.isValid(fillet.result)).toBe(true);
+        expect(fillet.generated).toEqual([]);
+        expect(filletCoverage.unclaimedResults).toHaveLength(1);
 
-      const chamfer = kernel.chamferWithHistory(
-        primitive,
-        [selectedEdge],
-        1,
-        primitiveHashes,
-        HASH_UPPER_BOUND
-      );
-      const chamferCoverage = inspectOcctCoverage(
-        kernel,
-        primitiveHashes,
-        chamfer
-      );
-      expect(kernel.isValid(chamfer.result)).toBe(true);
-      expect(chamfer.generated).toEqual([]);
-      expect(chamferCoverage.unclaimedResults).toHaveLength(1);
-    } finally {
-      kernel[Symbol.dispose]();
+        const chamfer = kernel.chamferWithHistory(
+          primitive,
+          [selectedEdge],
+          1,
+          primitiveHashes,
+          HASH_UPPER_BOUND
+        );
+        const chamferCoverage = inspectOcctCoverage(
+          kernel,
+          primitiveHashes,
+          chamfer
+        );
+        expect(kernel.isValid(chamfer.result)).toBe(true);
+        expect(chamfer.generated).toEqual([]);
+        expect(chamferCoverage.unclaimedResults).toHaveLength(1);
+      } finally {
+        kernel[Symbol.dispose]();
+      }
     }
-  });
+  );
 });
