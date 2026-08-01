@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import {
   test,
   expect,
@@ -9,6 +10,15 @@ import {
 test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
   page
 }) => {
+  // Five gestures on one body, each of which the kernel has to answer
+  // exactly: create, drag the wall out, undo/redo, drag and cancel, then
+  // offset the cap. A trace of a passing run spends ~6 s on the first tool
+  // click alone (viewer cold start behind a software rasteriser) and ~7 s
+  // more inside the two drags, because every intermediate pointermove
+  // rebuilds the exact preview and repaints. That is ~30 s of real work on a
+  // CI runner with no GPU, which leaves the 30 s default with no margin at
+  // all — the same budget the multi-region extrude test already raises.
+  test.setTimeout(90_000);
   await stubApi(page);
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -996,6 +1006,106 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => {
+  // Z3: imported STEP documents build on BrepKit like everything else. This
+  // is the only e2e that drives a real imported B-rep through the product --
+  // import, exact measurement, a blend on IMPORTED topology, and re-export --
+  // so it is what says the routing flip works in the app rather than only in
+  // the adapter suite.
+  test.setTimeout(90_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Imported Solid');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  // The import affordance is a hidden <input type=file> the File menu clicks.
+  // a-export-box is the corpus's 10x20x30 box: 6000 mm3, twelve edges.
+  await page
+    .getByLabel('Import STEP or STL…')
+    .setInputFiles(
+      fileURLToPath(
+        new URL('../parity/corpus/a-export-box.step', import.meta.url)
+      )
+    );
+
+  // The app names the import from the file's own PRODUCT entity, so the row
+  // title is evidence the STEP header was parsed, not just the geometry.
+  const importedRow = page.locator('.feature-row', {
+    hasText: 'brepkit_solid'
+  });
+  await expect(importedRow).toBeVisible();
+  // The static preview serves no Worker API, so the artifact archive is
+  // unreachable and the app must keep the STEP source in the document rather
+  // than lose the import. It says so.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'cloud archive unavailable; source saved locally'
+  );
+  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+
+  // The kernel measured the imported solid, not a mesh approximation of it.
+  await importedRow.locator('.feature-row-main').click();
+  await expect(page.locator('.panel-body')).toContainText('6000');
+
+  // Blend imported topology: the twelve edges have to be pickable, which
+  // means the import published exact edges with resolvable identities.
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await expect(inspector.locator('.selection-summary')).toContainText(
+    '12 exact edges selected'
+  );
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const fillet = page.locator('.feature-row', { hasText: 'Fillet' });
+  await expect(fillet).toBeVisible();
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  // Re-export the edited import as STEP and check it is a real B-rep file.
+  const fileMenu = page.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
+  const downloadPromise = page.waitForEvent('download');
+  await fileMenu.getByRole('button', { name: /STEP/ }).click();
+  const download = await downloadPromise;
+  await fileMenu.locator('summary').click();
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk as Buffer);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  expect(text.startsWith('ISO-10303-21;')).toBe(true);
+  expect(text).toContain('MANIFOLD_SOLID_BREP');
+  expect(text).toContain('CLOSED_SHELL');
+  // The twelve blend bands and eight corner patches are in the file, and they
+  // are exact. This used to assert B_SPLINE_SURFACE and say "the day K0.4
+  // lands this fails and gets corrected to CYLINDRICAL_SURFACE". K0.4's blend
+  // phases landed, the `fillet-on-import` / surfaceTypes pin is retired from
+  // corpus-pins.ts, and the file now carries no spline at all. Measured on
+  // this exact construction: 12 CYLINDRICAL_SURFACE, 8 SPHERICAL_SURFACE, 6
+  // planes, 5804.3375 mm3 against the Minkowski closed form 5804.6961.
+  expect(text).toContain('CYLINDRICAL_SURFACE');
+  expect(text).toContain('SPHERICAL_SURFACE');
+  expect(text).not.toContain('B_SPLINE_SURFACE');
+  expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
+  // Only the two artifact-archive uploads (import and export) may fail, and
+  // only because the preview host has no /api/uploads. Anything else is a
+  // real console error and this stays an equality assertion so it shows up.
+  expect(
+    consoleErrors.filter((message) => !message.includes('404'))
+  ).toEqual([]);
+  expect(consoleErrors).toHaveLength(2);
 });
 
 test('models a parametric part and exports a true STEP file', async ({

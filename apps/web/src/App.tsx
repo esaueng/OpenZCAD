@@ -5285,7 +5285,6 @@ export function App() {
   const geometryPhaseLabel: Record<typeof geometry.state.phase, string> = {
     starting: 'Starting geometry worker',
     'loading-brepkit': 'Loading exact BrepKit kernel',
-    'loading-occt': 'Loading OpenCascade for STEP geometry',
     rebuilding: 'Rebuilding exact geometry',
     ready: 'Exact geometry ready',
     failed: 'Exact geometry failed'
@@ -5524,11 +5523,10 @@ export function App() {
         exactFailureReason: geometry.state.error,
         hasTargetBody: Boolean(modelingTargetBody),
         openingFaceCount: modelingFaces.length,
-        kernel: features.some(
-          (feature) => feature.data.featureKind === 'imported-step'
-        )
-          ? 'occt'
-          : 'brepkit',
+        // Z3: BrepKit builds every document, imported STEP included, so an
+        // `imported-step` feature no longer switches the kernel — and no
+        // longer gates solid offset behind OpenCascade's convex-planar limit.
+        kernel: 'brepkit',
         offsetTopology: 'unknown'
       }))
     : null;

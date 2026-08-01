@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -15,11 +17,11 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { OcctStepKernelAdapter } from '../packages/kernel-adapter/src/occt-step';
 import {
   toUserId,
   type BodyId,
@@ -30,13 +32,26 @@ import {
 
 /**
  * Kernel-seam correctness: a document must mean the same geometry whichever
- * exact kernel builds it. Adding or removing a STEP import reroutes the whole
- * document between BrepKit and OpenCascade, so every persisted reference —
- * region fingerprints, edge and face hashes — and every export path has to
- * either resolve to the same geometry or fail closed. These tests are
- * deliberately adversarial: they assert *positions*, not just success, because
- * a positional (ordinal) resolution scheme passes success-only tests while
- * silently editing the wrong geometry.
+ * exact kernel builds it. Every persisted reference — region fingerprints,
+ * edge and face hashes — and every export path has to either resolve to the
+ * same geometry on both kernels or fail closed. These tests are deliberately
+ * adversarial: they assert *positions*, not just success, because a positional
+ * (ordinal) resolution scheme passes success-only tests while silently editing
+ * the wrong geometry.
+ *
+ * Z3 changed how the second kernel is reached, not whether it is checked.
+ * Adding a STEP import used to reroute the WHOLE document to OpenCascade, so
+ * these tests summoned OCCT by appending an import; now every document builds
+ * on BrepKit and OCCT is instantiated by name. Both legs still run, and they
+ * now measure two separate things instead of conflating them:
+ *
+ *   - `onOcct` — the same document through the other kernel. This is the
+ *     assertion that a saved selection means the same edge in both, and it is
+ *     what the corpus checks in bulk. It survives until Z5 deletes OCCT.
+ *   - `withImport` — the same document with an imported body ALONGSIDE the
+ *     modelled one, on BrepKit. Before Z3 this was indistinguishable from the
+ *     OCCT leg. It is now the mixed-document case in its own right: an import
+ *     must not disturb what its neighbours resolve to.
  */
 
 const user = toUserId('user_seam');
@@ -210,12 +225,16 @@ function fnv(signature: string): number {
   return unsigned === 0 ? 1 : unsigned;
 }
 
-describe('kernel seam correctness', () => {
+// Real-kernel suite: both kernels start up here, well past the 5 s default
+// when the whole test pool is contending for CPU.
+describe('kernel seam correctness', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
+  let occt: ExactKernelAdapter;
   let referenceStep: string;
 
   beforeAll(async () => {
     adapter = await createExactKernelAdapter();
+    occt = await OcctStepKernelAdapter.create();
     const source = addPrimitiveFeature(
       createProjectDocument('Reference', user),
       {
@@ -229,9 +248,10 @@ describe('kernel seam correctness', () => {
 
   afterAll(() => {
     adapter.dispose();
+    occt.dispose();
   });
 
-  it('keeps a region-extrude hole through a STEP-import reroute and back', async () => {
+  it('keeps a region-extrude hole on both kernels and beside a STEP import', async () => {
     const { document, bodyId, exactVolume } = plateWithHoleDocument();
 
     const onBrepKit = await adapter.syncDocument(document);
@@ -246,21 +266,25 @@ describe('kernel seam correctness', () => {
       )
     ).toBe(true);
 
-    // A STEP import reroutes the whole document to OpenCascade. The hole must
-    // not silently disappear (the historic failure sweeps the rectangle's
-    // whole profile: volume 12000 instead of ~9989).
+    // The hole must not silently disappear on either kernel, nor when an
+    // imported body joins the document (the historic failure sweeps the
+    // rectangle's whole profile: volume 12000 instead of ~9989).
     const withStep = addStepImport(document, referenceStep);
-    const onOcct = await adapter.syncDocument(withStep);
-    expect(onOcct.warnings).toEqual([]);
-    const occtBody = onOcct.bodyRepresentations[bodyId];
-    expect(
-      Math.abs((occtBody?.volume ?? 0) - exactVolume) / exactVolume
-    ).toBeLessThan(0.005);
-    expect(
-      occtBody?.topology?.faces.some(
-        (face) => face.geometry?.surfaceType === 'cylinder'
-      )
-    ).toBe(true);
+    for (const derived of [
+      await occt.syncDocument(document),
+      await adapter.syncDocument(withStep)
+    ]) {
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      expect(
+        Math.abs((body?.volume ?? 0) - exactVolume) / exactVolume
+      ).toBeLessThan(0.005);
+      expect(
+        body?.topology?.faces.some(
+          (face) => face.geometry?.surfaceType === 'cylinder'
+        )
+      ).toBe(true);
+    }
 
     // Removing the STEP source must return to identical BrepKit geometry.
     const backToBrepKit = await adapter.syncDocument(
@@ -273,7 +297,7 @@ describe('kernel seam correctness', () => {
     );
   });
 
-  it('fails closed naming the feature when OCCT cannot resolve the region', async () => {
+  it('fails closed naming the feature when a region cannot be resolved', async () => {
     const { document: withSketch, sketchId } = addSketchFeature(
       createProjectDocument('Ghost region', user),
       {
@@ -292,21 +316,24 @@ describe('kernel seam correctness', () => {
         sourceArea: 42
       }
     });
-    const derived = await adapter.syncDocument(
-      addStepImport(document, referenceStep)
-    );
-    expect(
-      derived.warnings.some(
-        (warning) =>
-          warning.includes('Ghost extrude') &&
-          warning.includes('Broken profile reference')
-      )
-    ).toBe(true);
-    // Never the fallback shape: the body must be absent, not the whole disk.
-    expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+    for (const derived of [
+      await adapter.syncDocument(document),
+      await occt.syncDocument(document),
+      await adapter.syncDocument(addStepImport(document, referenceStep))
+    ]) {
+      expect(
+        derived.warnings.some(
+          (warning) =>
+            warning.includes('Ghost extrude') &&
+            warning.includes('Broken profile reference')
+        )
+      ).toBe(true);
+      // Never the fallback shape: the body must be absent, not the whole disk.
+      expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+    }
   });
 
-  it('keeps a fillet on the same geometric edge across reroutes and upstream edits', async () => {
+  it('keeps a fillet on the same geometric edge across kernels and upstream edits', async () => {
     const { document, resultBodyId } = notchedBlockDocument(6);
     const base = await adapter.syncDocument(document);
     expect(base.warnings).toEqual([]);
@@ -334,11 +361,9 @@ describe('kernel seam correctness', () => {
     // The other intact corner survives untouched.
     expect(edgeOnVerticalLine(brepkitBody, 30, 0)).toBeTruthy();
 
-    // Reroute to OpenCascade: the same persisted hash must land on the same
-    // geometric edge — asserted by position, not by success.
-    const onOcct = await adapter.syncDocument(
-      addStepImport(filleted, referenceStep)
-    );
+    // Build the same document on OpenCascade: the same persisted hash must
+    // land on the same geometric edge — asserted by position, not by success.
+    const onOcct = await occt.syncDocument(filleted);
     expect(onOcct.warnings).toEqual([]);
     const occtBody = onOcct.bodyRepresentations[filletBodyId];
     expect(hasEdgePointNearLine(occtBody, 30, 18, 0.3)).toBe(false);
@@ -358,8 +383,11 @@ describe('kernel seam correctness', () => {
       featureId: cutterFeature.featureId,
       data: { dimensions: { width: 9 } }
     });
-    for (const candidate of [edited, addStepImport(edited, referenceStep)]) {
-      const derived = await adapter.syncDocument(candidate);
+    for (const derived of [
+      await adapter.syncDocument(edited),
+      await occt.syncDocument(edited),
+      await adapter.syncDocument(addStepImport(edited, referenceStep))
+    ]) {
       expect(derived.warnings).toEqual([]);
       const body = derived.bodyRepresentations[filletBodyId];
       expect(hasEdgePointNearLine(body, 30, 18, 0.3)).toBe(false);
@@ -412,9 +440,7 @@ describe('kernel seam correctness', () => {
 
     for (const { document, bodyId } of documents) {
       const onBrepKit = await adapter.syncDocument(document);
-      const onOcct = await adapter.syncDocument(
-        addStepImport(document, referenceStep)
-      );
+      const onOcct = await occt.syncDocument(document);
       expect(onBrepKit.warnings).toEqual([]);
       expect(onOcct.warnings).toEqual([]);
       const brepkitEdges = onBrepKit.bodyRepresentations[
@@ -435,6 +461,116 @@ describe('kernel seam correctness', () => {
     }
   });
 
+  it('fails closed on a pick stored against the other kernel\'s topology', async () => {
+    // The Z3 migration case, and the one that decides whether the flip is
+    // safe for documents that already exist. Until Z3, a document with a STEP
+    // import was built by OpenCascade, so any edge or face the user picked was
+    // stored against OCCT's topology. BrepKit builds those documents now.
+    //
+    // On analytic planar imports the two kernels publish the SAME hashes and
+    // nothing changes. They diverge on periodic surfaces: for this cone OCCT
+    // publishes three edges to BrepKit's two (the seam-edge pin in
+    // corpus-pins.ts, owner K0.6), and BrepKit's two are a subset. So a pick
+    // on OCCT's extra seam edge has no counterpart after the flip.
+    //
+    // The requirement is not that it resolves. It is that it REFUSES: names
+    // the feature, drops the result body, and leaves the imported body intact
+    // at its correct size. A stale pick silently landing on a neighbouring
+    // edge is the failure this whole identity scheme exists to prevent.
+    const source = addPrimitiveFeature(
+      createProjectDocument('Cone source', user),
+      {
+        name: 'Cone',
+        primitiveKind: 'cone',
+        dimensions: { bottomRadius: 10, topRadius: 0, height: 10 }
+      }
+    );
+    const coneStep = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+    const { document, bodyId } = importStepBody(
+      createProjectDocument('Imported cone', user),
+      {
+        name: 'Imported cone',
+        artifactId: 'artifact_seam_cone',
+        sourceName: 'cone.step',
+        stepText: coneStep
+      }
+    );
+
+    const onOcct = await occt.syncDocument(document);
+    const onBrepKit = await adapter.syncDocument(document);
+    const occtEdges = onOcct.bodyRepresentations[bodyId]!.topology!.edges;
+    const brepkitEdges = onBrepKit.bodyRepresentations[bodyId]!.topology!.edges;
+    const brepkitHashes = new Set(brepkitEdges.map((edge) => edge.hash));
+    // Pinned counts: three edges on OCCT, two on BrepKit, BrepKit's a subset.
+    expect(occtEdges).toHaveLength(3);
+    expect(brepkitEdges).toHaveLength(2);
+    const orphans = occtEdges.filter((edge) => !brepkitHashes.has(edge.hash));
+    expect(orphans).toHaveLength(1);
+    expect(
+      brepkitEdges.every((edge) =>
+        occtEdges.some((other) => other.hash === edge.hash)
+      )
+    ).toBe(true);
+
+    const stale = filletEdges(document, {
+      name: 'Pre-flip fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [orphans[0]!.hash],
+      size: 0.5
+    }).document;
+    const derived = await adapter.syncDocument(stale);
+    expect(derived.warnings).toEqual([
+      'Feature "Pre-flip fillet": A selected edge no longer exists.'
+    ]);
+    expect(derived.bodyRepresentations[stale.bodyOrder.at(-1)!]).toBeUndefined();
+    // The import itself is untouched: pi * 10^2 * 10 / 3.
+    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      (Math.PI * 1000) / 3,
+      6
+    );
+  });
+
+  it('keeps most identities on an imported tessellated body across kernels', async () => {
+    // The corpus records that `a-sample-parametric-bracket` has a different
+    // face-hash DIGEST on each kernel, and a digest differs if one element
+    // does. Measured element-wise the overlap is large, which is the number
+    // that actually says what a pre-Z3 pick on this body does: most survive
+    // the flip and the rest fail closed. Pinned so the overlap cannot quietly
+    // erode -- it is the migration cost of the flip, stated as a fraction.
+    const { document, bodyId } = importStepBody(
+      createProjectDocument('Bracket', user),
+      {
+        name: 'Bracket',
+        artifactId: 'artifact_seam_bracket',
+        sourceName: 'parametric-bracket.step',
+        stepText: readFileSync(resolve('samples/parametric-bracket.step'), 'utf8')
+      }
+    );
+    const onOcct = await occt.syncDocument(document);
+    const onBrepKit = await adapter.syncDocument(document);
+    const occtBody = onOcct.bodyRepresentations[bodyId]!;
+    const brepkitBody = onBrepKit.bodyRepresentations[bodyId]!;
+
+    const shared = (
+      left: ReadonlyArray<{ hash: number }>,
+      right: ReadonlyArray<{ hash: number }>
+    ): number => {
+      const hashes = new Set(right.map((entry) => entry.hash));
+      return left.filter((entry) => hashes.has(entry.hash)).length;
+    };
+
+    expect(occtBody.topology!.faces).toHaveLength(821);
+    expect(brepkitBody.topology!.faces).toHaveLength(821);
+    expect(occtBody.topology!.edges).toHaveLength(1722);
+    expect(brepkitBody.topology!.edges).toHaveLength(1722);
+    expect(shared(occtBody.topology!.faces, brepkitBody.topology!.faces)).toBe(
+      739
+    );
+    expect(shared(occtBody.topology!.edges, brepkitBody.topology!.edges)).toBe(
+      1646
+    );
+  });
+
   it('fails closed on an unresolvable fillet hash instead of changing shape', async () => {
     const { document, resultBodyId } = notchedBlockDocument(6);
     const unfilleted = await adapter.syncDocument(document);
@@ -447,8 +583,11 @@ describe('kernel seam correctness', () => {
       size: 2
     }).document;
 
-    for (const candidate of [bogus, addStepImport(bogus, referenceStep)]) {
-      const derived = await adapter.syncDocument(candidate);
+    for (const derived of [
+      await adapter.syncDocument(bogus),
+      await occt.syncDocument(bogus),
+      await adapter.syncDocument(addStepImport(bogus, referenceStep))
+    ]) {
       expect(
         derived.warnings.some(
           (warning) =>
@@ -479,8 +618,11 @@ describe('kernel seam correctness', () => {
       size: 2
     }).document;
 
-    for (const candidate of [legacy, addStepImport(legacy, referenceStep)]) {
-      const derived = await adapter.syncDocument(candidate);
+    for (const derived of [
+      await adapter.syncDocument(legacy),
+      await occt.syncDocument(legacy),
+      await adapter.syncDocument(addStepImport(legacy, referenceStep))
+    ]) {
       expect(
         derived.warnings.some(
           (warning) =>
@@ -598,26 +740,7 @@ describe('kernel seam correctness', () => {
     );
   });
 
-  it('scales compatibility-path STL exports to millimetres for inch documents', () => {
-    const compat = createKernelAdapter();
-    const document = addPrimitiveFeature(
-      createProjectDocument('Inch mesh part', user, 'inch'),
-      {
-        name: 'Inch box',
-        primitiveKind: 'box',
-        dimensions: { width: 1, height: 2, depth: 3 }
-      }
-    );
-    const stl = compat.exportStl(document, [document.bodyOrder[0]!]);
-    const vertices = asciiStlVertices(stl);
-    expect(vertices.length).toBeGreaterThan(0);
-    expect(Math.max(...vertices.map((vertex) => vertex[2]!))).toBeCloseTo(
-      76.2,
-      6
-    );
-  });
-
-  it('routes imported-mesh documents through a millimetre-scaled STL export', async () => {
+  it('scales imported-mesh STL exports to millimetres for inch documents', async () => {
     const tetrahedron = {
       vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
       indices: [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]

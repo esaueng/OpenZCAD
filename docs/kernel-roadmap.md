@@ -28,9 +28,18 @@ The status bar says one kernel; routing in
 | **OCCT** (`occt-wasm@3.8.0`) | The **whole document** reroutes to `OcctStepKernelAdapter` if it contains one `imported-step` feature; also pulled into pure-BrepKit docs for multi-body STEP export (`combineStepSolids`), and `inspectStep` is unconditionally OCCT | 22 MB wasm |
 | **Legacy JS polyhedral kernel** (`OpenZCADKernel` + `packages/geometry` BSP CSG) | The whole document reroutes here if it contains an `imported-mesh` feature (and no STEP) | — |
 
-Two document features are **OCCT-only** — BrepKit refuses them outright
-(`exact.ts` ≈ 3298: "resize-through-hole / remove-face-feature remain
-OCCT-only"). Everything else has a BrepKit implementation.
+> **Superseded by Track Z.** All three routes are gone. Z1.1 moved
+> `inspectStep`, Z1.2 deleted the legacy JS kernel, Z2 moved multi-solid
+> export, and Z3 removed the `imported-step` reroute — so `createExactKernelAdapter`
+> returns `BrepKitKernelAdapter` and nothing in `apps/` or the production
+> adapter path imports `occt-step` at all. OCCT survives as the parity
+> corpus's reference kernel until Z5 deletes the source. The table is kept
+> because it is the diagnosis the rest of this document argues from.
+
+Every document feature now has a BrepKit implementation. The two that were
+OCCT-only — `resize-through-hole` and `remove-face-feature` — were ported in
+Z4; what remains is not a missing implementation but two BrepKit boolean and
+defeature limitations those edits fail closed on (see Z4 below).
 
 Around the kernels sits a ring of JS that either works around BrepKit
 defects or substitutes for data BrepKit doesn't publish:
@@ -203,26 +212,57 @@ Switch `exportStep` multi-solid to BrepKit's compound writer; delete
 `getStepCombiner`/`combineStepSolids`. After this, no pure-BrepKit document
 ever loads OCCT.
 
-### Z3 — STEP import on BrepKit (needs K0.1, K0.6)
+### Z3 — STEP import on BrepKit — **done**
 
-Flip `containsImportedStep` routing off: `imported-step` documents rebuild
-on BrepKit. Delete `step-import.ts`'s angle rewriter (superseded by kernel
-unit handling). Gate on the Z1.3 corpus: identical-or-better warnings,
-volumes within tolerance, witnesses stable across a save/reload.
+`containsImportedStep` routing is deleted: `imported-step` documents rebuild
+on BrepKit, and `step-import.ts`'s angle rewriter is gone (superseded by
+kernel unit handling — removing it changed no corpus baseline, which is the
+evidence it was already inert). The Z1.3 corpus stayed green through the
+flip, and the app-side mirrors went with it: the worker no longer posts a
+`loading-occt` phase and the UI no longer gates solid offset on imported
+bodies behind OpenCascade's convex-planar limit.
 
-### Z4 — Port the OCCT-only direct edits (needs K0.3)
+The known cost, recorded rather than smoothed over: BrepKit blends fit
+B-spline bands where the exact answer is a quarter cylinder (K0.4, 4.63e-4
+on `fillet-on-import`), so users blending imported bodies get a NURBS
+approximation where OCCT gave an exact cylinder. BrepKit does this on
+natively modelled bodies too, so the flip extends an existing gap rather
+than creating one.
 
-Implement `resize-through-hole` and `remove-face-feature` on the BrepKit
-path using the new kernel ops; remove the refusal in `exact.ts`.
+### Z4 — Port the OCCT-only direct edits — **done, with two K0.3 gaps**
+
+`resize-through-hole` and `remove-face-feature` run on the BrepKit path and
+agree with OCCT volume-for-volume (`test/exact-kernel-adapter.test.ts`,
+"resizes and removes a through hole identically on BrepKit and
+OpenCascade"). Through-hole classification is derived from point-in-solid
+probes because BrepKit faces carry no orientation flag.
+
+Two cases still refuse, both waiting on K0.3 rather than on adapter work:
+
+- **Closing a hole** (`remove-face-feature` on a through-hole) is a plug
+  fuse, and BrepKit's GFA boolean often declines the handle-collapsing
+  configuration and falls back to a co-refined mesh. It succeeds on a
+  cylindrical body and frequently fails on a plate. The adapter detects the
+  fallback by face count and refuses rather than shipping a faceted body.
+  `resize-through-hole` is unaffected: it reaches the same set with one
+  boolean instead of two and never needs the plug.
+- **`defeature`** rebuilds a body from the planes of the faces it keeps, so
+  it accepts only all-planar bodies and returns a wrong solid on every
+  non-trivial one tried (chamfer, pocket, boss, notch — each fails
+  `validateSolid`). The adapter refuses both the unsupported-body case up
+  front and the wrong-solid case after the call.
 
 ### Z5 — Delete OCCT
 
 Remove `occt-step.ts` (2,150 lines), `occt-modeling-operations.ts`,
-`occt-lineage.ts`, the `occt-wasm` dependency, the vite manual chunk, the
-`ExactKernelKind = 'brepkit' | 'occt'` UI union and
-`OCCT_SHARP_OFFSET_LIMITATION` branch, and the `loading-occt` worker phase.
-Rewrite cross-kernel parity tests as BrepKit-vs-corpus-baseline tests.
-**Payoff: −22 MB wasm (−7.1 MB brotli), one code path, one behavior.**
+`occt-lineage.ts`, the `occt-wasm` dependency, the vite manual chunk, and
+the `ExactKernelKind = 'brepkit' | 'occt'` UI union with its
+`OCCT_SHARP_OFFSET_LIMITATION` branch. (The `loading-occt` worker phase went
+with Z3.) Rewrite cross-kernel parity tests as BrepKit-vs-corpus-baseline
+tests.
+**Payoff: one code path, one behavior.** The −22 MB wasm (−7.1 MB brotli)
+already landed at Z3 — the OCCT import was dynamic, so the asset stopped
+being emitted as soon as nothing reached it.
 
 ### Z6 — Retire the JS workaround ring (paced by Track K)
 
