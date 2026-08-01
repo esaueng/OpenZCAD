@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:web": "pnpm --filter @openzcad/web test",
+    "test:parity-corpus": "vitest run --config test/parity/vitest.corpus.config.ts",
     "test:e2e": "playwright test",
     "lint": "eslint apps packages test types --ext .ts,.tsx",
     "format": "prettier --write .",

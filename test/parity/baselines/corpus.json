@@ -1,0 +1,1591 @@
+{
+  "a-sample-parametric-bracket": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 18910.985188949486,
+      "faceCount": 821,
+      "edgeCount": 1722,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 821
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "61b71132",
+      "edgeHashDigest": "fbf7718e",
+      "bbox": [
+        -30,
+        -4,
+        -15,
+        30,
+        20,
+        15
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 18910.985188949486
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 18910.985159686203,
+      "faceCount": 821,
+      "edgeCount": 1722,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 821
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "0482617b",
+      "edgeHashDigest": "7262ee46",
+      "bbox": [
+        -30.000000088074962,
+        -4,
+        -15,
+        30,
+        20,
+        15
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 7.310205867232515e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 18910.985159686203
+      }
+    }
+  },
+  "a-sample-simple-assembly": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": importStep: [object WebAssembly.Exception]"
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "error": "importStep: [object WebAssembly.Exception]"
+      }
+    }
+  },
+  "a-export-box": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 6000,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "23016042",
+      "edgeHashDigest": "9e6afdba",
+      "bbox": [
+        0,
+        0,
+        0,
+        10,
+        20,
+        30
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 6000
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 6000,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "23016042",
+      "edgeHashDigest": "9e6afdba",
+      "bbox": [
+        0,
+        0,
+        0,
+        10,
+        20,
+        30
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 6000
+      }
+    }
+  },
+  "a-export-cylinder": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 4021.238596594935,
+      "faceCount": 3,
+      "edgeCount": 3,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "cylinder": 1,
+        "plane": 2
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "95026f6c",
+      "edgeHashDigest": "ad9fc7ba",
+      "bbox": [
+        -8,
+        -8,
+        0,
+        8,
+        8,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 4021.238596594935
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 4021.238596594935,
+      "faceCount": 3,
+      "edgeCount": 3,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "cylinder": 1,
+        "plane": 2
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "95026f6c",
+      "edgeHashDigest": "ad9fc7ba",
+      "bbox": [
+        -8,
+        -8,
+        0,
+        8,
+        8,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 4021.238596594935
+      }
+    }
+  },
+  "a-export-cone": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1047.1975511965977,
+      "faceCount": 2,
+      "edgeCount": 2,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "cone": 1,
+        "plane": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "3a7a71cd",
+      "edgeHashDigest": "d02fc837",
+      "bbox": [
+        -10,
+        -10,
+        0,
+        10,
+        10,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1047.1975511965977
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1047.1975511965977,
+      "faceCount": 2,
+      "edgeCount": 3,
+      "seamEdgeCount": 2,
+      "surfaceTypes": {
+        "cone": 1,
+        "plane": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "3a7a71cd",
+      "edgeHashDigest": "60672a43",
+      "bbox": [
+        -10,
+        -10,
+        0,
+        10,
+        10,
+        9.999999999999998
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 1.0758586672914244e-12,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1047.1975511965977
+      }
+    }
+  },
+  "a-export-sphere": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 904.7786842338604,
+      "faceCount": 2,
+      "edgeCount": 32,
+      "seamEdgeCount": 32,
+      "surfaceTypes": {
+        "sphere": 2
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "e0d01c9d",
+      "edgeHashDigest": "ef3ea079",
+      "bbox": [
+        -6,
+        -6,
+        -6,
+        6,
+        6,
+        6
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 904.7786842338604
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 904.7786842338604,
+      "faceCount": 2,
+      "edgeCount": 36,
+      "seamEdgeCount": 4,
+      "surfaceTypes": {
+        "sphere": 2
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "26977392",
+      "edgeHashDigest": "a527c73e",
+      "bbox": [
+        -6,
+        -6,
+        -6,
+        6,
+        6,
+        6
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 2.0773090038660464e-11,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 904.7786842338604
+      }
+    }
+  },
+  "a-export-bored-plate": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 8814.767373332443,
+      "faceCount": 7,
+      "edgeCount": 15,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "278af479",
+      "edgeHashDigest": "a850d842",
+      "bbox": [
+        0,
+        0,
+        0,
+        40,
+        24,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 8814.767373332443
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 8814.601836602551,
+      "faceCount": 7,
+      "edgeCount": 15,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "278af479",
+      "edgeHashDigest": "a850d842",
+      "bbox": [
+        0,
+        0,
+        0,
+        40,
+        24,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 3.095413900590246e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 8814.601836602551
+      }
+    }
+  },
+  "b-unit-mm-cube": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 16387.064,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "a08888a9",
+      "edgeHashDigest": "fa5f4241",
+      "bbox": [
+        0,
+        0,
+        0,
+        25.4,
+        25.4,
+        25.4
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 16387.064
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 16387.064,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "a08888a9",
+      "edgeHashDigest": "fa5f4241",
+      "bbox": [
+        0,
+        0,
+        0,
+        25.4,
+        25.4,
+        25.4
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 16387.064
+      }
+    }
+  },
+  "b-unit-inch-cube": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "36b44e76",
+      "edgeHashDigest": "ddcce681",
+      "bbox": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 16387.064,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "a08888a9",
+      "edgeHashDigest": "fa5f4241",
+      "bbox": [
+        0,
+        0,
+        0,
+        25.4,
+        25.4,
+        25.4
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 16387.064
+      }
+    }
+  },
+  "b-unit-degree-cone": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1047.1975511965977,
+      "faceCount": 2,
+      "edgeCount": 2,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "cone": 1,
+        "plane": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "3a7a71cd",
+      "edgeHashDigest": "d02fc837",
+      "bbox": [
+        -10,
+        -10,
+        0,
+        10,
+        10,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1047.1975511965977
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1047.1975511965977,
+      "faceCount": 2,
+      "edgeCount": 3,
+      "seamEdgeCount": 2,
+      "surfaceTypes": {
+        "cone": 1,
+        "plane": 1
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "3a7a71cd",
+      "edgeHashDigest": "60672a43",
+      "bbox": [
+        -10,
+        -10,
+        0,
+        10,
+        10,
+        9.999999999999998
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 1.0758586672914244e-12,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1047.1975511965977
+      }
+    }
+  },
+  "b-unit-degree-cone-unassigned": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": parse error: CONICAL_SURFACE #37: parameter 45 out of range [0.0000000000000002220446049250313, 1.5707963267948966]"
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "error": "parse error: CONICAL_SURFACE #37: parameter 45 out of range [0.0000000000000002220446049250313, 1.5707963267948966]"
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    }
+  },
+  "b-unit-no-global-context": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 8000,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "8a5ebd93",
+      "edgeHashDigest": "90ce4a6b",
+      "bbox": [
+        0,
+        0,
+        0,
+        20,
+        20,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 8000
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 7999.999999999998,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "8a5ebd93",
+      "edgeHashDigest": "90ce4a6b",
+      "bbox": [
+        0,
+        0,
+        0,
+        20,
+        20,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 7999.999999999998
+      }
+    }
+  },
+  "c-void-single-cavity": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 6999.999999999996,
+      "faceCount": 12,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 12
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "9481531a",
+      "edgeHashDigest": "1c8a2a31",
+      "bbox": [
+        0,
+        0,
+        0,
+        20,
+        20,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": true
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 6999.999999999996
+      }
+    }
+  },
+  "c-void-two-cavities": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 11272,
+      "faceCount": 18,
+      "edgeCount": 36,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 18
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "16443658",
+      "edgeHashDigest": "20493e0c",
+      "bbox": [
+        0,
+        0,
+        0,
+        30,
+        20,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": true
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 11272
+      }
+    }
+  },
+  "d-multi-two-boxes": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1216,
+      "faceCount": 12,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 12
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "54d9e1e8",
+      "edgeHashDigest": "1b636230",
+      "bbox": [
+        0,
+        0,
+        0,
+        26,
+        10,
+        10
+      ],
+      "roundTrip": {
+        "status": "reimport-refused",
+        "warnings": [
+          "Feature \"Imported\": unsupported STEP entity: SURFACE_CURVE (curve #48)"
+        ],
+        "exportedSolidCount": 2,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1216
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 1216,
+      "faceCount": 12,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 12
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "54d9e1e8",
+      "edgeHashDigest": "1b636230",
+      "bbox": [
+        0,
+        0,
+        0,
+        26,
+        10,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 2,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 1216
+      }
+    }
+  },
+  "d-multi-solid-and-void": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 216,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "67b522bf",
+      "edgeHashDigest": "0c0d856a",
+      "bbox": [
+        30,
+        0,
+        0,
+        36,
+        6,
+        6
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 216
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 7215.999999999999,
+      "faceCount": 18,
+      "edgeCount": 36,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 18
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "84534438",
+      "edgeHashDigest": "871da9f2",
+      "bbox": [
+        0,
+        0,
+        0,
+        36,
+        20,
+        20
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 2,
+        "exportedVoids": true
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 7215.999999999999
+      }
+    }
+  },
+  "e-nurbs-fillet-plate": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9534.97678436453,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6,
+        "bspline": 4
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "35d76d2e",
+      "edgeHashDigest": "9389207a",
+      "bbox": [
+        0,
+        0,
+        0,
+        40,
+        24,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 9534.97678436453
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9499.999999999998,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6,
+        "bspline": 4
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "35d76d2e",
+      "edgeHashDigest": "9389207a",
+      "bbox": [
+        -4.440892098500626e-16,
+        -4.440892098500626e-16,
+        0,
+        40,
+        24,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 9499.999999999998
+      }
+    }
+  },
+  "e-analytic-fillet-plate": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": unsupported STEP entity: SURFACE_CURVE (curve #26)"
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "error": "unsupported STEP entity: SURFACE_CURVE (curve #26)"
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 9522.743338823155,
+      "faceCount": 10,
+      "edgeCount": 24,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6,
+        "cylinder": 4
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "b563a24b",
+      "edgeHashDigest": "26f53b2e",
+      "bbox": [
+        -4.440892098501e-16,
+        -4.440892098501e-16,
+        0,
+        40,
+        24,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 3.4382748855931817e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 9522.743338823155
+      }
+    }
+  },
+  "f-hostile-occt-authored-box": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": unsupported STEP entity: SURFACE_CURVE (curve #26)"
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "error": "unsupported STEP entity: SURFACE_CURVE (curve #26)"
+      }
+    },
+    "occt": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 6000,
+      "faceCount": 6,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 6
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "23016042",
+      "edgeHashDigest": "9e6afdba",
+      "bbox": [
+        0,
+        0,
+        0,
+        10,
+        20,
+        30
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 6000
+      }
+    }
+  },
+  "f-hostile-open-shell": {
+    "brepkit": {
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 666.6666666666666,
+      "faceCount": 5,
+      "edgeCount": 12,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {
+        "plane": 5
+      },
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "f73016ce",
+      "edgeHashDigest": "77511a96",
+      "bbox": [
+        0,
+        0,
+        0,
+        10,
+        10,
+        10
+      ],
+      "roundTrip": {
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 0,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
+      },
+      "inspect": {
+        "solid": true,
+        "valid": true,
+        "volume": 666.6666666666666
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    }
+  },
+  "f-hostile-dangling-reference": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": parse error: entity #999999 not found"
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "error": "parse error: entity #999999 not found"
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    }
+  },
+  "f-hostile-no-shape-representation": {
+    "brepkit": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": STEP file contains no solids."
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "solid": false,
+        "valid": false,
+        "volume": 0
+      }
+    },
+    "occt": {
+      "bodyCount": 0,
+      "volume": 0,
+      "faceCount": 0,
+      "edgeCount": 0,
+      "seamEdgeCount": 0,
+      "surfaceTypes": {},
+      "witnessedFaces": 0,
+      "witnessedEdges": 0,
+      "lineageNames": [],
+      "faceHashDigest": "empty",
+      "edgeHashDigest": "empty",
+      "bbox": null,
+      "status": "refused",
+      "warnings": [
+        "Feature \"Imported\": importStep: [object WebAssembly.Exception]"
+      ],
+      "roundTrip": {
+        "status": "skipped-no-body"
+      },
+      "inspect": {
+        "error": "importStep: [object WebAssembly.Exception]"
+      }
+    }
+  }
+}

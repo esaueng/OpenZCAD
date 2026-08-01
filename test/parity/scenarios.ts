@@ -9,6 +9,10 @@
  * tool subtracted from a plate in one multi-tool subtract.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import {
   CommandManager,
   commandFactories
@@ -18,13 +22,22 @@ import {
   createParameterIds,
   createProjectDocument
 } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type BodyId,
+  type DerivedState,
+  type EdgeTopology,
+  type FaceTopology,
+  type ProjectDocument
+} from '@openzcad/shared';
 
 import {
   DEMO_DEFINITIONS,
   buildDemoDocument,
   type ExactSyncFn
 } from '../../apps/web/src/lib/demos';
+
+import { MODELING_BASE, REPO_ROOT } from './corpus/manifest';
 
 /** Edge-use census a mesh is pinned to, from `meshEdgeUse`. */
 export interface MeshDefectPin {
@@ -241,3 +254,377 @@ export const PARITY_SCENARIOS: ParityScenario[] = [
     build: () => Promise.resolve(buildBoreGrid())
   }
 ];
+
+// ---------------------------------------------------------------------------
+// Import-modeling scenarios — the Z1.3 working checklist
+// ---------------------------------------------------------------------------
+
+/**
+ * Modeling operations layered on top of an IMPORTED body.
+ *
+ * These are separate from `PARITY_SCENARIOS` on purpose. A document containing
+ * an `imported-step` feature routes the whole hybrid adapter to OpenCascade,
+ * so running these in the default vitest pool would add an OCCT WASM
+ * instantiation to the fast suite for no signal. The corpus job runs them
+ * against BrepKit and OCCT *directly*, side by side, which is the only way the
+ * delta these scenarios exist to measure is visible at all.
+ *
+ * Every scenario carries a `nominalVolumeMm3` computed from the design intent
+ * by hand, not read from a kernel. That is deliberate: when the two kernels
+ * disagree, "which one is wrong" is otherwise unanswerable, and a corpus that
+ * can only say "they differ" is much less useful to the lane it feeds.
+ */
+export interface ImportModelingScenario {
+  key: string;
+  /** One line: what this scenario is measuring and why it is in the corpus. */
+  purpose: string;
+  /**
+   * Closed-form volume of the intended shape, in mm³, derived from the
+   * construction rather than from either kernel.
+   */
+  nominalVolumeMm3: number;
+  /**
+   * Relative tolerance against `nominalVolumeMm3`. Loose values are always
+   * explained on the scenario — an unexplained loose tolerance is how a real
+   * defect hides.
+   */
+  nominalRtol: number;
+  build: (sync: ExactSyncFn) => Promise<ProjectDocument>;
+}
+
+const IMPORT_USER = toUserId('user_parity_import_modeling');
+
+function corpusStep(id: string): string {
+  return readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      'corpus',
+      `${id}.step`
+    ),
+    'utf8'
+  );
+}
+
+/** The manifest owns the base plate's path; assert the two agree. */
+const BASE_PLATE_PATH = join(REPO_ROOT, MODELING_BASE.path);
+
+function importedPlateManager(
+  name: string,
+  stepId: string
+): { manager: CommandManager; imported: ReturnType<typeof createBodyFeatureIds> } {
+  const manager = new CommandManager(
+    createProjectDocument(name, IMPORT_USER, 'mm')
+  );
+  const imported = createBodyFeatureIds();
+  manager.execute(
+    commandFactories.importStep({
+      name: 'Imported plate',
+      artifactId: `artifact_parity_${stepId}`,
+      sourceName: `${stepId}.step`,
+      stepText: corpusStep(stepId),
+      ids: imported
+    })
+  );
+  return { manager, imported };
+}
+
+function bounds(points: number[]): { min: number[]; max: number[] } {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let index = 0; index < points.length; index += 3) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      const value = points[index + axis]!;
+      min[axis] = Math.min(min[axis]!, value);
+      max[axis] = Math.max(max[axis]!, value);
+    }
+  }
+  return { min, max };
+}
+
+function topologyOf(
+  derived: DerivedState,
+  bodyId: BodyId,
+  what: string
+): { faces: FaceTopology[]; edges: EdgeTopology[] } {
+  const topology = derived.bodyRepresentations[bodyId]?.topology;
+  if (!topology) {
+    throw new Error(
+      `${what}: the imported body published no topology, so no pick can be resolved`
+    );
+  }
+  return { faces: topology.faces, edges: topology.edges };
+}
+
+/**
+ * The four vertical corner edges of the base plate, resolved by position the
+ * way an interactive edge pick resolves them. Tall in Z, narrow in XY — the
+ * same discipline `demos.ts` uses to keep long perimeter edges out of a corner
+ * pick.
+ */
+function verticalCornerEdges(edges: EdgeTopology[], what: string): number[] {
+  const hashes = edges
+    .filter((edge) => {
+      const { min, max } = bounds(edge.points);
+      return (
+        max[2]! - min[2]! >= MODELING_BASE.height - 1 &&
+        max[0]! - min[0]! < 1 &&
+        max[1]! - min[1]! < 1
+      );
+    })
+    .map((edge) => edge.hash);
+  if (hashes.length !== 4) {
+    throw new Error(
+      `${what}: expected 4 vertical corner edges on the imported plate, found ${hashes.length}`
+    );
+  }
+  return hashes;
+}
+
+function topFaceHash(faces: FaceTopology[], what: string): number {
+  const top = faces.filter(
+    (face) =>
+      face.geometry?.normal !== undefined &&
+      Math.abs(face.geometry.normal.z - 1) < 1e-6 &&
+      Math.abs(face.geometry.center.z - MODELING_BASE.height) < 1e-6
+  );
+  if (top.length !== 1) {
+    throw new Error(
+      `${what}: expected exactly one +Z face at z=${MODELING_BASE.height}, found ${top.length}`
+    );
+  }
+  return top[0]!.hash;
+}
+
+const PLATE_VOLUME =
+  MODELING_BASE.width * MODELING_BASE.depth * MODELING_BASE.height;
+
+/** A quarter-disc corner replaced by a fillet arc removes this much area. */
+const CORNER_FILLET_AREA = (radius: number) =>
+  (1 - Math.PI / 4) * radius * radius;
+
+export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
+  {
+    key: 'fillet-on-import',
+    purpose:
+      'Blend an imported body: r3 fillets on the four vertical corners of the ' +
+      'imported plate. The corner band is where the two kernels choose ' +
+      'different surface types for the same nominal geometry.',
+    nominalVolumeMm3:
+      PLATE_VOLUME - 4 * CORNER_FILLET_AREA(3) * MODELING_BASE.height,
+    // 1e-6: both kernels report analytic volumes for this class, so anything
+    // above float noise is a real geometric difference and must be pinned.
+    nominalRtol: 1e-6,
+    build: async (sync) => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · fillet on import',
+        'modeling-base-plate'
+      );
+      const derived = await sync(manager.document);
+      const { edges } = topologyOf(derived, imported.bodyId, 'fillet-on-import');
+      manager.runTransaction('Break the imported corners', [
+        commandFactories.filletEdges({
+          name: 'Corner break',
+          targetBodyId: imported.bodyId,
+          edgeHashes: verticalCornerEdges(edges, 'fillet-on-import'),
+          size: 3,
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  },
+  {
+    key: 'chamfer-on-import',
+    purpose:
+      'The other blend engine on the same picks: 3 mm chamfers on the four ' +
+      'vertical corners. Purely planar output, so a divergence here is a ' +
+      'topology problem, not a surface-fitting one.',
+    nominalVolumeMm3: PLATE_VOLUME - 4 * 0.5 * 3 * 3 * MODELING_BASE.height,
+    nominalRtol: 1e-6,
+    build: async (sync) => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · chamfer on import',
+        'modeling-base-plate'
+      );
+      const derived = await sync(manager.document);
+      const { edges } = topologyOf(derived, imported.bodyId, 'chamfer-on-import');
+      manager.runTransaction('Chamfer the imported corners', [
+        commandFactories.chamferEdges({
+          name: 'Corner chamfer',
+          targetBodyId: imported.bodyId,
+          edgeHashes: verticalCornerEdges(edges, 'chamfer-on-import'),
+          size: 3,
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  },
+  {
+    key: 'boolean-with-import',
+    purpose:
+      'Subtract a natively built r5 cylinder from the imported plate: an ' +
+      'exact primitive meeting imported topology in one boolean. The plain ' +
+      'analytic case, and the control for boolean-on-nurbs-import.',
+    nominalVolumeMm3: PLATE_VOLUME - Math.PI * 25 * MODELING_BASE.height,
+    nominalRtol: 1e-6,
+    build: async () => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · boolean with import',
+        'modeling-base-plate'
+      );
+      const bore = createBodyFeatureIds();
+      manager.runTransaction('Bore the imported plate', [
+        commandFactories.addPrimitive({
+          name: 'Bore tool',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 5, height: MODELING_BASE.height + 20 },
+          ids: bore
+        }),
+        commandFactories.transformBody({
+          name: 'Seat the bore',
+          targetBodyId: bore.bodyId,
+          translation: {
+            x: MODELING_BASE.width / 2,
+            y: MODELING_BASE.depth / 2,
+            z: -10
+          }
+        }),
+        commandFactories.booleanBodies({
+          name: 'Bored import',
+          operation: 'subtract',
+          targetBodyIds: [imported.bodyId, bore.bodyId],
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  },
+  {
+    key: 'pattern-boolean-with-import',
+    purpose:
+      'A patterned tool subtracted from the import in ONE multi-tool boolean ' +
+      '— three r2.5 bores in a row. Multi-tool booleans are where the ' +
+      'section-loop handling on a single planar face gets stressed.',
+    nominalVolumeMm3: PLATE_VOLUME - 3 * Math.PI * 2.5 * 2.5 * MODELING_BASE.height,
+    nominalRtol: 1e-6,
+    build: async () => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · pattern boolean with import',
+        'modeling-base-plate'
+      );
+      const bore = createBodyFeatureIds();
+      const row = createBodyFeatureIds();
+      manager.runTransaction('Drill a bore row into the import', [
+        commandFactories.addPrimitive({
+          name: 'Bore tool',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 2.5, height: MODELING_BASE.height + 20 },
+          ids: bore
+        }),
+        commandFactories.transformBody({
+          name: 'Seat the first bore',
+          targetBodyId: bore.bodyId,
+          translation: { x: 10, y: MODELING_BASE.depth / 2, z: -10 }
+        }),
+        commandFactories.patternBody({
+          name: 'Bore row',
+          targetBodyId: bore.bodyId,
+          patternKind: 'linear',
+          count: 3,
+          axis: 'x',
+          spacing: 10,
+          ids: row
+        }),
+        commandFactories.booleanBodies({
+          name: 'Drilled import',
+          operation: 'subtract',
+          targetBodyIds: [imported.bodyId, row.bodyId],
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  },
+  {
+    key: 'shell-on-import',
+    purpose:
+      'Hollow the imported plate to a 2 mm wall with its +Z face open. The ' +
+      'operation resolves a FACE pick on imported topology, which is the ' +
+      'other half of the K0.6 witness story.',
+    nominalVolumeMm3:
+      PLATE_VOLUME -
+      (MODELING_BASE.width - 4) *
+        (MODELING_BASE.depth - 4) *
+        (MODELING_BASE.height - 2),
+    nominalRtol: 1e-6,
+    build: async (sync) => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · shell on import',
+        'modeling-base-plate'
+      );
+      const derived = await sync(manager.document);
+      const { faces } = topologyOf(derived, imported.bodyId, 'shell-on-import');
+      manager.runTransaction('Hollow the imported plate', [
+        commandFactories.shellBody({
+          name: 'Hollow import',
+          targetBodyId: imported.bodyId,
+          openingFaceHashes: [topFaceHash(faces, 'shell-on-import')],
+          thickness: 2,
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  },
+  {
+    key: 'boolean-on-nurbs-import',
+    purpose:
+      'The K0.5 case: subtract an analytic cylinder from a body whose corner ' +
+      'bands arrived as B-splines (e-nurbs-fillet-plate). The r4 bore is ' +
+      'seated ON the filleted corner, so the cut surface must intersect a ' +
+      'NURBS face rather than a plane.',
+    // Filleted plate, minus the first-quadrant material inside r=4 of the
+    // origin that the r3 corner fillet had not already removed.
+    nominalVolumeMm3:
+      PLATE_VOLUME -
+      4 * CORNER_FILLET_AREA(3) * MODELING_BASE.height -
+      (Math.PI * 16) / 4 * MODELING_BASE.height +
+      CORNER_FILLET_AREA(3) * MODELING_BASE.height,
+    // 5e-3: the input body is a B-spline APPROXIMATION of the analytic
+    // filleted plate, so the nominal figure is the design intent rather than
+    // the file's exact content. Both kernels land inside 0.5% when the
+    // boolean is correct; a wrong boolean misses by far more, which is
+    // exactly what this scenario caught.
+    nominalRtol: 5e-3,
+    build: async () => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · boolean on NURBS import',
+        'e-nurbs-fillet-plate'
+      );
+      const bore = createBodyFeatureIds();
+      manager.runTransaction('Cut the blended corner', [
+        commandFactories.addPrimitive({
+          name: 'Corner bore',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 4, height: MODELING_BASE.height + 20 },
+          ids: bore
+        }),
+        commandFactories.transformBody({
+          name: 'Seat on the corner',
+          targetBodyId: bore.bodyId,
+          translation: { x: 0, y: 0, z: -10 }
+        }),
+        commandFactories.booleanBodies({
+          name: 'Cut blended corner',
+          operation: 'subtract',
+          targetBodyIds: [imported.bodyId, bore.bodyId],
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  }
+];
+
+export { BASE_PLATE_PATH };
