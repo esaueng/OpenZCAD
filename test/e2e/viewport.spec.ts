@@ -1065,18 +1065,18 @@ test('flicking a direction in the marking menu picks that action', async ({
   if (!origin) {
     throw new Error('the menu has no anchor');
   }
-  // Aim at the sector's direction but stop well short of the label, so only
+  // Aim at the sector's direction but stop well short of the slot, so only
   // the direction can be what chose it.
   const dx = target.x + target.width / 2 - origin.x;
   const dy = target.y + target.height / 2 - origin.y;
   const length = Math.hypot(dx, dy);
-  // Press at the hub and flick outward: the direction alone commits, without
-  // the pointer ever reaching the label it chose.
+  // Press at the hub and flick outward: past the dead zone the hub draws,
+  // but nowhere near the slot the direction commits to.
   await page.mouse.move(origin.x, origin.y);
   await page.mouse.down();
   await page.mouse.move(
-    origin.x + (dx / length) * 34,
-    origin.y + (dy / length) * 34
+    origin.x + (dx / length) * 60,
+    origin.y + (dy / length) * 60
   );
   await page.mouse.up();
 

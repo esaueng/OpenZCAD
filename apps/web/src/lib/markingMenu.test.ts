@@ -2,36 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   clampMenuOrigin,
   MARKING_DEAD_ZONE_PX,
-  RADIAL_SLOTS,
   sectorForVector,
-  sectorPosition,
-  splitRadial
+  sectorPosition
 } from './markingMenu';
-
-const items = (count: number) =>
-  Array.from({ length: count }, (_, index) => `item-${index}`);
-
-describe('what fits on the ring', () => {
-  it('keeps a full ring on the ring', () => {
-    const split = splitRadial(items(RADIAL_SLOTS));
-    expect(split.radial).toHaveLength(RADIAL_SLOTS);
-    expect(split.overflow).toEqual([]);
-  });
-
-  it('never leaves a single item alone in the overflow', () => {
-    // A list holding one row, next to a ring that gave up nothing for it, is
-    // the worst of both.
-    const split = splitRadial(items(RADIAL_SLOTS + 1));
-    expect(split.overflow.length).toBeGreaterThan(1);
-  });
-
-  it('loses no items to the split', () => {
-    for (const count of [0, 1, 5, 8, 9, 12]) {
-      const split = splitRadial(items(count));
-      expect([...split.radial, ...split.overflow]).toEqual(items(count));
-    }
-  });
-});
 
 describe('aiming at a sector', () => {
   const far = MARKING_DEAD_ZONE_PX * 3;
@@ -61,6 +34,14 @@ describe('aiming at a sector', () => {
   it('ignores the wobble between pressing and releasing', () => {
     expect(sectorForVector(3, -4, 8)).toBeNull();
     expect(sectorForVector(0, 0, 8)).toBeNull();
+  });
+
+  it('picks nothing while the pointer is still on the hub', () => {
+    // The hub is drawn at the dead zone's radius, so anything it covers has
+    // to be a release that chose nothing — otherwise the readout would name
+    // an action the menu was not going to run.
+    expect(sectorForVector(0, -(MARKING_DEAD_ZONE_PX - 1), 8)).toBeNull();
+    expect(sectorForVector(0, -(MARKING_DEAD_ZONE_PX + 1), 8)).toBe(0);
   });
 
   it('adapts to a ring that is not full', () => {
