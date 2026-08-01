@@ -9,14 +9,21 @@ import type { EdgeTopology } from '@openzcad/shared';
  * one lip is the most tedious thing in the fillet workflow, so a double click
  * walks the run instead.
  *
- * The walk is geometric, not topological: the kernel gives the viewport an
- * edge's display polyline but not which faces bound it, so "the same run" is
- * decided by edges meeting at a point and continuing in roughly the same
- * direction rather than by shared tangency. Two consequences worth knowing:
- * the run stops at a sharp corner, which is the point; and the four square
- * edges around a plain box's top face are a face loop rather than a run, so
- * they stay separate. A face loop needs edge-to-face adjacency the kernel
- * does not publish.
+ * The walk is geometric, not topological: "the same run" is decided by edges
+ * meeting at a point and continuing in roughly the same direction. Two
+ * consequences worth knowing: the run stops at a sharp corner, which is the
+ * point; and the four square edges around a plain box's top face are a face
+ * loop rather than a run, so they stay separate.
+ *
+ * It is geometric for historical reasons, not for want of the facts. The
+ * topology payload publishes `adjacentFaceHashes` — the faces an edge bounds —
+ * and `vertexIds` — the vertices it runs between — which is what a topological
+ * walk needs; M3/W4 is that rewrite. What the geometric walk gets wrong today
+ * is measured against the real kernel in
+ * `test/edge-chain-characterization.test.ts`: an octagonal boss rim comes back
+ * whole while a hexagonal one comes back as a single edge, a run steps between
+ * two solids that merely touch, and the same body a hundred thousand times
+ * smaller answers differently because the weld tolerance below is absolute.
  */
 
 /** World distance within which two edge ends count as the same vertex. */
@@ -25,18 +32,24 @@ const WELD_TOLERANCE = 1e-4;
 /**
  * Degrees two directions may differ and still count as continuing.
  *
- * Deliberately far looser than "tangent" reads, because the direction this
- * can measure is not the true tangent. The kernel hands the viewport a
- * fillet or chamfer arc as a two-point polyline — its endpoints and nothing
- * between — so the only direction available at an arc's end is its chord,
- * which for a quarter arc is a full 45 degrees off the tangent. Measured on
- * a filleted box, a rim edge meets its corner arc at 45 degrees and meets
- * the perpendicular rim edge and the wall below at 90.
+ * This used to be justified by chord error: the claim was that the kernel
+ * hands the viewport a fillet arc as a two-point polyline, so an arc's end
+ * direction is its chord, a full 45 degrees off the true tangent. That is
+ * false and was measured to be false. At the app's display deflection a
+ * quarter arc arrives with 28 points, and it stays 28 across three decades of
+ * radius because the deflection is size-relative. End directions here are
+ * within a couple of degrees of the real tangent.
  *
- * 50 degrees therefore separates "continues around the rim" from "turns a
- * corner" on the data that exists. Tighten it toward 12 if the kernel starts
- * sampling curved edges the way it already samples a cylinder's rim, which
- * would also stop those arcs drawing as visibly straight chords.
+ * 50 is still load-bearing, for a different reason. A chamfer is not tangent
+ * to anything: a 20x20x10 box chamfered 3 mm on its four vertical edges has a
+ * top rim whose worst kink is exactly 45.000000 degrees, a real corner. At a
+ * 45 degree tolerance that rim collapses from eight edges to one, while the UI
+ * promises "Fillet or chamfer applies to all of them". So tightening this
+ * toward true tangency would silently remove chamfer-band selection.
+ *
+ * Whether a chamfer band should count as one run is a product question, not a
+ * refactor. Do not tighten this as a cleanup. Both numbers are pinned in
+ * `test/edge-chain-characterization.test.ts`.
  */
 const TANGENT_TOLERANCE_DEG = 50;
 
