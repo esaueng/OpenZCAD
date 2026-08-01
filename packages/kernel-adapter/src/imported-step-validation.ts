@@ -1,8 +1,8 @@
 /**
  * Import validation taxonomy for STEP bodies (K0.6).
  *
- * Once OpenCascade is deleted there is no second reader to disagree with, so
- * whatever this layer lets through is what users get. A file that imports as a
+ * With OpenCascade deleted (Z5) there is no second reader to disagree with,
+ * so whatever this layer lets through is what users get. A file that imports as a
  * body, measures a volume, and is geometrically meaningless is the exact
  * failure class the single-kernel programme exists to remove — so the bar here
  * is deliberately asymmetric: a false positive costs a warning, a false

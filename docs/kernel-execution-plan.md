@@ -422,6 +422,48 @@ Z3, when the last reachable importer went away.
 *Rule:* this lands only after Z3's soak; revert path is `git revert` of one
 PR (keep the deletion atomic).
 
+*Z5 landed (2026-08-01). Four more inventory errors, one of them a
+contradiction the inventory could not have satisfied as written:*
+
+1. **The inventory contradicts its own correction.** It lists `occt-step.ts`
+   for deletion while the correction below requires the corpus's cross-kernel
+   comparison to keep working, and `corpus.spec.ts` runs
+   `OcctStepKernelAdapter` live on every corpus file and every
+   import-modeling scenario. Both cannot hold. Resolved by RELOCATION, not
+   deletion: the cluster moved verbatim to `test/parity/occt-reference/` and
+   `occt-wasm` moved from a dependency of `packages/kernel-adapter` to a root
+   **devDependency**. The production adapter is single-kernel and nothing
+   shipped can reach OpenCascade; the corpus is untouched and its baselines
+   did not move. The adapter also stopped declaring `implements
+   ExactKernelAdapter`, so it cannot be mistaken for a kernel the app could be
+   pointed at.
+2. **`test/step-import-compat.test.ts` is already BrepKit-only.** It contains
+   no OCCT reference at all — nothing to rewrite. (`topology-lineage-spike`
+   did need the treatment: OCCT half removed, BrepKit half and
+   `verifyCompleteBrepEvolution`'s set equality kept intact.)
+3. **The `−22,088 kB already banked` claim is right about the WASM and wrong
+   about the bundle.** Verified by build: before Z5, `apps/web/dist` emitted
+   no OCCT asset — but `grep -i occt apps/web/dist` still hit, because
+   `assets/index-*.js` carried `OCCT_SHARP_OFFSET_LIMITATION` and the
+   `capability.kernel === 'occt'` branch. Z5 removes 321 bytes raw / 150 gzip
+   and, more usefully, makes the count of bundle files mentioning OpenCascade
+   zero. Numbers in `performance-baseline.md`.
+4. **`ExactKernelKind` does not travel alone.** Deleting the union also
+   retires `ModelingOperationCapability.offsetTopology`, whose only reader was
+   the `kernel === 'occt'` guard, and the `offsetTopology: 'unknown'` argument
+   beside the `kernel: 'brepkit'` one in `App.tsx`. Leaving it would have kept
+   a capability field no code consults.
+
+*What was actually recovered:* 4,462 lines deleted from
+`packages/kernel-adapter` (2,130 `occt-step.ts`, 928 `occt-lineage.ts`, 679
+`occt-modeling-operations.ts`, 725 of their tests) — relocated, not destroyed
+— plus a net 346 lines (621 removed, 275 added back) of cross-kernel test
+legs in `exact-kernel-adapter.test.ts`, `kernel-seam.test.ts`, and
+`topology-lineage-spike.test.ts`. Each deleted comparison was replaced by the
+absolute claim it stood in for (a closed form, a pinned count, a named
+refusal), because "two implementations agree" is not evidence once one of them
+is gone.
+
 *Correction — decide what the corpus becomes before deleting the reference.*
 This inventory removes `occt-wasm` and the cross-kernel assertions, but Z1.3's
 corpus is built on running every file through **both** kernels and comparing.

@@ -10,7 +10,7 @@ OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling
 
 **Direct manipulation.** Shapr3D-style modeling straight on the model: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching with snapping and live dimensions, box select, selection filters, a marking menu, an Esc ladder, and a live orientation widget with perspective/orthographic switching.
 
-**One kernel, one topology language.** BrepKit builds every document, imported STEP included. OpenCascade is retained only as the cross-kernel reference the parity corpus measures against, and no longer ships in the app bundle. Both kernels publish the same exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
+**One kernel, one topology language.** BrepKit builds every document, imported STEP included. OpenCascade is gone from the adapter and survives only as the parity corpus's reference implementation under `test/parity/occt-reference`, which never ships. BrepKit publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
 
 **Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded read-only recognizer proves blind holes, counterbores, countersinks, bosses, prismatic pockets, and conical tapers in isolation, but those broader coordinated edits are not wired into the product yet. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL imports become mesh bodies. All geometry and exports run in the browser worker.
 
@@ -58,14 +58,14 @@ Boundaries that hold everywhere:
 
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
-- Both kernels persist identical topology fingerprints — checked in `test/kernel-seam.test.ts` and the parity corpus while OpenCascade is still present — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OCCT scheme are rejected with a re-select diagnostic rather than reinterpreted.
+- Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against the OpenCascade reference in bulk by the parity corpus — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OpenCascade scheme are rejected with a re-select diagnostic rather than reinterpreted.
 - Schema-v1 through schema-v5 documents migrate to additive schema v6 on load.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
 The current implementation status and explicitly unshipped gaps are tracked in
 [the capability matrix](docs/capability-matrix.md).
 
-The monorepo is a pnpm workspace: `apps/web` plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (BrepKit + OCCT behind one interface), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
+The monorepo is a pnpm workspace: `apps/web` plus focused packages — `document-core` (canonical model), `command-system` (undo/redo, transactions), `geometry` (sketch regions, plane math), `kernel-adapter` (the BrepKit exact adapter), `viewport` (React-free three.js scene framework), `io-step`/`io-stl`, `ai-contracts`, `cloudflare-adapters`, `persistence`, and `shared`.
 
 ## Development
 
@@ -91,7 +91,7 @@ Interaction and startup performance are measured, not guessed — see [docs/perf
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and BrepKit WASM load lazily inside the geometry worker on the first non-empty rebuild or export. OCCT is no longer reachable from any production path, so its ~22 MB WASM is no longer emitted into the bundle at all. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+The exact adapter and BrepKit WASM load lazily inside the geometry worker on the first non-empty rebuild or export. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
 ## Beta deployment
 
@@ -177,7 +177,7 @@ Current assistant limitations and gates:
 - Editable STEP sources are embedded in the canonical document (capped at 12 MB) for deterministic offline replay; large documents get expensive to save, sync, and undo (history snapshots clone the full document).
 - Imported STL builds on the exact kernel through its STL importer, sewn into a shell so it can be mirrored, shelled, and offset. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
 - Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented, but both checked-in sharing flags remain `false` pending controlled beta rollout.
-- BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not cross-kernel fingerprint-stable — they fail closed rather than mis-resolve.
+- BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.
 - True face attachment requires a schema-v5 lineage reference and an exact planar face at the sketch's history position. Legacy face attachments retain their stored migration frame with a warning; deleted, ambiguous, non-planar, and unsupported current references fail visibly.
 - The pinned BrepKit mirror preserves ordinary exact solids, but can report a volume mismatch for some dense boolean-plus-blend histories; exact preflight refuses those bodies without committing history rather than accepting a questionable reflection.
 - Viewport idle edges are consolidated to one draw call per visible body; hover and selected edges use small reusable overlay batches.
@@ -185,7 +185,7 @@ Current assistant limitations and gates:
 ## Next milestones
 
 1. Run the recovery-copy reload E2E and staged beta checks, then enable viewer sharing before editor sharing; keep both deployment flags off until those gates pass.
-2. Wire the exact imported-feature query into live OCCT bodies and add coordinated edits for proved blind/counterbored/countersunk holes, bosses, pockets, and tapers.
+2. Wire the exact imported-feature query into live imported bodies and add coordinated edits for proved blind/counterbored/countersunk holes, bosses, pockets, and tapers.
 3. Extend verified lineage through boolean post-processing, blends, patterns, and direct edits without nearest-geometry rebinding.
 4. Enable AI imported-feature operations only after the same deterministic manual command and exact preflight path ships.
 5. Measure cache hit rate, rebuild latency, retained worker memory, and the consolidated edge-overlay draw-call reduction on target hardware.
