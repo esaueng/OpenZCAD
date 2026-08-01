@@ -265,10 +265,16 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     occt: '7262ee46',
     owner: 'K0.6',
     note:
-      'Edge-hash counterpart of the face divergence above, same body and the ' +
-      'same cause. 1646 of the 1722 edges carry the same hash on both ' +
-      'kernels; 76 do not. The counts match exactly, so this is a hashing ' +
-      'difference on particular edges rather than a topology one.'
+      'Edge-hash counterpart of the face divergence above. 1646 of the 1722 ' +
+      'edges carry the same hash on both kernels; 76 do not. The counts match ' +
+      'exactly, so this is a hashing difference on particular edges rather ' +
+      'than a topology one — and the mechanism is the arc-witness one ' +
+      'documented on e-analytic-fillet-plate below, not the face divergence. ' +
+      'Both bodies that diverge with MATCHING counts carry arcs; the ' +
+      'all-straight-edge bodies in this corpus have no edge-hash pin at all. ' +
+      'Which 76 has not been measured element-wise against the arc count on ' +
+      'this specific body, so treat that last step as corroborated rather ' +
+      'than proven.'
   },
   {
     subject: 'a-sample-parametric-bracket',
@@ -624,10 +630,28 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     owner: 'K0.6',
     note:
       'Same 34 edges, same face hash digest — the faces agree exactly — and ' +
-      'a different edge hash set. So this is NOT the spline or measurement ' +
-      'gap: it is the seam class again, on the four cylindrical bands, and it ' +
-      'is the cleanest analytic instance of it in the corpus because every ' +
-      'other metric on the file lines up. Diagnose it alongside a-export-cone.'
+      'a different edge hash set. NOT the spline or measurement gap. ' +
+      'Previously attributed to the seam class alongside a-export-cone; that ' +
+      'is wrong and the mechanism is now measured. This file has 16 LINE and ' +
+      '8 CIRCLE edges and ZERO closed edges, so there is no seam to blame, ' +
+      'and a corner-fillet band is a quarter cylinder that carries none. ' +
+      'The divergence is the ARCS, and it comes from the witness itself: ' +
+      '`edgeSampleOf` builds the ADR-011 open-edge midpoint as ' +
+      '`evaluateEdgeCurve(edge, first + span / 2)` with first/span from ' +
+      '`getEdgeCurveParameters`, which on BrepKit returns the UNTRIMMED ' +
+      'period. For a trimmed arc that parameter is not the midpoint. ' +
+      'Measured on a 20x20x10 box with all 12 edges filleted at r=1: all 24 ' +
+      'arcs have a witness displaced by exactly r along their own arc, and ' +
+      '12 of them land precisely on one of their own endpoints, while all 24 ' +
+      'line edges are exact to 1e-9. OCCT returns the trimmed range, so its ' +
+      'arc witness is right and every arc hashes differently across kernels. ' +
+      'Severity is bounded: 0 witness COLLISIONS at r=1 and r=3, because ' +
+      'curve type, length and endpoints still discriminate — so picks resolve ' +
+      'correctly WITHIN BrepKit and the damage is cross-kernel only, which ' +
+      'since Z3 means corpus-only rather than user-facing. Do not "fix" it ' +
+      'here: the quantization is frozen and changing the witness invalidates ' +
+      'every persisted reference to a fillet or chamfer edge. That is a ' +
+      'migration with its own plan, not a bug fix.'
   },
   {
     subject: 'e-analytic-fillet-plate',
