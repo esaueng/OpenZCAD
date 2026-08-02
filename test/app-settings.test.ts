@@ -3,8 +3,7 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   PANEL_WIDTH_LIMITS,
-  toUserId,
-  type AppSettings
+  toUserId
 } from '@openzcad/shared';
 import {
   APP_SETTINGS_STORAGE_KEY,
@@ -147,10 +146,7 @@ describe('application settings', () => {
   });
 
   it('accepts an account payload from a client that predates the layout', () => {
-    const legacy = deepClone(DEFAULT_APP_SETTINGS) as AppSettings & {
-      layout?: AppSettings['layout'];
-    };
-    delete legacy.layout;
+    const { layout: _layout, ...legacy } = deepClone(DEFAULT_APP_SETTINGS);
 
     expect(
       parseUpdateAppSettingsRequest(
