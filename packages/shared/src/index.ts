@@ -12,7 +12,7 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 6 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 7 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -36,7 +36,14 @@ export type FeatureKind =
   | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind =
-  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc';
+  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc' | 'text';
+/**
+ * Font style of a text sketch object. Each style is a distinct bundled font
+ * file — never a synthetic shear or emboldening — so the letterforms are the
+ * ones the type designer drew.
+ */
+export type TextFontStyle = 'regular' | 'bold' | 'italic' | 'boldItalic';
+export type TextAlign = 'left' | 'center' | 'right';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
 export type PatternKind = 'linear' | 'circular';
 export type AxisId = 'x' | 'y' | 'z';
@@ -318,6 +325,27 @@ export type SketchObjectData = (
       startAngleDeg: ParamValue;
       endAngleDeg: ParamValue;
     }
+  | {
+      objectKind: 'text';
+      /**
+       * The string to render. Glyph outlines are never persisted — they are
+       * re-derived from these parameters on every rebuild, so editing the
+       * string regenerates every downstream feature.
+       */
+      text: string;
+      /** Registry family id, e.g. `'open-sans'`. */
+      fontFamily: string;
+      fontStyle: TextFontStyle;
+      /** Em size in model units. Parametric like every other dimension. */
+      size: ParamValue;
+      /** Sketch-plane origin of the first baseline. */
+      x: ParamValue;
+      y: ParamValue;
+      /** Rotation about (`x`, `y`) in degrees. */
+      rotation?: ParamValue;
+      /** Horizontal alignment of each line about `x`. Defaults to `'left'`. */
+      align?: TextAlign;
+    }
 ) & {
   /**
    * Reference-only geometry. Construction entities remain visible and
@@ -342,13 +370,38 @@ export type RevolveAxis = 'horizontal' | 'vertical';
  * The fingerprint/sample/area fields retain fail-closed compatibility with
  * profile references written before first-class profile ids were introduced.
  */
-export interface SketchProfileReference {
+export interface SketchRegionProfileReference {
   profileId?: string;
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   sourceArea: number;
   sourceEntityIds?: string[];
+  /** Discriminator; a region reference never carries the entity-wide mode. */
+  all?: false;
 }
+
+/**
+ * Reference to *every* profile bounded solely by the named sketch entities,
+ * however many there are and whatever their geometry.
+ *
+ * Geometry-derived identity (fingerprint, area, sample point) cannot survive an
+ * edit that changes how many regions an entity produces — changing a text
+ * object from "HI" to "HELLO" changes the region count, every fingerprint, and
+ * every area at once. Entity identity does survive: the sketch object's
+ * `EntityId` is stable across every edit to its parameters. This mode exists so
+ * a text extrude keeps working after the exact edit the text feature is for.
+ *
+ * Resolution is still fail-closed: an entity that currently bounds no profile
+ * is an error, not an empty extrude.
+ */
+export interface SketchEntityProfileReference {
+  all: true;
+  /** Profiles qualify when their source entities are a subset of these ids. */
+  sourceEntityIds: string[];
+}
+
+export type SketchProfileReference =
+  SketchRegionProfileReference | SketchEntityProfileReference;
 
 export type FeatureData =
   | {

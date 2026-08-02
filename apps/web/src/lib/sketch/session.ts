@@ -381,6 +381,10 @@ export function snapTargetsForObject(
         { x: cx, y: cy, kind: 'center' }
       ];
     }
+    case 'text':
+      // The baseline origin is the one point that exists without parsed font
+      // data, and it is the handle a user drags, so it is the snap target.
+      return [{ x: resolve(data.x), y: resolve(data.y), kind: 'endpoint' }];
   }
 }
 

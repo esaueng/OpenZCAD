@@ -100,6 +100,25 @@ export interface SketchRegionObject {
   data: SketchObjectData;
 }
 
+/**
+ * Supplies profiles for sketch objects the planar arrangement cannot derive.
+ *
+ * Today that is text, and only text. Glyph outlines need parsed font data,
+ * which is fetched asynchronously; this analyzer is synchronous and pure, so
+ * the font-backed expansion is injected by the caller rather than reached from
+ * in here. Returning `null` (or omitting the source) means the object
+ * contributes no profiles — it never falls back to the arrangement, which
+ * would be the O(n²) path the text plan exists to avoid.
+ */
+export type SketchProfileSource = (
+  object: SketchRegionObject,
+  resolve: (value: ParamValue) => number
+) => SketchProfile[] | null;
+
+export interface SketchProfileAnalysisOptions {
+  profileSource?: SketchProfileSource;
+}
+
 // ---------------------------------------------------------------------------
 // Primitive curves
 // ---------------------------------------------------------------------------
@@ -238,6 +257,15 @@ function curvesForObject(
         }
       ];
     }
+    case 'text': {
+      // Text never enters the half-edge arrangement. A word is thousands of
+      // curves and this pipeline is quadratic in curve count in several
+      // places; fonts also already encode which contour is an outer boundary
+      // and which is a counter, so the arrangement has nothing to discover.
+      // Text profiles arrive fully formed through `profileSource` instead
+      // (`docs/plans/text-feature-plan.md`, design decision 4).
+      return [];
+    }
   }
 }
 
@@ -298,10 +326,7 @@ function primitiveCurveKey(curve: Curve, tolerance: number): string {
   const start = toleranceKey(arcPoint(curve, 0), tolerance);
   const end = toleranceKey(arcPoint(curve, curve.sweep), tolerance);
   const ends = start <= end ? `${start}:${end}` : `${end}:${start}`;
-  const midpoint = toleranceKey(
-    arcPoint(curve, curve.sweep / 2),
-    tolerance
-  );
+  const midpoint = toleranceKey(arcPoint(curve, curve.sweep / 2), tolerance);
   return [
     'A',
     toleranceKey({ x: curve.cx, y: curve.cy }, tolerance),
@@ -961,9 +986,7 @@ function curveSignature(curve: RegionCurve): string {
     quantize(normalizeAngle(curve.endAngle))
   ].sort((a, b) => a - b);
   const signedSpan = curve.ccw ? span : -span;
-  const midpoint = quantize(
-    normalizeAngle(curve.startAngle + signedSpan / 2)
-  );
+  const midpoint = quantize(normalizeAngle(curve.startAngle + signedSpan / 2));
   return `A${base},${angles.join(',')},${quantize(span)},${midpoint}`;
 }
 
@@ -1596,18 +1619,43 @@ function extractSketchProfiles(
   return regions;
 }
 
+/**
+ * Profiles contributed by objects that bypass the arrangement, in sketch
+ * order. They are appended rather than merged into the area sort so a text
+ * object's regions stay in reading order across rebuilds.
+ */
+function sourcedProfiles(
+  objects: SketchRegionObject[],
+  resolve: (value: ParamValue) => number,
+  profileSource: SketchProfileSource
+): SketchProfile[] {
+  const profiles: SketchProfile[] = [];
+  for (const object of objects) {
+    if (object.data.construction === true) {
+      continue;
+    }
+    profiles.push(...(profileSource(object, resolve) ?? []));
+  }
+  return profiles;
+}
+
 export function computeSketchProfileAnalysis(
   objects: SketchRegionObject[],
   resolve: (value: ParamValue) => number,
-  requestedTolerance?: number
+  requestedTolerance?: number,
+  options?: SketchProfileAnalysisOptions
 ): SketchProfileAnalysis {
   const resolved = resolveSketchCurves(objects, resolve, requestedTolerance);
+  const profiles = extractSketchProfiles(
+    resolved.curves,
+    resolved.tolerance,
+    resolved.invalidEntityIds
+  );
+  if (options?.profileSource) {
+    profiles.push(...sourcedProfiles(objects, resolve, options.profileSource));
+  }
   return {
-    profiles: extractSketchProfiles(
-      resolved.curves,
-      resolved.tolerance,
-      resolved.invalidEntityIds
-    ),
+    profiles,
     diagnostics: resolved.diagnostics,
     tolerance: resolved.tolerance,
     modelScale: resolved.modelScale
@@ -1617,9 +1665,11 @@ export function computeSketchProfileAnalysis(
 export function computeSketchRegions(
   objects: SketchRegionObject[],
   resolve: (value: ParamValue) => number,
-  tolerance?: number
+  tolerance?: number,
+  options?: SketchProfileAnalysisOptions
 ): SketchRegion[] {
-  return computeSketchProfileAnalysis(objects, resolve, tolerance).profiles;
+  return computeSketchProfileAnalysis(objects, resolve, tolerance, options)
+    .profiles;
 }
 
 /** Finds the region a point lies in (smallest containing region wins). */

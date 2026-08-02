@@ -1133,6 +1133,14 @@ function profilePoints(
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
+    case 'text':
+      // This legacy path sweeps a single polygonal profile. Text is many
+      // regions with holes and exact beziers; approximating it here would
+      // silently produce the wrong solid, so it must go through the region
+      // path instead.
+      throw new Error(
+        'Text must be extruded through its detected sketch regions, not as a single profile.'
+      );
   }
 }
 

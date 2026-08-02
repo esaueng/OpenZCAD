@@ -77,5 +77,10 @@ export function objectPolyline(
       }
       return { points, closed: false };
     }
+    case 'text':
+      // One glyph outline is not one polyline, and sampling it needs parsed
+      // font data this synchronous helper has no access to. The text object's
+      // viewport display comes from its expanded regions instead.
+      return null;
   }
 }

@@ -3,29 +3,74 @@ import {
   computeSketchProfileAnalysis,
   profileContainsPoint,
   profilesShareBoundary,
+  type SketchProfileAnalysisOptions,
   type SketchRegion
 } from '@openzcad/geometry';
 import type {
   FeatureNode,
   ProjectDocument,
+  SketchEntityProfileReference,
   SketchNode,
   SketchObjectNode
 } from '@openzcad/shared';
 
 /**
- * Resolve the persisted region profile of an extrude against the sketch's
+ * Every profile bounded solely by the referenced entities.
+ *
+ * This is the entity-identity tier, and it deliberately looks at nothing
+ * geometric. A text object's regions change count, area, fingerprint and
+ * sample point together whenever the string changes, so any geometry-derived
+ * match would fail exactly when the user edits the text — the edit this
+ * feature exists to support. What does not change is the sketch object's
+ * `EntityId`, so that is the only thing matched on.
+ *
+ * Subset rather than equality: a region bounded by a subset of the referenced
+ * entities still belongs to them. It stays fail-closed — an entity set that
+ * currently bounds nothing throws rather than silently extruding nothing.
+ */
+function resolveEntityProfiles(
+  reference: SketchEntityProfileReference,
+  profiles: SketchRegion[]
+): SketchRegion[] {
+  const referenced = new Set(reference.sourceEntityIds);
+  if (referenced.size === 0) {
+    throw new Error(
+      'Broken profile reference — the extrude references every profile of no sketch entity.'
+    );
+  }
+  const matches = profiles.filter(
+    (candidate) =>
+      candidate.sourceEntityIds.length > 0 &&
+      candidate.sourceEntityIds.every((entityId) => referenced.has(entityId))
+  );
+  if (matches.length === 0) {
+    throw new Error(
+      'Broken profile reference — the sketch entities this extrude covers no longer bound any closed region.'
+    );
+  }
+  return matches;
+}
+
+/**
+ * Resolve the persisted region profiles of an extrude against the sketch's
  * current regions. Shared by both exact kernels so a document means the same
  * region — or fails with the same error — wherever it builds. Resolution is
  * fail-closed (ADR-010): the stored fingerprint must match a current region,
  * with a single tolerant fallback — the stored sample point still falls
  * inside a region whose area is within 1% — so nudging a curve keeps the
  * feature alive while topology changes refuse to guess.
+ *
+ * One reference kind opts out of geometric identity entirely: an
+ * `{ all: true, sourceEntityIds }` reference resolves by entity id alone (see
+ * `resolveEntityProfiles`). It is additive — every stored region reference
+ * takes exactly the path it took before.
  */
 export function resolveRegionProfiles(
   document: ProjectDocument,
   sketch: SketchNode,
   data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  options?: SketchProfileAnalysisOptions
 ): SketchRegion[] {
   const references =
     data.profiles && data.profiles.length > 0
@@ -40,10 +85,16 @@ export function resolveRegionProfiles(
     .map((objectId) => document.nodes[objectId])
     .filter((node): node is SketchObjectNode => node?.kind === 'sketch-object')
     .map((node) => ({ id: node.id, data: node.data }));
-  const analysis = computeSketchProfileAnalysis(objects, (value) =>
-    resolveParamValue(value, scope, 'sketch dimension')
+  const analysis = computeSketchProfileAnalysis(
+    objects,
+    (value) => resolveParamValue(value, scope, 'sketch dimension'),
+    undefined,
+    options
   );
-  const resolved = references.map((reference) => {
+  const resolved = references.flatMap((reference) => {
+    if (reference.all === true) {
+      return resolveEntityProfiles(reference, analysis.profiles);
+    }
     const areaTolerance = Math.max(
       Math.abs(reference.sourceArea) * 0.01,
       analysis.tolerance * analysis.tolerance * 16
@@ -104,9 +155,16 @@ export function resolveRegionProfile(
   document: ProjectDocument,
   sketch: SketchNode,
   data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  options?: SketchProfileAnalysisOptions
 ): SketchRegion {
-  const profiles = resolveRegionProfiles(document, sketch, data, scope);
+  const profiles = resolveRegionProfiles(
+    document,
+    sketch,
+    data,
+    scope,
+    options
+  );
   if (profiles.length !== 1) {
     throw new Error('Expected one sketch profile.');
   }

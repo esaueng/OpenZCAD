@@ -19,7 +19,9 @@ export {
   type RegionLoop,
   type SketchProfile,
   type SketchProfileAnalysis,
+  type SketchProfileAnalysisOptions,
   type SketchProfileDiagnostic,
+  type SketchProfileSource,
   type SketchRegion,
   type SketchRegionObject,
   type Vec2Like
