@@ -50,6 +50,7 @@ export {
   type FontFaceAsset,
   type FontFamilyEntry,
   type FontLibraryOptions,
+  type FontLicense,
   type FontStyle,
   type LoadedFont,
   type PlacedGlyph,

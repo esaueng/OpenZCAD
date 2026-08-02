@@ -11,8 +11,10 @@
  *
  * Output: packages/geometry/assets/fonts/<file>.ttf plus a generated
  * LICENSE-<family>.txt built from the font's own name table (copyright,
- * license description, license URL) followed by the verbatim SIL OFL 1.1
- * body. Nothing here is invented: the attribution comes out of the binaries.
+ * license description, license URL) followed by the verbatim licence body the
+ * URL points at. Nothing here is invented: the attribution comes out of the
+ * binaries, and an unrecognised licence URL is a hard error rather than an
+ * assumption.
  *
  * The script is intentionally not wired into `pnpm build` — font assets are
  * committed, and this only regenerates them.
@@ -28,13 +30,22 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT_DIR = path.join(ROOT, 'packages/geometry/assets/fonts');
 
 /**
- * Verbatim OFL 1.1 body, taken from a package already vendored in this
- * repo rather than retyped.
+ * Verbatim licence bodies, taken from files already in this repo rather than
+ * retyped. Which one a family gets is decided by the licence URL in its own
+ * name table — not all Google Fonts families are OFL (Roboto Slab is
+ * Apache-2.0), and asserting the wrong licence would be worse than none.
  */
 const OFL_SOURCE = path.join(
   ROOT,
   'node_modules/.pnpm/@fontsource+ibm-plex-sans@5.3.0/node_modules/@fontsource/ibm-plex-sans/LICENSE'
 );
+const APACHE_SOURCE = path.join(ROOT, 'LICENSE');
+
+/** licence URL fragment -> { id, body key }. */
+const LICENSE_BY_URL = [
+  { match: /scripts\.sil\.org\/OFL|openfontlicense\.org/i, id: 'OFL-1.1', body: 'ofl' },
+  { match: /apache\.org\/licenses\/LICENSE-2\.0/i, id: 'Apache-2.0', body: 'apache' }
+];
 
 /**
  * family -> { slug, styles }. `styles` lists the styles the family actually
@@ -92,13 +103,17 @@ function parseFaces(css) {
 async function main() {
   await mkdir(OUT_DIR, { recursive: true });
   const oflFull = await readFile(OFL_SOURCE, 'utf8');
-  const oflBody = oflFull.slice(oflFull.indexOf('-----------'));
+  const bodies = {
+    ofl: oflFull.slice(oflFull.indexOf('-----------')),
+    apache: await readFile(APACHE_SOURCE, 'utf8')
+  };
 
   // opentype.js is a dependency of @openzcad/geometry, not of the repo root.
   const opentype = await import(
     path.join(ROOT, 'packages/geometry/node_modules/opentype.js/dist/opentype.mjs')
   );
   const manifest = [];
+  const licenses = new Map();
 
   for (const entry of FAMILIES) {
     const url =
@@ -150,36 +165,57 @@ async function main() {
         file,
         bytes: bytes.length,
         unitsPerEm: parsed.unitsPerEm,
+        licenseUrl: pick('licenseURL'),
         sourceUrl: face.url
       });
       console.log(`${entry.family} ${style} -> ${file} (${bytes.length} bytes)`);
     }
 
+    const resolved = LICENSE_BY_URL.find((candidate) =>
+      candidate.match.test(licenseHeader.licenseURL)
+    );
+    if (!resolved) {
+      throw new Error(
+        `${entry.family}: license URL "${licenseHeader.licenseURL}" is not one ` +
+          'this script knows how to attribute. Add it to LICENSE_BY_URL with ' +
+          'the matching licence body before shipping the binary.'
+      );
+    }
+    licenses.set(entry.slug, resolved.id);
     await writeFile(
       path.join(OUT_DIR, `LICENSE-${entry.slug}.txt`),
       [
         entry.family,
         '',
         'Attribution below is copied verbatim from the font binary name table',
-        `(fetched from Google Fonts by scripts/fetch-text-fonts.mjs).`,
+        '(fetched from Google Fonts by scripts/fetch-text-fonts.mjs).',
         '',
         licenseHeader.copyright || '(no copyright record in the font name table)',
         '',
-        licenseHeader.license ||
-          'This Font Software is licensed under the SIL Open Font License, Version 1.1.',
+        licenseHeader.license || `Licensed under ${resolved.id}.`,
         '',
-        licenseHeader.licenseURL || 'https://openfontlicense.org',
+        licenseHeader.licenseURL,
         '',
-        oflBody
+        bodies[resolved.body]
       ].join('\n')
     );
   }
 
   await writeFile(
     path.join(OUT_DIR, 'manifest.json'),
-    `${JSON.stringify(manifest, null, 2)}\n`
+    `${JSON.stringify(
+      {
+        licenses: Object.fromEntries(licenses),
+        faces: manifest
+      },
+      null,
+      2
+    )}\n`
   );
   console.log(`\nWrote ${manifest.length} font files to ${OUT_DIR}`);
+  for (const [slug, id] of licenses) {
+    console.log(`  ${slug}: ${id}`);
+  }
 }
 
 await main();

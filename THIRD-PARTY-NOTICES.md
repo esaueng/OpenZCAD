@@ -35,6 +35,36 @@ authoritative dependency inventory.
   Feather are covered by the MIT license included in Lucide's license file.
   Source and license: <https://github.com/lucide-icons/lucide>.
 
+## Text-on-model fonts
+
+OpenZCAD redistributes the following font binaries in
+`packages/geometry/assets/fonts/`, so that text sketch objects can be expanded
+to outlines offline. The full license text and the copyright line taken from
+each font's own name table are in the matching `LICENSE-<family>.txt` beside
+the binaries; `manifest.json` records each file's exact Google Fonts source
+URL and the license its name table points at. Note that these are not all the
+same license — Roboto Slab is Apache-2.0, not OFL.
+
+- **Inter** — Copyright 2016 The Inter Project Authors; SIL Open Font License
+  1.1. <https://github.com/rsms/inter>.
+- **Open Sans** — Copyright 2020 The Open Sans Project Authors; SIL Open Font
+  License 1.1. <https://github.com/googlefonts/opensans>.
+- **Lora** — Copyright 2011 The Lora Project Authors, with Reserved Font Name
+  "Lora"; SIL Open Font License 1.1.
+  <https://github.com/cyrealtype/Lora-Cyrillic>.
+- **Roboto Slab** — Copyright 2018 The Roboto Slab Project Authors;
+  **Apache-2.0**. <https://github.com/googlefonts/robotoslab>.
+- **JetBrains Mono** — Copyright 2020 The JetBrains Mono Project Authors; SIL
+  Open Font License 1.1. <https://github.com/JetBrains/JetBrainsMono>.
+- **Oswald** — Copyright 2016 The Oswald Project Authors; SIL Open Font License
+  1.1. <https://github.com/googlefonts/OswaldFont>.
+- **Pacifico** — Copyright 2018 The Pacifico Project Authors; SIL Open Font
+  License 1.1. <https://github.com/googlefonts/Pacifico>.
+
+- **opentype.js 2.0.0** — Copyright Frederik De Bleser; MIT. Parses the bundled
+  font binaries into glyph outlines. Source and license:
+  <https://github.com/opentypejs/opentype.js>.
+
 The complete license texts shipped by npm packages remain available in each
 package's `LICENSE` file. This notice does not alter the terms of those
 licenses.
