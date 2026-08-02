@@ -1410,6 +1410,44 @@ stationary edge survives, and the finding shrank from "rebuild is broken" to
 appeared to measure absurdly was a body whose bore had missed entirely —
 `faces = 3` said so, and the row was discarded rather than reported.
 
+#### The app has no mesh-level check, and that is a class, not an oversight
+
+Worth stating separately from any one defect, because it explains why so many
+of the findings above are *silent*.
+
+`exact.ts` verifies bodies through `validateSolid` / `validateSolidRelaxed` —
+the kernel's **B-rep** validity check. It never checks the **mesh** it hands
+to the viewport and to STL export. Those are two different objects, and this
+sweep found four bodies where the first is right and the second is not:
+
+| body | B-rep | mesh |
+|---|---|---|
+| sphere cut by an overlapping box | exact to 2.2e-14 | 408 open edges |
+| cross-drilled shaft | `mass_properties` correct | +420 open edges |
+| the same shaft at deflection ≥ 0.3 | valid, five faces | **zero triangles** |
+| a pattern with overlapping instances | validation passes | *N* interpenetrating shells |
+
+Each fails a different way, and none of them can be seen from where the app
+looks.
+
+Two of these turn on the same trap, which is the part to remember: **a
+watertightness test passes vacuously on an empty mesh.** Zero boundary edges
+is trivially true of no triangles at all. That is what let a correctly
+measured offset sphere draw nothing (brepkit#65), and what let a valid
+five-face drilled shaft render as nothing at coarse deflection (brepkit#66).
+`is_watertight` answered `true` in both cases. A closure check that does not
+also assert non-emptiness is not a closure check.
+
+The pattern row is the mirror image: watertightness is satisfied by something
+that is *not one solid*, because *N* closed shells are each individually
+closed. Both directions of the same mistake — treating "no boundary edges" as
+if it meant "one sound body".
+
+None of this argues for adding a warning today; making every affected body
+warn is a product decision with its own noise cost. It argues that the
+current regime cannot detect an entire class, so the absence of warnings on
+these bodies is not evidence about them.
+
 ---
 
 ## 6. M5 — Platform (K2, product-sequenced)
