@@ -24,6 +24,20 @@ export interface Vec2Like {
   y: number;
 }
 
+/**
+ * The interior control points of a non-rational bezier: exactly one for a
+ * quadratic, exactly two for a cubic.
+ *
+ * A tuple union rather than `Vec2Like[]` on purpose. Degree is not a free
+ * parameter here — `bezierSignedAreaTerm`, `bezierPointAt` and the kernel
+ * adapter's `bezierNurbsParams` each re-derive it from the array length, and
+ * before this was a tuple they disagreed about the out-of-range cases (crash,
+ * silent truncation to cubic, and a thrown error respectively). The compiler
+ * now rejects those inputs at the single construction site instead.
+ */
+export type BezierControlPoints =
+  readonly [Vec2Like] | readonly [Vec2Like, Vec2Like];
+
 export type RegionCurve =
   | { kind: 'line'; a: Vec2Like; b: Vec2Like; sourceObjectId: string }
   | {
@@ -48,7 +62,7 @@ export type RegionCurve =
       a: Vec2Like;
       b: Vec2Like;
       /** Interior control points: one for a quadratic, two for a cubic. */
-      controls: Vec2Like[];
+      controls: BezierControlPoints;
       sourceObjectId: string;
     };
 
@@ -105,6 +119,27 @@ export interface SketchProfile {
   diagnostics: SketchProfileDiagnostic[];
   /** A point strictly inside the region (outside all holes). */
   samplePoint: Vec2Like;
+  /**
+   * Present only on profiles supplied by an object that carries its own
+   * outlines — today text, and only text. Absent means the profile came out
+   * of the half-edge arrangement.
+   *
+   * Two consumers depend on it. Resolution: an outline profile is matched by
+   * entity id (`SketchEntityProfileReference`), never by geometry, so the
+   * tolerant area + sample-point tier must skip it or a broken hand-drawn
+   * reference could silently land on a glyph. Build: `fidelity` says whether
+   * the loops are the authored curves or a polyline approximation of them, so
+   * the adapter can report a faceted result instead of shipping it silently.
+   */
+  outline?: {
+    /**
+     * `'flattened'` means the loops are line segments approximating curves
+     * that the font actually draws as beziers — glyphs resolved through the
+     * overlap union come back this way, because the union works on polygons.
+     * Those walls extrude faceted and export faceted.
+     */
+    fidelity: 'exact' | 'flattened';
+  };
 }
 
 /** Backward-compatible name retained for kernel and command consumers. */
@@ -1088,6 +1123,22 @@ function profileIdOf(
   return `profile_${fnv1a64(topology)}`;
 }
 
+/**
+ * Every canonical boundary-piece signature a profile carries, outer and holes.
+ *
+ * Exported so callers can bucket profiles by shared signature in a single
+ * pass rather than comparing every pair with `profilesShareBoundary`, which
+ * rebuilds one profile's whole signature set per comparison. Text puts one
+ * profile per glyph region into that set — none of which can ever share a
+ * boundary — so the pairwise sweep was quadratic overhead that grew with the
+ * length of the string.
+ */
+export function profileBoundarySignatures(profile: SketchProfile): string[] {
+  return [profile.outer, ...profile.holes].flatMap((loop) =>
+    loop.curves.map(curveSignature)
+  );
+}
+
 /** True when two bounded cells share an exact arrangement boundary piece. */
 export function profilesShareBoundary(
   left: SketchProfile,
@@ -1131,12 +1182,14 @@ function reverseRegionCurve(curve: RegionCurve): RegionCurve {
     return { ...curve, a: curve.b, b: curve.a };
   }
   if (curve.kind === 'bezier') {
-    return {
-      ...curve,
-      a: curve.b,
-      b: curve.a,
-      controls: [...curve.controls].reverse()
-    };
+    // Written out rather than `[...controls].reverse()`: `reverse()` widens a
+    // tuple back to an array, which is exactly the invariant this type exists
+    // to keep.
+    const controls: BezierControlPoints =
+      curve.controls.length === 1
+        ? [curve.controls[0]]
+        : [curve.controls[1], curve.controls[0]];
+    return { ...curve, a: curve.b, b: curve.a, controls };
   }
   return {
     ...curve,
@@ -1159,16 +1212,18 @@ function regionCurveSweep(
  * control points themselves, bit for bit.
  */
 function bezierPointAt(curve: BezierRegionCurve, t: number): Vec2Like {
-  const points = [curve.a, ...curve.controls, curve.b];
   const u = 1 - t;
-  if (points.length === 3) {
-    const [p0, p1, p2] = points as [Vec2Like, Vec2Like, Vec2Like];
+  const p0 = curve.a;
+  if (curve.controls.length === 1) {
+    const p1 = curve.controls[0];
+    const p2 = curve.b;
     return {
       x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
       y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
     };
   }
-  const [p0, p1, p2, p3] = points as [Vec2Like, Vec2Like, Vec2Like, Vec2Like];
+  const [p1, p2] = curve.controls;
+  const p3 = curve.b;
   return {
     x:
       u * u * u * p0.x +
@@ -1260,15 +1315,16 @@ function sampleRegionCurve(curve: RegionCurve): Vec2Like[] {
  * `regions.ts` keeps no runtime dependency on the text module's internals.
  */
 function bezierSignedAreaTerm(curve: BezierRegionCurve): number {
+  const controls = curve.controls;
   const coefficients = (axis: 'x' | 'y'): [number, number, number, number] => {
     const p0 = curve.a[axis];
     const p3 = curve.b[axis];
-    if (curve.controls.length === 1) {
-      const c = curve.controls[0]![axis];
+    if (controls.length === 1) {
+      const c = controls[0][axis];
       return [p0, 2 * (c - p0), p0 - 2 * c + p3, 0];
     }
-    const c1 = curve.controls[0]![axis];
-    const c2 = curve.controls[1]![axis];
+    const c1 = controls[0][axis];
+    const c2 = controls[1][axis];
     return [
       p0,
       3 * (c1 - p0),
@@ -1865,13 +1921,12 @@ function sourcedProfiles(
     if (object.data.construction === true) {
       continue;
     }
-    const supplied = profileSource?.(object, resolve) ?? null;
-    if (supplied) {
-      profiles.push(...supplied);
-      continue;
-    }
     try {
-      profiles.push(...textProfilesFor(object, resolve));
+      // Inside the try, not before it: a caller-supplied source is as capable
+      // of throwing as the built-in expansion, and one unresolvable object
+      // must not take the whole sketch's regions with it.
+      const supplied = profileSource?.(object, resolve) ?? null;
+      profiles.push(...(supplied ?? textProfilesFor(object, resolve)));
     } catch (error) {
       diagnostics.push({
         code: 'unresolved-outline',
