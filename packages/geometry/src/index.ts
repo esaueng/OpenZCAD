@@ -15,6 +15,8 @@ export {
   profilesShareBoundary,
   regionAtPoint,
   regionFingerprintOf,
+  regionLoopSignedArea,
+  type BezierRegionCurve,
   type RegionCurve,
   type RegionLoop,
   type SketchProfile,
