@@ -23,7 +23,11 @@ import {
   setTextFontProvider,
   type LoadedFont
 } from '@openzcad/geometry';
-import { setBezierProfileEdges } from '@openzcad/kernel-adapter';
+import {
+  DEFAULT_EXACT_BEZIER_EDGES,
+  bezierProfileEdgesEnabled,
+  setBezierProfileEdges
+} from '@openzcad/kernel-adapter';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -180,7 +184,7 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
 
   afterAll(() => {
     setTextFontProvider(null);
-    setBezierProfileEdges(true);
+    setBezierProfileEdges(DEFAULT_EXACT_BEZIER_EDGES);
     adapter.dispose();
   });
 
@@ -226,9 +230,17 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
 
     const holedBody = bodyOf(holed);
     const solidBody = bodyOf(solid);
+    // 'Bo' is curved, and the default flattens walls to a chord deviation of
+    // 1/2000 of extent, so its volume is an inscribed polygon's — about 6e-5
+    // under the true area. That is the approximation working as specified,
+    // not drift, so this is 3 decimals where the straight-sided case below
+    // stays at 4. Neither number is what proves the counters exist: the 1.15x
+    // margin further down is.
     expect(
       volumeRatio(holedBody, textArea(openSans, 'Bo') * EXTRUDE_DEPTH)
-    ).toBeCloseTo(1, 4);
+    ).toBeCloseTo(1, 3);
+    // 'Il' has no curves at all, so flattening changes nothing about it and
+    // there is no reason to relax this one.
     expect(
       volumeRatio(solidBody, textArea(openSans, 'Il') * EXTRUDE_DEPTH)
     ).toBeCloseTo(1, 4);
@@ -258,8 +270,14 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       (total, region) => total + region.outer.segments.length,
       0
     );
-    // caps + outer walls + hole walls, over two letters.
-    expect(holedBody.faceCount).toBe(2 * 2 + outerWalls + holeWalls);
+    // caps + outer walls + hole walls, over two letters. Equality holds only
+    // on the exact path, where one segment is one wall — the default flattens
+    // each curved segment into many, so here this is a floor. The exact
+    // identity is asserted in the opt-in test below, which pins `plane` to
+    // exactly 2 and every other face to a spline.
+    expect(holedBody.faceCount).toBeGreaterThanOrEqual(
+      2 * 2 + outerWalls + holeWalls
+    );
 
     expect(meshComponents(holedBody)).toBe(2);
     expect(meshComponents(solidBody)).toBe(2);
@@ -272,8 +290,15 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     expect(closure.nonManifoldEdges).toBe(0);
   });
 
-  it('keeps glyph curves exact rather than faceting them', async () => {
-    const derived = await adapter.syncDocument(textScene('o').document);
+  it('keeps glyph curves exact rather than faceting them, when opted in', async () => {
+    // Exact walls are opt-in now (they misclassify — see the default test at
+    // the bottom of this file). This still has to hold for whoever enables
+    // them, and for the day the kernel defect is fixed and it goes back to
+    // being the default.
+    setBezierProfileEdges(true);
+    const derived = await adapter
+      .syncDocument(textScene('o').document)
+      .finally(() => setBezierProfileEdges(DEFAULT_EXACT_BEZIER_EDGES));
     const body = bodyOf(derived);
     const surfaces = body.topology?.faces ?? [];
     expect(surfaces.length).toBeGreaterThan(0);
@@ -310,6 +335,11 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     // glyphs go through the polygon union — which works on polylines and
     // returns polylines. Inter has 36 such glyphs in ASCII; Open Sans has
     // none. Identical documents, identical letter, opposite outcomes.
+    // Opt into exact edges for the duration: this contrast is about outline
+    // *fidelity* — what the font costs itself — and with the flattening
+    // default in force both fonts would come back as polylines and the
+    // comparison would prove nothing.
+    setBezierProfileEdges(true);
     const interScene = textScene('e');
     const interDocument = updateSketchObject(interScene.document, {
       sketchId: interScene.sketchId,
@@ -326,7 +356,9 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       flattenedFaces.filter((face) => face.geometry?.surfaceType === 'bspline')
     ).toHaveLength(0);
 
-    const exact = await adapter.syncDocument(textScene('e').document);
+    const exact = await adapter
+      .syncDocument(textScene('e').document)
+      .finally(() => setBezierProfileEdges(DEFAULT_EXACT_BEZIER_EDGES));
     expect(exact.warnings).toEqual([]);
     const exactFaces = bodyOf(exact).topology?.faces ?? [];
     expect(
@@ -489,37 +521,61 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     }
   });
 
-  it('produces the same solid through the flattening fallback, loudly', async () => {
-    const scene = textScene('o');
-    const exact = bodyOf(await adapter.syncDocument(scene.document));
+  // Locks the decision itself, not an implementation detail. Exact-NURBS walls
+  // are the better geometry and produce misclassified solids
+  // (`o_glyph_bezier_cap_band_is_misclassified` in brepkit): 16 of 109 probe
+  // points wrong on an extruded 'o', where flattened walls score 0. Booleans
+  // stand on classification, so emboss and engrave are unreliable on curved
+  // letters through the exact path. If someone flips this default back before
+  // that repro passes, this test is the thing that stops them.
+  it('defaults to flattened walls, because exact ones misclassify', () => {
+    expect(DEFAULT_EXACT_BEZIER_EDGES).toBe(false);
+    expect(bezierProfileEdgesEnabled()).toBe(false);
+  });
 
+  it('takes the flattening default without warning about it', async () => {
+    const scene = textScene('o');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    setBezierProfileEdges(false);
     try {
       const derived = await adapter.syncDocument(scene.document);
-      const fallback = bodyOf(derived);
-      // Silent degradation is forbidden, and "not silent" has to mean the
-      // user can see it. The geometry kernel runs in a Web Worker, so a
-      // `console.warn` reaches nobody — the warning has to land on the
-      // document, the same channel the boolean face census uses.
-      expect(derived.warnings.join('\n')).toContain(
-        'flattened to line segments instead of exact NURBS edges'
-      );
+      const flattened = bodyOf(derived);
+      // The default is not a degradation to report. A warning on every text
+      // rebuild is the kind users learn to scroll past, which costs the
+      // signal when something genuinely goes wrong.
+      expect(derived.warnings).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
-      // The fallback is a real degradation: the same letter now needs far
-      // more walls, and its volume is a polygon's, slightly under the curve.
-      expect(fallback.faceCount).toBeGreaterThan(exact.faceCount * 3);
-      expect(fallback.volume).toBeLessThan(exact.volume);
-      expect(fallback.volume / exact.volume).toBeGreaterThan(0.999);
       const closure = inspectTriangleMeshClosure(
-        fallback.mesh.vertices,
-        fallback.mesh.indices
+        flattened.mesh.vertices,
+        flattened.mesh.indices
       );
       expect(closure.boundaryEdges).toBe(0);
       expect(closure.nonManifoldEdges).toBe(0);
     } finally {
-      setBezierProfileEdges(true);
       warn.mockRestore();
+    }
+  });
+
+  it('produces a smoother solid when exact beziers are opted into', async () => {
+    const scene = textScene('o');
+    const flattened = bodyOf(await adapter.syncDocument(scene.document));
+
+    setBezierProfileEdges(true);
+    try {
+      const exact = bodyOf(await adapter.syncDocument(scene.document));
+      // The opt-in is a real upgrade in appearance: the same letter needs far
+      // fewer walls, and its volume is the curve's rather than a polygon's
+      // inscribed approximation of it.
+      expect(flattened.faceCount).toBeGreaterThan(exact.faceCount * 3);
+      expect(flattened.volume).toBeLessThan(exact.volume);
+      expect(flattened.volume / exact.volume).toBeGreaterThan(0.999);
+      const closure = inspectTriangleMeshClosure(
+        exact.mesh.vertices,
+        exact.mesh.indices
+      );
+      expect(closure.boundaryEdges).toBe(0);
+      expect(closure.nonManifoldEdges).toBe(0);
+    } finally {
+      setBezierProfileEdges(DEFAULT_EXACT_BEZIER_EDGES);
     }
   });
 });
