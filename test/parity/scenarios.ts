@@ -502,6 +502,56 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
     }
   },
   {
+    key: 'boss-crossing-a-wall',
+    purpose:
+      'Fuse a cylindrical boss that CROSSES a planar wall of the plate — the ' +
+      'boss is seated 3 mm outside the x=0 face, so it overhangs the edge. ' +
+      'This is the non-planar coincident-contact case, and it is here because ' +
+      'the census the hardening work relies on cannot see the worst of it: a ' +
+      'dropped operand and an ignored cut produce no approximation at all, ' +
+      'just less geometry, so only a volume check catches them. Seated fully ' +
+      'inside the wall the same fuse is exact, which is what makes this worth ' +
+      'pinning rather than filing.',
+    // Plate, plus the whole boss above it, less the part of the boss that
+    // sits inside the plate. The boss disc (centre x=3, r=6) is cut by the
+    // x=0 wall, leaving a circular segment outside the footprint:
+    //   segment = r^2 acos(d/r) - d sqrt(r^2 - d^2)  with d = 3
+    nominalVolumeMm3:
+      PLATE_VOLUME +
+      Math.PI * 36 * 20 -
+      (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) *
+        MODELING_BASE.height,
+    nominalRtol: 1e-6,
+    build: async () => {
+      const { manager, imported } = importedPlateManager(
+        'Parity · boss crossing a wall',
+        'modeling-base-plate'
+      );
+      const boss = createBodyFeatureIds();
+      manager.runTransaction('Fuse a boss across the plate edge', [
+        commandFactories.addPrimitive({
+          name: 'Boss',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 6, height: 20 },
+          ids: boss
+        }),
+        commandFactories.transformBody({
+          name: 'Seat the boss across the x=0 wall',
+          targetBodyId: boss.bodyId,
+          // centre x=3 with r=6 puts 3 mm of the boss outside the wall
+          translation: { x: 3, y: MODELING_BASE.depth / 2, z: 0 }
+        }),
+        commandFactories.booleanBodies({
+          name: 'Boss fused across the edge',
+          operation: 'union',
+          targetBodyIds: [imported.bodyId, boss.bodyId],
+          ids: createBodyFeatureIds()
+        })
+      ]);
+      return manager.document;
+    }
+  },
+  {
     key: 'pattern-boolean-with-import',
     purpose:
       'A patterned tool subtracted from the import in ONE multi-tool boolean ' +

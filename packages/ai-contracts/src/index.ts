@@ -165,6 +165,17 @@ export type CadPatchOperation =
       localId?: LocalBodyId;
       sketchId: SketchId;
       axis: RevolveAxis;
+      /**
+       * Optional sweep angle in degrees, `(0, 360]`. Omitted means a full
+       * turn. Rollout-controlled by `AI_PATCH_PARTIAL_REVOLVE_ENABLED`: the
+       * property is pruned from the request schema while the flag is off, so
+       * `add_revolve` itself stays available either way.
+       *
+       * Strict structured output requires every declared property in
+       * `required`, so "omit this" travels as an explicit null, exactly as it
+       * does for `add_primitive` dimensions.
+       */
+      angleDeg?: ParamValue | null;
     }
   | {
       kind: 'add_boolean';
@@ -1541,9 +1552,19 @@ export const CAD_PATCH_JSON_SCHEMA = {
               name: { type: 'string' },
               localId: localIdSchema,
               sketchId: { type: 'string' },
-              axis: { type: 'string', enum: ['horizontal', 'vertical'] }
+              axis: { type: 'string', enum: ['horizontal', 'vertical'] },
+              // Null is a full turn. Pruned from this schema entirely while
+              // AI_PATCH_PARTIAL_REVOLVE_ENABLED is off.
+              angleDeg: nullableScalarSchema
             },
-            required: ['kind', 'name', 'localId', 'sketchId', 'axis']
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'sketchId',
+              'axis',
+              'angleDeg'
+            ]
           },
           {
             type: 'object',
@@ -2468,9 +2489,22 @@ export function parseCadPatchProposal(
         if (
           typeof operation.name !== 'string' ||
           typeof operation.sketchId !== 'string' ||
-          !['horizontal', 'vertical'].includes(String(operation.axis))
+          !['horizontal', 'vertical'].includes(String(operation.axis)) ||
+          (operation.angleDeg !== undefined &&
+            operation.angleDeg !== null &&
+            !isScalar(operation.angleDeg))
         ) {
           throw new Error('Invalid add_revolve operation.');
+        }
+        // A literal out of `(0, 360]` is refused here rather than at rebuild:
+        // an expression still resolves later against the parameter scope.
+        if (
+          typeof operation.angleDeg === 'number' &&
+          !(operation.angleDeg > 0 && operation.angleDeg <= 360)
+        ) {
+          throw new Error(
+            'add_revolve angleDeg must be greater than 0 and at most 360.'
+          );
         }
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
@@ -2985,7 +3019,9 @@ export function describeCadPatchOperation(
     case 'add_extrude':
       return `Extrude ${operation.sketchId} by ${String(operation.distance)}`;
     case 'add_revolve':
-      return `Revolve ${operation.sketchId} around its ${operation.axis} axis`;
+      return operation.angleDeg === undefined || operation.angleDeg === null
+        ? `Revolve ${operation.sketchId} around its ${operation.axis} axis`
+        : `Revolve ${operation.sketchId} ${String(operation.angleDeg)}° around its ${operation.axis} axis`;
     case 'add_boolean':
       return `${operation.operation} ${operation.targetBodyIds.length} bodies as ${operation.name}`;
     case 'add_transform':

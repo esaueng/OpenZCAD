@@ -1,3 +1,26 @@
+/**
+ * The OpenCascade reference adapter — the parity corpus's second opinion.
+ *
+ * This is NOT a production path and has not been one since Z3, which routed
+ * every document, imported STEP included, through BrepKit. Z5 deleted the
+ * last of OpenCascade from `packages/kernel-adapter` and moved this cluster
+ * here, next to the only thing that still runs it: `corpus.spec.ts` measures
+ * every corpus file and every import-modeling scenario through BOTH this
+ * adapter and BrepKit, and `corpus-pins.ts` is the record of where they
+ * differ. `generate.spec.ts` also authors two corpus fixtures with it, which
+ * is the only way to get a genuinely OCCT-written STEP file to import.
+ *
+ * It deliberately no longer implements `ExactKernelAdapter`. Structural
+ * conformance to the production interface would say this is a kernel the app
+ * could be pointed at; it is not, and the corpus consumes it through
+ * `MeasurableAdapter` instead. `occt-wasm` is a root devDependency for the
+ * same reason — available to tests, absent from anything shipped.
+ *
+ * If keeping this comparison ever costs more than it catches, retiring it is
+ * its own small decision: delete this directory, the OCCT kernel column in
+ * `corpus.spec.ts`, and the `occt:` side of each pin. The baselines and the
+ * closed-form reference bar survive that on their own.
+ */
 import { OcctKernel, type ShapeHandle } from 'occt-wasm';
 import occtWasmUrl from 'occt-wasm/dist/occt-wasm.wasm?url';
 import {
@@ -38,25 +61,24 @@ import {
   type SketchNode,
   type SketchObjectData
 } from '@openzcad/shared';
-import { displayTessellationForExtents } from './display-tessellation';
-import type { ExactKernelAdapter } from './exact';
-import { importedMeshStl } from './imported-mesh';
-import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import { displayTessellationForExtents } from '../../../packages/kernel-adapter/src/display-tessellation';
+import { importedMeshStl } from '../../../packages/kernel-adapter/src/imported-mesh';
+import { connectedRegionGroups, resolveRegionProfiles } from '../../../packages/kernel-adapter/src/region-profile';
 import {
   bezierProfileEdgesEnabled,
   flattenBezierCurve,
   flattenedOutlineWarning
-} from './profile-bezier-edges';
+} from '../../../packages/kernel-adapter/src/profile-bezier-edges';
 import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
-} from './union-connectivity';
+} from '../../../packages/kernel-adapter/src/union-connectivity';
 import {
   ambiguousReferenceError,
   isClosedEdge,
   quantizeCoordinate,
   unresolvedReferenceError
-} from './topology-fingerprint';
+} from '../../../packages/kernel-adapter/src/topology-fingerprint';
 import {
   mirrorOcctSolid,
   offsetOcctSolid,
@@ -86,8 +108,8 @@ import {
 import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
-} from './face-attachment';
-import { importedStepValidationWarning } from './imported-step-validation';
+} from '../../../packages/kernel-adapter/src/face-attachment';
+import { importedStepValidationWarning } from '../../../packages/kernel-adapter/src/imported-step-validation';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
@@ -995,7 +1017,7 @@ function sweepSemanticDescriptor(
  * All bodies in that document are built in the same kernel, so imported solids
  * remain exact inputs to transforms, booleans, patterns, and edge modifiers.
  */
-export class OcctStepKernelAdapter implements ExactKernelAdapter {
+export class OcctStepKernelAdapter {
   readonly kind = 'occt' as const;
 
   private constructor(private readonly kernel: OcctKernel) {}

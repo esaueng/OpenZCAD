@@ -3,6 +3,7 @@ import {
   ASSISTANT_REPLY_JSON_SCHEMA,
   CAD_PATCH_JSON_SCHEMA,
   createCadDocumentDigest,
+  describeCadPatchOperation,
   groundCadPatchProposalToSelection,
   parseAssistantReply,
   parseCadPatchProposal,
@@ -157,6 +158,80 @@ describe('AI patch contracts', () => {
       'add_edge_modifier',
       'add_pattern'
     ]);
+  });
+
+  it('accepts a partial-revolve angle and treats null as a full turn', () => {
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_revolve',
+      summary: 'Revolve a wedge and a full ring.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'Profile',
+          plane: 'XZ',
+          offset: 0,
+          objects: [
+            {
+              objectKind: 'rectangle',
+              width: 1,
+              height: 1,
+              centerX: 2.5,
+              centerY: 0.5
+            }
+          ],
+          localId: '$profile'
+        },
+        {
+          kind: 'add_revolve',
+          name: 'Wedge',
+          localId: '$wedge',
+          sketchId: '$profile',
+          axis: 'vertical',
+          angleDeg: 90
+        },
+        {
+          kind: 'add_revolve',
+          name: 'Ring',
+          localId: '$ring',
+          sketchId: '$profile',
+          axis: 'vertical',
+          angleDeg: null
+        }
+      ]
+    });
+    const revolves = proposal.operations.filter(
+      (operation) => operation.kind === 'add_revolve'
+    );
+    expect(revolves.map((operation) => operation.angleDeg)).toEqual([90, null]);
+    expect(describeCadPatchOperation(revolves[0]!)).toContain('90');
+    expect(describeCadPatchOperation(revolves[1]!)).not.toContain('°');
+  });
+
+  it('rejects a revolve angle outside (0, 360]', () => {
+    const proposal = (angleDeg: unknown) => () =>
+      parseCadPatchProposal({
+        proposalId: 'proposal_bad_angle',
+        summary: 'Revolve too far.',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'add_revolve',
+            name: 'Wedge',
+            localId: '$wedge',
+            sketchId: 'sketch_1',
+            axis: 'vertical',
+            angleDeg
+          }
+        ]
+      });
+    expect(proposal(0)).toThrow(/angleDeg/);
+    expect(proposal(-5)).toThrow(/angleDeg/);
+    expect(proposal(360.5)).toThrow(/angleDeg/);
+    expect(proposal(true)).toThrow(/add_revolve/);
+    // An expression is resolved later against the parameter table, so it is
+    // not range-checked here.
+    expect(proposal('sweep')).not.toThrow();
   });
 
   it('rejects an edge modifier without a valid exact edge ordinal', () => {

@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { BrepKitKernelAdapter } from '../../packages/kernel-adapter/src/exact';
-import { OcctStepKernelAdapter } from '../../packages/kernel-adapter/src/occt-step';
+import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 import {
   fnv1a,

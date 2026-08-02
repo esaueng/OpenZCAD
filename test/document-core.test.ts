@@ -13,11 +13,13 @@ import {
   evaluateExpression,
   extrudeSketch,
   getLatestBodyId,
+  getLatestSketchId,
   getParameterScope,
   listFeaturesInOrder,
   listParameters,
   normalizeDocument,
   resolveParamValue,
+  revolveSketch,
   setParameter,
   updateFeature,
   updateSketch
@@ -508,5 +510,66 @@ describe('sanitizeFileName', () => {
     expect(
       sanitizeFileName(`${'a'.repeat(300)}.stl`).length
     ).toBeLessThanOrEqual(128);
+  });
+});
+
+describe('revolve angle', () => {
+  const withProfile = () =>
+    addSketchFeature(createProjectDocument('Revolve', toUserId('user_test')), {
+      name: 'Profile',
+      plane: 'XZ',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 1,
+        height: 1,
+        centerX: 2.5,
+        centerY: 0.5
+      }
+    }).document;
+
+  const revolveData = (document: ReturnType<typeof withProfile>) => {
+    const feature = listFeaturesInOrder(document).find(
+      (node) => node.data.featureKind === 'revolve'
+    )!;
+    return feature.data.featureKind === 'revolve' ? feature.data : undefined;
+  };
+
+  it('omits the angle entirely when none is asked for', () => {
+    const base = withProfile();
+    const document = revolveSketch(base, {
+      name: 'Ring',
+      sketchId: getLatestSketchId(base)!,
+      axis: 'vertical'
+    }).document;
+    // Not `angleDeg: 360`, but no key at all: a full revolve authored today
+    // has to be indistinguishable from one authored before the field existed,
+    // so it keeps its ADR-013 semantic lineage.
+    expect(revolveData(document)).not.toHaveProperty('angleDeg');
+  });
+
+  it('stores an angle, including an expression, when one is asked for', () => {
+    const base = withProfile();
+    for (const angleDeg of [90, 337.5, 'sweep / 2'] as const) {
+      const document = revolveSketch(base, {
+        name: 'Wedge',
+        sketchId: getLatestSketchId(base)!,
+        axis: 'vertical',
+        angleDeg
+      }).document;
+      expect(revolveData(document)?.angleDeg).toBe(angleDeg);
+    }
+  });
+
+  it('survives normalizeDocument without gaining a default', () => {
+    const base = withProfile();
+    const document = normalizeDocument(
+      revolveSketch(base, {
+        name: 'Ring',
+        sketchId: getLatestSketchId(base)!,
+        axis: 'vertical'
+      }).document
+    );
+    expect(revolveData(document)).not.toHaveProperty('angleDeg');
   });
 });
