@@ -386,9 +386,28 @@ describe('text document model', () => {
       profiles: [{ all: true, sourceEntityIds: [textId] }]
     }).document;
 
+    const sketch = sketchNode(document, created.sketchId);
+    const objects = sketch.objectIds.map((id) => {
+      const node = document.nodes[id];
+      if (node?.kind !== 'sketch-object') {
+        throw new Error('object missing');
+      }
+      return { id: node.id, data: node.data };
+    });
+    // The rectangle really is producing a profile of its own, so excluding it
+    // is a decision the resolver makes rather than an accident.
+    expect(
+      computeSketchProfileAnalysis(
+        objects,
+        (value) => resolveParamValue(value, {}, 'sketch dimension'),
+        undefined,
+        { profileSource: source }
+      ).profiles
+    ).toHaveLength(3);
+
     const profiles = resolveRegionProfiles(
       document,
-      sketchNode(document, created.sketchId),
+      sketch,
       extrudeData(document),
       {},
       { profileSource: source }
@@ -402,7 +421,8 @@ describe('text document model', () => {
 
   it('fails closed when the referenced entity bounds nothing', () => {
     const scene = textScene('HI');
-    // An empty string produces no glyphs, so the reference covers nothing.
+    // A space has an advance but no outline, so the entity now bounds no
+    // region at all. That is an error, not an extrude of nothing.
     const { scene: edited } = editText(scene, {
       ...textObject('HI'),
       text: ' '
