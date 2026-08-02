@@ -839,6 +839,16 @@ function assertOperationExpressions(
         operation.distance
       );
       break;
+    case 'add_revolve':
+      // Optional: an omitted (or explicitly null) angle is a full turn.
+      if (operation.angleDeg !== undefined && operation.angleDeg !== null) {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} angleDeg`,
+          operation.angleDeg
+        );
+      }
+      break;
     case 'add_transform':
       vector(`${operation.name} translation`, operation.translation);
       vector(`${operation.name} rotationDeg`, operation.rotationDeg);
@@ -1230,6 +1240,8 @@ export function commandsForCadPatch(
           name: operation.name,
           sketchId: resolveSketch(operation.sketchId).sketchId,
           axis: operation.axis,
+          // Null is the schema's way of saying "omitted"; a full turn.
+          angleDeg: operation.angleDeg ?? undefined,
           ids
         });
       }

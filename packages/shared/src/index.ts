@@ -364,6 +364,13 @@ export interface SketchObjectNode extends BaseNode {
 export type RevolveAxis = 'horizontal' | 'vertical';
 
 /**
+ * A complete turn. The kernel accepts `(0, 360]` degrees; 360 is both the
+ * maximum and the value an absent `angleDeg` means, so documents written
+ * before partial revolve existed keep building exactly as they did.
+ */
+export const FULL_REVOLVE_ANGLE_DEG = 360;
+
+/**
  * Persistent reference to one derived bounded sketch cell.
  *
  * `profileId` is the preferred stable identity for newly created references.
@@ -435,6 +442,15 @@ export type FeatureData =
       featureKind: 'revolve';
       sketchId: SketchId;
       axis: RevolveAxis;
+      /**
+       * Sweep angle in degrees, in `(0, 360]`. Absent means a full turn, so
+       * every document written before this field existed keeps its exact
+       * previous geometry and its ADR-013 semantic lineage.
+       *
+       * A value below 360 is a deliberate ADR-011 hash-only body — see
+       * `PARTIAL_REVOLVE_HASH_ONLY_REASON` in the kernel adapter.
+       */
+      angleDeg?: ParamValue;
     }
   | {
       featureKind: 'boolean';
@@ -561,7 +577,7 @@ export interface FaceTopology {
 }
 
 export interface FaceGeometry {
-  /** Underlying OCCT surface class (plane, cylinder, cone, B-spline, ...). */
+  /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
   area: number;
   /** Exact surface center of mass, used as a topology fingerprint. */
@@ -614,15 +630,117 @@ export interface EdgeTopology {
    *   spheres are unavailable for the same reason.
    * - **Not sufficient for an edge run on its own.** Two edges on opposite
    *   sides of a box's top face share that face. A run also needs vertex
-   *   incidence, which nothing publishes yet.
+   *   incidence, which `vertexIds` publishes.
    */
   adjacentFaceHashes?: number[];
+  /**
+   * The exact curve underlying this edge, so a consumer can draw and measure
+   * true geometry instead of the chords `points` samples.
+   *
+   * Absent when the kernel refuses the edge. Absent rather than approximate is
+   * the rule for every part of this record: it is either exactly right or it
+   * is not there.
+   */
+  curve?: EdgeCurve;
+  /**
+   * The two vertices this edge runs between, as `[start, end]` in the edge's
+   * own direction — the same direction `points` is sampled in.
+   *
+   * These are the kernel's own vertex handles renumbered, not positions
+   * matched to a tolerance. Two edges belong to the same run only if they
+   * share a vertex, and `adjacentFaceHashes` cannot answer that: opposite
+   * sides of a box's top face bound the same face and meet nowhere.
+   *
+   * Deriving this from geometry was measured and rejected — see
+   * `test/vertex-identity.test.ts`. Quantizing display-polyline endpoints at
+   * the ADR-011 1e-6 quantum produced 73 false splits across the parity
+   * corpus, all on closed edges, because a closed edge's polyline is a loop
+   * that begins a quarter turn away from its own vertex.
+   *
+   * Four things it is NOT:
+   *
+   * - **Not two distinct vertices.** A closed edge names one vertex twice: a
+   *   cylinder's rim, a bore rim, and a torus's two zero-length degenerate
+   *   edges all report `[v, v]`. The pair is kept rather than deduplicated
+   *   because it is the kernel's own shape, it keeps start and end
+   *   distinguishable, and `new Set(ids).size === 1` is how the fillet
+   *   dispatcher already recognises a closed rim.
+   * - **Not a persistent identity.** Unlike `hash`, these are dense integers
+   *   assigned while walking one body's solids. They are comparable only
+   *   within the same `BodyTopology`, and a rebuild may renumber them. Do not
+   *   store them, key a document off them, or compare them across bodies.
+   * - **Not shared between solids.** Numbering is body-wide but the handle
+   *   map is rebuilt per solid, so two solids in one body — a linear pattern
+   *   whose spacing equals its extent, say — never share a vertex id even
+   *   where they touch exactly. That is deliberate: they are distinct
+   *   topology that happens to be coincident, and a run must not walk across.
+   * - **Not sufficient for an edge run on its own either.** Twelve box edges
+   *   meet in pairs at eight vertices and are not one run. Shared vertex and
+   *   shared face are both necessary; what makes a run is a product question
+   *   about tangency on top of them.
+   */
+  vertexIds?: [number, number];
   /**
    * XYZ-interleaved display polyline sampled from the exact edge curve.
    * Closed feature edges repeat their first point so the viewport draws the
    * closing segment.
    */
   points: number[];
+}
+
+/**
+ * Exact geometry for one edge's underlying curve.
+ *
+ * Only `type` is always present. Analytic data is published for circles alone,
+ * and only after it has been checked against the edge's own sampled polyline,
+ * so a consumer that finds `circle` may use it without further validation.
+ *
+ * Four things this record is NOT:
+ *
+ * - **Not a parameter range.** No `t` domain is published, and none should be
+ *   added without re-measuring. The kernel's `getEdgeCurveParameters` reports
+ *   the domain of the UNDERLYING curve, not the edge's trim of it: a quarter
+ *   fillet arc of length 3pi/2 reports `[0, 2pi]`, and evaluating at that
+ *   range's midpoint lands on the edge's own end vertex rather than its
+ *   middle. A consumer handed that range would mis-draw every fillet and
+ *   chamfer arc in the product. `circle` describes the full circle the edge
+ *   lies on; where the edge starts and stops on it is recoverable only from
+ *   `points` or the edge's vertices.
+ * - **Not a swept direction.** `circle.axis` is the unoriented normal of the
+ *   arc's plane, canonically signed so it does not flip between rebuilds. It
+ *   says nothing about which way the edge runs, and crossing it with anything
+ *   to recover a winding is meaningless.
+ * - **Not a claim about the surfaces meeting at the edge.** A circular edge
+ *   bounds whatever `adjacentFaceHashes` names; the curve is the intersection
+ *   geometry, not either face's own axis or radius, and a fillet arc's radius
+ *   is the fillet's only where the blend is tangent to both walls.
+ * - **Not a completeness guarantee.** An edge with no `curve` means the kernel
+ *   would not answer, not that the edge is degenerate; an edge whose `curve`
+ *   has no `circle` means only that no analytic form is published for it.
+ */
+export interface EdgeCurve {
+  /**
+   * The kernel's curve-type vocabulary: `LINE`, `CIRCLE`, `ELLIPSE`,
+   * `BSPLINE_CURVE`. Left open rather than closed to a union because it is the
+   * kernel's word, matching `FaceGeometry.surfaceType`; a consumer should
+   * compare against the case it handles and treat anything else as unknown.
+   */
+  type: string;
+  /**
+   * The full circle this edge lies on — never a subtended arc, see above.
+   *
+   * Published only for `type === 'CIRCLE'`. That gate is load-bearing rather
+   * than cosmetic: the kernel's edge curvature measurement is silently wrong
+   * for ellipses by roughly twelve orders of magnitude, reporting a radius of
+   * 1.4999e12 for a true 1.5, and a record built without the gate would carry
+   * plausible-shaped garbage rather than fail.
+   */
+  circle?: {
+    center: Vector3;
+    /** Unit normal of the arc's plane; unoriented, see above. */
+    axis: Vector3;
+    radius: number;
+  };
 }
 
 export interface BodyTopology {

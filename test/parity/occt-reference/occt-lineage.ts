@@ -23,12 +23,12 @@ import {
   type TopologyLineageOperation,
   type TopologyResolutionCandidate,
   type TopologyResolutionResult
-} from './topology-lineage';
+} from '../../../packages/kernel-adapter/src/topology-lineage';
 import {
   canonicalDirection,
   canonicalizeDirection,
   quantizeCoordinate
-} from './topology-fingerprint';
+} from '../../../packages/kernel-adapter/src/topology-fingerprint';
 
 const DIRECTION_SCALE = 1000;
 

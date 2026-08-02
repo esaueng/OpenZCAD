@@ -3,10 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { toBodyId } from '@openzcad/shared';
 import type { BodyOption } from './FeatureForms';
 import { ModelingOperationsForm } from './ModelingOperationsForm';
-import {
-  OCCT_SHARP_OFFSET_LIMITATION,
-  type ModelingOperationSubmission,
-  type ModelingFaceOption
+import type {
+  ModelingOperationSubmission,
+  ModelingFaceOption
 } from '../../lib/modelingOperations';
 
 const bodyId = toBodyId('body_form');
@@ -92,21 +91,24 @@ describe('Modeling operations form', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('renders the OCCT curved/non-convex limitation and blocks checking', () => {
+  it('renders a capability refusal verbatim and blocks checking', () => {
+    // The form must show whatever reason it is handed, in full: this used to
+    // be OpenCascade's convex-planar solid-offset limit, and a refusal that
+    // only says "unsupported" is how a user is left with no next step.
     const onPreflight = vi.fn();
     render(
       <ModelingOperationsForm
         operation="solid-offset"
         scope={{}}
         bodies={bodies}
-        unsupportedReason={OCCT_SHARP_OFFSET_LIMITATION}
+        unsupportedReason="Sharp solid offset is refused because curved, non-convex, or unproven topology cannot be proven correct."
         onPreflight={onPreflight}
         onSubmit={() => undefined}
       />
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'curved, non-convex, or unproven topology is refused'
+      'curved, non-convex, or unproven topology cannot be proven correct'
     );
     expect(
       screen.getByRole('button', { name: 'Recheck exact result' })
