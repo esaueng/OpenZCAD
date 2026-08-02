@@ -1236,8 +1236,12 @@ second pass instead swept *every* core modelling workflow through
 guide it. That found two more, and cleared several — the clearances matter
 as much as the findings, because they bound what the defects mean.
 
-**A sphere is the one shape booleans and offset get wrong**
-(`test/sphere-operations.test.ts`). Subtracting a tool parked **1000 units
+**A sphere was the one shape booleans and offset got wrong** — *fixed by
+brepkit#65, carried by the pin bump to `7dbf47b`; the pins in
+`test/sphere-operations.test.ts` are flipped and now assert the correct
+behaviour. Kept in full below because the root cause is a trap worth
+remembering, and because the fix has a cost that is also now pinned.*
+Subtracting a tool parked **1000 units
 away** — an operation that cannot touch the target — returns 4176.826
 against `4/3·π·1000` = 4188.790, and replaces both spherical faces with
 **2588 planes**. Offsetting a sphere measures *exactly* right (7238.2295,
@@ -1253,6 +1257,34 @@ defect is about curvature, periodicity or seams. Confirmed against the raw
 kernel too: `cut(makeSphere(10, seg), farBox)` returns 4176.8262 at seg =
 16, 32 **and** 64 alike, which is why this is not a tessellation-resolution
 story; an overlapping cut panics outright and poisons the kernel instance.
+
+*What it turned out to be, and why it is worth keeping.* The offset half was
+`try_direct_chain` fixing a loop's traversal sense by walking from an
+arbitrary start edge. On a bounded face that is harmless. On a **closed**
+surface the sense *is* the region — there is no outside to fix against — so
+both offset faces came out as the same hemisphere, one flagged `reversed`,
+and `dedupe_coincident_triangles` then did its job correctly and cancelled
+6903 coincident opposite-wound triangles to nothing. Note what the volume was
+doing throughout: two copies of one hemisphere contributed to the divergence
+integral exactly what the real sphere would, so the closed form agreed to
+1e-15 **on a body that did not exist**. That is the same trap as two
+measurement routes agreeing through a shared integrator, and it is the third
+time on this project that an exactly-right number has certified a wrong body.
+
+*The fix has a cost, and it is pinned rather than noted.* Keeping the sphere
+analytic is a strict win for a disjoint tool — the cut is now byte-identical
+to the input. For an **overlapping** tool it exposes a tessellation gap the
+old faceted path was hiding. On a sphere with the cap above z=5 removed, the
+volume is 3534.291735288594 against the closed form 3534.2917352885174 (2.2e-14,
+correct) with the right three faces — and a mesh of 86932 triangles carrying
+**408 open edges**, silently. The model is right and the render is wrong,
+where before both were consistently a little wrong. brepkit#65 landed that
+deliberately, on the grounds that a correct B-rep is the more fundamental of
+the two and the gap is localised; the revert lever is one `git checkout main
+-- crates/algo/src/builder/`, which restores the old overlapping behaviour
+while leaving the disjoint-cut identity in place. One further pin bounds it:
+**zero** vertices sit above the cut plane, so it is a seam that fails to
+close, not a trim that fails to apply.
 
 **A pattern never fuses overlapping instances**
 (`test/overlapping-pattern.test.ts`). Three r5 h10 cylinders patterned along
