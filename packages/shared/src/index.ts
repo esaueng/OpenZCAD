@@ -1038,6 +1038,17 @@ export interface AppSettings {
     density: AppDensity;
     reducedMotion: boolean;
   };
+  /**
+   * Workspace chrome widths in CSS pixels. Panel *collapse* is a per-device
+   * habit and stays in local panel state, but a width someone dialled in is a
+   * preference worth carrying: it rides the settings sync, so it follows an
+   * account between browsers and still falls back to device storage for anyone
+   * who is not signed in.
+   */
+  layout: {
+    sidebarWidth: number;
+    assistantWidth: number;
+  };
   viewport: {
     defaultProjection: SettingsProjectionMode;
     showGrid: boolean;
@@ -1069,6 +1080,27 @@ export interface AppSettings {
   };
 }
 
+export interface PanelWidthLimits {
+  min: number;
+  max: number;
+  default: number;
+}
+
+/**
+ * What a resized panel is allowed to be, in CSS pixels. Shared so the browser,
+ * the Worker's parser and the stylesheet caps agree on one set of numbers: the
+ * minimums keep a panel usable rather than a sliver, and the maximums stop a
+ * stored width from crowding out the viewport on the next device that reads it.
+ */
+export const PANEL_WIDTH_LIMITS: {
+  sidebar: PanelWidthLimits;
+  assistant: PanelWidthLimits;
+} = {
+  sidebar: { min: 180, max: 720, default: 252 },
+  // The assistant needs room for a question card's chips and an audit table.
+  assistant: { min: 300, max: 900, default: 360 }
+};
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
   general: {
@@ -1080,6 +1112,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     theme: 'system',
     density: 'compact',
     reducedMotion: false
+  },
+  layout: {
+    sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.default,
+    assistantWidth: PANEL_WIDTH_LIMITS.assistant.default
   },
   viewport: {
     defaultProjection: 'perspective',
