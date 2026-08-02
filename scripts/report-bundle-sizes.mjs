@@ -111,6 +111,42 @@ if (
   });
 }
 
+/**
+ * How close each approved large asset is to its own ceiling.
+ *
+ * This REPORTS and does not gate — the pass/fail decision above is untouched.
+ * It exists because a budget with a hard edge and no visible approach tells
+ * you nothing until the day it fails, and that day lands on whoever happens
+ * to push next rather than on whoever spent the headroom. The kernel wasm
+ * sits near 90% of its 6 MB allowance, so the margin is real but finite.
+ *
+ * Growth is NOT uniform, which is why the raw number is more useful than any
+ * rate: measured across one day of pin bumps, defect-fix kernel PRs cost
+ * roughly 2 KB each while feature PRs cost two orders of magnitude more. An
+ * extrapolated "days remaining" from a mixed sample is misleading in both
+ * directions, so none is computed here.
+ *
+ * An asset over its ceiling already appears in `failures`; this array is
+ * about the ones that are fine today.
+ */
+const headroom = rows.flatMap((row) => {
+  const exception = APPROVED_LAZY_ASSETS.find(({ pattern }) =>
+    pattern.test(row.file)
+  );
+  if (!exception) {
+    return [];
+  }
+  return [
+    {
+      file: row.file,
+      bytes: row.bytes,
+      maxBytes: exception.maxBytes,
+      remainingBytes: exception.maxBytes - row.bytes,
+      usedPercent: Number(((row.bytes / exception.maxBytes) * 100).toFixed(2))
+    }
+  ];
+});
+
 process.stdout.write(
   `${JSON.stringify(
     {
@@ -124,6 +160,7 @@ process.stdout.write(
           })
         )
       },
+      headroom,
       initialAssets,
       provenance: {
         commit: metadata.commit,
