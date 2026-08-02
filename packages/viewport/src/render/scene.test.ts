@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
   computeFitPose,
+  createAxesGizmo,
   createStudioGrid,
   shouldShowGroundShadow,
+  updateAxesGizmo,
   updateStudioGrid
 } from './scene';
 import { VIEW_DIRECTIONS } from '../camera/views';
@@ -81,6 +83,31 @@ describe('updateStudioGrid', () => {
     expect(grid.scale.x).toBeCloseTo(
       material.uniforms.fadeRadius!.value as number
     );
+  });
+});
+
+describe('updateAxesGizmo', () => {
+  it('stretches receding axes far while clamping axes aimed at the camera', () => {
+    const axes = createAxesGizmo();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    camera.up.set(0, 0, 1);
+    // From (+x, -y, +z), +Y recedes from the camera while +X and +Z angle
+    // toward it and must stop short of the camera plane.
+    camera.position.set(90, -90, 80);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+
+    updateAxesGizmo(axes, camera);
+
+    const [x, y, z] = axes.children as [THREE.Line, THREE.Line, THREE.Line];
+    expect(y.scale.x).toBe(100000);
+    // +X and +Z both angle toward the camera from this pose: finite, past the
+    // orbit distance (off screen), well short of the far plane.
+    const originDepth = camera.position.length();
+    for (const clamped of [x, z]) {
+      expect(clamped.scale.x).toBeGreaterThan(originDepth);
+      expect(clamped.scale.x).toBeLessThan(originDepth * 2);
+    }
   });
 });
 
