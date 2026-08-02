@@ -7,10 +7,7 @@ import {
   parseAssistantReply,
   parseCadPatchProposal
 } from '@openzcad/ai-contracts';
-import {
-  createProjectDocument,
-  importStepBody
-} from '@openzcad/document-core';
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toBodyId, toFeatureId, toUserId } from '@openzcad/shared';
 
 describe('AI patch contracts', () => {
@@ -47,6 +44,48 @@ describe('AI patch contracts', () => {
         ]
       }).operations
     ).toHaveLength(1);
+  });
+
+  it('accepts a text sketch object and rejects malformed ones', () => {
+    const textPatch = (object: Record<string, unknown>) => ({
+      proposalId: 'proposal_text',
+      summary: 'Label the plate.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'Label',
+          plane: 'XY',
+          offset: 0,
+          localId: null,
+          objects: [object]
+        }
+      ]
+    });
+    const valid = {
+      objectKind: 'text',
+      text: 'OPENZCAD',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 'labelSize',
+      x: 0,
+      y: -4
+    };
+
+    expect(parseCadPatchProposal(textPatch(valid)).operations).toHaveLength(1);
+    expect(() =>
+      parseCadPatchProposal(textPatch({ ...valid, fontStyle: 'extraBold' }))
+    ).toThrow(/add_sketch/);
+    expect(() =>
+      parseCadPatchProposal(textPatch({ ...valid, text: '' }))
+    ).toThrow(/add_sketch/);
+    // A null optional would reach the document as an unresolvable ParamValue.
+    expect(() =>
+      parseCadPatchProposal(textPatch({ ...valid, rotation: null }))
+    ).toThrow(/add_sketch/);
+    expect(() =>
+      parseCadPatchProposal(textPatch({ ...valid, size: null }))
+    ).toThrow(/add_sketch/);
   });
 
   it('rejects unrecognized operations and empty patches', () => {
@@ -336,7 +375,10 @@ describe('AI patch contracts', () => {
   });
 
   it('captures the complete feature, body, and topology selection in pick order', () => {
-    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const document = createProjectDocument(
+      'Selected edges',
+      toUserId('user_ai')
+    );
     const bodyId = toBodyId('body_selected');
     const digest = createCadDocumentDigest(document, {
       featureIds: [toFeatureId('feature_selected')],
@@ -368,7 +410,10 @@ describe('AI patch contracts', () => {
   });
 
   it('grounds a selected-edge proposal onto every picked edge', () => {
-    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const document = createProjectDocument(
+      'Selected edges',
+      toUserId('user_ai')
+    );
     const bodyId = toBodyId('body_selected');
     const digest = createCadDocumentDigest(document, {
       featureIds: [],
@@ -547,14 +592,15 @@ describe('AI patch contracts', () => {
   });
 
   it('does not retarget an edge modifier without an explicit selection reference', () => {
-    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const document = createProjectDocument(
+      'Selected edges',
+      toUserId('user_ai')
+    );
     const bodyId = toBodyId('body_selected');
     const digest = createCadDocumentDigest(document, {
       featureIds: [],
       bodyIds: [bodyId],
-      topologies: [
-        { bodyId, kind: 'edge', topologyId: 'edge:9', hash: 109 }
-      ]
+      topologies: [{ bodyId, kind: 'edge', topologyId: 'edge:9', hash: 109 }]
     });
     const proposal = parseCadPatchProposal({
       proposalId: 'proposal_named_edge',
@@ -605,9 +651,7 @@ describe('assistant reply contract', () => {
       proposalId: 'proposal_1',
       summary: 'Add a plate.',
       assumptions: ['2.4 mm wall'],
-      operations: [
-        { kind: 'set_parameter', name: 'plate_t', expression: '6' }
-      ]
+      operations: [{ kind: 'set_parameter', name: 'plate_t', expression: '6' }]
     },
     questions: null,
     message: null,
@@ -715,9 +759,9 @@ describe('assistant reply contract', () => {
         questions: [{ ...question, options: [], allowFreeText: false }]
       })
     ).toThrow('cannot be answered');
-    expect(() =>
-      parseAssistantReply({ ...base, questions: [] })
-    ).toThrow(/1 to 6 questions/);
+    expect(() => parseAssistantReply({ ...base, questions: [] })).toThrow(
+      /1 to 6 questions/
+    );
     expect(() =>
       parseAssistantReply({
         ...base,
@@ -725,7 +769,10 @@ describe('assistant reply contract', () => {
       })
     ).toThrow('Duplicate question id');
     expect(() =>
-      parseAssistantReply({ ...base, questions: [{ ...question, prompt: '  ' }] })
+      parseAssistantReply({
+        ...base,
+        questions: [{ ...question, prompt: '  ' }]
+      })
     ).toThrow('prompt must be a non-empty string');
     expect(() =>
       parseAssistantReply({
