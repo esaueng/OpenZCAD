@@ -40,6 +40,13 @@ export interface RegionTarget {
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
+  /**
+   * Entities whose curves bound this region. Carried so the drag-to-extrude
+   * path can store an entity-wide reference for text regions — a fingerprint
+   * reference to a glyph breaks the moment the string is edited, which is
+   * exactly the edit text exists to support.
+   */
+  sourceEntityIds: string[];
 }
 
 export type SketchToolId =
