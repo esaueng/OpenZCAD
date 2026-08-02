@@ -1459,6 +1459,19 @@ already proven; what is missing is reach. That makes this a smaller change
 than "add mesh validation" — it is closer to widening one boolean condition,
 with the noise cost being the real question rather than the engineering.
 
+*The same shape turned up twice in one pass, which is worth carrying as a
+habit.* The overlapping-pattern double-count
+(`exact.ts:4869`, `volume += kernel.volume(solid, …)` summed over a body's
+solids) also looks like missing infrastructure and is not:
+`union-connectivity.ts::analyzeUnionConnectivity` already walks a body's
+solids with union-find, prunes pairs by bounding box before spending an exact
+kernel call, and takes an `exactOverlap` callback for "kernels whose distance
+query reports penetration depth instead of zero". That callback is exactly the
+predicate that decides whether summing is valid — and it draws the
+distinction that matters, since two *tangent* solids share no volume and sum
+correctly while *penetrating* ones do not. **Look for the existing primitive
+before scoping new infrastructure.**
+
 This sweep found four bodies where the B-rep is right and the mesh is not:
 
 | body | B-rep | mesh |
