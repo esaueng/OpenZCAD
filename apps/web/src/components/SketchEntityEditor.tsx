@@ -48,6 +48,14 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
     { key: 'centerY', label: 'Center Y' },
     { key: 'startAngleDeg', label: 'Start angle' },
     { key: 'endAngleDeg', label: 'End angle' }
+  ],
+  // Only the numeric fields. The string, family and style need a dedicated
+  // editor (the text tool's form) rather than an expression input, so this
+  // generic editor exposes what it can drive and leaves the rest alone.
+  text: [
+    { key: 'size', label: 'Size' },
+    { key: 'x', label: 'X' },
+    { key: 'y', label: 'Y' }
   ]
 };
 
@@ -61,11 +69,22 @@ function initialValues(data: SketchObjectData): Record<string, string> {
 }
 
 function nextData(
-  kind: SketchObjectData['objectKind'],
+  data: SketchObjectData,
   values: Record<string, string>
 ): SketchObjectData {
   const value = (key: string) => coerceParamValue(values[key] ?? '');
+  const kind = data.objectKind;
   switch (kind) {
+    case 'text':
+      // The string, family and style are not expression fields; carry them
+      // through untouched so this editor can only move and resize the text.
+      return {
+        ...data,
+        objectKind: kind,
+        size: value('size'),
+        x: value('x'),
+        y: value('y')
+      };
     case 'line':
       return {
         objectKind: kind,
@@ -131,7 +150,8 @@ function geometryError(
   if (
     (kind === 'rectangle' && (resolved.width! <= 0 || resolved.height! <= 0)) ||
     ((kind === 'circle' || kind === 'polygon' || kind === 'arc') &&
-      resolved.radius! <= 0)
+      resolved.radius! <= 0) ||
+    (kind === 'text' && resolved.size! <= 0)
   ) {
     return 'Lengths and radii must be greater than zero.';
   }
@@ -178,7 +198,7 @@ export function SketchEntityEditor({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (valid) {
-      onApply(nextData(data.objectKind, values));
+      onApply(nextData(data, values));
     }
   }
 
