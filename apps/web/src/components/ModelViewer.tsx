@@ -132,6 +132,7 @@ import {
   sketchObjectFromDrag,
   snapSketchPoint,
   snapTargetsForObject,
+  textObjectFromPoint,
   type SketchPoint,
   type SnapTarget,
   type SnapTargetKind
@@ -171,7 +172,7 @@ export interface CylinderRadiusHandleTarget {
 /** Active in-viewport sketch session, derived from the interaction machine. */
 export interface SketchModeState {
   basis: PlaneBasis;
-  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
   snapStep: number | null;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
@@ -2895,6 +2896,13 @@ export function ModelViewer({
           rig?.setInProgress(null, false);
           hideSketchDimLabel();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'text' && point && !moved) {
+          // One click places the baseline origin; everything else about a text
+          // object is a parameter, so there is no drag and no second click.
+          onSketchCommitRef.current(textObjectFromPoint(point));
           requestRender();
           return;
         }
