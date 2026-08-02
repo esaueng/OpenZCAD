@@ -484,23 +484,45 @@ describe('partial revolve lineage', () => {
 
 describe('partial revolve mesh orientation', () => {
   /**
-   * CHARACTERIZATION of an open defect, recorded so it cannot regress
-   * silently and so the next reader does not have to rediscover it.
+   * These six were written as a CHARACTERIZATION of an open defect: BrepKit's
+   * `revolve` returned a reversed shell below a full turn, so the display
+   * mesh and the exported STL both came out inside-out. `writeAsciiStl`
+   * computes facet normals from the winding, so a wedge exported with every
+   * normal pointing into the solid.
    *
-   * BrepKit's `revolve` returns a REVERSED shell for every angle below a full
-   * turn. The solid itself is fine — `validateSolid` passes, the volume is
-   * right, the mesh is closed and consistently wound — but the winding is
-   * consistently INWARD, so the display mesh and the exported STL both come
-   * out inside-out. STL facet normals are computed from the winding
-   * (`writeAsciiStl`), so a wedge exports with every normal pointing into the
-   * solid. This is a kernel orientation bug, not something to paper over with
-   * an app-side flip in the middle of the lineage path.
+   * brepkit#59 fixed it, and these were FLIPPED rather than relaxed — the
+   * assertion is now stronger than the sign test it replaced. Two corrections
+   * that PR established, kept here because they explain the shape of the
+   * fix:
+   *
+   * - It was never partial-only. The predictor is the sign of
+   *   `input_normal . (axis x e_r)`, not the sweep angle, so half the
+   *   configuration space was already outward — which is why sampling made it
+   *   look intermittent.
+   * - The 360 case was not correct either; it just usually took a different
+   *   path. A holed profile defers both fast paths and reproduced the
+   *   reversal at a full turn too.
+   *
+   * Why a green suite hid this for so long: `solid_volume` returns the
+   * MAGNITUDE of its integral, so an inside-out solid still reports a
+   * correct, positive volume. Only the winding could see it — hence a signed
+   * mesh volume rather than `body.volume`.
    */
   it.each([45, 90, 180, 270, 359, 359.99])(
-    'still hands back an inward-wound mesh at %s degrees',
+    'winds an outward mesh enclosing the swept volume at %s degrees',
     async (angleDeg) => {
       const { body } = await buildRevolve(annulusProfile(1), angleDeg);
-      expect(meshSignedVolume(body!.mesh)).toBeLessThan(0);
+      const signed = meshSignedVolume(body!.mesh);
+      // Outward, which is the whole point of #59.
+      expect(signed).toBeGreaterThan(0);
+      // And it encloses the RIGHT volume, not merely a positive one. A sign
+      // flip alone would pass a mesh that was outward-wound and wrong; this
+      // is the Pappus closed form the file already computes by hand.
+      const expected = partialRevolveVolume(angleDeg, 1);
+      expect(Math.abs(signed - expected) / expected).toBeLessThan(5e-4);
+      // The display mesh is inscribed, so it must come in slightly UNDER the
+      // exact swept volume rather than straddling it.
+      expect(signed).toBeLessThan(expected);
     },
     120_000
   );
@@ -530,15 +552,66 @@ describe('partial revolve and edge modifiers', () => {
       })
     );
 
-    // Measured: 12 of 12 refuse, at every radius from 0.4 down to 0.002.
-    expect(outcomes.every((warnings) => warnings.length === 1)).toBe(true);
-    // Every one of them names the wedge. In particular none of them says
-    // "try a smaller radius", which is false at every radius here, and none
-    // says the edge no longer exists, which it does.
-    for (const [warnings] of outcomes) {
-      expect(warnings).toContain('This body is a partial revolve');
-      expect(warnings).not.toContain('Try a smaller radius');
-      expect(warnings).not.toContain('no longer exists');
+    // Was 12 of 12 before the pin carried brepkit#59. It is now 10 of 12:
+    // edges 3 and 11 stopped refusing. They did NOT start working — see the
+    // test below, which is why this is a count and not an `every`.
+    const refused = outcomes.filter((warnings) => warnings.length === 1);
+    expect(refused).toHaveLength(10);
+    // Every refusal still names the wedge. In particular none says "try a
+    // smaller radius", which is false at every radius here, and none says the
+    // edge no longer exists, which it does.
+    for (const warnings of refused) {
+      expect(warnings[0]).toContain('This body is a partial revolve');
+      expect(warnings[0]).not.toContain('Try a smaller radius');
+      expect(warnings[0]).not.toContain('no longer exists');
+    }
+  }, 300_000);
+
+  /**
+   * The two edges that stopped refusing now return a CORRUPT body instead,
+   * silently. This is strictly worse than the refusal it replaced, and it is
+   * newly reachable: before the pin carried brepkit#59 all twelve edges
+   * refused, so this wrong answer could not be produced at all.
+   *
+   * Whether #59 introduced the bad blend or merely un-gated a latent one is
+   * not established here — what is measured is the reachability change.
+   *
+   * A radius-0.1 fillet on an arc of length ~3.93 should change the volume by
+   * about (r^2 - pi*r^2/4)*L ~= 0.008. It instead ADDS 4.063, which is 103%
+   * of the whole body and roughly 480x any plausible fillet.
+   *
+   * The mesh agrees with the measurement (7.9886 against 7.9899), so the
+   * SOLID is wrong rather than its measurement — this is not another instance
+   * of a bad integrator. And both edges give the identical value to twelve
+   * significant figures, so it is structural, not numerical drift.
+   */
+  it('silently doubles the body on the two edges that stopped refusing', async () => {
+    const { document, body } = await buildRevolve(annulusProfile(1), 90);
+    const bodyId = getLatestBodyId(document)!;
+    const edges = body!.topology!.edges;
+    // 5*pi/4, the exact quarter-turn Pappus volume, stated by hand.
+    const WEDGE = (5 * Math.PI) / 4;
+    expect(Math.abs(body!.volume - WEDGE)).toBeLessThan(1e-9);
+
+    for (const index of [3, 11]) {
+      const candidate = filletEdges(document, {
+        name: 'Round',
+        targetBodyId: bodyId,
+        edgeHashes: [edges[index]!.hash],
+        size: 0.1
+      }).document;
+      const derived = await kernel.syncDocument(candidate);
+      const filleted =
+        derived.bodyRepresentations[getLatestBodyId(candidate)!]!;
+      // No refusal, no warning, no diagnostic of any kind.
+      expect(derived.warnings).toEqual([]);
+      // And the body has slightly more than doubled.
+      expect(filleted.volume).toBeCloseTo(7.989887134, 6);
+      expect(filleted.volume / WEDGE).toBeGreaterThan(2);
+      // The mesh encloses the same wrong volume, so the solid is wrong.
+      expect(
+        Math.abs(meshSignedVolume(filleted.mesh) - filleted.volume)
+      ).toBeLessThan(2e-3);
     }
   }, 300_000);
 
