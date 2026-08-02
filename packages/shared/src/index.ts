@@ -336,6 +336,13 @@ export interface SketchObjectNode extends BaseNode {
 export type RevolveAxis = 'horizontal' | 'vertical';
 
 /**
+ * A complete turn. The kernel accepts `(0, 360]` degrees; 360 is both the
+ * maximum and the value an absent `angleDeg` means, so documents written
+ * before partial revolve existed keep building exactly as they did.
+ */
+export const FULL_REVOLVE_ANGLE_DEG = 360;
+
+/**
  * Persistent reference to one derived bounded sketch cell.
  *
  * `profileId` is the preferred stable identity for newly created references.
@@ -382,6 +389,15 @@ export type FeatureData =
       featureKind: 'revolve';
       sketchId: SketchId;
       axis: RevolveAxis;
+      /**
+       * Sweep angle in degrees, in `(0, 360]`. Absent means a full turn, so
+       * every document written before this field existed keeps its exact
+       * previous geometry and its ADR-013 semantic lineage.
+       *
+       * A value below 360 is a deliberate ADR-011 hash-only body — see
+       * `PARTIAL_REVOLVE_HASH_ONLY_REASON` in the kernel adapter.
+       */
+      angleDeg?: ParamValue;
     }
   | {
       featureKind: 'boolean';
