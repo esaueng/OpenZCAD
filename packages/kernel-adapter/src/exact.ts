@@ -50,11 +50,15 @@ import {
   selectSafelyUnifiedSolid,
   type TriangleMeshClosure
 } from './boolean-result-validation';
-import {
-  importedMeshStl,
-  meshBooleanUnsupportedError
-} from './imported-mesh';
+import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import {
+  basisMatchesLiftedFrame,
+  bezierFallbackWarning,
+  bezierNurbsParams,
+  bezierProfileEdgesEnabled,
+  flattenBezierCurve
+} from './profile-bezier-edges';
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import {
   analyzeUnionConnectivity,
@@ -107,6 +111,8 @@ const STL_EXPORT_DEFLECTION = 0.08;
 /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
+/** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
+const NURBS_CURVE_TYPE = 3;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
 /** Relative bar for proving a plane runs tangent to a cylindrical band. */
@@ -620,11 +626,7 @@ function selectedEdgesShareVertex(
  * a blend only when some adjacent planar face is parallel to its axis and
  * stands exactly one radius off it.
  */
-function isBlendFace(
-  kernel: BrepKernel,
-  solid: number,
-  face: number
-): boolean {
+function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
   const surfaceType = kernel.getSurfaceType(face);
   if (surfaceType === 'bspline') {
     return true;
@@ -653,7 +655,10 @@ function isBlendFace(
     return false;
   }
   const bandEdges = new Set(kernel.getFaceEdges(face));
-  const tolerance = Math.max(BLEND_TANGENCY_TOLERANCE * radius, GEOMETRY_EPSILON);
+  const tolerance = Math.max(
+    BLEND_TANGENCY_TOLERANCE * radius,
+    GEOMETRY_EPSILON
+  );
   for (const neighbour of kernel.getSolidFaces(solid)) {
     if (
       neighbour === face ||
@@ -2969,8 +2974,7 @@ function importMeshSolid(kernel: BrepKernel, stlText: string): number {
   try {
     const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
     const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
-      | string
-      | { solid?: number };
+      string | { solid?: number };
     const parsed = (
       typeof healed === 'string' ? JSON.parse(healed) : healed
     ) as { solid?: number };
@@ -3243,14 +3247,27 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   /**
    * Build an exact planar face for a detected region: outer wire plus hole
-   * wires from the region's line/arc curves. No tessellation — arcs become
-   * true circular edges, so STEP export keeps analytic surfaces.
+   * wires from the region's line/arc/bezier curves. No tessellation — arcs
+   * become true circular edges and glyph beziers become NURBS edges, so STEP
+   * export keeps analytic surfaces and smooth outlines.
+   *
+   * TODO(brepkit Phase 0.3): once `makeFaceFromWires(outer, inner[])` ships,
+   * replace the `makePlanarFaceFromWire` + `addHolesToFace` pair below with
+   * the single call. The pinned brepkit-wasm here does not have it, and this
+   * must not depend on unreleased kernel work.
    */
   private makeRegionFace(
     kernel: BrepKernel,
     region: SketchRegion,
     basis: PlaneBasis
   ): number {
+    // The exact path needs the kernel's lifted second axis to be this basis's
+    // `v`; every basis the app builds is right-handed, so this only ever trips
+    // on a corrupt face-attached frame.
+    const rightHanded = basisMatchesLiftedFrame(basis);
+    const exactBeziers = bezierProfileEdgesEnabled() && rightHanded;
+    let flattened = 0;
+
     const wireFor = (loop: SketchRegion['outer']): number => {
       const edges: number[] = [];
       for (const curve of loop.curves) {
@@ -3258,6 +3275,42 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           const a = BrepKitKernelAdapter.planePoint3(basis, curve.a);
           const b = BrepKitKernelAdapter.planePoint3(basis, curve.b);
           edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
+          continue;
+        }
+        if (curve.kind === 'bezier') {
+          if (exactBeziers) {
+            edges.push(
+              kernel.liftCurve2dToPlane(
+                NURBS_CURVE_TYPE,
+                bezierNurbsParams(curve),
+                basis.origin.x,
+                basis.origin.y,
+                basis.origin.z,
+                basis.u.x,
+                basis.u.y,
+                basis.u.z,
+                basis.normal.x,
+                basis.normal.y,
+                basis.normal.z,
+                0,
+                1
+              )
+            );
+            continue;
+          }
+          // Feature-flagged fallback: the same line pipeline every polygon
+          // uses. The endpoints are the curve's own point objects, so the
+          // joints with the neighbouring edges stay bit-identical.
+          flattened += 1;
+          const points = flattenBezierCurve(curve);
+          for (let index = 0; index + 1 < points.length; index += 1) {
+            const a = BrepKitKernelAdapter.planePoint3(basis, points[index]!);
+            const b = BrepKitKernelAdapter.planePoint3(
+              basis,
+              points[index + 1]!
+            );
+            edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
+          }
           continue;
         }
         const span = Math.abs(curve.endAngle - curve.startAngle);
@@ -3320,14 +3373,24 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       return kernel.makeWire(Uint32Array.from(edges), true);
     };
 
-    const face = kernel.makePlanarFaceFromWire(wireFor(region.outer));
-    if (region.holes.length === 0) {
+    const outerWire = wireFor(region.outer);
+    const holeWires = region.holes.map(wireFor);
+    if (flattened > 0) {
+      // Never silent: a flattened glyph is a visible product regression.
+      console.warn(
+        bezierFallbackWarning(
+          rightHanded
+            ? 'exact bezier profile edges are disabled'
+            : 'the sketch plane frame is not right-handed',
+          flattened
+        )
+      );
+    }
+    const face = kernel.makePlanarFaceFromWire(outerWire);
+    if (holeWires.length === 0) {
       return face;
     }
-    return kernel.addHolesToFace(
-      face,
-      Uint32Array.from(region.holes.map(wireFor))
-    );
+    return kernel.addHolesToFace(face, Uint32Array.from(holeWires));
   }
 
   /** Extrude one or more explicitly selected bounded sketch cells. */
@@ -4800,9 +4863,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // coincident faces weld). The kernel writes each body as its own
       // MANIFOLD_SOLID_BREP inside one shape representation, so they stay
       // distinct through a round trip.
-      return decodeText(
-        kernel.exportStepMulti(new Uint32Array(exportSolids))
-      );
+      return decodeText(kernel.exportStepMulti(new Uint32Array(exportSolids)));
     } finally {
       kernel.free();
     }
