@@ -211,10 +211,32 @@ chunks (decimal kB, using Vite's gzip report):
 
 > **Superseded for OCCT (Z3, 2026-08-01).** The STEP route flip removed the
 > last reachable importer of `occt-step.ts`, and because that import was
-> already dynamic the 22,088.41 kB asset simply stopped being emitted —
-> `apps/web/dist` now totals about 13 MB. The row is kept so the size that
-> was removed stays on the record. Every other line predates the flip and
-> is unaffected by it; re-measure with `pnpm build:report`.
+> already dynamic the 22,088.41 kB asset simply stopped being emitted. The row
+> is kept so the size that was removed stays on the record. Every other line
+> predates the flip and is unaffected by it; re-measure with
+> `pnpm build:report`.
+
+> **Z5 (2026-08-01), measured rather than assumed.** The claim above — that
+> the WASM payoff was fully banked at Z3 — holds for the WASM and only for the
+> WASM. A build immediately before Z5 emitted no OCCT asset and totalled
+> 10,174,485 bytes across reported assets (`apps/web/dist` 12,292,594 bytes on
+> disk), but `grep -i occt apps/web/dist` still **hit**: `assets/index-*.js`
+> carried the `OCCT_SHARP_OFFSET_LIMITATION` string and the
+> `capability.kernel === 'occt'` branch that could never be true after Z3.
+> Deleting them is the last of it:
+>
+> | Measure | Before Z5 | After Z5 | Delta |
+> | --- | ---: | ---: | ---: |
+> | `assets/index-*.js` raw | 400,750 B | 400,429 B | −321 B |
+> | `assets/index-*.js` gzip | 114,840 B | 114,690 B | −150 B |
+> | All reported assets, raw | 10,174,485 B | 10,174,164 B | −321 B |
+> | `apps/web/dist` on disk | 12,292,594 B | 12,292,273 B | −321 B |
+> | Files matching `occt`/`opencascade` | 1 | **0** | — |
+>
+> So the honest accounting is: Z3 banked 22,088 kB; Z5 banks 321 bytes and the
+> property that the shipped bundle contains no OpenCascade at all. What Z5
+> actually recovers is source, not payload — see the Z5 entry in
+> `docs/kernel-execution-plan.md` for the line counts.
 
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
@@ -234,8 +256,9 @@ reference fixtures remain:
 | Heat Sink        |      63,313.412896981696 |    42 |
 | Drill row Body   |       34,673.60481847148 |    11 |
 
-The Wave 0 topology-history characterization also passed all three suites for
-the pinned BrepKit and OCCT kernels. The separately verified primitive, sweep,
+The Wave 0 topology-history characterization passed all three suites for the
+pinned BrepKit and OCCT kernels; Z5 removed its OCCT suite along with the
+kernel, leaving the two BrepKit suites. The separately verified primitive, sweep,
 and supported rigid-transform lineage subset is now implemented; those broader
 history probes still do not prove boolean, blend, pattern, direct-edit, or STEP
 lineage. ADR-013 records the remaining bridge-gated gaps.
@@ -270,7 +293,8 @@ target machine and browser:
 3. canonical edit miss versus derived-only hit;
 4. eviction latency after 8+ representative documents;
 5. retained worker heap with large embedded STEP sources; and
-6. OCCT first-load time for a STEP document.
+6. BrepKit first-load time for a STEP document (this used to read "OCCT";
+   after Z3 it is the same load as line 1, since one kernel builds imports).
 
 Report median and p95 separately, include document byte size/body/face counts,
 and distinguish kernel load, exact rebuild, structured clone, and main-thread

@@ -60,19 +60,21 @@ export interface ModelingFaceOption {
   reference?: FaceTopologyReferenceV5;
 }
 
-export type ExactKernelKind = 'brepkit' | 'occt';
-
+/**
+ * There is one exact kernel, so nothing here branches on which one built the
+ * body. Solid offset used to carry a `kernel`/`offsetTopology` pair whose only
+ * job was to refuse curved, non-convex, or unproven topology on OpenCascade,
+ * whose sharp offset was limited to proven convex planar bodies. Z3 routed
+ * every document through BrepKit and the field went constant; Z5 deleted the
+ * kernel and the refusal with it. A future capability gate belongs on a
+ * measured property of the BODY, not on the name of the kernel.
+ */
 export interface ModelingOperationCapability {
   exactState: 'ready' | 'pending' | 'failed';
   exactFailureReason?: string;
   hasTargetBody: boolean;
   openingFaceCount?: number;
-  kernel?: ExactKernelKind;
-  offsetTopology?: 'proven-convex-planar' | 'curved' | 'non-convex' | 'unknown';
 }
-
-export const OCCT_SHARP_OFFSET_LIMITATION =
-  'OpenCascade sharp solid offset supports only proven convex planar bodies; curved, non-convex, or unproven topology is refused because the pinned kernel bridge otherwise creates rounded joins.';
 
 function titleCase(value: string): string {
   return value.length === 0
@@ -143,13 +145,6 @@ export function modelingOperationDisabledReason(
   }
   if (operation === 'shell' && (capability.openingFaceCount ?? 0) === 0) {
     return 'Select at least one opening face';
-  }
-  if (
-    operation === 'solid-offset' &&
-    capability.kernel === 'occt' &&
-    capability.offsetTopology !== 'proven-convex-planar'
-  ) {
-    return OCCT_SHARP_OFFSET_LIMITATION;
   }
   return null;
 }

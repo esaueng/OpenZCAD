@@ -5210,13 +5210,13 @@
       "bbox": null,
       "status": "refused",
       "warnings": [
-        "Feature \"Imported\": importStep: [object WebAssembly.Exception]"
+        "Feature \"Imported\": importStep: no shapes found in STEP data"
       ],
       "roundTrip": {
         "status": "skipped-no-body"
       },
       "inspect": {
-        "error": "importStep: [object WebAssembly.Exception]"
+        "error": "importStep: no shapes found in STEP data"
       }
     }
   },
@@ -7537,13 +7537,13 @@
       "bbox": null,
       "status": "refused",
       "warnings": [
-        "Feature \"Imported\": importStep: [object WebAssembly.Exception]"
+        "Feature \"Imported\": importStep: no shapes found in STEP data"
       ],
       "roundTrip": {
         "status": "skipped-no-body"
       },
       "inspect": {
-        "error": "importStep: [object WebAssembly.Exception]"
+        "error": "importStep: no shapes found in STEP data"
       }
     }
   }
