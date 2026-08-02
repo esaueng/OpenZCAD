@@ -351,7 +351,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     owner: 'K0.6',
     note:
       SEAM_NOTE +
-      ' Both of the cone\'s extra edges are seams, so the FEATURE edge count ' +
+      " Both of the cone's extra edges are seams, so the FEATURE edge count " +
       'agrees (1 each) and only the seam bookkeeping differs — the cheapest ' +
       'instance of this class to debug.'
   },
@@ -412,7 +412,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     occt: 4,
     owner: 'K0.6',
     note:
-      'BrepKit classifies ALL 32 of the sphere\'s edges as seams; OCCT ' +
+      "BrepKit classifies ALL 32 of the sphere's edges as seams; OCCT " +
       'classifies 4 of its 36. displayRole drives what the viewport draws, so ' +
       'this is user-visible as well as reference-breaking: on BrepKit the ' +
       'sphere shows no feature edges at all. The largest single-metric ' +
@@ -450,7 +450,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'The identity scheme failing closed, correctly, on a real defect. ' +
       "BrepKit's two hemispherical patches produce the SAME exact ADR-011 " +
       'witness, so neither can be named one-to-one and the body publishes no ' +
-      'face reference at all; OCCT\'s two patches differ and both publish. ' +
+      "face reference at all; OCCT's two patches differ and both publish. " +
       'Nothing here should be loosened — an ambiguous name is worse than ' +
       'none — but the consequence is a product limit worth stating plainly: ' +
       'a face pick on an imported sphere cannot be stored on BrepKit. It ' +
@@ -512,7 +512,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     owner: 'K0.6',
     note:
       'Byte-identical digests to a-export-cone on both kernels, which proves ' +
-      'the adapter\'s degree rewriter reproduces the radian file exactly. ' +
+      "the adapter's degree rewriter reproduces the radian file exactly. " +
       'That is the evidence Z3 needs before deleting the rewriter: the ' +
       'kernel must reach these same two digests from the degree file on its ' +
       'own.'
@@ -573,7 +573,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'no LENGTH_UNIT in a GLOBAL_UNIT_ASSIGNED_CONTEXT", OCCT still assumes ' +
       'millimetres and reads 8000 mm3. Failing closed on an unknown scale is ' +
       'defensible — guessing millimetres is how a part arrives 25.4x wrong — ' +
-      'but it is a REGRESSION in what OpenZCAD can open, and it is K0.1\'s to ' +
+      "but it is a REGRESSION in what OpenZCAD can open, and it is K0.1's to " +
       'settle deliberately before Z3: either import with a stated assumption ' +
       'the user can see, or keep the refusal and say so in the file picker.'
   },
@@ -621,7 +621,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'Name-set counterpart of the witnessedFaces pin above: the same four ' +
       'B-spline band faces, named on BrepKit and withheld on OCCT. The ' +
       'digests differ rather than one being a subset of the other because ' +
-      'the two kernels also disagree on this file\'s spline geometry (see ' +
+      "the two kernels also disagree on this file's spline geometry (see " +
       'the volume pin), which moves every fingerprint on the body.'
   },
   {
@@ -693,23 +693,24 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     occt: '["Feature \\"Imported\\": STEP file contains no solids."]',
     owner: 'OCCT-defect',
     note:
-      'All that is left of the corpus\'s headline validity gap, and BrepKit ' +
+      "All that is left of the corpus's headline validity gap, and BrepKit " +
       'is now the better side of it. This file used to import on BrepKit as a ' +
       'body of 666.67 mm3 with no warning; K0.6 refuses it, and refuses it ' +
       'by naming the defect and counting the boundary edges, where OCCT ' +
       'reports the generic "contains no solids" and leaves the user to work ' +
-      'out which face is missing. Keep BrepKit\'s message.'
+      "out which face is missing. Keep BrepKit's message."
   },
   {
     subject: 'f-hostile-dangling-reference',
     metric: 'warnings',
-    brepkit: '["Feature \\"Imported\\": parse error: entity #999999 not found"]',
+    brepkit:
+      '["Feature \\"Imported\\": parse error: entity #999999 not found"]',
     occt: '["Feature \\"Imported\\": STEP file contains no solids."]',
     owner: 'OCCT-defect',
     note:
       'BrepKit is better again: it names the missing entity, OCCT reports ' +
       'the generic "contains no solids" and leaves the user to find a ' +
-      'dangling reference by hand. Keep BrepKit\'s message when K0.6 aligns ' +
+      "dangling reference by hand. Keep BrepKit's message when K0.6 aligns " +
       'the taxonomy.'
   },
   {
@@ -746,7 +747,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
     note:
       MEASUREMENT_NOTE +
       ' This pin used to read 9518.3321434 and belong to K0.4: BrepKit fitted ' +
-      "the four corner bands as B-splines just inside the true quarter " +
+      'the four corner bands as B-splines just inside the true quarter ' +
       'cylinder and lost 4.4 mm3 (4.63e-4 relative). The bands are now exact ' +
       'cylinders — the surfaceTypes and faceHashDigest pins that recorded ' +
       'that gap are retired — and what is left is 1.43e-5, the residue the ' +
@@ -833,57 +834,58 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10984.864189375206,
+    reported: 10951.844000782583,
     owner: 'K0.5',
     note:
-      'THE SOLID IS NOW EXACT; THE MEASUREMENT IS NOT. brepkit#55 fixed the ' +
-      'non-planar coincident-contact defect and this pin changed character ' +
-      'rather than going away — which is why it was not simply retired. ' +
-      'Before: 57 faces, ALL PLANES, every analytic surface destroyed, and ' +
-      'a bounding box whose x-min read -2.996917 where the construction says ' +
-      'exactly -3. Now: 11 faces (9 planes + 2 CYLINDERS) and x-min exactly ' +
-      '-3, so the geometry reaches its own extent. Verified outside the app ' +
-      'entirely, on the raw kernel: massProperties returns ' +
-      '10952.079901041969 against the closed form 10952.079901041901 — ' +
-      'agreement to 6e-15. The body is right. ' +
-      'What is left is that the app does not measure it that way. ' +
-      '`exact.ts` reports body volume through `kernel.volume(solid, ' +
-      'MEASUREMENT_DEFLECTION)`, and that route reads 10984.86 — 0.30% HIGH. ' +
-      'It is not a deflection artefact: it converges to +0.3125% as the ' +
-      'tolerance tightens (1e-3 -> 1e-6), so it is systematic. ' +
-      'THE MECHANISM HERE HAS BEEN WRONG TWICE; what follows is the third ' +
-      'and currently-supported account, kept with its history because the ' +
-      'two dead ends are the reason to distrust a confident-sounding one. ' +
-      '(1) brepkit#55 filed it as "the notched-wall detector declines and ' +
-      'the area route credits the whole cylinder". (2) brepkit#64 refuted ' +
-      'that: the detector is RIGHT to decline, since both faces genuinely ' +
-      'are UV rectangles, and the exact integral was never wrong. Its own ' +
-      'account was that `tessellate_solid` samples a CLOSED circular rim ' +
-      'from the curve\'s intrinsic parameter origin rather than from the ' +
-      'edge\'s seam vertex, so the boundary walk reads 2.5 turns for a band ' +
-      'that goes round once and the CDT folds triangles back over the ' +
-      'cylinder — a mesh that is still closed and 2-manifold while ' +
-      'enclosing some space twice. (3) That is real and fixed, but it is ' +
-      'not the whole story for THIS body, which sits exactly on a ' +
-      'previously unknown cliff at d/R = 1/2: above it the FUSE never ' +
-      'splits the boss wall against the plate at all, leaving one face of ' +
-      'exactly 2*pi*R*H and carrying the buried portion as an interior ' +
-      'sheet. On the bad side the body has 10 faces, not the 11 recorded ' +
-      'above, and the tab/ring split this note describes does not exist. ' +
+      'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
+      'survived two kernel fixes by CHANGING CHARACTER rather than going ' +
+      'away, and the shape of the remaining error has flipped, so read the ' +
+      'sign before assuming which defect you are looking at. ' +
+      'brepkit#55 restored the geometry: before it, 57 faces, ALL PLANES, ' +
+      'every analytic surface destroyed, x-min reading -2.996917 where the ' +
+      'construction says exactly -3. After it, 11 faces (9 planes + 2 ' +
+      'CYLINDERS) and x-min exactly -3. On the raw kernel massProperties ' +
+      'returns 10952.079901041969 against the closed form ' +
+      '10952.079901041901 — agreement to 6e-15. The body has been right ' +
+      'since then; only the app-facing route was not. ' +
+      'brepkit#64 then fixed that route, and the improvement is large: ' +
+      '  before  10984.864189375206   +2.9934e-3  (0.299% OVER) ' +
+      '  now     10951.844000782583   -2.1539e-5  (0.00215% UNDER) ' +
+      'a 139x reduction, AND A SIGN FLIP. That flip is the useful signal. ' +
+      'The old error ADDED material, because `tessellate_solid` sampled a ' +
+      "closed circular rim from the curve's intrinsic parameter origin " +
+      "instead of the edge's seam vertex, so the boundary walk read 2.5 " +
+      'turns for a band that goes round once and the CDT folded triangles ' +
+      'back over the cylinder — a mesh still closed and 2-manifold while ' +
+      'enclosing some space twice. That is fixed. What remains REMOVES ' +
+      'material, which is the ordinary inscribed-mesh signature, the same ' +
+      'class as test/filleted-body-volume.test.ts (a filleted box reads ' +
+      '-4.2e-6 to -1.7e-5 on the same route). So this is no longer a ' +
+      'special defect of this body; it is the general tessellated-volume ' +
+      'residual, and it should be retired by whatever fixes THAT. ' +
+      'THE MECHANISM HERE HAS BEEN WRONG TWICE, which is why the history ' +
+      'stays. (1) brepkit#55 filed it as "the notched-wall detector ' +
+      'declines and the area route credits the whole cylinder". ' +
+      '(2) brepkit#64 refuted that — the detector is RIGHT to decline, ' +
+      'both faces genuinely are UV rectangles, and the exact integral was ' +
+      'never wrong. Do not trust a confident-sounding third account either. ' +
+      'ALSO, AND SEPARATELY: this body sits exactly on a cliff at ' +
+      'd/R = 1/2. Past it the FUSE never splits the boss wall against the ' +
+      'plate, leaving one face of exactly 2*pi*R*H and carrying the buried ' +
+      'portion as an interior sheet. On that side the body has 10 faces, ' +
+      'not the 11 recorded here, and the tab/ring split does not exist. ' +
       'Which side it lands on is decided by architecture AND by model ' +
       'scale — Linux at 1000x reproduces what macOS reports at 1x — so the ' +
-      '11-face reading above is this platform\'s answer, not the body\'s. ' +
-      'validate_solid and both measurement routes call it fine on both ' +
-      'sides; mesh watertightness is the only witness. ' +
-      'Note what this means: a user modelling this body sees a volume 0.3% ' +
-      'wrong on geometry that is exactly correct. Switching the adapter to ' +
-      'massProperties is NOT an obvious fix — that route has its own open ' +
-      'defect, reading a quadric sector wider than pi as its own complement ' +
-      '(4.3% light). Neither route is trustworthy everywhere yet. ' +
-      'Retire this pin when the app-facing volume reaches the closed form, ' +
-      'not before — and re-read the mechanism history above before ' +
-      'believing any single explanation of why it does not. Exact tangency ' +
-      'is separate and still falls back at 0.02%.'
+      "11-face reading is this platform's answer, not the body's. " +
+      'validate_solid and BOTH measurement routes call it fine on both ' +
+      'sides; mesh watertightness is the only witness. brepkit#64 pins that ' +
+      'cliff but does not fix it. ' +
+      'Switching the adapter to massProperties is still NOT an obvious ' +
+      'fix — that route has its own open defect, reading a quadric sector ' +
+      'wider than pi as its own complement (4.3% light). ' +
+      'Retire this pin when the app-facing volume reaches the closed form ' +
+      '(the corpus bar is 1e-6; the current -2.15e-5 is 21x above it), not ' +
+      'before. Exact tangency is separate and still falls back at 0.02%.'
   },
   {
     subject: 'boss-crossing-a-wall',
@@ -916,7 +918,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     owner: 'K0.1',
     note:
       'A 20 mm cube whose units are declared and never bound to a ' +
-      'GLOBAL_UNIT_ASSIGNED_CONTEXT. K0.1\'s unit work made BrepKit refuse ' +
+      "GLOBAL_UNIT_ASSIGNED_CONTEXT. K0.1's unit work made BrepKit refuse " +
       'it rather than assume millimetres. Fails closed, which is the safe ' +
       'direction — a wrong scale is silent and expensive — but the file is ' +
       'plainly readable and OCCT reads it to 8000, so this is a capability ' +
