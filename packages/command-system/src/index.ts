@@ -776,14 +776,22 @@ function assertOperationExpressions(
     assertEvaluableExpression(scope, `${label}.y`, value.y);
     assertEvaluableExpression(scope, `${label}.z`, value.z);
   };
+  // Text carries fields that are text, not dimensions — the string itself, a
+  // font family id, a style, an alignment. Feeding those to the expression
+  // evaluator would reject every valid text object, so they are named here
+  // rather than guessed at from their runtime type.
+  const nonDimensionKeys = new Set([
+    'objectKind',
+    'construction',
+    'text',
+    'fontFamily',
+    'fontStyle',
+    'align'
+  ]);
   const sketchObjects = (name: string, objects: SketchObjectData[]) => {
     objects.forEach((object, index) => {
       Object.entries(object).forEach(([key, value]) => {
-        if (
-          key !== 'objectKind' &&
-          key !== 'construction' &&
-          typeof value !== 'boolean'
-        ) {
+        if (!nonDimensionKeys.has(key) && typeof value !== 'boolean') {
           assertEvaluableExpression(
             scope,
             `${name} objects[${index}].${key}`,

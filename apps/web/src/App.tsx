@@ -1514,6 +1514,11 @@ export function App() {
         // Open curves have no fill; region overlays render them separately.
         return [];
       }
+      if (data.objectKind === 'text') {
+        // Text has no single closed profile — it is many regions with holes,
+        // and the region overlay renders it.
+        return [];
+      }
       const centerX = evalParamValue(data.centerX, scope);
       const centerY = evalParamValue(data.centerY, scope);
       if (centerX === null || centerY === null) {
@@ -4707,7 +4712,22 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      const highlighted = references.flatMap((reference) => {
+      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
+      // region its entities bound, so it can legitimately light up many
+      // regions — or, after a text edit, a different number than last time.
+      const perReference = references.map((reference) => {
+        if (reference.all === true) {
+          const referenced = new Set(reference.sourceEntityIds);
+          return (
+            view?.regions.filter(
+              (candidate) =>
+                candidate.sourceEntityIds.length > 0 &&
+                candidate.sourceEntityIds.every((entityId) =>
+                  referenced.has(entityId)
+                )
+            ) ?? []
+          );
+        }
         const sourceMatches = reference.sourceEntityIds
           ? (view?.regions.filter(
               (candidate) =>
@@ -4727,23 +4747,20 @@ export function App() {
                 Math.max(reference.sourceArea * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region
-          ? [
-              {
-                sketchId: extrudeData.sketchId,
-                profileId: region.profileId,
-                regionFingerprint: region.regionFingerprint,
-                samplePoint: region.samplePoint,
-                centroid: region.centroid,
-                boundingBox: region.boundingBox,
-                sourceEntityIds: region.sourceEntityIds,
-                area: region.area
-              }
-            ]
-          : [];
+        return region ? [region] : [];
       });
+      const highlighted = perReference.flat().map((region) => ({
+        sketchId: extrudeData.sketchId,
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        centroid: region.centroid,
+        boundingBox: region.boundingBox,
+        sourceEntityIds: region.sourceEntityIds,
+        area: region.area
+      }));
       setSelectedProfiles(highlighted);
-      if (references.length > 0 && highlighted.length !== references.length) {
+      if (perReference.some((regions) => regions.length === 0)) {
         setStatus(
           'Broken profile reference — edit the source sketch or reselect the extrusion profiles.'
         );

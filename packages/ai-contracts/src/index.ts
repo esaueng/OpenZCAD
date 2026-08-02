@@ -17,10 +17,20 @@ import type {
   SketchId,
   SketchPlaneFrame,
   SketchPlaneRef,
+  TextAlign,
+  TextFontStyle,
   TopologyReferenceV5,
   TopologySelection,
   Vector3
 } from '@openzcad/shared';
+
+const TEXT_FONT_STYLES: readonly TextFontStyle[] = [
+  'regular',
+  'bold',
+  'italic',
+  'boldItalic'
+];
+const TEXT_ALIGNMENTS: readonly TextAlign[] = ['left', 'center', 'right'];
 
 /**
  * A body reference inside a proposal. Either a `bodyId` that already exists in
@@ -1015,6 +1025,40 @@ const sketchObjectSchema = {
         'radius',
         'startAngleDeg',
         'endAngleDeg'
+      ]
+    },
+    {
+      // `rotation` and `align` are deliberately absent: strict structured
+      // output requires every declared property in `required`, so an optional
+      // field has to be offered as an explicit null, and a null would land in
+      // the document as a ParamValue that cannot resolve. They stay editor-only
+      // until there is a reason to spend a nullable field on them.
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'text' },
+        text: { type: 'string', description: 'The string to render.' },
+        fontFamily: {
+          type: 'string',
+          description:
+            'Bundled font family id, e.g. "open-sans", "inter", "lora", "roboto-slab", "jetbrains-mono", "oswald", "pacifico".'
+        },
+        fontStyle: {
+          type: 'string',
+          enum: ['regular', 'bold', 'italic', 'boldItalic']
+        },
+        size: scalarSchema,
+        x: scalarSchema,
+        y: scalarSchema
+      },
+      required: [
+        'objectKind',
+        'text',
+        'fontFamily',
+        'fontStyle',
+        'size',
+        'x',
+        'y'
       ]
     }
   ]
@@ -2181,6 +2225,22 @@ function isSketchObjects(value: unknown): value is SketchObjectData[] {
             'startAngleDeg',
             'endAngleDeg'
           ].every((key) => isScalar(object[key]));
+        case 'text':
+          // The optional fields are checked when present rather than merely
+          // tolerated: a null `rotation` would reach the document as a
+          // ParamValue that cannot resolve and would fail at rebuild instead
+          // of here.
+          return (
+            typeof object.text === 'string' &&
+            object.text.length > 0 &&
+            typeof object.fontFamily === 'string' &&
+            object.fontFamily.length > 0 &&
+            TEXT_FONT_STYLES.includes(object.fontStyle as TextFontStyle) &&
+            ['size', 'x', 'y'].every((key) => isScalar(object[key])) &&
+            (object.rotation === undefined || isScalar(object.rotation)) &&
+            (object.align === undefined ||
+              TEXT_ALIGNMENTS.includes(object.align as TextAlign))
+          );
         default:
           return false;
       }
