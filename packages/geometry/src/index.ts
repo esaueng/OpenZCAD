@@ -50,6 +50,7 @@ export {
   parseFontFace,
   resolveFontStyle,
   setTextFontProvider,
+  textDisplayLoops,
   textFontProvider,
   textProfileSet,
   textProfilesFromFont,

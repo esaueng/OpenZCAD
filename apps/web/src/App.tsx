@@ -168,7 +168,7 @@ import { frameFromFace } from './lib/sketch/session';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
 import { SketchToolRail } from './components/SketchToolRail';
 import { SketchEntityEditor } from './components/SketchEntityEditor';
-import { objectPolyline } from './lib/objectPolyline';
+import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
   CommandPalette,
@@ -3807,15 +3807,12 @@ export function App() {
         ? []
         : objects.flatMap((object) => {
             try {
-              const polyline = objectPolyline(object.data, resolve);
-              return polyline
-                ? [
-                    {
-                      ...polyline,
-                      construction: object.data.construction === true
-                    }
-                  ]
-                : [];
+              // A text object draws one run per glyph region plus one per
+              // counter, so this is many runs from one object.
+              return objectPolylines(object.data, resolve).map((polyline) => ({
+                ...polyline,
+                construction: object.data.construction === true
+              }));
             } catch {
               return [];
             }

@@ -36,8 +36,10 @@ import type {
   Vec2Like
 } from '../regions';
 
-/** Chord tolerance of the display polylines, as a fraction of the em size. */
+/** Chord tolerance of a profile's sampled polyline, as a fraction of em. */
 const FLATTEN_TOLERANCE_RATIO = 1 / 500;
+/** Coarser tolerance for viewport outlines, which only have to look smooth. */
+const DISPLAY_TOLERANCE_RATIO = 1 / 200;
 /** Fingerprints are identity hints, matching `regions.ts`'s own quantum. */
 const FINGERPRINT_QUANTUM = 1e-6;
 
@@ -271,6 +273,45 @@ export function textProfilesFromFont(
   const flattenTolerance = parameters.size * FLATTEN_TOLERANCE_RATIO;
   return set.regions.map((region) =>
     profileFor(region, sourceObjectId, flattenTolerance)
+  );
+}
+
+/**
+ * Coarse closed polylines for one text object — **viewport display only**.
+ *
+ * Deliberately not `textProfilesFromFont(...).map(loop => loop.polyline)`:
+ * that would pay for hashing, centroids and identity on every sketch
+ * redraw, and it would be sampled at the kernel path's tolerance. Nothing
+ * built from these points ever reaches a solid; the kernel is handed the
+ * exact beziers instead.
+ *
+ * Returns `null` when no face is loaded, so a caller can draw nothing this
+ * frame rather than block on a fetch.
+ */
+export function textDisplayLoops(
+  parameters: TextObjectParameters,
+  toleranceRatio = DISPLAY_TOLERANCE_RATIO
+): Vec2Like[][] | null {
+  const font = textFontProvider()?.(
+    parameters.fontFamily,
+    parameters.fontStyle
+  );
+  if (!font) {
+    return null;
+  }
+  const set = textProfileSet(font, {
+    text: parameters.text,
+    size: parameters.size,
+    x: parameters.x,
+    y: parameters.y,
+    rotation: ((parameters.rotationDeg ?? 0) * Math.PI) / 180,
+    align: parameters.align
+  });
+  const tolerance = parameters.size * toleranceRatio;
+  return set.regions.flatMap((region) =>
+    [region.outer, ...region.holes].map((loop) =>
+      flattenLoop(loop.segments, tolerance)
+    )
   );
 }
 
