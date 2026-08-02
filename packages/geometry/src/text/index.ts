@@ -36,6 +36,16 @@ export {
   clearTextProfileCache,
   textProfileSet
 } from './profiles';
+export {
+  setTextFontProvider,
+  textFontProvider,
+  type TextFontProvider
+} from './fontProvider';
+export {
+  textProfilesFromFont,
+  textSketchProfiles,
+  type TextObjectParameters
+} from './sketchProfiles';
 export { localPolygonUnion2d } from './polygonUnion';
 export { flattenLoop, loopSignedArea, orientLoop } from './loops';
 export { DEFAULT_LINE_HEIGHT, layoutText, type TextLayout } from './layout';

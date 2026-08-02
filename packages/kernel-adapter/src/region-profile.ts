@@ -4,6 +4,7 @@ import {
   profileContainsPoint,
   profilesShareBoundary,
   type SketchProfileAnalysisOptions,
+  type SketchProfileDiagnostic,
   type SketchRegion
 } from '@openzcad/geometry';
 import type {
@@ -30,7 +31,8 @@ import type {
  */
 function resolveEntityProfiles(
   reference: SketchEntityProfileReference,
-  profiles: SketchRegion[]
+  profiles: SketchRegion[],
+  diagnostics: readonly SketchProfileDiagnostic[]
 ): SketchRegion[] {
   const referenced = new Set(reference.sourceEntityIds);
   if (referenced.size === 0) {
@@ -44,8 +46,19 @@ function resolveEntityProfiles(
       candidate.sourceEntityIds.every((entityId) => referenced.has(entityId))
   );
   if (matches.length === 0) {
+    // An object that carries its own outlines — text — reports why it could
+    // not produce them as an analysis diagnostic. Without this the failure
+    // reads as "the entities bound nothing", which is true but describes the
+    // symptom rather than the cause (usually: the font is not loaded yet).
+    const cause = diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === 'unresolved-outline' &&
+        diagnostic.sourceEntityIds.some((entityId) => referenced.has(entityId))
+    );
     throw new Error(
-      'Broken profile reference — the sketch entities this extrude covers no longer bound any closed region.'
+      cause
+        ? `Broken profile reference — ${cause.message}`
+        : 'Broken profile reference — the sketch entities this extrude covers no longer bound any closed region.'
     );
   }
   return matches;
@@ -93,7 +106,11 @@ export function resolveRegionProfiles(
   );
   const resolved = references.flatMap((reference) => {
     if (reference.all === true) {
-      return resolveEntityProfiles(reference, analysis.profiles);
+      return resolveEntityProfiles(
+        reference,
+        analysis.profiles,
+        analysis.diagnostics
+      );
     }
     const areaTolerance = Math.max(
       Math.abs(reference.sourceArea) * 0.01,
