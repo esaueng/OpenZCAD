@@ -4,11 +4,13 @@ import {
   nowIso,
   toEntityId,
   type BodyId,
+  type EntityId,
   type ParamValue,
   type ProjectDocument,
   type SerializedCommand,
   type SketchId,
-  type SketchObjectData
+  type SketchObjectData,
+  type SketchProfileReference
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
@@ -79,7 +81,11 @@ import {
   normalizeLocalId,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
-import { computeSketchRegions, regionAtPoint } from '@openzcad/geometry';
+import {
+  computeSketchRegions,
+  regionAtPoint,
+  type SketchRegion
+} from '@openzcad/geometry';
 
 export type CommandKind =
   | 'primitive.add'
@@ -999,6 +1005,32 @@ class LocalBodyScope {
   }
 }
 
+/**
+ * Collapses repeated entity-wide references.
+ *
+ * Two sample points inside two glyphs of the same text object name the same
+ * entity, and resolving that entity twice hands the extrude the same profiles
+ * twice — which `resolveRegionProfiles` rejects as a duplicate. The
+ * same-region guard upstream cannot see this: those are genuinely different
+ * regions, they simply resolve through one reference.
+ */
+function dedupeProfileReferences(
+  references: SketchProfileReference[]
+): SketchProfileReference[] {
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    if (reference.all !== true) {
+      return true;
+    }
+    const key = [...reference.sourceEntityIds].sort().join('|');
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Converts a reviewed AI proposal into normal undoable document commands. */
 export function commandsForCadPatch(
   document: ProjectDocument,
@@ -1017,14 +1049,26 @@ export function commandsForCadPatch(
     return bodyId;
   };
 
-  /** Sketches created earlier in this proposal, addressable by $alias. */
+  /**
+   * Sketches created earlier in this proposal, addressable by $alias.
+   *
+   * The object *ids* are carried alongside the data because a profile
+   * reference may have to name them: a text object's regions are referenced by
+   * entity id, not by geometry (see `SketchEntityProfileReference`). For a
+   * sketch this proposal creates, the ids are the ones the `add_sketch`
+   * command was minted with, so they are known before it executes.
+   */
   const localSketches = new Map<
     string,
-    { sketchId: SketchId; objects: SketchObjectData[] }
+    { sketchId: SketchId; objects: SketchObjectData[]; objectIds: EntityId[] }
   >();
   const resolveSketch = (
     reference: string
-  ): { sketchId: SketchId; objects: SketchObjectData[] } => {
+  ): {
+    sketchId: SketchId;
+    objects: SketchObjectData[];
+    objectIds: EntityId[];
+  } => {
     if (isLocalBodyRef(reference)) {
       const local = localSketches.get(normalizeLocalId(reference));
       if (!local) {
@@ -1038,11 +1082,52 @@ export function commandsForCadPatch(
     if (!sketch) {
       throw new Error(`Sketch ${reference} not found in the document.`);
     }
-    const objects = sketch.objectIds.flatMap((objectId) => {
+    const objects: SketchObjectData[] = [];
+    const objectIds: EntityId[] = [];
+    for (const objectId of sketch.objectIds) {
       const node = document.nodes[objectId];
-      return node?.kind === 'sketch-object' ? [node.data] : [];
-    });
-    return { sketchId: sketch.sketchId, objects };
+      if (node?.kind === 'sketch-object') {
+        objects.push(node.data);
+        objectIds.push(objectId);
+      }
+    }
+    return { sketchId: sketch.sketchId, objects, objectIds };
+  };
+
+  /**
+   * The profile reference to persist for one resolved region.
+   *
+   * A region bounded solely by objects that carry their own outlines — today
+   * text — is referenced by entity id. Every geometry-derived field changes at
+   * once when the string does, and partially: a letter that did not move keeps
+   * resolving while one that vanished does not, which half-updates the model.
+   * Everything else keeps the geometry reference it has always had, byte for
+   * byte.
+   */
+  const profileReferenceFor = (
+    region: SketchRegion,
+    samplePoint: { x: number; y: number },
+    objects: SketchObjectData[],
+    objectIds: EntityId[]
+  ): SketchProfileReference => {
+    const kindOf = (entityId: string): SketchObjectData | undefined =>
+      objects[objectIds.indexOf(entityId as EntityId)];
+    const entityWide =
+      region.sourceEntityIds.length > 0 &&
+      region.sourceEntityIds.every(
+        (entityId) => kindOf(entityId)?.objectKind === 'text'
+      );
+    if (entityWide) {
+      return {
+        all: true,
+        sourceEntityIds: [...region.sourceEntityIds].sort()
+      };
+    }
+    return {
+      regionFingerprint: region.regionFingerprint,
+      samplePoint,
+      sourceArea: region.area
+    };
   };
 
   return proposal.operations.map((operation) => {
@@ -1086,7 +1171,8 @@ export function commandsForCadPatch(
         if (operation.localId) {
           localSketches.set(normalizeLocalId(operation.localId), {
             sketchId: ids.sketchId,
-            objects: operation.objects
+            objects: operation.objects,
+            objectIds: [...ids.objectNodeIds]
           });
         }
         return commandFactories.addSketch({
@@ -1108,7 +1194,7 @@ export function commandsForCadPatch(
           // AI paths store byte-identical features.
           const regions = computeSketchRegions(
             sketch.objects.map((data, index) => ({
-              id: `object_${index}`,
+              id: sketch.objectIds[index] ?? `object_${index}`,
               data
             })),
             (value) =>
@@ -1120,11 +1206,12 @@ export function commandsForCadPatch(
               `add_extrude samplePoint (${operation.samplePoint.x}, ${operation.samplePoint.y}) is not inside any closed region of the sketch.`
             );
           }
-          profile = {
-            regionFingerprint: region.regionFingerprint,
-            samplePoint: operation.samplePoint,
-            sourceArea: region.area
-          };
+          profile = profileReferenceFor(
+            region,
+            operation.samplePoint,
+            sketch.objects,
+            sketch.objectIds
+          );
         }
         const ids = createBodyFeatureIds();
         scope.declare(operation.localId, ids.bodyId);
@@ -1196,7 +1283,8 @@ export function commandsForCadPatch(
         if (operation.localId) {
           localSketches.set(normalizeLocalId(operation.localId), {
             sketchId: ids.sketchId,
-            objects: operation.objects
+            objects: operation.objects,
+            objectIds: [...ids.objectNodeIds]
           });
         }
         return commandFactories.addSketch({
@@ -1210,7 +1298,7 @@ export function commandsForCadPatch(
         const sketch = resolveSketch(operation.sketchId);
         const regions = computeSketchRegions(
           sketch.objects.map((data, index) => ({
-            id: `object_${index}`,
+            id: sketch.objectIds[index] ?? `object_${index}`,
             data
           })),
           (value) =>
@@ -1239,11 +1327,16 @@ export function commandsForCadPatch(
           name: operation.name,
           sketchId: sketch.sketchId,
           distance: operation.distance,
-          profiles: selected.map(({ region, samplePoint }) => ({
-            regionFingerprint: region.regionFingerprint,
-            samplePoint,
-            sourceArea: region.area
-          })),
+          profiles: dedupeProfileReferences(
+            selected.map(({ region, samplePoint }) =>
+              profileReferenceFor(
+                region,
+                samplePoint,
+                sketch.objects,
+                sketch.objectIds
+              )
+            )
+          ),
           ids
         });
       }

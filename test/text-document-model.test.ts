@@ -13,7 +13,7 @@
  * Phase 1 glyph pipeline, so the counts, areas and hole structure are the ones
  * the kernel will actually see.
  */
-import { describe, expect, it, beforeAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
@@ -36,6 +36,7 @@ import {
   computeSketchProfileAnalysis,
   flattenLoop,
   regionFingerprintOf,
+  setTextFontProvider,
   type RegionLoop,
   type SketchProfile,
   type SketchProfileSource,
@@ -49,6 +50,7 @@ import {
   type EntityId,
   type FeatureNode,
   type ProjectDocument,
+  type SketchId,
   type SketchNode,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -678,5 +680,233 @@ describe('existing documents are unaffected', () => {
     expect(resolved).toHaveLength(1);
     expect(resolved[0]!.profileId).toBe(ring.profileId);
     expect(resolved[0]!.holes).toHaveLength(1);
+  });
+});
+
+describe('the same edit through the production expansion', () => {
+  // Every test above injects a `profileSource`, whose ids are
+  // `${objectId}:${fingerprint}:${x}`. Production uses
+  // `profile_text_${fnv1a64(signature)}` over the exact bezier control points,
+  // and `resolveRegionProfiles` refuses a resolution whose profile ids are not
+  // distinct — so the production scheme is precisely the thing that could make
+  // an entity-wide match fail, and until now it was only ever exercised on its
+  // own, never together with the resolver.
+  beforeAll(async () => {
+    const library = new FontLibrary(nodeFontDataSource());
+    await library.load('open-sans', 'regular');
+    setTextFontProvider((family, style) => library.peek(family, style));
+  });
+
+  afterAll(() => {
+    setTextFontProvider(null);
+  });
+
+  it('resolves "HI" then "HELLO" with distinct production profile ids', () => {
+    const scene = textScene('HI');
+    const before = resolveRegionProfiles(
+      scene.document,
+      scene.sketch,
+      scene.extrude,
+      {}
+    );
+    expect(before).toHaveLength(2);
+    expect(
+      before.every((profile) => profile.profileId.startsWith('profile_text_'))
+    ).toBe(true);
+
+    const { scene: edited } = editText(scene, textObject('HELLO'));
+    const after = resolveRegionProfiles(
+      edited.document,
+      edited.sketch,
+      edited.extrude,
+      {}
+    );
+    expect(after).toHaveLength(5);
+    expect(new Set(after.map((profile) => profile.profileId)).size).toBe(5);
+    expect(after.filter((profile) => profile.holes.length === 1)).toHaveLength(
+      1
+    );
+  });
+
+  it('keeps repeated glyphs distinct, which the duplicate guard requires', () => {
+    // 'llll' is four copies of one outline at four positions. If the id
+    // signature omitted position, all four would collide and the resolution
+    // would be rejected as "more than one reference to the same profile".
+    for (const [text, count] of [
+      ['llll', 4],
+      ['OO', 2],
+      ['ooo', 3],
+      ['WW', 2]
+    ] as const) {
+      const scene = textScene(text);
+      const resolved = resolveRegionProfiles(
+        scene.document,
+        scene.sketch,
+        scene.extrude,
+        {}
+      );
+      expect(resolved).toHaveLength(count);
+      expect(new Set(resolved.map((profile) => profile.profileId)).size).toBe(
+        count
+      );
+    }
+  });
+
+  it('refuses to resolve a geometry reference onto a glyph region', () => {
+    // Text profiles live in the same `analysis.profiles` array as arrangement
+    // cells, and the tolerant third tier matches on area + sample point with
+    // no entity constraint at all. A reference whose own entity is gone could
+    // therefore land on whichever letter happened to sit over its stored
+    // sample point with a similar area — a silent wrong rebuild where the
+    // contract is to fail closed.
+    const scene = textScene('HELLO');
+    const glyph = resolveRegionProfiles(
+      scene.document,
+      scene.sketch,
+      scene.extrude,
+      {}
+    )[0]!;
+    const strayReference = {
+      ...scene.extrude,
+      profiles: [
+        {
+          // No profileId and no sourceEntityIds, so tiers one and two are
+          // both skipped: this is exactly a legacy reference to a deleted
+          // drawn entity, aimed at a glyph.
+          regionFingerprint: 987654321,
+          samplePoint: glyph.samplePoint,
+          sourceArea: glyph.area
+        }
+      ]
+    };
+    expect(() =>
+      resolveRegionProfiles(scene.document, scene.sketch, strayReference, {})
+    ).toThrow(/Broken profile reference/);
+  });
+
+  it('makes the AI patch path emit the entity-wide reference for text', () => {
+    // Until now nothing in product code ever constructed an `{ all: true }`
+    // reference — only tests did — so the sole reachable way to extrude text
+    // wrote exactly the fragile geometry reference this feature exists to
+    // avoid. `commandsForCadPatch` now recognises a text-bounded region.
+    const manager = new CommandManager(
+      createProjectDocument('AI text extrude', user())
+    );
+    const letterSamplePoint = computeSketchProfileAnalysis(
+      [{ id: 'probe', data: textObject('HI') }],
+      (value) => resolveParamValue(value, {}, 'sketch dimension')
+    ).profiles[1]!.samplePoint;
+    const commands = commandsForCadPatch(manager.document, {
+      proposalId: 'proposal_text_extrude',
+      summary: 'Raise a label.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'Label',
+          plane: 'XY',
+          offset: 0,
+          localId: 'label',
+          objects: [
+            {
+              objectKind: 'text',
+              text: 'HI',
+              fontFamily: 'open-sans',
+              fontStyle: 'regular',
+              size: 10,
+              x: 0,
+              y: 0
+            }
+          ]
+        },
+        {
+          kind: 'add_extrude',
+          name: 'Raised label',
+          sketchId: '$label' as SketchId,
+          localId: null,
+          distance: 5,
+          // Inside the 'I', from the glyph pipeline rather than guessed.
+          samplePoint: letterSamplePoint
+        }
+      ]
+    });
+    manager.runTransaction('Apply text extrude patch', commands);
+
+    const sketchId = getLatestSketchId(manager.document)!;
+    const textObjectId = sketchNode(manager.document, sketchId).objectIds[0]!;
+    const extrude = extrudeData(manager.document);
+    expect(extrude.profile).toEqual({
+      all: true,
+      sourceEntityIds: [textObjectId]
+    });
+
+    // And it is not decoration: the reference survives the edit that would
+    // break the geometry one.
+    const edited = updateSketchObject(manager.document, {
+      sketchId,
+      objectId: textObjectId,
+      data: textObject('HELLO')
+    });
+    expect(
+      resolveRegionProfiles(
+        edited,
+        sketchNode(edited, sketchId),
+        extrudeData(edited),
+        {}
+      )
+    ).toHaveLength(5);
+  });
+
+  it('leaves a drawn region on the geometry reference it always had', () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI circle extrude', user())
+    );
+    const commands = commandsForCadPatch(manager.document, {
+      proposalId: 'proposal_circle',
+      summary: 'Raise a disc.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'Disc',
+          plane: 'XY',
+          offset: 0,
+          localId: 'disc',
+          objects: [
+            { objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }
+          ]
+        },
+        {
+          kind: 'add_extrude',
+          name: 'Raised disc',
+          sketchId: '$disc' as SketchId,
+          localId: null,
+          distance: 5,
+          samplePoint: { x: 0, y: 0 }
+        }
+      ]
+    });
+    manager.runTransaction('Apply disc patch', commands);
+    const profile = extrudeData(manager.document).profile!;
+    expect(profile.all).not.toBe(true);
+    expect(profile).toMatchObject({ samplePoint: { x: 0, y: 0 } });
+    expect(profile).not.toHaveProperty('sourceEntityIds');
+  });
+
+  it('carries exact beziers, not the flattened polylines the stub produced', () => {
+    // The stub source flattens; the production path does not. This is the
+    // difference that made the two worth testing together.
+    const scene = textScene('o');
+    const resolved = resolveRegionProfiles(
+      scene.document,
+      scene.sketch,
+      scene.extrude,
+      {}
+    );
+    expect(resolved).toHaveLength(1);
+    expect(
+      resolved[0]!.outer.curves.some((curve) => curve.kind === 'bezier')
+    ).toBe(true);
+    expect(resolved[0]!.outline?.fidelity).toBe('exact');
   });
 });

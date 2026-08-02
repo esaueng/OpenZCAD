@@ -163,6 +163,10 @@ import {
   type FaceTarget
 } from './lib/interaction/machine';
 import { updateProfileSelection } from './lib/profileSelection';
+import {
+  isEntityWideProfileSource,
+  profileReferencesForSelection
+} from './lib/profileReferences';
 import type { SelectionActionId } from './lib/interaction/capabilities';
 import { frameFromFace } from './lib/sketch/session';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
@@ -1726,6 +1730,23 @@ export function App() {
     sketchId: SketchId | null;
   } | null>(null);
 
+  /**
+   * True for a sketch entity whose profiles must be referenced as a whole.
+   *
+   * Text is the case: the region count itself changes when the string does,
+   * so a geometry-identity reference to one glyph breaks on exactly the edit
+   * the feature is for. See `lib/profileReferences.ts`.
+   */
+  const entityWideProfileSource = useCallback(
+    (entityId: string): boolean => {
+      const node = doc?.nodes[entityId as EntityId];
+      return (
+        node?.kind === 'sketch-object' && isEntityWideProfileSource(node.data)
+      );
+    },
+    [doc]
+  );
+
   function startExtrude(sketchId: SketchId) {
     if (tool !== 'extrude') {
       extrudeSelectionReturnRef.current = {
@@ -1804,13 +1825,10 @@ export function App() {
       name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
       sketchId: extrudePreview.sketchId as SketchId,
       distance: extrudePreview.distance,
-      profiles: selectedProfiles.map((profile) => ({
-        profileId: profile.profileId,
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        sourceEntityIds: profile.sourceEntityIds
-      }))
+      profiles: profileReferencesForSelection(
+        selectedProfiles,
+        entityWideProfileSource
+      )
     });
     const createdBodyId = command.payload.ids!.bodyId;
     profileExtrudePreview.clear();
@@ -4099,17 +4117,7 @@ export function App() {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
-      profiles: profiles.map((profile) => ({
-        ...(profile.profileId.startsWith('legacy_')
-          ? {}
-          : { profileId: profile.profileId }),
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        ...(profile.sourceEntityIds.length > 0
-          ? { sourceEntityIds: profile.sourceEntityIds }
-          : {})
-      }))
+      profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     });
     const resultBodyId =
       command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
