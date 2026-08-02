@@ -22,6 +22,7 @@ import {
 import { writeAsciiStl } from '@openzcad/io-stl';
 import {
   DEFAULT_BODY_COLOR,
+  FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
   featureColor,
   nowIso,
@@ -30,6 +31,7 @@ import {
   type BodyTopology,
   type DerivedState,
   type DirectEditOperation,
+  type EdgeCurve,
   type EdgeWitnessV1,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
@@ -38,6 +40,7 @@ import {
   type ProjectDocument,
   type SketchId,
   type QuantizedTopologyPoint,
+  type ParamValue,
   type SketchNode,
   type SketchObjectData,
   type TopologyLineageDiagnostic
@@ -131,6 +134,76 @@ const DIRECT_EDIT_TOLERANCE = 1e-6;
 const FULL_REVOLUTION = Math.PI * 2;
 const PERIODIC_SURFACE_TYPES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
 
+/**
+ * Why a partial revolve of a non-circular profile publishes no ADR-013
+ * semantic names, spelled out here so a reader finds a decision rather than an
+ * unexplained empty reference set.
+ *
+ * Two independent breaks, both measured (docs/kernel-execution-plan.md, "Z7
+ * Feature exposure"), neither of them a kernel defect — the solid itself is
+ * one closed shell with `validateSolid` 0, correct caps, watertight
+ * tessellation and an exact volume at every angle:
+ *
+ * 1. `buildRevolveLineage` names each profile vertex's swept edge with
+ *    `expectedCircleWitness`, which is `closed: true` with `length: 2*pi*r`.
+ *    Below a full turn those edges are ARCS — an `EdgeWitnessV1` variant that
+ *    witness can never equal — so every profile-vertex edge role fails.
+ * 2. BrepKit splits a swept face at each 90 degree boundary, and the pieces
+ *    carry duplicate analytic parameters, so the exactly-one-match rule in
+ *    `addUniqueSemanticAssignment` goes ambiguous above 90 degrees.
+ *
+ * Shipping the angle with ADR-011 hash-only references is the deliberate
+ * call: hashes still resolve a wedge's faces and edges for selection and for
+ * downstream features, they simply do not survive a topology-changing edit
+ * the way a named role does. Reversing this needs an arc-capable edge witness
+ * and a piece-aware face role, not a change here.
+ */
+const PARTIAL_REVOLVE_HASH_ONLY_REASON =
+  'A revolve below 360 degrees publishes hash-only references by design: its swept edges are arcs rather than the closed circles ADR-013 profile-vertex roles witness, and BrepKit splits its swept faces at 90 degree boundaries into pieces with duplicate analytic parameters.';
+
+/**
+ * A revolve keeps ADR-013 semantic lineage for a full turn, and for a
+ * circular profile at any angle.
+ *
+ * The circular exemption is not a special case bolted on. A circle's revolve
+ * role is the single torus surface, named by surface type rather than by an
+ * analytic carrier, and a torus does not quadrant-split: a partial revolve of
+ * a circle measures three faces (torus plus two caps) at every angle below
+ * 360 and one at 360, so the role stays unique. That branch also publishes no
+ * profile-vertex edge roles, so neither break above applies to it.
+ */
+function revolveKeepsSemanticLineage(
+  angleDeg: number,
+  data: SketchObjectData
+): boolean {
+  return angleDeg >= FULL_REVOLVE_ANGLE_DEG || data.objectKind === 'circle';
+}
+
+/**
+ * Resolve a revolve's sweep angle and enforce the kernel's `(0, 360]` domain
+ * here rather than letting the WASM boundary throw. The kernel's own refusal
+ * is a generic operation failure naming no parameter; a rebuild warning has
+ * to say which field is out of range and what the range is.
+ *
+ * An absent field means a full turn, so a document written before partial
+ * revolve existed resolves to exactly 360 and rebuilds unchanged.
+ */
+function resolveRevolveAngleDeg(
+  angleDeg: ParamValue | undefined,
+  scope: Record<string, number>
+): number {
+  if (angleDeg === undefined) {
+    return FULL_REVOLVE_ANGLE_DEG;
+  }
+  const resolved = resolveParamValue(angleDeg, scope, 'angle');
+  if (!(resolved > 0) || resolved > FULL_REVOLVE_ANGLE_DEG) {
+    throw new Error(
+      `Revolve angle must be greater than 0 and at most ${FULL_REVOLVE_ANGLE_DEG} degrees.`
+    );
+  }
+  return resolved;
+}
+
 interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
@@ -165,6 +238,13 @@ interface ExactBuildResult {
    * refusal instead of a silently poor result.
    */
   meshBodies: Set<BodyId>;
+  /**
+   * Bodies swept by a revolve below a full turn, directly or through a
+   * derived feature. Recorded at the sweep rather than re-derived later
+   * because it is what makes an edge-modifier refusal on a wedge explainable
+   * instead of a bare "try a smaller radius" that is false at every radius.
+   */
+  partialRevolveBodies: Set<BodyId>;
   warnings: string[];
 }
 
@@ -309,6 +389,190 @@ function sameSphereSurface(kernel: BrepKernel, faces: number[]): boolean {
 }
 
 /**
+ * Bar for accepting a candidate circle as the edge's own geometry, as a
+ * fraction of how far the edge itself reaches.
+ *
+ * The sampled polyline is taken off the exact curve, so a true circle's
+ * residue is a few multiples of double-precision rounding and anything that
+ * clears this bar is a fit rather than a near miss.
+ */
+const EDGE_CIRCLE_MISFIT_TOLERANCE = 1e-6;
+
+/**
+ * How badly a candidate circle misses the edge's own sampled polyline: the
+ * larger of the radial and the out-of-plane error over every sample, divided by
+ * the extent of the polyline.
+ *
+ * Divided by the EDGE's size, never the circle's, and that is the whole point.
+ * Scaling the residue by the candidate radius hands a wrong answer a tolerance
+ * budget proportional to how wrong it is: the kernel's elliptical misreading is
+ * a radius of 7.5e11 for a curve six units across, so against its own radius a
+ * miss of several whole units scores about 4e-12 and sails through. Against the
+ * edge's own six units the same miss scores 1 and is thrown out. Every
+ * mismeasurement worth catching is one where the two scales disagree, which is
+ * exactly the case a self-relative test cannot see.
+ *
+ * This is the only thing standing between a wrong analytic radius and the
+ * published payload, so it fails closed: fewer than two samples, or samples
+ * with no extent, is unverifiable rather than acceptable and returns infinity.
+ * Exported because no fixture in the corpus is an ellipse or a spline, so
+ * nothing in CI otherwise exercises the rejection path this exists for.
+ */
+export function edgeCircleMisfit(
+  circle: { center: Vec3; axis: Vec3; radius: number },
+  points: readonly number[]
+): number {
+  const { center, axis, radius } = circle;
+  if (!Number.isFinite(radius) || radius <= GEOMETRY_EPSILON) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const samples: Vec3[] = [];
+  for (let offset = 0; offset + 2 < points.length; offset += 3) {
+    samples.push({
+      x: points[offset] ?? 0,
+      y: points[offset + 1] ?? 0,
+      z: points[offset + 2] ?? 0
+    });
+  }
+  const first = samples[0];
+  if (samples.length < 2 || !first) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const extent = samples.reduce(
+    (widest, sample) => Math.max(widest, length(subtract(sample, first))),
+    0
+  );
+  if (extent <= GEOMETRY_EPSILON) {
+    return Number.POSITIVE_INFINITY;
+  }
+  let worst = 0;
+  for (const sample of samples) {
+    const toSample = subtract(sample, center);
+    const axial = dot(toSample, axis);
+    const radial = length(subtract(toSample, scale(axis, axial)));
+    worst = Math.max(
+      worst,
+      Math.abs(radial - radius) / extent,
+      Math.abs(axial) / extent
+    );
+  }
+  return worst;
+}
+
+/**
+ * Read the circle a circular edge lies on, or `undefined` when it cannot be
+ * proven.
+ *
+ * Curvature rather than the curve's parameters, deliberately. The obvious
+ * source — `getEdgeCurveParameters` plus `evaluateEdgeCurve` across that range
+ * — reports the UNDERLYING curve's domain rather than the edge's trim of it, so
+ * a quarter fillet arc reads as a full turn. Curvature is constant along a
+ * circle, so an untrimmed parameter cannot contaminate it: the radius is right
+ * whichever point on the circle is asked, and so is the centre, because every
+ * point of the underlying circle is the same distance from it.
+ *
+ * The caller has already gated on the kernel calling this edge a CIRCLE. That
+ * gate matters — the same curvature call is silently wrong for ellipses by
+ * about 1e12 — but it is not trusted on its own: the candidate is accepted only
+ * once it has been checked against the edge's own sampled polyline, which no
+ * mismeasured radius can fit.
+ */
+function brepEdgeCircle(
+  kernel: BrepKernel,
+  edge: number,
+  points: readonly number[]
+): { center: Vec3; axis: Vec3; radius: number } | undefined {
+  let curvature: number[];
+  let position: number[];
+  try {
+    // Any parameter on the underlying circle gives the same circle. The domain
+    // start is simply one the kernel is certain to accept; nothing about the
+    // range itself is used, and nothing about it is published.
+    const parameter = Array.from(kernel.getEdgeCurveParameters(edge))[0] ?? 0;
+    curvature = Array.from(kernel.measureCurvatureAtEdge(edge, parameter));
+    position = Array.from(kernel.evaluateEdgeCurve(edge, parameter));
+  } catch {
+    // Matching `analyticSurfaceRecord`: an invalid handle throws out of the
+    // WASM boundary, and an edge the kernel will not describe is an edge with
+    // no published curve rather than a failed rebuild.
+    return undefined;
+  }
+  const curvatureValue = curvature[0];
+  const measuredTangent = finiteVec3(curvature.slice(1, 4));
+  // Points at the centre of curvature, which is what turns a point on the
+  // circle into the circle's centre.
+  const measuredInward = finiteVec3(curvature.slice(4, 7));
+  const anchor = finiteVec3(position.slice(0, 3));
+  if (
+    typeof curvatureValue !== 'number' ||
+    !Number.isFinite(curvatureValue) ||
+    curvatureValue <= GEOMETRY_EPSILON ||
+    !measuredTangent ||
+    !measuredInward ||
+    !anchor
+  ) {
+    return undefined;
+  }
+  const tangent = normalized(measuredTangent);
+  const inward = normalized(measuredInward);
+  if (!tangent || !inward) {
+    return undefined;
+  }
+  const axis = normalized(cross(tangent, inward));
+  if (!axis) {
+    return undefined;
+  }
+  const radius = 1 / curvatureValue;
+  const circle = {
+    center: add(anchor, scale(inward, radius)),
+    // The Frenet frame's sign follows the parameterization phase, which is not
+    // stable across rebuilds; the published axis is the plane's unoriented
+    // normal, so it is canonicalized like every other direction in a payload.
+    axis: canonicalDirection(axis),
+    radius
+  };
+  return edgeCircleMisfit(circle, points) <= EDGE_CIRCLE_MISFIT_TOLERANCE
+    ? circle
+    : undefined;
+}
+
+/**
+ * Describe the exact curve under an edge: always its type, plus analytic data
+ * for circles.
+ *
+ * Circles only because they are what the viewport needs and what the kernel
+ * can be held to. The type alone is still worth publishing for the rest — it
+ * is how a consumer tells a straight edge from a curved one without measuring
+ * chords.
+ *
+ * Exported for the same reason `edgeCircleMisfit` is: no document primitive
+ * produces an elliptical edge, so the only way to hold the CIRCLE gate against
+ * a real ellipse is to build one on a bare kernel and hand it to this.
+ */
+export function brepEdgeCurve(
+  kernel: BrepKernel,
+  edge: number,
+  points: readonly number[]
+): EdgeCurve | undefined {
+  let type: string;
+  try {
+    type = kernel.getEdgeCurveType(edge);
+  } catch {
+    return undefined;
+  }
+  if (typeof type !== 'string' || type.length === 0) {
+    return undefined;
+  }
+  if (type !== 'CIRCLE') {
+    return { type };
+  }
+  const circle = brepEdgeCircle(kernel, edge, points);
+  // A circle that could not be proven still publishes its type. The field
+  // narrows; it never lies.
+  return circle ? { type, circle } : { type };
+}
+
+/**
  * Translate the kernel's edge-to-face map into the face hashes the topology
  * payload publishes, sorted ascending.
  *
@@ -342,6 +606,44 @@ function brepAdjacentFaceHashes(
     return hash;
   });
   return hashes.sort((left, right) => left - right);
+}
+
+/**
+ * The two vertices an edge runs between, renumbered into the body-scoped ids
+ * `EdgeTopology.vertexIds` publishes.
+ *
+ * Read straight from the kernel rather than derived from positions. Quantizing
+ * endpoints at the ADR-011 quantum was measured against these handles and does
+ * not work — `test/vertex-identity.test.ts` carries the numbers, the decisive
+ * one being that a closed edge's display polyline begins a quarter turn away
+ * from its own vertex.
+ *
+ * NOT sorted, unlike the face hashes above. The order is the edge's own
+ * start-then-end, which is the direction `points` is sampled in and is
+ * reproducible for that reason; sorting would discard which end is which. A
+ * closed edge names one vertex twice and keeps both entries.
+ */
+function brepVertexIds(
+  edge: number,
+  handles: Uint32Array,
+  vertexIdByHandle: ReadonlyMap<number, number>
+): [number, number] | undefined {
+  if (handles.length !== 2) {
+    return undefined;
+  }
+  const ids = Array.from(handles, (handle) => {
+    const id = vertexIdByHandle.get(handle);
+    if (id === undefined) {
+      // Same guard as the face owners above: a vertex outside this solid's own
+      // vertex set means two kernel calls disagree about what the solid
+      // contains, and publishing a half-resolved pair would hide it.
+      throw new Error(
+        `Edge ${edge} names vertex handle ${handle}, which is not among this solid's vertices.`
+      );
+    }
+    return id;
+  });
+  return [ids[0]!, ids[1]!];
 }
 
 /**
@@ -470,128 +772,6 @@ function revolveRadialProfile(
     local,
     coordinateFrameMatrix(cylinder.origin, cylinder.axis)
   );
-}
-
-/**
- * Rebuild selected rims on a simple cylinder from a bounded radial profile.
- *
- * BrepKit's general fillet can return the input handle unchanged when the
- * blend is exactly half the cylinder diameter, even though the rounded radial
- * profile is valid. The profile uses a fixed, fine-grained quarter-circle
- * approximation so the result remains a valid revolved solid. Keep this
- * fallback deliberately narrow: every selected edge must be one of the two
- * full circular cap rims on a three-face analytic cylinder.
- */
-function tryExactAnalyticCylinderRimFillet(
-  kernel: BrepKernel,
-  solid: number,
-  selectedEdges: number[],
-  radius: number
-): number | null {
-  const cylinder = readAnalyticCylinder(kernel, solid);
-  if (!cylinder || selectedEdges.length === 0 || !Number.isFinite(radius)) {
-    return null;
-  }
-
-  const height = cylinder.axialMax - cylinder.axialMin;
-  const span = Math.max(1, cylinder.radius, height);
-  const linearTolerance = ANALYTIC_MATCH_EPSILON * span;
-  const lengthTolerance = Math.max(
-    linearTolerance,
-    2 * Math.PI * cylinder.radius * 1e-5
-  );
-  const selectedRims = new Set<'bottom' | 'top'>();
-
-  for (const edge of selectedEdges) {
-    const sample = edgeSampleOf(kernel, edge);
-    if (
-      !sample.closed ||
-      sample.curveType.toUpperCase() !== 'CIRCLE' ||
-      Math.abs(sample.length - 2 * Math.PI * cylinder.radius) > lengthTolerance
-    ) {
-      return null;
-    }
-    const centerOffset = subtract(sample.center, cylinder.origin);
-    const axialPosition = dot(centerOffset, cylinder.axis);
-    const radialOffset = subtract(
-      centerOffset,
-      scale(cylinder.axis, axialPosition)
-    );
-    if (length(radialOffset) > linearTolerance) {
-      return null;
-    }
-    if (
-      Math.abs(axialPosition - cylinder.axialMin) <= linearTolerance &&
-      !selectedRims.has('bottom')
-    ) {
-      selectedRims.add('bottom');
-    } else if (
-      Math.abs(axialPosition - cylinder.axialMax) <= linearTolerance &&
-      !selectedRims.has('top')
-    ) {
-      selectedRims.add('top');
-    } else {
-      return null;
-    }
-  }
-
-  if (
-    radius <= GEOMETRY_EPSILON ||
-    radius >= cylinder.radius - linearTolerance ||
-    (selectedRims.size === 2 && radius * 2 >= height - linearTolerance) ||
-    (selectedRims.size === 1 && radius >= height - linearTolerance)
-  ) {
-    return null;
-  }
-
-  const profile: Vec2[] = [];
-  const appendQuarter = (
-    center: Vec2,
-    startAngle: number,
-    endAngle: number
-  ) => {
-    const segments = 64;
-    for (let index = 0; index <= segments; index += 1) {
-      if (profile.length > 0 && index === 0) {
-        continue;
-      }
-      const angle = startAngle + ((endAngle - startAngle) * index) / segments;
-      profile.push({
-        x: center.x + radius * Math.cos(angle),
-        y: center.y + radius * Math.sin(angle)
-      });
-    }
-  };
-  const bottomAxis = { x: 0, y: cylinder.axialMin };
-  const bottomOuter = selectedRims.has('bottom')
-    ? { x: cylinder.radius - radius, y: cylinder.axialMin }
-    : { x: cylinder.radius, y: cylinder.axialMin };
-  profile.push(bottomAxis, bottomOuter);
-
-  if (selectedRims.has('bottom')) {
-    appendQuarter(
-      { x: cylinder.radius - radius, y: cylinder.axialMin + radius },
-      -Math.PI / 2,
-      0
-    );
-  }
-
-  const wallTop = selectedRims.has('top')
-    ? { x: cylinder.radius, y: cylinder.axialMax - radius }
-    : { x: cylinder.radius, y: cylinder.axialMax };
-  profile.push(wallTop);
-
-  if (selectedRims.has('top')) {
-    appendQuarter(
-      { x: cylinder.radius - radius, y: cylinder.axialMax - radius },
-      0,
-      Math.PI / 2
-    );
-  }
-
-  const topAxis = { x: 0, y: cylinder.axialMax };
-  profile.push(topAxis);
-  return revolveRadialProfile(kernel, profile, cylinder);
 }
 
 /** True when two of the selected edges meet at a shared model vertex. */
@@ -754,15 +934,6 @@ function applyEdgeModifier(
     } catch {
       modified = target;
     }
-    if (modified === target) {
-      try {
-        modified =
-          tryExactAnalyticCylinderRimFillet(kernel, target, selected, size) ??
-          target;
-      } catch {
-        modified = target;
-      }
-    }
   } else {
     try {
       modified = kernel.chamfer(target, handles, size);
@@ -851,13 +1022,20 @@ function edgeModifierSucceedsSmaller(
  * up to r2.24 and the corner chain up to r2, so an unconditional "cannot be
  * rounded at any radius" would now be false, and would bury the advice that
  * actually works.
+ *
+ * `partialRevolveTarget` is the one cause the selection's own topology cannot
+ * reveal, because a wedge's edges look ordinary — plain lines and arcs, no
+ * closed rim, no blend face. It is passed in from the build, where the
+ * feature that produced the body is known. It is still reported only after
+ * the size ladder has failed, so it never buries a working smaller size.
  */
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
-  size: number
+  size: number,
+  partialRevolveTarget: boolean
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -868,6 +1046,13 @@ function edgeModifierFailureMessage(
       edgeModifierSucceedsSmaller(kernel, target, selected, featureKind, size)
     ) {
       return `${prefix} Try a smaller ${dimension}.`;
+    }
+    // Named before the topology causes because it explains the whole body
+    // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
+    // degree wedge refuses all 12 of its edges at every radius from 0.4 down
+    // to 0.002, while the same profile at 360 rounds 4 of its 6.
+    if (partialRevolveTarget) {
+      return `${prefix} This body is a partial revolve, and the kernel cannot blend the edges of a revolved wedge at any ${dimension} yet — revolve a full turn and ${featureKind} the result, or apply the ${label.toLowerCase()} before the body is cut back to a wedge.`;
     }
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
       return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
@@ -1071,7 +1256,7 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 export interface ExactKernelAdapter {
-  readonly kind: 'brepkit' | 'occt';
+  readonly kind: 'brepkit';
   syncDocument(document: ProjectDocument): Promise<DerivedState>;
   exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   exportStl(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
@@ -1328,11 +1513,23 @@ function edgeHandlesByFingerprint(
 ): Map<number, number[]> {
   const result = new Map<number, number[]>();
   for (const edge of kernel.getSolidEdges(solid)) {
-    const hash = edgeFingerprint(kernel, edge);
-    registerHandle(result, hash, edge);
-    const legacy = legacyEdgeFingerprint(kernel, edge);
-    if (legacy !== hash) {
-      registerHandle(result, legacy, edge);
+    // Three schemes, registered together because a persisted selection may
+    // hold any of them. The witness hash is the one `BodyTopology` publishes
+    // and therefore the one a user's selection actually stores; registering
+    // it is not redundant with the fingerprint, because the two order an open
+    // edge's endpoints by different keys — `edgeSignatureOf` sorts the raw
+    // coordinates and `edgeWitnessOf` sorts the quantized ones. They agree
+    // until two endpoints tie after quantization on the leading axis, which
+    // is exactly what a partial revolve produces: its cut-plane edges sit at
+    // a numerical zero of ~1e-16, so 2 of a 90 degree wedge's 12 edges hashed
+    // one way when published and another way when resolved, and were
+    // unselectable for every downstream feature.
+    for (const hash of new Set([
+      edgeFingerprint(kernel, edge),
+      legacyEdgeFingerprint(kernel, edge),
+      topologyHashOfWitness('edge', edgeWitnessOf(kernel, edge))
+    ])) {
+      registerHandle(result, hash, edge);
     }
   }
   return result;
@@ -3031,6 +3228,11 @@ function inheritMeshOrigin(
   if (derived !== undefined && result.meshBodies.has(source)) {
     result.meshBodies.add(derived);
   }
+  // A wedge stays a wedge through a transform, mirror, pattern or shell, so
+  // the edge-modifier advice below has to travel with it.
+  if (derived !== undefined && result.partialRevolveBodies.has(source)) {
+    result.partialRevolveBodies.add(derived);
+  }
 }
 
 function collapseShape(kernel: BrepKernel, shape: ExactShape): number {
@@ -3063,6 +3265,86 @@ function unifyUnionFaces(kernel: BrepKernel, solid: number): number {
 function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
   const fused = kernel.fuseAll(Uint32Array.from(solids));
   return unifyUnionFaces(kernel, fused);
+}
+
+/**
+ * How much interior volume these solids share, summed over every pair.
+ *
+ * Zero means they can be summed safely. A positive figure means summing
+ * double-counts, and its SIZE is what tells a caller afterwards whether a
+ * fuse actually merged anything — which is why this returns a quantity
+ * rather than the boolean the first cut of it returned. By inclusion-
+ * exclusion the pairwise total is the exact correction where no three solids
+ * share a region and an overestimate where they do, so it is a lower bound on
+ * what a successful merge must remove, never an upper one.
+ *
+ * TOUCHING IS NOT OVERLAPPING, and the distinction is the whole point. Two
+ * boxes meeting exactly on a face sum to their true union, so fusing them
+ * would change topology and lineage while moving no number; two boxes that
+ * interpenetrate are counted twice by any caller that sums per-solid volumes.
+ * Only the second case is a defect, so only the second case is reported here.
+ *
+ * Bounding boxes filter first, so the exact intersect — much the more
+ * expensive call, and the one that can throw — runs only on pairs that could
+ * possibly share volume. A patterned row's boxes overlap only between
+ * neighbours, so the kernel work stays near-linear in the instance count even
+ * though the box scan is quadratic.
+ *
+ * The floor is a fraction of the pair's own bounding diagonal CUBED, not an
+ * absolute figure. A volume is L^3: an absolute floor would call a
+ * millimetre-scale overlap empty and a kilometre-scale rounding error real.
+ * This is the same dimensional mistake this project has now found in the
+ * kernel five times, and it is not worth making again here.
+ */
+function sharedSolidVolume(kernel: BrepKernel, solids: number[]): number {
+  if (solids.length < 2) {
+    return 0;
+  }
+  let total = 0;
+  const boxes = solids.map((solid) => kernel.boundingBox(solid));
+  for (let left = 0; left < solids.length; left += 1) {
+    for (let right = left + 1; right < solids.length; right += 1) {
+      const a = boxes[left]!;
+      const b = boxes[right]!;
+      const spans = [0, 1, 2].map(
+        (axis) =>
+          Math.min(a[axis + 3]!, b[axis + 3]!) - Math.max(a[axis]!, b[axis]!)
+      );
+      if (spans.some((span) => span <= 0)) {
+        continue;
+      }
+      const diagonal = Math.hypot(
+        Math.max(a[3]! - a[0]!, b[3]! - b[0]!),
+        Math.max(a[4]! - a[1]!, b[4]! - b[1]!),
+        Math.max(a[5]! - a[2]!, b[5]! - b[2]!)
+      );
+      const floor = diagonal ** 3 * 1e-9;
+      // The box overlap is an upper bound on the shared volume, so a pair
+      // whose boxes barely graze cannot clear the floor and need not be
+      // intersected at all.
+      if (spans[0]! * spans[1]! * spans[2]! <= floor) {
+        continue;
+      }
+      let shared: number;
+      try {
+        shared = kernel.volume(
+          kernel.intersect(solids[left]!, solids[right]!),
+          MEASUREMENT_DEFLECTION
+        );
+      } catch {
+        // A refused intersection is not evidence of disjointness. The boxes
+        // already say these two could share volume, so fail toward fusing: a
+        // needless fuse costs time, a missed one reports a wrong volume. The
+        // box overlap stands in for a figure the kernel would not give.
+        total += spans[0]! * spans[1]! * spans[2]!;
+        continue;
+      }
+      if (shared > floor) {
+        total += shared;
+      }
+    }
+  }
+  return total;
 }
 
 /**
@@ -3578,6 +3860,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
     const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
     const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
+    const angleDeg = resolveRevolveAngleDeg(feature.data.angleDeg, scope);
     const solid = kernel.revolve(
       face,
       point.x,
@@ -3586,21 +3869,25 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       direction.x,
       direction.y,
       direction.z,
-      360
+      angleDeg
     );
     return {
       solids: [solid],
-      lineage: buildRevolveLineage(
-        kernel,
-        solid,
-        feature,
-        String(object.id),
-        object.data,
-        basis,
-        direction,
-        point,
-        scope
-      )
+      // A partial revolve of a non-circular profile is a deliberate ADR-011
+      // hash-only body, not a lineage builder that quietly matched nothing.
+      lineage: revolveKeepsSemanticLineage(angleDeg, object.data)
+        ? buildRevolveLineage(
+            kernel,
+            solid,
+            feature,
+            String(object.id),
+            object.data,
+            basis,
+            direction,
+            point,
+            scope
+          )
+        : brepKitHashOnlyLineage('sweep', PARTIAL_REVOLVE_HASH_ONLY_REASON)
     };
   }
 
@@ -3615,6 +3902,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       consumed: new Set(),
       importedStepDiagnostics: new Map(),
       meshBodies: new Set(),
+      partialRevolveBodies: new Set(),
       warnings: [...errors]
     };
 
@@ -3750,6 +4038,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     )
                 )
               );
+              if (
+                feature.data.featureKind === 'revolve' &&
+                resolveRevolveAngleDeg(feature.data.angleDeg, scope) <
+                  FULL_REVOLVE_ANGLE_DEG
+              ) {
+                result.partialRevolveBodies.add(feature.bodyId);
+              }
             }
             break;
           case 'transform': {
@@ -4051,7 +4346,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   target,
                   selected,
                   feature.data.featureKind,
-                  size
+                  size,
+                  result.partialRevolveBodies.has(feature.data.targetBodyId)
                 )
               );
             }
@@ -4140,7 +4436,62 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
             }
             result.consumed.add(feature.data.targetBodyId);
-            result.shapes.set(feature.bodyId, { solids });
+            // Instances that interpenetrate have to become ONE solid before
+            // anything measures them. Every consumer downstream — the volume
+            // the Inspector prints, the STL writer, the mesh the viewport
+            // draws — walks this list per solid and sums, so two overlapping
+            // copies are counted twice and the interior walls are drawn. The
+            // agreement between the reported volume and the enclosed mesh
+            // volume is no defence: both sum the same list, so both are wrong
+            // by exactly the same amount and neither can catch the other.
+            //
+            // Fusing is deliberately conditional. The disjoint case is the
+            // overwhelmingly common one, it is already correct, and fusing it
+            // would rebuild topology and re-key lineage for no change in any
+            // number a user sees. So the fuse runs only where the sum is
+            // actually wrong.
+            const shared = sharedSolidVolume(kernel, solids);
+            if (shared > 0) {
+              const summed = solids.reduce(
+                (total, instance) =>
+                  total + kernel.volume(instance, MEASUREMENT_DEFLECTION),
+                0
+              );
+              const fused = fuseUniformSolid(kernel, solids);
+              const removed =
+                summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
+              // The fuse is NOT guaranteed to merge. On shallow overlaps it
+              // returns the operands essentially untouched — measured on three
+              // r5 h10 cylinders, by overlap depth (2r - d):
+              //
+              //   depth 1.0, 4.0  ->  9 faces, 0.6 of 58.8 shared removed
+              //   depth 7.0, 9.5  -> 41 and 33 faces, merged
+              //
+              // Testing "did the volume stay equal to the sum" is too weak:
+              // the fuse perturbs it by ~0.03% while merging nothing, which is
+              // enough to clear any equality bar. So the test is whether it
+              // removed a real share of the material the instances are KNOWN
+              // to share, which was measured on the way in.
+              //
+              // Half is a deliberately loose bar. The pairwise total
+              // overstates the true correction wherever three instances meet,
+              // so a correct merge can legitimately remove less than all of
+              // it; nothing near a working fuse removes under half.
+              //
+              // The body still stands either way — the instances are real and
+              // the user asked for them. Silence is the only outcome ruled
+              // out, because this defect survived precisely by being silent:
+              // the reported volume and the enclosed mesh agreed, both summing
+              // the same list.
+              if (removed < shared * 0.5) {
+                result.warnings.push(
+                  `Feature "${feature.name}": instances overlap but the merge did not take, so the reported volume counts shared material more than once.`
+                );
+              }
+              result.shapes.set(feature.bodyId, { solids: [fused] });
+            } else {
+              result.shapes.set(feature.bodyId, { solids });
+            }
             inheritMeshOrigin(
               result,
               feature.data.targetBodyId,
@@ -4589,6 +4940,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     let volume = 0;
     let valid = true;
     let strictValid = true;
+    // Vertex ids are numbered across the whole body while the handle map below
+    // is rebuilt per solid, so two solids that touch exactly — a linear pattern
+    // whose spacing equals its extent — never share an id.
+    let nextVertexId = 0;
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
@@ -4608,6 +4963,18 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       // them, and face handles are only observed to be globally unique, not
       // contracted to be.
       const faceHashByHandle = new Map<number, number>();
+      // Vertex handle -> body-scoped id, for the same reason and with the same
+      // scoping: `getSolidVertices` is per solid, and vertex handles are only
+      // observed to be globally unique, not contracted to be. Numbered from
+      // the kernel's own vertex list rather than from the order edges happen
+      // to name them, so the ids do not depend on the edge loop below.
+      const vertexIdByHandle = new Map<number, number>();
+      for (const vertex of kernel.getSolidVertices(solid)) {
+        if (!vertexIdByHandle.has(vertex)) {
+          vertexIdByHandle.set(vertex, nextVertexId);
+          nextVertexId += 1;
+        }
+      }
       const mesh = kernel.tessellateSolidGroupedBinary(
         solid,
         displayTessellation.linearDeflection,
@@ -4713,6 +5080,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               message: `BrepKit edge lineage ${reference.lineageName} no longer matches its exact measured witness.`
             });
           }
+          const points = edgePositions.slice(
+            edgeOffsets[index],
+            edgeOffsets[index + 1]
+          );
           topology.edges.push({
             topologyId: `edge:${hash}`,
             hash,
@@ -4723,10 +5094,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               edgeToFaces,
               faceHashByHandle
             ),
-            points: edgePositions.slice(
-              edgeOffsets[index],
-              edgeOffsets[index + 1]
-            )
+            // Given the sampled polyline so a candidate circle is checked
+            // against the edge's own geometry before it is published.
+            curve: brepEdgeCurve(kernel, edge, points),
+            vertexIds: brepVertexIds(
+              edge,
+              kernel.getEdgeVertexHandles(edge),
+              vertexIdByHandle
+            ),
+            points
           });
         }
       } finally {
@@ -5050,9 +5426,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
  *
  * Until Z3 a document carrying an `imported-step` feature rerouted WHOLE to
  * OpenCascade, so an import and everything modelled on top of it were built by
- * a second kernel. That reroute is gone: there is one kernel on the production
- * path, and `occt-step.ts` survives only as the cross-kernel reference the
- * parity corpus measures against until Z5 deletes it.
+ * a second kernel. That reroute is gone and Z5 removed the second kernel from
+ * this package: there is one kernel, one code path, and `kind` is a constant.
+ * The OpenCascade adapter survives only as the parity corpus's reference
+ * implementation, in `test/parity/occt-reference/`, and nothing in the shipped
+ * app can reach it.
  */
 export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
   return new BrepKitKernelAdapter();

@@ -9,6 +9,7 @@ import {
   PDFJS_ASSET_BASE,
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
+import { resolveSourceCommit } from './build/sourceCommit';
 import {
   FONT_ASSET_BASE,
   FONT_FAMILIES
@@ -84,21 +85,16 @@ async function brepkitBuildInfo(): Promise<{
 }
 
 function sourceCommit(): string {
-  const supplied =
-    process.env.OPENZCAD_BUILD_COMMIT ??
-    process.env.GITHUB_SHA ??
-    process.env.CF_PAGES_COMMIT_SHA;
-  if (supplied?.trim()) {
-    return supplied.trim();
-  }
-  try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd: fileURLToPath(new URL('../..', import.meta.url)),
-      encoding: 'utf8'
-    }).trim();
-  } catch {
-    return 'unknown';
-  }
+  return resolveSourceCommit(process.env, () => {
+    try {
+      return execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: fileURLToPath(new URL('../..', import.meta.url)),
+        encoding: 'utf8'
+      });
+    } catch {
+      return null;
+    }
+  });
 }
 
 function buildMetadata(
