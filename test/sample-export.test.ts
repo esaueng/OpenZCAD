@@ -110,17 +110,21 @@ describe('walkthrough bracket sample', { timeout: 30_000 }, () => {
     // the drill from that already-faceted body facets the bore too.
     //
     // The committed samples/parametric-bracket.step is therefore faceted.
-    // The assertions below are recording what the kernel does today, not
-    // endorsing it — see the Phase 3 report.
-    expect(derived.warnings).toEqual([
-      expect.stringContaining(
-        'Feature "Plate + Boss": The boolean returned a faceted approximation'
-      ),
-      expect.stringContaining(
-        'Feature "Bracket": The boolean replaced every curved surface'
-      )
-    ]);
+    //
+    // What is asserted is the shape of the answer, not today's answer: every
+    // warning the sample produces must be a census warning, and the census
+    // must agree with the faces on the body. A kernel that stops faceting
+    // passes this; a kernel that starts emitting some other warning does not.
+    const FACET_CENSUS_MESSAGE =
+      /faceted approximation instead of exact surfaces|replaced every curved surface with planar faces|produced far more faces than its operands/;
+    expect(
+      derived.warnings.filter((warning) => !FACET_CENSUS_MESSAGE.test(warning))
+    ).toEqual([]);
     const bracket = derived.bodyRepresentations[bracketBody]!;
+    const curvedFaces = (bracket.topology?.faces ?? []).filter(
+      (face) => face.geometry && face.geometry.surfaceType !== 'plane'
+    ).length;
+    expect(curvedFaces === 0).toBe(derived.warnings.length > 0);
     expect(bracket.consumed).toBe(false);
     expect(derived.exportableBodyIds).toEqual([bracketBody]);
 
