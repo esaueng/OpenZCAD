@@ -19,6 +19,7 @@
 import { flattenLoop } from './loops';
 import { textFontProvider } from './fontProvider';
 import { textProfileSet } from './profiles';
+import { findFontFamily, resolveFontStyle } from './registry';
 import { TextGeometryError } from './types';
 import type { LoadedFont } from './loader';
 import type {
@@ -237,7 +238,14 @@ function profileFor(
     },
     validity: 'valid',
     diagnostics: [],
-    samplePoint: { x: region.samplePoint.x, y: region.samplePoint.y }
+    samplePoint: { x: region.samplePoint.x, y: region.samplePoint.y },
+    // Carried, not dropped. A `'unioned'` region is every segment a line —
+    // the overlap union works on polygons — so its walls extrude and export
+    // faceted. That is a visible product regression and the adapter warns
+    // about it; discarding the flag here is what would make it silent.
+    outline: {
+      fidelity: region.source === 'unioned' ? 'flattened' : 'exact'
+    }
   };
 }
 
@@ -277,6 +285,24 @@ export function textProfilesFromFont(
 }
 
 /**
+ * The face to actually draw with, honouring the registry's fallback chain.
+ *
+ * Not every bundled family ships every style — Oswald and Roboto Slab have no
+ * designed italic, Pacifico has only a regular — and the plan's rule is that a
+ * missing style degrades to a real file rather than to a synthetic shear.
+ * `resolveFontStyle` owns that chain; this is the only runtime caller of it,
+ * and without this call `{ oswald, italic }` failed permanently with a message
+ * that read like a transient loading problem.
+ */
+function loadedFace(
+  lookup: (familyOrId: string, style: FontStyle) => LoadedFont | undefined,
+  familyOrId: string,
+  style: FontStyle
+): LoadedFont | undefined {
+  return lookup(familyOrId, resolveFontStyle(familyOrId, style) ?? style);
+}
+
+/**
  * Coarse closed polylines for one text object — **viewport display only**.
  *
  * Deliberately not `textProfilesFromFont(...).map(loop => loop.polyline)`:
@@ -292,10 +318,10 @@ export function textDisplayLoops(
   parameters: TextObjectParameters,
   toleranceRatio = DISPLAY_TOLERANCE_RATIO
 ): Vec2Like[][] | null {
-  const font = textFontProvider()?.(
-    parameters.fontFamily,
-    parameters.fontStyle
-  );
+  const provider = textFontProvider();
+  const font = provider
+    ? loadedFace(provider, parameters.fontFamily, parameters.fontStyle)
+    : undefined;
   if (!font) {
     return null;
   }
@@ -335,7 +361,16 @@ export function textSketchProfiles(
         'Call setTextFontProvider once the font faces a document needs are loaded.'
     );
   }
-  const font = provider(parameters.fontFamily, parameters.fontStyle);
+  if (!findFontFamily(parameters.fontFamily)) {
+    throw new TextGeometryError(
+      `There is no bundled font family "${parameters.fontFamily}".`
+    );
+  }
+  const font = loadedFace(
+    provider,
+    parameters.fontFamily,
+    parameters.fontStyle
+  );
   if (!font) {
     throw new TextGeometryError(
       `The font face "${parameters.fontFamily}" ${parameters.fontStyle} is not loaded yet.`
