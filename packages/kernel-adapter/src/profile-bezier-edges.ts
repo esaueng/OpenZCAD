@@ -6,39 +6,48 @@ import type {
 } from '@openzcad/geometry';
 
 /**
- * Exact bezier profile edges, behind a feature flag that is **off by default**.
+ * Exact bezier profile edges, on by default.
  *
  * Glyph outlines are quadratic (TrueType) or cubic (PostScript) beziers, and
- * the text fast path can hand them to the kernel as exact NURBS edges: a smooth
- * wall at any zoom and a faithful STEP export, where a flattened one produces a
- * visibly faceted stem. That is the better geometry, and it is not the default.
+ * the text fast path hands them to the kernel as exact NURBS edges. That is
+ * the difference between a smooth wall and a visibly faceted one: an Open Sans
+ * 'o' is 25 walls exact and 409 flattened, and every one of those 409 is a
+ * separate face the viewer outlines, so a flattened letter reads as striped
+ * rather than round. It also decides whether STEP export carries curves.
  *
- * The reason is a kernel defect, not a preference. An extruded glyph with
- * exact-NURBS walls comes back watertight, with the right face count, and
- * volume-correct to four decimals — and *misclassified*. Sweeping 109 points
- * through an extruded Open Sans 'o' at mid-height and comparing `classifyPoint`
- * against a winding-number ground truth computed from the same segments, 16 of
- * 109 are wrong: points outside the glyph report `inside`, points inside the
- * left wall report `outside`. The identical solid built with flattened walls
- * scores 0 of 109. brepkit tracks this as the `#[ignore]` ready-repro
- * `o_glyph_bezier_cap_band_is_misclassified`.
+ * This was briefly defaulted off, and the reasoning was wrong in an
+ * instructive way. An extruded glyph with exact walls *is* misclassified in
+ * the middle of its bezier cap band — 16 of 109 probe points through an
+ * extruded 'o' disagree with a winding-number ground truth, where flattened
+ * walls score 0 of 109, and brepkit tracks that as the `#[ignore]` repro
+ * `o_glyph_bezier_cap_band_is_misclassified`. From "booleans stand on
+ * classification" it seemed to follow that emboss and engrave were unreliable
+ * on curved letters. That inference was not tested, and it is false.
  *
- * Classification is what booleans stand on, so emboss and engrave — the whole
- * point of text on a model — are unreliable on curved letters through the exact
- * path. Faceted-but-correct beats smooth-but-wrong, so flattening is the
- * default until that repro passes.
+ * Emboss and engrave contact the slab on a *flat* face; the misclassified
+ * band is nowhere near the intersection the boolean has to resolve. Measured
+ * directly in `text-kernel-build.test.ts`, a 'Bo' — counters and curved stems
+ * — unions and subtracts against a slab through both wall modes and lands
+ * watertight, non-manifold-free, and within 1e-4 of the closed-form volume
+ * either way. A boolean that had consulted a lying classifier would not hit
+ * that number by luck.
  *
- * Turn the exact path back on with `setBezierProfileEdges(true)`, or
- * `globalThis.openzcadBezierProfileEdges = true` before this module loads. It
- * is the right default again the moment the kernel defect is fixed; flipping
- * `DEFAULT_EXACT_BEZIER_EDGES` is the whole change.
+ * So the defect is real, still open, and does not reach the flows this
+ * feature exists for. What it does still affect is direct `classifyPoint`
+ * queries deep inside a curved glyph wall. If that starts to matter, the fix
+ * is the kernel repro, not this flag.
+ *
+ * `setBezierProfileEdges(false)` selects flattening for a caller that needs
+ * it, and `globalThis.openzcadBezierProfileEdges = false` does it for a
+ * deployment before this module loads.
  */
 
 /**
- * Whether beziers reach the kernel exact. `false` until
- * `o_glyph_bezier_cap_band_is_misclassified` passes — see the module note.
+ * Whether beziers reach the kernel exact. Kept as a named constant because
+ * tests pin it: the default is a decision backed by the curved-glyph boolean
+ * measurement above, not an incidental value.
  */
-export const DEFAULT_EXACT_BEZIER_EDGES = false;
+export const DEFAULT_EXACT_BEZIER_EDGES = true;
 
 /** Chord deviation the fallback polyline may keep, as a fraction of extent. */
 const FALLBACK_CHORD_RATIO = 1 / 2000;

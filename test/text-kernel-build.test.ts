@@ -230,17 +230,9 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
 
     const holedBody = bodyOf(holed);
     const solidBody = bodyOf(solid);
-    // 'Bo' is curved, and the default flattens walls to a chord deviation of
-    // 1/2000 of extent, so its volume is an inscribed polygon's — about 6e-5
-    // under the true area. That is the approximation working as specified,
-    // not drift, so this is 3 decimals where the straight-sided case below
-    // stays at 4. Neither number is what proves the counters exist: the 1.15x
-    // margin further down is.
     expect(
       volumeRatio(holedBody, textArea(openSans, 'Bo') * EXTRUDE_DEPTH)
-    ).toBeCloseTo(1, 3);
-    // 'Il' has no curves at all, so flattening changes nothing about it and
-    // there is no reason to relax this one.
+    ).toBeCloseTo(1, 4);
     expect(
       volumeRatio(solidBody, textArea(openSans, 'Il') * EXTRUDE_DEPTH)
     ).toBeCloseTo(1, 4);
@@ -270,14 +262,11 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       (total, region) => total + region.outer.segments.length,
       0
     );
-    // caps + outer walls + hole walls, over two letters. Equality holds only
-    // on the exact path, where one segment is one wall — the default flattens
-    // each curved segment into many, so here this is a floor. The exact
-    // identity is asserted in the opt-in test below, which pins `plane` to
-    // exactly 2 and every other face to a spline.
-    expect(holedBody.faceCount).toBeGreaterThanOrEqual(
-      2 * 2 + outerWalls + holeWalls
-    );
+    // caps + outer walls + hole walls, over two letters. One glyph segment is
+    // one wall on the exact path, so this is an equality — and it is the
+    // assertion that would catch a counter being dropped or a wall being
+    // silently subdivided.
+    expect(holedBody.faceCount).toBe(2 * 2 + outerWalls + holeWalls);
 
     expect(meshComponents(holedBody)).toBe(2);
     expect(meshComponents(solidBody)).toBe(2);
@@ -521,32 +510,104 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     }
   });
 
-  // Locks the decision itself, not an implementation detail. Exact-NURBS walls
-  // are the better geometry and produce misclassified solids
-  // (`o_glyph_bezier_cap_band_is_misclassified` in brepkit): 16 of 109 probe
-  // points wrong on an extruded 'o', where flattened walls score 0. Booleans
-  // stand on classification, so emboss and engrave are unreliable on curved
-  // letters through the exact path. If someone flips this default back before
-  // that repro passes, this test is the thing that stops them.
-  it('defaults to flattened walls, because exact ones misclassify', () => {
-    expect(DEFAULT_EXACT_BEZIER_EDGES).toBe(false);
-    expect(bezierProfileEdgesEnabled()).toBe(false);
+  /**
+   * Emboss and engrave with a CURVED letter, through both wall modes.
+   *
+   * The existing emboss case above uses 'TEXT', which is entirely
+   * straight-sided — so no boolean test touched a bezier wall, which is
+   * exactly where the risk lives. 'Bo' has three counters and curved stems.
+   *
+   * This is also the measurement that decides the default. Exact walls are
+   * misclassified in the middle of the bezier cap band, but emboss and engrave
+   * contact the slab on a FLAT face, so the question is whether that
+   * misclassification actually reaches the boolean. Asserting closed-form
+   * volume answers it: a boolean that consulted a lying classifier does not
+   * land within 1e-4 of the right number by luck.
+   */
+  for (const exact of [false, true]) {
+    const label = exact ? 'exact bezier walls' : 'flattened walls';
+    it(`embosses and engraves a curved glyph with ${label}`, async () => {
+      setBezierProfileEdges(exact);
+      try {
+        const glyphArea = textArea(openSans, 'Bo');
+        for (const operation of ['union', 'subtract'] as const) {
+          const withSlab = addPrimitiveFeature(
+            createProjectDocument('Curved', toUserId('user_text_curved')),
+            {
+              name: 'Slab',
+              primitiveKind: 'box',
+              dimensions: { width: 120, height: 40, depth: 4 }
+            }
+          );
+          const slabId = withSlab.bodyOrder.at(-1)!;
+          const created = addSketchFeature(withSlab, {
+            name: 'Label',
+            planeRef: { type: 'canonical', plane: 'XY', offset: 2 },
+            objects: [textObject('Bo', { x: 8, y: 12 })]
+          });
+          const sketch = findSketch(created.document, created.sketchId)!;
+          const withExtrude = extrudeSketch(created.document, {
+            name: 'Raised label',
+            sketchId: created.sketchId,
+            distance: EXTRUDE_DEPTH,
+            profiles: [{ all: true, sourceEntityIds: [sketch.objectIds[0]!] }]
+          });
+          const manager = new CommandManager(withExtrude.document);
+          const document = manager.execute(
+            commandFactories.booleanBodies({
+              name: operation === 'union' ? 'Emboss' : 'Engrave',
+              operation,
+              targetBodyIds: [slabId, withExtrude.bodyId]
+            })
+          );
+          const body = bodyOf(await adapter.syncDocument(document));
+          const closure = inspectTriangleMeshClosure(
+            body.mesh.vertices,
+            body.mesh.indices
+          );
+          expect(closure.boundaryEdges, `${label} ${operation}`).toBe(0);
+          expect(closure.nonManifoldEdges, `${label} ${operation}`).toBe(0);
+
+          // The glyph prism spans z 2..7 against a slab of z 0..4, so a union
+          // adds the 3 mm standing proud and a subtract removes the 2 mm
+          // buried in it.
+          const slab = 120 * 40 * 4;
+          const expected =
+            operation === 'union'
+              ? slab + glyphArea * (EXTRUDE_DEPTH - 2)
+              : slab - glyphArea * 2;
+          expect(
+            volumeRatio(body, expected),
+            `${label} ${operation} volume`
+          ).toBeCloseTo(1, 4);
+        }
+      } finally {
+        setBezierProfileEdges(DEFAULT_EXACT_BEZIER_EDGES);
+      }
+    });
+  }
+
+  // Locks the decision, not an incidental value. Exact walls are the default
+  // because the curved-glyph emboss and engrave above land correct through
+  // them — not because the misclassification repro was fixed. It is still
+  // open. Anyone flipping this should have a measurement, the way the pair of
+  // tests above is one.
+  it('defaults to exact walls, which curved booleans are measured to survive', () => {
+    expect(DEFAULT_EXACT_BEZIER_EDGES).toBe(true);
+    expect(bezierProfileEdgesEnabled()).toBe(true);
   });
 
-  it('takes the flattening default without warning about it', async () => {
+  it('takes the exact default without warning about it', async () => {
     const scene = textScene('o');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const derived = await adapter.syncDocument(scene.document);
-      const flattened = bodyOf(derived);
-      // The default is not a degradation to report. A warning on every text
-      // rebuild is the kind users learn to scroll past, which costs the
-      // signal when something genuinely goes wrong.
+      const exact = bodyOf(derived);
       expect(derived.warnings).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
       const closure = inspectTriangleMeshClosure(
-        flattened.mesh.vertices,
-        flattened.mesh.indices
+        exact.mesh.vertices,
+        exact.mesh.indices
       );
       expect(closure.boundaryEdges).toBe(0);
       expect(closure.nonManifoldEdges).toBe(0);
@@ -555,22 +616,23 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     }
   });
 
-  it('produces a smoother solid when exact beziers are opted into', async () => {
+  it('keeps a curved letter to a handful of walls rather than hundreds', async () => {
     const scene = textScene('o');
-    const flattened = bodyOf(await adapter.syncDocument(scene.document));
+    const exact = bodyOf(await adapter.syncDocument(scene.document));
 
-    setBezierProfileEdges(true);
+    setBezierProfileEdges(false);
     try {
-      const exact = bodyOf(await adapter.syncDocument(scene.document));
-      // The opt-in is a real upgrade in appearance: the same letter needs far
-      // fewer walls, and its volume is the curve's rather than a polygon's
-      // inscribed approximation of it.
+      const flattened = bodyOf(await adapter.syncDocument(scene.document));
+      // This ratio is the whole user-visible difference. Every flattened wall
+      // is a separate face the viewer outlines, so an 'o' built this way reads
+      // as striped instead of round.
       expect(flattened.faceCount).toBeGreaterThan(exact.faceCount * 3);
+      // Flattening inscribes the curve, so it also loses a little volume.
       expect(flattened.volume).toBeLessThan(exact.volume);
       expect(flattened.volume / exact.volume).toBeGreaterThan(0.999);
       const closure = inspectTriangleMeshClosure(
-        exact.mesh.vertices,
-        exact.mesh.indices
+        flattened.mesh.vertices,
+        flattened.mesh.indices
       );
       expect(closure.boundaryEdges).toBe(0);
       expect(closure.nonManifoldEdges).toBe(0);
