@@ -1067,6 +1067,53 @@ the `brepkit_approx` census the Hardening row keeps as a CI metric, but the
 dropped-operand and ignored-cut cases would **not** — they produce no
 approximation at all, just less geometry.
 
+### Measuring defects where the user meets them, not where they live
+
+Every defect above is recorded at kernel level, which is where they get
+fixed — but it is not where they get *noticed*, and two of them turned out
+to be materially worse when measured through `syncDocument`, on the mesh the
+viewport draws and the volume the UI prints. Both are pinned that way now,
+each with `it.fails` tests asserting the right answer so they turn red on
+the day the kernel stops being wrong.
+
+**A hollowed body reports its volume as if solid**
+(`test/hollow-body-volume.test.ts`). An r10 h20 cylinder with a fully
+enclosed r4 h8 void comes back as **6283.185307179587** — not approximately
+the solid cylinder, *exactly* `π·10²·20` — against a closed form of
+5881.061447520093. **6.8 % high, with an empty warnings array.**
+`kernel.volume` ignores inner shells; `massProperties` reads the same body
+right to 1.2e-9; and the adapter reports every body through the first. That
+the number is exactly the un-hollowed volume is what identifies it as a
+dropped shell rather than an integration error. Shelling is a core workflow,
+so this is wrong in the product today rather than latent.
+
+**A cross-drilled shaft is drawn differently from how it measures**
+(`test/cross-drilled-render.test.ts`), and this is **wider than the
+kernel-level record**, which described only the equal-radius case:
+
+| bore r | app prints | mesh encloses | boundary edges |
+| --- | --- | --- | --- |
+| 3 (equal) | 704.263 | **847.724** | 0 |
+| 2 | 750.652 | 796.736 | **1542** |
+| 1 | 802.579 | 825.382 | **1154** |
+
+Undrilled stock is 848.230; the equal-radius answer is 704.230 by Steinmetz.
+So at equal radius the viewport shows a shaft with **no hole** — within
+0.06 % of undrilled — while the printed volume says there is one, and the
+mesh is watertight so nothing downstream objects. At smaller radii the hole
+*is* drawn but the surface **leaks**. The record implicitly treated
+non-tangent bores as fine; they are not, they fail differently.
+
+*Two method notes, because both nearly produced a false report.* The first
+probe showed a perfect no-op at every radius — identical volume **and**
+identical triangle count — which was too clean to be a kernel result: the
+transform field is `rotationDeg`, not `rotation`, so the rotation was
+silently dropped and the bore sat outside the shaft entirely. Subtracting a
+disjoint body *is* correctly a no-op. And the boundary-edge counts mean
+nothing until vertices are welded by **position**, because this kernel emits
+duplicates at seams and an index-based count reports those as holes; welding
+changed nothing here, which is what makes the counts trustworthy.
+
 ---
 
 ## 6. M5 — Platform (K2, product-sequenced)
