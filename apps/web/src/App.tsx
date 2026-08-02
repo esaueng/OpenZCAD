@@ -3705,6 +3705,29 @@ export function App() {
       ...object,
       ...(sketchConstruction ? { construction: true } : {})
     };
+    /**
+     * A placed text object says "Text" in a default face — useless until it is
+     * edited, and the editor is where every one of its parameters lives. So
+     * placing one selects it and hands over to Select, the way a drawing app
+     * drops you into the caret.
+     *
+     * This has to run for the first object of a brand-new sketch as well as
+     * for later ones. Start a sketch, press T, click — that is the common
+     * path, and it is the one that goes through `addSketch`.
+     */
+    const selectIfText = (sketchId: SketchId) => {
+      if (committedObject.objectKind !== 'text') {
+        return;
+      }
+      const objectId = managerRef.current
+        ? findSketch(managerRef.current.document, sketchId)?.objectIds.at(-1)
+        : undefined;
+      if (objectId) {
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+        dispatchInteraction({ type: 'sketch-select-object', objectId });
+      }
+    };
+
     if (!session.sketchId) {
       const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
       if (
@@ -3721,37 +3744,23 @@ export function App() {
       const sketchId = managerRef.current?.document.sketchOrder.at(-1);
       if (sketchId) {
         dispatchInteraction({ type: 'sketch-created', sketchId });
+        selectIfText(sketchId);
       }
       setStatus(`${name} started.`);
       return;
     }
-    const added = executeCommand(
-      commandFactories.addSketchObjects(
-        {
-          sketchId: session.sketchId as SketchId,
-          objects: [committedObject]
-        },
-        `Add ${committedObject.objectKind}`
+    if (
+      executeCommand(
+        commandFactories.addSketchObjects(
+          {
+            sketchId: session.sketchId as SketchId,
+            objects: [committedObject]
+          },
+          `Add ${committedObject.objectKind}`
+        )
       )
-    );
-    // A placed text object says "Text" in a default face — useless until it is
-    // edited, and the editor is where every one of its parameters lives. So
-    // placing one selects it and hands over to Select, the way a drawing app
-    // drops you into the caret. The other kinds are drawn to their final shape
-    // and would only be interrupted by this.
-    if (added && committedObject.objectKind === 'text') {
-      const objectId = managerRef.current?.document.nodes[
-        session.sketchId
-      ]?.kind === 'sketch'
-        ? findSketch(
-            managerRef.current.document,
-            session.sketchId as SketchId
-          )?.objectIds.at(-1)
-        : undefined;
-      if (objectId) {
-        dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
-        dispatchInteraction({ type: 'sketch-select-object', objectId });
-      }
+    ) {
+      selectIfText(session.sketchId as SketchId);
     }
   }
 

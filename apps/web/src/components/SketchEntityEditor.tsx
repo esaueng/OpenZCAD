@@ -17,6 +17,13 @@ interface SketchEntityEditorProps {
 interface FieldDefinition {
   key: string;
   label: string;
+  /**
+   * Shown when the object carries no value for this key. Optional fields —
+   * a text object's `rotation` — are absent on every object created before
+   * the field existed, and an empty expression input is invalid, which would
+   * disable Apply on an object the user had not touched.
+   */
+  fallback?: string;
 }
 
 const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
@@ -53,8 +60,12 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
   // Only the numeric fields. The string, family and style need a dedicated
   // editor (the text tool's form) rather than an expression input, so this
   // generic editor exposes what it can drive and leaves the rest alone.
+  // Position and rotation place the text on the face being sketched; the
+  // string, family and style are not expression fields and live in
+  // `TextObjectFields` above the grid.
   text: [
     { key: 'size', label: 'Size' },
+    { key: 'rotation', label: 'Rotation', fallback: '0' },
     { key: 'x', label: 'X' },
     { key: 'y', label: 'Y' }
   ]
@@ -62,10 +73,10 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
 
 function initialValues(data: SketchObjectData): Record<string, string> {
   return Object.fromEntries(
-    FIELDS[data.objectKind].map(({ key }) => [
-      key,
-      String((data as unknown as Record<string, string | number>)[key] ?? '')
-    ])
+    FIELDS[data.objectKind].map(({ key, fallback }) => {
+      const raw = (data as unknown as Record<string, string | number>)[key];
+      return [key, raw === undefined ? (fallback ?? '') : String(raw)];
+    })
   );
 }
 
@@ -87,6 +98,7 @@ function nextData(
         objectKind: kind,
         ...(text ?? {}),
         size: value('size'),
+        rotation: value('rotation'),
         x: value('x'),
         y: value('y')
       };
