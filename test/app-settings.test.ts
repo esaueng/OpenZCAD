@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APP_SETTINGS, deepClone, toUserId } from '@openzcad/shared';
+import {
+  DEFAULT_APP_SETTINGS,
+  deepClone,
+  PANEL_WIDTH_LIMITS,
+  toUserId,
+  type AppSettings
+} from '@openzcad/shared';
 import {
   APP_SETTINGS_STORAGE_KEY,
   defaultAppSettings,
@@ -110,6 +116,77 @@ describe('application settings', () => {
         'development'
       )
     ).toBe('http://localhost:11434/v1/responses');
+  });
+
+  it('carries resized panel widths to the account, in range', () => {
+    // Layout widths ride the settings sync so a resized sidebar follows the
+    // account to the next browser, rather than being stranded on one device.
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.layout = { sidebarWidth: 318, assistantWidth: 505 };
+
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings },
+        'development'
+      ).settings.layout
+    ).toEqual({ sidebarWidth: 318, assistantWidth: 505 });
+
+    // A width from a client with different limits is brought into range, not
+    // treated as a reason to reject everything else in the payload.
+    const extreme = deepClone(DEFAULT_APP_SETTINGS);
+    extreme.layout = { sidebarWidth: 4_000, assistantWidth: 12 };
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: extreme },
+        'development'
+      ).settings.layout
+    ).toEqual({
+      sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.max,
+      assistantWidth: PANEL_WIDTH_LIMITS.assistant.min
+    });
+  });
+
+  it('accepts an account payload from a client that predates the layout', () => {
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as AppSettings & {
+      layout?: AppSettings['layout'];
+    };
+    delete legacy.layout;
+
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: legacy },
+        'development'
+      ).settings.layout
+    ).toEqual({
+      sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.default,
+      assistantWidth: PANEL_WIDTH_LIMITS.assistant.default
+    });
+  });
+
+  it('normalizes stored panel widths without discarding the settings', () => {
+    const normalized = normalizeAppSettings({
+      layout: { sidebarWidth: '340', assistantWidth: 1_200 }
+    });
+    expect(normalized.layout.sidebarWidth).toBe(
+      PANEL_WIDTH_LIMITS.sidebar.default
+    );
+    expect(normalized.layout.assistantWidth).toBe(
+      PANEL_WIDTH_LIMITS.assistant.max
+    );
+    expect(
+      normalizeAppSettings({ layout: { sidebarWidth: 301.6 } }).layout
+    ).toEqual({
+      sidebarWidth: 302,
+      assistantWidth: PANEL_WIDTH_LIMITS.assistant.default
+    });
+  });
+
+  it('round-trips a resized panel through device storage', () => {
+    const resized = defaultAppSettings();
+    resized.layout.sidebarWidth = 288;
+
+    expect(saveLocalAppSettings(resized, null)).toBe(true);
+    expect(loadLocalAppSettings().layout.sidebarWidth).toBe(288);
   });
 
   it('keeps an unsaved device change from being reverted by the account copy', () => {
