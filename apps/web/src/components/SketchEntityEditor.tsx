@@ -4,6 +4,7 @@ import type { SketchObjectData } from '@openzcad/shared';
 import { Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
+import { TextObjectFields, type TextAttributes } from './TextObjectFields';
 
 interface SketchEntityEditorProps {
   data: SketchObjectData;
@@ -48,6 +49,14 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
     { key: 'centerY', label: 'Center Y' },
     { key: 'startAngleDeg', label: 'Start angle' },
     { key: 'endAngleDeg', label: 'End angle' }
+  ],
+  // Only the numeric fields. The string, family and style need a dedicated
+  // editor (the text tool's form) rather than an expression input, so this
+  // generic editor exposes what it can drive and leaves the rest alone.
+  text: [
+    { key: 'size', label: 'Size' },
+    { key: 'x', label: 'X' },
+    { key: 'y', label: 'Y' }
   ]
 };
 
@@ -61,13 +70,29 @@ function initialValues(data: SketchObjectData): Record<string, string> {
 }
 
 function nextData(
-  kind: SketchObjectData['objectKind'],
-  values: Record<string, string>
+  data: SketchObjectData,
+  values: Record<string, string>,
+  text: TextAttributes | null
 ): SketchObjectData {
   const value = (key: string) => coerceParamValue(values[key] ?? '');
+  const kind = data.objectKind;
   switch (kind) {
+    case 'text':
+      // Every case spreads `...data` first. The fields this editor exposes
+      // are then overwritten, and everything else survives — `construction`
+      // on any kind. Rebuilding a fresh object literal instead silently
+      // un-marked construction geometry the moment its radius was edited.
+      return {
+        ...data,
+        objectKind: kind,
+        ...(text ?? {}),
+        size: value('size'),
+        x: value('x'),
+        y: value('y')
+      };
     case 'line':
       return {
+        ...data,
         objectKind: kind,
         x1: value('x1'),
         y1: value('y1'),
@@ -76,6 +101,7 @@ function nextData(
       };
     case 'rectangle':
       return {
+        ...data,
         objectKind: kind,
         width: value('width'),
         height: value('height'),
@@ -84,6 +110,7 @@ function nextData(
       };
     case 'circle':
       return {
+        ...data,
         objectKind: kind,
         radius: value('radius'),
         centerX: value('centerX'),
@@ -91,6 +118,7 @@ function nextData(
       };
     case 'polygon':
       return {
+        ...data,
         objectKind: kind,
         sides: value('sides'),
         radius: value('radius'),
@@ -99,6 +127,7 @@ function nextData(
       };
     case 'arc':
       return {
+        ...data,
         objectKind: kind,
         radius: value('radius'),
         centerX: value('centerX'),
@@ -131,7 +160,8 @@ function geometryError(
   if (
     (kind === 'rectangle' && (resolved.width! <= 0 || resolved.height! <= 0)) ||
     ((kind === 'circle' || kind === 'polygon' || kind === 'arc') &&
-      resolved.radius! <= 0)
+      resolved.radius! <= 0) ||
+    (kind === 'text' && resolved.size! <= 0)
   ) {
     return 'Lengths and radii must be greater than zero.';
   }
@@ -166,6 +196,15 @@ export function SketchEntityEditor({
   onClose
 }: SketchEntityEditorProps) {
   const [values, setValues] = useState(() => initialValues(data));
+  const [textAttrs, setTextAttrs] = useState<TextAttributes | null>(() =>
+    data.objectKind === 'text'
+      ? {
+          text: data.text,
+          fontFamily: data.fontFamily,
+          fontStyle: data.fontStyle
+        }
+      : null
+  );
   const fields = FIELDS[data.objectKind];
   const expressionsValid = fields.every(
     ({ key }) => previewExpression(values[key] ?? '', scope).ok
@@ -178,7 +217,7 @@ export function SketchEntityEditor({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (valid) {
-      onApply(nextData(data.objectKind, values));
+      onApply(nextData(data, values, textAttrs));
     }
   }
 
@@ -202,6 +241,9 @@ export function SketchEntityEditor({
           <X size={14} aria-hidden="true" />
         </button>
       </header>
+      {textAttrs && (
+        <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
+      )}
       <div className="sketch-entity-fields">
         {fields.map(({ key, label }) => (
           <ExprInput

@@ -73,6 +73,8 @@ import {
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
+  updateAxesGizmo,
+  updateStudioGrid,
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
   type AxisProjection,
@@ -130,6 +132,7 @@ import {
   sketchObjectFromDrag,
   snapSketchPoint,
   snapTargetsForObject,
+  textObjectFromPoint,
   type SketchPoint,
   type SnapTarget,
   type SnapTargetKind
@@ -169,7 +172,7 @@ export interface CylinderRadiusHandleTarget {
 /** Active in-viewport sketch session, derived from the interaction machine. */
 export interface SketchModeState {
   basis: PlaneBasis;
-  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
   snapStep: number | null;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
@@ -834,7 +837,11 @@ export function ModelViewer({
     const shadowCatcher = createShadowCatcher();
     scene.add(shadowCatcher);
 
-    const axes = createAxesGizmo(16, {
+    // Stretched per frame by updateAxesGizmo so each axis runs past the
+    // viewport edge — on screen they read as infinite. Fat lines keep a
+    // constant screen-space width, so the triad stays one crisp stroke at
+    // any zoom.
+    const axes = createAxesGizmo({
       width: renderer.domElement.clientWidth || 1,
       height: renderer.domElement.clientHeight || 1
     });
@@ -2892,6 +2899,13 @@ export function ModelViewer({
           requestRender();
           return;
         }
+        if (mode.tool === 'text' && point && !moved) {
+          // One click places the baseline origin; everything else about a text
+          // object is a parameter, so there is no drag and no second click.
+          onSketchCommitRef.current(textObjectFromPoint(point));
+          requestRender();
+          return;
+        }
         if (mode.tool === 'line' && point && !moved) {
           if (!gesture.chainAnchor) {
             gesture.chainAnchor = point;
@@ -3301,6 +3315,8 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       updateOffsetChip();
+      updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
+      updateAxesGizmo(axes, context.activeCamera);
       shadowCatcher.visible = shouldShowGroundShadow(
         context.activeCamera,
         showGridRef.current
