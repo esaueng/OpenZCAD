@@ -116,6 +116,7 @@ import {
   formatNumber,
   inferContentType
 } from './lib/model';
+import { useDocumentFonts } from './lib/textFonts';
 import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import {
   SHORTCUT_TO_TOOL,
@@ -164,12 +165,16 @@ import {
   type FaceTarget
 } from './lib/interaction/machine';
 import { updateProfileSelection } from './lib/profileSelection';
+import {
+  isEntityWideProfileSource,
+  profileReferencesForSelection
+} from './lib/profileReferences';
 import type { SelectionActionId } from './lib/interaction/capabilities';
 import { frameFromFace } from './lib/sketch/session';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
 import { SketchToolRail } from './components/SketchToolRail';
 import { SketchEntityEditor } from './components/SketchEntityEditor';
-import { objectPolyline } from './lib/objectPolyline';
+import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
   CommandPalette,
@@ -1228,6 +1233,10 @@ export function App() {
     [doc]
   );
 
+  // Text profiles resolve faces synchronously on this thread as well as in the
+  // worker, so the faces this document names have to be parsed here too.
+  const textFontsVersion = useDocumentFonts(doc ?? null);
+
   const representations = doc?.derived.bodyRepresentations ?? {};
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
@@ -1554,6 +1563,11 @@ export function App() {
         // Open curves have no fill; region overlays render them separately.
         return [];
       }
+      if (data.objectKind === 'text') {
+        // Text has no single closed profile — it is many regions with holes,
+        // and the region overlay renders it.
+        return [];
+      }
       const centerX = evalParamValue(data.centerX, scope);
       const centerY = evalParamValue(data.centerY, scope);
       if (centerX === null || centerY === null) {
@@ -1761,6 +1775,23 @@ export function App() {
     sketchId: SketchId | null;
   } | null>(null);
 
+  /**
+   * True for a sketch entity whose profiles must be referenced as a whole.
+   *
+   * Text is the case: the region count itself changes when the string does,
+   * so a geometry-identity reference to one glyph breaks on exactly the edit
+   * the feature is for. See `lib/profileReferences.ts`.
+   */
+  const entityWideProfileSource = useCallback(
+    (entityId: string): boolean => {
+      const node = doc?.nodes[entityId as EntityId];
+      return (
+        node?.kind === 'sketch-object' && isEntityWideProfileSource(node.data)
+      );
+    },
+    [doc]
+  );
+
   function startExtrude(sketchId: SketchId) {
     if (tool !== 'extrude') {
       extrudeSelectionReturnRef.current = {
@@ -1839,13 +1870,10 @@ export function App() {
       name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
       sketchId: extrudePreview.sketchId as SketchId,
       distance: extrudePreview.distance,
-      profiles: selectedProfiles.map((profile) => ({
-        profileId: profile.profileId,
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        sourceEntityIds: profile.sourceEntityIds
-      }))
+      profiles: profileReferencesForSelection(
+        selectedProfiles,
+        entityWideProfileSource
+      )
     });
     const createdBodyId = command.payload.ids!.bodyId;
     profileExtrudePreview.clear();
@@ -3697,7 +3725,7 @@ export function App() {
       setStatus(`${name} started.`);
       return;
     }
-    executeCommand(
+    const added = executeCommand(
       commandFactories.addSketchObjects(
         {
           sketchId: session.sketchId as SketchId,
@@ -3706,6 +3734,25 @@ export function App() {
         `Add ${committedObject.objectKind}`
       )
     );
+    // A placed text object says "Text" in a default face — useless until it is
+    // edited, and the editor is where every one of its parameters lives. So
+    // placing one selects it and hands over to Select, the way a drawing app
+    // drops you into the caret. The other kinds are drawn to their final shape
+    // and would only be interrupted by this.
+    if (added && committedObject.objectKind === 'text') {
+      const objectId = managerRef.current?.document.nodes[
+        session.sketchId
+      ]?.kind === 'sketch'
+        ? findSketch(
+            managerRef.current.document,
+            session.sketchId as SketchId
+          )?.objectIds.at(-1)
+        : undefined;
+      if (objectId) {
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+        dispatchInteraction({ type: 'sketch-select-object', objectId });
+      }
+    }
   }
 
   function showProfileDiagnostics() {
@@ -3863,15 +3910,12 @@ export function App() {
         ? []
         : objects.flatMap((object) => {
             try {
-              const polyline = objectPolyline(object.data, resolve);
-              return polyline
-                ? [
-                    {
-                      ...polyline,
-                      construction: object.data.construction === true
-                    }
-                  ]
-                : [];
+              // A text object draws one run per glyph region plus one per
+              // counter, so this is many runs from one object.
+              return objectPolylines(object.data, resolve).map((polyline) => ({
+                ...polyline,
+                construction: object.data.construction === true
+              }));
             } catch {
               return [];
             }
@@ -3923,7 +3967,11 @@ export function App() {
     parameterScope,
     interaction,
     selectedSketch,
-    selectedSketchProfileId
+    selectedSketchProfileId,
+    // Text outlines resolve from already-parsed faces, so a face arriving
+    // after this memo last ran has to re-run it or the glyph stays a
+    // diagnostic until something unrelated invalidates the memo.
+    textFontsVersion
   ]);
 
   useEffect(() => {
@@ -4158,17 +4206,7 @@ export function App() {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
-      profiles: profiles.map((profile) => ({
-        ...(profile.profileId.startsWith('legacy_')
-          ? {}
-          : { profileId: profile.profileId }),
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        ...(profile.sourceEntityIds.length > 0
-          ? { sourceEntityIds: profile.sourceEntityIds }
-          : {})
-      }))
+      profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     });
     const resultBodyId =
       command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
@@ -4768,7 +4806,22 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      const highlighted = references.flatMap((reference) => {
+      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
+      // region its entities bound, so it can legitimately light up many
+      // regions — or, after a text edit, a different number than last time.
+      const perReference = references.map((reference) => {
+        if (reference.all === true) {
+          const referenced = new Set(reference.sourceEntityIds);
+          return (
+            view?.regions.filter(
+              (candidate) =>
+                candidate.sourceEntityIds.length > 0 &&
+                candidate.sourceEntityIds.every((entityId) =>
+                  referenced.has(entityId)
+                )
+            ) ?? []
+          );
+        }
         const sourceMatches = reference.sourceEntityIds
           ? (view?.regions.filter(
               (candidate) =>
@@ -4788,23 +4841,20 @@ export function App() {
                 Math.max(reference.sourceArea * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region
-          ? [
-              {
-                sketchId: extrudeData.sketchId,
-                profileId: region.profileId,
-                regionFingerprint: region.regionFingerprint,
-                samplePoint: region.samplePoint,
-                centroid: region.centroid,
-                boundingBox: region.boundingBox,
-                sourceEntityIds: region.sourceEntityIds,
-                area: region.area
-              }
-            ]
-          : [];
+        return region ? [region] : [];
       });
+      const highlighted = perReference.flat().map((region) => ({
+        sketchId: extrudeData.sketchId,
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        centroid: region.centroid,
+        boundingBox: region.boundingBox,
+        sourceEntityIds: region.sourceEntityIds,
+        area: region.area
+      }));
       setSelectedProfiles(highlighted);
-      if (references.length > 0 && highlighted.length !== references.length) {
+      if (perReference.some((regions) => regions.length === 0)) {
         setStatus(
           'Broken profile reference — edit the source sketch or reselect the extrusion profiles.'
         );
@@ -5203,7 +5253,9 @@ export function App() {
                   ? ('circle' as const)
                   : event.key.toLowerCase() === 'r'
                     ? ('rectangle' as const)
-                    : null;
+                    : event.key.toLowerCase() === 't'
+                      ? ('text' as const)
+                      : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });

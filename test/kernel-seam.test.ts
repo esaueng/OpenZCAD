@@ -16,7 +16,14 @@ import {
   transformBody,
   updateFeature
 } from '@openzcad/document-core';
-import { computeSketchRegions } from '@openzcad/geometry';
+import {
+  buildTextProfileSet,
+  computeSketchRegions,
+  setTextFontProvider
+} from '@openzcad/geometry';
+import { FontLibrary } from '../packages/geometry/src/text/loader';
+import { nodeFontDataSource } from '../packages/geometry/src/text/nodeFontSource';
+import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boolean-result-validation';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -461,7 +468,7 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     }
   });
 
-  it('fails closed on a pick stored against the other kernel\'s topology', async () => {
+  it("fails closed on a pick stored against the other kernel's topology", async () => {
     // The Z3 migration case, and the one that decides whether the flip is
     // safe for documents that already exist. Until Z3, a document with a STEP
     // import was built by OpenCascade, so any edge or face the user picked was
@@ -522,7 +529,9 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     expect(derived.warnings).toEqual([
       'Feature "Pre-flip fillet": A selected edge no longer exists.'
     ]);
-    expect(derived.bodyRepresentations[stale.bodyOrder.at(-1)!]).toBeUndefined();
+    expect(
+      derived.bodyRepresentations[stale.bodyOrder.at(-1)!]
+    ).toBeUndefined();
     // The import itself is untouched: pi * 10^2 * 10 / 3.
     expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
       (Math.PI * 1000) / 3,
@@ -543,7 +552,10 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
         name: 'Bracket',
         artifactId: 'artifact_seam_bracket',
         sourceName: 'parametric-bracket.step',
-        stepText: readFileSync(resolve('samples/parametric-bracket.step'), 'utf8')
+        stepText: readFileSync(
+          resolve('samples/parametric-bracket.step'),
+          'utf8'
+        )
       }
     );
     const onOcct = await occt.syncDocument(document);
@@ -798,5 +810,68 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
       40,
       6
     );
+  });
+
+  it('builds the same text solid from exact beziers on both kernels', async () => {
+    // The `'bezier'` region-curve kind reaches BrepKit through
+    // `liftCurve2dToPlane` and OpenCascade through `makeBezierEdge` — two
+    // different constructions of the same curve, and the OCCT one had no
+    // coverage at all. Same document, same volume, both watertight.
+    const library = new FontLibrary(nodeFontDataSource());
+    await library.load('open-sans', 'regular');
+    setTextFontProvider((family, style) => library.peek(family, style));
+    try {
+      const created = addSketchFeature(
+        createProjectDocument('Text seam', user),
+        {
+          name: 'Label',
+          planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+          objects: [
+            {
+              objectKind: 'text',
+              text: 'Bo',
+              fontFamily: 'open-sans',
+              fontStyle: 'regular',
+              size: 20,
+              x: 0,
+              y: 0
+            }
+          ]
+        }
+      );
+      const sketch = findSketch(created.document, created.sketchId)!;
+      const { document, bodyId } = extrudeSketch(created.document, {
+        name: 'Raised label',
+        sketchId: created.sketchId,
+        distance: 5,
+        profiles: [{ all: true, sourceEntityIds: [sketch.objectIds[0]!] }]
+      });
+
+      // The area comes from the glyph pipeline, so neither kernel is grading
+      // its own homework: 'Bo' has three counters, and dropping one is a
+      // percent-scale volume error.
+      const exactVolume =
+        buildTextProfileSet(library.peek('open-sans', 'regular')!, {
+          text: 'Bo',
+          size: 20
+        }).regions.reduce((total, region) => total + region.area, 0) * 5;
+
+      for (const kernel of [adapter, occt]) {
+        const derived = await kernel.syncDocument(document);
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[bodyId]!;
+        expect(Math.abs(body.volume - exactVolume) / exactVolume).toBeLessThan(
+          0.001
+        );
+        const closure = inspectTriangleMeshClosure(
+          body.mesh.vertices,
+          body.mesh.indices
+        );
+        expect(closure.boundaryEdges).toBe(0);
+        expect(closure.nonManifoldEdges).toBe(0);
+      }
+    } finally {
+      setTextFontProvider(null);
+    }
   });
 });
