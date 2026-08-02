@@ -6,18 +6,39 @@ import type {
 } from '@openzcad/geometry';
 
 /**
- * Exact bezier profile edges, behind a feature flag.
+ * Exact bezier profile edges, behind a feature flag that is **off by default**.
  *
  * Glyph outlines are quadratic (TrueType) or cubic (PostScript) beziers, and
- * the whole point of the text fast path is to keep them exact all the way to
- * the kernel — a NURBS edge produces a smooth wall at any zoom and a faithful
- * STEP export, where a flattened one produces a visibly faceted stem.
+ * the text fast path can hand them to the kernel as exact NURBS edges: a smooth
+ * wall at any zoom and a faithful STEP export, where a flattened one produces a
+ * visibly faceted stem. That is the better geometry, and it is not the default.
  *
- * The flag exists so a kernel edge case cannot block shipping: turning it off
- * routes every bezier through the same line pipeline arcs and polygons already
- * use. That path is a real degradation, so it is never silent — see
- * `flattenBezierCurve`'s callers, which warn every time they use it.
+ * The reason is a kernel defect, not a preference. An extruded glyph with
+ * exact-NURBS walls comes back watertight, with the right face count, and
+ * volume-correct to four decimals — and *misclassified*. Sweeping 109 points
+ * through an extruded Open Sans 'o' at mid-height and comparing `classifyPoint`
+ * against a winding-number ground truth computed from the same segments, 16 of
+ * 109 are wrong: points outside the glyph report `inside`, points inside the
+ * left wall report `outside`. The identical solid built with flattened walls
+ * scores 0 of 109. brepkit tracks this as the `#[ignore]` ready-repro
+ * `o_glyph_bezier_cap_band_is_misclassified`.
+ *
+ * Classification is what booleans stand on, so emboss and engrave — the whole
+ * point of text on a model — are unreliable on curved letters through the exact
+ * path. Faceted-but-correct beats smooth-but-wrong, so flattening is the
+ * default until that repro passes.
+ *
+ * Turn the exact path back on with `setBezierProfileEdges(true)`, or
+ * `globalThis.openzcadBezierProfileEdges = true` before this module loads. It
+ * is the right default again the moment the kernel defect is fixed; flipping
+ * `DEFAULT_EXACT_BEZIER_EDGES` is the whole change.
  */
+
+/**
+ * Whether beziers reach the kernel exact. `false` until
+ * `o_glyph_bezier_cap_band_is_misclassified` passes — see the module note.
+ */
+export const DEFAULT_EXACT_BEZIER_EDGES = false;
 
 /** Chord deviation the fallback polyline may keep, as a fraction of extent. */
 const FALLBACK_CHORD_RATIO = 1 / 2000;
@@ -32,14 +53,14 @@ const MAX_FALLBACK_SEGMENTS = 64;
 const BASIS_HANDEDNESS_TOLERANCE = 1e-9;
 
 /**
- * Global override read once at module load, so a deployment can disable the
+ * Global override read once at module load, so a deployment can select the
  * exact path without a code change:
- * `globalThis.openzcadBezierProfileEdges = false`.
+ * `globalThis.openzcadBezierProfileEdges = true`.
  */
 function initialFlag(): boolean {
   const override = (globalThis as Record<string, unknown>)
     .openzcadBezierProfileEdges;
-  return override === undefined ? true : override !== false;
+  return override === undefined ? DEFAULT_EXACT_BEZIER_EDGES : override === true;
 }
 
 let bezierProfileEdges = initialFlag();
@@ -182,9 +203,13 @@ export function flattenBezierCurve(curve: BezierRegionCurve): Vec2Like[] {
 }
 
 /**
- * The single warning the fallback is allowed to be quiet about is none: a
- * flattened glyph is a product regression the user can see, so every rebuild
- * that takes the fallback says so and says why.
+ * Reported when the exact path was *asked for* and could not be delivered.
+ *
+ * Flattening is the default (see the module note), and warning about the
+ * default on every rebuild would be noise on the normal path — the kind of
+ * warning users learn to scroll past, which costs the signal when something
+ * genuinely goes wrong. So this fires only for the anomaly: the caller enabled
+ * exact beziers and the geometry refused them anyway. Callers pass the reason.
  */
 export function bezierFallbackWarning(reason: string, count: number): string {
   return (
