@@ -65,6 +65,11 @@ import { displayTessellationForExtents } from '../../../packages/kernel-adapter/
 import { importedMeshStl } from '../../../packages/kernel-adapter/src/imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from '../../../packages/kernel-adapter/src/region-profile';
 import {
+  bezierProfileEdgesEnabled,
+  flattenBezierCurve,
+  flattenedOutlineWarning
+} from '../../../packages/kernel-adapter/src/profile-bezier-edges';
+import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
 } from '../../../packages/kernel-adapter/src/union-connectivity';
@@ -903,6 +908,12 @@ function profilePoints(
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
+    case 'text':
+      // Text is many regions with holes; a single polygonal profile cannot
+      // represent it. It builds through the region path instead.
+      throw new Error(
+        'Text must be extruded through its detected sketch regions, not as a single profile.'
+      );
   }
 }
 
@@ -1154,11 +1165,16 @@ export class OcctStepKernelAdapter {
 
   /**
    * Build an exact planar face for a detected region: outer wire plus hole
-   * wires from the region's line/arc curves. Mirrors the BrepKit adapter's
-   * construction — including the identical ≤ 90° arc subdivision — so the
-   * resulting edges carry the same ADR-011 fingerprints on both kernels.
+   * wires from the region's line/arc/bezier curves. Mirrors the BrepKit
+   * adapter's construction — including the identical ≤ 90° arc subdivision —
+   * so the resulting edges carry the same ADR-011 fingerprints on both
+   * kernels.
    */
-  private makeRegionFace(region: SketchRegion, basis: PlaneBasis): ShapeHandle {
+  private makeRegionFace(
+    region: SketchRegion,
+    basis: PlaneBasis
+  ): ShapeHandle {
+    const exactBeziers = bezierProfileEdgesEnabled();
     const wireFor = (loop: SketchRegion['outer']): ShapeHandle => {
       const edges: ShapeHandle[] = [];
       for (const curve of loop.curves) {
@@ -1169,6 +1185,31 @@ export class OcctStepKernelAdapter {
               OcctStepKernelAdapter.planePoint3(basis, curve.b)
             )
           );
+          continue;
+        }
+        if (curve.kind === 'bezier') {
+          if (exactBeziers) {
+            // OpenCascade takes 3D control points directly, so the plane's
+            // own basis lifts them — no dependence on how the kernel derives
+            // a second axis, unlike BrepKit's `liftCurve2dToPlane`.
+            edges.push(
+              this.kernel.makeBezierEdge(
+                [curve.a, ...curve.controls, curve.b].map((point) =>
+                  OcctStepKernelAdapter.planePoint3(basis, point)
+                )
+              )
+            );
+            continue;
+          }
+          const points = flattenBezierCurve(curve);
+          for (let index = 0; index + 1 < points.length; index += 1) {
+            edges.push(
+              this.kernel.makeLineEdge(
+                OcctStepKernelAdapter.planePoint3(basis, points[index]!),
+                OcctStepKernelAdapter.planePoint3(basis, points[index + 1]!)
+              )
+            );
+          }
           continue;
         }
         const span = Math.abs(curve.endAngle - curve.startAngle);
@@ -1221,11 +1262,17 @@ export class OcctStepKernelAdapter {
       return this.kernel.makeWire(edges);
     };
 
-    const face = this.kernel.makeFace(wireFor(region.outer));
-    if (region.holes.length === 0) {
+    const outerWire = wireFor(region.outer);
+    const holeWires = region.holes.map(wireFor);
+    // No warning for `flattened` here. Flattening is the default (see
+    // `profile-bezier-edges`), and unlike the BrepKit adapter this one has no
+    // second way to reach the fallback — `exactBeziers` is the only gate, so a
+    // warning would fire on every rebuild and say nothing.
+    const face = this.kernel.makeFace(outerWire);
+    if (holeWires.length === 0) {
       return face;
     }
-    return this.kernel.addHolesInFace(face, region.holes.map(wireFor));
+    return this.kernel.addHolesInFace(face, holeWires);
   }
 
   /** Extrude one or more explicitly selected bounded sketch cells. */
@@ -1234,10 +1281,17 @@ export class OcctStepKernelAdapter {
     sketch: SketchNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>,
-    basis: PlaneBasis
+    basis: PlaneBasis,
+    warn: (message: string) => void
   ): ShapeHandle {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
     const distance = resolveParamValue(data.distance, scope, 'distance');
+    const flattenedOutlines = regions.filter(
+      (region) => region.outline?.fidelity === 'flattened'
+    ).length;
+    if (flattenedOutlines > 0) {
+      warn(flattenedOutlineWarning(flattenedOutlines));
+    }
     const solids = connectedRegionGroups(regions).map((group) => {
       return this.kernel.extrude(
         this.makeRegionFace(mergeAdjacentProfiles(group), basis),
@@ -1273,7 +1327,8 @@ export class OcctStepKernelAdapter {
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
-    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
   ): ShapeHandle {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -1301,7 +1356,8 @@ export class OcctStepKernelAdapter {
         sketchNode,
         feature.data,
         scope,
-        basis
+        basis,
+        warn
       );
     }
     const sketch = findSketch(document, feature.data.sketchId);
@@ -1388,7 +1444,9 @@ export class OcctStepKernelAdapter {
                 document,
                 feature,
                 scope,
-                result.sketchBases
+                result.sketchBases,
+                (message) =>
+                  result.warnings.push(`Feature "${feature.name}": ${message}`)
               );
               result.shapes.set(feature.bodyId, shape);
               result.lineages.set(

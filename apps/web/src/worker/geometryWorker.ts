@@ -6,6 +6,7 @@ import {
   canonicalProjectContentKey
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
+import { preloadDocumentFonts } from '../lib/textFonts';
 
 export type GeometryWorkerRequest =
   | { type: 'sync'; document: ProjectDocument; requestId?: string }
@@ -159,6 +160,12 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   };
   try {
     post(stateFor('starting', request, { stale: true }));
+
+    // The text fast path resolves faces synchronously, so every face this
+    // document names has to be parsed before the rebuild reads it. A miss is
+    // reported as a profile diagnostic rather than thrown, so this never
+    // blocks the rest of the model on one unavailable font.
+    await preloadDocumentFonts(document);
 
     if (request.type === 'export') {
       if (exactKernelStatus === 'idle' || exactKernelStatus === 'loading') {

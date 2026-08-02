@@ -29,9 +29,9 @@ interface BrepEvolution {
     generated: Record<string, number[]>;
     deleted: number[];
     /**
-     * Result faces the kernel declined to attribute, mapped to the source
-     * faces it could not choose between. Optional because it postdates the
-     * three fields above.
+     * Result faces the kernel could not trace to an input face, each listed
+     * with the inputs that tied. A caller holding a persistent face reference
+     * has to fail closed on these rather than guess between the candidates.
      *
      * Decoding it is not optional, and that is the point. This file once
      * reported a blend band as attributed by nothing, when the kernel had in
@@ -42,7 +42,7 @@ interface BrepEvolution {
      * read every field the record has, or it reports the right failure for
      * the wrong reason.
      */
-    unresolved?: Record<string, number[]>;
+    unresolved: Record<string, number[]>;
   };
 }
 
@@ -95,12 +95,11 @@ function parseBrepEvolution(value: unknown): BrepEvolution {
       // This is deliberately required. Missing `deleted` is a contract error,
       // not evidence that every source face survived.
       deleted: integerArray(evolution.deleted, 'deleted'),
-      // Optional because it postdates the three above, but decoded whenever
-      // present — see the field's doc comment for why reading it matters.
-      unresolved:
-        evolution.unresolved === undefined
-          ? undefined
-          : handleMap(evolution.unresolved, 'unresolved')
+      // Required for the same reason: a missing `unresolved` channel is a
+      // kernel that stopped reporting its own doubt, not a kernel that has
+      // none. Reading it as an empty map would silently upgrade every tied
+      // face into a confidently traced one.
+      unresolved: handleMap(evolution.unresolved, 'unresolved')
     }
   };
 }
@@ -128,12 +127,18 @@ function verifyCompleteBrepEvolution(
   const modifiedResults = Object.values(payload.evolution.modified).flat();
   const generatedResults = Object.values(payload.evolution.generated).flat();
 
-  // Checked before the set equality below, so a refusal reports itself as a
-  // refusal. Without this, an unresolved face reaches the equality as a
-  // result nothing claims, and the failure reads as "attributed by nothing"
-  // when the kernel in fact recorded which sources it could not choose
-  // between. Those are different defects with different fixes.
-  const unresolved = payload.evolution.unresolved ?? {};
+  // Checked before the coverage comparisons below, which an unresolved face
+  // would also fail — but as a set difference nobody can read. Every face of
+  // every result here is traceable, so doubt is the finding, not a mismatch.
+  //
+  // The two well-formedness checks run before the emptiness one so that a
+  // regression reports itself as a REFUSAL rather than as an absence: without
+  // them an unresolved face reaches the coverage equality as a result nothing
+  // claims, and the failure reads "attributed by nothing" when the kernel in
+  // fact recorded which sources it could not choose between. Those are
+  // different defects with different fixes. They are vacuous while the map is
+  // empty, which is the whole point — they exist for the day it is not.
+  const { unresolved } = payload.evolution;
   expect(
     Object.keys(unresolved).every((handle) => resultFaces.has(Number(handle)))
   ).toBe(true);
@@ -143,6 +148,7 @@ function verifyCompleteBrepEvolution(
       .every((handle) => sourceFaces.has(handle))
   ).toBe(true);
   expect(unresolved).toEqual({});
+
 
   expect(modifiedSources.every((handle) => sourceFaces.has(handle))).toBe(true);
   expect(
@@ -250,25 +256,34 @@ describe('topology-lineage kernel spike', () => {
       );
       verifyCompleteBrepEvolution(kernel, [primitive], fillet);
       expect(kernel.validateSolidRelaxed(fillet.solid)).toBe(0);
-      // The band is GENERATED from both faces the rounded edge separated, and
-      // nothing is modified into it. This assertion has now been through three
-      // shapes, and the middle one was wrong:
+      // The blend band is a new face, and the kernel names where it came from:
+      // it arrives under GENERATED, listed against both faces the rounded edge
+      // separated, because it was built between them and both are its origin.
+      // `generated` is an adjacency record rather than an identity, so naming
+      // two sources for one new face is the ordinary case.
+      //
+      // A band is deliberately never listed under MODIFIED: it is no input
+      // face cut back, and a selection stored against one of those faces must
+      // not silently acquire it.
+      //
+      // This assertion has been through three shapes, and the middle one was
+      // wrong:
       //
       // 1. Originally generated with NO source — a face from nowhere.
       // 2. Then MODIFIED from both parents. That looked like an improvement
       //    and this test pinned it, but it was an artefact of a near-tie rule
-      //    and actively harmful: a selection stored against one parent
-      //    silently acquired the cylinder.
+      //    and actively harmful, for exactly the reason above: a selection
+      //    stored against one parent silently acquired the cylinder.
       // 3. Now generated from both parents, which is what the walking builder
       //    and the wasm binding's own documentation always said. The two
       //    engines behind one operation had simply been disagreeing.
       //
-      // Counting faces would say nothing about which of the three is right, so
-      // what is asserted is the attribution: the band is listed under exactly
-      // the two source faces that shared the selected edge, and under no
-      // others. `unresolved` being empty is enforced by
-      // verifyCompleteBrepEvolution above — a refusal here is a defect, and
-      // is how the regression that held the pin was found.
+      // Recording the count alone would say nothing about which of the three
+      // is right, so the claim asserted is the attribution — checked against
+      // the solid's own adjacency, not against another reading of the same
+      // evolution record. `unresolved` being empty is enforced by
+      // verifyCompleteBrepEvolution above — a refusal here is a defect, and is
+      // how the regression that held the pin was found.
       const bandFaces = Array.from(kernel.getSolidFaces(fillet.solid)).filter(
         (face) => kernel.getSurfaceType(face) === 'cylinder'
       );
@@ -284,14 +299,18 @@ describe('topology-lineage kernel spike', () => {
         .filter(([, results]) => results.includes(band))
         .map(([source]) => Number(source));
       expectSameSet(bandSources, facesOnSelectedEdge);
-      // The band is the only generated face, and no source is modified INTO
-      // it — each surviving plane maps to its own single survivor.
+      // The band is the only face the fillet adds, and it is not any input
+      // face's continuation.
       expectSameSet(Object.values(fillet.evolution.generated).flat(), [band]);
-      expect(
-        Object.values(fillet.evolution.modified)
-          .flat()
-          .includes(band)
-      ).toBe(false);
+      expect(Object.values(fillet.evolution.modified).flat()).not.toContain(
+        band
+      );
+      // Which faces are modified is already settled above, against the box's
+      // own face list. What is asserted here is that rounding one edge trims
+      // those faces without splitting any: each arrives as exactly one face.
+      for (const results of Object.values(fillet.evolution.modified)) {
+        expect(results).toHaveLength(1);
+      }
       // No source face disappears when a single edge is rounded.
       expect(fillet.evolution.deleted).toEqual([]);
 

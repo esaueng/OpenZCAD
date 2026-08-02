@@ -499,6 +499,26 @@ describe('worker api routes', () => {
     });
   });
 
+  // wrangler.jsonc deliberately leaves AI_DEPLOYMENT_ALLOWED_EMAILS out of
+  // secrets.required, which is only safe because an unset allowlist denies
+  // every account rather than admitting them. A regression here would hand the
+  // deployment's provider key to any authenticated session.
+  it('denies deployment assistant funding when no allowlist is configured', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { cookie: '__Host-openzcad_session=test-session' }
+      }),
+      withEnabledDeploymentAssistant({
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ configured: false });
+  });
+
   it('requires an email-code identity for cloud routes', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects'),

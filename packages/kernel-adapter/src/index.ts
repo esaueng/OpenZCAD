@@ -17,6 +17,12 @@ export {
 } from './imported-mesh';
 
 export {
+  DEFAULT_EXACT_BEZIER_EDGES,
+  bezierProfileEdgesEnabled,
+  setBezierProfileEdges
+} from './profile-bezier-edges';
+
+export {
   DEFAULT_RECOGNITION_LIMITS,
   recognizeImportedFeature,
   type ExactFaceAdjacency,

@@ -42,6 +42,6 @@
     "happy-dom": "^20.11.1",
     "vite": "^8.1.5",
     "vite-plugin-wasm": "3.6.0",
-    "wrangler": "^4.114.0"
+    "wrangler": "^4.118.0"
   }
 }
