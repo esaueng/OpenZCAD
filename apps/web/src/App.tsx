@@ -126,6 +126,7 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
+import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
@@ -259,6 +260,15 @@ import {
   type PanelState,
   type SidebarSectionId
 } from './lib/panelState';
+import {
+  ASSISTANT_WIDTH_LIMITS,
+  clampAssistantWidth,
+  clampSidebarWidth,
+  maxAssistantWidth,
+  maxSidebarWidth,
+  savedPanelWidths,
+  SIDEBAR_WIDTH_LIMITS
+} from './lib/panelWidths';
 
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
@@ -514,6 +524,36 @@ export function App() {
   const setAssistantCollapsed = useCallback((collapsed: boolean) => {
     setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
   }, []);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  // Panel widths are capped against the window, so a narrower window has to
+  // recompute them. The stored preference is never rewritten by a resize: it is
+  // what the user asked for, and it applies again on a screen that can hold it.
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof globalThis.innerWidth === 'number' ? globalThis.innerWidth : 0
+  );
+  useEffect(() => {
+    const onResize = () => setWindowWidth(globalThis.innerWidth);
+    onResize();
+    globalThis.addEventListener('resize', onResize);
+    return () => globalThis.removeEventListener('resize', onResize);
+  }, []);
+  const savedWidths = savedPanelWidths(appSettings);
+  const sidebarWidth = clampSidebarWidth(savedWidths.sidebar, windowWidth);
+  const assistantWidth = clampAssistantWidth(
+    savedWidths.assistant,
+    windowWidth
+  );
+  /**
+   * The width under the pointer, written straight to the grid. A drag emits one
+   * of these a frame; sending them through React would re-render the editor and
+   * the viewport with them, which is what makes a splitter feel heavy.
+   */
+  const previewPanelWidth = useCallback(
+    (variable: '--sidebar-w' | '--assistant-w', width: number) => {
+      workspaceRef.current?.style.setProperty(variable, `${width}px`);
+    },
+    []
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
@@ -2069,6 +2109,27 @@ export function App() {
     } else {
       setSettingsMessage('Saved on this device.');
     }
+  }
+
+  /**
+   * Keeps a resized panel. It goes down the same road as every other
+   * preference: the device copy is written immediately, and a signed-in session
+   * syncs it to the account profile, so the width follows the person rather
+   * than the browser they set it in.
+   */
+  function commitPanelWidth(panel: 'sidebar' | 'assistant', width: number) {
+    const current = appSettingsRef.current;
+    const saved = savedPanelWidths(current);
+    if (saved[panel] === width) {
+      return;
+    }
+    handleAppSettingsChange({
+      ...current,
+      layout: {
+        sidebarWidth: panel === 'sidebar' ? width : saved.sidebar,
+        assistantWidth: panel === 'assistant' ? width : saved.assistant
+      }
+    });
   }
 
   function endCloudSettingsSession() {
@@ -5678,6 +5739,37 @@ export function App() {
 
   return (
     <AppShell
+      workspaceRef={workspaceRef}
+      sidebarWidth={sidebarWidth}
+      assistantWidth={assistantWidth}
+      sidebarResizer={
+        <PanelResizer
+          label="Resize the sidebar"
+          edge="left"
+          width={sidebarWidth}
+          min={SIDEBAR_WIDTH_LIMITS.min}
+          max={maxSidebarWidth(windowWidth)}
+          onPreview={(width) => previewPanelWidth('--sidebar-w', width)}
+          onCommit={(width) => commitPanelWidth('sidebar', width)}
+          onReset={() =>
+            commitPanelWidth('sidebar', SIDEBAR_WIDTH_LIMITS.default)
+          }
+        />
+      }
+      assistantResizer={
+        <PanelResizer
+          label="Resize the assistant"
+          edge="right"
+          width={assistantWidth}
+          min={ASSISTANT_WIDTH_LIMITS.min}
+          max={maxAssistantWidth(windowWidth)}
+          onPreview={(width) => previewPanelWidth('--assistant-w', width)}
+          onCommit={(width) => commitPanelWidth('assistant', width)}
+          onReset={() =>
+            commitPanelWidth('assistant', ASSISTANT_WIDTH_LIMITS.default)
+          }
+        />
+      }
       topBar={
         <TopBar
           projectName={doc.name}
