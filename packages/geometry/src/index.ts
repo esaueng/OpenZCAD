@@ -24,6 +24,48 @@ export {
   type SketchRegionObject,
   type Vec2Like
 } from './regions';
+export {
+  DEFAULT_FONT_FAMILY_ID,
+  DEFAULT_FONT_STYLE,
+  DEFAULT_LINE_HEIGHT,
+  FONT_ASSET_BASE,
+  FONT_FAMILIES,
+  FontLibrary,
+  TextGeometryError,
+  buildTextProfileSet,
+  clearTextProfileCache,
+  fetchFontDataSource,
+  findFontFace,
+  findFontFamily,
+  flattenLoop,
+  fontAssetUrl,
+  layoutText,
+  localPolygonUnion2d,
+  loopSignedArea,
+  orientLoop,
+  parseFontFace,
+  resolveFontStyle,
+  textProfileSet,
+  type FontDataSource,
+  type FontFaceAsset,
+  type FontFamilyEntry,
+  type FontLibraryOptions,
+  type FontStyle,
+  type LoadedFont,
+  type PlacedGlyph,
+  type PolygonUnion2d,
+  type TextAlign,
+  type TextBoundingBox,
+  type TextLayout,
+  type TextLoop,
+  type TextPoint,
+  type TextProfileOptions,
+  type TextProfileSet,
+  type TextRegion,
+  type TextRequest,
+  type TextSegment,
+  type TextWinding
+} from './text';
 
 /**
  * Document-side geometry.
