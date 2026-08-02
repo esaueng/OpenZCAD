@@ -43,7 +43,6 @@ import type { ExactKernelAdapter } from './exact';
 import { importedMeshStl } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
-  bezierFallbackWarning,
   bezierProfileEdgesEnabled,
   flattenBezierCurve,
   flattenedOutlineWarning
@@ -1151,11 +1150,9 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
    */
   private makeRegionFace(
     region: SketchRegion,
-    basis: PlaneBasis,
-    warn: (message: string) => void
+    basis: PlaneBasis
   ): ShapeHandle {
     const exactBeziers = bezierProfileEdgesEnabled();
-    let flattened = 0;
     const wireFor = (loop: SketchRegion['outer']): ShapeHandle => {
       const edges: ShapeHandle[] = [];
       for (const curve of loop.curves) {
@@ -1182,7 +1179,6 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
             );
             continue;
           }
-          flattened += 1;
           const points = flattenBezierCurve(curve);
           for (let index = 0; index + 1 < points.length; index += 1) {
             edges.push(
@@ -1246,17 +1242,10 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
 
     const outerWire = wireFor(region.outer);
     const holeWires = region.holes.map(wireFor);
-    if (flattened > 0) {
-      // The document warning channel, not the console: this adapter runs in a
-      // Web Worker too, and the BrepKit adapter reports the same degradation
-      // the same way.
-      warn(
-        bezierFallbackWarning(
-          'exact bezier profile edges are disabled',
-          flattened
-        )
-      );
-    }
+    // No warning for `flattened` here. Flattening is the default (see
+    // `profile-bezier-edges`), and unlike the BrepKit adapter this one has no
+    // second way to reach the fallback — `exactBeziers` is the only gate, so a
+    // warning would fire on every rebuild and say nothing.
     const face = this.kernel.makeFace(outerWire);
     if (holeWires.length === 0) {
       return face;
@@ -1283,7 +1272,7 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     }
     const solids = connectedRegionGroups(regions).map((group) => {
       return this.kernel.extrude(
-        this.makeRegionFace(mergeAdjacentProfiles(group), basis, warn),
+        this.makeRegionFace(mergeAdjacentProfiles(group), basis),
         basis.normal.x * distance,
         basis.normal.y * distance,
         basis.normal.z * distance

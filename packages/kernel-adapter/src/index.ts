@@ -17,6 +17,7 @@ export {
 } from './imported-mesh';
 
 export {
+  DEFAULT_EXACT_BEZIER_EDGES,
   bezierProfileEdgesEnabled,
   setBezierProfileEdges
 } from './profile-bezier-edges';
