@@ -175,6 +175,104 @@ export function countFaceConnectedComponents(
   return new Set(faces.map((face) => find(face))).size;
 }
 
+// ---------------------------------------------------------------------------
+// Face-count census.
+// ---------------------------------------------------------------------------
+
+/** Faces of a solid, split by whether their surface is analytic or planar. */
+export interface FaceCensus {
+  faces: number;
+  /** Faces whose surface is anything other than a plane. */
+  curvedFaces: number;
+}
+
+export interface BooleanFaceCensus {
+  operands: FaceCensus;
+  result: FaceCensus;
+}
+
+/**
+ * Growth allowed before a boolean result is treated as a faceting fallback.
+ *
+ * A legitimate boolean splits faces where the operands intersect, which can
+ * multiply the face count by a few. A meshed fallback replaces every surface
+ * with triangles and lands in the hundreds or thousands. The additive slack
+ * keeps small operands (a six-face box cut by a six-face box) clear of the
+ * multiplicative bound.
+ */
+const FACET_FALLBACK_FACTOR = 4;
+const FACET_FALLBACK_SLACK = 32;
+
+export interface FaceCensusSubject {
+  getSolidFaces(solid: number): ArrayLike<number>;
+  getSurfaceType(face: number): string;
+}
+
+export function censusOfSolids(
+  kernel: FaceCensusSubject,
+  solids: readonly number[]
+): FaceCensus {
+  let faces = 0;
+  let curvedFaces = 0;
+  for (const solid of solids) {
+    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+      faces += 1;
+      if (kernel.getSurfaceType(face) !== 'plane') {
+        curvedFaces += 1;
+      }
+    }
+  }
+  return { faces, curvedFaces };
+}
+
+/**
+ * The signal that a boolean silently fell back to a faceted result.
+ *
+ * BrepKit's booleans can abandon exact surface intersection on sliver and
+ * near-tangent contacts and return a triangulated, all-planar approximation
+ * instead — which is exactly what thin glyph stems and touching letters
+ * produce. That result is watertight, valid, has a plausible volume, and its
+ * triangle count is unremarkable, so none of the existing checks see it. What
+ * changes is the faces: every curved surface becomes planar, and the count
+ * explodes.
+ *
+ * Both conditions are reported because either alone has a false positive.
+ * Losing every curved face is normal when the operands had none; a large face
+ * count is normal for a genuinely complicated result. Together they are not.
+ */
+export function booleanFacetFallbackWarning(
+  census: BooleanFaceCensus
+): string | null {
+  const lostCurvature =
+    census.operands.curvedFaces > 0 && census.result.curvedFaces === 0;
+  const exploded =
+    census.result.faces >
+    census.operands.faces * FACET_FALLBACK_FACTOR + FACET_FALLBACK_SLACK;
+  if (!lostCurvature && !exploded) {
+    return null;
+  }
+  const detail = [
+    `${census.operands.faces} operand faces (${census.operands.curvedFaces} curved)`,
+    `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
+  ].join(' became ');
+  if (lostCurvature && exploded) {
+    return (
+      `The boolean returned a faceted approximation instead of exact surfaces: ${detail}. ` +
+      'This happens on sliver or near-tangent contacts; move or thicken the overlap and try again.'
+    );
+  }
+  if (lostCurvature) {
+    return (
+      `The boolean replaced every curved surface with planar faces: ${detail}. ` +
+      'Curved geometry will export faceted.'
+    );
+  }
+  return (
+    `The boolean produced far more faces than its operands: ${detail}. ` +
+    'This is usually a sliver or near-tangent contact being approximated.'
+  );
+}
+
 interface BooleanFaceUnifier {
   copyAndTransformSolid(solid: number, matrix: Float64Array): number;
   unifyFaces(solid: number): number;
