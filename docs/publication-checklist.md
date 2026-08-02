@@ -34,8 +34,12 @@ the public object database.
 - Apply every D1 migration, including `0007_ai_global_budget.sql`, before
   deploying Worker code that depends on it.
 - Provision stable Worker secrets: authentication peppers, Turnstile secret,
-  settings encryption key, `AI_IDENTITY_PEPPER`, the deployment AI email
-  allowlist, and any provider key.
+  settings encryption key, and `AI_IDENTITY_PEPPER`. These four are the ones a
+  deploy refuses to publish without.
+- Funding AI from the deployment is opt-in and needs two further secrets, the
+  provider key and `AI_DEPLOYMENT_ALLOWED_EMAILS`. Neither blocks a deploy:
+  with the allowlist unset no account can spend the deployment key, and the
+  assistant runs on personal provider tokens alone.
 - Set provider-side billing limits independently of the in-app D1 budget.
 - Verify Turnstile hostname/action validation, allowlisted and denied AI
   accounts, daily-budget exhaustion, personal provider credentials, login,
