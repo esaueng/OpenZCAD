@@ -850,18 +850,40 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       '`exact.ts` reports body volume through `kernel.volume(solid, ' +
       'MEASUREMENT_DEFLECTION)`, and that route reads 10984.86 — 0.30% HIGH. ' +
       'It is not a deflection artefact: it converges to +0.3125% as the ' +
-      'tolerance tightens (1e-3 -> 1e-6), so it is systematic. This is the ' +
-      'residual brepkit#55 documented and declined to chase: a quadric wall ' +
-      'that splits into a tab plus a ring is two rectangles, so the ' +
-      'detector that routes notched walls to the exact integral correctly ' +
-      'declines, and the area route credits the whole cylinder. ' +
+      'tolerance tightens (1e-3 -> 1e-6), so it is systematic. ' +
+      'THE MECHANISM HERE HAS BEEN WRONG TWICE; what follows is the third ' +
+      'and currently-supported account, kept with its history because the ' +
+      'two dead ends are the reason to distrust a confident-sounding one. ' +
+      '(1) brepkit#55 filed it as "the notched-wall detector declines and ' +
+      'the area route credits the whole cylinder". (2) brepkit#64 refuted ' +
+      'that: the detector is RIGHT to decline, since both faces genuinely ' +
+      'are UV rectangles, and the exact integral was never wrong. Its own ' +
+      'account was that `tessellate_solid` samples a CLOSED circular rim ' +
+      'from the curve\'s intrinsic parameter origin rather than from the ' +
+      'edge\'s seam vertex, so the boundary walk reads 2.5 turns for a band ' +
+      'that goes round once and the CDT folds triangles back over the ' +
+      'cylinder — a mesh that is still closed and 2-manifold while ' +
+      'enclosing some space twice. (3) That is real and fixed, but it is ' +
+      'not the whole story for THIS body, which sits exactly on a ' +
+      'previously unknown cliff at d/R = 1/2: above it the FUSE never ' +
+      'splits the boss wall against the plate at all, leaving one face of ' +
+      'exactly 2*pi*R*H and carrying the buried portion as an interior ' +
+      'sheet. On the bad side the body has 10 faces, not the 11 recorded ' +
+      'above, and the tab/ring split this note describes does not exist. ' +
+      'Which side it lands on is decided by architecture AND by model ' +
+      'scale — Linux at 1000x reproduces what macOS reports at 1x — so the ' +
+      '11-face reading above is this platform\'s answer, not the body\'s. ' +
+      'validate_solid and both measurement routes call it fine on both ' +
+      'sides; mesh watertightness is the only witness. ' +
       'Note what this means: a user modelling this body sees a volume 0.3% ' +
       'wrong on geometry that is exactly correct. Switching the adapter to ' +
       'massProperties is NOT an obvious fix — that route has its own open ' +
       'defect, reading a quadric sector wider than pi as its own complement ' +
       '(4.3% light). Neither route is trustworthy everywhere yet. ' +
       'Retire this pin when the app-facing volume reaches the closed form, ' +
-      'not before. Exact tangency is separate and still falls back at 0.02%.'
+      'not before — and re-read the mechanism history above before ' +
+      'believing any single explanation of why it does not. Exact tangency ' +
+      'is separate and still falls back at 0.02%.'
   },
   {
     subject: 'boss-crossing-a-wall',
