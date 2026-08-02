@@ -30,7 +30,24 @@ export type RegionCurve =
       endAngle: number;
       ccw: boolean;
       sourceObjectId: string;
+    }
+  | {
+      /**
+       * A non-rational bezier. Glyph outlines are quadratic (TrueType) or
+       * cubic (PostScript) beziers and are kept exact all the way to the
+       * kernel — see `docs/plans/text-feature-plan.md`, design decision 4.
+       * Nothing in the half-edge arrangement produces one; they only reach
+       * here through the text fast path.
+       */
+      kind: 'bezier';
+      a: Vec2Like;
+      b: Vec2Like;
+      /** Interior control points: one for a quadratic, two for a cubic. */
+      controls: Vec2Like[];
+      sourceObjectId: string;
     };
+
+export type BezierRegionCurve = Extract<RegionCurve, { kind: 'bezier' }>;
 
 export interface RegionLoop {
   curves: RegionCurve[];
@@ -149,6 +166,10 @@ type Curve = SegCurve | ArcCurve;
 const TWO_PI = Math.PI * 2;
 /** Samples for a full circle when producing polylines. */
 const CIRCLE_POLYLINE_SEGMENTS = 64;
+/** Chord deviation a sampled bezier may keep, as a fraction of its extent. */
+const BEZIER_SAMPLE_RATIO = 1 / 400;
+/** Ceiling on the sampled-polyline cost of a single bezier. */
+const MAX_BEZIER_POLYLINE_SEGMENTS = 32;
 /** Fingerprints are identity hints, not geometric comparisons. */
 const FINGERPRINT_QUANTUM = 1e-6;
 
@@ -972,6 +993,22 @@ function curveSignature(curve: RegionCurve): string {
       forward.join(',') <= backward.join(',') ? forward : backward;
     return `L${canonical.join(',')}`;
   }
+  if (curve.kind === 'bezier') {
+    // Direction-canonical like the line case: the same bezier traced either
+    // way must sign identically, or `mergeAdjacentProfiles` would fail to
+    // cancel a shared boundary piece.
+    const points = [curve.a, ...curve.controls, curve.b];
+    const forward = points.flatMap((point) => [
+      quantize(point.x),
+      quantize(point.y)
+    ]);
+    const backward = [...points]
+      .reverse()
+      .flatMap((point) => [quantize(point.x), quantize(point.y)]);
+    const canonical =
+      forward.join(',') <= backward.join(',') ? forward : backward;
+    return `B${curve.controls.length + 1},${canonical.join(',')}`;
+  }
   const forwardSweep = normalizeAngle(curve.endAngle - curve.startAngle);
   const span = curve.ccw
     ? forwardSweep || TWO_PI
@@ -1060,32 +1097,46 @@ export function profilesShareBoundary(
 }
 
 function regionCurveStart(curve: RegionCurve): Vec2Like {
-  return curve.kind === 'line'
-    ? curve.a
-    : {
-        x: curve.center.x + Math.cos(curve.startAngle) * curve.radius,
-        y: curve.center.y + Math.sin(curve.startAngle) * curve.radius
-      };
+  // Endpoints are returned by reference, never recomputed: the whole text
+  // pipeline depends on adjacent segments sharing one point object so the
+  // doubles `makeWire` welds are bit-identical on both sides of a joint.
+  if (curve.kind === 'line' || curve.kind === 'bezier') {
+    return curve.a;
+  }
+  return {
+    x: curve.center.x + Math.cos(curve.startAngle) * curve.radius,
+    y: curve.center.y + Math.sin(curve.startAngle) * curve.radius
+  };
 }
 
 function regionCurveEnd(curve: RegionCurve): Vec2Like {
-  return curve.kind === 'line'
-    ? curve.b
-    : {
-        x: curve.center.x + Math.cos(curve.endAngle) * curve.radius,
-        y: curve.center.y + Math.sin(curve.endAngle) * curve.radius
-      };
+  if (curve.kind === 'line' || curve.kind === 'bezier') {
+    return curve.b;
+  }
+  return {
+    x: curve.center.x + Math.cos(curve.endAngle) * curve.radius,
+    y: curve.center.y + Math.sin(curve.endAngle) * curve.radius
+  };
 }
 
 function reverseRegionCurve(curve: RegionCurve): RegionCurve {
-  return curve.kind === 'line'
-    ? { ...curve, a: curve.b, b: curve.a }
-    : {
-        ...curve,
-        startAngle: curve.endAngle,
-        endAngle: curve.startAngle,
-        ccw: !curve.ccw
-      };
+  if (curve.kind === 'line') {
+    return { ...curve, a: curve.b, b: curve.a };
+  }
+  if (curve.kind === 'bezier') {
+    return {
+      ...curve,
+      a: curve.b,
+      b: curve.a,
+      controls: [...curve.controls].reverse()
+    };
+  }
+  return {
+    ...curve,
+    startAngle: curve.endAngle,
+    endAngle: curve.startAngle,
+    ccw: !curve.ccw
+  };
 }
 
 function regionCurveSweep(
@@ -1095,9 +1146,90 @@ function regionCurveSweep(
   return curve.ccw ? forward || TWO_PI : forward - TWO_PI || -TWO_PI;
 }
 
+/**
+ * Bernstein evaluation of a non-rational bezier of degree 1–3. Kept explicit
+ * rather than de Casteljau so the endpoint values at t = 0 and t = 1 are the
+ * control points themselves, bit for bit.
+ */
+function bezierPointAt(curve: BezierRegionCurve, t: number): Vec2Like {
+  const points = [curve.a, ...curve.controls, curve.b];
+  const u = 1 - t;
+  if (points.length === 3) {
+    const [p0, p1, p2] = points as [Vec2Like, Vec2Like, Vec2Like];
+    return {
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
+    };
+  }
+  const [p0, p1, p2, p3] = points as [Vec2Like, Vec2Like, Vec2Like, Vec2Like];
+  return {
+    x:
+      u * u * u * p0.x +
+      3 * u * u * t * p1.x +
+      3 * u * t * t * p2.x +
+      t * t * t * p3.x,
+    y:
+      u * u * u * p0.y +
+      3 * u * u * t * p1.y +
+      3 * u * t * t * p2.y +
+      t * t * t * p3.y
+  };
+}
+
+/**
+ * Samples needed to keep a bezier's chord deviation under
+ * `BEZIER_SAMPLE_RATIO` of its own control-polygon extent. Scale-relative so
+ * a 3 mm glyph and a 300 mm one sample alike, and deterministic — the count
+ * is a pure function of the control points.
+ */
+function bezierSampleCount(curve: BezierRegionCurve): number {
+  const points = [curve.a, ...curve.controls, curve.b];
+  let deviation = 0;
+  const dx = curve.b.x - curve.a.x;
+  const dy = curve.b.y - curve.a.y;
+  const chord = Math.hypot(dx, dy);
+  for (const control of curve.controls) {
+    deviation = Math.max(
+      deviation,
+      chord > 0
+        ? Math.abs(
+            (control.x - curve.a.x) * dy - (control.y - curve.a.y) * dx
+          ) / chord
+        : Math.hypot(control.x - curve.a.x, control.y - curve.a.y)
+    );
+  }
+  let extent = 0;
+  for (const point of points) {
+    extent = Math.max(
+      extent,
+      Math.hypot(point.x - curve.a.x, point.y - curve.a.y)
+    );
+  }
+  if (extent === 0) {
+    return 1;
+  }
+  // Chord error of an n-segment subdivision falls off as 1/n²; solving
+  // deviation / n² ≤ ratio · extent gives the count below.
+  const target = Math.sqrt(deviation / (BEZIER_SAMPLE_RATIO * extent));
+  return Math.min(
+    MAX_BEZIER_POLYLINE_SEGMENTS,
+    Math.max(2, Math.ceil(Number.isFinite(target) ? target : 2))
+  );
+}
+
 function sampleRegionCurve(curve: RegionCurve): Vec2Like[] {
   if (curve.kind === 'line') {
     return [curve.a, curve.b];
+  }
+  if (curve.kind === 'bezier') {
+    const steps = bezierSampleCount(curve);
+    const samples: Vec2Like[] = [curve.a];
+    for (let index = 1; index < steps; index += 1) {
+      samples.push(bezierPointAt(curve, index / steps));
+    }
+    // The shared endpoint object, not a re-evaluation at t = 1.
+    samples.push(curve.b);
+    return samples;
   }
   const sweep = regionCurveSweep(curve);
   const steps = Math.max(
@@ -1113,9 +1245,54 @@ function sampleRegionCurve(curve: RegionCurve): Vec2Like[] {
   });
 }
 
+/**
+ * `∫₀¹ (x y' − y x') dt` for one bezier — twice its Green's-theorem area
+ * contribution. Both coordinates are cubic polynomials, so the integrand is
+ * degree 4 and integrates exactly. This is the same integral
+ * `text/loops.ts` computes; it is duplicated rather than imported so
+ * `regions.ts` keeps no runtime dependency on the text module's internals.
+ */
+function bezierSignedAreaTerm(curve: BezierRegionCurve): number {
+  const coefficients = (axis: 'x' | 'y'): [number, number, number, number] => {
+    const p0 = curve.a[axis];
+    const p3 = curve.b[axis];
+    if (curve.controls.length === 1) {
+      const c = curve.controls[0]![axis];
+      return [p0, 2 * (c - p0), p0 - 2 * c + p3, 0];
+    }
+    const c1 = curve.controls[0]![axis];
+    const c2 = curve.controls[1]![axis];
+    return [
+      p0,
+      3 * (c1 - p0),
+      3 * (p0 - 2 * c1 + c2),
+      -p0 + 3 * c1 - 3 * c2 + p3
+    ];
+  };
+  const x = coefficients('x');
+  const y = coefficients('y');
+  const dx = [x[1], 2 * x[2], 3 * x[3]];
+  const dy = [y[1], 2 * y[2], 3 * y[3]];
+  const integrand = [0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < 4; i += 1) {
+    for (let j = 0; j < 3; j += 1) {
+      integrand[i + j] = integrand[i + j]! + (x[i]! * dy[j]! - y[i]! * dx[j]!);
+    }
+  }
+  let total = 0;
+  for (let k = 0; k < integrand.length; k += 1) {
+    total += integrand[k]! / (k + 1);
+  }
+  return total;
+}
+
 function exactAreaForRegionCurves(curves: RegionCurve[]): number {
   let area = 0;
   for (const curve of curves) {
+    if (curve.kind === 'bezier') {
+      area += bezierSignedAreaTerm(curve) / 2;
+      continue;
+    }
     const start = regionCurveStart(curve);
     const end = regionCurveEnd(curve);
     area += (start.x * end.y - end.x * start.y) / 2;
@@ -1125,6 +1302,15 @@ function exactAreaForRegionCurves(curves: RegionCurve[]): number {
     }
   }
   return area;
+}
+
+/**
+ * Exact signed area of a closed loop — positive counter-clockwise. Arcs
+ * contribute their circular segment and beziers their Green's-theorem
+ * integral, so nothing here depends on how finely the loop samples.
+ */
+export function regionLoopSignedArea(loop: RegionLoop): number {
+  return exactAreaForRegionCurves(loop.curves);
 }
 
 function loopFromCurves(curves: RegionCurve[]): RegionLoop {
