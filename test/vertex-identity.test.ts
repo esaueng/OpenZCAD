@@ -148,14 +148,33 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
   // Why not quantize positions instead.
   // -------------------------------------------------------------------------
 
-  it('would lose a closed edge entirely, because its polyline misses its vertex', () => {
-    // The decisive result. A closed edge's display polyline is a full loop, so
-    // it HAS no free end to match — and it does not even begin at the vertex.
-    // The sampler starts a quarter turn away from the seam, so a derivation
-    // that quantized polyline endpoints would place the rim's vertex somewhere
-    // no other edge touches. Measured across the parity corpus: 73 vertices
-    // reached from two edges that quantize apart, every one of them on a
-    // closed edge.
+  it('now starts a closed edge at the vertex it owns, which it did not before', () => {
+    // THIS TEST WAS FLIPPED by the pin bump to 02bbf81 carrying brepkit#64.
+    //
+    // It used to assert the opposite, and was described here as "the decisive
+    // result": a closed edge's polyline began a QUARTER TURN from the seam, so
+    // a derivation that quantized polyline endpoints would place a rim's
+    // vertex where no other edge touches. Measured then across the parity
+    // corpus: 73 vertices reached from two edges that quantize apart, every
+    // one of them on a closed edge.
+    //
+    // brepkit#64 fixed exactly that, for an unrelated reason — the offset
+    // sheared the CDT's parameter domain and folded a band's triangles back
+    // over themselves. Closed rims are now sampled from the edge's own start
+    // vertex, so the gap this test measured has gone from 10*sqrt(2) = 14.142
+    // to 6.12e-16.
+    //
+    // WHAT THAT DOES TO THE ARGUMENT, stated plainly rather than left for
+    // someone to trip over: the "73 false splits" evidence for publishing
+    // `vertexIds` instead of deriving identity from polyline endpoints was
+    // measured against the OLD sampler and no longer describes this kernel.
+    // That specific number should not be quoted as current. The other reasons
+    // `vertexIds` exists are untouched and still sufficient — a closed edge
+    // names ONE vertex twice, so endpoints cannot distinguish a rim from a
+    // degenerate edge; and the handles are dense per-body integers that a
+    // rebuild may renumber, so they are not derivable from geometry at all.
+    // Whether endpoint quantization would now succeed on the corpus is simply
+    // unmeasured. Do not assume either way from this test.
     const kernel = new BrepKernel();
     const cylinder = kernel.makeCylinder(10, 20);
     const edges = Array.from(kernel.getSolidEdges(cylinder));
@@ -171,11 +190,11 @@ describe('edge-to-vertex incidence', { timeout: 60_000 }, () => {
       const polyline = polylines[index]!;
       const start = polyline.slice(0, 3);
       const finish = polyline.slice(-3);
-      // The polyline does close on itself...
+      // The polyline still closes on itself...
       expect(distance(start, finish)).toBeLessThan(1e-9);
-      // ...but a quarter of the circumference away from the vertex it owns.
+      // ...and now it also begins at the vertex it owns.
       const vertex = kernel.getVertexPosition(handles[0]!);
-      expect(distance(start, vertex)).toBeCloseTo(10 * Math.SQRT2, 6);
+      expect(distance(start, vertex)).toBeLessThan(1e-9);
     });
     expect(checked).toBe(2);
   });
