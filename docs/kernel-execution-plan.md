@@ -1285,6 +1285,58 @@ That last one is now pinned *because* it is correct
 repeated defect family in this document, so the one operation that gets it
 right is worth holding still.
 
+**A fillet is the one ordinary body that loses exact measurement**
+(`test/filleted-body-volume.test.ts`). A third pass went after parametric
+rebuild — change an upstream dimension and see whether a downstream feature
+that references topology survives. Rebuild itself is sound: a reference to an
+edge that does not move survives a change to the far face, and one to an edge
+that *does* move fails **loud**, with `Feature "Fillet": A selected edge no
+longer exists.` and no body. That is the right shape of failure. But
+measuring the rebuilt bodies turned up something else.
+
+A box with one convex edge filleted at r=2 reports 7982.798349 against
+`8000 − r²(1−π/4)·20` = 7982.831853, i.e. −4.197e-6. It is the *only*
+ordinary body in the sweep that is not exact:
+
+| body | rel | |
+|---|---|---|
+| box 20³ | 0 | exact |
+| cylinder r10 h20 | 0 | exact |
+| box + **chamfer** 2, same edge | 0 | exact |
+| box with a **through bore** r4 | 0 | exact |
+| two boxes fused | 0 | exact |
+| box + **fillet** r2 | **−4.197e-6** | |
+
+The bored box is the control that carries the argument: same face count (7),
+same surface mix (`cylinder` + `plane`), also a boolean result, also carrying
+an analytic quadric — and exact to the last bit. So an exact path for
+cylinder-and-plane bodies exists and that body reaches it. It is not
+"curved", not "a boolean result", not "has a quadric".
+
+The error is **identical at S = 0.2, 2, 20 and 200**, so it is not the
+absolute-length class this document keeps finding. It is the mirror image —
+relative to the *wrong* length. Hold the fillet fixed on the corner a stretch
+does not touch, and grow the far dimension:
+
+| width | removed | exact | over |
+|---|---|---|---|
+| 20 | 17.201651 | 17.168147 | 0.1952 % |
+| 200 | 17.356369 | 17.168147 | 1.0963 % |
+| 2000 | 17.763456 | 17.168147 | **3.4675 %** |
+
+The same 2 mm fillet measures 0.2 % over on a 20 mm block and 3.5 % over on a
+2 m beam, having not changed. The percentage is also worst on the *smallest*
+fillets — 0.71 % at r=0.5 against 0.05 % at r=8 — which is the common case
+rather than the exotic one. The likely mechanism is one line of BrepKit,
+`volume_tessellation_deflection`'s `requested.min(diag * 5e-5)`, which ties a
+small feature's tessellation to the whole part's bounding-box diagonal; it
+predicts both behaviours. Treat that as a lead, not a conclusion.
+
+Stated at its honest size: at *body* level this is small (4.2e-6 on the cube,
+7.4e-7 on the beam). It matters at *feature* level, and it matters because it
+breaks something users assume without checking — that editing one dimension
+does not move the measured contribution of a feature elsewhere on the part.
+
 *Method notes again, because this pass produced three false alarms before it
 produced a finding.* A cylinder cut that came back **exactly −25.0000 %**
 was not a defect but a transform-matrix layout error — `transformMatrix` is
@@ -1298,6 +1350,15 @@ appeared to ignore every object but the first was the documented contract:
 thing that distinguished them was checking the probe before believing the
 result — the same discipline that has corrected roughly half the briefs in
 this document.
+
+The fillet pass added two more of the same kind, both caught before they
+reached a task. A first run concluded that *every* topological reference dies
+on a parametric rebuild; it had picked an arbitrary z-edge that happened to
+be the one at `x = w`, which does move. Re-picking by position showed the
+stationary edge survives, and the finding shrank from "rebuild is broken" to
+"rebuild works and fails loud where it must". And a cross-drilled shaft that
+appeared to measure absurdly was a body whose bore had missed entirely —
+`faces = 3` said so, and the row was discarded rather than reported.
 
 ---
 
