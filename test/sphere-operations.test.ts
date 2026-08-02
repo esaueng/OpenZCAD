@@ -119,14 +119,34 @@ describe('a sphere under boolean and offset', () => {
   };
 
   describe('subtracting a tool that touches nothing', () => {
+    /**
+     * These two are deliberately SEPARATE `it.fails` rather than one with two
+     * assertions, and the reason is worth keeping.
+     *
+     * An `it.fails` only turns red when EVERY assertion inside it passes. Bundle
+     * two independent symptoms together and a partial fix leaves the test green
+     * — which is exactly the silent-success failure mode this whole file exists
+     * to catch. Losing 0.29% of the volume and replacing the analytic sphere
+     * with 2588 planes are separate symptoms with plausibly separate fixes, so
+     * they get separate tripwires.
+     */
     it.fails(
-      'leaves the sphere exactly as it was',
+      'keeps the whole volume when the tool touches nothing',
       async () => {
-        const { volume, surfaces } = await cutWithDisjointTool('sphere', {
+        const { volume } = await cutWithDisjointTool('sphere', {
           radius: SPHERE_R
         });
         expect(Math.abs(volume - SPHERE) / SPHERE).toBeLessThan(1e-9);
-        // And it should still BE a sphere, not a polyhedron standing in for one.
+      },
+      120_000
+    );
+
+    it.fails(
+      'keeps the sphere analytic rather than standing a polyhedron in for it',
+      async () => {
+        const { surfaces } = await cutWithDisjointTool('sphere', {
+          radius: SPHERE_R
+        });
         expect(surfaces).toEqual(new Set(['sphere']));
       },
       120_000
