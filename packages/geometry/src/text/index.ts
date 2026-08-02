@@ -23,13 +23,22 @@ export {
   type FontFamilyEntry,
   type FontLicense
 } from './registry';
-export {
-  FontLibrary,
-  fetchFontDataSource,
-  parseFontFace,
-  type FontDataSource,
-  type FontLibraryOptions,
-  type LoadedFont
+/**
+ * Types only, deliberately.
+ *
+ * `loader.ts` imports opentype.js — a few hundred kilobytes of font parser.
+ * Re-exporting its values here would put that in the static module graph of
+ * every consumer of this barrel, and a host that only ever draws rectangles
+ * would pay for it. Type exports erase, so this costs nothing at runtime.
+ *
+ * Import the values from `./loader` (or the `@openzcad/geometry/text-loader`
+ * subpath) at the point of use, ideally behind a dynamic import so the parser
+ * lands in its own chunk.
+ */
+export type {
+  FontDataSource,
+  FontLibraryOptions,
+  LoadedFont
 } from './loader';
 export {
   buildTextProfileSet,

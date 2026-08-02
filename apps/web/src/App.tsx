@@ -116,6 +116,7 @@ import {
   formatNumber,
   inferContentType
 } from './lib/model';
+import { useDocumentFonts } from './lib/textFonts';
 import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import {
   SHORTCUT_TO_TOOL,
@@ -1231,6 +1232,10 @@ export function App() {
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
   );
+
+  // Text profiles resolve faces synchronously on this thread as well as in the
+  // worker, so the faces this document names have to be parsed here too.
+  const textFontsVersion = useDocumentFonts(doc ?? null);
 
   const representations = doc?.derived.bodyRepresentations ?? {};
   const renderedRepresentations =
@@ -3720,7 +3725,7 @@ export function App() {
       setStatus(`${name} started.`);
       return;
     }
-    executeCommand(
+    const added = executeCommand(
       commandFactories.addSketchObjects(
         {
           sketchId: session.sketchId as SketchId,
@@ -3729,6 +3734,25 @@ export function App() {
         `Add ${committedObject.objectKind}`
       )
     );
+    // A placed text object says "Text" in a default face — useless until it is
+    // edited, and the editor is where every one of its parameters lives. So
+    // placing one selects it and hands over to Select, the way a drawing app
+    // drops you into the caret. The other kinds are drawn to their final shape
+    // and would only be interrupted by this.
+    if (added && committedObject.objectKind === 'text') {
+      const objectId = managerRef.current?.document.nodes[
+        session.sketchId
+      ]?.kind === 'sketch'
+        ? findSketch(
+            managerRef.current.document,
+            session.sketchId as SketchId
+          )?.objectIds.at(-1)
+        : undefined;
+      if (objectId) {
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+        dispatchInteraction({ type: 'sketch-select-object', objectId });
+      }
+    }
   }
 
   function showProfileDiagnostics() {
@@ -3943,7 +3967,11 @@ export function App() {
     parameterScope,
     interaction,
     selectedSketch,
-    selectedSketchProfileId
+    selectedSketchProfileId,
+    // Text outlines resolve from already-parsed faces, so a face arriving
+    // after this memo last ran has to re-run it or the glyph stays a
+    // diagnostic until something unrelated invalidates the memo.
+    textFontsVersion
   ]);
 
   useEffect(() => {
@@ -5225,7 +5253,9 @@ export function App() {
                   ? ('circle' as const)
                   : event.key.toLowerCase() === 'r'
                     ? ('rectangle' as const)
-                    : null;
+                    : event.key.toLowerCase() === 't'
+                      ? ('text' as const)
+                      : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
