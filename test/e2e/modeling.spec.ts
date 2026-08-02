@@ -1190,7 +1190,18 @@ test('models a parametric part and exports a true STEP file', async ({
       .locator('.feature-row', { hasText: 'Subtract' })
       .getByTitle('Feature failed to build')
   ).toHaveCount(0);
-  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  // One warning, and it is a true finding rather than noise. The cylinder is
+  // r=14 centred at y=9 in a box only 18 deep, so its circle spans y −5..23 and
+  // severs the box outright. The kernel does not answer that cut with exact
+  // surfaces: measured at the binding, 9 operand faces (1 curved) become 46
+  // result faces with **0 curved** — the cylindrical wall comes back as planar
+  // facets. The boolean face census reports exactly that, which is what it was
+  // added for. The build still succeeds and the volume and STEP export below
+  // still hold, which is precisely why nothing caught it before.
+  //
+  // Asserting the specific message rather than a count: a second, different
+  // warning appearing here should still fail this test.
+  await expect(page.getByRole('contentinfo')).toContainText('warnings1');
 
   // Export STEP and verify the download is a real ISO 10303-21 file. Import
   // and export live inside the collapsed File menu, so open it first: a
