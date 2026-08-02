@@ -1,5 +1,10 @@
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { geometryTolerance } from './tolerance';
+// Value import, and deliberately one-way: `text/sketchProfiles` imports only
+// *types* from this module, so there is no runtime cycle. It also avoids
+// `text/loader`, which is the sole `opentype.js` import site — computing
+// sketch regions must not drag a font parser into the bundle.
+import { textSketchProfiles } from './text/sketchProfiles';
 
 /**
  * Planar region detection for sketches.
@@ -19,6 +24,20 @@ export interface Vec2Like {
   y: number;
 }
 
+/**
+ * The interior control points of a non-rational bezier: exactly one for a
+ * quadratic, exactly two for a cubic.
+ *
+ * A tuple union rather than `Vec2Like[]` on purpose. Degree is not a free
+ * parameter here — `bezierSignedAreaTerm`, `bezierPointAt` and the kernel
+ * adapter's `bezierNurbsParams` each re-derive it from the array length, and
+ * before this was a tuple they disagreed about the out-of-range cases (crash,
+ * silent truncation to cubic, and a thrown error respectively). The compiler
+ * now rejects those inputs at the single construction site instead.
+ */
+export type BezierControlPoints =
+  readonly [Vec2Like] | readonly [Vec2Like, Vec2Like];
+
 export type RegionCurve =
   | { kind: 'line'; a: Vec2Like; b: Vec2Like; sourceObjectId: string }
   | {
@@ -30,7 +49,24 @@ export type RegionCurve =
       endAngle: number;
       ccw: boolean;
       sourceObjectId: string;
+    }
+  | {
+      /**
+       * A non-rational bezier. Glyph outlines are quadratic (TrueType) or
+       * cubic (PostScript) beziers and are kept exact all the way to the
+       * kernel — see `docs/plans/text-feature-plan.md`, design decision 4.
+       * Nothing in the half-edge arrangement produces one; they only reach
+       * here through the text fast path.
+       */
+      kind: 'bezier';
+      a: Vec2Like;
+      b: Vec2Like;
+      /** Interior control points: one for a quadratic, two for a cubic. */
+      controls: BezierControlPoints;
+      sourceObjectId: string;
     };
+
+export type BezierRegionCurve = Extract<RegionCurve, { kind: 'bezier' }>;
 
 export interface RegionLoop {
   curves: RegionCurve[];
@@ -47,7 +83,9 @@ export interface SketchProfileDiagnostic {
     | 'degenerate-entity'
     | 'open-endpoint'
     | 'gap-within-tolerance'
-    | 'unresolved-parameter';
+    | 'unresolved-parameter'
+    /** An object that carries its own outlines could not produce them. */
+    | 'unresolved-outline';
   severity: 'info' | 'warning' | 'error';
   message: string;
   sourceEntityIds: string[];
@@ -81,6 +119,27 @@ export interface SketchProfile {
   diagnostics: SketchProfileDiagnostic[];
   /** A point strictly inside the region (outside all holes). */
   samplePoint: Vec2Like;
+  /**
+   * Present only on profiles supplied by an object that carries its own
+   * outlines — today text, and only text. Absent means the profile came out
+   * of the half-edge arrangement.
+   *
+   * Two consumers depend on it. Resolution: an outline profile is matched by
+   * entity id (`SketchEntityProfileReference`), never by geometry, so the
+   * tolerant area + sample-point tier must skip it or a broken hand-drawn
+   * reference could silently land on a glyph. Build: `fidelity` says whether
+   * the loops are the authored curves or a polyline approximation of them, so
+   * the adapter can report a faceted result instead of shipping it silently.
+   */
+  outline?: {
+    /**
+     * `'flattened'` means the loops are line segments approximating curves
+     * that the font actually draws as beziers — glyphs resolved through the
+     * overlap union come back this way, because the union works on polygons.
+     * Those walls extrude faceted and export faceted.
+     */
+    fidelity: 'exact' | 'flattened';
+  };
 }
 
 /** Backward-compatible name retained for kernel and command consumers. */
@@ -98,6 +157,25 @@ export interface SketchProfileAnalysis {
 export interface SketchRegionObject {
   id: string;
   data: SketchObjectData;
+}
+
+/**
+ * Supplies profiles for sketch objects the planar arrangement cannot derive.
+ *
+ * Today that is text, and only text. Glyph outlines need parsed font data,
+ * which is fetched asynchronously; this analyzer is synchronous and pure, so
+ * the font-backed expansion is injected by the caller rather than reached from
+ * in here. Returning `null` (or omitting the source) means the object
+ * contributes no profiles — it never falls back to the arrangement, which
+ * would be the O(n²) path the text plan exists to avoid.
+ */
+export type SketchProfileSource = (
+  object: SketchRegionObject,
+  resolve: (value: ParamValue) => number
+) => SketchProfile[] | null;
+
+export interface SketchProfileAnalysisOptions {
+  profileSource?: SketchProfileSource;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +208,10 @@ type Curve = SegCurve | ArcCurve;
 const TWO_PI = Math.PI * 2;
 /** Samples for a full circle when producing polylines. */
 const CIRCLE_POLYLINE_SEGMENTS = 64;
+/** Chord deviation a sampled bezier may keep, as a fraction of its extent. */
+const BEZIER_SAMPLE_RATIO = 1 / 400;
+/** Ceiling on the sampled-polyline cost of a single bezier. */
+const MAX_BEZIER_POLYLINE_SEGMENTS = 32;
 /** Fingerprints are identity hints, not geometric comparisons. */
 const FINGERPRINT_QUANTUM = 1e-6;
 
@@ -238,6 +320,15 @@ function curvesForObject(
         }
       ];
     }
+    case 'text': {
+      // Text never enters the half-edge arrangement. A word is thousands of
+      // curves and this pipeline is quadratic in curve count in several
+      // places; fonts also already encode which contour is an outer boundary
+      // and which is a counter, so the arrangement has nothing to discover.
+      // Text profiles arrive fully formed through `profileSource` instead
+      // (`docs/plans/text-feature-plan.md`, design decision 4).
+      return [];
+    }
   }
 }
 
@@ -298,10 +389,7 @@ function primitiveCurveKey(curve: Curve, tolerance: number): string {
   const start = toleranceKey(arcPoint(curve, 0), tolerance);
   const end = toleranceKey(arcPoint(curve, curve.sweep), tolerance);
   const ends = start <= end ? `${start}:${end}` : `${end}:${start}`;
-  const midpoint = toleranceKey(
-    arcPoint(curve, curve.sweep / 2),
-    tolerance
-  );
+  const midpoint = toleranceKey(arcPoint(curve, curve.sweep / 2), tolerance);
   return [
     'A',
     toleranceKey({ x: curve.cx, y: curve.cy }, tolerance),
@@ -947,6 +1035,22 @@ function curveSignature(curve: RegionCurve): string {
       forward.join(',') <= backward.join(',') ? forward : backward;
     return `L${canonical.join(',')}`;
   }
+  if (curve.kind === 'bezier') {
+    // Direction-canonical like the line case: the same bezier traced either
+    // way must sign identically, or `mergeAdjacentProfiles` would fail to
+    // cancel a shared boundary piece.
+    const points = [curve.a, ...curve.controls, curve.b];
+    const forward = points.flatMap((point) => [
+      quantize(point.x),
+      quantize(point.y)
+    ]);
+    const backward = [...points]
+      .reverse()
+      .flatMap((point) => [quantize(point.x), quantize(point.y)]);
+    const canonical =
+      forward.join(',') <= backward.join(',') ? forward : backward;
+    return `B${curve.controls.length + 1},${canonical.join(',')}`;
+  }
   const forwardSweep = normalizeAngle(curve.endAngle - curve.startAngle);
   const span = curve.ccw
     ? forwardSweep || TWO_PI
@@ -961,9 +1065,7 @@ function curveSignature(curve: RegionCurve): string {
     quantize(normalizeAngle(curve.endAngle))
   ].sort((a, b) => a - b);
   const signedSpan = curve.ccw ? span : -span;
-  const midpoint = quantize(
-    normalizeAngle(curve.startAngle + signedSpan / 2)
-  );
+  const midpoint = quantize(normalizeAngle(curve.startAngle + signedSpan / 2));
   return `A${base},${angles.join(',')},${quantize(span)},${midpoint}`;
 }
 
@@ -1021,6 +1123,22 @@ function profileIdOf(
   return `profile_${fnv1a64(topology)}`;
 }
 
+/**
+ * Every canonical boundary-piece signature a profile carries, outer and holes.
+ *
+ * Exported so callers can bucket profiles by shared signature in a single
+ * pass rather than comparing every pair with `profilesShareBoundary`, which
+ * rebuilds one profile's whole signature set per comparison. Text puts one
+ * profile per glyph region into that set — none of which can ever share a
+ * boundary — so the pairwise sweep was quadratic overhead that grew with the
+ * length of the string.
+ */
+export function profileBoundarySignatures(profile: SketchProfile): string[] {
+  return [profile.outer, ...profile.holes].flatMap((loop) =>
+    loop.curves.map(curveSignature)
+  );
+}
+
 /** True when two bounded cells share an exact arrangement boundary piece. */
 export function profilesShareBoundary(
   left: SketchProfile,
@@ -1037,32 +1155,48 @@ export function profilesShareBoundary(
 }
 
 function regionCurveStart(curve: RegionCurve): Vec2Like {
-  return curve.kind === 'line'
-    ? curve.a
-    : {
-        x: curve.center.x + Math.cos(curve.startAngle) * curve.radius,
-        y: curve.center.y + Math.sin(curve.startAngle) * curve.radius
-      };
+  // Endpoints are returned by reference, never recomputed: the whole text
+  // pipeline depends on adjacent segments sharing one point object so the
+  // doubles `makeWire` welds are bit-identical on both sides of a joint.
+  if (curve.kind === 'line' || curve.kind === 'bezier') {
+    return curve.a;
+  }
+  return {
+    x: curve.center.x + Math.cos(curve.startAngle) * curve.radius,
+    y: curve.center.y + Math.sin(curve.startAngle) * curve.radius
+  };
 }
 
 function regionCurveEnd(curve: RegionCurve): Vec2Like {
-  return curve.kind === 'line'
-    ? curve.b
-    : {
-        x: curve.center.x + Math.cos(curve.endAngle) * curve.radius,
-        y: curve.center.y + Math.sin(curve.endAngle) * curve.radius
-      };
+  if (curve.kind === 'line' || curve.kind === 'bezier') {
+    return curve.b;
+  }
+  return {
+    x: curve.center.x + Math.cos(curve.endAngle) * curve.radius,
+    y: curve.center.y + Math.sin(curve.endAngle) * curve.radius
+  };
 }
 
 function reverseRegionCurve(curve: RegionCurve): RegionCurve {
-  return curve.kind === 'line'
-    ? { ...curve, a: curve.b, b: curve.a }
-    : {
-        ...curve,
-        startAngle: curve.endAngle,
-        endAngle: curve.startAngle,
-        ccw: !curve.ccw
-      };
+  if (curve.kind === 'line') {
+    return { ...curve, a: curve.b, b: curve.a };
+  }
+  if (curve.kind === 'bezier') {
+    // Written out rather than `[...controls].reverse()`: `reverse()` widens a
+    // tuple back to an array, which is exactly the invariant this type exists
+    // to keep.
+    const controls: BezierControlPoints =
+      curve.controls.length === 1
+        ? [curve.controls[0]]
+        : [curve.controls[1], curve.controls[0]];
+    return { ...curve, a: curve.b, b: curve.a, controls };
+  }
+  return {
+    ...curve,
+    startAngle: curve.endAngle,
+    endAngle: curve.startAngle,
+    ccw: !curve.ccw
+  };
 }
 
 function regionCurveSweep(
@@ -1072,9 +1206,92 @@ function regionCurveSweep(
   return curve.ccw ? forward || TWO_PI : forward - TWO_PI || -TWO_PI;
 }
 
+/**
+ * Bernstein evaluation of a non-rational bezier of degree 1–3. Kept explicit
+ * rather than de Casteljau so the endpoint values at t = 0 and t = 1 are the
+ * control points themselves, bit for bit.
+ */
+function bezierPointAt(curve: BezierRegionCurve, t: number): Vec2Like {
+  const u = 1 - t;
+  const p0 = curve.a;
+  if (curve.controls.length === 1) {
+    const p1 = curve.controls[0];
+    const p2 = curve.b;
+    return {
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
+    };
+  }
+  const [p1, p2] = curve.controls;
+  const p3 = curve.b;
+  return {
+    x:
+      u * u * u * p0.x +
+      3 * u * u * t * p1.x +
+      3 * u * t * t * p2.x +
+      t * t * t * p3.x,
+    y:
+      u * u * u * p0.y +
+      3 * u * u * t * p1.y +
+      3 * u * t * t * p2.y +
+      t * t * t * p3.y
+  };
+}
+
+/**
+ * Samples needed to keep a bezier's chord deviation under
+ * `BEZIER_SAMPLE_RATIO` of its own control-polygon extent. Scale-relative so
+ * a 3 mm glyph and a 300 mm one sample alike, and deterministic — the count
+ * is a pure function of the control points.
+ */
+function bezierSampleCount(curve: BezierRegionCurve): number {
+  const points = [curve.a, ...curve.controls, curve.b];
+  let deviation = 0;
+  const dx = curve.b.x - curve.a.x;
+  const dy = curve.b.y - curve.a.y;
+  const chord = Math.hypot(dx, dy);
+  for (const control of curve.controls) {
+    deviation = Math.max(
+      deviation,
+      chord > 0
+        ? Math.abs(
+            (control.x - curve.a.x) * dy - (control.y - curve.a.y) * dx
+          ) / chord
+        : Math.hypot(control.x - curve.a.x, control.y - curve.a.y)
+    );
+  }
+  let extent = 0;
+  for (const point of points) {
+    extent = Math.max(
+      extent,
+      Math.hypot(point.x - curve.a.x, point.y - curve.a.y)
+    );
+  }
+  if (extent === 0) {
+    return 1;
+  }
+  // Chord error of an n-segment subdivision falls off as 1/n²; solving
+  // deviation / n² ≤ ratio · extent gives the count below.
+  const target = Math.sqrt(deviation / (BEZIER_SAMPLE_RATIO * extent));
+  return Math.min(
+    MAX_BEZIER_POLYLINE_SEGMENTS,
+    Math.max(2, Math.ceil(Number.isFinite(target) ? target : 2))
+  );
+}
+
 function sampleRegionCurve(curve: RegionCurve): Vec2Like[] {
   if (curve.kind === 'line') {
     return [curve.a, curve.b];
+  }
+  if (curve.kind === 'bezier') {
+    const steps = bezierSampleCount(curve);
+    const samples: Vec2Like[] = [curve.a];
+    for (let index = 1; index < steps; index += 1) {
+      samples.push(bezierPointAt(curve, index / steps));
+    }
+    // The shared endpoint object, not a re-evaluation at t = 1.
+    samples.push(curve.b);
+    return samples;
   }
   const sweep = regionCurveSweep(curve);
   const steps = Math.max(
@@ -1090,9 +1307,55 @@ function sampleRegionCurve(curve: RegionCurve): Vec2Like[] {
   });
 }
 
+/**
+ * `∫₀¹ (x y' − y x') dt` for one bezier — twice its Green's-theorem area
+ * contribution. Both coordinates are cubic polynomials, so the integrand is
+ * degree 4 and integrates exactly. This is the same integral
+ * `text/loops.ts` computes; it is duplicated rather than imported so
+ * `regions.ts` keeps no runtime dependency on the text module's internals.
+ */
+function bezierSignedAreaTerm(curve: BezierRegionCurve): number {
+  const controls = curve.controls;
+  const coefficients = (axis: 'x' | 'y'): [number, number, number, number] => {
+    const p0 = curve.a[axis];
+    const p3 = curve.b[axis];
+    if (controls.length === 1) {
+      const c = controls[0][axis];
+      return [p0, 2 * (c - p0), p0 - 2 * c + p3, 0];
+    }
+    const c1 = controls[0][axis];
+    const c2 = controls[1][axis];
+    return [
+      p0,
+      3 * (c1 - p0),
+      3 * (p0 - 2 * c1 + c2),
+      -p0 + 3 * c1 - 3 * c2 + p3
+    ];
+  };
+  const x = coefficients('x');
+  const y = coefficients('y');
+  const dx = [x[1], 2 * x[2], 3 * x[3]];
+  const dy = [y[1], 2 * y[2], 3 * y[3]];
+  const integrand = [0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < 4; i += 1) {
+    for (let j = 0; j < 3; j += 1) {
+      integrand[i + j] = integrand[i + j]! + (x[i]! * dy[j]! - y[i]! * dx[j]!);
+    }
+  }
+  let total = 0;
+  for (let k = 0; k < integrand.length; k += 1) {
+    total += integrand[k]! / (k + 1);
+  }
+  return total;
+}
+
 function exactAreaForRegionCurves(curves: RegionCurve[]): number {
   let area = 0;
   for (const curve of curves) {
+    if (curve.kind === 'bezier') {
+      area += bezierSignedAreaTerm(curve) / 2;
+      continue;
+    }
     const start = regionCurveStart(curve);
     const end = regionCurveEnd(curve);
     area += (start.x * end.y - end.x * start.y) / 2;
@@ -1102,6 +1365,15 @@ function exactAreaForRegionCurves(curves: RegionCurve[]): number {
     }
   }
   return area;
+}
+
+/**
+ * Exact signed area of a closed loop — positive counter-clockwise. Arcs
+ * contribute their circular segment and beziers their Green's-theorem
+ * integral, so nothing here depends on how finely the loop samples.
+ */
+export function regionLoopSignedArea(loop: RegionLoop): number {
+  return exactAreaForRegionCurves(loop.curves);
 }
 
 function loopFromCurves(curves: RegionCurve[]): RegionLoop {
@@ -1596,19 +1868,100 @@ function extractSketchProfiles(
   return regions;
 }
 
+/**
+ * The built-in expansion for a text object.
+ *
+ * Text takes a dedicated fast path: the font already encodes which contour is
+ * an outer boundary and which is a counter, so the glyph pipeline emits
+ * finished outer-plus-holes regions and none of it enters `buildSubCurves`.
+ * That is not only a shortcut — a word is 1,500–3,000 segments and this
+ * arrangement is quadratic in curve count in several places, on the UI thread
+ * and the worker, on every keystroke.
+ */
+function textProfilesFor(
+  object: SketchRegionObject,
+  resolve: (value: ParamValue) => number
+): SketchProfile[] {
+  const data = object.data;
+  if (data.objectKind !== 'text') {
+    return [];
+  }
+  return textSketchProfiles(object.id, {
+    text: data.text,
+    fontFamily: data.fontFamily,
+    fontStyle: data.fontStyle,
+    size: resolve(data.size),
+    x: resolve(data.x),
+    y: resolve(data.y),
+    rotationDeg: data.rotation === undefined ? 0 : resolve(data.rotation),
+    align: data.align
+  });
+}
+
+/**
+ * Profiles contributed by objects that bypass the arrangement, in sketch
+ * order. They are appended rather than merged into the area sort so a text
+ * object's regions stay in reading order across rebuilds.
+ *
+ * A caller-supplied `profileSource` wins when it returns an array; returning
+ * `null` (or supplying no source at all) falls through to the built-in text
+ * expansion. Failures become diagnostics rather than aborting the whole
+ * analysis, so a sketch with one unresolvable text object still yields the
+ * regions of everything else — and the extrude that consumed the text still
+ * fails closed, with this diagnostic's message attached.
+ */
+function sourcedProfiles(
+  objects: SketchRegionObject[],
+  resolve: (value: ParamValue) => number,
+  diagnostics: SketchProfileDiagnostic[],
+  profileSource: SketchProfileSource | undefined
+): SketchProfile[] {
+  const profiles: SketchProfile[] = [];
+  for (const object of objects) {
+    if (object.data.construction === true) {
+      continue;
+    }
+    try {
+      // Inside the try, not before it: a caller-supplied source is as capable
+      // of throwing as the built-in expansion, and one unresolvable object
+      // must not take the whole sketch's regions with it.
+      const supplied = profileSource?.(object, resolve) ?? null;
+      profiles.push(...(supplied ?? textProfilesFor(object, resolve)));
+    } catch (error) {
+      diagnostics.push({
+        code: 'unresolved-outline',
+        severity: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'This sketch object could not be expanded into outlines.',
+        sourceEntityIds: [object.id],
+        points: []
+      });
+    }
+  }
+  return profiles;
+}
+
 export function computeSketchProfileAnalysis(
   objects: SketchRegionObject[],
   resolve: (value: ParamValue) => number,
-  requestedTolerance?: number
+  requestedTolerance?: number,
+  options?: SketchProfileAnalysisOptions
 ): SketchProfileAnalysis {
   const resolved = resolveSketchCurves(objects, resolve, requestedTolerance);
+  const profiles = extractSketchProfiles(
+    resolved.curves,
+    resolved.tolerance,
+    resolved.invalidEntityIds
+  );
+  const diagnostics = [...resolved.diagnostics];
+  profiles.push(
+    ...sourcedProfiles(objects, resolve, diagnostics, options?.profileSource)
+  );
   return {
-    profiles: extractSketchProfiles(
-      resolved.curves,
-      resolved.tolerance,
-      resolved.invalidEntityIds
-    ),
-    diagnostics: resolved.diagnostics,
+    profiles,
+    diagnostics,
     tolerance: resolved.tolerance,
     modelScale: resolved.modelScale
   };
@@ -1617,9 +1970,11 @@ export function computeSketchProfileAnalysis(
 export function computeSketchRegions(
   objects: SketchRegionObject[],
   resolve: (value: ParamValue) => number,
-  tolerance?: number
+  tolerance?: number,
+  options?: SketchProfileAnalysisOptions
 ): SketchRegion[] {
-  return computeSketchProfileAnalysis(objects, resolve, tolerance).profiles;
+  return computeSketchProfileAnalysis(objects, resolve, tolerance, options)
+    .profiles;
 }
 
 /** Finds the region a point lies in (smallest containing region wins). */
