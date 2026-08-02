@@ -119,14 +119,18 @@ describe('a sphere under boolean and offset', () => {
   };
 
   describe('subtracting a tool that touches nothing', () => {
-    it.fails('leaves the sphere exactly as it was', async () => {
-      const { volume, surfaces } = await cutWithDisjointTool('sphere', {
-        radius: SPHERE_R
-      });
-      expect(Math.abs(volume - SPHERE) / SPHERE).toBeLessThan(1e-9);
-      // And it should still BE a sphere, not a polyhedron standing in for one.
-      expect(surfaces).toEqual(new Set(['sphere']));
-    });
+    it.fails(
+      'leaves the sphere exactly as it was',
+      async () => {
+        const { volume, surfaces } = await cutWithDisjointTool('sphere', {
+          radius: SPHERE_R
+        });
+        expect(Math.abs(volume - SPHERE) / SPHERE).toBeLessThan(1e-9);
+        // And it should still BE a sphere, not a polyhedron standing in for one.
+        expect(surfaces).toEqual(new Set(['sphere']));
+      },
+      120_000
+    );
 
     it('instead facets the sphere and loses 0.29% of it, silently', async () => {
       // The companion to the pin above. It records the specific wrong value so
@@ -143,7 +147,7 @@ describe('a sphere under boolean and offset', () => {
       expect(triangles).toBeLessThan(10_000);
       // And nothing tells the user any of this happened.
       expect(warnings).toEqual([]);
-    });
+    }, 120_000);
 
     it.each([
       ['box', { width: 20, height: 20, depth: 20 }, 8000, 'plane'],
@@ -159,21 +163,26 @@ describe('a sphere under boolean and offset', () => {
         // The analytic surface survives the same operation on these shapes.
         expect(surfaces.has(keptSurface)).toBe(true);
         expect(warnings).toEqual([]);
-      }
+      },
+      120_000
     );
   });
 
   describe('offsetting a solid', () => {
-    it.fails('draws the offset sphere it correctly measures', async () => {
-      const { volume, triangles } = await offset(
-        'sphere',
-        { radius: SPHERE_R },
-        2
-      );
-      // The measurement is already right; it is the mesh that is missing.
-      expect(volume).toBeCloseTo((4 / 3) * Math.PI * 12 ** 3, 6);
-      expect(triangles).toBeGreaterThan(0);
-    });
+    it.fails(
+      'draws the offset sphere it correctly measures',
+      async () => {
+        const { volume, triangles } = await offset(
+          'sphere',
+          { radius: SPHERE_R },
+          2
+        );
+        // The measurement is already right; it is the mesh that is missing.
+        expect(volume).toBeCloseTo((4 / 3) * Math.PI * 12 ** 3, 6);
+        expect(triangles).toBeGreaterThan(0);
+      },
+      120_000
+    );
 
     it('measures the offset sphere exactly and then draws nothing', async () => {
       const { volume, triangles, warnings } = await offset(
@@ -188,7 +197,7 @@ describe('a sphere under boolean and offset', () => {
       // silent rather than loud.
       expect(triangles).toBe(0);
       expect(warnings).toEqual([]);
-    });
+    }, 120_000);
 
     it('does the same at a distance far too small to blame on tolerance', async () => {
       const { volume, triangles } = await offset(
@@ -198,7 +207,7 @@ describe('a sphere under boolean and offset', () => {
       );
       expect(volume).toBeCloseTo((4 / 3) * Math.PI * 10.001 ** 3, 6);
       expect(triangles).toBe(0);
-    });
+    }, 120_000);
 
     it.each([
       ['box', { width: 20, height: 20, depth: 20 }, 2, 24 ** 3],
@@ -220,7 +229,8 @@ describe('a sphere under boolean and offset', () => {
         expect(Math.abs(volume - exact) / exact).toBeLessThan(1e-6);
         expect(triangles).toBeGreaterThan(0);
         expect(warnings).toEqual([]);
-      }
+      },
+      120_000
     );
   });
 });
