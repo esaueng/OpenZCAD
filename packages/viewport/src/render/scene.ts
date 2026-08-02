@@ -10,6 +10,7 @@ import type {
   BodyTopology,
   MeshGeometry
 } from '@openzcad/shared';
+import { VIEW_DIRECTIONS } from '../camera/views';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -455,25 +456,42 @@ export function createGradientBackground(): THREE.Texture {
 }
 
 /**
- * Construction-plane grid drawn in a fragment shader: anti-aliased minor and
- * major lines with a radial falloff, so the floor reads as an infinite
- * engineering plane instead of a hard-edged helper cage. Lies in the Z-up XY
- * plane, a whisker below z=0 to avoid z-fighting with grounded bottom faces.
+ * Roughly how many minor grid cells span the viewport's height at any zoom.
+ * The adaptive grid picks the power-of-ten step closest to this density, so
+ * zooming in always reveals a finer subdivision instead of magnifying a fixed
+ * 10mm lattice into a handful of giant cells.
+ */
+const GRID_CELLS_PER_VIEW = 60;
+
+/**
+ * Construction-plane grid drawn in a fragment shader: anti-aliased lines with
+ * a radial falloff, so the floor reads as an infinite engineering plane
+ * instead of a hard-edged helper cage. Lies in the Z-up XY plane, a whisker
+ * below z=0 to avoid z-fighting with grounded bottom faces.
+ *
+ * The lattice is zoom-adaptive. `updateStudioGrid` must run each frame: it
+ * recentres the quad under the orbit target, scales it to the fade radius, and
+ * feeds the shader a power-of-ten step derived from the visible extent. Four
+ * nested decades render at once with weights chosen so a decade rollover is
+ * seamless — the tier a line leaves and the tier it joins meet at the same
+ * alpha, and line colour is a function of that alpha alone. fwidth-based
+ * antialiasing keeps every line one crisp screen-space stroke at any zoom.
  */
 export function createStudioGrid(): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(640, 640);
+  const geometry = new THREE.PlaneGeometry(2, 2);
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
     uniforms: {
-      minorStep: { value: 10 },
-      majorStep: { value: 50 },
+      minorStep: { value: 1 },
+      levelFract: { value: 0 },
       minorColor: { value: new THREE.Color('#3d5073') },
       majorColor: { value: new THREE.Color('#5c78ac') },
       axisXColor: { value: new THREE.Color('#6d4757') },
       axisYColor: { value: new THREE.Color('#456352') },
-      fadeRadius: { value: 300 }
+      fadeRadius: { value: 300 },
+      fadeCenter: { value: new THREE.Vector2(0, 0) }
     },
     vertexShader: /* glsl */ `
       varying vec2 worldXY;
@@ -486,12 +504,13 @@ export function createStudioGrid(): THREE.Mesh {
     fragmentShader: /* glsl */ `
       varying vec2 worldXY;
       uniform float minorStep;
-      uniform float majorStep;
+      uniform float levelFract;
       uniform vec3 minorColor;
       uniform vec3 majorColor;
       uniform vec3 axisXColor;
       uniform vec3 axisYColor;
       uniform float fadeRadius;
+      uniform vec2 fadeCenter;
 
       float gridLine(vec2 p, float step) {
         vec2 coord = p / step;
@@ -500,16 +519,30 @@ export function createStudioGrid(): THREE.Mesh {
       }
 
       void main() {
-        float minor = gridLine(worldXY, minorStep) * 0.6;
-        float major = gridLine(worldXY, majorStep);
+        float f = levelFract;
+        // Four decades with cross-faded weights. At f=1 each tier's weight
+        // equals the next-finer tier's weight at f=0, so the step change when
+        // the floor increments never moves a line's alpha. Coarser lines
+        // always coincide with finer ones, so max() keeps them additive-free.
+        float g0 = gridLine(worldXY, minorStep) * (0.42 * (1.0 - f));
+        float g1 = gridLine(worldXY, minorStep * 10.0) * mix(0.7, 0.42, f);
+        float g2 = gridLine(worldXY, minorStep * 100.0) * mix(1.0, 0.7, f);
+        float g3 = gridLine(worldXY, minorStep * 1000.0);
+        float lineA = max(max(g0, g1), max(g2, g3));
         // Axis lines: X line runs along X at y=0, Y line along Y at x=0.
-        float axisX = 1.0 - min(abs(worldXY.y) / (fwidth(worldXY.y) * 1.2 + 0.4), 1.0);
-        float axisY = 1.0 - min(abs(worldXY.x) / (fwidth(worldXY.x) * 1.2 + 0.4), 1.0);
-        float fade = 1.0 - smoothstep(fadeRadius * 0.55, fadeRadius, length(worldXY));
-        vec3 color = minorColor;
-        float alpha = minor * 0.7;
-        color = mix(color, majorColor, major);
-        alpha = max(alpha, major);
+        // Pure fwidth width — no world-space pad — so they hold one screen
+        // stroke however deep the zoom goes.
+        float axisX = 1.0 - min(abs(worldXY.y) / (fwidth(worldXY.y) * 1.6), 1.0);
+        float axisY = 1.0 - min(abs(worldXY.x) / (fwidth(worldXY.x) * 1.6), 1.0);
+        float fade = 1.0 - smoothstep(
+          fadeRadius * 0.45,
+          fadeRadius,
+          distance(worldXY, fadeCenter)
+        );
+        // Colour follows line strength, which is continuous across rollovers,
+        // so hue never pops when a decade demotes from major to minor.
+        vec3 color = mix(minorColor, majorColor, smoothstep(0.42, 1.0, lineA));
+        float alpha = lineA;
         color = mix(color, axisXColor, axisX);
         alpha = max(alpha, axisX);
         color = mix(color, axisYColor, axisY);
@@ -522,9 +555,57 @@ export function createStudioGrid(): THREE.Mesh {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.rotation.x = 0; // PlaneGeometry is already XY; grid lives at z≈0.
   mesh.position.z = -0.02;
+  mesh.scale.set(300, 300, 1);
   mesh.name = 'studio-grid';
   mesh.raycast = () => undefined;
+  // The quad is repositioned and rescaled per frame; a stale bounding sphere
+  // must never cull it out from under the camera.
+  mesh.frustumCulled = false;
   return mesh;
+}
+
+/**
+ * Per-frame drive for the adaptive grid: follows the orbit target so the
+ * plane never runs out under a pan, and rescales the lattice step with the
+ * visible extent so zooming keeps a constant on-screen cell density.
+ */
+export function updateStudioGrid(
+  grid: THREE.Mesh,
+  camera: THREE.Camera,
+  target: THREE.Vector3
+) {
+  let viewExtent: number;
+  if (camera instanceof THREE.OrthographicCamera) {
+    viewExtent = (camera.top - camera.bottom) / Math.max(camera.zoom, 1e-9);
+  } else if (camera instanceof THREE.PerspectiveCamera) {
+    const distance = Math.max(camera.position.distanceTo(target), 1e-6);
+    viewExtent =
+      2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  } else {
+    return;
+  }
+  const level = Math.log10(
+    Math.max(viewExtent, 1e-9) / GRID_CELLS_PER_VIEW
+  );
+  const levelFloor = Math.floor(level);
+  const fadeRadius = viewExtent * 2.5;
+  const material = grid.material as THREE.ShaderMaterial;
+  material.uniforms.minorStep!.value = Math.pow(10, levelFloor);
+  material.uniforms.levelFract!.value = level - levelFloor;
+  material.uniforms.fadeRadius!.value = fadeRadius;
+  (material.uniforms.fadeCenter!.value as THREE.Vector2).set(
+    target.x,
+    target.y
+  );
+  // The z offset shrinks with the view so a deep zoom never reveals a visible
+  // gap between the plane and geometry grounded at z=0, while an overview
+  // keeps enough separation to avoid z-fighting with grounded bottom faces.
+  grid.position.set(
+    target.x,
+    target.y,
+    -THREE.MathUtils.clamp(viewExtent * 2e-4, 1e-5, 0.02)
+  );
+  grid.scale.set(fadeRadius, fadeRadius, 1);
 }
 
 /**
@@ -638,7 +719,7 @@ export function computeFitPose(
   }
   if (box.isEmpty()) {
     return {
-      position: new THREE.Vector3(80, -80, 80),
+      position: VIEW_DIRECTIONS.iso.clone().multiplyScalar(140),
       target: new THREE.Vector3(0, 0, 0),
       near: 0.1,
       far: 2000
@@ -649,8 +730,9 @@ export function computeFitPose(
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   const distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
-  // Right, front, above — matching the historical fit direction.
-  const direction = new THREE.Vector3(1, -1, 0.9).normalize();
+  // Fit always lands on the home orientation: the same iso direction the
+  // default camera pose and the ISO view preset use.
+  const direction = VIEW_DIRECTIONS.iso.clone();
   return {
     position: center.clone().addScaledVector(direction, distance),
     target: center,
