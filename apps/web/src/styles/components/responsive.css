@@ -5,8 +5,9 @@
 /* ── Narrow screens ──────────────────────────────────────── */
 
 @media (max-width: 1120px) {
+  /* The chosen width still applies; only the viewport's floor tightens. */
   .workspace {
-    grid-template-columns: 220px minmax(320px, 1fr);
+    grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
   }
 
   .topbar .topbar-action:not(.save-state) {
@@ -22,15 +23,18 @@
 
 @media (max-width: 820px) {
   .workspace {
-    grid-template-columns: 190px minmax(320px, 1fr);
+    grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
   }
+  /* The dock floats over the viewport here, so it claims no column — but it
+     keeps its width, and its splitter still tracks the edge it draws at. */
   .workspace.with-assistant {
-    grid-template-columns: 190px minmax(280px, 1fr);
+    --assistant-col-w: min(var(--assistant-w), 100%);
+    grid-template-columns: var(--sidebar-col-w) minmax(280px, 1fr);
   }
   .assistant-panel {
     position: absolute;
     inset: 0 0 0 auto;
-    width: min(360px, 100%);
+    width: var(--assistant-col-w);
     z-index: 6;
   }
 }
@@ -95,6 +99,12 @@
   .sidebar {
     border-right: 0;
     border-bottom: var(--border-thin);
+  }
+
+  /* Stacked rows: there is no vertical seam left to drag, and at this width
+     the panels are as large as the screen can spare anyway. */
+  .panel-resizer {
+    display: none;
   }
 
   .palette-float {
