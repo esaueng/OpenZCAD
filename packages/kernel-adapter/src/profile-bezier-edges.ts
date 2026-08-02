@@ -1,0 +1,195 @@
+import type {
+  BezierRegionCurve,
+  PlaneBasis,
+  Vec2Like,
+  Vec3
+} from '@openzcad/geometry';
+
+/**
+ * Exact bezier profile edges, behind a feature flag.
+ *
+ * Glyph outlines are quadratic (TrueType) or cubic (PostScript) beziers, and
+ * the whole point of the text fast path is to keep them exact all the way to
+ * the kernel — a NURBS edge produces a smooth wall at any zoom and a faithful
+ * STEP export, where a flattened one produces a visibly faceted stem.
+ *
+ * The flag exists so a kernel edge case cannot block shipping: turning it off
+ * routes every bezier through the same line pipeline arcs and polygons already
+ * use. That path is a real degradation, so it is never silent — see
+ * `flattenBezierCurve`'s callers, which warn every time they use it.
+ */
+
+/** Chord deviation the fallback polyline may keep, as a fraction of extent. */
+const FALLBACK_CHORD_RATIO = 1 / 2000;
+/** Ceiling on the fallback's segment count for one bezier. */
+const MAX_FALLBACK_SEGMENTS = 64;
+/**
+ * How far `v` may drift from `normal × u` before a lifted bezier and a
+ * JS-computed line endpoint would disagree about where the plane's second
+ * axis points. Well above float noise, far below anything that would mirror
+ * or rotate the text.
+ */
+const BASIS_HANDEDNESS_TOLERANCE = 1e-9;
+
+/**
+ * Global override read once at module load, so a deployment can disable the
+ * exact path without a code change:
+ * `globalThis.openzcadBezierProfileEdges = false`.
+ */
+function initialFlag(): boolean {
+  const override = (globalThis as Record<string, unknown>)
+    .openzcadBezierProfileEdges;
+  return override === undefined ? true : override !== false;
+}
+
+let bezierProfileEdges = initialFlag();
+
+/** True when profile beziers reach the kernel as exact NURBS edges. */
+export function bezierProfileEdgesEnabled(): boolean {
+  return bezierProfileEdges;
+}
+
+/** Flip the exact-bezier path. `false` selects the flattening fallback. */
+export function setBezierProfileEdges(enabled: boolean): void {
+  bezierProfileEdges = enabled;
+}
+
+/**
+ * `liftCurve2dToPlane` derives the plane's second axis as `normal × x_axis`.
+ * Every basis this app produces is right-handed (`u × v = normal`), so that
+ * matches `v` — but a face-attached frame is measured, not constructed, and a
+ * frame that ever drifted would silently mirror the text about its baseline
+ * rather than fail. Checking is two cross products.
+ */
+export function basisMatchesLiftedFrame(basis: PlaneBasis): boolean {
+  const derived: Vec3 = {
+    x: basis.normal.y * basis.u.z - basis.normal.z * basis.u.y,
+    y: basis.normal.z * basis.u.x - basis.normal.x * basis.u.z,
+    z: basis.normal.x * basis.u.y - basis.normal.y * basis.u.x
+  };
+  return (
+    Math.abs(derived.x - basis.v.x) <= BASIS_HANDEDNESS_TOLERANCE &&
+    Math.abs(derived.y - basis.v.y) <= BASIS_HANDEDNESS_TOLERANCE &&
+    Math.abs(derived.z - basis.v.z) <= BASIS_HANDEDNESS_TOLERANCE
+  );
+}
+
+/**
+ * `curve_params` for `liftCurve2dToPlane(curveType = 3)`:
+ * `[degree, n_cp, ...knots (n_cp + degree + 1), ...xy pairs (2 · n_cp),
+ * ...weights (n_cp)]`. A bezier is a NURBS with a clamped knot vector that
+ * has no interior knots — `[0,0,0,1,1,1]` for a quadratic,
+ * `[0,0,0,0,1,1,1,1]` for a cubic — and unit weights, which is what makes it
+ * non-rational.
+ */
+export function bezierNurbsParams(curve: BezierRegionCurve): Float64Array {
+  const points: Vec2Like[] = [curve.a, ...curve.controls, curve.b];
+  const count = points.length;
+  const degree = count - 1;
+  if (degree < 2 || degree > 3) {
+    throw new Error(
+      `A profile bezier must be quadratic or cubic; received degree ${degree}.`
+    );
+  }
+  const params = new Float64Array(2 + 2 * count + 2 * count + count);
+  let at = 0;
+  params[at++] = degree;
+  params[at++] = count;
+  for (let index = 0; index < count; index += 1) {
+    params[at++] = 0;
+  }
+  for (let index = 0; index < count; index += 1) {
+    params[at++] = 1;
+  }
+  for (const point of points) {
+    params[at++] = point.x;
+    params[at++] = point.y;
+  }
+  for (let index = 0; index < count; index += 1) {
+    params[at++] = 1;
+  }
+  return params;
+}
+
+function bezierPointAt(points: readonly Vec2Like[], t: number): Vec2Like {
+  const u = 1 - t;
+  if (points.length === 3) {
+    const [p0, p1, p2] = points as [Vec2Like, Vec2Like, Vec2Like];
+    return {
+      x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+      y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
+    };
+  }
+  const [p0, p1, p2, p3] = points as [Vec2Like, Vec2Like, Vec2Like, Vec2Like];
+  return {
+    x:
+      u * u * u * p0.x +
+      3 * u * u * t * p1.x +
+      3 * u * t * t * p2.x +
+      t * t * t * p3.x,
+    y:
+      u * u * u * p0.y +
+      3 * u * u * t * p1.y +
+      3 * u * t * t * p2.y +
+      t * t * t * p3.y
+  };
+}
+
+/**
+ * The fallback polyline for one bezier, as ordered 2D points.
+ *
+ * The first and last entries are the curve's own endpoint objects, never
+ * re-evaluations of the polynomial at t = 0 and t = 1: a neighbouring line or
+ * bezier shares those same objects, and `makeWire` welds at 1e-7, so a
+ * recomputed endpoint is how a wire fails to close.
+ */
+export function flattenBezierCurve(curve: BezierRegionCurve): Vec2Like[] {
+  const points: Vec2Like[] = [curve.a, ...curve.controls, curve.b];
+  const dx = curve.b.x - curve.a.x;
+  const dy = curve.b.y - curve.a.y;
+  const chord = Math.hypot(dx, dy);
+  let deviation = 0;
+  let extent = 0;
+  for (const control of curve.controls) {
+    deviation = Math.max(
+      deviation,
+      chord > 0
+        ? Math.abs(
+            (control.x - curve.a.x) * dy - (control.y - curve.a.y) * dx
+          ) / chord
+        : Math.hypot(control.x - curve.a.x, control.y - curve.a.y)
+    );
+  }
+  for (const point of points) {
+    extent = Math.max(
+      extent,
+      Math.hypot(point.x - curve.a.x, point.y - curve.a.y)
+    );
+  }
+  // Chord error of an n-piece subdivision falls off as 1/n².
+  const target =
+    extent > 0 ? Math.sqrt(deviation / (FALLBACK_CHORD_RATIO * extent)) : 1;
+  const steps = Math.min(
+    MAX_FALLBACK_SEGMENTS,
+    Math.max(1, Math.ceil(Number.isFinite(target) ? target : 1))
+  );
+  const out: Vec2Like[] = [curve.a];
+  for (let index = 1; index < steps; index += 1) {
+    out.push(bezierPointAt(points, index / steps));
+  }
+  out.push(curve.b);
+  return out;
+}
+
+/**
+ * The single warning the fallback is allowed to be quiet about is none: a
+ * flattened glyph is a product regression the user can see, so every rebuild
+ * that takes the fallback says so and says why.
+ */
+export function bezierFallbackWarning(reason: string, count: number): string {
+  return (
+    `${count} bezier profile edge${count === 1 ? '' : 's'} were flattened to ` +
+    `line segments instead of exact NURBS edges (${reason}). Curved outlines ` +
+    'will look faceted and export faceted.'
+  );
+}

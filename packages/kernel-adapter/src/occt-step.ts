@@ -43,6 +43,11 @@ import type { ExactKernelAdapter } from './exact';
 import { importedMeshStl } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
+  bezierFallbackWarning,
+  bezierProfileEdgesEnabled,
+  flattenBezierCurve
+} from './profile-bezier-edges';
+import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
 } from './union-connectivity';
@@ -1138,11 +1143,14 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
 
   /**
    * Build an exact planar face for a detected region: outer wire plus hole
-   * wires from the region's line/arc curves. Mirrors the BrepKit adapter's
-   * construction — including the identical ≤ 90° arc subdivision — so the
-   * resulting edges carry the same ADR-011 fingerprints on both kernels.
+   * wires from the region's line/arc/bezier curves. Mirrors the BrepKit
+   * adapter's construction — including the identical ≤ 90° arc subdivision —
+   * so the resulting edges carry the same ADR-011 fingerprints on both
+   * kernels.
    */
   private makeRegionFace(region: SketchRegion, basis: PlaneBasis): ShapeHandle {
+    const exactBeziers = bezierProfileEdgesEnabled();
+    let flattened = 0;
     const wireFor = (loop: SketchRegion['outer']): ShapeHandle => {
       const edges: ShapeHandle[] = [];
       for (const curve of loop.curves) {
@@ -1153,6 +1161,32 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
               OcctStepKernelAdapter.planePoint3(basis, curve.b)
             )
           );
+          continue;
+        }
+        if (curve.kind === 'bezier') {
+          if (exactBeziers) {
+            // OpenCascade takes 3D control points directly, so the plane's
+            // own basis lifts them — no dependence on how the kernel derives
+            // a second axis, unlike BrepKit's `liftCurve2dToPlane`.
+            edges.push(
+              this.kernel.makeBezierEdge(
+                [curve.a, ...curve.controls, curve.b].map((point) =>
+                  OcctStepKernelAdapter.planePoint3(basis, point)
+                )
+              )
+            );
+            continue;
+          }
+          flattened += 1;
+          const points = flattenBezierCurve(curve);
+          for (let index = 0; index + 1 < points.length; index += 1) {
+            edges.push(
+              this.kernel.makeLineEdge(
+                OcctStepKernelAdapter.planePoint3(basis, points[index]!),
+                OcctStepKernelAdapter.planePoint3(basis, points[index + 1]!)
+              )
+            );
+          }
           continue;
         }
         const span = Math.abs(curve.endAngle - curve.startAngle);
@@ -1205,11 +1239,21 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
       return this.kernel.makeWire(edges);
     };
 
-    const face = this.kernel.makeFace(wireFor(region.outer));
-    if (region.holes.length === 0) {
+    const outerWire = wireFor(region.outer);
+    const holeWires = region.holes.map(wireFor);
+    if (flattened > 0) {
+      console.warn(
+        bezierFallbackWarning(
+          'exact bezier profile edges are disabled',
+          flattened
+        )
+      );
+    }
+    const face = this.kernel.makeFace(outerWire);
+    if (holeWires.length === 0) {
       return face;
     }
-    return this.kernel.addHolesInFace(face, region.holes.map(wireFor));
+    return this.kernel.addHolesInFace(face, holeWires);
   }
 
   /** Extrude one or more explicitly selected bounded sketch cells. */
