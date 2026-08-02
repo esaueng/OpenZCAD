@@ -42,6 +42,7 @@ export {
   type TextFontProvider
 } from './fontProvider';
 export {
+  textDisplayLoops,
   textProfilesFromFont,
   textSketchProfiles,
   type TextObjectParameters

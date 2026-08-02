@@ -10,7 +10,10 @@ import {
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
 import type { SketchPoint } from '../../lib/sketch/session';
-import { objectPolyline } from '../../lib/objectPolyline';
+import {
+  objectPolylines,
+  type SketchObjectPolyline
+} from '../../lib/objectPolyline';
 
 /**
  * Scene-side rig for in-viewport sketching: a tinted plane quad with a
@@ -184,54 +187,58 @@ export function buildSketchModeRig(
     setObjects(objects, selectedObjectId, resolve) {
       disposeChildren(committedGroup);
       for (const object of objects) {
-        let polyline: { points: SketchPoint[]; closed: boolean } | null;
+        // One object can draw several runs — a text object is one loop per
+        // glyph region plus one per counter.
+        let polylines: SketchObjectPolyline[];
         try {
-          polyline = objectPolyline(object.data, resolve);
+          polylines = objectPolylines(object.data, resolve);
         } catch {
           continue;
         }
-        if (!polyline || polyline.points.length < 2) {
-          continue;
-        }
-        const vertices = polyline.points.map((point) =>
-          liftPoint(basis, point)
-        );
-        // The native line stays on as an invisible pick proxy. Line2 raycasts
-        // against a screen-space threshold whereas pickObject's caller supplies
-        // a world-unit radius, so keeping it leaves selection behaviour exactly
-        // as it was. Both are siblings: an invisible parent would hide the
-        // visual with it.
-        const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
-        const pickProxy = polyline.closed
-          ? new THREE.LineLoop(geometry, new THREE.LineBasicMaterial())
-          : new THREE.Line(geometry, new THREE.LineBasicMaterial());
-        pickProxy.visible = false;
-        pickProxy.frustumCulled = false;
-        pickProxy.userData.sketchObjectId = object.id;
-        committedGroup.add(pickProxy);
+        for (const polyline of polylines) {
+          if (polyline.points.length < 2) {
+            continue;
+          }
+          const vertices = polyline.points.map((point) =>
+            liftPoint(basis, point)
+          );
+          // The native line stays on as an invisible pick proxy. Line2 raycasts
+          // against a screen-space threshold whereas pickObject's caller supplies
+          // a world-unit radius, so keeping it leaves selection behaviour exactly
+          // as it was. Both are siblings: an invisible parent would hide the
+          // visual with it.
+          const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
+          const pickProxy = polyline.closed
+            ? new THREE.LineLoop(geometry, new THREE.LineBasicMaterial())
+            : new THREE.Line(geometry, new THREE.LineBasicMaterial());
+          pickProxy.visible = false;
+          pickProxy.frustumCulled = false;
+          pickProxy.userData.sketchObjectId = object.id;
+          committedGroup.add(pickProxy);
 
-        const visual = createFatLine(vertices, {
-          color:
-            object.id === selectedObjectId
-              ? SELECTED_COLOR
-              : object.data.construction
-                ? 0x7b8da3
-                : COMMITTED_COLOR,
-          linewidth: SKETCH_LINE_WIDTH,
-          opacity: object.data.construction ? 0.72 : 0.95,
-          depthTest: true,
-          closed: polyline.closed,
-          resolution: resolution()
-        });
-        if (object.data.construction) {
-          visual.material.dashed = true;
-          visual.material.dashSize = 1.4;
-          visual.material.gapSize = 1;
+          const visual = createFatLine(vertices, {
+            color:
+              object.id === selectedObjectId
+                ? SELECTED_COLOR
+                : object.data.construction
+                  ? 0x7b8da3
+                  : COMMITTED_COLOR,
+            linewidth: SKETCH_LINE_WIDTH,
+            opacity: object.data.construction ? 0.72 : 0.95,
+            depthTest: true,
+            closed: polyline.closed,
+            resolution: resolution()
+          });
+          if (object.data.construction) {
+            visual.material.dashed = true;
+            visual.material.dashSize = 1.4;
+            visual.material.gapSize = 1;
+          }
+          visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+          visual.frustumCulled = false;
+          visual.raycast = () => undefined; // the proxy is the only pick target
+          committedGroup.add(visual);
         }
-        visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
-        visual.frustumCulled = false;
-        visual.raycast = () => undefined; // the proxy is the only pick target
-        committedGroup.add(visual);
       }
     },
     pickObject(raycaster, threshold) {
