@@ -82,11 +82,8 @@ describe('resizable panel widths', () => {
     });
 
     // What a Worker still on the previous settings schema would return.
-    const legacy = deepClone(DEFAULT_APP_SETTINGS) as AppSettings & {
-      layout?: AppSettings['layout'];
-    };
-    delete legacy.layout;
-    expect(savedPanelWidths(legacy)).toEqual({
+    const { layout: _layout, ...legacy } = deepClone(DEFAULT_APP_SETTINGS);
+    expect(savedPanelWidths(legacy as AppSettings)).toEqual({
       sidebar: PANEL_WIDTH_LIMITS.sidebar.default,
       assistant: PANEL_WIDTH_LIMITS.assistant.default
     });
