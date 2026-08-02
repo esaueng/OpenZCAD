@@ -1,8 +1,8 @@
 import { resolveParamValue } from '@openzcad/document-core';
 import {
   computeSketchProfileAnalysis,
+  profileBoundarySignatures,
   profileContainsPoint,
-  profilesShareBoundary,
   type SketchProfileAnalysisOptions,
   type SketchProfileDiagnostic,
   type SketchRegion
@@ -145,8 +145,16 @@ export function resolveRegionProfiles(
       return sourceMatches[0]!;
     }
 
+    // The tolerant tier deliberately ignores entity identity, so a legacy
+    // reference survives a redrawn curve. That is only safe over arrangement
+    // cells. A profile supplied by an object that carries its own outlines
+    // (`candidate.outline`) is matched by entity id and nothing else — letting
+    // this tier see one means deleting the circle a reference points at can
+    // silently re-point it at whichever glyph happens to sit over the stored
+    // sample point with a similar area.
     const fallbackMatches = analysis.profiles.filter(
       (candidate) =>
+        !candidate.outline &&
         Math.abs(candidate.area - reference.sourceArea) <= areaTolerance &&
         profileContainsPoint(candidate, reference.samplePoint)
     );
@@ -188,26 +196,64 @@ export function resolveRegionProfile(
   return profiles[0]!;
 }
 
-/** Connected profile components; only cells sharing a boundary need fusing. */
+/**
+ * Connected profile components; only cells sharing a boundary need fusing.
+ *
+ * Bucketed by boundary signature rather than compared pairwise. The relation
+ * is "shares at least one canonical boundary piece", so profiles that land in
+ * the same signature bucket are exactly the ones `profilesShareBoundary` would
+ * have paired — the components are identical, computed in one pass over the
+ * curves instead of one signature-set rebuild per pair. That matters because
+ * a text object contributes one profile per glyph region and none of them can
+ * ever share a boundary: the pairwise sweep was quadratic work with a
+ * guaranteed-empty answer, growing with the length of the string.
+ *
+ * Groups come back in first-appearance order, and members within a group in
+ * input order.
+ */
 export function connectedRegionGroups(
   profiles: SketchRegion[]
 ): SketchRegion[][] {
-  const remaining = new Set(profiles);
-  const groups: SketchRegion[][] = [];
-  while (remaining.size > 0) {
-    const seed = remaining.values().next().value as SketchRegion;
-    remaining.delete(seed);
-    const group = [seed];
-    for (let index = 0; index < group.length; index += 1) {
-      const current = group[index]!;
-      for (const candidate of [...remaining]) {
-        if (profilesShareBoundary(current, candidate)) {
-          remaining.delete(candidate);
-          group.push(candidate);
-        }
+  const parent = profiles.map((_, index) => index);
+  const find = (index: number): number => {
+    let root = index;
+    while (parent[root] !== root) {
+      root = parent[root]!;
+    }
+    for (let walk = index; parent[walk] !== root;) {
+      const next = parent[walk]!;
+      parent[walk] = root;
+      walk = next;
+    }
+    return root;
+  };
+  const union = (left: number, right: number): void => {
+    const a = find(left);
+    const b = find(right);
+    if (a !== b) {
+      parent[Math.max(a, b)] = Math.min(a, b);
+    }
+  };
+  const firstSeen = new Map<string, number>();
+  profiles.forEach((profile, index) => {
+    for (const signature of profileBoundarySignatures(profile)) {
+      const owner = firstSeen.get(signature);
+      if (owner === undefined) {
+        firstSeen.set(signature, index);
+      } else {
+        union(owner, index);
       }
     }
-    groups.push(group);
-  }
-  return groups;
+  });
+  const groups = new Map<number, SketchRegion[]>();
+  profiles.forEach((profile, index) => {
+    const root = find(index);
+    const existing = groups.get(root);
+    if (existing) {
+      existing.push(profile);
+    } else {
+      groups.set(root, [profile]);
+    }
+  });
+  return [...groups.values()];
 }

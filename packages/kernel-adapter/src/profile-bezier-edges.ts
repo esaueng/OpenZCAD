@@ -193,3 +193,26 @@ export function bezierFallbackWarning(reason: string, count: number): string {
     'will look faceted and export faceted.'
   );
 }
+
+/**
+ * The other, far more common way a curved profile arrives flattened.
+ *
+ * Real fonts draw glyphs as overlapping strokes inside one self-intersecting
+ * contour and let the nonzero fill rule sort it out at paint time. A B-Rep
+ * face cannot: those contours have to be resolved by a polygon union, which
+ * works on polylines and hands back polylines. The result is indistinguishable
+ * from an authored polygon by the time it reaches the kernel, so the geometry
+ * layer flags it (`SketchProfile.outline.fidelity`) and this reports it.
+ *
+ * It is font-dependent, not text-dependent, which is why the message names the
+ * way out: Open Sans, Lora and Oswald have no self-overlapping ASCII glyph.
+ */
+export function flattenedOutlineWarning(count: number): string {
+  return (
+    `${count} text region${count === 1 ? '' : 's'} reached the kernel as ` +
+    "polylines rather than the font's own curves, because their glyph " +
+    'outlines overlap and had to be resolved by a polygon union. Those walls ' +
+    'will look faceted and export faceted. Open Sans, Lora and Oswald have no ' +
+    'self-overlapping ASCII glyph and stay exact.'
+  );
+}
