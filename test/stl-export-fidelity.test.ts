@@ -157,6 +157,62 @@ describe('what STL export actually writes', () => {
     expect(stl.openEdges).toBe(0);
   }, 120_000);
 
+  /**
+   * Units are SOUND, and this pins the one line that makes them so.
+   *
+   * The model is "units are a label on the numbers": geometry is built in raw
+   * document units, `volume` is reported in cubic document units — a 10-cube
+   * measures 1000 whatever the setting — and only EXPORT converts, because an
+   * STL carries no unit field and millimetres are the de-facto convention.
+   * Changing a document's units therefore REINTERPRETS the model rather than
+   * converting it, at exactly 25.4x for mm -> inch. That is the standard
+   * document-unit behaviour and is not a defect.
+   *
+   * It is pinned because `exportStl`'s conversion is a single multiplication
+   * by `UNIT_TO_MM[document.units]`, and losing it is the most expensive kind
+   * of silent failure this codebase can have: an inch document would export
+   * 25.4x too small, the file would be perfectly well formed, every check
+   * here and in the app would pass, and the first sign of trouble would be a
+   * physical part. No number in the app would look wrong, because `volume`
+   * is in document units and stays 1000 either way.
+   */
+  it.each([
+    ['mm', 20],
+    ['cm', 200],
+    ['m', 20000],
+    ['inch', 508]
+  ] as const)(
+    'exports a 20-unit cube as %s at the right physical size',
+    async (units, expectedMm) => {
+      adapter ??= await createExactKernelAdapter();
+      let document = createProjectDocument('Cube', toUserId('user_stl'));
+      document = { ...document, units };
+      document = addPrimitiveFeature(document, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      });
+      const bodyId = document.bodyOrder.at(-1)!;
+      const derived = await adapter.syncDocument(document);
+      // The measurement is unit-agnostic: 20^3 document units, always.
+      expect(derived.bodyRepresentations[bodyId]!.volume).toBe(8000);
+      // The file is not: it is millimetres, so it must carry the conversion.
+      //
+      // RELATIVE, not absolute. These volumes span 8e3 mm^3 to 8e12 mm^3, and
+      // an absolute tolerance that is generous at one end is below the float64
+      // noise floor at the other — 8e12 carries about 1.8e-3 of representation
+      // error, so `toBeCloseTo(_, 3)` fails on the metre row for arithmetic
+      // reasons that have nothing to do with the export. Asserting an absolute
+      // bound on a quantity that ranges over nine orders of magnitude is the
+      // same dimensional mistake this project keeps finding in the kernel.
+      const stl = measureStl(await adapter.exportStl(document, [bodyId]));
+      const exact = expectedMm ** 3;
+      expect(Math.abs(stl.volume - exact) / exact).toBeLessThan(1e-12);
+      expect(stl.openEdges).toBe(0);
+    },
+    120_000
+  );
+
   it.fails(
     'exports the drilled shaft the UI says it drilled',
     async () => {
