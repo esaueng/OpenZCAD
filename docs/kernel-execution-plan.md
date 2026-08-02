@@ -1306,6 +1306,24 @@ Three things make it silent, and the second is the one worth fixing:
 So it is not only a measurement defect: the viewport draws interpenetrating
 shells and STL export writes a self-intersecting mesh.
 
+**Deleting a feature from the middle of the history is sound**
+(`test/delete-mid-history-feature.test.ts`) — a clearance, pinned anyway. On
+`BoxA | BoxB | Stack | Fuse`, dropping an operand makes every dependent
+feature warn by name and produce **no body at all**, rather than one carrying
+a stale volume; dropping the boolean leaves the operands; and dropping the
+*transform* makes the union **recompute to 8000**, because an untranslated B
+sits entirely inside A. A downstream fillet behaves the same way: it refuses
+loudly when its target's history goes, and re-lands on the rebuilt body when
+the history merely changes.
+
+The `drop Stack` row is why this is pinned despite being correct. It is the
+one case where a **cached** result would be indistinguishable from a right one
+at a glance — the union still exists and still has a plausible volume, and
+only the number says which happened. 8000 means it re-fused; 9000 would mean
+it handed back the pre-delete answer. "Fails loud" is exactly the property
+that decays to silence without anyone noticing, and nothing else in the suite
+was watching it.
+
 **Cleared in the same sweep**, recorded so neither defect is read wider than
 it is: `booleanBodies` union *does* fuse (two identical coincident boxes
 report 8000, not 16000), STEP round trip is exact (a bored cylinder reads
