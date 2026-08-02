@@ -59,7 +59,8 @@ import {
   bezierFallbackWarning,
   bezierNurbsParams,
   bezierProfileEdgesEnabled,
-  flattenBezierCurve
+  flattenBezierCurve,
+  flattenedOutlineWarning
 } from './profile-bezier-edges';
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import {
@@ -3257,11 +3258,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    * replace the `makePlanarFaceFromWire` + `addHolesToFace` pair below with
    * the single call. The pinned brepkit-wasm here does not have it, and this
    * must not depend on unreleased kernel work.
+   *
+   * `warn` is the document-level warning channel, not `console.warn`: the
+   * geometry kernel runs in a Web Worker, so a console line is invisible to
+   * the person looking at the faceted result.
    */
   private makeRegionFace(
     kernel: BrepKernel,
     region: SketchRegion,
-    basis: PlaneBasis
+    basis: PlaneBasis,
+    warn: (message: string) => void
   ): number {
     // The exact path needs the kernel's lifted second axis to be this basis's
     // `v`; every basis the app builds is right-handed, so this only ever trips
@@ -3379,7 +3385,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const holeWires = region.holes.map(wireFor);
     if (flattened > 0) {
       // Never silent: a flattened glyph is a visible product regression.
-      console.warn(
+      warn(
         bezierFallbackWarning(
           rightHanded
             ? 'exact bezier profile edges are disabled'
@@ -3403,17 +3409,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     feature: FeatureNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>,
-    basis: PlaneBasis
+    basis: PlaneBasis,
+    warn: (message: string) => void
   ): ExactShape {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
     const distance = resolveParamValue(data.distance, scope, 'distance');
+    // A profile whose loops are a polyline approximation of curves the font
+    // actually draws is a degradation the user can see in the result and in
+    // the STEP export, and nothing downstream can tell it from an authored
+    // polygon. Reported once per build rather than once per region.
+    const flattenedOutlines = regions.filter(
+      (region) => region.outline?.fidelity === 'flattened'
+    ).length;
+    if (flattenedOutlines > 0) {
+      warn(flattenedOutlineWarning(flattenedOutlines));
+    }
     const groups = connectedRegionGroups(regions);
     const lineages: BrepKitLineageState[] = [];
     const solids = groups.map((group) => {
       const face = this.makeRegionFace(
         kernel,
         mergeAdjacentProfiles(group),
-        basis
+        basis,
+        warn
       );
       const solid = kernel.extrude(
         face,
@@ -3482,7 +3500,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
-    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
   ): ExactShape {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -3512,7 +3531,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         feature,
         feature.data,
         scope,
-        basis
+        basis,
+        warn
       );
     }
     const sketch = findSketch(document, feature.data.sketchId);
@@ -3724,7 +3744,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   document,
                   feature,
                   scope,
-                  result.sketchBases
+                  result.sketchBases,
+                  (message) =>
+                    result.warnings.push(
+                      `Feature "${feature.name}": ${message}`
+                    )
                 )
               );
             }

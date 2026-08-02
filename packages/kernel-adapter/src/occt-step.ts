@@ -45,7 +45,8 @@ import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
   bezierFallbackWarning,
   bezierProfileEdgesEnabled,
-  flattenBezierCurve
+  flattenBezierCurve,
+  flattenedOutlineWarning
 } from './profile-bezier-edges';
 import {
   analyzeUnionConnectivity,
@@ -1148,7 +1149,11 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
    * so the resulting edges carry the same ADR-011 fingerprints on both
    * kernels.
    */
-  private makeRegionFace(region: SketchRegion, basis: PlaneBasis): ShapeHandle {
+  private makeRegionFace(
+    region: SketchRegion,
+    basis: PlaneBasis,
+    warn: (message: string) => void
+  ): ShapeHandle {
     const exactBeziers = bezierProfileEdgesEnabled();
     let flattened = 0;
     const wireFor = (loop: SketchRegion['outer']): ShapeHandle => {
@@ -1242,7 +1247,10 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     const outerWire = wireFor(region.outer);
     const holeWires = region.holes.map(wireFor);
     if (flattened > 0) {
-      console.warn(
+      // The document warning channel, not the console: this adapter runs in a
+      // Web Worker too, and the BrepKit adapter reports the same degradation
+      // the same way.
+      warn(
         bezierFallbackWarning(
           'exact bezier profile edges are disabled',
           flattened
@@ -1262,13 +1270,20 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     sketch: SketchNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>,
-    basis: PlaneBasis
+    basis: PlaneBasis,
+    warn: (message: string) => void
   ): ShapeHandle {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
     const distance = resolveParamValue(data.distance, scope, 'distance');
+    const flattenedOutlines = regions.filter(
+      (region) => region.outline?.fidelity === 'flattened'
+    ).length;
+    if (flattenedOutlines > 0) {
+      warn(flattenedOutlineWarning(flattenedOutlines));
+    }
     const solids = connectedRegionGroups(regions).map((group) => {
       return this.kernel.extrude(
-        this.makeRegionFace(mergeAdjacentProfiles(group), basis),
+        this.makeRegionFace(mergeAdjacentProfiles(group), basis, warn),
         basis.normal.x * distance,
         basis.normal.y * distance,
         basis.normal.z * distance
@@ -1301,7 +1316,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
-    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
   ): ShapeHandle {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -1329,7 +1345,8 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
         sketchNode,
         feature.data,
         scope,
-        basis
+        basis,
+        warn
       );
     }
     const sketch = findSketch(document, feature.data.sketchId);
@@ -1416,7 +1433,9 @@ export class OcctStepKernelAdapter implements ExactKernelAdapter {
                 document,
                 feature,
                 scope,
-                result.sketchBases
+                result.sketchBases,
+                (message) =>
+                  result.warnings.push(`Feature "${feature.name}": ${message}`)
               );
               result.shapes.set(feature.bodyId, shape);
               result.lineages.set(
