@@ -1,5 +1,10 @@
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { geometryTolerance } from './tolerance';
+// Value import, and deliberately one-way: `text/sketchProfiles` imports only
+// *types* from this module, so there is no runtime cycle. It also avoids
+// `text/loader`, which is the sole `opentype.js` import site — computing
+// sketch regions must not drag a font parser into the bundle.
+import { textSketchProfiles } from './text/sketchProfiles';
 
 /**
  * Planar region detection for sketches.
@@ -64,7 +69,9 @@ export interface SketchProfileDiagnostic {
     | 'degenerate-entity'
     | 'open-endpoint'
     | 'gap-within-tolerance'
-    | 'unresolved-parameter';
+    | 'unresolved-parameter'
+    /** An object that carries its own outlines could not produce them. */
+    | 'unresolved-outline';
   severity: 'info' | 'warning' | 'error';
   message: string;
   sourceEntityIds: string[];
@@ -1806,21 +1813,77 @@ function extractSketchProfiles(
 }
 
 /**
+ * The built-in expansion for a text object.
+ *
+ * Text takes a dedicated fast path: the font already encodes which contour is
+ * an outer boundary and which is a counter, so the glyph pipeline emits
+ * finished outer-plus-holes regions and none of it enters `buildSubCurves`.
+ * That is not only a shortcut — a word is 1,500–3,000 segments and this
+ * arrangement is quadratic in curve count in several places, on the UI thread
+ * and the worker, on every keystroke.
+ */
+function textProfilesFor(
+  object: SketchRegionObject,
+  resolve: (value: ParamValue) => number
+): SketchProfile[] {
+  const data = object.data;
+  if (data.objectKind !== 'text') {
+    return [];
+  }
+  return textSketchProfiles(object.id, {
+    text: data.text,
+    fontFamily: data.fontFamily,
+    fontStyle: data.fontStyle,
+    size: resolve(data.size),
+    x: resolve(data.x),
+    y: resolve(data.y),
+    rotationDeg: data.rotation === undefined ? 0 : resolve(data.rotation),
+    align: data.align
+  });
+}
+
+/**
  * Profiles contributed by objects that bypass the arrangement, in sketch
  * order. They are appended rather than merged into the area sort so a text
  * object's regions stay in reading order across rebuilds.
+ *
+ * A caller-supplied `profileSource` wins when it returns an array; returning
+ * `null` (or supplying no source at all) falls through to the built-in text
+ * expansion. Failures become diagnostics rather than aborting the whole
+ * analysis, so a sketch with one unresolvable text object still yields the
+ * regions of everything else — and the extrude that consumed the text still
+ * fails closed, with this diagnostic's message attached.
  */
 function sourcedProfiles(
   objects: SketchRegionObject[],
   resolve: (value: ParamValue) => number,
-  profileSource: SketchProfileSource
+  diagnostics: SketchProfileDiagnostic[],
+  profileSource: SketchProfileSource | undefined
 ): SketchProfile[] {
   const profiles: SketchProfile[] = [];
   for (const object of objects) {
     if (object.data.construction === true) {
       continue;
     }
-    profiles.push(...(profileSource(object, resolve) ?? []));
+    const supplied = profileSource?.(object, resolve) ?? null;
+    if (supplied) {
+      profiles.push(...supplied);
+      continue;
+    }
+    try {
+      profiles.push(...textProfilesFor(object, resolve));
+    } catch (error) {
+      diagnostics.push({
+        code: 'unresolved-outline',
+        severity: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'This sketch object could not be expanded into outlines.',
+        sourceEntityIds: [object.id],
+        points: []
+      });
+    }
   }
   return profiles;
 }
@@ -1837,12 +1900,13 @@ export function computeSketchProfileAnalysis(
     resolved.tolerance,
     resolved.invalidEntityIds
   );
-  if (options?.profileSource) {
-    profiles.push(...sourcedProfiles(objects, resolve, options.profileSource));
-  }
+  const diagnostics = [...resolved.diagnostics];
+  profiles.push(
+    ...sourcedProfiles(objects, resolve, diagnostics, options?.profileSource)
+  );
   return {
     profiles,
-    diagnostics: resolved.diagnostics,
+    diagnostics,
     tolerance: resolved.tolerance,
     modelScale: resolved.modelScale
   };
