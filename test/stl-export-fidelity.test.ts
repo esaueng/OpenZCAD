@@ -21,10 +21,19 @@ import {
  * `STL_EXPORT_DEFLECTION`, coarser than the viewport, so the facet counts and
  * the errors are its own.
  *
- * `exportStl` performs NO mesh validation. It tessellates and writes. The
- * app's only body check is `validateSolid`, which inspects the B-rep and
- * never looks at triangles — see the plan's "The app has no mesh-level check"
- * section. So everything below leaves as a well-formed file with no warning.
+ * `exportStl` performs NO mesh validation. It tessellates and writes.
+ *
+ * A mesh check DOES exist elsewhere in the adapter — `syncDocument` runs
+ * `inspectTriangleMeshClosure` and warns "Union produced an open,
+ * non-manifold, or inconsistently oriented result." But it is gated on
+ * `requiresStrictUnionValidation`, i.e. `featureKind === 'boolean' &&
+ * operation === 'union'`, so it runs for union results and nothing else. Every
+ * body below is a SUBTRACT, which that gate excludes, and the export path
+ * consults nothing at all regardless. So everything here leaves as a
+ * well-formed file with no warning.
+ *
+ * That the machinery already exists and is already proven is the useful part:
+ * the gap is reach, not absence.
  *
  * THE HEADLINE, and it is worth stating in user terms rather than in
  * millimetres. Drill a shaft with an equal-radius cross bore and export it:

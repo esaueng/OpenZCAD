@@ -1431,15 +1431,35 @@ stationary edge survives, and the finding shrank from "rebuild is broken" to
 appeared to measure absurdly was a body whose bore had missed entirely —
 `faces = 3` said so, and the row was discarded rather than reported.
 
-#### The app has no mesh-level check, and that is a class, not an oversight
+#### The mesh check exists, works, and covers exactly one operation
 
-Worth stating separately from any one defect, because it explains why so many
-of the findings above are *silent*.
+**Corrected.** An earlier version of this section said the app "never checks
+the mesh". That is wrong, and the truth is more useful.
 
-`exact.ts` verifies bodies through `validateSolid` / `validateSolidRelaxed` —
-the kernel's **B-rep** validity check. It never checks the **mesh** it hands
-to the viewport and to STL export. Those are two different objects, and this
-sweep found four bodies where the first is right and the second is not:
+`exact.ts` *does* inspect mesh closure — `inspectTriangleMeshClosure` plus
+`isClosedConsistentlyOrientedMesh`, warning *"Union produced an open,
+non-manifold, or inconsistently oriented result."* It is real, it is exercised
+(`test/exact-kernel-adapter.test.ts:1210`), and it works.
+
+It is gated on `requiresStrictUnionValidation`:
+
+```js
+!consumed && feature.data.featureKind === 'boolean'
+          && feature.data.operation === 'union'
+```
+
+So it runs for boolean **union** results and nothing else — not subtract, not
+intersect, not pattern, not offset, not fillet, not primitives, not imports.
+Everything else is measured with `validateSolid` alone, which inspects the
+B-rep and never looks at a triangle.
+
+That scope is why the findings below are silent: **every one of them is a
+non-union operation.** The machinery to catch them already exists and is
+already proven; what is missing is reach. That makes this a smaller change
+than "add mesh validation" — it is closer to widening one boolean condition,
+with the noise cost being the real question rather than the engineering.
+
+This sweep found four bodies where the B-rep is right and the mesh is not:
 
 | body | B-rep | mesh |
 |---|---|---|
@@ -1464,10 +1484,11 @@ that is *not one solid*, because *N* closed shells are each individually
 closed. Both directions of the same mistake — treating "no boundary edges" as
 if it meant "one sound body".
 
-None of this argues for adding a warning today; making every affected body
-warn is a product decision with its own noise cost. It argues that the
-current regime cannot detect an entire class, so the absence of warnings on
-these bodies is not evidence about them.
+None of this argues for widening the gate today; making every affected body
+warn is a product decision with its own noise cost, and a union-shaped message
+would need rewording for other operations. It argues that the check's current
+reach excludes every operation these defects live on, so the absence of
+warnings on these bodies is not evidence about them.
 
 **And the class reaches the file the user ships**
 (`test/stl-export-fidelity.test.ts`). `exportStl` performs no mesh validation
