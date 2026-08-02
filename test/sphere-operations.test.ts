@@ -177,7 +177,7 @@ describe('a sphere under boolean and offset', () => {
       async (primitiveKind, dimensions, exact, keptSurface) => {
         const { volume, surfaces, warnings } = await cutWithDisjointTool(
           primitiveKind,
-          dimensions as Record<string, number>
+          dimensions
         );
         expect(Math.abs(volume - exact) / exact).toBeLessThan(1e-9);
         // The analytic surface survives the same operation on these shapes.
@@ -243,7 +243,7 @@ describe('a sphere under boolean and offset', () => {
       async (primitiveKind, dimensions, distance, exact) => {
         const { volume, triangles, warnings } = await offset(
           primitiveKind,
-          dimensions as Record<string, number>,
+          dimensions,
           distance
         );
         expect(Math.abs(volume - exact) / exact).toBeLessThan(1e-6);
