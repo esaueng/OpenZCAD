@@ -349,6 +349,17 @@ const ROLLOUT_OPERATION_FLAGS = [
   ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED']
 ] as const;
 
+/**
+ * Rollout flags on a single PROPERTY of an operation that is already
+ * available. Partial revolve is not a new operation kind — `add_revolve` has
+ * shipped for a long time and only grew an optional `angleDeg` — so pruning
+ * the whole branch would withdraw a working capability. The property is
+ * pruned instead, from both `properties` and `required`.
+ */
+const ROLLOUT_OPERATION_PROPERTY_FLAGS = [
+  ['add_revolve', 'angleDeg', 'AI_PATCH_PARTIAL_REVOLVE_ENABLED']
+] as const;
+
 function rolloutCapabilityInstructions(env: CloudflareEnv): string {
   const enabled = ROLLOUT_OPERATION_FLAGS.filter(([, flag]) =>
     isCloudflareFeatureEnabled(env, flag)
@@ -356,6 +367,12 @@ function rolloutCapabilityInstructions(env: CloudflareEnv): string {
   const disabled = ROLLOUT_OPERATION_FLAGS.filter(
     ([, flag]) => !isCloudflareFeatureEnabled(env, flag)
   ).map(([operation]) => operation);
+  const enabledProperties = ROLLOUT_OPERATION_PROPERTY_FLAGS.filter(
+    ([, , flag]) => isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation, property]) => `${operation}.${property}`);
+  const disabledProperties = ROLLOUT_OPERATION_PROPERTY_FLAGS.filter(
+    ([, , flag]) => !isCloudflareFeatureEnabled(env, flag)
+  ).map(([operation, property]) => `${operation}.${property}`);
   return `# Rollout-controlled modeling operations
 
 The base operations described above remain available. The following newer operations are enabled for this deployment: ${enabled.length > 0 ? enabled.map((operation) => `\`${operation}\``).join(', ') : 'none'}.
@@ -369,6 +386,10 @@ When enabled:
 - \`add_mirror\` creates a separate reflected body and keeps its source.
 - \`add_shell\` requires one or more explicitly referenced opening faces.
 - \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
+
+Rollout-controlled operation fields (the operations themselves stay available either way). Enabled: ${enabledProperties.length > 0 ? enabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}. Disabled: ${disabledProperties.length > 0 ? disabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}.
+
+- \`add_revolve.angleDeg\` sweeps a partial turn, in degrees, greater than 0 and at most 360. Send null, or leave it out where the schema allows, for a full turn. A partial revolve keeps hash-only topology references and the kernel cannot fillet or chamfer its edges, so do not follow one with an edge modifier on the same body.
 
 Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. Topology-dependent operations may target only existing live bodies, never same-proposal body aliases. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
 }
@@ -413,6 +434,35 @@ function assistantReplySchemaFor(env: CloudflareEnv): unknown {
     const flag = typeof kind === 'string' ? rolloutFlags.get(kind) : undefined;
     return flag === undefined || isCloudflareFeatureEnabled(env, flag);
   });
+
+  // Same enforcement one level down, for a flag that gates a field rather
+  // than a whole operation. `required` must lose the property too: strict
+  // structured output rejects a schema whose `required` names something
+  // `properties` does not declare.
+  for (const [
+    kind,
+    property,
+    propertyFlag
+  ] of ROLLOUT_OPERATION_PROPERTY_FLAGS) {
+    if (isCloudflareFeatureEnabled(env, propertyFlag)) {
+      continue;
+    }
+    for (const choice of items!.anyOf as unknown[]) {
+      const operationProperties = schemaRecord(
+        schemaRecord(choice)?.properties
+      );
+      if (schemaRecord(operationProperties?.kind)?.const !== kind) {
+        continue;
+      }
+      delete operationProperties![property];
+      const operation = schemaRecord(choice)!;
+      if (Array.isArray(operation.required)) {
+        operation.required = operation.required.filter(
+          (name) => name !== property
+        );
+      }
+    }
+  }
   return schema;
 }
 
