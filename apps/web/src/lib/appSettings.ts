@@ -1,6 +1,8 @@
 import {
   DEFAULT_APP_SETTINGS,
+  PANEL_WIDTH_LIMITS,
   type AppSettings,
+  type PanelWidthLimits,
   type UnitSystem
 } from '@openzcad/shared';
 
@@ -73,6 +75,18 @@ function boundedNumber(
     : fallback;
 }
 
+/**
+ * A stored panel width, brought back into range rather than rejected. A width
+ * outside the limits is a stale or hand-edited value, not a reason to throw the
+ * rest of the settings away — the closest usable width is what the user meant.
+ */
+function panelWidth(value: unknown, limits: PanelWidthLimits): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return limits.default;
+  }
+  return Math.round(Math.min(limits.max, Math.max(limits.min, value)));
+}
+
 function member<T extends string>(
   value: unknown,
   allowed: readonly T[],
@@ -88,6 +102,7 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   const root = record(value);
   const general = record(root.general);
   const appearance = record(root.appearance);
+  const layout = record(root.layout);
   const viewport = record(root.viewport);
   const sketching = record(root.sketching);
   const assistant = record(root.assistant);
@@ -119,6 +134,13 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       reducedMotion: boolean(
         appearance.reducedMotion,
         defaults.appearance.reducedMotion
+      )
+    },
+    layout: {
+      sidebarWidth: panelWidth(layout.sidebarWidth, PANEL_WIDTH_LIMITS.sidebar),
+      assistantWidth: panelWidth(
+        layout.assistantWidth,
+        PANEL_WIDTH_LIMITS.assistant
       )
     },
     viewport: {
