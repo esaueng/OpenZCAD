@@ -13,6 +13,7 @@ import {
   mergeAdjacentProfiles,
   regionFingerprintOf,
   regionLoopSignedArea,
+  type BezierControlPoints,
   type RegionCurve,
   type RegionLoop,
   type SketchProfile,
@@ -25,7 +26,17 @@ function line(a: Vec2Like, b: Vec2Like): RegionCurve {
   return { kind: 'line', a, b, sourceObjectId: OBJECT_ID };
 }
 
-function bezier(a: Vec2Like, controls: Vec2Like[], b: Vec2Like): RegionCurve {
+/**
+ * `controls` is a 1-or-2 tuple, not an array: degree is not a free parameter,
+ * and the type is what stops a degree-1 or degree-4 "bezier" from being built
+ * at all. `regions.ts` and the kernel adapter each re-derive the degree from
+ * the length and used to disagree about the out-of-range cases.
+ */
+function bezier(
+  a: Vec2Like,
+  controls: BezierControlPoints,
+  b: Vec2Like
+): RegionCurve {
   return { kind: 'bezier', a, b, controls, sourceObjectId: OBJECT_ID };
 }
 

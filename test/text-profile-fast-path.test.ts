@@ -362,6 +362,108 @@ describe('failing loudly when a face is unavailable', () => {
     );
     expect(analysis.profiles).toEqual([]);
   });
+
+  it('contains a throwing caller-supplied source the same way', () => {
+    // The seam is public API, and its contract is the same as the built-in
+    // expansion's: one unresolvable object becomes one diagnostic, and the
+    // rest of the sketch still yields its regions. Before, the source was
+    // called outside the try and took the whole analysis with it.
+    installProvider();
+    const analysis = computeSketchProfileAnalysis(
+      [
+        textObject('text_1'),
+        {
+          id: 'circle_1',
+          data: { objectKind: 'circle', radius: 5, centerX: 0, centerY: 0 }
+        }
+      ],
+      resolve,
+      undefined,
+      {
+        profileSource: (object) => {
+          if (object.id === 'text_1') {
+            throw new Error('the injected source refused');
+          }
+          return null;
+        }
+      }
+    );
+    expect(analysis.profiles).toHaveLength(1);
+    expect(analysis.profiles[0]!.sourceEntityIds).toEqual(['circle_1']);
+    expect(analysis.diagnostics).toHaveLength(1);
+    expect(analysis.diagnostics[0]!.code).toBe('unresolved-outline');
+    expect(analysis.diagnostics[0]!.message).toContain(
+      'the injected source refused'
+    );
+  });
+
+  it('refuses a family that is not bundled, rather than reading as unloaded', () => {
+    installProvider();
+    const analysis = computeSketchProfileAnalysis(
+      [textObject('text_1', { fontFamily: 'Helvetica' })],
+      resolve
+    );
+    expect(analysis.profiles).toEqual([]);
+    expect(analysis.diagnostics[0]!.message).toContain(
+      'no bundled font family'
+    );
+  });
+});
+
+describe('styles a family does not ship', () => {
+  it('falls back to a real file instead of failing forever', async () => {
+    // Oswald ships no designed italic, and the plan's rule is that a missing
+    // style degrades to a real face rather than a synthetic shear.
+    // `resolveFontStyle` has always encoded that chain; nothing called it at
+    // runtime, so `{ oswald, italic }` failed permanently with a message that
+    // read like a transient loading problem.
+    await library.load('oswald', 'regular');
+    installProvider();
+    const italic = computeSketchRegions(
+      [textObject('text_1', { fontFamily: 'oswald', fontStyle: 'italic' })],
+      resolve
+    );
+    const regular = computeSketchRegions(
+      [textObject('text_1', { fontFamily: 'oswald', fontStyle: 'regular' })],
+      resolve
+    );
+    expect(italic).toHaveLength(4);
+    // The fallback is the regular face itself, not an approximation of an
+    // italic: identical geometry, region for region.
+    expect(italic.map((profile) => profile.area)).toEqual(
+      regular.map((profile) => profile.area)
+    );
+  });
+});
+
+describe('flattened outlines are flagged, not hidden', () => {
+  it('marks a union-resolved glyph as flattened and an exact one as exact', async () => {
+    // Inter draws 36 of its 95 ASCII glyphs as overlapping strokes inside one
+    // self-intersecting contour; those have to go through the polygon union,
+    // which works on polylines and hands back polylines. Open Sans has none.
+    // Same letter, same size, opposite fidelity.
+    await library.load('inter', 'regular');
+    installProvider();
+    const flattened = computeSketchRegions(
+      [textObject('text_1', { fontFamily: 'inter', text: 'e' })],
+      resolve
+    );
+    const exact = computeSketchRegions(
+      [textObject('text_1', { fontFamily: 'open-sans', text: 'e' })],
+      resolve
+    );
+    expect(flattened).toHaveLength(1);
+    expect(exact).toHaveLength(1);
+    expect(flattened[0]!.outline?.fidelity).toBe('flattened');
+    expect(exact[0]!.outline?.fidelity).toBe('exact');
+    // The flag is not decoration — it describes what the curves actually are.
+    expect(
+      flattened[0]!.outer.curves.every((curve) => curve.kind === 'line')
+    ).toBe(true);
+    expect(
+      exact[0]!.outer.curves.some((curve) => curve.kind === 'bezier')
+    ).toBe(true);
+  });
 });
 
 describe('regenerating after an edit', () => {
