@@ -4,7 +4,8 @@ import type { CameraPose } from '../render/scene';
 import {
   orbitPivotForPoint,
   tweenDurationFor,
-  tweenOrientationFor
+  tweenOrientationFor,
+  VIEW_DIRECTIONS
 } from './views';
 import { pointerBindingsFor, type MiddleDragAction } from '../input/bindings';
 import type { ProjectionMode } from '../types';
@@ -38,6 +39,9 @@ const DRAG_DAMPING = 0.35;
 const GLIDE_DAMPING = 0.15;
 /** Keep low-frame-rate devices from stretching a short CAD glide into a coast. */
 const ORBIT_GLIDE_MAX_MS = 800;
+
+/** Orbit radius of the home pose on a fresh document, before any fit runs. */
+const DEFAULT_ORBIT_RADIUS = 150;
 
 /**
  * A glide is parameterized as orientation + orbit, not as two positions: the
@@ -114,7 +118,11 @@ export class CameraController {
     // in its constructor and never refreshes it, so assigning `up` afterwards
     // leaves the orbit axis on +Y while `camera.up` reads (0,0,1).
     this.perspective.up.set(0, 0, 1);
-    this.perspective.position.set(90, -90, 80);
+    // Home pose: the shared iso direction, so a fresh document, the ISO view
+    // preset, and the fit action all agree on one default orientation.
+    this.perspective.position
+      .copy(VIEW_DIRECTIONS.iso)
+      .multiplyScalar(DEFAULT_ORBIT_RADIUS);
 
     this.orthographic = new THREE.OrthographicCamera(
       -90,
