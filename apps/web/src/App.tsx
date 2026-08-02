@@ -6311,7 +6311,8 @@ export function App() {
                         data: {
                           featureKind: 'revolve',
                           sketchId: value.sketchId,
-                          axis: value.axis
+                          axis: value.axis,
+                          angleDeg: value.angleDeg
                         }
                       },
                       `Edit ${value.name}`

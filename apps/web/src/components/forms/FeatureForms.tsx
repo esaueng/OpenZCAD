@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
-import type {
-  AxisId,
-  BodyId,
-  BooleanOperation,
-  ParamValue,
-  PatternKind,
-  PlaneId,
-  PrimitiveKind,
-  RevolveAxis,
-  SketchId,
-  SketchObjectData,
-  SketchObjectKind
+import {
+  FULL_REVOLVE_ANGLE_DEG,
+  type AxisId,
+  type BodyId,
+  type BooleanOperation,
+  type ParamValue,
+  type PatternKind,
+  type PlaneId,
+  type PrimitiveKind,
+  type RevolveAxis,
+  type SketchId,
+  type SketchObjectData,
+  type SketchObjectKind
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
 import {
@@ -532,7 +533,12 @@ export function ExtrudeForm({
 interface RevolveFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
-  initial?: { name: string; sketchId: SketchId; axis: RevolveAxis };
+  initial?: {
+    name: string;
+    sketchId: SketchId;
+    axis: RevolveAxis;
+    angleDeg?: ParamValue;
+  };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
   initialSketchId?: SketchId;
   submitLabel: string;
@@ -540,6 +546,7 @@ interface RevolveFormProps {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
+    angleDeg: ParamValue;
   }): void;
   onCancel?: () => void;
 }
@@ -553,13 +560,31 @@ export function RevolveForm({
   onSubmit,
   onCancel
 }: RevolveFormProps) {
-  void scope;
   const [name, setName] = useState(initial?.name ?? 'Revolve');
   const [sketchId, setSketchId] = useState<SketchId | ''>(
     initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
   );
   const [axis, setAxis] = useState<RevolveAxis>(initial?.axis ?? 'vertical');
-  const canSubmit = name.trim().length > 0 && sketchId !== '';
+  const [angleDeg, setAngleDeg] = useState(
+    paramValueText(initial?.angleDeg ?? FULL_REVOLVE_ANGLE_DEG)
+  );
+  const anglePreview = previewExpression(angleDeg, scope);
+  const angleInRange =
+    anglePreview.ok &&
+    anglePreview.value !== undefined &&
+    anglePreview.value > 0 &&
+    anglePreview.value <= FULL_REVOLVE_ANGLE_DEG;
+  const canSubmit =
+    name.trim().length > 0 &&
+    sketchId !== '' &&
+    fieldsValid(scope, [angleDeg]) &&
+    angleInRange;
+  // Kept in sync with the kernel's own gate: a partial revolve is a
+  // hash-only body and none of its edges can be filleted or chamfered.
+  const isPartial =
+    anglePreview.ok &&
+    anglePreview.value !== undefined &&
+    anglePreview.value < FULL_REVOLVE_ANGLE_DEG;
 
   return (
     <FormShell
@@ -568,7 +593,12 @@ export function RevolveForm({
       submitLabel={submitLabel}
       canSubmit={canSubmit}
       onSubmit={() =>
-        onSubmit({ name: name.trim(), sketchId: sketchId as SketchId, axis })
+        onSubmit({
+          name: name.trim(),
+          sketchId: sketchId as SketchId,
+          axis,
+          angleDeg: coerceParamValue(angleDeg)
+        })
       }
       onCancel={onCancel}
     >
@@ -591,10 +621,28 @@ export function RevolveForm({
           ))}
         </select>
       </label>
+      <ExprInput
+        label="Angle (deg)"
+        value={angleDeg}
+        scope={scope}
+        onChange={setAngleDeg}
+      />
       <p className="muted">
-        Sweeps the profile a full turn. Offset the profile center so it clears
-        the axis.
+        Sweeps the profile through the angle, greater than 0 and up to 360.
+        Offset the profile center so it clears the axis.
       </p>
+      {isPartial && (
+        <p className="muted">
+          A partial revolve keeps hash-only face and edge references rather than
+          named ones, and its edges cannot be filleted or chamfered. Round the
+          full revolve first if the result needs blends.
+        </p>
+      )}
+      {!angleInRange && anglePreview.ok && (
+        <p className="muted error">
+          Angle must be greater than 0 and at most 360 degrees.
+        </p>
+      )}
     </FormShell>
   );
 }
