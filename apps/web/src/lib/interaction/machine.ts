@@ -42,7 +42,13 @@ export interface RegionTarget {
   area: number;
 }
 
-export type SketchToolId = 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+export type SketchToolId =
+  | 'select'
+  | 'line'
+  | 'arc'
+  | 'circle'
+  | 'rectangle'
+  | 'text';
 
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */

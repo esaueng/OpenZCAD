@@ -445,9 +445,11 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
       }
     } satisfies SketchNode;
   }
-  // Schema v4 -> v5 topology references and v5 -> v6 modeling feature kinds
-  // are additive. Existing hashes and exact source geometry remain the
-  // fail-closed fallback until a feature writes a lineage reference.
+  // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds, and
+  // v6 -> v7 text sketch objects plus entity-wide profile references are all
+  // additive. Existing hashes and exact source geometry remain the fail-closed
+  // fallback until a feature writes a lineage reference; a v6 document has no
+  // text objects and no `all: true` reference, so nothing needs rewriting.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,

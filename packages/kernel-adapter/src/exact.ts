@@ -47,17 +47,24 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import {
+  booleanFacetFallbackWarning,
+  censusOfSolids,
   countFaceConnectedComponents,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   selectSafelyUnifiedSolid,
   type TriangleMeshClosure
 } from './boolean-result-validation';
-import {
-  importedMeshStl,
-  meshBooleanUnsupportedError
-} from './imported-mesh';
+import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import {
+  basisMatchesLiftedFrame,
+  bezierFallbackWarning,
+  bezierNurbsParams,
+  bezierProfileEdgesEnabled,
+  flattenBezierCurve,
+  flattenedOutlineWarning
+} from './profile-bezier-edges';
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import {
   analyzeUnionConnectivity,
@@ -110,6 +117,8 @@ const STL_EXPORT_DEFLECTION = 0.08;
 /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
+/** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
+const NURBS_CURVE_TYPE = 3;
 const GEOMETRY_EPSILON = 1e-9;
 const ANALYTIC_MATCH_EPSILON = 1e-7;
 /** Relative bar for proving a plane runs tangent to a cylindrical band. */
@@ -800,11 +809,7 @@ function selectedEdgesShareVertex(
  * a blend only when some adjacent planar face is parallel to its axis and
  * stands exactly one radius off it.
  */
-function isBlendFace(
-  kernel: BrepKernel,
-  solid: number,
-  face: number
-): boolean {
+function isBlendFace(kernel: BrepKernel, solid: number, face: number): boolean {
   const surfaceType = kernel.getSurfaceType(face);
   if (surfaceType === 'bspline') {
     return true;
@@ -833,7 +838,10 @@ function isBlendFace(
     return false;
   }
   const bandEdges = new Set(kernel.getFaceEdges(face));
-  const tolerance = Math.max(BLEND_TANGENCY_TOLERANCE * radius, GEOMETRY_EPSILON);
+  const tolerance = Math.max(
+    BLEND_TANGENCY_TOLERANCE * radius,
+    GEOMETRY_EPSILON
+  );
   for (const neighbour of kernel.getSolidFaces(solid)) {
     if (
       neighbour === face ||
@@ -1317,6 +1325,14 @@ function profilePoints(
       // through detected closed regions instead.
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
+      );
+    case 'text':
+      // This legacy path sweeps a single polygonal profile. Text is many
+      // regions with holes and exact beziers; approximating it here would
+      // silently produce the wrong solid, so it must go through the region
+      // path instead.
+      throw new Error(
+        'Text must be extruded through its detected sketch regions, not as a single profile.'
       );
   }
 }
@@ -3158,8 +3174,7 @@ function importMeshSolid(kernel: BrepKernel, stlText: string): number {
   try {
     const sewn = kernel.sewFaces(faces, scale * MESH_SEW_TOLERANCE_RATIO);
     const healed = kernel.runHealPipeline(sewn, ['unify_same_domain']) as
-      | string
-      | { solid?: number };
+      string | { solid?: number };
     const parsed = (
       typeof healed === 'string' ? JSON.parse(healed) : healed
     ) as { solid?: number };
@@ -3437,14 +3452,32 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   /**
    * Build an exact planar face for a detected region: outer wire plus hole
-   * wires from the region's line/arc curves. No tessellation — arcs become
-   * true circular edges, so STEP export keeps analytic surfaces.
+   * wires from the region's line/arc/bezier curves. No tessellation — arcs
+   * become true circular edges and glyph beziers become NURBS edges, so STEP
+   * export keeps analytic surfaces and smooth outlines.
+   *
+   * TODO(brepkit Phase 0.3): once `makeFaceFromWires(outer, inner[])` ships,
+   * replace the `makePlanarFaceFromWire` + `addHolesToFace` pair below with
+   * the single call. The pinned brepkit-wasm here does not have it, and this
+   * must not depend on unreleased kernel work.
+   *
+   * `warn` is the document-level warning channel, not `console.warn`: the
+   * geometry kernel runs in a Web Worker, so a console line is invisible to
+   * the person looking at the faceted result.
    */
   private makeRegionFace(
     kernel: BrepKernel,
     region: SketchRegion,
-    basis: PlaneBasis
+    basis: PlaneBasis,
+    warn: (message: string) => void
   ): number {
+    // The exact path needs the kernel's lifted second axis to be this basis's
+    // `v`; every basis the app builds is right-handed, so this only ever trips
+    // on a corrupt face-attached frame.
+    const rightHanded = basisMatchesLiftedFrame(basis);
+    const exactBeziers = bezierProfileEdgesEnabled() && rightHanded;
+    let flattened = 0;
+
     const wireFor = (loop: SketchRegion['outer']): number => {
       const edges: number[] = [];
       for (const curve of loop.curves) {
@@ -3452,6 +3485,42 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           const a = BrepKitKernelAdapter.planePoint3(basis, curve.a);
           const b = BrepKitKernelAdapter.planePoint3(basis, curve.b);
           edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
+          continue;
+        }
+        if (curve.kind === 'bezier') {
+          if (exactBeziers) {
+            edges.push(
+              kernel.liftCurve2dToPlane(
+                NURBS_CURVE_TYPE,
+                bezierNurbsParams(curve),
+                basis.origin.x,
+                basis.origin.y,
+                basis.origin.z,
+                basis.u.x,
+                basis.u.y,
+                basis.u.z,
+                basis.normal.x,
+                basis.normal.y,
+                basis.normal.z,
+                0,
+                1
+              )
+            );
+            continue;
+          }
+          // Feature-flagged fallback: the same line pipeline every polygon
+          // uses. The endpoints are the curve's own point objects, so the
+          // joints with the neighbouring edges stay bit-identical.
+          flattened += 1;
+          const points = flattenBezierCurve(curve);
+          for (let index = 0; index + 1 < points.length; index += 1) {
+            const a = BrepKitKernelAdapter.planePoint3(basis, points[index]!);
+            const b = BrepKitKernelAdapter.planePoint3(
+              basis,
+              points[index + 1]!
+            );
+            edges.push(kernel.makeLineEdge(a.x, a.y, a.z, b.x, b.y, b.z));
+          }
           continue;
         }
         const span = Math.abs(curve.endAngle - curve.startAngle);
@@ -3514,14 +3583,23 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       return kernel.makeWire(Uint32Array.from(edges), true);
     };
 
-    const face = kernel.makePlanarFaceFromWire(wireFor(region.outer));
-    if (region.holes.length === 0) {
+    const outerWire = wireFor(region.outer);
+    const holeWires = region.holes.map(wireFor);
+    if (flattened > 0 && bezierProfileEdgesEnabled()) {
+      // Flattening is the default and is not worth a warning; being asked for
+      // exact edges and silently not producing them is.
+      warn(
+        bezierFallbackWarning(
+          'the sketch plane frame is not right-handed',
+          flattened
+        )
+      );
+    }
+    const face = kernel.makePlanarFaceFromWire(outerWire);
+    if (holeWires.length === 0) {
       return face;
     }
-    return kernel.addHolesToFace(
-      face,
-      Uint32Array.from(region.holes.map(wireFor))
-    );
+    return kernel.addHolesToFace(face, Uint32Array.from(holeWires));
   }
 
   /** Extrude one or more explicitly selected bounded sketch cells. */
@@ -3532,17 +3610,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     feature: FeatureNode,
     data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
     scope: Record<string, number>,
-    basis: PlaneBasis
+    basis: PlaneBasis,
+    warn: (message: string) => void
   ): ExactShape {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
     const distance = resolveParamValue(data.distance, scope, 'distance');
+    // A profile whose loops are a polyline approximation of curves the font
+    // actually draws is a degradation the user can see in the result and in
+    // the STEP export, and nothing downstream can tell it from an authored
+    // polygon. Reported once per build rather than once per region.
+    const flattenedOutlines = regions.filter(
+      (region) => region.outline?.fidelity === 'flattened'
+    ).length;
+    if (flattenedOutlines > 0) {
+      warn(flattenedOutlineWarning(flattenedOutlines));
+    }
     const groups = connectedRegionGroups(regions);
     const lineages: BrepKitLineageState[] = [];
     const solids = groups.map((group) => {
       const face = this.makeRegionFace(
         kernel,
         mergeAdjacentProfiles(group),
-        basis
+        basis,
+        warn
       );
       const solid = kernel.extrude(
         face,
@@ -3611,7 +3701,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     feature: FeatureNode,
     scope: Record<string, number>,
-    sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+    sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+    warn: (message: string) => void
   ): ExactShape {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -3641,7 +3732,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         feature,
         feature.data,
         scope,
-        basis
+        basis,
+        warn
       );
     }
     const sketch = findSketch(document, feature.data.sketchId);
@@ -3859,7 +3951,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   document,
                   feature,
                   scope,
-                  result.sketchBases
+                  result.sketchBases,
+                  (message) =>
+                    result.warnings.push(
+                      `Feature "${feature.name}": ${message}`
+                    )
                 )
               );
               if (
@@ -4031,6 +4127,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
               return shape;
             });
+            // Census the operands before the boolean consumes them. A faceted
+            // fallback is only visible as a change in face count and surface
+            // type, so both sides have to be measured.
+            const operandCensus = censusOfSolids(
+              kernel,
+              operands.flatMap((shape) => shape.solids)
+            );
             let solid: number;
             if (feature.data.operation === 'union') {
               const unionSolids = operands.flatMap((shape) => shape.solids);
@@ -4091,6 +4194,17 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     : kernel.intersect(solid, tool);
               }
               solid = unifyBooleanFaces(kernel, solid);
+            }
+            // The face-count census. Mesh closure, validation and volume all
+            // pass on a silently faceted boolean result; the faces do not.
+            const facetFallback = booleanFacetFallbackWarning({
+              operands: operandCensus,
+              result: censusOfSolids(kernel, [solid])
+            });
+            if (facetFallback) {
+              result.warnings.push(
+                `Feature "${feature.name}": ${facetFallback}`
+              );
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)

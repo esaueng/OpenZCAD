@@ -10,6 +10,10 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import {
+  FONT_ASSET_BASE,
+  FONT_FAMILIES
+} from '../../packages/geometry/src/text/registry';
 
 if (typeof globalThis.File === 'undefined') {
   // Node 18 lacks the global File constructor that some dependencies expect.
@@ -128,6 +132,58 @@ function buildMetadata(
  * build. They are plain data, not importable modules, so pdf.js is given a URL
  * prefix instead — see `pdfjsAssets.ts` for why each one is needed.
  */
+/**
+ * Serves the bundled text fonts at `FONT_ASSET_BASE` (`/fonts/`).
+ *
+ * The faces live in `packages/geometry/assets/fonts` because that is where the
+ * registry and the golden tests read them from. The browser needs them over
+ * HTTP, and copying 21 files into `public/` would vendor them into the source
+ * tree twice. Same shape as `pdfjsAssets` above: stream from source in dev,
+ * copy into the build output on write.
+ */
+function textFontAssets(): PluginOption {
+  const sourceRoot = fileURLToPath(
+    new URL('../../packages/geometry/assets/fonts/', import.meta.url)
+  );
+  let outDir = 'dist';
+  return {
+    name: 'openzcad-text-font-assets',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const url = request.url ?? '';
+        if (!url.startsWith(FONT_ASSET_BASE)) {
+          next();
+          return;
+        }
+        const relative = url.slice(FONT_ASSET_BASE.length).split('?')[0] ?? '';
+        // Only the flat asset directory, and never a traversal out of it.
+        if (!/^[\w.-]+\.(?:ttf|otf)$/.test(relative)) {
+          next();
+          return;
+        }
+        const stream = createReadStream(`${sourceRoot}${relative}`);
+        stream.on('error', () => next());
+        stream.on('open', () => response.setHeader('content-type', 'font/ttf'));
+        stream.pipe(response);
+      });
+    },
+    async writeBundle() {
+      const target = join(outDir, FONT_ASSET_BASE.replace(/^\/|\/$/g, ''));
+      await mkdir(target, { recursive: true });
+      // Only the faces themselves; the licence texts and manifest beside them
+      // are for the repo, not the wire.
+      for (const family of FONT_FAMILIES) {
+        for (const face of family.faces) {
+          await cp(`${sourceRoot}${face.file}`, join(target, face.file));
+        }
+      }
+    }
+  };
+}
+
 function pdfjsAssets(): PluginOption {
   const sourceRoot = fileURLToPath(
     new URL('./node_modules/pdfjs-dist/', import.meta.url)
@@ -183,7 +239,13 @@ export default defineConfig(async ({ command, isPreview }) => {
   const commit = sourceCommit();
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
-  plugins.push(react(), wasm(), pdfjsAssets(), buildMetadata(commit, brepkit));
+  plugins.push(
+    react(),
+    wasm(),
+    pdfjsAssets(),
+    textFontAssets(),
+    buildMetadata(commit, brepkit)
+  );
 
   const nodeMajor = Number.parseInt(
     process.versions.node.split('.')[0] ?? '0',
@@ -221,6 +283,15 @@ export default defineConfig(async ({ command, isPreview }) => {
     },
     resolve: {
       alias: {
+        // Imported dynamically so opentype.js lands in its own chunk instead
+        // of the entry bundle. Reaching it through the geometry index would
+        // not split — that index is statically imported all over the app.
+        '@openzcad/geometry/text-loader': fileURLToPath(
+          new URL(
+            '../../packages/geometry/src/text/loader.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/kernel-adapter/exact': fileURLToPath(
           new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
         ),

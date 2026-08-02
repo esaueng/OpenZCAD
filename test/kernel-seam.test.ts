@@ -438,7 +438,9 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     expect(derived.warnings).toEqual([
       'Feature "Pre-flip fillet": A selected edge no longer exists.'
     ]);
-    expect(derived.bodyRepresentations[stale.bodyOrder.at(-1)!]).toBeUndefined();
+    expect(
+      derived.bodyRepresentations[stale.bodyOrder.at(-1)!]
+    ).toBeUndefined();
     // The import itself is untouched: pi * 10^2 * 10 / 3.
     expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
       (Math.PI * 1000) / 3,
@@ -460,7 +462,10 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
         name: 'Bracket',
         artifactId: 'artifact_seam_bracket',
         sourceName: 'parametric-bracket.step',
-        stepText: readFileSync(resolve('samples/parametric-bracket.step'), 'utf8')
+        stepText: readFileSync(
+          resolve('samples/parametric-bracket.step'),
+          'utf8'
+        )
       }
     );
     const onBrepKit = await adapter.syncDocument(document);
