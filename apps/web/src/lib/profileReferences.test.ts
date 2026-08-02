@@ -109,6 +109,20 @@ describe('profileReferencesForSelection', () => {
 });
 
 describe('isEntityWideProfileSource', () => {
+  it('promotes the drag-to-extrude fallback over a text region too', () => {
+    // Dragging the arrow extrudes without a prior selection, and that path
+    // synthesizes a `legacy_` pick from the drag target. It used to lose the
+    // source entities, so a drag-extruded label stored a fingerprint
+    // reference — which broke the moment the string was edited, the exact
+    // edit text exists to support. The target's entities must ride through.
+    expect(
+      profileReferencesForSelection(
+        [pick('legacy_1234', ['text_1'])],
+        isText
+      )
+    ).toEqual([{ all: true, sourceEntityIds: ['text_1'] }]);
+  });
+
   it('is true for text and false for drawn geometry', () => {
     expect(
       isEntityWideProfileSource({
