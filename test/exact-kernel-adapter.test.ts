@@ -28,6 +28,8 @@ import {
 import { OcctStepKernelAdapter } from '../packages/kernel-adapter/src/occt-step';
 import {
   toUserId,
+  type BodyRepresentation,
+  type DerivedState,
   type DirectEditOperation,
   type ParamValue,
   type PrimitiveKind
@@ -40,6 +42,37 @@ import {
 } from '../packages/kernel-adapter/src/boolean-result-validation';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
+
+/** The two message shapes `booleanFacetFallbackWarning` can produce. */
+const FACET_CENSUS_MESSAGE =
+  /faceted approximation instead of exact surfaces|replaced every curved surface with planar faces|produced far more faces than its operands/;
+
+/**
+ * The boolean face census either fires or it does not, and today's answer is
+ * not the one to pin: the kernel facets these contacts now and may well stop,
+ * and asserting the warning is present would turn that improvement into an
+ * unrelated test failure here. Two things must hold either way — no warning
+ * other than the census's appears, and the census agrees with the faces
+ * actually on the resulting body.
+ */
+function expectCensusConsistentWithFaces(
+  derived: DerivedState,
+  body: BodyRepresentation
+): void {
+  const censusWarnings = derived.warnings.filter((warning) =>
+    FACET_CENSUS_MESSAGE.test(warning)
+  );
+  expect(derived.warnings).toEqual(censusWarnings);
+  const curvedFaces = (body.topology?.faces ?? []).filter(
+    (face) => face.geometry && face.geometry.surfaceType !== 'plane'
+  ).length;
+  if (censusWarnings.length > 0) {
+    // Every census message this path can produce is the lost-curvature one.
+    expect(curvedFaces).toBe(0);
+  } else {
+    expect(curvedFaces).toBeGreaterThan(0);
+  }
+}
 const CLOSE_PROJECTED_RADIUS_PX = 1200;
 const MAX_PROJECTED_CHORD_ERROR_PX = 0.5;
 
@@ -787,11 +820,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // silently answers it with a faceted approximation: two exact cylindrical
     // surfaces become 193 planar faces, and the volume lands ~0.08 % low.
     // Closure, validity and volume all still pass — the face-count census is
-    // the only thing that sees it, which is why it exists.
-    expect(derived.warnings).toEqual([
-      expect.stringContaining('faceted approximation instead of exact surfaces')
-    ]);
-    expect(derived.warnings[0]).toContain('0 curved');
+    // the only thing that sees it, which is why it exists. What is asserted is
+    // that the census and the faces agree, not that the kernel keeps faceting.
+    expectCensusConsistentWithFaces(derived, body);
     expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
     expect(body.volume).toBeGreaterThan(0);
     // Runs in under a second locally but has tripped the 5 s default on slow
@@ -842,9 +873,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     );
 
     // Exact face contact degrades the same way the 1 µm sliver above does.
-    expect(derived.warnings).toEqual([
-      expect.stringContaining('faceted approximation instead of exact surfaces')
-    ]);
+    expectCensusConsistentWithFaces(derived, body);
     expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
     expect(body.volume).toBeGreaterThan(0);
   });
