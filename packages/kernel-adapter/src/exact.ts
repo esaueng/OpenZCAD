@@ -3268,6 +3268,86 @@ function fuseUniformSolid(kernel: BrepKernel, solids: number[]): number {
 }
 
 /**
+ * How much interior volume these solids share, summed over every pair.
+ *
+ * Zero means they can be summed safely. A positive figure means summing
+ * double-counts, and its SIZE is what tells a caller afterwards whether a
+ * fuse actually merged anything — which is why this returns a quantity
+ * rather than the boolean the first cut of it returned. By inclusion-
+ * exclusion the pairwise total is the exact correction where no three solids
+ * share a region and an overestimate where they do, so it is a lower bound on
+ * what a successful merge must remove, never an upper one.
+ *
+ * TOUCHING IS NOT OVERLAPPING, and the distinction is the whole point. Two
+ * boxes meeting exactly on a face sum to their true union, so fusing them
+ * would change topology and lineage while moving no number; two boxes that
+ * interpenetrate are counted twice by any caller that sums per-solid volumes.
+ * Only the second case is a defect, so only the second case is reported here.
+ *
+ * Bounding boxes filter first, so the exact intersect — much the more
+ * expensive call, and the one that can throw — runs only on pairs that could
+ * possibly share volume. A patterned row's boxes overlap only between
+ * neighbours, so the kernel work stays near-linear in the instance count even
+ * though the box scan is quadratic.
+ *
+ * The floor is a fraction of the pair's own bounding diagonal CUBED, not an
+ * absolute figure. A volume is L^3: an absolute floor would call a
+ * millimetre-scale overlap empty and a kilometre-scale rounding error real.
+ * This is the same dimensional mistake this project has now found in the
+ * kernel five times, and it is not worth making again here.
+ */
+function sharedSolidVolume(kernel: BrepKernel, solids: number[]): number {
+  if (solids.length < 2) {
+    return 0;
+  }
+  let total = 0;
+  const boxes = solids.map((solid) => kernel.boundingBox(solid));
+  for (let left = 0; left < solids.length; left += 1) {
+    for (let right = left + 1; right < solids.length; right += 1) {
+      const a = boxes[left]!;
+      const b = boxes[right]!;
+      const spans = [0, 1, 2].map(
+        (axis) =>
+          Math.min(a[axis + 3]!, b[axis + 3]!) - Math.max(a[axis]!, b[axis]!)
+      );
+      if (spans.some((span) => span <= 0)) {
+        continue;
+      }
+      const diagonal = Math.hypot(
+        Math.max(a[3]! - a[0]!, b[3]! - b[0]!),
+        Math.max(a[4]! - a[1]!, b[4]! - b[1]!),
+        Math.max(a[5]! - a[2]!, b[5]! - b[2]!)
+      );
+      const floor = diagonal ** 3 * 1e-9;
+      // The box overlap is an upper bound on the shared volume, so a pair
+      // whose boxes barely graze cannot clear the floor and need not be
+      // intersected at all.
+      if (spans[0]! * spans[1]! * spans[2]! <= floor) {
+        continue;
+      }
+      let shared: number;
+      try {
+        shared = kernel.volume(
+          kernel.intersect(solids[left]!, solids[right]!),
+          MEASUREMENT_DEFLECTION
+        );
+      } catch {
+        // A refused intersection is not evidence of disjointness. The boxes
+        // already say these two could share volume, so fail toward fusing: a
+        // needless fuse costs time, a missed one reports a wrong volume. The
+        // box overlap stands in for a figure the kernel would not give.
+        total += spans[0]! * spans[1]! * spans[2]!;
+        continue;
+      }
+      if (shared > floor) {
+        total += shared;
+      }
+    }
+  }
+  return total;
+}
+
+/**
  * Face unification is allowed to replace the raw Union only when the copied
  * result remains a strict topological solid. The final Union acceptance gate
  * below separately checks its disposable viewport projection.
@@ -4356,7 +4436,62 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
             }
             result.consumed.add(feature.data.targetBodyId);
-            result.shapes.set(feature.bodyId, { solids });
+            // Instances that interpenetrate have to become ONE solid before
+            // anything measures them. Every consumer downstream — the volume
+            // the Inspector prints, the STL writer, the mesh the viewport
+            // draws — walks this list per solid and sums, so two overlapping
+            // copies are counted twice and the interior walls are drawn. The
+            // agreement between the reported volume and the enclosed mesh
+            // volume is no defence: both sum the same list, so both are wrong
+            // by exactly the same amount and neither can catch the other.
+            //
+            // Fusing is deliberately conditional. The disjoint case is the
+            // overwhelmingly common one, it is already correct, and fusing it
+            // would rebuild topology and re-key lineage for no change in any
+            // number a user sees. So the fuse runs only where the sum is
+            // actually wrong.
+            const shared = sharedSolidVolume(kernel, solids);
+            if (shared > 0) {
+              const summed = solids.reduce(
+                (total, instance) =>
+                  total + kernel.volume(instance, MEASUREMENT_DEFLECTION),
+                0
+              );
+              const fused = fuseUniformSolid(kernel, solids);
+              const removed =
+                summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
+              // The fuse is NOT guaranteed to merge. On shallow overlaps it
+              // returns the operands essentially untouched — measured on three
+              // r5 h10 cylinders, by overlap depth (2r - d):
+              //
+              //   depth 1.0, 4.0  ->  9 faces, 0.6 of 58.8 shared removed
+              //   depth 7.0, 9.5  -> 41 and 33 faces, merged
+              //
+              // Testing "did the volume stay equal to the sum" is too weak:
+              // the fuse perturbs it by ~0.03% while merging nothing, which is
+              // enough to clear any equality bar. So the test is whether it
+              // removed a real share of the material the instances are KNOWN
+              // to share, which was measured on the way in.
+              //
+              // Half is a deliberately loose bar. The pairwise total
+              // overstates the true correction wherever three instances meet,
+              // so a correct merge can legitimately remove less than all of
+              // it; nothing near a working fuse removes under half.
+              //
+              // The body still stands either way — the instances are real and
+              // the user asked for them. Silence is the only outcome ruled
+              // out, because this defect survived precisely by being silent:
+              // the reported volume and the enclosed mesh agreed, both summing
+              // the same list.
+              if (removed < shared * 0.5) {
+                result.warnings.push(
+                  `Feature "${feature.name}": instances overlap but the merge did not take, so the reported volume counts shared material more than once.`
+                );
+              }
+              result.shapes.set(feature.bodyId, { solids: [fused] });
+            } else {
+              result.shapes.set(feature.bodyId, { solids });
+            }
             inheritMeshOrigin(
               result,
               feature.data.targetBodyId,
