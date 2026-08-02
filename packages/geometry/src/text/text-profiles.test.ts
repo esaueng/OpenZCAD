@@ -4,7 +4,11 @@ import { FontLibrary, parseFontFace } from './loader';
 import { FONT_ASSET_DIR, nodeFontDataSource } from './nodeFontSource';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { buildTextProfileSet, clearTextProfileCache, textProfileSet } from './profiles';
+import {
+  buildTextProfileSet,
+  clearTextProfileCache,
+  textProfileSet
+} from './profiles';
 import { flattenLoop } from './loops';
 import { layoutText } from './layout';
 import { TextGeometryError } from './types';
@@ -37,26 +41,34 @@ function expectLoopContinuity(loop: TextLoop, label: string): void {
       `${label}: y joint ${i} ${current.b.y} vs ${next.a.y}`
     ).toBe(true);
   }
-  expect(Object.is(loopStart(loop).x, loopEnd(loop).x), `${label}: closure x`).toBe(
-    true
-  );
-  expect(Object.is(loopStart(loop).y, loopEnd(loop).y), `${label}: closure y`).toBe(
-    true
-  );
+  expect(
+    Object.is(loopStart(loop).x, loopEnd(loop).x),
+    `${label}: closure x`
+  ).toBe(true);
+  expect(
+    Object.is(loopStart(loop).y, loopEnd(loop).y),
+    `${label}: closure y`
+  ).toBe(true);
 }
 
 function expectWinding(region: TextRegion, label: string): void {
   expect(region.outer.winding, `${label}: outer winding`).toBe('ccw');
-  expect(region.outer.signedArea, `${label}: outer area sign`).toBeGreaterThan(0);
-  expect(endpointShoelace(region.outer), `${label}: outer shoelace`).toBeGreaterThan(
+  expect(region.outer.signedArea, `${label}: outer area sign`).toBeGreaterThan(
     0
   );
+  expect(
+    endpointShoelace(region.outer),
+    `${label}: outer shoelace`
+  ).toBeGreaterThan(0);
   for (const [index, hole] of region.holes.entries()) {
     expect(hole.winding, `${label}: hole ${index} winding`).toBe('cw');
-    expect(hole.signedArea, `${label}: hole ${index} area sign`).toBeLessThan(0);
-    expect(endpointShoelace(hole), `${label}: hole ${index} shoelace`).toBeLessThan(
+    expect(hole.signedArea, `${label}: hole ${index} area sign`).toBeLessThan(
       0
     );
+    expect(
+      endpointShoelace(hole),
+      `${label}: hole ${index} shoelace`
+    ).toBeLessThan(0);
   }
 }
 
@@ -96,7 +108,9 @@ describe('font registry', () => {
           style: face.style
         });
         const loaded = parseFontFace(family.id, face.style, bytes);
-        expect(loaded.unitsPerEm, `${family.id} ${face.style}`).toBeGreaterThan(0);
+        expect(loaded.unitsPerEm, `${family.id} ${face.style}`).toBeGreaterThan(
+          0
+        );
         expect(loaded.font.numGlyphs).toBeGreaterThan(50);
       }
     }
@@ -106,7 +120,9 @@ describe('font registry', () => {
     const files = new Set<string>();
     for (const family of FONT_FAMILIES) {
       for (const face of family.faces) {
-        expect(files.has(face.file), `duplicate asset ${face.file}`).toBe(false);
+        expect(files.has(face.file), `duplicate asset ${face.file}`).toBe(
+          false
+        );
         files.add(face.file);
       }
     }
@@ -183,8 +199,12 @@ describe('font registry', () => {
   });
 
   it('resolves a family by id or display name', () => {
-    expect(findFontFace('Open Sans', 'bold')?.face.file).toBe('open-sans-bold.ttf');
-    expect(findFontFace('open-sans', 'bold')?.face.file).toBe('open-sans-bold.ttf');
+    expect(findFontFace('Open Sans', 'bold')?.face.file).toBe(
+      'open-sans-bold.ttf'
+    );
+    expect(findFontFace('open-sans', 'bold')?.face.file).toBe(
+      'open-sans-bold.ttf'
+    );
   });
 });
 
@@ -199,9 +219,10 @@ describe('a letter with a counter', () => {
       expectWinding(region, `${familyId} O`);
       expectLoopContinuity(region.outer, `${familyId} O outer`);
       expectLoopContinuity(region.holes[0]!, `${familyId} O hole`);
-      expect(contains(region.outer, region.holes[0]!), `${familyId} hole inside`).toBe(
-        true
-      );
+      expect(
+        contains(region.outer, region.holes[0]!),
+        `${familyId} hole inside`
+      ).toBe(true);
       // Holes really are subtracted: a filled disc of this outline would be
       // much larger than the ring the letter actually encloses.
       expect(region.area).toBeLessThan(Math.abs(region.outer.signedArea));
@@ -258,7 +279,9 @@ describe('a multi-glyph word', () => {
     for (let i = 1; i < xs.length; i += 1) {
       expect(xs[i]!).toBeGreaterThan(xs[i - 1]!);
     }
-    expect(set.advanceWidth).toBeGreaterThan(set.boundingBox.max.x - set.boundingBox.min.x);
+    expect(set.advanceWidth).toBeGreaterThan(
+      set.boundingBox.max.x - set.boundingBox.min.x
+    );
     expect(set.lineCount).toBe(1);
   });
 
@@ -305,8 +328,14 @@ describe('a multi-glyph word', () => {
   it('applies kerning when the font has a pair, and honours the toggle', async () => {
     const font = await loadTestFont('pacifico');
     const kerned = layoutText(font, { text: 'To', size: 10 });
-    const unkerned = layoutText(font, { text: 'To', size: 10 }, { kerning: false });
-    expect(kerned.glyphs[1]!.penUnits).toBeLessThan(unkerned.glyphs[1]!.penUnits);
+    const unkerned = layoutText(
+      font,
+      { text: 'To', size: 10 },
+      { kerning: false }
+    );
+    expect(kerned.glyphs[1]!.penUnits).toBeLessThan(
+      unkerned.glyphs[1]!.penUnits
+    );
   });
 
   it('reports characters the font has no glyph for', async () => {
@@ -418,7 +447,9 @@ describe('overlapping glyphs', () => {
         size: 10
       });
       expect(set.unionedGlyphs, `${familyId}`).toEqual([]);
-      expect(set.regions.every((region) => region.source === 'exact')).toBe(true);
+      expect(set.regions.every((region) => region.source === 'exact')).toBe(
+        true
+      );
       expectWellFormed(set, `${familyId} pangram`);
     }
   });
@@ -472,7 +503,12 @@ describe('placement', () => {
   it('translates and rotates rigidly', async () => {
     const font = await loadTestFont('open-sans');
     const plain = buildTextProfileSet(font, { text: 'L', size: 10 });
-    const moved = buildTextProfileSet(font, { text: 'L', size: 10, x: 3, y: -2 });
+    const moved = buildTextProfileSet(font, {
+      text: 'L',
+      size: 10,
+      x: 3,
+      y: -2
+    });
     expect(moved.boundingBox.min.x).toBeCloseTo(plain.boundingBox.min.x + 3, 9);
     expect(moved.boundingBox.min.y).toBeCloseTo(plain.boundingBox.min.y - 2, 9);
 
@@ -504,9 +540,9 @@ describe('failure modes', () => {
     expect(() => buildTextProfileSet(font, { text: 'A', size: -1 })).toThrow(
       TextGeometryError
     );
-    expect(() => buildTextProfileSet(font, { text: 'A', size: Number.NaN })).toThrow(
-      TextGeometryError
-    );
+    expect(() =>
+      buildTextProfileSet(font, { text: 'A', size: Number.NaN })
+    ).toThrow(TextGeometryError);
   });
 
   it('refuses a family or style that is not bundled', async () => {
@@ -530,7 +566,12 @@ describe('failure modes', () => {
   });
 });
 
-describe('every bundled family', () => {
+// Both cases below sweep every bundled face, and the glyph union is the
+// expensive part: under `vitest --coverage` on a CI runner they take tens of
+// seconds, well past the 5 s default. The budget is generous because what is
+// being asserted is correctness across the whole font set, not speed — the
+// perf work these numbers argue for is tracked as Phase 5.
+describe('every bundled family', { timeout: 120_000 }, () => {
   it('survives letter spacing tight enough to force the union', async () => {
     // Negative spacing drives neighbours into each other, which is the case
     // that used to strand the union's boundary trace. Every result must still
@@ -550,10 +591,14 @@ describe('every bundled family', () => {
     }
   });
 
-
   it('produces closed, correctly wound loops for a mixed string', async () => {
     for (const familyId of TEST_FAMILY_IDS) {
-      for (const style of ['regular', 'bold', 'italic', 'boldItalic'] as const) {
+      for (const style of [
+        'regular',
+        'bold',
+        'italic',
+        'boldItalic'
+      ] as const) {
         const resolved = resolveFontStyle(familyId, style);
         if (resolved !== style) {
           continue;
