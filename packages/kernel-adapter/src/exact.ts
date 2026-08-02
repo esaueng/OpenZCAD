@@ -44,6 +44,8 @@ import {
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
 import {
+  booleanFacetFallbackWarning,
+  censusOfSolids,
   countFaceConnectedComponents,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
@@ -3887,6 +3889,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
               return shape;
             });
+            // Census the operands before the boolean consumes them. A faceted
+            // fallback is only visible as a change in face count and surface
+            // type, so both sides have to be measured.
+            const operandCensus = censusOfSolids(
+              kernel,
+              operands.flatMap((shape) => shape.solids)
+            );
             let solid: number;
             if (feature.data.operation === 'union') {
               const unionSolids = operands.flatMap((shape) => shape.solids);
@@ -3947,6 +3956,17 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     : kernel.intersect(solid, tool);
               }
               solid = unifyBooleanFaces(kernel, solid);
+            }
+            // The face-count census. Mesh closure, validation and volume all
+            // pass on a silently faceted boolean result; the faces do not.
+            const facetFallback = booleanFacetFallbackWarning({
+              operands: operandCensus,
+              result: censusOfSolids(kernel, [solid])
+            });
+            if (facetFallback) {
+              result.warnings.push(
+                `Feature "${feature.name}": ${facetFallback}`
+              );
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)
