@@ -192,8 +192,8 @@ export const localPolygonUnion2d: PolygonUnion2d = (loops) => {
     }
   }
 
-  // Split at crossings with edges of other loops. Each crossing point is
-  // computed once and interned, so both edges break on the same object.
+  // Split at crossings. Each crossing point is computed once and interned,
+  // so both edges break on the same object.
   const bounds = edges.map(edgeBounds);
   for (let i = 0; i < edges.length; i += 1) {
     const left = edges[i]!;
