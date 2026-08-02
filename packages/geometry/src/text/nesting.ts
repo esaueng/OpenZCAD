@@ -127,7 +127,6 @@ export function assembleRegions(
     const item = analyzed[i]!;
     let depth = 0;
     let parent = -1;
-    let parentDepth = -1;
     for (let j = 0; j < analyzed.length; j += 1) {
       if (i === j) {
         continue;

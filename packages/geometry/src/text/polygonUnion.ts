@@ -156,9 +156,9 @@ export const localPolygonUnion2d: PolygonUnion2d = (loops) => {
   if (usable.length === 0) {
     return [];
   }
-  if (usable.length === 1) {
-    return [Float64Array.from(usable[0]!)];
-  }
+  // A single loop is not a shortcut: one self-intersecting contour is exactly
+  // how fonts draw a 'P' or an 'e', and its counter only appears once the
+  // crossings are resolved.
 
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
