@@ -48,7 +48,8 @@ describe('cloudflare adapters', () => {
       'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
       'AI_PATCH_MIRROR_ENABLED',
       'AI_PATCH_SHELL_ENABLED',
-      'AI_PATCH_SOLID_OFFSET_ENABLED'
+      'AI_PATCH_SOLID_OFFSET_ENABLED',
+      'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
     ]);
     expect(isCloudflareFeatureEnabled({}, 'PROJECT_SHARING_ENABLED')).toBe(
       false

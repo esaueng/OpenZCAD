@@ -769,11 +769,12 @@ UI form + AI-contract op + tests)
 
 *Correction:* "worker case" was in this checklist and is not a cost —
 `geometryWorker.ts` is document-level sync/export with **zero** per-feature
-branches. The rebuild switch is `exact.ts:3608-3621`.
+branches. The rebuild switch is the `featureKind` switch in `exact.ts`'s
+`build` (line numbers in this row went stale during Z7; find it by name).
 
 | Feature | Kernel binding | Extra notes | Est |
 | --- | --- | --- | --- |
-| Partial revolve **angle** | `revolve(..., angleDeg)` exists; app hard-codes 360 (`exact.ts:3461`) | see below — kernel is fine, *lineage* is the cost | **M** |
+| ~~Partial revolve **angle**~~ | ~~`revolve(..., angleDeg)` exists; app hard-codes 360~~ | **landed (Z7)** — shipped with ADR-011 hash-only lineage; three defects found, see below | **S** |
 | Revolve axis-by-selection | — | separate item; blocked on giving revolve a region path first | **M–L** |
 | Symmetric / two-sided extrude | compose two `extrude` + `fuse`, or start-offset the profile | document-model change (`distanceBack`) | **M** |
 | Sweep / loft / helix features | `sweep*`, `loft*`, `helicalSweep` bound | needs path/profile selection UX — the real cost | **L** (mostly UI) |
@@ -813,6 +814,64 @@ call and keeps this at S — but make it deliberately, not by discovering it
 later.** Also gate or warn on fillet: it fails on 12/12 edges of a 90° wedge
 while succeeding on 4/6 of the same full revolve, and users reach for fillet
 immediately after making a wedge.
+
+### Z7 partial revolve as built, and the three things this row got wrong
+
+Shipped as `FeatureData.revolve.angleDeg`, optional, absent meaning a full
+turn. The hash-only fallback is named in code
+(`PARTIAL_REVOLVE_HASH_ONLY_REASON`) and in an ADR-013 amendment; the circular
+exemption is implemented and covered; a full turn keeps all four face roles and
+all four profile-vertex edge roles, asserted rather than assumed. Rollout flag
+`AI_PATCH_PARTIAL_REVOLVE_ENABLED` gates the **field** rather than the
+operation, since `add_revolve` itself has shipped for a long time.
+
+Everything this row asserted about faces, volumes, closure and the `(0, 360]`
+guard reproduced exactly. Three corrections and one new defect:
+
+*χ is not 2 for a full revolve, and the check that said so would have been
+"fixed" by loosening it.* A wedge is a topological ball, χ = 2. Sweeping the
+same off-axis profile a full turn closes it onto itself and gives a **genus-1**
+solid, χ = 0. Both are asserted per case.
+
+*The fillet failure is worse than "12/12 refuse", and part of it was a hash
+bug.* Two of the wedge's twelve edges were not refused at all — they came back
+"A selected edge no longer exists", because the hash `BodyTopology` publishes
+and the hash `edgeHandlesByFingerprint` resolves are computed by different
+sorts. `edgeSignatureOf` orders an open edge's endpoints by **raw** coordinate,
+`edgeWitnessOf` orders them by the **quantized** coordinate. They agree until
+two endpoints tie after quantization on the leading axis — which is exactly
+what a wedge's cut-plane edges do, sitting at a numerical zero of ~1e-16. Those
+two edges were unselectable for every downstream feature, not just fillet.
+Fixed additively: `edgeHandlesByFingerprint` now registers the witness hash
+alongside the fingerprint and the legacy scheme, so no persisted hash changes.
+With that fixed the count is a true 12/12 refused, at every radius from 0.4
+down to 0.002 — so the pre-existing "Try a smaller radius" advice was false at
+every radius. `edgeModifierFailureMessage` now names the wedge, and only after
+the size ladder has failed.
+
+*Scale invariance does not hold at 0.001× for a partial revolve.* At 1× and
+1000× the volume matches the closed form to 1e-16. Below roughly 5e-3 model
+units it goes **low** by a fixed relative amount per sweep angle — 1.30e-5 at
+45°, 1.70e-5 at 90°, 2.76e-5 at 180°, 3.45e-5 at 270°, 3.43e-5 at 359° —
+identical at 2e-3, 1e-3 and 5e-4, so it is a threshold rather than drift. The
+**full** revolve of the same profile stays exact to 4e-16 at 1e-3, and
+cylinder, sphere and torus primitives are exact to 1e-16 there, so this is
+specific to the partial sweep. Signature of a chord under-approximation of the
+swept arc bounded by an absolute tolerance inside the kernel — the same class
+as #53's `wire_polygon_sampled`, which was fixed at ordinary scale. Recorded as
+a characterization test; not app-fixable.
+
+*New, and the one that should block enabling this by default: **every partial
+revolve comes back with a reversed shell.*** The solid is valid and its volume
+is right, and the mesh is closed and consistently wound — but wound **inward**.
+Signed mesh volume is negative at 45°, 90°, 180°, 270°, 359° and 359.99°, and
+positive at exactly 360. `writeAsciiStl` computes facet normals from the
+winding, so a wedge **exports to STL inside-out**: measured −3.914 signed
+volume on a 90° wedge against +15.391 for the full revolve of the same profile.
+This is a BrepKit `revolve` orientation bug. It is deliberately not patched
+app-side — flipping a shell by a signed-volume heuristic in the middle of the
+lineage path is precisely the plausible-but-wrong change this document exists
+to prevent — but it is characterized so it cannot regress silently.
 
 *Axis-by-selection is separate and starts blocked.* `RevolveAxis` is
 `'horizontal' | 'vertical'` — the sketch basis through the plane origin — and
