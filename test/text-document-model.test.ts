@@ -691,8 +691,9 @@ describe('the same edit through the production expansion', () => {
   // distinct — so the production scheme is precisely the thing that could make
   // an entity-wide match fail, and until now it was only ever exercised on its
   // own, never together with the resolver.
+  const library = new FontLibrary(nodeFontDataSource());
+
   beforeAll(async () => {
-    const library = new FontLibrary(nodeFontDataSource());
     await library.load('open-sans', 'regular');
     setTextFontProvider((family, style) => library.peek(family, style));
   });
@@ -891,6 +892,65 @@ describe('the same edit through the production expansion', () => {
     expect(profile.all).not.toBe(true);
     expect(profile).toMatchObject({ samplePoint: { x: 0, y: 0 } });
     expect(profile).not.toHaveProperty('sourceEntityIds');
+  });
+
+  it('persists parameters only — no glyph outline reaches the document', () => {
+    // Release-blocking property: a text object stores what the user typed and
+    // where, and the extrude stores an entity id. Everything else is derived
+    // on rebuild. Persisting outlines would freeze the glyphs against the
+    // font, bloat every save, and make the string un-editable in practice.
+    const scene = textScene('ENGRAVED LABEL 12');
+    const segments = buildTextProfileSet(
+      library.peek('open-sans', 'regular')!,
+      { text: 'ENGRAVED LABEL 12', size: 10 }
+    ).regions.reduce(
+      (total, region) =>
+        total +
+        [region.outer, ...region.holes].reduce(
+          (count, loop) => count + loop.segments.length,
+          0
+        ),
+      0
+    );
+    expect(segments).toBeGreaterThan(200);
+
+    const node = scene.document.nodes[scene.textObjectId];
+    if (node?.kind !== 'sketch-object') {
+      throw new Error('text object missing');
+    }
+    expect(Object.keys(node.data).sort()).toEqual([
+      'fontFamily',
+      'fontStyle',
+      'objectKind',
+      'size',
+      'text',
+      'x',
+      'y'
+    ]);
+    expect(extrudeData(scene.document).profiles).toEqual([
+      { all: true, sourceEntityIds: [scene.textObjectId] }
+    ]);
+
+    // Structural, not size-based: nothing anywhere in the document is a run
+    // of coordinates. 200+ segments could not hide in any array this short.
+    const longNumericArrays: unknown[] = [];
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        if (
+          value.length > 4 &&
+          value.every((entry) => typeof entry === 'number')
+        ) {
+          longNumericArrays.push(value);
+        }
+        value.forEach(walk);
+        return;
+      }
+      if (value && typeof value === 'object') {
+        Object.values(value).forEach(walk);
+      }
+    };
+    walk(scene.document);
+    expect(longNumericArrays).toEqual([]);
   });
 
   it('carries exact beziers, not the flattened polylines the stub produced', () => {
