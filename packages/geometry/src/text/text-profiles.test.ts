@@ -531,6 +531,26 @@ describe('failure modes', () => {
 });
 
 describe('every bundled family', () => {
+  it('survives letter spacing tight enough to force the union', async () => {
+    // Negative spacing drives neighbours into each other, which is the case
+    // that used to strand the union's boundary trace. Every result must still
+    // be closed and correctly wound, in every face.
+    for (const familyId of TEST_FAMILY_IDS) {
+      const font = await loadTestFont(familyId);
+      for (const text of ['ll', 'Wa', 'gg', 'AV', 'To', 'HELLO']) {
+        for (const letterSpacing of [-0.1, -0.3, -0.45]) {
+          const set = buildTextProfileSet(font, {
+            text,
+            size: 10,
+            letterSpacing
+          });
+          expectWellFormed(set, `${familyId} "${text}" @${letterSpacing}`);
+        }
+      }
+    }
+  });
+
+
   it('produces closed, correctly wound loops for a mixed string', async () => {
     for (const familyId of TEST_FAMILY_IDS) {
       for (const style of ['regular', 'bold', 'italic', 'boldItalic'] as const) {
