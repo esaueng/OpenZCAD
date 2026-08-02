@@ -32,6 +32,7 @@ const region: RegionTarget = {
   sketchId: 'sketch_1',
   regionFingerprint: 42,
   samplePoint: { x: 1, y: 2 },
+  sourceEntityIds: [],
   area: 100
 };
 
