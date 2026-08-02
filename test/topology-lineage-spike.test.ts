@@ -10,6 +10,12 @@ interface BrepEvolution {
     modified: Record<string, number[]>;
     generated: Record<string, number[]>;
     deleted: number[];
+    /**
+     * Result faces the kernel could not trace to an input face, each listed
+     * with the inputs that tied. A caller holding a persistent face reference
+     * has to fail closed on these rather than guess between the candidates.
+     */
+    unresolved: Record<string, number[]>;
   };
 }
 
@@ -61,7 +67,12 @@ function parseBrepEvolution(value: unknown): BrepEvolution {
       generated: handleMap(evolution.generated, 'generated'),
       // This is deliberately required. Missing `deleted` is a contract error,
       // not evidence that every source face survived.
-      deleted: integerArray(evolution.deleted, 'deleted')
+      deleted: integerArray(evolution.deleted, 'deleted'),
+      // Required for the same reason: a missing `unresolved` channel is a
+      // kernel that stopped reporting its own doubt, not a kernel that has
+      // none. Reading it as an empty map would silently upgrade every tied
+      // face into a confidently traced one.
+      unresolved: handleMap(evolution.unresolved, 'unresolved')
     }
   };
 }
@@ -89,6 +100,10 @@ function verifyCompleteBrepEvolution(
   const modifiedResults = Object.values(payload.evolution.modified).flat();
   const generatedResults = Object.values(payload.evolution.generated).flat();
 
+  // Checked before the coverage comparisons below, which an unresolved face
+  // would also fail — but as a set difference nobody can read. Every face of
+  // every result here is traceable, so doubt is the finding, not a mismatch.
+  expect(payload.evolution.unresolved).toEqual({});
   expect(modifiedSources.every((handle) => sourceFaces.has(handle))).toBe(true);
   expect(
     payload.evolution.deleted.every((handle) => sourceFaces.has(handle))
@@ -283,13 +298,18 @@ describe('topology-lineage kernel spike', () => {
       );
       verifyCompleteBrepEvolution(kernel, [primitive], fillet);
       expect(kernel.validateSolidRelaxed(fillet.solid)).toBe(0);
-      // The blend band used to arrive as one GENERATED face with no source.
-      // Under GFA face provenance it is reported as a MODIFIED result of both
-      // faces the rounded edge separated, and nothing is generated at all.
-      // Recording the count alone would say nothing about whether the new
-      // attribution is right, so the claim asserted is the attribution: the
-      // band's face is listed under exactly the two source faces that shared
-      // the selected edge, and under no others.
+      // The blend band is a new face, and the kernel names where it came from:
+      // it arrives under GENERATED, listed against both faces the rounded edge
+      // separated, because it was built between them and both are its origin.
+      // `generated` is an adjacency record rather than an identity, so naming
+      // two sources for one new face is the ordinary case.
+      //
+      // A band is deliberately never listed under MODIFIED: it is no input
+      // face cut back, and a selection stored against one of those faces must
+      // not silently acquire it. Recording the count alone would say nothing
+      // about whether the attribution is right, so the claim asserted is the
+      // attribution — checked against the solid's own adjacency, not against
+      // another reading of the same evolution record.
       const bandFaces = Array.from(kernel.getSolidFaces(fillet.solid)).filter(
         (face) => kernel.getSurfaceType(face) === 'cylinder'
       );
@@ -301,11 +321,22 @@ describe('topology-lineage kernel spike', () => {
         Array.from(kernel.getFaceEdges(face)).includes(selectedEdge)
       );
       expect(facesOnSelectedEdge).toHaveLength(2);
-      const bandSources = Object.entries(fillet.evolution.modified)
+      const bandSources = Object.entries(fillet.evolution.generated)
         .filter(([, results]) => results.includes(band))
         .map(([source]) => Number(source));
       expectSameSet(bandSources, facesOnSelectedEdge);
-      expect(Object.values(fillet.evolution.generated).flat()).toHaveLength(0);
+      // The band is the only face the fillet adds, and it is not any input
+      // face's continuation.
+      expectSameSet(Object.values(fillet.evolution.generated).flat(), [band]);
+      expect(Object.values(fillet.evolution.modified).flat()).not.toContain(
+        band
+      );
+      // Which faces are modified is already settled above, against the box's
+      // own face list. What is asserted here is that rounding one edge trims
+      // those faces without splitting any: each arrives as exactly one face.
+      for (const results of Object.values(fillet.evolution.modified)) {
+        expect(results).toHaveLength(1);
+      }
       // No source face disappears when a single edge is rounded.
       expect(fillet.evolution.deleted).toEqual([]);
 
