@@ -173,6 +173,7 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
 
   beforeAll(async () => {
     openSans = await library.load('open-sans', 'regular');
+    await library.load('inter', 'regular');
     setTextFontProvider((family, style) => library.peek(family, style));
     adapter = await createExactKernelAdapter();
   });
@@ -276,12 +277,62 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     const body = bodyOf(derived);
     const surfaces = body.topology?.faces ?? [];
     expect(surfaces.length).toBeGreaterThan(0);
+
+    // The direct statement of the claim, not a proxy for it: every wall of a
+    // curved glyph must be a spline surface, and the only planes may be the
+    // two caps. Volume alone would not catch this — a fine enough polygon
+    // reproduces the volume to well inside the tolerance below.
+    const set = buildTextProfileSet(openSans, { text: 'o', size: 20 });
+    const bezierWalls = [set.regions[0]!.outer, ...set.regions[0]!.holes]
+      .flatMap((loop) => loop.segments)
+      .filter((segment) => segment.kind !== 'line').length;
+    expect(bezierWalls).toBeGreaterThan(0);
+    const byType = surfaces.reduce<Record<string, number>>((counts, face) => {
+      const type = face.geometry?.surfaceType ?? 'unknown';
+      counts[type] = (counts[type] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(byType.plane ?? 0).toBe(2);
+    expect(byType.bspline ?? 0).toBeGreaterThanOrEqual(bezierWalls);
+
     // Open Sans's 'o' is 12 quadratics outside and 12 inside; a faceted
     // build would need hundreds of walls to hit the same volume.
     expect(body.faceCount).toBeLessThan(40);
     expect(
       volumeRatio(body, textArea(openSans, 'o') * EXTRUDE_DEPTH)
     ).toBeCloseTo(1, 4);
+  });
+
+  it("says so when a font's own overlaps cost it its curves", async () => {
+    // The common flattening path, and the one the plan did not anticipate:
+    // real fonts draw a glyph as overlapping strokes inside one
+    // self-intersecting contour. A B-Rep face cannot take that, so those
+    // glyphs go through the polygon union — which works on polylines and
+    // returns polylines. Inter has 36 such glyphs in ASCII; Open Sans has
+    // none. Identical documents, identical letter, opposite outcomes.
+    const interScene = textScene('e');
+    const interDocument = updateSketchObject(interScene.document, {
+      sketchId: interScene.sketchId,
+      objectId: interScene.textObjectId,
+      data: textObject('e', { fontFamily: 'inter' })
+    });
+
+    const flattened = await adapter.syncDocument(interDocument);
+    expect(flattened.warnings.join('\n')).toContain(
+      "reached the kernel as polylines rather than the font's own curves"
+    );
+    const flattenedFaces = bodyOf(flattened).topology?.faces ?? [];
+    expect(
+      flattenedFaces.filter((face) => face.geometry?.surfaceType === 'bspline')
+    ).toHaveLength(0);
+
+    const exact = await adapter.syncDocument(textScene('e').document);
+    expect(exact.warnings).toEqual([]);
+    const exactFaces = bodyOf(exact).topology?.faces ?? [];
+    expect(
+      exactFaces.filter((face) => face.geometry?.surfaceType === 'bspline')
+        .length
+    ).toBeGreaterThan(0);
   });
 
   it('regenerates after the string is edited, with no broken reference', async () => {
@@ -416,9 +467,17 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     expect(closure.nonManifoldEdges).toBe(0);
     expect(meshComponents(body)).toBe(1);
 
-    // Whatever the kernel does here, the census must have an opinion that
-    // agrees with the face count. This asserts the two are consistent rather
-    // than pinning a kernel behaviour that may improve.
+    // The emboss volume is closed form, and it is the assertion that actually
+    // constrains the result: the slab, plus the part of the text prism that
+    // stands above it. The text sketch sits 2 mm up and is extruded 5 mm, so
+    // 2 mm of every glyph prism is buried in the 4 mm slab.
+    const glyphArea = textArea(openSans, 'TEXT');
+    const expected = 120 * 40 * 4 + glyphArea * EXTRUDE_DEPTH - glyphArea * 2;
+    expect(volumeRatio(body, expected)).toBeCloseTo(1, 5);
+
+    // Separately, the census must have an opinion that agrees with the face
+    // count. This asserts the two are consistent rather than pinning a kernel
+    // behaviour that may improve.
     const facetWarnings = derived.warnings.filter((warning) =>
       warning.includes('faces')
     );
@@ -437,12 +496,16 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     setBezierProfileEdges(false);
     try {
-      const fallback = bodyOf(await adapter.syncDocument(scene.document));
-      // Silent degradation is forbidden: taking the fallback says so.
-      expect(warn).toHaveBeenCalled();
-      expect(warn.mock.calls.flat().join('\n')).toContain(
+      const derived = await adapter.syncDocument(scene.document);
+      const fallback = bodyOf(derived);
+      // Silent degradation is forbidden, and "not silent" has to mean the
+      // user can see it. The geometry kernel runs in a Web Worker, so a
+      // `console.warn` reaches nobody — the warning has to land on the
+      // document, the same channel the boolean face census uses.
+      expect(derived.warnings.join('\n')).toContain(
         'flattened to line segments instead of exact NURBS edges'
       );
+      expect(warn).not.toHaveBeenCalled();
       // The fallback is a real degradation: the same letter now needs far
       // more walls, and its volume is a polygon's, slightly under the curve.
       expect(fallback.faceCount).toBeGreaterThan(exact.faceCount * 3);
