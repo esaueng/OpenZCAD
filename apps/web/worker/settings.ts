@@ -2,7 +2,9 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   nowIso,
+  PANEL_WIDTH_LIMITS,
   type AppSettings,
+  type PanelWidthLimits,
   type AppSettingsResponse,
   type AssistantCredentialMetadata,
   type AssistantProvider,
@@ -91,6 +93,18 @@ function optionalMember<T extends string>(
   return typeof value === 'string' && allowed.includes(value as T)
     ? (value as T)
     : fallback;
+}
+
+/**
+ * A panel width from a client that may predate the preference, or postdate this
+ * Worker's limits. Chrome geometry is cosmetic, so an absent or out-of-range
+ * width is clamped rather than made a reason to reject the whole save.
+ */
+function optionalPanelWidth(value: unknown, limits: PanelWidthLimits): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return limits.default;
+  }
+  return Math.round(Math.min(limits.max, Math.max(limits.min, value)));
 }
 
 function requiredNumber(
@@ -224,6 +238,8 @@ export function parseUpdateAppSettingsRequest(
   const settings = asRecord(root.settings, '"settings"');
   const general = asRecord(settings.general, '"settings.general"');
   const appearance = asRecord(settings.appearance, '"settings.appearance"');
+  // Layout widths are optional in the payload so older clients keep saving.
+  const layout = asRecord(settings.layout ?? {}, '"settings.layout"');
   const viewport = asRecord(settings.viewport, '"settings.viewport"');
   const sketching = asRecord(settings.sketching, '"settings.sketching"');
   const assistant = asRecord(settings.assistant, '"settings.assistant"');
@@ -251,6 +267,16 @@ export function parseUpdateAppSettingsRequest(
         theme: requiredMember(appearance, 'theme', THEMES),
         density: requiredMember(appearance, 'density', DENSITIES),
         reducedMotion: requiredBoolean(appearance, 'reducedMotion')
+      },
+      layout: {
+        sidebarWidth: optionalPanelWidth(
+          layout.sidebarWidth,
+          PANEL_WIDTH_LIMITS.sidebar
+        ),
+        assistantWidth: optionalPanelWidth(
+          layout.assistantWidth,
+          PANEL_WIDTH_LIMITS.assistant
+        )
       },
       viewport: {
         defaultProjection: requiredMember(
