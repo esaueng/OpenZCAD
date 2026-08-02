@@ -783,7 +783,15 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       body.mesh.indices
     );
 
-    expect(derived.warnings).toEqual([]);
+    // A 1 µm overlap between two cylinders is the sliver case, and the kernel
+    // silently answers it with a faceted approximation: two exact cylindrical
+    // surfaces become 193 planar faces, and the volume lands ~0.08 % low.
+    // Closure, validity and volume all still pass — the face-count census is
+    // the only thing that sees it, which is why it exists.
+    expect(derived.warnings).toEqual([
+      expect.stringContaining('faceted approximation instead of exact surfaces')
+    ]);
+    expect(derived.warnings[0]).toContain('0 curved');
     expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
     expect(body.volume).toBeGreaterThan(0);
     // Runs in under a second locally but has tripped the 5 s default on slow
@@ -833,7 +841,10 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       body.mesh.indices
     );
 
-    expect(derived.warnings).toEqual([]);
+    // Exact face contact degrades the same way the 1 µm sliver above does.
+    expect(derived.warnings).toEqual([
+      expect.stringContaining('faceted approximation instead of exact surfaces')
+    ]);
     expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
     expect(body.volume).toBeGreaterThan(0);
   });
@@ -2006,7 +2017,8 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       filletedEdge[5]! - filletedEdge[2]!
     );
     expect(edgeLength).toBeCloseTo(7, 9);
-    const analyticFilletVolume = 504 - (1 - Math.PI / 4) * 0.5 * 0.5 * edgeLength;
+    const analyticFilletVolume =
+      504 - (1 - Math.PI / 4) * 0.5 * 0.5 * edgeLength;
     expect(analyticFilletVolume).toBeCloseTo(503.6244467862, 9);
     // The band is now the EXACT quarter cylinder, not a B-spline fitted just
     // inside it, so this asserts the closed form rather than a recorded
@@ -3450,12 +3462,11 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       );
     const long = topOfLength(80)[0]!;
     const sharesEndpoint = (a: number[], b: number[]): boolean => {
-      const ends = (points: number[]) => [
-        points.slice(0, 3),
-        points.slice(-3)
-      ];
+      const ends = (points: number[]) => [points.slice(0, 3), points.slice(-3)];
       return ends(a).some((p) =>
-        ends(b).some((q) => Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!) < 1e-6)
+        ends(b).some(
+          (q) => Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!) < 1e-6
+        )
       );
     };
     const short = topOfLength(60).find((edge) =>
@@ -3472,9 +3483,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
 
     const plateVolume = derived.bodyRepresentations[bodyId]!.volume;
     const plateClosedForm = 80 * 60 * 6 - Math.PI * 2.25 ** 2 * 6;
-    expect(Math.abs(plateVolume - plateClosedForm) / plateClosedForm).toBeLessThan(
-      1e-5
-    );
+    expect(
+      Math.abs(plateVolume - plateClosedForm) / plateClosedForm
+    ).toBeLessThan(1e-5);
 
     const filletPlate = async (
       name: string,
@@ -3493,7 +3504,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         body: result.bodyRepresentations[candidate.bodyOrder.at(-1)!]
       };
     };
-    const watertight = (body: { mesh: { vertices: number[]; indices: number[] } }) =>
+    const watertight = (body: {
+      mesh: { vertices: number[]; indices: number[] };
+    }) =>
       isClosedConsistentlyOrientedMesh(
         inspectTriangleMeshClosure(body.mesh.vertices, body.mesh.indices)
       );
@@ -3505,7 +3518,11 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         .sort();
 
     // --- the corner chain: used to be refused at every radius ---------------
-    const corner = await filletPlate('Corner fillet', [long.hash, short.hash], 2);
+    const corner = await filletPlate(
+      'Corner fillet',
+      [long.hash, short.hash],
+      2
+    );
     expect(corner.warnings).toEqual([]);
     const cornerClosure = inspectTriangleMeshClosure(
       corner.body!.mesh.vertices,
@@ -3530,12 +3547,11 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       'plane',
       'sphere'
     ]);
-    const cornerBands = corner
-      .body!.topology!.faces.filter(
-        (face) =>
-          face.geometry?.surfaceType === 'cylinder' &&
-          Math.abs((face.geometry.radius ?? 0) - 2) < 1e-9
-      );
+    const cornerBands = corner.body!.topology!.faces.filter(
+      (face) =>
+        face.geometry?.surfaceType === 'cylinder' &&
+        Math.abs((face.geometry.radius ?? 0) - 2) < 1e-9
+    );
     expect(cornerBands).toHaveLength(2);
     // The vertex patch is a sphere of the blend radius, not an approximation.
     const cornerPatch = corner.body!.topology!.faces.filter(
@@ -3673,10 +3689,15 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       // octant, so the corner cube gives up 8 - pi r^3 / 6 of its volume.
       const cornerPatch = 8 - (Math.PI * 8) / 6;
       const removedBy = (handles: number[], size: number) =>
-        boxVolume - converged(kernel.fillet(box, Uint32Array.from(handles), size));
+        boxVolume -
+        converged(kernel.fillet(box, Uint32Array.from(handles), size));
       // 1e-4 relative: the converged mesh still carries ~1e-5 of residue on a
       // curved band, and every gap below is orders of magnitude larger.
-      const removes = (label: string, handles: number[], closedForm: number) => {
+      const removes = (
+        label: string,
+        handles: number[],
+        closedForm: number
+      ) => {
         const measured = removedBy(handles, 2);
         expect
           .soft(
