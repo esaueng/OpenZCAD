@@ -84,6 +84,31 @@ export function lineObjectFromPoints(
   return { objectKind: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
 }
 
+/** Placeholder string a freshly placed text object carries. */
+export const DEFAULT_TEXT_CONTENT = 'Text';
+/** Em size, in model units, for a freshly placed text object. */
+export const DEFAULT_TEXT_SIZE = 10;
+/** Family a freshly placed text object uses. */
+export const DEFAULT_TEXT_FAMILY = 'open-sans';
+
+/**
+ * Text is placed with a single click rather than a drag: its extent comes from
+ * the string and the em size, not from how far the pointer travelled, so there
+ * is nothing for a drag to mean. The click sets the baseline origin and the
+ * Inspector takes over from there.
+ */
+export function textObjectFromPoint(point: SketchPoint): SketchObjectData {
+  return {
+    objectKind: 'text',
+    text: DEFAULT_TEXT_CONTENT,
+    fontFamily: DEFAULT_TEXT_FAMILY,
+    fontStyle: 'regular',
+    size: DEFAULT_TEXT_SIZE,
+    x: point.x,
+    y: point.y
+  };
+}
+
 function positiveSweep(startAngle: number, endAngle: number): number {
   let sweep = (endAngle - startAngle) % (Math.PI * 2);
   if (sweep < 0) {

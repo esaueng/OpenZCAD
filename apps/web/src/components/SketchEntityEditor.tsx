@@ -4,6 +4,7 @@ import type { SketchObjectData } from '@openzcad/shared';
 import { Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
+import { TextObjectFields, type TextAttributes } from './TextObjectFields';
 
 interface SketchEntityEditorProps {
   data: SketchObjectData;
@@ -70,21 +71,21 @@ function initialValues(data: SketchObjectData): Record<string, string> {
 
 function nextData(
   data: SketchObjectData,
-  values: Record<string, string>
+  values: Record<string, string>,
+  text: TextAttributes | null
 ): SketchObjectData {
   const value = (key: string) => coerceParamValue(values[key] ?? '');
   const kind = data.objectKind;
   switch (kind) {
     case 'text':
       // Every case spreads `...data` first. The fields this editor exposes
-      // are then overwritten, and everything else survives — the `text`,
-      // `fontFamily` and `fontStyle` of a text object, which are not
-      // expression fields, and `construction` on any kind. Rebuilding a fresh
-      // object literal instead silently un-marked construction geometry the
-      // moment its radius was edited.
+      // are then overwritten, and everything else survives — `construction`
+      // on any kind. Rebuilding a fresh object literal instead silently
+      // un-marked construction geometry the moment its radius was edited.
       return {
         ...data,
         objectKind: kind,
+        ...(text ?? {}),
         size: value('size'),
         x: value('x'),
         y: value('y')
@@ -195,6 +196,15 @@ export function SketchEntityEditor({
   onClose
 }: SketchEntityEditorProps) {
   const [values, setValues] = useState(() => initialValues(data));
+  const [textAttrs, setTextAttrs] = useState<TextAttributes | null>(() =>
+    data.objectKind === 'text'
+      ? {
+          text: data.text,
+          fontFamily: data.fontFamily,
+          fontStyle: data.fontStyle
+        }
+      : null
+  );
   const fields = FIELDS[data.objectKind];
   const expressionsValid = fields.every(
     ({ key }) => previewExpression(values[key] ?? '', scope).ok
@@ -207,7 +217,7 @@ export function SketchEntityEditor({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (valid) {
-      onApply(nextData(data, values));
+      onApply(nextData(data, values, textAttrs));
     }
   }
 
@@ -231,6 +241,9 @@ export function SketchEntityEditor({
           <X size={14} aria-hidden="true" />
         </button>
       </header>
+      {textAttrs && (
+        <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
+      )}
       <div className="sketch-entity-fields">
         {fields.map(({ key, label }) => (
           <ExprInput

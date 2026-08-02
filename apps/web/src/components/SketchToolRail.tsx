@@ -7,6 +7,7 @@ import {
   Minus,
   ScanSearch,
   Square,
+  Type,
   Waypoints
 } from 'lucide-react';
 import type { SketchToolId } from '../lib/interaction/machine';
@@ -31,7 +32,8 @@ const TOOLS: {
   { id: 'line', label: 'Line', keyHint: 'L', icon: Minus },
   { id: 'arc', label: 'Arc', keyHint: 'A', icon: Waypoints },
   { id: 'circle', label: 'Circle', keyHint: 'C', icon: Circle },
-  { id: 'rectangle', label: 'Rectangle', keyHint: 'R', icon: Square }
+  { id: 'rectangle', label: 'Rectangle', keyHint: 'R', icon: Square },
+  { id: 'text', label: 'Text', keyHint: 'T', icon: Type }
 ];
 
 /**
