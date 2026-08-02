@@ -4147,7 +4147,8 @@ export function App() {
         sketchId: region.sketchId,
         regionFingerprint: region.regionFingerprint,
         samplePoint: region.samplePoint,
-        area: region.area
+        area: region.area,
+        sourceEntityIds: region.sourceEntityIds
       }
     });
     setStatus(
@@ -4207,7 +4208,11 @@ export function App() {
                 min: target.samplePoint,
                 max: target.samplePoint
               },
-              sourceEntityIds: [],
+              // The target's source entities, not [] — over a text region this
+              // is what lets profileReferencesForSelection store the
+              // entity-wide reference, so a drag-extruded label still rebuilds
+              // after its string is edited.
+              sourceEntityIds: target.sourceEntityIds,
               area: target.area
             }
           ];
