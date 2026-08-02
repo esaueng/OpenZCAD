@@ -1324,6 +1324,27 @@ it handed back the pre-delete answer. "Fails loud" is exactly the property
 that decays to silence without anyone noticing, and nothing else in the suite
 was watching it.
 
+**Units are sound, and that closes the sweep.** Geometry is built in raw
+document units, `volume` reports cubic document units — a 10-cube measures
+1000 in every setting — and only *export* converts, since an STL carries no
+unit field. Measured across all four systems the exported spans are 10 / 100 /
+10000 / 254 mm, so changing a document's units **reinterprets** the model
+rather than converting it, at exactly 25.4× for mm → inch. That is standard
+document-unit behaviour. It is pinned in `test/stl-export-fidelity.test.ts`
+anyway, because the conversion is a single multiplication whose loss would
+export an inch document 25.4× too small with every check still passing and no
+number on screen looking wrong.
+
+Nothing product-facing is left unswept. Mesh and STEP **import** were already
+covered before this pass and were deliberately not re-probed —
+`test/imported-mesh.test.ts` and `test/imported-step-validation.test.ts`
+between them pin refusal-by-name, open-shell rejection, non-manifold
+rejection, STL round-trip and inch scaling. (The units pin above does overlap
+one of those cases; it sweeps four systems on a primitive where the existing
+test covers inch on a mesh import.) Checking first is the point: an earlier
+probe in this pass duplicated existing parametric-rebuild coverage before
+anyone noticed.
+
 **Cleared in the same sweep**, recorded so neither defect is read wider than
 it is: `booleanBodies` union *does* fuse (two identical coincident boxes
 report 8000, not 16000), STEP round trip is exact (a bored cylinder reads
