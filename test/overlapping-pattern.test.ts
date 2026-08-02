@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
-  patternBody
+  patternBody,
+  transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
@@ -148,4 +149,66 @@ describe('a linear pattern whose instances overlap', () => {
     const { volume } = await patterned(0.5);
     expect(volume / trueUnion(0.5)).toBeGreaterThan(11.7);
   }, 120_000);
+
+  /**
+   * Not a linear-pattern quirk. A CIRCULAR pattern does the same thing, which
+   * matters to whoever fixes this: the gap is in `pattern` itself, not in the
+   * linear arm.
+   *
+   * Six r5 cylinders seated 6 from the axis put adjacent centres
+   * 2 * 6 * sin(30deg) = 6 apart, so every neighbour overlaps. Twelve puts
+   * them 2 * 6 * sin(15deg) = 3.106 apart, which is heavy overlap.
+   *
+   *   count   app prints   sum of instances   faces
+   *   6       4712.389     4712.389           18
+   *   12      9424.778     9424.778           36
+   *
+   * Faces are exactly three per instance in both, so nothing is fused here
+   * either. The closed form for the true union of a ring of overlapping
+   * cylinders is not written out, so these assert the sum and the face count
+   * rather than the error -- enough to show the same gap without pretending
+   * to a reference this file does not derive.
+   */
+  const circular = async (count: number) => {
+    adapter ??= await createExactKernelAdapter();
+    let document = createProjectDocument('Circular', toUserId('user_pattern'));
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: RADIUS, height: HEIGHT }
+    });
+    const id = document.bodyOrder.at(-1)!;
+    document = transformBody(document, {
+      name: 'Seat it off the axis',
+      targetBodyId: id,
+      translation: { x: 6, y: 0, z: 0 }
+    }).document;
+    document = patternBody(document, {
+      name: 'Patterned',
+      targetBodyId: id,
+      patternKind: 'circular',
+      count,
+      axis: { x: 0, y: 0, z: 1 },
+      angleDeg: 360
+    }).document;
+    const derived = await adapter.syncDocument(document);
+    const body = derived.bodyRepresentations[document.bodyOrder.at(-1)!]!;
+    return {
+      volume: body.volume,
+      faces: body.topology?.faces.length ?? 0,
+      warnings: derived.warnings
+    };
+  };
+
+  it.each([6, 12])(
+    'sums a circular pattern of %s overlapping instances too',
+    async (count) => {
+      const { volume, faces, warnings } = await circular(count);
+      expect(volume).toBeCloseTo(count * ONE, 6);
+      // Three faces per instance: side plus two caps, none of them merged.
+      expect(faces).toBe(3 * count);
+      expect(warnings).toEqual([]);
+    },
+    120_000
+  );
 });
