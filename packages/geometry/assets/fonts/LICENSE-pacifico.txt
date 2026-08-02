@@ -5,7 +5,7 @@ Attribution below is copied verbatim from the font binary name table
 
 Copyright 2018 The Pacifico Project Authors (https://github.com/googlefonts/Pacifico)
 
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
+Licensed under OFL-1.1.
 
 http://scripts.sil.org/OFL
 

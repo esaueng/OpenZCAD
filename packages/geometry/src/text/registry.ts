@@ -9,9 +9,9 @@
  *
  * Binaries and their per-family licence texts live in
  * `packages/geometry/assets/fonts/`, refreshed by
- * `scripts/fetch-text-fonts.mjs`. All seven families are SIL OFL 1.1; the
- * copyright line in each `LICENSE-*.txt` is copied out of the font's own name
- * table rather than transcribed by hand.
+ * `scripts/fetch-text-fonts.mjs`. Six families are SIL OFL 1.1 and Roboto Slab
+ * is Apache-2.0 — the licence recorded here comes from each font's own name
+ * table, not from an assumption that everything on Google Fonts is OFL.
  */
 import type { FontStyle } from './types';
 
@@ -24,13 +24,16 @@ export interface FontFaceAsset {
   readonly italic: boolean;
 }
 
+export type FontLicense = 'OFL-1.1' | 'Apache-2.0';
+
 export interface FontFamilyEntry {
   /** Stable identifier persisted in the document. */
   readonly id: string;
   /** Display name, also the CSS family name for UI previews. */
   readonly family: string;
   readonly category: 'sans-serif' | 'serif' | 'monospace' | 'display' | 'script';
-  readonly license: 'OFL-1.1';
+  /** Taken from the font binary's licence URL; asserted by a test. */
+  readonly license: FontLicense;
   /** File name of the bundled licence text for this family. */
   readonly licenseFile: string;
   readonly faces: readonly FontFaceAsset[];
@@ -52,13 +55,14 @@ function family(
   id: string,
   name: string,
   category: FontFamilyEntry['category'],
-  styles: readonly FontStyle[]
+  styles: readonly FontStyle[],
+  license: FontLicense = 'OFL-1.1'
 ): FontFamilyEntry {
   return {
     id,
     family: name,
     category,
-    license: 'OFL-1.1',
+    license,
     licenseFile: `LICENSE-${id}.txt`,
     faces: styles.map((style) => face(style, `${id}-${style.toLowerCase()}.ttf`))
   };
@@ -79,7 +83,7 @@ export const FONT_FAMILIES: readonly FontFamilyEntry[] = Object.freeze([
   family('inter', 'Inter', 'sans-serif', ALL_STYLES),
   family('open-sans', 'Open Sans', 'sans-serif', ALL_STYLES),
   family('lora', 'Lora', 'serif', ALL_STYLES),
-  family('roboto-slab', 'Roboto Slab', 'serif', ['regular', 'bold']),
+  family('roboto-slab', 'Roboto Slab', 'serif', ['regular', 'bold'], 'Apache-2.0'),
   family('jetbrains-mono', 'JetBrains Mono', 'monospace', ALL_STYLES),
   family('oswald', 'Oswald', 'display', ['regular', 'bold']),
   family('pacifico', 'Pacifico', 'script', ['regular'])
