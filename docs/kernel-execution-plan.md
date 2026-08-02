@@ -844,16 +844,52 @@ what a wedge's cut-plane edges do, sitting at a numerical zero of ~1e-16. Those
 two edges were unselectable for every downstream feature, not just fillet.
 Fixed additively: `edgeHandlesByFingerprint` now registers the witness hash
 alongside the fingerprint and the legacy scheme, so no persisted hash changes.
-With that fixed the count is a true 12/12 refused, at every radius from 0.4
+With that fixed the count was a true 12/12 refused, at every radius from 0.4
 down to 0.002 — so the pre-existing "Try a smaller radius" advice was false at
 every radius. `edgeModifierFailureMessage` now names the wedge, and only after
 the size ladder has failed.
 
-*Scale invariance does not hold at 0.001× for a partial revolve.* At 1× and
-1000× the volume matches the closed form to 1e-16. Below roughly 5e-3 model
-units it goes **low** by a fixed relative amount per sweep angle — 1.30e-5 at
-45°, 1.70e-5 at 90°, 2.76e-5 at 180°, 3.45e-5 at 270°, 3.43e-5 at 359° —
-identical at 2e-3, 1e-3 and 5e-4, so it is a threshold rather than drift. The
+**Superseded once the pin carried brepkit#59: it is 10 of 12, and the two
+that stopped refusing are worse than the refusal they replaced.** Filleting
+either at r=0.1 returns a body with **more than twice** the correct volume —
+5π/4 = 3.926990816987242 becomes **7.989887134262642**, +103 %, where a
+fillet that size should move the volume by about 0.008. The mesh agrees with
+the measurement, so the *solid* is wrong rather than its integrator, and both
+edges give the identical value to twelve significant figures, so it is
+structural rather than drift. Zero warnings. A clean refusal became a silent
+corruption, and it is newly reachable — before #59 the wrong answer could not
+be produced at all. Whether #59 introduced the bad blend or merely un-gated a
+latent one is **not** established; only the reachability change is measured.
+The wedge refusal message is also now false for those two edges. Pinned in
+`test/partial-revolve.test.ts` as a plain test, with the count kept as a count
+rather than softened to an `every`, so the 10/2 split stays visible.
+
+*Scale invariance does not hold at small model scales for a partial revolve,
+and the threshold is **angle-dependent** — an earlier reading of this as "below
+roughly 5e-3" was wrong for three of the four angles.* At 1× and 1000× the
+volume matches the closed form to 1e-16. Measured:
+
+| scale | 45° | 90° | 180° | 270° |
+| --- | --- | --- | --- | --- |
+| 1e-2 | exact | exact | exact | exact |
+| 5e-3 | **1.2985e-5** | exact | exact | exact |
+| 3e-3 | 1.2985e-5 | exact | exact | exact |
+| 2e-3 | 1.2985e-5 | **1.6967e-5** | **2.7593e-5** | **3.4452e-5** |
+| 1e-3 | 1.2985e-5 | 1.6967e-5 | 2.7593e-5 | 3.4452e-5 |
+| 5e-4 | 1.2985e-5 | 1.6967e-5 | 2.7593e-5 | 3.4452e-5 |
+
+45° breaks at 5e-3 while the other three are still exact there *and* at 3e-3,
+breaking only at 2e-3; each then saturates past its **own** threshold to five
+significant figures. That angle-dependence settles a question left open when
+#59 landed: this is **not** the same defect as #59's `Tolerance::linear /
+min_radius` note, because that ratio is angle-independent — the profile's inner
+radius is 2·scale whatever the sweep — and would break all four angles
+together. The pattern instead fits a segment count driven by an absolute
+sagitta tolerance and **floored** at a minimum: a smaller sweep needs fewer
+segments to meet the same sagitta, so it reaches the floor sooner, at a larger
+model scale. Same defect class as the recurring absolute-length constants,
+different site. The call site is not located, and the account is characterized
+from the app side only. The
 **full** revolve of the same profile stays exact to 4e-16 at 1e-3, and
 cylinder, sphere and torus primitives are exact to 1e-16 there, so this is
 specific to the partial sweep. Signature of a chord under-approximation of the
@@ -861,17 +897,36 @@ swept arc bounded by an absolute tolerance inside the kernel — the same class
 as #53's `wire_polygon_sampled`, which was fixed at ordinary scale. Recorded as
 a characterization test; not app-fixable.
 
-*New, and the one that should block enabling this by default: **every partial
-revolve comes back with a reversed shell.*** The solid is valid and its volume
-is right, and the mesh is closed and consistently wound — but wound **inward**.
-Signed mesh volume is negative at 45°, 90°, 180°, 270°, 359° and 359.99°, and
-positive at exactly 360. `writeAsciiStl` computes facet normals from the
-winding, so a wedge **exports to STL inside-out**: measured −3.914 signed
-volume on a 90° wedge against +15.391 for the full revolve of the same profile.
-This is a BrepKit `revolve` orientation bug. It is deliberately not patched
-app-side — flipping a shell by a signed-volume heuristic in the middle of the
-lineage path is precisely the plausible-but-wrong change this document exists
-to prevent — but it is characterized so it cannot regress silently.
+*Was: "every partial revolve comes back with a reversed shell". **Fixed by
+brepkit#59, and the characterization was wrong twice.*** The observation held —
+signed mesh volume was negative at 45°, 90°, 180°, 270°, 359° and 359.99° and
+positive at exactly 360, so a wedge exported to STL inside-out, since
+`writeAsciiStl` derives facet normals from the winding. Declining to patch it
+app-side was right: flipping a shell by a signed-volume heuristic mid-lineage
+is precisely the plausible-but-wrong change this document exists to prevent.
+
+But the *diagnosis* was wrong in two ways, both established by the fix. It was
+**never partial-only** — the predictor is the sign of
+`input_normal · (axis × ê_r)`, not the sweep angle, so half the configuration
+space was already outward, which is why sampling made it look like a clean
+partial-versus-full split. And **360 is not correct either**; it merely usually
+takes a different path. A holed profile defers both fast paths and reproduces
+the reversal at a full turn, measuring −301.645 against Pappus 96π = 301.593.
+The real cause was the segmented NURBS path orienting each band off
+`du × dv = (profile tangent) × (sweep tangent)` — consistent across the band
+but outward only when `n · s > 0`, which nothing tested.
+
+Why a green suite hid it for so long is the part worth carrying forward:
+`measure::solid_volume` returns the **magnitude** of its integral, so an
+inside-out solid still reports a correct, positive volume. Every volume oracle
+in the suite was blind to it; only a signed *mesh* volume could see it. That
+laundering is tracked as its own defect.
+
+The six characterization cases were **flipped, not relaxed**, and strengthened
+past the sign test they replaced: each now asserts the mesh encloses the Pappus
+volume for its angle to 5e-4 *and* comes in slightly under, since the display
+mesh is inscribed. A bare sign flip would have accepted an outward-wound mesh
+that was wrong.
 
 *Axis-by-selection is separate and starts blocked.* `RevolveAxis` is
 `'horizontal' | 'vertical'` — the sketch basis through the plane origin — and
@@ -1172,6 +1227,77 @@ disjoint body *is* correctly a no-op. And the boundary-edge counts mean
 nothing until vertices are welded by **position**, because this kernel emits
 duplicates at seams and an index-based count reports those as holes; welding
 changed nothing here, which is what makes the counts trustworthy.
+
+#### Sweeping the rest of the toolbar
+
+The two above came from probing defects already known at kernel level. A
+second pass instead swept *every* core modelling workflow through
+`syncDocument` against hand closed forms, with no kernel-side suspicion to
+guide it. That found two more, and cleared several — the clearances matter
+as much as the findings, because they bound what the defects mean.
+
+**A sphere is the one shape booleans and offset get wrong**
+(`test/sphere-operations.test.ts`). Subtracting a tool parked **1000 units
+away** — an operation that cannot touch the target — returns 4176.826
+against `4/3·π·1000` = 4188.790, and replaces both spherical faces with
+**2588 planes**. Offsetting a sphere measures *exactly* right (7238.2295,
+i.e. r=12 to the last digit) and then draws **zero triangles**: a body that
+is in the tree, measures perfectly, and is invisible. No watertightness
+check objects, because zero boundary edges is vacuously true of an empty
+mesh. It reproduces at +0.001, so it is not a tolerance story.
+
+The controls carry the argument. Box, cylinder and torus go through the
+identical path in the same run and are exact under both operations — the
+torus especially, being closed, seamed and doubly periodic. So neither
+defect is about curvature, periodicity or seams. Confirmed against the raw
+kernel too: `cut(makeSphere(10, seg), farBox)` returns 4176.8262 at seg =
+16, 32 **and** 64 alike, which is why this is not a tessellation-resolution
+story; an overlapping cut panics outright and poisons the kernel instance.
+
+**A pattern never fuses overlapping instances**
+(`test/overlapping-pattern.test.ts`). Three r5 h10 cylinders patterned along
+x report **the same volume, mesh, triangle count and face count at every
+spacing from 30 down to 0.5** — 2356.194, which is exactly three whole
+instances. At spacing 0.5 the true union is 199.791, so the app is **11.8×
+over**. Nine faces is three cylinders' worth, so the instances are never
+fused: the body is three interpenetrating solids. Circular patterns do the
+same, which places the gap in `pattern` itself rather than the linear arm.
+
+Three things make it silent, and the second is the one worth fixing:
+
+- no warning at any spacing;
+- **exact B-Rep validation passes**, so the "failed exact B-rep validation"
+  warning never fires on a body that self-intersects;
+- the mesh is self-consistent, because N closed shells are each individually
+  closed — watertightness is satisfied by something that is not one solid.
+
+So it is not only a measurement defect: the viewport draws interpenetrating
+shells and STL export writes a self-intersecting mesh.
+
+**Cleared in the same sweep**, recorded so neither defect is read wider than
+it is: `booleanBodies` union *does* fuse (two identical coincident boxes
+report 8000, not 16000), STEP round trip is exact (a bored cylinder reads
+5717.698630 before and after, equal to its closed form), mirror, shell and
+intersect are exact, and a region extrude honours its inner loops — one
+bore, two bores, and a nested annulus all land on the closed form to 1e-9.
+That last one is now pinned *because* it is correct
+(`test/extrude-inner-loops.test.ts`): inner-wire handling is the most
+repeated defect family in this document, so the one operation that gets it
+right is worth holding still.
+
+*Method notes again, because this pass produced three false alarms before it
+produced a finding.* A cylinder cut that came back **exactly −25.0000 %**
+was not a defect but a transform-matrix layout error — `transformMatrix` is
+row-major with translation at indices 3/7/11, and putting it at 12 leaves
+the tool at the origin where a corner-at-origin box removes precisely one
+quadrant. A torus that refused to build was the wrong dimension keys
+(`majorRadius`/`minorRadius`, not `radius`/`tubeRadius`). And a sketch that
+appeared to ignore every object but the first was the documented contract:
+`extrudeSketch` extrudes `objectIds[0]` alone unless given
+`profile`/`profiles`. Each looked exactly like a kernel defect, and the
+thing that distinguished them was checking the probe before believing the
+result — the same discipline that has corrected roughly half the briefs in
+this document.
 
 ---
 
