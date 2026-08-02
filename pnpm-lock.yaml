@@ -192,6 +192,9 @@ importers:
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
+      opentype.js:
+        specifier: ^2.0.0
+        version: 2.0.0
 
   packages/io-step:
     dependencies:
@@ -223,7 +226,7 @@ importers:
         version: link:../shared
       brepkit-wasm:
         specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/brepkit/tar.gz/f3defc3ff20bba513cf6751c2fab2dfc14095f9d#path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/brepkit/tar.gz/ba3b4a7c3269459a2c994e31489a7a0924962ac3#path:/crates/wasm/pkg
       occt-wasm:
         specifier: 3.8.1
         version: 3.8.1
@@ -1205,8 +1208,8 @@ packages:
     resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
     engines: {node: 20 || >=22}
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/f3defc3ff20bba513cf6751c2fab2dfc14095f9d#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/f3defc3ff20bba513cf6751c2fab2dfc14095f9d}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/ba3b4a7c3269459a2c994e31489a7a0924962ac3#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/ba3b4a7c3269459a2c994e31489a7a0924962ac3}
     version: 2.129.0
 
   buffer-image-size@0.6.4:
@@ -1594,6 +1597,10 @@ packages:
 
   occt-wasm@3.8.1:
     resolution: {integrity: sha512-X8ZGnvxSEdkXwt/cTn+BvZK9LnuK9IGz95il3DeyTERSdO6EoevxjZHIKmbQhBBThxEEpx46y3PCUep6t6oU+Q==}
+
+  opentype.js@2.0.0:
+    resolution: {integrity: sha512-kCyjv6xdDY1W/jLWZ/L3QhhTlKUqDZMQ5+Jdlw12b3dXkKNpYBqqlMMj0YDQPShWFTMwgZI1hG14kN3XUDSg/A==}
+    hasBin: true
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -2723,7 +2730,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/f3defc3ff20bba513cf6751c2fab2dfc14095f9d#path:/crates/wasm/pkg: {}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/ba3b4a7c3269459a2c994e31489a7a0924962ac3#path:/crates/wasm/pkg: {}
 
   buffer-image-size@0.6.4:
     dependencies:
@@ -3097,6 +3104,8 @@ snapshots:
   occt-wasm@3.8.1:
     dependencies:
       comlink: 4.4.2
+
+  opentype.js@2.0.0: {}
 
   optionator@0.9.4:
     dependencies:
