@@ -16,11 +16,83 @@
   background: var(--color-bg);
 }
 
+/*
+  `--sidebar-w` and `--assistant-w` are the widths the user chose, published by
+  the shell. `--sidebar-col-w` and `--assistant-col-w` are what actually gets
+  drawn: the `min()` caps keep the viewport the larger share of a narrow window
+  without touching the stored preference, which comes back at full size the next
+  time there is room for it. The splitters read the drawn widths, so a capped
+  panel still has its handle on its own edge. Keep the fractions in step with
+  `SIDEBAR_VIEWPORT_SHARE` / `ASSISTANT_VIEWPORT_SHARE` in `lib/panelWidths.ts`,
+  which stop a drag past the point where the panel would no longer grow.
+*/
 .workspace {
+  --sidebar-col-w: min(var(--sidebar-w), 30vw);
+  --assistant-col-w: 0px;
+  position: relative;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(360px, 1fr);
+  grid-template-columns: var(--sidebar-col-w) minmax(360px, 1fr);
   background: var(--color-bg);
+}
+
+/* ── Panel splitters ─────────────────────────────────────── */
+
+/*
+  Positioned over the seam rather than placed in the grid: an extra column of
+  in-flow children would have to be declared in every `grid-template-columns`
+  the workspace has, in every breakpoint.
+*/
+.panel-resizer {
+  position: absolute;
+  z-index: var(--z-panel-resizer);
+  top: 0;
+  bottom: 0;
+  width: 11px;
+  cursor: col-resize;
+  /* A touch drag must resize rather than scroll the panel it starts on. */
+  touch-action: none;
+}
+
+.sidebar-resizer {
+  left: var(--sidebar-col-w);
+  transform: translateX(-50%);
+}
+
+.assistant-resizer {
+  right: var(--assistant-col-w);
+  transform: translateX(50%);
+}
+
+/* The seam itself: invisible until it is worth grabbing. */
+.panel-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.panel-resizer[data-dragging='true']::after {
+  background: var(--color-accent);
+}
+
+.panel-resizer:focus-visible {
+  outline: none;
+}
+
+/*
+  While a drag is live the pointer is captured by the splitter, so every other
+  element would otherwise keep showing its own cursor and selecting its text.
+*/
+:root[data-panel-resizing='true'] body {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .viewer-area {

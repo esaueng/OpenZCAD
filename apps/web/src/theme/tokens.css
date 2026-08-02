@@ -76,6 +76,9 @@
   --topbar-h: 44px;
   --toolbar-h: 48px;
   --statusbar-h: 30px;
+  /* Starting widths for the two resizable panels. The workspace republishes
+     both from the user's saved layout, so these are what a fresh profile —
+     or a workspace rendered before settings load — gets. */
   --sidebar-w: 252px;
   --context-w: 330px;
   /* Wide enough for a question card's chips and a dimension audit table. */
@@ -89,6 +92,9 @@
   /* ── Z-index scale ────────────────────────────────────── */
   --z-viewer-overlay: 2;
   --z-inspector-float: 5;
+  /* Above the assistant dock (6 when it floats on a narrow screen), so the
+     seam between the panels stays grabbable whichever way they are laid out. */
+  --z-panel-resizer: 7;
   --z-modal: 50;
   --z-context-menu: 60;
   --z-start-screen: 100;
