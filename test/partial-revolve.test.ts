@@ -289,15 +289,38 @@ describe('partial revolve geometry', () => {
 
   /**
    * CHARACTERIZATION, not an endorsement. Scale invariance fails for a
-   * partial revolve below roughly 5e-3 model units, and only for a partial
-   * revolve: the same profile at 360 stays exact to 4e-16 at 1e-3, and
-   * cylinder / sphere / torus primitives are exact to 1e-16 there too. The
-   * error is a fixed relative amount per sweep angle once the threshold is
-   * crossed — identical at 2e-3, 1e-3 and 5e-4 — and always LOW, the
-   * signature of a chord under-approximation of the swept arc bounded by an
-   * absolute tolerance inside the kernel. Reported upstream; this test exists
-   * so the number cannot drift unnoticed and so nobody "fixes" it by
-   * loosening the 1x and 1000x cases above.
+   * partial revolve at small model scales, and only for a partial revolve:
+   * the same profile at 360 stays exact to 4e-16 at 1e-3, and cylinder /
+   * sphere / torus primitives are exact to 1e-16 there too.
+   *
+   * The threshold is ANGLE-DEPENDENT, which an earlier reading of this
+   * ("below roughly 5e-3 model units") got wrong. Measured:
+   *
+   *   scale   45deg       90deg       180deg      270deg
+   *   1e-2    exact       exact       exact       exact
+   *   5e-3    1.2985e-5   exact       exact       exact
+   *   3e-3    1.2985e-5   exact       exact       exact
+   *   2e-3    1.2985e-5   1.6967e-5   2.7593e-5   3.4452e-5
+   *   1e-3    1.2985e-5   1.6967e-5   2.7593e-5   3.4452e-5
+   *   5e-4    1.2985e-5   1.6967e-5   2.7593e-5   3.4452e-5
+   *
+   * So 45 degrees breaks at 5e-3 while the other three are still exact
+   * there and only break at 2e-3. Once past its OWN threshold each angle
+   * saturates at a fixed relative error, identical to five significant
+   * figures across every smaller scale.
+   *
+   * That angle-dependence is why this is NOT the same thing as brepkit#59's
+   * `Tolerance::linear / min_radius` note. That ratio is angle-independent —
+   * the profile's inner radius is 2*scale whatever the sweep — so it would
+   * break all four angles at the same scale. The observed pattern instead
+   * fits a segment count driven by an absolute sagitta tolerance and floored
+   * at a minimum: a smaller sweep needs fewer segments to meet the same
+   * sagitta, so it reaches the floor sooner, at a LARGER scale. Same defect
+   * class as the recurring absolute-length constants, different site.
+   *
+   * The error is always LOW, consistent with a chord under-approximation of
+   * the swept arc. This test exists so the numbers cannot drift unnoticed
+   * and so nobody "fixes" it by loosening the 1x and 1000x cases above.
    */
   it.each([
     [90, 1.6967e-5],
