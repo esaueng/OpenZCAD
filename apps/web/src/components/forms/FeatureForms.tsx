@@ -67,7 +67,10 @@ function FormShell({
           onCancel();
         }
         // Enter submits from any field, including selects.
-        if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+        if (
+          event.key === 'Enter' &&
+          !(event.target instanceof HTMLButtonElement)
+        ) {
           event.preventDefault();
           if (canSubmit) {
             onSubmit();
@@ -81,7 +84,12 @@ function FormShell({
       </label>
       {children}
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={!canSubmit} title="Enter">
+        <button
+          type="submit"
+          className="primary"
+          disabled={!canSubmit}
+          title="Enter"
+        >
           {submitLabel}
           <kbd className="kbd-inline">↵</kbd>
         </button>
@@ -167,7 +175,11 @@ export function PrimitiveForm({
     name.trim().length > 0 && fieldsValid(scope, Object.values(values));
 
   useEffect(() => {
-    if (kind !== 'cylinder' || liveRadius === undefined || liveRadius === null) {
+    if (
+      kind !== 'cylinder' ||
+      liveRadius === undefined ||
+      liveRadius === null
+    ) {
       return;
     }
     const text = String(Math.round(liveRadius * 1000) / 1000);
@@ -230,11 +242,26 @@ interface SketchFormProps {
   onCancel?: () => void;
 }
 
-/** The form only offers closed one-object profiles; open curves (line/arc) are drawn in the viewport sketch mode. */
+/**
+ * The form only offers closed one-object profiles. Open curves (line/arc) are
+ * drawn in the viewport sketch mode, and text is placed with the text tool.
+ */
 type ClosedShapeKind = Extract<
   SketchObjectKind,
   'rectangle' | 'circle' | 'polygon'
 >;
+
+const CLOSED_SHAPE_KINDS: readonly ClosedShapeKind[] = [
+  'rectangle',
+  'circle',
+  'polygon'
+];
+
+function isClosedShape(
+  data: SketchObjectData
+): data is Extract<SketchObjectData, { objectKind: ClosedShapeKind }> {
+  return CLOSED_SHAPE_KINDS.includes(data.objectKind as ClosedShapeKind);
+}
 
 const SHAPE_LABELS: Record<ClosedShapeKind, string> = {
   rectangle: 'Rectangle',
@@ -253,11 +280,7 @@ export function SketchForm({
   const [plane, setPlane] = useState<PlaneId>(initial?.plane ?? 'XZ');
   const [offset, setOffset] = useState(paramValueText(initial?.offset ?? 0));
   const initialObject =
-    initial &&
-    initial.object.objectKind !== 'line' &&
-    initial.object.objectKind !== 'arc'
-      ? initial.object
-      : undefined;
+    initial && isClosedShape(initial.object) ? initial.object : undefined;
   const [shape, setShape] = useState<ClosedShapeKind>(
     initialObject?.objectKind ?? 'rectangle'
   );
@@ -441,7 +464,12 @@ interface SketchPickerProps {
   autoFocus?: boolean;
 }
 
-function SketchPicker({ sketches, value, onChange, autoFocus }: SketchPickerProps) {
+function SketchPicker({
+  sketches,
+  value,
+  onChange,
+  autoFocus
+}: SketchPickerProps) {
   return (
     <label className="field">
       <span>Sketch</span>
