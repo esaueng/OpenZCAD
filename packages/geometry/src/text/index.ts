@@ -20,7 +20,8 @@ export {
   fontAssetUrl,
   resolveFontStyle,
   type FontFaceAsset,
-  type FontFamilyEntry
+  type FontFamilyEntry,
+  type FontLicense
 } from './registry';
 export {
   FontLibrary,
