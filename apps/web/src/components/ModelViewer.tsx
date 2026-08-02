@@ -73,6 +73,7 @@ import {
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
+  updateStudioGrid,
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
   type AxisProjection,
@@ -834,7 +835,10 @@ export function ModelViewer({
     const shadowCatcher = createShadowCatcher();
     scene.add(shadowCatcher);
 
-    const axes = createAxesGizmo(16, {
+    // Long enough that the far plane, not the geometry, ends each axis — on
+    // screen they run to infinity. Fat lines keep a constant screen-space
+    // width, so the triad stays one crisp stroke at any zoom.
+    const axes = createAxesGizmo(100000, {
       width: renderer.domElement.clientWidth || 1,
       height: renderer.domElement.clientHeight || 1
     });
@@ -3301,6 +3305,7 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       updateOffsetChip();
+      updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
       shadowCatcher.visible = shouldShowGroundShadow(
         context.activeCamera,
         showGridRef.current
