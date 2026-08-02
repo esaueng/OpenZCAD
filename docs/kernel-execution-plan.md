@@ -1448,6 +1448,31 @@ warn is a product decision with its own noise cost. It argues that the
 current regime cannot detect an entire class, so the absence of warnings on
 these bodies is not evidence about them.
 
+**And the class reaches the file the user ships**
+(`test/stl-export-fidelity.test.ts`). `exportStl` performs no mesh validation
+either — it tessellates and writes. Measured from the exported ASCII STL
+rather than from `body.mesh`, which is a different artifact at a coarser
+deflection:
+
+| bore r | UI prints | STL encloses | error | STL open edges |
+|---|---|---|---|---|
+| 3 | 704.263 | **831.109** | **+18.0 %** | **0** |
+| 2 | 750.652 | 804.284 | +7.1 % | 60 |
+| 1 | 802.579 | 818.248 | +2.0 % | 120 |
+
+The first row is the one to sit with. A user drills a shaft, the UI confirms
+704.263, and the exported file is a **watertight** solid enclosing 18 % more
+material with the hole absent. A slicer accepts it and prints the wrong part.
+Watertight is what makes it dangerous rather than merely wrong — the one check
+a slicer performs, this file passes.
+
+Two things stop this being read too narrowly. A body whose **B-rep is exact**
+still exports a leaking file: the capped ball measures 3534.2917 against a
+closed form of 3534.2917 and exports 116 open edges, so fixing the geometry
+would not fix the file. And a plain box exports 12 facets enclosing exactly
+8000 with zero open edges — STL can represent these bodies correctly, so this
+is a pipeline defect and not a property of the format.
+
 ---
 
 ## 6. M5 — Platform (K2, product-sequenced)
