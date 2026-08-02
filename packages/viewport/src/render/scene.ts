@@ -487,9 +487,7 @@ export function createStudioGrid(): THREE.Mesh {
       minorStep: { value: 1 },
       levelFract: { value: 0 },
       minorColor: { value: new THREE.Color('#3d5073') },
-      majorColor: { value: new THREE.Color('#5c78ac') },
-      axisXColor: { value: new THREE.Color('#6d4757') },
-      axisYColor: { value: new THREE.Color('#456352') },
+      majorColor: { value: new THREE.Color('#4e5f7d') },
       fadeRadius: { value: 300 },
       fadeCenter: { value: new THREE.Vector2(0, 0) }
     },
@@ -507,8 +505,6 @@ export function createStudioGrid(): THREE.Mesh {
       uniform float levelFract;
       uniform vec3 minorColor;
       uniform vec3 majorColor;
-      uniform vec3 axisXColor;
-      uniform vec3 axisYColor;
       uniform float fadeRadius;
       uniform vec2 fadeCenter;
 
@@ -524,16 +520,11 @@ export function createStudioGrid(): THREE.Mesh {
         // equals the next-finer tier's weight at f=0, so the step change when
         // the floor increments never moves a line's alpha. Coarser lines
         // always coincide with finer ones, so max() keeps them additive-free.
-        float g0 = gridLine(worldXY, minorStep) * (0.42 * (1.0 - f));
-        float g1 = gridLine(worldXY, minorStep * 10.0) * mix(0.7, 0.42, f);
-        float g2 = gridLine(worldXY, minorStep * 100.0) * mix(1.0, 0.7, f);
-        float g3 = gridLine(worldXY, minorStep * 1000.0);
+        float g0 = gridLine(worldXY, minorStep) * (0.22 * (1.0 - f));
+        float g1 = gridLine(worldXY, minorStep * 10.0) * mix(0.38, 0.22, f);
+        float g2 = gridLine(worldXY, minorStep * 100.0) * mix(0.55, 0.38, f);
+        float g3 = gridLine(worldXY, minorStep * 1000.0) * 0.55;
         float lineA = max(max(g0, g1), max(g2, g3));
-        // Axis lines: X line runs along X at y=0, Y line along Y at x=0.
-        // Pure fwidth width — no world-space pad — so they hold one screen
-        // stroke however deep the zoom goes.
-        float axisX = 1.0 - min(abs(worldXY.y) / (fwidth(worldXY.y) * 1.6), 1.0);
-        float axisY = 1.0 - min(abs(worldXY.x) / (fwidth(worldXY.x) * 1.6), 1.0);
         float fade = 1.0 - smoothstep(
           fadeRadius * 0.45,
           fadeRadius,
@@ -541,12 +532,12 @@ export function createStudioGrid(): THREE.Mesh {
         );
         // Colour follows line strength, which is continuous across rollovers,
         // so hue never pops when a decade demotes from major to minor.
-        vec3 color = mix(minorColor, majorColor, smoothstep(0.42, 1.0, lineA));
+        // No in-plane axis strokes here: the fat-line axis gizmo draws the
+        // world axes, and the grid rendering over it — transparent meshes
+        // sort nearer than the distant line midpoints — would tint and
+        // stipple those lines wherever the two coincide.
+        vec3 color = mix(minorColor, majorColor, smoothstep(0.22, 0.55, lineA));
         float alpha = lineA;
-        color = mix(color, axisXColor, axisX);
-        alpha = max(alpha, axisX);
-        color = mix(color, axisYColor, axisY);
-        alpha = max(alpha, axisY);
         if (alpha * fade < 0.004) discard;
         gl_FragColor = vec4(color, alpha * fade);
       }
@@ -614,29 +605,75 @@ export function updateStudioGrid(
  * other viewport polyline is. Picking stays off — the triad is decoration, and
  * Line2 raycasts against a screen-space radius that would make it an easy
  * accidental hit where the thin native lines were practically unhittable.
+ *
+ * Each axis is a unit segment that `updateAxesGizmo` stretches per frame, so
+ * on screen every axis runs past the viewport edge and reads as infinite. The
+ * length is dynamic rather than a huge constant because LineMaterial's
+ * near-plane trimming visibly corrupts a segment whose far endpoint sits deep
+ * behind the camera — an axis pointing toward the camera would dim to nothing
+ * — while endpoints kept in front of the camera plane render exactly.
  */
-export function createAxesGizmo(
-  size: number,
-  resolution?: FatLineResolution
-): THREE.Group {
+export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
   const group = new THREE.Group();
   group.name = 'axes';
+  // Slightly softened primaries: bold enough to anchor the frame on the dark
+  // studio background without going neon the way pure #f00/#0f0/#00f do.
   const axes = [
-    { direction: new THREE.Vector3(size, 0, 0), color: '#ff0000' },
-    { direction: new THREE.Vector3(0, size, 0), color: '#00ff00' },
-    { direction: new THREE.Vector3(0, 0, size), color: '#0000ff' }
+    { direction: new THREE.Vector3(1, 0, 0), color: '#ee4444' },
+    { direction: new THREE.Vector3(0, 1, 0), color: '#3fbf5f' },
+    { direction: new THREE.Vector3(0, 0, 1), color: '#4477ff' }
   ];
   for (const axis of axes) {
     const line = createFatLine([new THREE.Vector3(), axis.direction], {
       color: axis.color,
-      linewidth: 1.6,
-      opacity: 0.55,
+      linewidth: 1.8,
+      opacity: 0.9,
       resolution
     });
     line.raycast = () => undefined;
+    // Draw after the grid plane. Distance sorting puts these quads at their
+    // distant midpoints — behind everything — and lets the grid's translucent
+    // fragments wash over them.
+    line.renderOrder = 1;
+    line.frustumCulled = false;
+    line.userData.axisDirection = axis.direction.clone();
     group.add(line);
   }
   return group;
+}
+
+/** Axis length when nothing constrains it: far past any usable zoom. */
+const AXIS_EXTENT_MAX = 100000;
+
+/**
+ * Per-frame drive for the axis triad. Axes that recede from the camera get
+ * the full extent; an axis pointing toward the camera is clamped to a hair in
+ * front of the camera plane, where its endpoint already projects far outside
+ * the viewport — visually still infinite, numerically still exact.
+ */
+export function updateAxesGizmo(group: THREE.Group, camera: THREE.Camera) {
+  const forward = camera.getWorldDirection(new THREE.Vector3());
+  const originDepth = forward.dot(
+    new THREE.Vector3().sub(camera.getWorldPosition(new THREE.Vector3()))
+  );
+  for (const child of group.children) {
+    const direction = child.userData.axisDirection as
+      | THREE.Vector3
+      | undefined;
+    if (!direction) {
+      continue;
+    }
+    const towardCamera = direction.dot(forward);
+    let extent = AXIS_EXTENT_MAX;
+    if (towardCamera < -1e-6 && originDepth > 0) {
+      // 0.65, not ~1: an endpoint approaching the camera plane projects to
+      // extreme clip coordinates, and the screen-space quad Line2 builds from
+      // them degenerates. At 65% of the way there the endpoint still lands
+      // far outside any viewport, so the axis reads as infinite regardless.
+      extent = Math.min(extent, (originDepth * 0.65) / -towardCamera);
+    }
+    child.scale.setScalar(Math.max(extent, 1e-3));
+  }
 }
 
 /** Invisible floor that only receives soft shadows, grounding the model. */
