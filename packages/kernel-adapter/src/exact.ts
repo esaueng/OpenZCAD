@@ -3383,13 +3383,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
     const outerWire = wireFor(region.outer);
     const holeWires = region.holes.map(wireFor);
-    if (flattened > 0) {
-      // Never silent: a flattened glyph is a visible product regression.
+    if (flattened > 0 && bezierProfileEdgesEnabled()) {
+      // Flattening is the default and is not worth a warning; being asked for
+      // exact edges and silently not producing them is.
       warn(
         bezierFallbackWarning(
-          rightHanded
-            ? 'exact bezier profile edges are disabled'
-            : 'the sketch plane frame is not right-handed',
+          'the sketch plane frame is not right-handed',
           flattened
         )
       );
