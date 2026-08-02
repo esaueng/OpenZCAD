@@ -345,6 +345,32 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     }
   });
 
+  it('refuses the legacy single-profile sweep instead of approximating', async () => {
+    // An extrude with no profile reference sweeps the sketch's first object
+    // as one polygonal loop. Text is many regions with holes and exact
+    // beziers; that path can express none of it, so it must refuse rather
+    // than quietly build the wrong solid.
+    const created = addSketchFeature(
+      createProjectDocument('Legacy sweep', toUserId('user_text_legacy')),
+      {
+        name: 'Text sketch',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [textObject('O')]
+      }
+    );
+    const document = extrudeSketch(created.document, {
+      name: 'Legacy extrude',
+      sketchId: created.sketchId,
+      distance: EXTRUDE_DEPTH
+    }).document;
+
+    const derived = await adapter.syncDocument(document);
+    expect(Object.keys(derived.bodyRepresentations)).toHaveLength(0);
+    expect(derived.warnings.join('\n')).toContain(
+      'Text must be extruded through its detected sketch regions'
+    );
+  });
+
   it('embosses onto a slab and censuses the faces of the fuse', async () => {
     // The emboss flow: a slab, text extruded above it, fused. Glyph stems
     // are thin and their contact with the slab is coplanar — the sliver case

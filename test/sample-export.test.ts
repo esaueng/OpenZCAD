@@ -2,7 +2,10 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument, getLatestBodyId } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  getLatestBodyId
+} from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -19,9 +22,15 @@ function buildBracket() {
   const manager = new CommandManager(
     createProjectDocument('Parametric Bracket', toUserId('user_sample'))
   );
-  manager.execute(commandFactories.setParameter({ name: 'w', expression: '60' }));
-  manager.execute(commandFactories.setParameter({ name: 't', expression: '8' }));
-  manager.execute(commandFactories.setParameter({ name: 'hole', expression: '6' }));
+  manager.execute(
+    commandFactories.setParameter({ name: 'w', expression: '60' })
+  );
+  manager.execute(
+    commandFactories.setParameter({ name: 't', expression: '8' })
+  );
+  manager.execute(
+    commandFactories.setParameter({ name: 'hole', expression: '6' })
+  );
 
   manager.execute(
     commandFactories.addPrimitive({
@@ -92,7 +101,25 @@ describe('walkthrough bracket sample', { timeout: 30_000 }, () => {
   it('builds a watertight parametric bracket and exports valid STEP', async () => {
     const { manager, bracketBody } = buildBracket();
     const derived = await adapter.syncDocument(manager.document);
-    expect(derived.warnings).toEqual([]);
+    // The face-count census exposes something this sample has always done
+    // silently: fusing the cylindrical boss onto the plate returns a faceted
+    // approximation. Six planar faces plus one cylinder become 69 planar
+    // faces and no curved ones, and the volume lands ~0.06 % low
+    // (23124.47 against an exact 23137.6). The boss visibly protrudes, so a
+    // correct union could not possibly have zero curved faces. Subtracting
+    // the drill from that already-faceted body facets the bore too.
+    //
+    // The committed samples/parametric-bracket.step is therefore faceted.
+    // The assertions below are recording what the kernel does today, not
+    // endorsing it — see the Phase 3 report.
+    expect(derived.warnings).toEqual([
+      expect.stringContaining(
+        'Feature "Plate + Boss": The boolean returned a faceted approximation'
+      ),
+      expect.stringContaining(
+        'Feature "Bracket": The boolean replaced every curved surface'
+      )
+    ]);
     const bracket = derived.bodyRepresentations[bracketBody]!;
     expect(bracket.consumed).toBe(false);
     expect(derived.exportableBodyIds).toEqual([bracketBody]);
