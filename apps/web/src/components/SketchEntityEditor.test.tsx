@@ -107,6 +107,10 @@ describe('SketchEntityEditor', () => {
       fontFamily: 'lora',
       fontStyle: 'bold',
       size: 25,
+      // The editor exposes rotation, so it writes one. An object created
+      // before the field existed carries none, and an apply normalises it to
+      // the 0 it was already behaving as.
+      rotation: 0,
       x: 1,
       y: 2,
       align: 'center'
@@ -182,6 +186,49 @@ describe('SketchEntityEditor', () => {
     expect(screen.getByLabelText('Font')).toBeTruthy();
     expect(screen.getByLabelText('Size')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
+  });
+});
+
+describe('text placement and movement', () => {
+  // Reported from the deployed build: "it just adds the text 'Text', I can't
+  // modify the text at all". Rotation was in the data model and honoured by
+  // the layout, but the editor never exposed it, so text could not be turned
+  // to sit on the face being sketched.
+  it('offers rotation and position, not only size', () => {
+    render(
+      <SketchEntityEditor
+        data={TEXT_OBJECT}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('Rotation')).toBeTruthy();
+    expect(screen.getByLabelText('X')).toBeTruthy();
+    expect(screen.getByLabelText('Y')).toBeTruthy();
+  });
+
+  it('defaults rotation to 0 on an object that predates the field', async () => {
+    // `rotation` is optional, so every text object created before it existed
+    // carries no value. An empty expression input is invalid, which would
+    // disable Apply on an object the user had not even touched.
+    const applied = await applyEdit(TEXT_OBJECT, 'X', '12');
+    expect(applied).toMatchObject({ x: 12, rotation: 0 });
+  });
+
+  it('rotates without disturbing the string or the placement', async () => {
+    const applied = await applyEdit(
+      { ...TEXT_OBJECT, text: 'HELLO', x: 5, y: 7 },
+      'Rotation',
+      '45'
+    );
+    expect(applied).toMatchObject({
+      rotation: 45,
+      text: 'HELLO',
+      x: 5,
+      y: 7
+    });
   });
 });
 
