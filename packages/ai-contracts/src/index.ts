@@ -31,6 +31,29 @@ const TEXT_FONT_STYLES: readonly TextFontStyle[] = [
   'boldItalic'
 ];
 const TEXT_ALIGNMENTS: readonly TextAlign[] = ['left', 'center', 'right'];
+/**
+ * Every bundled font family id, as a constraint rather than a hint.
+ *
+ * `fontFamily` used to be validated only as "a non-empty string", so a
+ * proposal naming `Arial` or `Helvetica` — the obvious guesses — was accepted,
+ * persisted, and only failed at geometry rebuild, with a message about a face
+ * not being loaded that reads like a transient problem rather than an
+ * unsupported font. `fontStyle` and `align` in the same expression were
+ * already checked against literal sets.
+ *
+ * Duplicated rather than imported: this package depends only on
+ * `document-core` and `shared`, never on `@openzcad/geometry` where the font
+ * registry lives. `ai-contracts.test.ts` asserts the two lists agree.
+ */
+export const TEXT_FONT_FAMILY_IDS = [
+  'inter',
+  'open-sans',
+  'lora',
+  'roboto-slab',
+  'jetbrains-mono',
+  'oswald',
+  'pacifico'
+] as const;
 
 /**
  * A body reference inside a proposal. Either a `bodyId` that already exists in
@@ -1040,8 +1063,17 @@ const sketchObjectSchema = {
         text: { type: 'string', description: 'The string to render.' },
         fontFamily: {
           type: 'string',
+          enum: [
+            'inter',
+            'open-sans',
+            'lora',
+            'roboto-slab',
+            'jetbrains-mono',
+            'oswald',
+            'pacifico'
+          ],
           description:
-            'Bundled font family id, e.g. "open-sans", "inter", "lora", "roboto-slab", "jetbrains-mono", "oswald", "pacifico".'
+            'Bundled font family id. Open Sans keeps its glyph curves exact through the kernel; Inter, JetBrains Mono and Pacifico have self-overlapping glyphs that arrive faceted.'
         },
         fontStyle: {
           type: 'string',
@@ -2233,8 +2265,9 @@ function isSketchObjects(value: unknown): value is SketchObjectData[] {
           return (
             typeof object.text === 'string' &&
             object.text.length > 0 &&
-            typeof object.fontFamily === 'string' &&
-            object.fontFamily.length > 0 &&
+            TEXT_FONT_FAMILY_IDS.includes(
+              object.fontFamily as (typeof TEXT_FONT_FAMILY_IDS)[number]
+            ) &&
             TEXT_FONT_STYLES.includes(object.fontStyle as TextFontStyle) &&
             ['size', 'x', 'y'].every((key) => isScalar(object[key])) &&
             (object.rotation === undefined || isScalar(object.rotation)) &&

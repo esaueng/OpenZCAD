@@ -76,8 +76,12 @@ function nextData(
   const kind = data.objectKind;
   switch (kind) {
     case 'text':
-      // The string, family and style are not expression fields; carry them
-      // through untouched so this editor can only move and resize the text.
+      // Every case spreads `...data` first. The fields this editor exposes
+      // are then overwritten, and everything else survives — the `text`,
+      // `fontFamily` and `fontStyle` of a text object, which are not
+      // expression fields, and `construction` on any kind. Rebuilding a fresh
+      // object literal instead silently un-marked construction geometry the
+      // moment its radius was edited.
       return {
         ...data,
         objectKind: kind,
@@ -87,6 +91,7 @@ function nextData(
       };
     case 'line':
       return {
+        ...data,
         objectKind: kind,
         x1: value('x1'),
         y1: value('y1'),
@@ -95,6 +100,7 @@ function nextData(
       };
     case 'rectangle':
       return {
+        ...data,
         objectKind: kind,
         width: value('width'),
         height: value('height'),
@@ -103,6 +109,7 @@ function nextData(
       };
     case 'circle':
       return {
+        ...data,
         objectKind: kind,
         radius: value('radius'),
         centerX: value('centerX'),
@@ -110,6 +117,7 @@ function nextData(
       };
     case 'polygon':
       return {
+        ...data,
         objectKind: kind,
         sides: value('sides'),
         radius: value('radius'),
@@ -118,6 +126,7 @@ function nextData(
       };
     case 'arc':
       return {
+        ...data,
         objectKind: kind,
         radius: value('radius'),
         centerX: value('centerX'),

@@ -5,8 +5,10 @@ import {
   createCadDocumentDigest,
   groundCadPatchProposalToSelection,
   parseAssistantReply,
-  parseCadPatchProposal
+  parseCadPatchProposal,
+  TEXT_FONT_FAMILY_IDS
 } from '@openzcad/ai-contracts';
+import { FONT_FAMILIES } from '@openzcad/geometry';
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toBodyId, toFeatureId, toUserId } from '@openzcad/shared';
 
@@ -86,6 +88,24 @@ describe('AI patch contracts', () => {
     expect(() =>
       parseCadPatchProposal(textPatch({ ...valid, size: null }))
     ).toThrow(/add_sketch/);
+    // The obvious guesses. Accepting them meant the failure surfaced at
+    // geometry rebuild as "the face is not loaded yet", which reads like a
+    // transient problem rather than an unsupported font.
+    for (const fontFamily of ['Arial', 'Helvetica', 'Open Sans']) {
+      expect(() =>
+        parseCadPatchProposal(textPatch({ ...valid, fontFamily }))
+      ).toThrow(/add_sketch/);
+    }
+  });
+
+  it('offers the AI exactly the font families the geometry package bundles', () => {
+    // `ai-contracts` cannot depend on `@openzcad/geometry`, so the id list is
+    // duplicated. This is what keeps the copy honest: a family added to the
+    // registry and not to the contract would be unreachable from the
+    // assistant, and one removed would be proposable and unbuildable.
+    expect([...TEXT_FONT_FAMILY_IDS]).toEqual(
+      FONT_FAMILIES.map((entry) => entry.id)
+    );
   });
 
   it('rejects unrecognized operations and empty patches', () => {
