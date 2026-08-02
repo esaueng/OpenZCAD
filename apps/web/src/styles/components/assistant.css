@@ -5,9 +5,10 @@
 /* ── Assistant dock ──────────────────────────────────────── */
 
 .workspace.with-assistant {
+  --assistant-col-w: min(var(--assistant-w), 35vw);
   grid-template-columns:
-    var(--sidebar-w) minmax(320px, 1fr)
-    var(--assistant-w);
+    var(--sidebar-col-w) minmax(280px, 1fr)
+    var(--assistant-col-w);
 }
 
 .assistant-panel {
