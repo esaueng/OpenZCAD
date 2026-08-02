@@ -87,7 +87,7 @@ describe('a linear pattern whose instances overlap', () => {
       targetBodyId: id,
       patternKind: 'linear',
       count: 3,
-      axis: { x: 1, y: 0, z: 0 },
+      axis: 'x',
       spacing
     }).document;
     const derived = await adapter.syncDocument(document);
@@ -188,7 +188,7 @@ describe('a linear pattern whose instances overlap', () => {
       targetBodyId: id,
       patternKind: 'circular',
       count,
-      axis: { x: 0, y: 0, z: 1 },
+      axis: 'z',
       angleDeg: 360
     }).document;
     const derived = await adapter.syncDocument(document);
