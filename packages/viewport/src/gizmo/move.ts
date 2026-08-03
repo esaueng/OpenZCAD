@@ -19,7 +19,14 @@ export interface MoveGizmoFocus {
 
 /** Pending Move/Rotate values, previewed live and committed as one feature. */
 export interface MovePreview {
+  /** Body id — or, when `target` is `'sketch'`, the sketch id being moved. */
   bodyId: string;
+  /**
+   * What the gizmo is attached to. Bodies translate and rotate; sketches
+   * translate only (a rectangle has no angle to store), so the rings are
+   * omitted from the gizmo and rotation stays zero.
+   */
+  target?: 'body' | 'sketch';
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }

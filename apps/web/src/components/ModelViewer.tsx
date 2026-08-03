@@ -82,6 +82,7 @@ import {
   type DirectEditAxis,
   type MoveAxis,
   type MoveGizmoFocus,
+  type MoveGizmoVisualData,
   type MoveHandleKind,
   type MovePreview,
   type DepthCycle,
@@ -92,6 +93,10 @@ import {
   type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
+  alignTranslationToCenters,
+  centerAlignLabel,
+  type CenterAlignMatch,
+  type CenterAlignTarget,
   type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
@@ -185,6 +190,37 @@ export interface SketchModeState {
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
+/**
+ * In-plane bounding-box center of a sketch's curves, lifted to world space.
+ * This is where the move gizmo sits when a sketch is the target. Null when
+ * the sketch has nothing drawable yet (e.g. its font has not loaded).
+ */
+function sketchViewCenter(view: SketchViewData): THREE.Vector3 | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const curve of view.curves) {
+    for (const point of curve.points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+    return null;
+  }
+  const x = (minX + maxX) / 2;
+  const y = (minY + maxY) / 2;
+  const basis = view.basis;
+  return new THREE.Vector3(
+    basis.origin.x + basis.u.x * x + basis.v.x * y,
+    basis.origin.y + basis.u.y * x + basis.v.y * y,
+    basis.origin.z + basis.u.z * x + basis.v.z * y
+  );
+}
+
 export interface SketchViewData {
   sketchId: string;
   basis: PlaneBasis;
@@ -525,6 +561,8 @@ interface MoveDragState {
   worldPerPixel: number;
   startTranslation: MovePreview['translation'];
   startRotation: MovePreview['rotationDeg'];
+  /** Moving thing's center with zero translation; snap math needs where it rests. */
+  restingCenter: THREE.Vector3;
   snapMove: number;
   snapRotate: number;
 }
@@ -921,11 +959,25 @@ export function ModelViewer({
         return;
       }
       const center = moveCenterRef.current;
-      const object = context.objectsByBodyId.get(preview.bodyId);
-      if (object) {
-        const final = composeMoveTransform(center, translation, rotationDeg);
-        object.rotation.copy(moveEuler(rotationDeg));
-        object.position.set(final.x, final.y, final.z);
+      if (preview.target === 'sketch') {
+        // A sketch preview shifts its overlay children — curves, region
+        // fills, boundaries, markers — as a rigid translation. No rotation:
+        // the document cannot store one for most sketch object kinds.
+        const overlay = regionGroupRef.current;
+        if (overlay) {
+          for (const child of overlay.children) {
+            if (child.userData.sketchViewId === preview.bodyId) {
+              child.position.set(translation.x, translation.y, translation.z);
+            }
+          }
+        }
+      } else {
+        const object = context.objectsByBodyId.get(preview.bodyId);
+        if (object) {
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          object.rotation.copy(moveEuler(rotationDeg));
+          object.position.set(final.x, final.y, final.z);
+        }
       }
       moveGizmoGroup.position.set(
         center.x + translation.x,
@@ -1045,6 +1097,8 @@ export function ModelViewer({
      * every edge of the model on every pointer move.
      */
     let moveSnaps: SnapCandidate[] = [];
+    /** Face centers of the other bodies, for center-alignment snapping. */
+    let moveCenterTargets: CenterAlignTarget[] = [];
     /** Screen-projected drag along the offset handle's normal. */
     let offsetDrag: {
       pointerId: number;
@@ -1160,6 +1214,49 @@ export function ModelViewer({
             ? snapsFromEdges(body.topology.edges, { label: body.name })
             : []
         );
+    }
+
+    /**
+     * Centers to align the moving thing with: every face center of every
+     * other body. Point snapping answers "is the handle on that corner";
+     * these answer "is what I am moving centred on that face" — per axis,
+     * so latching one axis or both are the same rule.
+     */
+    function collectCenterAlignTargets(
+      movingBodyId: string | null
+    ): CenterAlignTarget[] {
+      return bodiesRef.current
+        .filter((body) => !body.consumed && body.bodyId !== movingBodyId)
+        .flatMap((body) =>
+          (body.topology?.faces ?? []).flatMap((face) =>
+            face.geometry?.center
+              ? [{ point: face.geometry.center, label: body.name }]
+              : []
+          )
+        );
+    }
+
+    /** Glyph + readout for a latched center alignment. */
+    function showCenterAlignGlyph(matches: CenterAlignMatch[]): void {
+      const target = matches[0]?.target;
+      if (!target) {
+        hud.hide(snapGlyph);
+        return;
+      }
+      const host = renderer.domElement;
+      const screen = projectToScreen(
+        new THREE.Vector3(target.point.x, target.point.y, target.point.z),
+        context.activeCamera,
+        host.clientWidth,
+        host.clientHeight
+      );
+      if (!screen) {
+        hud.hide(snapGlyph);
+        return;
+      }
+      snapGlyph.textContent = `◎ ${centerAlignLabel(matches)}`;
+      snapGlyph.dataset.kind = 'center';
+      hud.showAt(snapGlyph, screen.x, screen.y);
     }
 
     /**
@@ -2159,6 +2256,28 @@ export function ModelViewer({
               drag.snapMove,
               fine
             );
+            // Center alignment outranks the step grid on the driven axis: a
+            // face's center is a place someone meant, a grid line is not.
+            // Shift frees both together, as it already means.
+            const aligned = fine
+              ? null
+              : alignTranslationToCenters(
+                  drag.restingCenter,
+                  {
+                    ...translation,
+                    [drag.axis]:
+                      drag.startTranslation[drag.axis] + (t - drag.startT)
+                  },
+                  moveCenterTargets,
+                  [drag.axis],
+                  drag.worldPerPixel * SNAP_RADIUS_PX
+                );
+            if (aligned && aligned.matches.length > 0) {
+              translation[drag.axis] = aligned.translation[drag.axis];
+              showCenterAlignGlyph(aligned.matches);
+            } else {
+              hud.hide(snapGlyph);
+            }
           }
         } else if (drag.kind === 'ring') {
           const angle = ringAngleAt(
@@ -2219,7 +2338,6 @@ export function ModelViewer({
             translation.z = landed.z;
             showSnapGlyph(snapped);
           } else {
-            hud.hide(snapGlyph);
             translation.x = snapTo(
               drag.startTranslation.x + world.x,
               drag.snapMove,
@@ -2235,6 +2353,31 @@ export function ModelViewer({
               drag.snapMove,
               fine
             );
+            // No corner under the pointer: try lining centers up instead.
+            // Raw (pre-grid) deltas feed the test so the grid cannot round
+            // the drag out of the alignment window; each axis latches
+            // independently, so centering on one axis or both just falls out.
+            const aligned = fine
+              ? null
+              : alignTranslationToCenters(
+                  drag.restingCenter,
+                  {
+                    x: drag.startTranslation.x + world.x,
+                    y: drag.startTranslation.y + world.y,
+                    z: drag.startTranslation.z + world.z
+                  },
+                  moveCenterTargets,
+                  ['x', 'y', 'z'],
+                  drag.worldPerPixel * SNAP_RADIUS_PX
+                );
+            if (aligned && aligned.matches.length > 0) {
+              for (const match of aligned.matches) {
+                translation[match.axis] = aligned.translation[match.axis];
+              }
+              showCenterAlignGlyph(aligned.matches);
+            } else {
+              hud.hide(snapGlyph);
+            }
           }
         }
         context.applyMovePreview(translation, rotation);
@@ -2427,7 +2570,12 @@ export function ModelViewer({
           axis?: MoveAxis;
         };
         const axis = data.axis ?? 'x';
-        moveSnaps = collectMoveSnaps(activeMove.bodyId);
+        // A sketch is not a body, so every body contributes snap points and
+        // alignment centers when one is being moved.
+        const movingBodyId =
+          activeMove.target === 'sketch' ? null : activeMove.bodyId;
+        moveSnaps = collectMoveSnaps(movingBodyId);
+        moveCenterTargets = collectCenterAlignTargets(movingBodyId);
         const pivot = moveGizmoGroup.position.clone();
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
@@ -2455,6 +2603,7 @@ export function ModelViewer({
           worldPerPixel,
           startTranslation: { ...activeMove.translation },
           startRotation: { ...activeMove.rotationDeg },
+          restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
           snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180)
         };
@@ -3833,19 +3982,39 @@ export function ModelViewer({
         object.position.set(0, 0, 0);
         object.rotation.set(0, 0, 0);
       }
+      const overlay = regionGroupRef.current;
+      if (overlay) {
+        for (const child of overlay.children) {
+          if (child.userData.sketchViewId) {
+            child.position.set(0, 0, 0);
+          }
+        }
+      }
       return;
     }
-    const body = bodies.find(
-      (candidate) => candidate.bodyId === movePreview.bodyId
-    );
-    if (!body) {
-      return;
+    let center: THREE.Vector3;
+    if (movePreview.target === 'sketch') {
+      const view = sketchViews.find(
+        (candidate) => candidate.sketchId === movePreview.bodyId
+      );
+      const lifted = view ? sketchViewCenter(view) : null;
+      if (!lifted) {
+        return;
+      }
+      center = lifted;
+    } else {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === movePreview.bodyId
+      );
+      if (!body) {
+        return;
+      }
+      center = new THREE.Vector3(
+        (body.bbox.min.x + body.bbox.max.x) / 2,
+        (body.bbox.min.y + body.bbox.max.y) / 2,
+        (body.bbox.min.z + body.bbox.max.z) / 2
+      );
     }
-    const center = new THREE.Vector3(
-      (body.bbox.min.x + body.bbox.max.x) / 2,
-      (body.bbox.min.y + body.bbox.max.y) / 2,
-      (body.bbox.min.z + body.bbox.max.z) / 2
-    );
     moveCenterRef.current.copy(center);
     const projectedUnitSizePx = projectedWorldSizePx(
       context.activeCamera,
@@ -3859,6 +4028,14 @@ export function ModelViewer({
     context.moveGizmoGroup.userData.gizmoScale = scale;
 
     for (const part of buildMoveGizmoParts(scale)) {
+      // A sketch translates only — a rectangle has no angle to store — so the
+      // rotation rings are omitted rather than offered and ignored.
+      if (
+        movePreview.target === 'sketch' &&
+        (part.userData as MoveGizmoVisualData).kind === 'ring'
+      ) {
+        continue;
+      }
       context.moveGizmoGroup.add(part);
     }
 
@@ -3868,7 +4045,7 @@ export function ModelViewer({
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
         null
     );
-  }, [movePreview, bodies]);
+  }, [movePreview, bodies, sketchViews]);
 
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
@@ -4070,6 +4247,7 @@ export function ModelViewer({
           resolution: context.fatLineResolution()
         });
         line.name = 'sketch-curve';
+        line.userData.sketchViewId = view.sketchId;
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
@@ -4119,6 +4297,7 @@ export function ModelViewer({
           boundary.visible = false;
           boundary.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
           boundary.raycast = () => undefined;
+          boundary.userData.sketchViewId = view.sketchId;
           group.add(boundary);
           return boundary;
         });
@@ -4148,6 +4327,8 @@ export function ModelViewer({
         group.add(mesh, marker);
         mesh.userData.regionBoundaries = boundaries;
         mesh.userData.regionMarker = marker;
+        mesh.userData.sketchViewId = view.sketchId;
+        marker.userData.sketchViewId = view.sketchId;
         profilePickTargetsRef.current.push({
           pick,
           object: mesh,
