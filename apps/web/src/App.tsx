@@ -6436,6 +6436,54 @@ export function App() {
                   }
                   executeTransaction(`Edit ${value.name}`, commands);
                 }}
+                onApplyTextSketch={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'sketch' ||
+                    !selectedSketch ||
+                    !selectedSketch.objectIds[0]
+                  ) {
+                    return;
+                  }
+                  // updateSketchObject, not updateSketch: the object changes
+                  // and the plane must not — a face-attached text sketch has
+                  // to stay on its face.
+                  const commands: AnyCommand[] = [
+                    commandFactories.updateSketchObject(
+                      {
+                        sketchId: feature.data.sketchId,
+                        objectId: selectedSketch.objectIds[0],
+                        data: value.data
+                      },
+                      `Edit ${value.name}`
+                    )
+                  ];
+                  if (value.name !== feature.name) {
+                    commands.push(
+                      commandFactories.renameNode({
+                        nodeId: feature.id,
+                        name: value.name
+                      }),
+                      commandFactories.renameNode({
+                        nodeId: selectedSketch.id,
+                        name: value.name
+                      })
+                    );
+                  }
+                  executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onEditSketchInViewport={(feature) => {
+                  if (feature.data.featureKind !== 'sketch' || !doc) {
+                    return;
+                  }
+                  const sketch = findSketch(doc, feature.data.sketchId);
+                  if (sketch) {
+                    dispatchInteraction({
+                      type: 'enter-sketch',
+                      plane: sketch.planeRef,
+                      sketchId: sketch.sketchId
+                    });
+                  }
+                }}
                 onApplyExtrude={(feature, value) => {
                   if (
                     feature.data.featureKind !== 'extrude' ||
