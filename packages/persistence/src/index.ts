@@ -28,6 +28,8 @@ import {
   type ProjectOrganization,
   type ProjectSummary,
   type ReorderProjectsRequest,
+  type SaveProjectDocumentRequest,
+  type SaveProjectDocumentResponse,
   type SaveRevisionRequest,
   type UpdateProjectRequest,
   type UploadSessionRecord,
@@ -245,6 +247,18 @@ export interface PersistenceService {
     userId: UserId,
     request: SaveRevisionRequest
   ): Promise<ProjectDocument>;
+  /**
+   * A fenced document write that adds no revision. Continuous sync uses this;
+   * explicit checkpoints use {@link PersistenceService.saveRevision}.
+   *
+   * @throws ProjectNotFoundError when the project does not exist.
+   * @throws RevisionConflictError when the account has moved on.
+   * @throws DocumentTooLargeError when the document exceeds the store's cap.
+   */
+  saveDocument(
+    userId: UserId,
+    request: SaveProjectDocumentRequest
+  ): Promise<SaveProjectDocumentResponse>;
   createUploadSession(
     userId: UserId,
     request: CreateUploadSessionRequest
@@ -730,6 +744,36 @@ export class InMemoryPersistenceService implements PersistenceService {
     const document = createCheckpoint(normalized, request.reason);
     this.projects.set(request.projectId, document);
     return document;
+  }
+
+  async saveDocument(
+    userId: UserId,
+    request: SaveProjectDocumentRequest
+  ): Promise<SaveProjectDocumentResponse> {
+    const existing = this.projects.get(request.projectId);
+    if (!existing) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const access = await this.requireProjectEdit(userId, request.projectId);
+    if (existing.version !== request.expectedVersion) {
+      throw new RevisionConflictError(request.projectId, existing.version);
+    }
+    const normalized = withoutDerivedProjection(
+      normalizeDocument(request.document)
+    );
+    if (
+      normalized.projectId !== request.projectId ||
+      normalized.ownerUserId !== access.ownerUserId
+    ) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    assertPersistableDocument(normalized);
+    this.projects.set(request.projectId, normalized);
+    return {
+      projectId: request.projectId,
+      version: normalized.version,
+      updatedAt: normalized.derived.updatedAt
+    };
   }
 
   async createUploadSession(

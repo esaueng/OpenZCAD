@@ -20,6 +20,7 @@ import {
   parseDuplicateProjectRequest,
   parseFinalizeImportRequest,
   parseReorderProjectsRequest,
+  parseSaveProjectDocumentRequest,
   parseSaveRevisionRequest,
   parseUpdateProjectRequest
 } from './validation';
@@ -74,6 +75,7 @@ const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
+const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_SHARING_ROUTE = /^\/api\/projects\/([^/]+)\/sharing$/;
 const PROJECT_INVITATIONS_ROUTE = /^\/api\/projects\/([^/]+)\/invitations$/;
@@ -618,6 +620,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       revisionsMatch[1]!
     );
     return json(await persistence.saveRevision(userId, payload));
+  }
+
+  const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
+  if (request.method === 'PUT' && documentMatch) {
+    const payload = parseSaveProjectDocumentRequest(
+      await readJsonBody(request),
+      documentMatch[1]!
+    );
+    return json(await persistence.saveDocument(userId, payload));
   }
 
   if (request.method === 'POST' && pathname === '/api/uploads') {
