@@ -267,6 +267,45 @@ describe('ADR-013 evolution verification', () => {
       })
     ).toMatchObject({ status: 'unsupported', fallback: 'hash-only' });
   });
+
+  /**
+   * The capability table describes the adapter, not the roadmap.
+   *
+   * `boolean` and `fillet` used to claim `verified-evolution-only` and
+   * `pattern` claimed `derived`, while `exact.ts` hash-onlied all three. The
+   * claim survived because `verified-evolution-only` was read by no code at
+   * all, so nothing could disagree with it — the table was the only artifact
+   * asserting the capability, and it asserted it into a vacuum.
+   *
+   * These pin the three against the shipped behaviour. They are deliberately
+   * boring: the point is that a future entry cannot move here without someone
+   * changing a test, which is the check the old arrangement lacked.
+   */
+  it.each(['boolean', 'fillet', 'chamfer', 'pattern'] as const)(
+    'reports %s as hash-only, matching what the adapter actually produces',
+    (operation) => {
+      expect(topologyLineageCapability(operation)).toMatchObject({
+        status: 'unsupported',
+        fallback: 'hash-only'
+      });
+    }
+  );
+
+  it('still reports the operations that DO carry lineage', () => {
+    // The control. Without it, the assertion above would pass just as happily
+    // if every entry in the table had been flattened to hash-only, which would
+    // be a different and worse kind of dishonesty.
+    expect(topologyLineageCapability('primitive')).toEqual({
+      status: 'semantic'
+    });
+    expect(topologyLineageCapability('sweep')).toEqual({ status: 'semantic' });
+    expect(topologyLineageCapability('rigid-transform')).toEqual({
+      status: 'derived'
+    });
+    expect(topologyLineageCapability('imported-step')).toEqual({
+      status: 'derived'
+    });
+  });
 });
 
 describe('ADR-013 resolution order', () => {

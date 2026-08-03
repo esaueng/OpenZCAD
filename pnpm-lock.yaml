@@ -230,9 +230,6 @@ importers:
       brepkit-wasm:
         specifier: github:esaueng/brepkit#bbce6cff72c7f81319063326ce8bc1df273b2d64&path:/crates/wasm/pkg
         version: https://codeload.github.com/esaueng/brepkit/tar.gz/bbce6cff72c7f81319063326ce8bc1df273b2d64#path:/crates/wasm/pkg
-      occt-wasm:
-        specifier: 3.8.1
-        version: 3.8.1
 
   packages/persistence:
     dependencies:
