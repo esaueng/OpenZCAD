@@ -144,6 +144,12 @@
   background: var(--color-accent-dim);
 }
 
+.tool-card-submode button:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .tool-card-close {
   display: grid;
   place-items: center;

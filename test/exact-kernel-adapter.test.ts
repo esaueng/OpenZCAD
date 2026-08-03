@@ -18,6 +18,7 @@ import {
   patternBody,
   shellBody,
   transformBody,
+  updateSketch,
   updateSketchObject
 } from '@openzcad/document-core';
 import {
@@ -351,6 +352,81 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     } finally {
       brepKit.dispose();
     }
+  });
+
+  it('converts a legacy face attachment to the same fixed geometry without a warning', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument(
+        'Legacy attachment conversion',
+        toUserId('user_legacy_attachment_conversion')
+      ),
+      {
+        name: 'Legacy attachment box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const sourceFace = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
+    )!;
+    const geometry = sourceFace.geometry!;
+    const frame = {
+      origin: { ...geometry.center },
+      xAxis: { x: 0, y: -1, z: 0 },
+      yAxis: { x: 1, y: 0, z: 0 },
+      zAxis: { ...geometry.normal! }
+    };
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...base, derived: sourceDerived },
+      {
+        name: 'Legacy face sketch',
+        planeRef: {
+          type: 'face',
+          bodyId: sourceBodyId,
+          faceHash: sourceFace.hash,
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal!,
+          frame
+        },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 4,
+            height: 6,
+            centerX: 0,
+            centerY: 0
+          }
+        ]
+      }
+    );
+    const { document: legacyDocument, bodyId: extrusionBodyId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Legacy extrusion',
+        sketchId,
+        distance: 5
+      }
+    );
+
+    const legacy = await adapter.syncDocument(legacyDocument);
+    expect(legacy.warnings).toContain(
+      'Sketch "Legacy face sketch": legacy face attachment has no schema-v5 lineage reference; using its stored migration frame.'
+    );
+
+    const fixedDocument = updateSketch(legacyDocument, {
+      sketchId,
+      planeRef: { type: 'frame', frame }
+    });
+    const fixed = await adapter.syncDocument(fixedDocument);
+    expect(fixed.warnings).toEqual([]);
+    expect(fixed.bodyRepresentations[extrusionBodyId]).toEqual(
+      legacy.bodyRepresentations[extrusionBodyId]
+    );
   });
 
   it('publishes an imported-mesh body as a hash-only, unreferenced solid', async () => {
