@@ -249,8 +249,12 @@ export function toolDisabledReason(
   ) {
     return 'Needs at least two bodies';
   }
-  if (tool === 'transform' && avail.liveBodyCount < 1) {
-    return 'Needs a body';
+  if (
+    tool === 'transform' &&
+    avail.liveBodyCount < 1 &&
+    avail.sketchCount < 1
+  ) {
+    return 'Needs a body or a sketch';
   }
   if (
     (tool === 'mirror' || tool === 'shell' || tool === 'solid-offset') &&
