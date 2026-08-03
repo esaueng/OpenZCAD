@@ -134,6 +134,7 @@ import {
 } from './lib/model';
 import { useDocumentFonts } from './lib/textFonts';
 import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
+import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
   SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
@@ -3845,8 +3846,8 @@ export function App() {
     }
     try {
       const bundle = createProjectDiagnosticBundle(doc, {
-        brepkitVersion: import.meta.env.OZ_BREPKIT_VERSION,
-        brepkitCommit: import.meta.env.OZ_BREPKIT_COMMIT
+        brepkitVersion: KERNEL_BUILD.packageVersion,
+        brepkitCommit: KERNEL_BUILD.sourceCommit
       });
       const fileName = `${exportFileStem(doc.name)}.openzcad-diagnostic.json`;
       downloadText(
