@@ -29,7 +29,14 @@ export const PROJECT_AUTOSAVE_RETRY_DELAY_MS = 5_000;
  * succeed no matter how long anyone waits.
  */
 export type CloudProjectSyncState =
-  'local' | 'syncing' | 'synced' | 'offline' | 'conflict' | 'refused';
+  | 'local'
+  | 'syncing'
+  | 'synced'
+  | 'offline'
+  | 'conflict'
+  | 'refused'
+  /** Cloud autosave is switched off; only an explicit save writes now. */
+  | 'paused';
 
 /**
  * What the workspace shows. `saving` is the device write, which the controller
@@ -132,7 +139,8 @@ function browserConnectivity(): CloudProjectAutosaveConnectivity {
 export class CloudProjectAutosave {
   readonly #options: CloudProjectAutosaveOptions;
   readonly #connectivity: CloudProjectAutosaveConnectivity;
-  readonly #idleDelayMs: number;
+  #idleDelayMs: number;
+  #enabled = true;
   readonly #maxWaitMs: number;
   readonly #retryDelayMs: number;
   readonly #maxAutomaticRetries: number;
@@ -181,6 +189,38 @@ export class CloudProjectAutosave {
 
   get isHalted(): boolean {
     return this.#halted !== null;
+  }
+
+  /**
+   * Applies the user's preferences. Turning autosave off does not discard the
+   * queued edit — the device still has it, and an explicit save can still send
+   * it — it only stops this controller writing without being asked.
+   */
+  configure({
+    enabled,
+    idleDelayMs
+  }: {
+    enabled?: boolean;
+    idleDelayMs?: number;
+  }): void {
+    if (idleDelayMs !== undefined) {
+      this.#idleDelayMs = idleDelayMs;
+    }
+    if (enabled === undefined || enabled === this.#enabled) {
+      return;
+    }
+    this.#enabled = enabled;
+    this.#clearTimer();
+    if (!enabled) {
+      if (this.#pending) {
+        this.#emit('paused');
+      }
+      return;
+    }
+    if (this.#pending && this.#project && !this.#halted) {
+      this.#emit('syncing');
+      this.#armTimer(0);
+    }
   }
 
   /**
@@ -266,6 +306,10 @@ export class CloudProjectAutosave {
       this.#emit(this.#halted);
       return;
     }
+    if (!this.#enabled) {
+      this.#emit('paused');
+      return;
+    }
     if (!this.#connectivity.isOnline()) {
       this.#emit('offline');
       return;
@@ -288,6 +332,9 @@ export class CloudProjectAutosave {
       !this.#project ||
       this.#project.projectId !== next.projectId ||
       this.#halted ||
+      // Autosave off means "do not write without me asking", and a page-hide or
+      // logout drain is still this controller asking rather than the user.
+      !this.#enabled ||
       !this.#connectivity.isOnline()
     ) {
       return null;
@@ -470,7 +517,7 @@ export class CloudProjectAutosave {
       return;
     }
     this.#automaticRetries = 0;
-    if (this.#pending && this.#project && !this.#halted) {
+    if (this.#pending && this.#project && !this.#halted && this.#enabled) {
       this.#emit('syncing');
       this.#armTimer(0);
     }
