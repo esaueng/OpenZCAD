@@ -119,6 +119,35 @@ export async function stubApi(
     const payload = route.request().postDataJSON() as { document: unknown };
     return route.fulfill({ json: payload.document });
   });
+  // Cloud autosave writes here continuously once a project is account-backed.
+  // Unstubbed it would 404 against the static preview, and the console-error
+  // assertions several specs make would be reporting the stub gap rather than
+  // anything about the app.
+  await page.route('**/api/projects/*/document', (route) => {
+    const payload = route.request().postDataJSON() as {
+      projectId: string;
+      document: { version: number };
+    };
+    return route.fulfill({
+      json: {
+        projectId: payload.projectId,
+        version: payload.document.version,
+        updatedAt: new Date().toISOString()
+      }
+    });
+  });
+  await page.route('**/api/account/storage', (route) =>
+    route.fulfill({
+      json: {
+        projectCount: 0,
+        documentBytes: 0,
+        revisionBytes: 0,
+        revisionCount: 0,
+        documentLimitBytes: 1_500_000,
+        maxRevisionsPerProject: 50
+      }
+    })
+  );
   await page.route('**/api/exports', (route) =>
     route.fulfill({ status: 404, json: { error: 'stub' } })
   );

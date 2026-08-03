@@ -1,4 +1,5 @@
 import type {
+  AccountStorageUsage,
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
@@ -17,6 +18,8 @@ import type {
   ReorderProjectsRequest,
   ReorderProjectsResponse,
   SaveAssistantCredentialRequest,
+  SaveProjectDocumentRequest,
+  SaveProjectDocumentResponse,
   SaveRevisionRequest,
   StartEmailLoginRequest,
   StartEmailLoginResponse,
@@ -25,6 +28,7 @@ import type {
   UpdateProjectResponse,
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
+import { withoutDerivedProjection } from '@openzcad/document-core';
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -34,7 +38,20 @@ import type {
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    /**
+     * The machine-readable `code` the API sends alongside a refusal, when it
+     * sends one. Statuses are too coarse for the sync paths: a 409 can mean
+     * "already in your account" or "someone else edited this", and those want
+     * opposite responses from the client.
+     */
+    readonly code?: string,
+    /**
+     * The rest of the refusal body. A fenced write reports the version the
+     * account actually holds, and a size refusal reports the ceiling; both let
+     * the client explain itself without a second round trip.
+     */
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'ApiError';
@@ -62,17 +79,25 @@ async function requestJson<T>(
   if (!response.ok) {
     const text = await response.text();
     let message = text;
+    let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const payload = JSON.parse(text) as { error?: unknown };
+      const payload = JSON.parse(text) as Record<string, unknown>;
       if (typeof payload.error === 'string') {
         message = payload.error;
       }
+      if (typeof payload.code === 'string') {
+        code = payload.code;
+      }
+      details = payload;
     } catch {
       // Plain-text responses remain useful as-is.
     }
     throw new ApiError(
       response.status,
-      message || `${response.status} ${response.statusText}`
+      message || `${response.status} ${response.statusText}`,
+      code,
+      details
     );
   }
 
@@ -118,11 +143,25 @@ export const api = {
       '/api/settings/assistant/test',
       { method: 'POST', body: '{}' }
     ),
+  storageUsage: () => requestJson<AccountStorageUsage>('/api/account/storage'),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  /**
+   * Gives an existing device-local project an account record, keeping its id.
+   * The derived projection is dropped on the way out: it is rebuilt from
+   * canonical history on load, and for a dense import it is most of the bytes.
+   */
+  adoptProject: (document: ProjectDocument) =>
+    requestJson<CreateProjectResponse>('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.name,
+        document: withoutDerivedProjection(document)
+      })
     }),
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
@@ -167,6 +206,18 @@ export const api = {
       `/api/projects/${payload.projectId}/revisions`,
       {
         method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    ),
+  /**
+   * The continuous-sync write. Same fencing as `saveRevision`, no history
+   * entry, and only an acknowledgement comes back.
+   */
+  saveProjectDocument: (payload: SaveProjectDocumentRequest) =>
+    requestJson<SaveProjectDocumentResponse>(
+      `/api/projects/${payload.projectId}/document`,
+      {
+        method: 'PUT',
         body: JSON.stringify(payload)
       }
     ),

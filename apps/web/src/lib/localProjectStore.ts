@@ -14,10 +14,23 @@ const STORE_NAME = 'projects';
  * along with it.
  */
 const META_STORE_NAME = 'projectMeta';
-const DATABASE_VERSION = 2;
+/**
+ * The version this device and the account last agreed on, per project. Kept in
+ * its own store rather than beside the shelf state: the two answer different
+ * questions, and folding a sync baseline into a record that gets merged with
+ * the account's copy of the shelf would let one device's baseline travel to
+ * another, where it would be a lie.
+ */
+const SYNC_STORE_NAME = 'projectSync';
+const DATABASE_VERSION = 3;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+}
+
+interface ProjectSyncRecord {
+  projectId: string;
+  lastSyncedVersion: number;
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -29,6 +42,14 @@ function openDatabase(): Promise<IDBDatabase> {
       }
       if (!request.result.objectStoreNames.contains(META_STORE_NAME)) {
         request.result.createObjectStore(META_STORE_NAME, {
+          keyPath: 'projectId'
+        });
+      }
+      // Absent for every project on an upgraded database, which reads as "no
+      // baseline" — the conservative answer, and the correct one: this device
+      // has genuinely never recorded what it agreed with.
+      if (!request.result.objectStoreNames.contains(SYNC_STORE_NAME)) {
+        request.result.createObjectStore(SYNC_STORE_NAME, {
           keyPath: 'projectId'
         });
       }
@@ -113,7 +134,51 @@ export function listLocalProjectOrganizations(): Promise<
   );
 }
 
-/** Destroys a project's document and its shelf state. Irreversible. */
+/**
+ * Records that this device and the account now hold the same version of
+ * `projectId`. Everything the conflict machinery decides is measured from here.
+ */
+export function saveLastSyncedVersion(
+  projectId: string,
+  lastSyncedVersion: number
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.put({ projectId, lastSyncedVersion }),
+    SYNC_STORE_NAME
+  ).then(() => undefined);
+}
+
+/** Null when this device has no record — which is not the same as zero. */
+export function loadLastSyncedVersion(
+  projectId: string
+): Promise<number | null> {
+  return transaction<ProjectSyncRecord | undefined>(
+    'readonly',
+    (store) =>
+      store.get(projectId) as IDBRequest<ProjectSyncRecord | undefined>,
+    SYNC_STORE_NAME
+  )
+    .then((record) => record?.lastSyncedVersion ?? null)
+    .catch(() => null);
+}
+
+/**
+ * Forgets the baseline for `projectId`, so the next reconciliation treats it as
+ * unknown rather than as agreement. Used when the account copy goes away under
+ * this device — signing out of an account that held it, say.
+ */
+export function clearLastSyncedVersion(projectId: string): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.delete(projectId),
+    SYNC_STORE_NAME
+  )
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
+/** Destroys a project's document, its shelf state, and its sync baseline. */
 export function deleteLocalProject(projectId: string): Promise<void> {
   return transaction('readwrite', (store) => store.delete(projectId))
     .then(() =>
@@ -123,6 +188,7 @@ export function deleteLocalProject(projectId: string): Promise<void> {
         META_STORE_NAME
       )
     )
+    .then(() => clearLastSyncedVersion(projectId))
     .then(() => undefined);
 }
 
@@ -144,6 +210,7 @@ export async function listLocalProjects(): Promise<ProjectSummary[]> {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       updatedAt: document.derived.updatedAt,
       revisionCount: document.checkpoints.length,
+      documentVersion: document.version,
       // Left undefined when this device has never organised the project, so a
       // merge can fall back to whatever the account knows instead of treating
       // "no record" as "active, unpinned, first".
@@ -177,19 +244,74 @@ export async function purgeExpiredLocalProjects(
   return expired;
 }
 
-/** Picks the canonical reopen candidate without allowing stale cloud data to hide local edits. */
-export function selectProjectDocument(
+/**
+ * What opening a project should do about its two copies.
+ *
+ * `diverged` exists because picking a winner is not always honest. Comparing
+ * versions and then timestamps cannot tell a device that is behind from two
+ * devices that both moved, and it settles the second case by discarding one
+ * side on the authority of a device clock. Reporting the ambiguity instead lets
+ * the caller write a recovery copy and ask.
+ */
+export type ProjectOpenChoice =
+  | { choice: 'none' }
+  | { choice: 'local'; document: ProjectDocument }
+  | { choice: 'remote'; document: ProjectDocument }
+  | {
+      choice: 'diverged';
+      local: ProjectDocument;
+      remote: ProjectDocument;
+    };
+
+export function chooseProjectDocument(
   local: ProjectDocument | null,
-  remote: ProjectDocument | null
-): ProjectDocument | null {
+  remote: ProjectDocument | null,
+  lastSyncedVersion: number | null = null
+): ProjectOpenChoice {
   if (!local) {
-    return remote;
+    return remote ? { choice: 'remote', document: remote } : { choice: 'none' };
   }
   if (!remote) {
-    return local;
+    return { choice: 'local', document: local };
   }
-  if (local.version !== remote.version) {
-    return local.version > remote.version ? local : remote;
+  if (local.version === remote.version) {
+    return { choice: 'local', document: local };
   }
-  return local.derived.updatedAt > remote.derived.updatedAt ? local : remote;
+  if (lastSyncedVersion !== null) {
+    const localMoved = local.version !== lastSyncedVersion;
+    const remoteMoved = remote.version !== lastSyncedVersion;
+    if (localMoved && remoteMoved) {
+      return { choice: 'diverged', local, remote };
+    }
+    return localMoved
+      ? { choice: 'local', document: local }
+      : { choice: 'remote', document: remote };
+  }
+  // No baseline: fall back to the newer version, as before. It is a guess, but
+  // it is the guess that keeps the most work, and the caller still writes a
+  // recovery copy of the side it does not take.
+  return local.version > remote.version
+    ? { choice: 'local', document: local }
+    : { choice: 'remote', document: remote };
+}
+
+/**
+ * The winning document only. Callers that can act on divergence should use
+ * {@link chooseProjectDocument} instead — this collapses that case to "keep the
+ * local copy", which is safe but silently drops the account's.
+ */
+export function selectProjectDocument(
+  local: ProjectDocument | null,
+  remote: ProjectDocument | null,
+  lastSyncedVersion: number | null = null
+): ProjectDocument | null {
+  const outcome = chooseProjectDocument(local, remote, lastSyncedVersion);
+  switch (outcome.choice) {
+    case 'none':
+      return null;
+    case 'diverged':
+      return outcome.local;
+    default:
+      return outcome.document;
+  }
 }

@@ -4,10 +4,14 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   isPurgeDue,
+  MAX_PERSISTED_DOCUMENT_BYTES,
+  MAX_PROJECT_REVISIONS,
   nowIso,
+  persistedDocumentBytes,
   sanitizeFileName,
   toArtifactId,
   toUploadSessionId,
+  type AccountStorageUsage,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
   type CreateProjectRequest,
@@ -26,16 +30,20 @@ import {
   type ProjectOrganization,
   type ProjectSummary,
   type ReorderProjectsRequest,
+  type SaveProjectDocumentRequest,
+  type SaveProjectDocumentResponse,
   type SaveRevisionRequest,
   type UpdateProjectRequest,
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
 import {
+  adoptProjectDocument,
   createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
-  normalizeDocument
+  normalizeDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 
 export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
@@ -112,6 +120,48 @@ export class RevisionConflictError extends Error {
   ) {
     super(`Project ${projectId} has a newer remote revision.`);
     this.name = 'RevisionConflictError';
+  }
+}
+
+/**
+ * Adoption refused. The two codes are kept apart because they mean opposite
+ * things to the device holding the document: `ALREADY_ADOPTED` says the account
+ * already has this project and the device should sync rather than upload, while
+ * `PROJECT_ID_TAKEN` says the id belongs to someone else and the document can
+ * only enter the account as a new project.
+ */
+export class ProjectAdoptionError extends Error {
+  constructor(
+    readonly code: 'ALREADY_ADOPTED' | 'PROJECT_ID_TAKEN',
+    message: string
+  ) {
+    super(message);
+    this.name = 'ProjectAdoptionError';
+  }
+}
+
+/**
+ * A document too big for the store to hold. Distinct from a transport failure
+ * on purpose: retrying will never help, and the client has to say so instead of
+ * leaving the user waiting for a sync that cannot happen.
+ */
+export class DocumentTooLargeError extends Error {
+  constructor(
+    readonly bytes: number,
+    readonly limitBytes: number
+  ) {
+    super(
+      `Document is ${bytes} bytes; the account stores at most ${limitBytes}.`
+    );
+    this.name = 'DocumentTooLargeError';
+  }
+}
+
+/** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
+export function assertPersistableDocument(document: ProjectDocument): void {
+  const bytes = persistedDocumentBytes(document);
+  if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
+    throw new DocumentTooLargeError(bytes, MAX_PERSISTED_DOCUMENT_BYTES);
   }
 }
 
@@ -199,6 +249,20 @@ export interface PersistenceService {
     userId: UserId,
     request: SaveRevisionRequest
   ): Promise<ProjectDocument>;
+  /**
+   * A fenced document write that adds no revision. Continuous sync uses this;
+   * explicit checkpoints use {@link PersistenceService.saveRevision}.
+   *
+   * @throws ProjectNotFoundError when the project does not exist.
+   * @throws RevisionConflictError when the account has moved on.
+   * @throws DocumentTooLargeError when the document exceeds the store's cap.
+   */
+  saveDocument(
+    userId: UserId,
+    request: SaveProjectDocumentRequest
+  ): Promise<SaveProjectDocumentResponse>;
+  /** What this account currently stores, and the limits it is measured against. */
+  getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
   createUploadSession(
     userId: UserId,
     request: CreateUploadSessionRequest
@@ -247,6 +311,12 @@ export class InMemoryPersistenceService implements PersistenceService {
   >();
   private readonly invitationRateEvents = new Map<string, number[]>();
   private readonly organization = new Map<string, ProjectOrganization>();
+  /**
+   * Sizes only, per project, newest last. Enough to reproduce the account's
+   * retention count and byte totals without keeping a second copy of every
+   * document in memory.
+   */
+  private readonly revisionBytes = new Map<string, number[]>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
@@ -526,12 +596,38 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: CreateProjectRequest
   ): Promise<CreateProjectResponse> {
-    const document = createProjectDocument(request.name, userId, request.units);
+    const document = request.document
+      ? this.prepareAdoption(userId, request.document, request.name)
+      : createProjectDocument(request.name, userId, request.units);
     this.projects.set(document.projectId, document);
     return {
       project: this.summarize(document),
       document
     };
+  }
+
+  private prepareAdoption(
+    userId: UserId,
+    source: ProjectDocument,
+    name: string
+  ): ProjectDocument {
+    const existing = this.projects.get(source.projectId);
+    if (existing) {
+      throw existing.ownerUserId === userId
+        ? new ProjectAdoptionError(
+            'ALREADY_ADOPTED',
+            'This project is already saved to your account.'
+          )
+        : new ProjectAdoptionError(
+            'PROJECT_ID_TAKEN',
+            'That project id is already in use.'
+          );
+    }
+    const document = withoutDerivedProjection(
+      adoptProjectDocument(source, userId, name)
+    );
+    assertPersistableDocument(document);
+    return document;
   }
 
   async duplicateProject(
@@ -655,9 +751,73 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    const document = createCheckpoint(normalized, request.reason);
+    const document = createCheckpoint(
+      withoutDerivedProjection(normalized),
+      request.reason
+    );
+    assertPersistableDocument(document);
     this.projects.set(request.projectId, document);
+    this.recordRevision(request.projectId, document);
     return document;
+  }
+
+  /**
+   * Mirrors the store's retention rule so tests and the no-D1 development
+   * server behave the same way the account does. Only the count matters here —
+   * the in-memory service never persists the bodies.
+   */
+  private recordRevision(projectId: string, document: ProjectDocument): void {
+    const history = this.revisionBytes.get(projectId) ?? [];
+    history.push(persistedDocumentBytes(document));
+    this.revisionBytes.set(projectId, history.slice(-MAX_PROJECT_REVISIONS));
+  }
+
+  async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
+    const owned = this.ownedProjects(userId);
+    const revisions = owned.flatMap(
+      (document) => this.revisionBytes.get(document.projectId) ?? []
+    );
+    return {
+      projectCount: owned.length,
+      documentBytes: owned.reduce(
+        (total, document) => total + persistedDocumentBytes(document),
+        0
+      ),
+      revisionBytes: revisions.reduce((total, bytes) => total + bytes, 0),
+      revisionCount: revisions.length,
+      documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+    };
+  }
+
+  async saveDocument(
+    userId: UserId,
+    request: SaveProjectDocumentRequest
+  ): Promise<SaveProjectDocumentResponse> {
+    const existing = this.projects.get(request.projectId);
+    if (!existing) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const access = await this.requireProjectEdit(userId, request.projectId);
+    if (existing.version !== request.expectedVersion) {
+      throw new RevisionConflictError(request.projectId, existing.version);
+    }
+    const normalized = withoutDerivedProjection(
+      normalizeDocument(request.document)
+    );
+    if (
+      normalized.projectId !== request.projectId ||
+      normalized.ownerUserId !== access.ownerUserId
+    ) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    assertPersistableDocument(normalized);
+    this.projects.set(request.projectId, normalized);
+    return {
+      projectId: request.projectId,
+      version: normalized.version,
+      updatedAt: normalized.derived.updatedAt
+    };
   }
 
   async createUploadSession(
@@ -853,7 +1013,8 @@ function summarizeDocument(document: ProjectDocument): ProjectSummary {
     name: document.name,
     lastRevisionId: latestRevision?.revisionId,
     revisionCount: document.revisions.length,
-    updatedAt: latestRevision?.createdAt ?? nowIso()
+    updatedAt: latestRevision?.createdAt ?? nowIso(),
+    documentVersion: document.version
   };
 }
 
