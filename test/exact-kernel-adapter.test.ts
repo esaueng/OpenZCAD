@@ -1286,6 +1286,128 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(body.volume).toBeGreaterThan(0);
   });
 
+  it('rejects the M4 tangent cylindrical-boss union when the kernel drops the boss', async () => {
+    const withPlate = addPrimitiveFeature(
+      createProjectDocument('Tangent boss', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 60, height: 40, depth: 8 }
+      }
+    );
+    const plateId = withPlate.bodyOrder.at(-1)!;
+    const withBoss = addPrimitiveFeature(withPlate, {
+      name: 'Boss',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 16 }
+    });
+    const bossId = withBoss.bodyOrder.at(-1)!;
+    const positioned = transformBody(withBoss, {
+      name: 'Make boss tangent to x wall',
+      targetBodyId: bossId,
+      translation: { x: 10, y: 20, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Tangent boss union',
+        operation: 'union',
+        targetBodyIds: [plateId, bossId]
+      })
+    );
+
+    // Fault injection pins the historical M4 kernel answer deterministically:
+    // fuseAll reports success but returns its plate operand unchanged.
+    const fuse = vi
+      .spyOn(BrepKernel.prototype, 'fuseAll')
+      .mockImplementation((solids) => solids[0]!);
+    let derived: DerivedState;
+    try {
+      derived = await adapter.syncDocument(document);
+    } finally {
+      fuse.mockRestore();
+    }
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId]!;
+
+    // M4: fuseAll returns a valid six-plane solid, but it is exactly the plate
+    // and silently loses the boss above z=8. The product must surface this as
+    // a precommit warning instead of allowing the plausible result into undo.
+    expect(body.volume).toBeCloseTo(60 * 40 * 8, 6);
+    expect(body.bbox.max.z).toBeCloseTo(8, 7);
+    expect(derived.warnings[0]).toBe(
+      'Feature "Tangent boss union": Union dropped geometry from operand "Boss Body": the result\'s maximum z is 8 mm, but the operand reaches 16 mm (8 mm missing). A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.'
+    );
+  });
+
+  it('preserves inward-overlapping and wall-crossing boss unions as exact STEP', async () => {
+    for (const [placement, centerX] of [
+      ['inward-overlapping', 7],
+      ['wall-crossing', 3]
+    ] as const) {
+      const manager = new CommandManager(
+        createProjectDocument(
+          `${placement} boss`,
+          toUserId(`user_exact_${placement}`)
+        )
+      );
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Imported plate',
+          artifactId: `artifact_${placement}_boss`,
+          sourceName: 'modeling-base-plate.step',
+          stepText: readFileSync(
+            resolve('test/parity/corpus/modeling-base-plate.step'),
+            'utf8'
+          )
+        })
+      );
+      const plateId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Boss',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 6, height: 20 }
+        })
+      );
+      const bossId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.transformBody({
+          name: `Place ${placement} boss`,
+          targetBodyId: bossId,
+          translation: { x: centerX, y: 12, z: 0 }
+        })
+      );
+      const document = manager.execute(
+        commandFactories.booleanBodies({
+          name: `${placement} boss union`,
+          operation: 'union',
+          targetBodyIds: [plateId, bossId]
+        })
+      );
+      const resultId = document.bodyOrder.at(-1)!;
+      const derived = await adapter.syncDocument(document);
+      const body = derived.bodyRepresentations[resultId]!;
+
+      expect(derived.warnings).toEqual([]);
+      expect(body.bbox.min.x).toBeCloseTo(Math.min(0, centerX - 6), 7);
+      expect(body.bbox.max.z).toBeCloseTo(20, 7);
+      expect(
+        body.topology?.faces.some(
+          (face) => face.geometry?.surfaceType === 'cylinder'
+        )
+      ).toBe(true);
+
+      const step = await adapter.exportStep(document, [resultId]);
+      expect(step).toContain('CYLINDRICAL_SURFACE');
+      await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
+    }
+  });
+
   it('attributes a strict Union validation failure to the feature', async () => {
     const validate = vi
       .spyOn(BrepKernel.prototype, 'validateSolid')
