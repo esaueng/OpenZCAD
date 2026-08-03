@@ -1,3 +1,7 @@
+import { geometryTolerance } from '@openzcad/geometry';
+import type { UnitSystem } from '@openzcad/shared';
+import type { UnionBounds } from './union-connectivity';
+
 export interface TriangleMeshClosure {
   boundaryEdges: number;
   nonManifoldEdges: number;
@@ -270,6 +274,119 @@ export function booleanFacetFallbackWarning(
   return (
     `The boolean produced far more faces than its operands: ${detail}. ` +
     'This is usually a sliver or near-tangent contact being approximated.'
+  );
+}
+
+export interface UnionOperandBounds {
+  name: string;
+  bounds: UnionBounds;
+}
+
+export interface UnionExtentValidation {
+  operands: readonly UnionOperandBounds[];
+  result: UnionBounds;
+  units: UnitSystem;
+  /** Upper bound for AABB drift when the kernel returns a faceted fallback. */
+  approximationTolerance: number;
+}
+
+type BoundsAxis = 'x' | 'y' | 'z';
+
+interface MissingUnionExtent {
+  operand: UnionOperandBounds;
+  axis: BoundsAxis;
+  side: 'minimum' | 'maximum';
+  resultValue: number;
+  operandValue: number;
+  missing: number;
+}
+
+function formatLength(value: number): string {
+  const magnitude = Math.abs(value);
+  if (magnitude !== 0 && (magnitude < 0.001 || magnitude >= 100_000)) {
+    return value.toExponential(3);
+  }
+  return Number(value.toPrecision(7)).toString();
+}
+
+/**
+ * A union is a superset of every operand, so its exact AABB must contain every
+ * operand AABB. M4's tangent cylindrical-boss failure violates that necessary
+ * invariant while still returning a valid six-face solid: the result is the
+ * plate alone and the boss's axial extent disappears.
+ *
+ * This deliberately does not predict the union's volume or topology. Valid
+ * containment, touching, overlapping, and crossing booleans all satisfy the
+ * same superset invariant, and small kernel AABB noise is tolerated at the
+ * model's scale.
+ */
+export function droppedUnionOperandWarning(
+  input: UnionExtentValidation
+): string | null {
+  const coordinateScale = Math.max(
+    1,
+    ...[
+      input.result,
+      ...input.operands.map((operand) => operand.bounds)
+    ].flatMap((bounds) => [
+      Math.abs(bounds.min.x),
+      Math.abs(bounds.min.y),
+      Math.abs(bounds.min.z),
+      Math.abs(bounds.max.x),
+      Math.abs(bounds.max.y),
+      Math.abs(bounds.max.z)
+    ])
+  );
+  const numericTolerance = geometryTolerance(coordinateScale);
+  const approximationTolerance = Number.isFinite(input.approximationTolerance)
+    ? Math.max(0, input.approximationTolerance)
+    : 0;
+  const missing: MissingUnionExtent[] = [];
+  for (const operand of input.operands) {
+    for (const axis of ['x', 'y', 'z'] as const) {
+      const operandSpan = operand.bounds.max[axis] - operand.bounds.min[axis];
+      // A rejected faceted fallback can inscribe a curved operand slightly
+      // inside its exact AABB. Ignore at most 0.1% of that operand's own span,
+      // capped by the kernel's configured approximation deflection. The M4
+      // drop loses half the boss height, far outside either bound.
+      const tolerance = Math.max(
+        numericTolerance,
+        Math.min(approximationTolerance, Math.abs(operandSpan) * 1e-3)
+      );
+      const minimumMissing = input.result.min[axis] - operand.bounds.min[axis];
+      if (minimumMissing > tolerance) {
+        missing.push({
+          operand,
+          axis,
+          side: 'minimum',
+          resultValue: input.result.min[axis],
+          operandValue: operand.bounds.min[axis],
+          missing: minimumMissing
+        });
+      }
+      const maximumMissing = operand.bounds.max[axis] - input.result.max[axis];
+      if (maximumMissing > tolerance) {
+        missing.push({
+          operand,
+          axis,
+          side: 'maximum',
+          resultValue: input.result.max[axis],
+          operandValue: operand.bounds.max[axis],
+          missing: maximumMissing
+        });
+      }
+    }
+  }
+  const loss = missing.sort((left, right) => right.missing - left.missing)[0];
+  if (!loss) {
+    return null;
+  }
+  const units = input.units;
+  return (
+    `Union dropped geometry from operand "${loss.operand.name}": the result's ${loss.side} ${loss.axis} is ` +
+    `${formatLength(loss.resultValue)} ${units}, but the operand reaches ${formatLength(loss.operandValue)} ${units} ` +
+    `(${formatLength(loss.missing)} ${units} missing). ` +
+    'A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.'
   );
 }
 
