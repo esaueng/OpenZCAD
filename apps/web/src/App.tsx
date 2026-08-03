@@ -6014,15 +6014,15 @@ export function App() {
     return () => window.removeEventListener('keydown', listener);
   }, []);
 
-  if (startupState === 'restoring') {
-    return <StartupScreen />;
-  }
-
   /**
    * Projects carrying an unresolved divergence marker. Recomputed from the
    * shelf rather than tracked in state: the markers outlive the session that
    * wrote them, so reading them is the only way the shelf can be right after a
    * reload.
+   *
+   * Must stay above the restore-screen return below — every hook does. Putting
+   * it after meant the hook count changed as the app left that screen, which
+   * React treats as a broken component rather than a late memo.
    */
   const conflictedProjectIds = useMemo(
     () =>
@@ -6033,6 +6033,10 @@ export function App() {
       ),
     [projects]
   );
+
+  if (startupState === 'restoring') {
+    return <StartupScreen />;
+  }
 
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
