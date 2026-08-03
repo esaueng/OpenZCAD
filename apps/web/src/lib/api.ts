@@ -1,4 +1,5 @@
 import type {
+  AccountStorageUsage,
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
@@ -142,6 +143,7 @@ export const api = {
       '/api/settings/assistant/test',
       { method: 'POST', body: '{}' }
     ),
+  storageUsage: () => requestJson<AccountStorageUsage>('/api/account/storage'),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {

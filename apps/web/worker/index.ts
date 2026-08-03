@@ -429,6 +429,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(result);
   }
 
+  if (request.method === 'GET' && pathname === '/api/account/storage') {
+    return json(await persistence.getStorageUsage(userId));
+  }
+
   if (request.method === 'GET' && pathname === '/api/projects') {
     // Listing is the one call every client makes on arrival, which makes it
     // the natural place to collect the bin: retention is measured in days, so

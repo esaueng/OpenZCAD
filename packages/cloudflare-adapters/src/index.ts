@@ -22,7 +22,9 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   MAX_PERSISTED_DOCUMENT_BYTES,
+  MAX_PROJECT_REVISIONS,
   nowIso,
+  persistedDocumentBytes,
   projectOrganization,
   PROJECT_STATUSES,
   sanitizeFileName,
@@ -30,6 +32,7 @@ import {
   toProjectId,
   toUploadSessionId,
   TRASH_RETENTION_MS,
+  type AccountStorageUsage,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
   type CreateProjectRequest,
@@ -834,7 +837,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
-    const normalized = normalizeDocument(request.document);
+    const normalized = withoutDerivedProjection(
+      normalizeDocument(request.document)
+    );
     if (
       normalized.projectId !== request.projectId ||
       normalized.ownerUserId !== access.ownerUserId
@@ -842,17 +847,20 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(request.projectId);
     }
     const document = createCheckpoint(normalized, request.reason);
+    assertPersistableDocument(document);
     const documentJson = JSON.stringify(document);
+    const documentBytes = persistedDocumentBytes(document);
     const latestRevision = document.revisions.at(-1);
     if (!latestRevision) {
       throw new Error('Checkpoint creation did not produce a revision.');
     }
     const results = await this.env.DB.batch([
       this.env.DB.prepare(
-        `UPDATE projects SET document_json = ?, document_version = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
+        `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
       ).bind(
         documentJson,
         document.version,
+        documentBytes,
         nowIso(),
         document.name,
         request.projectId,
@@ -860,12 +868,13 @@ export class D1R2PersistenceService implements PersistenceService {
         request.expectedVersion
       ),
       this.env.DB.prepare(
-        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ? WHERE changes() > 0`
+        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
       ).bind(
         latestRevision.revisionId,
         request.projectId,
         request.reason,
         documentJson,
+        documentBytes,
         latestRevision.createdAt,
         userId
       )
@@ -884,7 +893,61 @@ export class D1R2PersistenceService implements PersistenceService {
         current.document_version
       );
     }
+    await this.pruneRevisions(request.projectId);
     return document;
+  }
+
+  /**
+   * Drops a project's oldest revisions once it holds more than
+   * {@link MAX_PROJECT_REVISIONS}.
+   *
+   * Runs after the insert rather than before, so the save that would exceed the
+   * limit is never the one refused — history is a convenience and must never
+   * cost somebody a save. A failure here is swallowed for the same reason: the
+   * document is already stored, and the next save prunes again.
+   */
+  private async pruneRevisions(projectId: string): Promise<void> {
+    try {
+      await this.env
+        .DB!.prepare(
+          `DELETE FROM revisions WHERE project_id = ? AND id NOT IN (
+             SELECT id FROM revisions WHERE project_id = ?
+             ORDER BY created_at DESC, id DESC LIMIT ?
+           )`
+        )
+        .bind(projectId, projectId, MAX_PROJECT_REVISIONS)
+        .run();
+    } catch {
+      // Retention is housekeeping. It does not get to fail a save.
+    }
+  }
+
+  async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().getStorageUsage(userId);
+    }
+    const totals = await this.env.DB.prepare(
+      `SELECT COUNT(*) AS project_count, COALESCE(SUM(document_bytes), 0) AS document_bytes
+       FROM projects WHERE user_id = ?`
+    )
+      .bind(userId)
+      .first<{ project_count: number; document_bytes: number }>();
+    const revisions = await this.env.DB.prepare(
+      `SELECT COUNT(*) AS revision_count, COALESCE(SUM(revisions.document_bytes), 0) AS revision_bytes
+       FROM revisions
+       JOIN projects ON projects.id = revisions.project_id
+       WHERE projects.user_id = ?`
+    )
+      .bind(userId)
+      .first<{ revision_count: number; revision_bytes: number }>();
+    return {
+      projectCount: totals?.project_count ?? 0,
+      documentBytes: totals?.document_bytes ?? 0,
+      revisionBytes: revisions?.revision_bytes ?? 0,
+      revisionCount: revisions?.revision_count ?? 0,
+      documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+    };
   }
 
   /**
@@ -914,11 +977,12 @@ export class D1R2PersistenceService implements PersistenceService {
     assertPersistableDocument(normalized);
     const updatedAt = nowIso();
     const result = await this.env.DB.prepare(
-      `UPDATE projects SET document_json = ?, document_version = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
+      `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
     )
       .bind(
         JSON.stringify(normalized),
         normalized.version,
+        persistedDocumentBytes(normalized),
         updatedAt,
         normalized.name,
         request.projectId,
@@ -1149,7 +1213,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const updatedAt = nowIso();
     await this.env
       .DB!.prepare(
-        `INSERT INTO projects (id, user_id, name, document_json, document_version, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         document.projectId,
@@ -1157,6 +1221,7 @@ export class D1R2PersistenceService implements PersistenceService {
         document.name,
         JSON.stringify(document),
         document.version,
+        persistedDocumentBytes(document),
         updatedAt,
         organization.status,
         organization.pinned ? 1 : 0,

@@ -5,11 +5,13 @@ import {
   duplicateProjectName,
   isPurgeDue,
   MAX_PERSISTED_DOCUMENT_BYTES,
+  MAX_PROJECT_REVISIONS,
   nowIso,
   persistedDocumentBytes,
   sanitizeFileName,
   toArtifactId,
   toUploadSessionId,
+  type AccountStorageUsage,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
   type CreateProjectRequest,
@@ -259,6 +261,8 @@ export interface PersistenceService {
     userId: UserId,
     request: SaveProjectDocumentRequest
   ): Promise<SaveProjectDocumentResponse>;
+  /** What this account currently stores, and the limits it is measured against. */
+  getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
   createUploadSession(
     userId: UserId,
     request: CreateUploadSessionRequest
@@ -307,6 +311,12 @@ export class InMemoryPersistenceService implements PersistenceService {
   >();
   private readonly invitationRateEvents = new Map<string, number[]>();
   private readonly organization = new Map<string, ProjectOrganization>();
+  /**
+   * Sizes only, per project, newest last. Enough to reproduce the account's
+   * retention count and byte totals without keeping a second copy of every
+   * document in memory.
+   */
+  private readonly revisionBytes = new Map<string, number[]>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
@@ -741,9 +751,43 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    const document = createCheckpoint(normalized, request.reason);
+    const document = createCheckpoint(
+      withoutDerivedProjection(normalized),
+      request.reason
+    );
+    assertPersistableDocument(document);
     this.projects.set(request.projectId, document);
+    this.recordRevision(request.projectId, document);
     return document;
+  }
+
+  /**
+   * Mirrors the store's retention rule so tests and the no-D1 development
+   * server behave the same way the account does. Only the count matters here —
+   * the in-memory service never persists the bodies.
+   */
+  private recordRevision(projectId: string, document: ProjectDocument): void {
+    const history = this.revisionBytes.get(projectId) ?? [];
+    history.push(persistedDocumentBytes(document));
+    this.revisionBytes.set(projectId, history.slice(-MAX_PROJECT_REVISIONS));
+  }
+
+  async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
+    const owned = this.ownedProjects(userId);
+    const revisions = owned.flatMap(
+      (document) => this.revisionBytes.get(document.projectId) ?? []
+    );
+    return {
+      projectCount: owned.length,
+      documentBytes: owned.reduce(
+        (total, document) => total + persistedDocumentBytes(document),
+        0
+      ),
+      revisionBytes: revisions.reduce((total, bytes) => total + bytes, 0),
+      revisionCount: revisions.length,
+      documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+    };
   }
 
   async saveDocument(
