@@ -3,6 +3,8 @@ import {
   Archive,
   ArchiveRestore,
   ChevronDown,
+  CloudOff,
+  CloudUpload,
   Copy,
   GraduationCap,
   GripVertical,
@@ -42,6 +44,15 @@ interface StartScreenProps {
   onOpenDemo(definition: DemoDefinition): void;
   onOpenSettings(): void;
   onDuplicate(project: ProjectSummary): void;
+  /**
+   * Projects the account holds. Anything absent lives on this device alone —
+   * but only meaningfully so when `signedIn`, because a signed-out session has
+   * no account to compare against and must not label everything local-only.
+   */
+  cloudProjectIds: ReadonlySet<string>;
+  signedIn: boolean;
+  onSaveToAccount(project: ProjectSummary): void;
+  onSaveAllToAccount(projects: ProjectSummary[]): void;
   onMoveToShelf(project: ProjectSummary, status: ProjectStatus): void;
   onTogglePin(project: ProjectSummary): void;
   /** The shelf's projects in their new order, front to back. */
@@ -81,6 +92,10 @@ export function StartScreen({
   onOpenDemo,
   onOpenSettings,
   onDuplicate,
+  cloudProjectIds,
+  signedIn,
+  onSaveToAccount,
+  onSaveAllToAccount,
   onMoveToShelf,
   onTogglePin,
   onReorder,
@@ -166,6 +181,18 @@ export function StartScreen({
   // every position is on screen and in its stored order.
   const canReorder = shelf === 'active' && !search && !busy;
 
+  // Demos are rebuilt from their definitions on any device, so they are not
+  // work to rescue and would only pad the offer. Trashed projects are excluded
+  // for the same reason in reverse: uploading something on its way out is not
+  // what "save my work" means.
+  const localOnlyProjects = signedIn
+    ? userProjects.filter(
+        (project) =>
+          !cloudProjectIds.has(project.projectId) &&
+          projectOrganization(project).status !== 'deleted'
+      )
+    : [];
+
   function moveProject(projectId: string, toIndex: number) {
     const from = shelfProjects.findIndex(
       (project) => project.projectId === projectId
@@ -194,11 +221,22 @@ export function StartScreen({
     const daysLeft = organization.deletedAt
       ? daysUntilPurge(organization.deletedAt)
       : TRASH_RETENTION_DAYS;
+    const localOnly = signedIn && !cloudProjectIds.has(project.projectId);
 
     const preview = (
       <>
         <span className="start-tile-thumb">
           <PartThumbnail project={project} loadBodies={loadThumbnailBodies} />
+          {localOnly && !trashed && (
+            <span
+              className="start-tile-badge"
+              role="img"
+              aria-label="On this device only"
+              title="On this device only — not saved to your account."
+            >
+              <CloudOff size={12} aria-hidden="true" />
+            </span>
+          )}
         </span>
         <strong className="start-tile-name">{project.name}</strong>
         <small className="start-tile-meta">
@@ -374,6 +412,19 @@ export function StartScreen({
               </>
             ) : (
               <>
+                {localOnly && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onSaveToAccount(project);
+                    }}
+                  >
+                    <CloudUpload size={13} aria-hidden="true" />
+                    Save to my account
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -560,6 +611,27 @@ export function StartScreen({
               </>
             )}
           </div>
+
+          {localOnlyProjects.length > 0 && (
+            <div className="start-adopt-bar" role="status">
+              <CloudOff size={14} aria-hidden="true" />
+              <span>
+                {localOnlyProjects.length}{' '}
+                {localOnlyProjects.length === 1 ? 'project is' : 'projects are'}{' '}
+                on this device only.
+              </span>
+              <button
+                type="button"
+                className="start-shelf-action"
+                disabled={busy}
+                onClick={() => onSaveAllToAccount(localOnlyProjects)}
+              >
+                <CloudUpload size={13} aria-hidden="true" />
+                Save {localOnlyProjects.length === 1 ? 'it' : 'them all'} to my
+                account
+              </button>
+            </div>
+          )}
 
           <div className="start-tile-grid">
             {shelf === 'active' && (

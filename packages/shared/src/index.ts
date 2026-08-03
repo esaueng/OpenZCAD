@@ -1058,6 +1058,14 @@ export function duplicateProjectName(
 export interface CreateProjectRequest {
   name: string;
   units?: UnitSystem;
+  /**
+   * An existing device-local document to adopt into the account rather than a
+   * fresh project to mint. The document keeps its `projectId`, so the device's
+   * local copy and the shelf metadata it has already accumulated stay pointed
+   * at the same project once it has an account record. `units` is ignored when
+   * this is present — the document already has them.
+   */
+  document?: ProjectDocument;
 }
 
 export interface CreateProjectResponse {
@@ -1487,6 +1495,20 @@ export type CollaborationErrorCode =
  * limit from a rejected request.
  */
 export const MAX_PROJECT_NAME_LENGTH = 200;
+
+/**
+ * Largest document the account will store, as serialized JSON bytes. D1 keeps
+ * each document as one blob, so this is a row ceiling rather than a quota.
+ * Shared because three layers have to agree on it: the collaboration room
+ * refuses oversize frames, the persistence layer refuses oversize writes, and
+ * the client needs to name the limit instead of reporting a generic failure.
+ */
+export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
+
+/** Serialized size of `document`, measured the way the store measures it. */
+export function persistedDocumentBytes(document: ProjectDocument): number {
+  return new TextEncoder().encode(JSON.stringify(document)).byteLength;
+}
 
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
