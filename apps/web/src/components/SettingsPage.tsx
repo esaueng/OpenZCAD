@@ -24,13 +24,31 @@ import {
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type {
-  AccountStorageUsage,
-  AppSettings,
-  AppSettingsResponse,
-  AuthConfigResponse,
-  AuthSession
+import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  type AccountStorageUsage,
+  type AppSettings,
+  type AppSettingsResponse,
+  type AuthConfigResponse,
+  type AuthSession
 } from '@openzcad/shared';
+
+/**
+ * A typed number input still hands back NaN for an empty field, and the bounds
+ * are the store's rather than a suggestion — a delay outside them is normalized
+ * away on the way to the account, so it should never be reachable here.
+ */
+function clampAutosaveDelay(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return CLOUD_AUTOSAVE_DELAY_BOUNDS.default;
+  }
+  return Math.round(
+    Math.min(
+      Math.max(seconds, CLOUD_AUTOSAVE_DELAY_BOUNDS.min),
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
+    )
+  );
+}
 import { api } from '../lib/api';
 import {
   visibleSettingsSections,
@@ -902,10 +920,45 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Cloud autosave"
-                description="A project your account holds is copied there shortly after you stop editing, and again before the tab closes."
-                scope="Always on"
+                description="Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only with Ctrl/Cmd+S."
+                scope="Account"
               >
-                <span className="settings-state good">Active</span>
+                <Toggle
+                  label="Cloud autosave"
+                  checked={settings.files.cloudAutosave}
+                  onChange={(cloudAutosave) =>
+                    onChange({
+                      ...settings,
+                      files: { ...settings.files, cloudAutosave }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Cloud autosave delay"
+                description="Quiet time before the copy is written. A continuous edit is still written at least once a minute."
+                scope="Account"
+              >
+                <input
+                  type="number"
+                  aria-label="Cloud autosave delay in seconds"
+                  disabled={!settings.files.cloudAutosave}
+                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
+                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
+                  step={1}
+                  value={settings.files.cloudAutosaveDelaySeconds}
+                  onChange={(event) =>
+                    onChange({
+                      ...settings,
+                      files: {
+                        ...settings.files,
+                        cloudAutosaveDelaySeconds: clampAutosaveDelay(
+                          event.target.valueAsNumber
+                        )
+                      }
+                    })
+                  }
+                />
               </SettingRow>
               <SettingRow
                 title="Cloud revisions"

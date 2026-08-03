@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   deepClone,
   PANEL_WIDTH_LIMITS,
@@ -273,5 +274,69 @@ describe('application settings', () => {
         secret
       )
     ).rejects.toThrow('could not be decrypted');
+  });
+
+  it('reads settings written before cloud autosave as the defaults, not as off', () => {
+    // Turning autosave off is a choice. Absence is not that choice, and reading
+    // it as one would quietly stop syncing for every existing account.
+    const normalized = normalizeAppSettings({
+      general: { defaultUnits: 'mm' }
+    });
+    expect(normalized.files.cloudAutosave).toBe(true);
+    expect(normalized.files.cloudAutosaveDelaySeconds).toBe(
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.default
+    );
+  });
+
+  it('keeps the autosave delay inside the bounds every layer agrees on', () => {
+    expect(
+      normalizeAppSettings({ files: { cloudAutosaveDelaySeconds: 0 } }).files
+        .cloudAutosaveDelaySeconds
+    ).toBe(CLOUD_AUTOSAVE_DELAY_BOUNDS.min);
+    expect(
+      normalizeAppSettings({ files: { cloudAutosaveDelaySeconds: 9_000 } })
+        .files.cloudAutosaveDelaySeconds
+    ).toBe(CLOUD_AUTOSAVE_DELAY_BOUNDS.max);
+    expect(
+      normalizeAppSettings({ files: { cloudAutosaveDelaySeconds: 7.6 } }).files
+        .cloudAutosaveDelaySeconds
+    ).toBe(8);
+  });
+
+  it('carries the autosave preference through the account round trip', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.files = { cloudAutosave: false, cloudAutosaveDelaySeconds: 30 };
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files).toEqual({
+      cloudAutosave: false,
+      cloudAutosaveDelaySeconds: 30
+    });
+  });
+
+  it('accepts a payload from a client that predates the preference', () => {
+    const { files: _omitted, ...settings } = deepClone(DEFAULT_APP_SETTINGS);
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files.cloudAutosave).toBe(true);
+  });
+
+  it('clamps an out-of-range delay at the account boundary too', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.files = {
+      cloudAutosave: true,
+      cloudAutosaveDelaySeconds: 100_000
+    };
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files.cloudAutosaveDelaySeconds).toBe(
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
+    );
   });
 });

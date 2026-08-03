@@ -53,6 +53,11 @@ const SAVE_STATE_LABELS: Record<
   refused: {
     label: 'Too large',
     title: 'Too large for your account. Saved on this device.'
+  },
+  paused: {
+    label: 'This device',
+    title:
+      'Saved on this device · cloud autosave is off. Ctrl/Cmd+S updates your account.'
   }
 };
 

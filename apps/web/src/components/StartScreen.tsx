@@ -16,6 +16,7 @@ import {
   Search,
   Settings,
   Trash2,
+  TriangleAlert,
   X
 } from 'lucide-react';
 import {
@@ -50,6 +51,12 @@ interface StartScreenProps {
    * no account to compare against and must not label everything local-only.
    */
   cloudProjectIds: ReadonlySet<string>;
+  /**
+   * Projects whose two copies diverged and were never reconciled. Surfaced on
+   * the shelf because the divergence outlives the session that found it, and a
+   * user who closed the dialog needs a way back to it.
+   */
+  conflictedProjectIds: ReadonlySet<string>;
   signedIn: boolean;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
@@ -93,6 +100,7 @@ export function StartScreen({
   onOpenSettings,
   onDuplicate,
   cloudProjectIds,
+  conflictedProjectIds,
   signedIn,
   onSaveToAccount,
   onSaveAllToAccount,
@@ -222,20 +230,33 @@ export function StartScreen({
       ? daysUntilPurge(organization.deletedAt)
       : TRASH_RETENTION_DAYS;
     const localOnly = signedIn && !cloudProjectIds.has(project.projectId);
+    const conflicted = conflictedProjectIds.has(project.projectId);
 
     const preview = (
       <>
         <span className="start-tile-thumb">
           <PartThumbnail project={project} loadBodies={loadThumbnailBodies} />
-          {localOnly && !trashed && (
+          {conflicted && !trashed ? (
             <span
-              className="start-tile-badge"
+              className="start-tile-badge is-conflict"
               role="img"
-              aria-label="On this device only"
-              title="On this device only — not saved to your account."
+              aria-label="Changed in two places"
+              title="This project changed here and in your account. Open it to choose which to keep."
             >
-              <CloudOff size={12} aria-hidden="true" />
+              <TriangleAlert size={12} aria-hidden="true" />
             </span>
+          ) : (
+            localOnly &&
+            !trashed && (
+              <span
+                className="start-tile-badge"
+                role="img"
+                aria-label="On this device only"
+                title="On this device only — not saved to your account."
+              >
+                <CloudOff size={12} aria-hidden="true" />
+              </span>
+            )
           )}
         </span>
         <strong className="start-tile-name">{project.name}</strong>

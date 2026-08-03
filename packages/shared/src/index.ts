@@ -1276,6 +1276,16 @@ export interface AppSettings {
     linearSnap: number;
     angleSnap: number;
   };
+  /**
+   * How work reaches the account. There is no toggle for the device write —
+   * that is what protects the work, and it is not a preference.
+   */
+  files: {
+    /** Copy the open project to the account as you work. */
+    cloudAutosave: boolean;
+    /** Quiet time before a copy is written, in seconds. */
+    cloudAutosaveDelaySeconds: number;
+  };
   assistant: {
     enabled: boolean;
     credentialSource: AssistantCredentialSource;
@@ -1314,6 +1324,18 @@ export const PANEL_WIDTH_LIMITS: {
   assistant: { min: 300, max: 900, default: 360 }
 };
 
+/**
+ * Bounds on the cloud-autosave quiet time, in seconds. Shared so the browser,
+ * the Worker's parser, and the settings control agree. The floor is not zero:
+ * a write on every keystroke would spend the account's write budget on
+ * intermediate states nobody asked to keep.
+ */
+export const CLOUD_AUTOSAVE_DELAY_BOUNDS = {
+  min: 1,
+  max: 60,
+  default: 3
+} as const;
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
   general: {
@@ -1341,6 +1363,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     snapEnabled: true,
     linearSnap: 1,
     angleSnap: 15
+  },
+  files: {
+    cloudAutosave: true,
+    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default
   },
   assistant: {
     enabled: false,

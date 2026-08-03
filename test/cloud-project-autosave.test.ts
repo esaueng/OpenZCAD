@@ -487,6 +487,69 @@ describe('cloud project autosave — flushing', () => {
     controller.dispose();
   });
 
+  it('does not write while cloud autosave is switched off', async () => {
+    const { controller, saves, statuses } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.configure({ enabled: false });
+
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+    await controller.whenIdle();
+
+    expect(saves).toHaveLength(0);
+    expect(lastState(statuses)).toBe('paused');
+    controller.dispose();
+  });
+
+  it('does not sneak a write out on a flush while switched off', async () => {
+    // "Off" has to mean off. A page-hide drain is still this controller
+    // deciding to write, not the user asking it to.
+    const { controller, saves } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.configure({ enabled: false });
+    controller.schedule(documentAt(3, document));
+
+    await controller.flushPending();
+    expect(saves).toHaveLength(0);
+    controller.dispose();
+  });
+
+  it('sends the held edit as soon as autosave is switched back on', async () => {
+    const { controller, saves } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.configure({ enabled: false });
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    expect(saves).toHaveLength(0);
+
+    controller.configure({ enabled: true });
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.version).toBe(3);
+    controller.dispose();
+  });
+
+  it('takes a new idle delay without losing the queued edit', async () => {
+    const { controller, saves } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+    controller.configure({ idleDelayMs: 10_000 });
+
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS * 2);
+    expect(saves).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await controller.whenIdle();
+    expect(saves).toHaveLength(1);
+    controller.dispose();
+  });
+
   it('refuses to be used after disposal', () => {
     const { controller } = harness();
     controller.dispose();
