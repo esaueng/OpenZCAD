@@ -76,7 +76,14 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     id: 'files',
     label: 'Files & autosave',
     detail: 'Recovery, imports, and exports',
-    settings: ['Local autosave', 'Cloud revisions', 'STEP and STL exports']
+    settings: [
+      'Local autosave',
+      'Cloud autosave',
+      'Cloud autosave delay',
+      'Cloud revisions',
+      'Account storage',
+      'STEP and STL exports'
+    ]
   },
   {
     id: 'assistant',

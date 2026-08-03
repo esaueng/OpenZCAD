@@ -92,7 +92,7 @@ function recoveryHandlers(calls: string[] = []): ConflictResolutionHandlers {
     writeRecoveryCopy: vi.fn(async () => {
       calls.push('recovery');
     }),
-    useRoomVersion: vi.fn(async () => {
+    useRemoteVersion: vi.fn(async () => {
       calls.push('room');
     }),
     keepMyVersion: vi.fn(async () => {
@@ -158,8 +158,9 @@ describe('ProjectSharingDialog', () => {
     const conflict = {
       projectId: base.projectId,
       localDocument: version(base, 2),
-      roomDocument: version(base, 3),
-      expectedRoomVersion: 3
+      remoteDocument: version(base, 3),
+      expectedRemoteVersion: 3,
+      source: 'room' as const
     };
     const calls: string[] = [];
     const handlers = recoveryHandlers(calls);
@@ -195,8 +196,9 @@ describe('ProjectSharingDialog', () => {
     const conflict = {
       projectId: base.projectId,
       localDocument: version(base, 5),
-      roomDocument: version(base, 6),
-      expectedRoomVersion: 6
+      remoteDocument: version(base, 6),
+      expectedRemoteVersion: 6,
+      source: 'room' as const
     };
     const calls: string[] = [];
     const handlers = recoveryHandlers(calls);
@@ -226,7 +228,7 @@ describe('ProjectSharingDialog', () => {
     await waitFor(() => expect(calls).toEqual(['recovery', 'mine']));
     expect(handlers.keepMyVersion).toHaveBeenCalledWith({
       document: conflict.localDocument,
-      expectedRoomVersion: 6,
+      expectedRemoteVersion: 6,
       leaseId: 'lease_editor'
     });
   });

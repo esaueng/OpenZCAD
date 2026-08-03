@@ -468,7 +468,26 @@
   border-color: var(--color-border-strong);
 }
 
+/*
+ * The offer to upload device-only work. It reads as information rather than a
+ * warning: keeping a part on one machine is a legitimate choice, and the bar
+ * exists to make the alternative reachable, not to nag.
+ */
+.start-adopt-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-surface-1);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
 .start-tile-thumb {
+  position: relative;
   display: grid;
   place-items: center;
   height: 84px;
@@ -479,6 +498,34 @@
   border-radius: var(--radius-sm);
   color: var(--color-border-strong);
   overflow: hidden;
+}
+
+/*
+ * Sits over the preview rather than in the grid flow, so a part that is only on
+ * this device is marked without the thumbnail being resized around the mark.
+ */
+.start-tile-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  padding: 3px;
+  background: var(--color-surface-1);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+}
+
+/* The thumbnail's own svg rule fills the tile; the badge icon must not. */
+.start-tile-badge svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Device-only is an ordinary state; an unreconciled divergence is not. */
+.start-tile-badge.is-conflict {
+  color: var(--color-warning);
+  border-color: currentcolor;
 }
 
 .start-tile-thumb svg {

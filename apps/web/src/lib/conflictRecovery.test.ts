@@ -6,7 +6,7 @@ import {
   conflictFromDocuments,
   readUnresolvedConflict,
   rememberUnresolvedConflict,
-  resolveCollaborationConflict,
+  resolveProjectConflict,
   type ConflictResolutionHandlers
 } from './conflictRecovery';
 
@@ -19,7 +19,7 @@ function version(document: ProjectDocument, value: number): ProjectDocument {
 function handlers(): ConflictResolutionHandlers {
   return {
     writeRecoveryCopy: vi.fn(async () => undefined),
-    useRoomVersion: vi.fn(async () => undefined),
+    useRemoteVersion: vi.fn(async () => undefined),
     keepMyVersion: vi.fn(async () => undefined),
     saveLocalAsCopy: vi.fn(async () => undefined)
   };
@@ -32,7 +32,7 @@ describe('collaboration conflict recovery', () => {
     const marker = {
       projectId: 'project_reload',
       localVersion: 7,
-      roomVersion: 8,
+      remoteVersion: 8,
       detectedAt: 1234
     };
     rememberUnresolvedConflict(marker);
@@ -42,7 +42,7 @@ describe('collaboration conflict recovery', () => {
     expect(readUnresolvedConflict(marker.projectId)).toBeNull();
   });
 
-  it.each(['use-room', 'keep-mine', 'save-local-copy'] as const)(
+  it.each(['use-remote', 'keep-mine', 'save-local-copy'] as const)(
     'writes a recovery copy before %s mutates either document',
     async (resolution) => {
       const base = createProjectDocument('Conflict', owner);
@@ -55,7 +55,7 @@ describe('collaboration conflict recovery', () => {
         writeRecoveryCopy: vi.fn(async () => {
           calls.push('recovery');
         }),
-        useRoomVersion: vi.fn(async () => {
+        useRemoteVersion: vi.fn(async () => {
           calls.push('room');
         }),
         keepMyVersion: vi.fn(async () => {
@@ -66,7 +66,7 @@ describe('collaboration conflict recovery', () => {
         })
       };
 
-      await resolveCollaborationConflict(
+      await resolveProjectConflict(
         conflict,
         resolution,
         {
@@ -85,7 +85,7 @@ describe('collaboration conflict recovery', () => {
 
       expect(calls[0]).toBe('recovery');
       expect(calls.slice(1)).toEqual(
-        resolution === 'use-room'
+        resolution === 'use-remote'
           ? ['room']
           : resolution === 'keep-mine'
             ? ['mine']
@@ -100,15 +100,15 @@ describe('collaboration conflict recovery', () => {
     const recoveryHandlers = handlers();
 
     await expect(
-      resolveCollaborationConflict(
-        { ...conflict, expectedRoomVersion: 2 },
+      resolveProjectConflict(
+        { ...conflict, expectedRemoteVersion: 2 },
         'keep-mine',
         { role: 'owner', lease: null },
         recoveryHandlers
       )
-    ).rejects.toMatchObject({ code: 'ROOM_VERSION_MISMATCH' });
+    ).rejects.toMatchObject({ code: 'REMOTE_VERSION_MISMATCH' });
     await expect(
-      resolveCollaborationConflict(
+      resolveProjectConflict(
         conflict,
         'keep-mine',
         { role: 'viewer', lease: null },
@@ -116,7 +116,7 @@ describe('collaboration conflict recovery', () => {
       )
     ).rejects.toMatchObject({ code: 'VIEWER_FORBIDDEN' });
     await expect(
-      resolveCollaborationConflict(
+      resolveProjectConflict(
         conflict,
         'keep-mine',
         {
