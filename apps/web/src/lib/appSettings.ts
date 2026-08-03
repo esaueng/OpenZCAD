@@ -1,4 +1,5 @@
 import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   PANEL_WIDTH_LIMITS,
   type AppSettings,
@@ -87,6 +88,21 @@ function panelWidth(value: unknown, limits: PanelWidthLimits): number {
   return Math.round(Math.min(limits.max, Math.max(limits.min, value)));
 }
 
+/**
+ * A bounded preference whose out-of-range values are pulled to the nearest
+ * bound rather than replaced with the default. The Worker normalizes the same
+ * fields the same way, so a value cannot mean one thing here and another there.
+ */
+function clampedNumber(
+  value: unknown,
+  bounds: { min: number; max: number; default: number }
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return bounds.default;
+  }
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, value)));
+}
+
 function member<T extends string>(
   value: unknown,
   allowed: readonly T[],
@@ -105,6 +121,9 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   const layout = record(root.layout);
   const viewport = record(root.viewport);
   const sketching = record(root.sketching);
+  // Absent from settings written before cloud autosave was configurable, which
+  // reads as the defaults rather than as "off".
+  const files = record(root.files);
   const assistant = record(root.assistant);
   const experiments = record(root.experiments);
   return {
@@ -181,6 +200,13 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         defaults.sketching.angleSnap,
         1,
         90
+      )
+    },
+    files: {
+      cloudAutosave: boolean(files.cloudAutosave, defaults.files.cloudAutosave),
+      cloudAutosaveDelaySeconds: clampedNumber(
+        files.cloudAutosaveDelaySeconds,
+        CLOUD_AUTOSAVE_DELAY_BOUNDS
       )
     },
     assistant: {

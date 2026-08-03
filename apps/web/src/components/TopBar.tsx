@@ -9,6 +9,7 @@ import {
   Pencil,
   Redo2,
   Settings as SettingsIcon,
+  TriangleAlert,
   Undo2,
   Upload,
   Users
@@ -16,6 +17,49 @@ import {
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { CollaborationStatus } from '../lib/useCollaboration';
+import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+
+/**
+ * What the save button says, per state. Every one of these except `saving`
+ * means the work is already stored on this device — the wording differentiates
+ * how far it has got beyond that, and never implies work is at risk when it is
+ * not.
+ */
+const SAVE_STATE_LABELS: Record<
+  WorkspaceSaveState,
+  { label: string; title: string }
+> = {
+  saving: { label: 'Saving', title: 'Saving to this device…' },
+  local: {
+    label: 'Local only',
+    title: 'Saved on this device. Not in your account.'
+  },
+  syncing: {
+    label: 'Syncing',
+    title: 'Saved on this device · copying to your account…'
+  },
+  synced: {
+    label: 'Saved',
+    title: 'Saved on this device and in your account.'
+  },
+  offline: {
+    label: 'Offline',
+    title: 'Saved on this device · your account is unreachable right now.'
+  },
+  conflict: {
+    label: 'Conflict',
+    title: 'This project changed elsewhere. Your work is safe on this device.'
+  },
+  refused: {
+    label: 'Too large',
+    title: 'Too large for your account. Saved on this device.'
+  },
+  paused: {
+    label: 'Autosave off',
+    title:
+      'Saved on this device · cloud autosave is off. Ctrl/Cmd+S updates your account.'
+  }
+};
 
 interface TopBarProps {
   projectName: string | null;
@@ -25,7 +69,7 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
-  saveState: 'saved' | 'saving' | 'offline';
+  saveState: WorkspaceSaveState;
   artifacts: ArtifactRecord[];
   session: AuthSession | null;
   collaborationStatus: CollaborationStatus;
@@ -285,24 +329,22 @@ export function TopBar({
         </div>
       </details>
       <button
-        className="save-state topbar-action"
+        className={`save-state topbar-action is-${saveState}`}
         type="button"
         disabled={!projectName}
         onClick={onSave}
-        title="Save a revision (Ctrl+S)"
+        title={`${SAVE_STATE_LABELS[saveState].title} Click to save a revision (Ctrl+S).`}
       >
-        {saveState === 'saving' ? (
+        {saveState === 'saving' || saveState === 'syncing' ? (
           <LoaderCircle className="spin" size={14} aria-hidden="true" />
-        ) : saveState === 'offline' ? (
-          <CloudOff size={14} aria-hidden="true" />
-        ) : (
+        ) : saveState === 'conflict' || saveState === 'refused' ? (
+          <TriangleAlert size={14} aria-hidden="true" />
+        ) : saveState === 'synced' ? (
           <Check size={14} aria-hidden="true" />
+        ) : (
+          <CloudOff size={14} aria-hidden="true" />
         )}
-        {saveState === 'saving'
-          ? 'Saving'
-          : saveState === 'offline'
-            ? 'Local only'
-            : 'Saved'}
+        {SAVE_STATE_LABELS[saveState].label}
       </button>
       {session && (
         <span className="session-user" title={session.email ?? session.userId}>

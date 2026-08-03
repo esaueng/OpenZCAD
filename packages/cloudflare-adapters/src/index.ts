@@ -1,7 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactStorageError,
+  assertPersistableDocument,
   getInMemoryPersistence,
+  ProjectAdoptionError,
   PROJECT_ACTIVE_INVITATION_CAP,
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
@@ -19,7 +21,10 @@ import {
   applyOrganizationUpdate,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  MAX_PERSISTED_DOCUMENT_BYTES,
+  MAX_PROJECT_REVISIONS,
   nowIso,
+  persistedDocumentBytes,
   projectOrganization,
   PROJECT_STATUSES,
   sanitizeFileName,
@@ -27,6 +32,7 @@ import {
   toProjectId,
   toUploadSessionId,
   TRASH_RETENTION_MS,
+  type AccountStorageUsage,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
   type CreateProjectRequest,
@@ -51,16 +57,20 @@ import {
   type ProjectStatus,
   type ProjectSummary,
   type ReorderProjectsRequest,
+  type SaveProjectDocumentRequest,
+  type SaveProjectDocumentResponse,
   type SaveRevisionRequest,
   type UpdateProjectRequest,
   type UploadSessionRecord,
   type UserId
 } from '@openzcad/shared';
 import {
+  adoptProjectDocument,
   createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
-  normalizeDocument
+  normalizeDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 
 export interface CloudflareEnv {
@@ -68,6 +78,13 @@ export interface CloudflareEnv {
   AUTH_MODE?: 'development' | 'email-code';
   PROJECT_SHARING_ENABLED?: string;
   PROJECT_EDIT_LEASES_ENFORCED?: string;
+  /**
+   * Lets the project owner's own devices join a live room, independent of
+   * sharing. Deliberately a separate flag: sharing carries invitations, roles,
+   * and lease enforcement, and turning on device sync must not turn any of
+   * those on with it.
+   */
+  PROJECT_PERSONAL_SYNC_ENABLED?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_FACE_SKETCH_ENABLED?: string;
   AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED?: string;
@@ -126,6 +143,7 @@ export interface CloudflareEnv {
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',
+  'PROJECT_PERSONAL_SYNC_ENABLED',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_FACE_SKETCH_ENABLED',
   'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
@@ -640,11 +658,46 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createProject(userId, request);
     }
-    const document = createProjectDocument(request.name, userId, request.units);
+    const document = request.document
+      ? await this.prepareAdoption(userId, request.document, request.name)
+      : createProjectDocument(request.name, userId, request.units);
     return {
       project: await this.insertProject(userId, document),
       document
     };
+  }
+
+  /**
+   * Validates a device-local document on its way into the account. The id check
+   * is a pre-flight rather than the guard: the primary key would refuse a
+   * duplicate anyway, but a bare constraint violation cannot tell the device
+   * whether it should sync this project or upload it as a new one.
+   */
+  private async prepareAdoption(
+    userId: UserId,
+    source: ProjectDocument,
+    name: string
+  ): Promise<ProjectDocument> {
+    const existing = await this.env
+      .DB!.prepare(`SELECT user_id FROM projects WHERE id = ?`)
+      .bind(source.projectId)
+      .first<{ user_id: string }>();
+    if (existing) {
+      throw existing.user_id === userId
+        ? new ProjectAdoptionError(
+            'ALREADY_ADOPTED',
+            'This project is already saved to your account.'
+          )
+        : new ProjectAdoptionError(
+            'PROJECT_ID_TAKEN',
+            'That project id is already in use.'
+          );
+    }
+    const document = withoutDerivedProjection(
+      adoptProjectDocument(source, userId, name)
+    );
+    assertPersistableDocument(document);
+    return document;
   }
 
   async duplicateProject(
@@ -792,7 +845,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
-    const normalized = normalizeDocument(request.document);
+    const normalized = withoutDerivedProjection(
+      normalizeDocument(request.document)
+    );
     if (
       normalized.projectId !== request.projectId ||
       normalized.ownerUserId !== access.ownerUserId
@@ -800,17 +855,20 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(request.projectId);
     }
     const document = createCheckpoint(normalized, request.reason);
+    assertPersistableDocument(document);
     const documentJson = JSON.stringify(document);
+    const documentBytes = persistedDocumentBytes(document);
     const latestRevision = document.revisions.at(-1);
     if (!latestRevision) {
       throw new Error('Checkpoint creation did not produce a revision.');
     }
     const results = await this.env.DB.batch([
       this.env.DB.prepare(
-        `UPDATE projects SET document_json = ?, document_version = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
+        `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
       ).bind(
         documentJson,
         document.version,
+        documentBytes,
         nowIso(),
         document.name,
         request.projectId,
@@ -818,12 +876,13 @@ export class D1R2PersistenceService implements PersistenceService {
         request.expectedVersion
       ),
       this.env.DB.prepare(
-        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ? WHERE changes() > 0`
+        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
       ).bind(
         latestRevision.revisionId,
         request.projectId,
         request.reason,
         documentJson,
+        documentBytes,
         latestRevision.createdAt,
         userId
       )
@@ -842,7 +901,122 @@ export class D1R2PersistenceService implements PersistenceService {
         current.document_version
       );
     }
+    await this.pruneRevisions(request.projectId);
     return document;
+  }
+
+  /**
+   * Drops a project's oldest revisions once it holds more than
+   * {@link MAX_PROJECT_REVISIONS}.
+   *
+   * Runs after the insert rather than before, so the save that would exceed the
+   * limit is never the one refused — history is a convenience and must never
+   * cost somebody a save. A failure here is swallowed for the same reason: the
+   * document is already stored, and the next save prunes again.
+   */
+  private async pruneRevisions(projectId: string): Promise<void> {
+    try {
+      await this.env
+        .DB!.prepare(
+          `DELETE FROM revisions WHERE project_id = ? AND id NOT IN (
+             SELECT id FROM revisions WHERE project_id = ?
+             ORDER BY created_at DESC, id DESC LIMIT ?
+           )`
+        )
+        .bind(projectId, projectId, MAX_PROJECT_REVISIONS)
+        .run();
+    } catch {
+      // Retention is housekeeping. It does not get to fail a save.
+    }
+  }
+
+  async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().getStorageUsage(userId);
+    }
+    const totals = await this.env.DB.prepare(
+      `SELECT COUNT(*) AS project_count, COALESCE(SUM(document_bytes), 0) AS document_bytes
+       FROM projects WHERE user_id = ?`
+    )
+      .bind(userId)
+      .first<{ project_count: number; document_bytes: number }>();
+    const revisions = await this.env.DB.prepare(
+      `SELECT COUNT(*) AS revision_count, COALESCE(SUM(revisions.document_bytes), 0) AS revision_bytes
+       FROM revisions
+       JOIN projects ON projects.id = revisions.project_id
+       WHERE projects.user_id = ?`
+    )
+      .bind(userId)
+      .first<{ revision_count: number; revision_bytes: number }>();
+    return {
+      projectCount: totals?.project_count ?? 0,
+      documentBytes: totals?.document_bytes ?? 0,
+      revisionBytes: revisions?.revision_bytes ?? 0,
+      revisionCount: revisions?.revision_count ?? 0,
+      documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
+      maxRevisionsPerProject: MAX_PROJECT_REVISIONS
+    };
+  }
+
+  /**
+   * The continuous-sync write: the same fenced update as `saveRevision`,
+   * without the `revisions` insert. Splitting them is what makes autosave
+   * affordable — a revision row is a whole extra copy of the document, and
+   * writing one per autosave would make stored bytes a function of how fast
+   * somebody types rather than of how much work they did.
+   */
+  async saveDocument(
+    userId: UserId,
+    request: SaveProjectDocumentRequest
+  ): Promise<SaveProjectDocumentResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().saveDocument(userId, request);
+    }
+    const access = await this.requireProjectEdit(userId, request.projectId);
+    const normalized = withoutDerivedProjection(
+      normalizeDocument(request.document)
+    );
+    if (
+      normalized.projectId !== request.projectId ||
+      normalized.ownerUserId !== access.ownerUserId
+    ) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    assertPersistableDocument(normalized);
+    const updatedAt = nowIso();
+    const result = await this.env.DB.prepare(
+      `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
+    )
+      .bind(
+        JSON.stringify(normalized),
+        normalized.version,
+        persistedDocumentBytes(normalized),
+        updatedAt,
+        normalized.name,
+        request.projectId,
+        access.ownerUserId,
+        request.expectedVersion
+      )
+      .run();
+    if (result.meta?.changes === 0) {
+      const current = await this.env.DB.prepare(
+        `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
+      )
+        .bind(request.projectId, access.ownerUserId)
+        .first<{ document_version: number }>();
+      if (!current) {
+        throw new ProjectNotFoundError(request.projectId);
+      }
+      throw new RevisionConflictError(
+        request.projectId,
+        current.document_version
+      );
+    }
+    return {
+      projectId: request.projectId,
+      version: normalized.version,
+      updatedAt
+    };
   }
 
   async createUploadSession(
@@ -1047,7 +1221,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const updatedAt = nowIso();
     await this.env
       .DB!.prepare(
-        `INSERT INTO projects (id, user_id, name, document_json, document_version, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         document.projectId,
@@ -1055,6 +1229,7 @@ export class D1R2PersistenceService implements PersistenceService {
         document.name,
         JSON.stringify(document),
         document.version,
+        persistedDocumentBytes(document),
         updatedAt,
         organization.status,
         organization.pinned ? 1 : 0,
@@ -1282,6 +1457,10 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       revisionCount: document.revisions.length,
       updatedAt: row.updated_at,
+      // Read from the document rather than the row's `document_version` so the
+      // number always describes the blob this summary was built from, even if
+      // the two ever disagree.
+      documentVersion: document.version,
       organization: organizationFromRow(row)
     };
   } catch {
@@ -1367,14 +1546,15 @@ const ROOM_STORAGE_SCHEMA = 1;
 const MAX_ROOM_HISTORY = 20;
 
 /**
- * Ceiling for any document the room stores. SQLite-backed Durable Object
- * storage rejects a single value over 2 MiB, and every document now occupies a
- * key of its own, so this is the real limit rather than a guess at how far the
- * whole room may grow. Documents above it are refused before any in-memory
- * state moves, because a write that fails after the mutation leaves the room
- * serving state that no longer survives eviction.
+ * The room reuses the account's document ceiling
+ * ({@link MAX_PERSISTED_DOCUMENT_BYTES}) rather than setting its own, so a
+ * document cannot be small enough to live in the room and too large to be
+ * saved. SQLite-backed Durable Object storage independently rejects a single
+ * value over 2 MiB, and every document now occupies a key of its own, so the
+ * shared limit is also below the hard one. Documents above it are refused
+ * before any in-memory state moves, because a write that fails after the
+ * mutation leaves the room serving state that no longer survives eviction.
  */
-const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
 
 /**
  * Structural limits applied to client JSON before it reaches `normalizeDocument`
