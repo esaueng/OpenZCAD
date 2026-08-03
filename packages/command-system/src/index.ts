@@ -51,6 +51,7 @@ import {
   transformBody,
   updateFeature,
   updateSketch,
+  translateSketch,
   type BooleanInput,
   type DirectEditInput,
   type ExtrudeInput,
@@ -71,6 +72,7 @@ import {
   type SketchObjectAddInput,
   type SketchObjectDeleteInput,
   type SketchObjectUpdateInput,
+  type SketchTranslateInput,
   type SketchUpdateInput,
   type ShellInput,
   type SolidOffsetInput,
@@ -91,6 +93,7 @@ export type CommandKind =
   | 'primitive.add'
   | 'sketch.add'
   | 'sketch.update'
+  | 'sketch.translate'
   | 'sketch.object.add'
   | 'sketch.object.update'
   | 'sketch.object.delete'
@@ -134,6 +137,7 @@ export type AnyCommand =
   | CommandDefinition<PrimitiveInput>
   | CommandDefinition<SketchInput>
   | CommandDefinition<SketchUpdateInput>
+  | CommandDefinition<SketchTranslateInput>
   | CommandDefinition<SketchObjectAddInput>
   | CommandDefinition<SketchObjectUpdateInput>
   | CommandDefinition<SketchObjectDeleteInput>
@@ -426,6 +430,33 @@ export const commandFactories = {
       (document) => {
         if (!findSketch(document, payload.sketchId)) {
           throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  translateSketch(
+    payload: SketchTranslateInput,
+    label = 'Move sketch'
+  ): CommandDefinition<SketchTranslateInput> {
+    return makeCommand(
+      'sketch.translate',
+      label,
+      payload,
+      (document) => translateSketch(document, payload),
+      (document) => {
+        if (
+          ![payload.du, payload.dv, payload.dn ?? 0].every(Number.isFinite)
+        ) {
+          throw new Error('Sketch translation must be finite.');
+        }
+        const sketch = findSketch(document, payload.sketchId);
+        if (!sketch) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+        if ((payload.dn ?? 0) !== 0 && sketch.planeRef.type !== 'canonical') {
+          throw new Error(
+            'A face-attached sketch cannot move along its normal.'
+          );
         }
       }
     );
@@ -1643,6 +1674,9 @@ export function replayCommands(
         break;
       case 'sketch.add':
         next = addSketchFeature(next, command.payload as SketchInput).document;
+        break;
+      case 'sketch.translate':
+        next = translateSketch(next, command.payload as SketchTranslateInput);
         break;
       case 'sketch.update':
         next = updateSketch(next, command.payload as SketchUpdateInput);
