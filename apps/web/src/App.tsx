@@ -111,6 +111,17 @@ import {
   CloudProjectAutosave,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
+import {
+  decideProjectSync,
+  shouldPollForFreshness
+} from './lib/projectSyncDecision';
+
+/**
+ * How often an open cloud project checks whether another device has moved it.
+ * Focus and reconnect cover the cases that matter most; the interval is the
+ * backstop for a tab left open and in front of somebody.
+ */
+const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 import { mark, measure, timed, timedAsync } from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
 import {
@@ -662,7 +673,13 @@ export function App() {
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [collaborationRollout, setCollaborationRollout] = useState({
     sharingEnabled: false,
-    editLeasesEnforced: false
+    editLeasesEnforced: false,
+    /**
+     * The owner's own devices may join a room. Independent of `sharingEnabled`
+     * on purpose — it must never be read as permission to invite anyone, show
+     * sharing UI, or enforce a lease.
+     */
+    personalSyncEnabled: false
   });
   const [session, setSession] = useState<AuthSession | null>(null);
   const sessionRef = useRef(session);
@@ -883,7 +900,11 @@ export function App() {
     // account cookies to a collaboration room after this exact project has
     // been resolved as a cloud-backed document.
     session:
-      cloudAvailable && collaborationRollout.sharingEnabled ? session : null,
+      cloudAvailable &&
+      (collaborationRollout.sharingEnabled ||
+        collaborationRollout.personalSyncEnabled)
+        ? session
+        : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -893,12 +914,26 @@ export function App() {
       ) {
         return;
       }
+      // The room and the freshness poll are two routes to the same place, so
+      // they have to leave the same state behind: without re-baselining here,
+      // the next autosave would be fenced against a version this device has
+      // already moved past and would report a conflict that does not exist.
+      remoteVersionsRef.current.set(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
       hydrateDocument(remoteDocument, {
         restoreView: false,
         rememberProject: false
       });
       setStatus(
-        `Applied live revision ${remoteDocument.version} from a collaborator.`
+        collaborationRollout.sharingEnabled
+          ? `Applied live revision ${remoteDocument.version} from a collaborator.`
+          : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
     },
     onConflict(remoteDocument) {
@@ -1139,6 +1174,89 @@ export function App() {
     };
   }, []);
 
+  /**
+   * Asks the account whether the open project has moved elsewhere, and pulls it
+   * when this device has nothing of its own outstanding.
+   *
+   * A version comparison, not a document fetch — cheap enough to be the
+   * permanent answer rather than a placeholder for the live room. It narrows
+   * the window in which two devices diverge unnoticed; it does not close it,
+   * which is what the room is for.
+   */
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (
+      !shouldPollForFreshness({
+        projectId,
+        signedIn: Boolean(session),
+        accountHoldsProject: Boolean(
+          projectId && remoteVersionsRef.current.has(projectId)
+        ),
+        awaitingResolution: cloudProjectAutosaveRef.current?.isHalted !== false
+      })
+    ) {
+      return;
+    }
+    let cancelled = false;
+
+    async function check() {
+      const controller = cloudProjectAutosaveRef.current;
+      const current = managerRef.current?.document;
+      if (cancelled || !controller || !current || controller.isHalted) {
+        return;
+      }
+      const summary = (
+        await api.listProjects().catch(() => null)
+      )?.projects.find((project) => project.projectId === current.projectId);
+      if (cancelled || summary?.documentVersion === undefined) {
+        return;
+      }
+      const action = decideProjectSync({
+        localVersion: current.version,
+        accountVersion: summary.documentVersion,
+        lastSyncedVersion: controller.syncedVersion,
+        hasUnsentChanges: controller.hasPendingChanges
+      });
+      if (action !== 'pull') {
+        // `push` is already the autosave controller's job, and `conflict` is
+        // raised by the write that gets fenced rather than guessed at here.
+        return;
+      }
+      const remote = await api.loadProject(current.projectId).catch(() => null);
+      const live = managerRef.current?.document;
+      // Anything the user did while the document was in flight makes it stale.
+      if (
+        cancelled ||
+        !remote ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version ||
+        controller.hasPendingChanges
+      ) {
+        return;
+      }
+      await saveLocalProject(remote);
+      remoteVersionsRef.current.set(remote.projectId, remote.version);
+      controller.adoptAccountVersion(remote.projectId, remote.version);
+      hydrateDocument(remote);
+      setStatus(`Updated to the version saved on another device.`);
+    }
+
+    const onFocus = () => void check();
+    const interval = window.setInterval(
+      () => void check(),
+      FRESHNESS_POLL_INTERVAL_MS
+    );
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onFocus);
+    };
+  }, [doc?.projectId, session]);
+
   useEffect(() => {
     const controller = cloudSettingsAutosaveRef.current;
     const userId = session?.userId ?? null;
@@ -1211,7 +1329,8 @@ export function App() {
           sharingEnabled: health?.projectSharingEnabled === true,
           editLeasesEnforced:
             health?.projectSharingEnabled === true &&
-            health.projectEditLeasesEnforced === true
+            health.projectEditLeasesEnforced === true,
+          personalSyncEnabled: health?.projectPersonalSyncEnabled === true
         });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(

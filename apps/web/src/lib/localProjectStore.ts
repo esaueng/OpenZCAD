@@ -144,6 +144,7 @@ export async function listLocalProjects(): Promise<ProjectSummary[]> {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       updatedAt: document.derived.updatedAt,
       revisionCount: document.checkpoints.length,
+      documentVersion: document.version,
       // Left undefined when this device has never organised the project, so a
       // merge can fall back to whatever the account knows instead of treating
       // "no record" as "active, unpinned, first".

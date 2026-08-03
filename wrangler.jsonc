@@ -28,6 +28,10 @@
     "AI_REASONING_EFFORT": "high",
     "PROJECT_SHARING_ENABLED": "false",
     "PROJECT_EDIT_LEASES_ENFORCED": "false",
+    // The owner's own devices joining a live room. Off pending the same
+    // controlled rollout as sharing, but tracked separately: enabling this must
+    // never be a way to enable invitations, roles, or lease enforcement.
+    "PROJECT_PERSONAL_SYNC_ENABLED": "false",
     "AI_GLOBAL_DAILY_REQUEST_LIMIT": "100",
     "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "400"
   },

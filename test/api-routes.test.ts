@@ -1300,6 +1300,58 @@ describe('worker api routes', () => {
     });
   });
 
+  it('reports each project’s document version in the listing', async () => {
+    // The pull side asks "am I behind?" from the listing it already fetches,
+    // rather than pulling whole documents to find out.
+    const created = await createProject('Versioned');
+    await worker.fetch(
+      post(`/api/projects/${created.document.projectId}/revisions`, {
+        projectId: created.document.projectId,
+        reason: 'Manual save',
+        expectedVersion: created.document.version,
+        document: created.document
+      }),
+      env
+    );
+
+    const listed = (await (
+      await worker.fetch(new Request('https://example.com/api/projects'), env)
+    ).json()) as { projects: ProjectSummary[] };
+    const summary = listed.projects.find(
+      (project) => project.projectId === created.document.projectId
+    );
+    expect(summary?.documentVersion).toBe(created.document.version);
+  });
+
+  it('reports personal device sync separately from sharing', async () => {
+    // Turning on device sync must never read as permission to invite anyone.
+    const health = (await (
+      await worker.fetch(new Request('https://example.com/api/health'), {
+        ...env,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      })
+    ).json()) as {
+      projectPersonalSyncEnabled: boolean;
+      projectSharingEnabled: boolean;
+      projectEditLeasesEnforced: boolean;
+    };
+    expect(health.projectPersonalSyncEnabled).toBe(true);
+    expect(health.projectSharingEnabled).toBe(false);
+    expect(health.projectEditLeasesEnforced).toBe(false);
+  });
+
+  it('keeps sharing routes closed while personal sync is on', async () => {
+    const created = await createProject('Still Private');
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/sharing`
+      ),
+      { ...env, PROJECT_PERSONAL_SYNC_ENABLED: 'true' }
+    );
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({ code: 'FEATURE_DISABLED' });
+  });
+
   it('refuses a document save whose body disagrees with the url', async () => {
     const created = await createProject('Mismatched');
     const other = await createProject('Other');

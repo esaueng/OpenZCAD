@@ -1013,7 +1013,8 @@ function summarizeDocument(document: ProjectDocument): ProjectSummary {
     name: document.name,
     lastRevisionId: latestRevision?.revisionId,
     revisionCount: document.revisions.length,
-    updatedAt: latestRevision?.createdAt ?? nowIso()
+    updatedAt: latestRevision?.createdAt ?? nowIso(),
+    documentVersion: document.version
   };
 }
 
