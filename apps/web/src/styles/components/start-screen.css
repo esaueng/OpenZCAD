@@ -522,6 +522,12 @@
   height: 12px;
 }
 
+/* Device-only is an ordinary state; an unreconciled divergence is not. */
+.start-tile-badge.is-conflict {
+  color: var(--color-warning);
+  border-color: currentcolor;
+}
+
 .start-tile-thumb svg {
   width: 100%;
   height: 100%;

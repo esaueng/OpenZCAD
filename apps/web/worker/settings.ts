@@ -1,4 +1,5 @@
 import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   deepClone,
   nowIso,
@@ -105,6 +106,22 @@ function optionalPanelWidth(value: unknown, limits: PanelWidthLimits): number {
     return limits.default;
   }
   return Math.round(Math.min(limits.max, Math.max(limits.min, value)));
+}
+
+/**
+ * An optional bounded preference: unusable becomes the default, out of range
+ * becomes the nearest bound. Clamping rather than rejecting keeps one bad
+ * number from failing a whole settings save, and matches how panel widths and
+ * the browser's own normalization treat the same shape of value.
+ */
+function optionalBoundedNumber(
+  value: unknown,
+  bounds: { min: number; max: number; default: number }
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return bounds.default;
+  }
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, value)));
 }
 
 function requiredNumber(
@@ -242,9 +259,15 @@ export function parseUpdateAppSettingsRequest(
   const layout = asRecord(settings.layout ?? {}, '"settings.layout"');
   const viewport = asRecord(settings.viewport, '"settings.viewport"');
   const sketching = asRecord(settings.sketching, '"settings.sketching"');
+  // Optional in the payload so a client from before cloud autosave was
+  // configurable keeps saving instead of being rejected.
+  const files = asRecord(settings.files ?? {}, '"settings.files"');
   const assistant = asRecord(settings.assistant, '"settings.assistant"');
   // Experiments are optional in the payload so older clients keep saving.
-  const experiments = asRecord(settings.experiments ?? {}, '"settings.experiments"');
+  const experiments = asRecord(
+    settings.experiments ?? {},
+    '"settings.experiments"'
+  );
   const provider = requiredMember(assistant, 'provider', PROVIDERS);
   const rawBaseUrl = requiredString(assistant, 'baseUrl', 2_048, true);
   const baseUrl =
@@ -298,6 +321,17 @@ export function parseUpdateAppSettingsRequest(
         snapEnabled: requiredBoolean(sketching, 'snapEnabled'),
         linearSnap: requiredNumber(sketching, 'linearSnap', 0.001, 10_000),
         angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90)
+      },
+      files: {
+        cloudAutosave:
+          typeof files.cloudAutosave === 'boolean' ? files.cloudAutosave : true,
+        // Falls back to the default rather than clamping or rejecting, matching
+        // how the browser normalizes the same field and how the other optional
+        // preferences behave. A cosmetic number is never worth failing a save.
+        cloudAutosaveDelaySeconds: optionalBoundedNumber(
+          files.cloudAutosaveDelaySeconds,
+          CLOUD_AUTOSAVE_DELAY_BOUNDS
+        )
       },
       assistant: {
         enabled: requiredBoolean(assistant, 'enabled'),

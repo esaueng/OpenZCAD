@@ -265,6 +265,7 @@ import { preflightCadPatch } from './lib/aiPatchPreflight';
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
+  readUnresolvedConflict,
   resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
@@ -1229,6 +1230,16 @@ export function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    cloudProjectAutosaveRef.current?.configure({
+      enabled: appSettings.files.cloudAutosave,
+      idleDelayMs: appSettings.files.cloudAutosaveDelaySeconds * 1000
+    });
+  }, [
+    appSettings.files.cloudAutosave,
+    appSettings.files.cloudAutosaveDelaySeconds
+  ]);
 
   /**
    * Points the autosave controller at whichever project is open, and only when
@@ -6007,6 +6018,22 @@ export function App() {
     return <StartupScreen />;
   }
 
+  /**
+   * Projects carrying an unresolved divergence marker. Recomputed from the
+   * shelf rather than tracked in state: the markers outlive the session that
+   * wrote them, so reading them is the only way the shelf can be right after a
+   * reload.
+   */
+  const conflictedProjectIds = useMemo(
+    () =>
+      new Set(
+        projects
+          .map((project) => project.projectId)
+          .filter((projectId) => readUnresolvedConflict(projectId) !== null)
+      ),
+    [projects]
+  );
+
   // Settings layers over whatever is behind it instead of replacing it.
   // Returning it in place of the shell unmounted the whole workspace, and with
   // it the assistant's conversation and any request still streaming.
@@ -6057,6 +6084,7 @@ export function App() {
           onOpenSettings={openSettings}
           onDuplicate={(project) => void handleDuplicateProject(project)}
           cloudProjectIds={cloudProjectIds}
+          conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
