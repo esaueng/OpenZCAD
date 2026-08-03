@@ -1,8 +1,4 @@
-import type {
-  FaceTopologyReferenceV5,
-  SketchPlaneRef,
-  TopologySelection
-} from '@openzcad/shared';
+import type { SketchPlaneRef, TopologySelection } from '@openzcad/shared';
 import {
   preferredCapability,
   selectionCapabilities,
@@ -21,8 +17,6 @@ import {
 export interface FaceTarget extends FaceCapabilityTarget {
   bodyId: string;
   topologyId: string;
-  /** Persistent exact identity when the current kernel projection proves it. */
-  reference?: FaceTopologyReferenceV5;
   /** World-space click point captured at selection. */
   point: [number, number, number];
   /** Outward face normal at the click point. */
@@ -401,6 +395,8 @@ export interface ToolCardAction {
   id: SelectionActionId;
   label: string;
   active: boolean;
+  enabled: boolean;
+  disabledReason?: string;
 }
 
 export interface ToolCardModel {
@@ -444,6 +440,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       const actions = capabilities.map((capability) => ({
         id: capability.action,
         label: capability.label,
+        enabled: capability.enabled,
+        ...(capability.disabledReason
+          ? { disabledReason: capability.disabledReason }
+          : {}),
         active:
           (state.op === 'offset-face' && capability.action === 'offset-face') ||
           (state.op === 'resize-cylinder-radius' &&
@@ -479,6 +479,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       }).map((capability) => ({
         id: capability.action,
         label: capability.label,
+        enabled: capability.enabled,
+        ...(capability.disabledReason
+          ? { disabledReason: capability.disabledReason }
+          : {}),
         active: capability.action === state.op
       }));
       return {
