@@ -47,6 +47,18 @@ Legacy face attachments without `faceReference` continue using their stored
 frame and emit a warning. This preserves old documents without pretending that
 the snapshot has acquired persistent attachment semantics.
 
+Product creation is fail-closed at the same boundary. The UI only creates a
+new face attachment when the current exact planar face carries a schema-v5
+reference whose `currentHash` matches the picked face. Hash-only planar faces
+remain available for their supported direct edits, but Sketch is disabled with
+an explicit explanation. The UI does not synthesize a reference or silently
+create another legacy snapshot.
+
+An existing legacy attachment can be converted explicitly to a fixed plane.
+That undoable edit copies the stored migration frame into a
+`SketchPlaneRef.type === "frame"`, preserving the current geometry while
+honestly dropping the unsupported face-association claim.
+
 ## Consequences
 
 - Supported sketches follow valid upstream transforms and dimensional changes.
@@ -54,7 +66,8 @@ the snapshot has acquired persistent attachment semantics.
   neither path can invent a replacement face.
 - A deleted or unprovable source fails visibly instead of moving a sketch.
 - Legacy documents remain replayable, but their warning identifies snapshot
-  behavior and the need to reselect the face.
+  behavior and offers an explicit geometry-preserving conversion to a fixed
+  plane.
 - Full attachment coverage remains bounded by ADR-013 lineage coverage. A
   hash-only boolean, blend, pattern, direct edit, or STEP face does not become
   lineage-safe merely because it is planar.
@@ -65,3 +78,6 @@ The shared resolver has unit coverage for stable movement and refusal of
 deleted, ambiguous, non-planar, invalid, and unsupported references. Both exact
 adapter suites exercise history-position resolution. Product and AI creation
 copy the current exact face reference and deterministic attachment frame.
+Product unit and interaction coverage also prove that hash-only planar faces
+retain Offset Face while refusing Sketch, and that legacy-to-fixed conversion
+removes the diagnostic without changing the derived body representation.
