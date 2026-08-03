@@ -79,6 +79,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Local autosave',
       'Cloud autosave',
+      'Cloud autosave delay',
       'Cloud revisions',
       'Account storage',
       'STEP and STL exports'
