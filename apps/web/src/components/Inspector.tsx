@@ -28,11 +28,13 @@ import {
   PrimitiveForm,
   RevolveForm,
   SketchForm,
+  TextSketchForm,
   TransformForm,
   type BodyOption,
   type EdgeModifierFormValue,
   type PatternFormValue,
   type SketchFormValue,
+  type TextSketchFormValue,
   type SketchOption,
   type TransformFormValue
 } from './forms/FeatureForms';
@@ -85,6 +87,9 @@ export interface InspectorCallbacks {
     dimensions: Record<string, ParamValue>
   ): void;
   onApplySketch(feature: FeatureNode, value: SketchFormValue): void;
+  onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
+  /** Re-enters viewport sketch mode for the feature's sketch. */
+  onEditSketchInViewport(feature: FeatureNode): void;
   onApplyExtrude(
     feature: FeatureNode,
     value: { name: string; sketchId: SketchId; distance: ParamValue }
@@ -508,6 +513,27 @@ export function Inspector(props: InspectorProps) {
             props.onApplyPrimitive(selectedFeature, name, dimensions)
           }
           onCancel={props.onCancel}
+        />
+      );
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketchObject &&
+      selectedSketchObject.objectKind === 'text'
+    ) {
+      // Text sketches get their own form: the closed-shape form below would
+      // present them as a rectangle, and applying it would replace the text.
+      form = (
+        <TextSketchForm
+          key={editKey}
+          scope={scope}
+          initial={{
+            name: selectedFeature.name,
+            object: selectedSketchObject
+          }}
+          onSubmit={(value) => props.onApplyTextSketch(selectedFeature, value)}
+          onCancel={props.onCancel}
+          onEditInViewport={() => props.onEditSketchInViewport(selectedFeature)}
         />
       );
     } else if (
