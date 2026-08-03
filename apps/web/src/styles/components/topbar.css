@@ -304,6 +304,17 @@
   background: var(--color-surface-hover);
 }
 
+/*
+ * Only the two states that need a decision are coloured. The rest — including
+ * "saved on this device only" — are ordinary outcomes, and tinting them would
+ * suggest work is at risk when it is sitting safely in IndexedDB.
+ */
+.save-state.is-conflict,
+.save-state.is-refused {
+  color: var(--color-warning);
+  border-color: currentcolor;
+}
+
 .session-user {
   max-width: 150px;
   overflow: hidden;
@@ -343,4 +354,3 @@
     transform: rotate(360deg);
   }
 }
-

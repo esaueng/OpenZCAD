@@ -1120,6 +1120,28 @@ export interface SaveRevisionRequest {
   document: ProjectDocument;
 }
 
+/**
+ * A continuous-sync write: the same fenced update as a revision save, without
+ * the history entry. Autosave uses this so a long editing session costs a
+ * bounded number of row updates rather than one full document snapshot per
+ * save; explicit checkpoints still go through {@link SaveRevisionRequest}.
+ */
+export interface SaveProjectDocumentRequest {
+  projectId: ProjectId;
+  expectedVersion: number;
+  document: ProjectDocument;
+}
+
+/**
+ * Acknowledgement only. The whole document does not come back — the client
+ * already has it, and returning it would double the cost of every autosave.
+ */
+export interface SaveProjectDocumentResponse {
+  projectId: ProjectId;
+  version: number;
+  updatedAt: string;
+}
+
 export interface CreateUploadSessionRequest {
   projectId: ProjectId;
   fileName: string;
