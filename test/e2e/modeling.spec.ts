@@ -311,6 +311,85 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('refuses a new face sketch after a hash-only direct edit', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Direct Edit Sketch Guard');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const findPlanarFacePoint = async () => {
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+      for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+        const candidate = {
+          x: bounds!.x + bounds!.width * xRatio,
+          y: bounds!.y + bounds!.height * yRatio
+        };
+        await page.mouse.move(candidate.x, candidate.y);
+        if (
+          (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+        ) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  };
+
+  const sourceFacePoint = await findPlanarFacePoint();
+  expect(sourceFacePoint).not.toBeNull();
+  await page.mouse.click(sourceFacePoint!.x, sourceFacePoint!.y);
+  await page.getByTestId('direct-manipulation-value').click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  await offsetKeypad.getByRole('textbox').fill('2');
+  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toBeVisible();
+
+  const editedFacePoint = await findPlanarFacePoint();
+  expect(editedFacePoint).not.toBeNull();
+  await page.mouse.click(editedFacePoint!.x, editedFacePoint!.y);
+  const offsetCard = page.getByRole('region', {
+    name: 'Offset Face operation'
+  });
+  const sketchAction = offsetCard.getByRole('tab', {
+    name: /Sketch: This edited face has no stable topology reference/
+  });
+  await expect(sketchAction).toBeDisabled();
+  await expect(sketchAction).toHaveAttribute(
+    'title',
+    /no stable topology reference/
+  );
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.mouse.click(editedFacePoint!.x, editedFacePoint!.y);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'This edited face has no stable topology reference'
+  );
+  await expect(
+    page.locator('.feature-row-main', { hasText: /^Sketch/ })
+  ).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('keeps a source circle stable over its coincident extrude edge', async ({
   page
 }) => {

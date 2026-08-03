@@ -6,6 +6,9 @@
  * instead of re-implementing topology checks independently.
  */
 
+import type { FaceTopologyReferenceV5 } from '@openzcad/shared';
+import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
+
 export type SelectionActionId =
   | 'offset-face'
   | 'resize-radial-face'
@@ -30,6 +33,8 @@ export interface SelectionCapability {
 export interface FaceCapabilityTarget {
   surfaceType: 'planar' | 'cylindrical' | 'other';
   hash?: number;
+  /** Persistent exact identity when the current kernel projection proves it. */
+  reference?: FaceTopologyReferenceV5;
   radius?: number;
 }
 
@@ -55,6 +60,21 @@ function enabled(
   };
 }
 
+function disabled(
+  action: SelectionActionId,
+  label: string,
+  disabledReason: string
+): SelectionCapability {
+  return {
+    action,
+    label,
+    enabled: false,
+    disabledReason,
+    previewKind: 'none',
+    preferred: false
+  };
+}
+
 /**
  * Returns actions in their UI order. Unsupported actions are omitted unless a
  * disabled reason is useful to the person holding the current selection.
@@ -66,6 +86,10 @@ export function selectionCapabilities(
     case 'face': {
       const { target } = selection;
       if (target.surfaceType === 'planar' && target.hash !== undefined) {
+        const sketchCapability =
+          target.reference?.currentHash === target.hash
+            ? enabled('sketch-on-face', 'Sketch', undefined, 'none')
+            : disabled('sketch-on-face', 'Sketch', UNSTABLE_FACE_SKETCH_REASON);
         return [
           enabled(
             'offset-face',
@@ -74,7 +98,7 @@ export function selectionCapabilities(
             'transform-proxy',
             true
           ),
-          enabled('sketch-on-face', 'Sketch', undefined, 'none')
+          sketchCapability
         ];
       }
       if (
