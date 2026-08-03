@@ -170,7 +170,10 @@ import {
   profileReferencesForSelection
 } from './lib/profileReferences';
 import type { SelectionActionId } from './lib/interaction/capabilities';
-import { frameFromFace } from './lib/sketch/session';
+import {
+  faceSketchAttachment,
+  fixedPlaneRefForLegacyAttachment
+} from './lib/faceSketchAttachment';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
 import { SketchToolRail } from './components/SketchToolRail';
 import { SketchEntityEditor } from './components/SketchEntityEditor';
@@ -3263,36 +3266,18 @@ export function App() {
     const faceTopology = representations[
       target.bodyId as BodyId
     ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
-    const geometry = faceTopology?.geometry;
-    if (geometry?.surfaceType !== 'plane' || target.hash === undefined) {
-      setStatus('Pick a planar face to sketch on, or choose a plane.');
+    const attachment = faceSketchAttachment({
+      bodyId: target.bodyId as BodyId,
+      pickedHash: target.hash,
+      face: faceTopology
+    });
+    if (!attachment.ok) {
+      setStatus(attachment.reason);
       return false;
     }
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: {
-        type: 'face',
-        bodyId: target.bodyId as BodyId,
-        faceHash: target.hash,
-        ...(faceTopology?.reference
-          ? { faceReference: faceTopology.reference }
-          : {}),
-        sourceArea: geometry.area,
-        sourceCenter: geometry.center,
-        sourceNormal: geometry.normal ?? {
-          x: target.normal[0],
-          y: target.normal[1],
-          z: target.normal[2]
-        },
-        frame: frameFromFace(
-          geometry.center,
-          geometry.normal ?? {
-            x: target.normal[0],
-            y: target.normal[1],
-            z: target.normal[2]
-          }
-        )
-      }
+      plane: attachment.planeRef
     });
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
@@ -3347,16 +3332,15 @@ export function App() {
           bodyId: selection.bodyId,
           topologyId: selection.topologyId,
           hash: selection.hash,
-          ...(selection.reference?.kind === 'face'
-            ? { reference: selection.reference }
+          ...(faceTopology?.reference
+            ? { reference: faceTopology.reference }
             : {}),
           point: [detail.point.x, detail.point.y, detail.point.z],
           normal: [detail.normal.x, detail.normal.y, detail.normal.z],
           surfaceType: 'planar'
         };
-        if (startSketchOnFace(target)) {
-          return;
-        }
+        startSketchOnFace(target);
+        return;
       }
       setStatus('Pick a planar face to sketch on, or choose a plane.');
       return;
@@ -3391,8 +3375,8 @@ export function App() {
         bodyId: selection.bodyId,
         topologyId: selection.topologyId,
         hash: selection.hash,
-        ...(selection.reference?.kind === 'face'
-          ? { reference: selection.reference }
+        ...(faceTopology?.reference
+          ? { reference: faceTopology.reference }
           : {}),
         point: [detail.point.x, detail.point.y, detail.point.z],
         normal: [detail.normal.x, detail.normal.y, detail.normal.z],
@@ -6435,6 +6419,23 @@ export function App() {
                     );
                   }
                   executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onConvertSketchToFixedPlane={(sketch) => {
+                  const planeRef = fixedPlaneRefForLegacyAttachment(
+                    sketch.planeRef
+                  );
+                  if (!planeRef) {
+                    setStatus(
+                      `${sketch.name} is not a legacy face attachment.`
+                    );
+                    return;
+                  }
+                  executeCommand(
+                    commandFactories.updateSketch(
+                      { sketchId: sketch.sketchId, planeRef },
+                      `Convert ${sketch.name} to fixed plane`
+                    )
+                  );
                 }}
                 onApplyExtrude={(feature, value) => {
                   if (
