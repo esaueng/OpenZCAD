@@ -220,7 +220,7 @@ describe('useCollaboration lease ordering', () => {
     rememberUnresolvedConflict({
       projectId: base.projectId,
       localVersion: local.version,
-      roomVersion: remote.version,
+      remoteVersion: remote.version,
       detectedAt: Date.now()
     });
     const onRemoteDocument = vi.fn();

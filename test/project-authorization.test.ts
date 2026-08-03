@@ -122,7 +122,9 @@ describe('project authorization', () => {
     const revision = batched.find((statement) =>
       statement.sql.startsWith('INSERT OR REPLACE INTO revisions')
     );
-    expect(update?.bindings[5]).toBe(owner);
+    // The owner binds the UPDATE's user_id predicate: an editor's save must
+    // stay scoped to the owner's row rather than to the editor's.
+    expect(update?.bindings[6]).toBe(owner);
     expect(revision?.bindings.at(-1)).toBe(editor);
     expect(revision?.sql).toContain('author_user_id');
   });

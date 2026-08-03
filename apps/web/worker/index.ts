@@ -6,6 +6,8 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import {
   ArtifactStorageError,
+  DocumentTooLargeError,
+  ProjectAdoptionError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError
@@ -18,6 +20,7 @@ import {
   parseDuplicateProjectRequest,
   parseFinalizeImportRequest,
   parseReorderProjectsRequest,
+  parseSaveProjectDocumentRequest,
   parseSaveRevisionRequest,
   parseUpdateProjectRequest
 } from './validation';
@@ -72,6 +75,7 @@ const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
+const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_SHARING_ROUTE = /^\/api\/projects\/([^/]+)\/sharing$/;
 const PROJECT_INVITATIONS_ROUTE = /^\/api\/projects\/([^/]+)\/invitations$/;
@@ -196,6 +200,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       projectEditLeasesEnforced: isCloudflareFeatureEnabled(
         env,
         'PROJECT_EDIT_LEASES_ENFORCED'
+      ),
+      projectPersonalSyncEnabled: isCloudflareFeatureEnabled(
+        env,
+        'PROJECT_PERSONAL_SYNC_ENABLED'
       )
     });
   }
@@ -425,6 +433,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(result);
   }
 
+  if (request.method === 'GET' && pathname === '/api/account/storage') {
+    return json(await persistence.getStorageUsage(userId));
+  }
+
   if (request.method === 'GET' && pathname === '/api/projects') {
     // Listing is the one call every client makes on arrival, which makes it
     // the natural place to collect the bin: retention is measured in days, so
@@ -618,6 +630,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.saveRevision(userId, payload));
   }
 
+  const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
+  if (request.method === 'PUT' && documentMatch) {
+    const payload = parseSaveProjectDocumentRequest(
+      await readJsonBody(request),
+      documentMatch[1]!
+    );
+    return json(await persistence.saveDocument(userId, payload));
+  }
+
   if (request.method === 'POST' && pathname === '/api/uploads') {
     const payload = parseCreateUploadSessionRequest(
       await readJsonBody(request)
@@ -736,6 +757,19 @@ export default {
               ? 404
               : 409;
         return json({ error: error.message, code: error.code }, status);
+      }
+      if (error instanceof ProjectAdoptionError) {
+        return json({ error: error.message, code: error.code }, 409);
+      }
+      if (error instanceof DocumentTooLargeError) {
+        return json(
+          {
+            error: error.message,
+            code: 'DOCUMENT_TOO_LARGE',
+            limitBytes: error.limitBytes
+          },
+          413
+        );
       }
       if (error instanceof RevisionConflictError) {
         return json(

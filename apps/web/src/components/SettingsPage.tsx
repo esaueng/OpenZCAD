@@ -24,17 +24,59 @@ import {
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type {
-  AppSettings,
-  AppSettingsResponse,
-  AuthConfigResponse,
-  AuthSession
+import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  type AccountStorageUsage,
+  type AppSettings,
+  type AppSettingsResponse,
+  type AuthConfigResponse,
+  type AuthSession
 } from '@openzcad/shared';
+
+/**
+ * A typed number input still hands back NaN for an empty field, and the bounds
+ * are the store's rather than a suggestion — a delay outside them is normalized
+ * away on the way to the account, so it should never be reachable here.
+ */
+function clampAutosaveDelay(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return CLOUD_AUTOSAVE_DELAY_BOUNDS.default;
+  }
+  return Math.round(
+    Math.min(
+      Math.max(seconds, CLOUD_AUTOSAVE_DELAY_BOUNDS.min),
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
+    )
+  );
+}
+import { api } from '../lib/api';
 import {
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
 import { BrandMark } from './BrandMark';
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const megabytes = bytes / (1024 * 1024);
+  return megabytes >= 1
+    ? `${megabytes.toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * Names the ceiling even before anyone is near it. A limit discovered only at
+ * the moment a save is refused reads as a bug; a limit stated up front reads as
+ * a limit.
+ */
+function storageDescription(usage: AccountStorageUsage | null): string {
+  if (!usage) {
+    return 'Sign in to see what your account is storing.';
+  }
+  return `${usage.projectCount} project(s) · ${formatBytes(usage.documentBytes)} current, ${formatBytes(usage.revisionBytes)} across ${usage.revisionCount} saved revision(s). Each project may be up to ${formatBytes(usage.documentLimitBytes)} and keeps its last ${usage.maxRevisionsPerProject} revisions.`;
+}
 
 type SectionId = SettingsSectionId;
 
@@ -358,6 +400,30 @@ export function SettingsPage({
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
+    null
+  );
+
+  // Fetched only when the panel that shows it is open, and dropped on sign-out
+  // so one account's totals never linger in front of another.
+  useEffect(() => {
+    if (active !== 'files' || !session) {
+      setStorageUsage(null);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .storageUsage()
+      .then((usage) => {
+        if (!cancelled) {
+          setStorageUsage(usage);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [active, session]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -853,11 +919,66 @@ export function SettingsPage({
                 <span className="settings-state good">Active</span>
               </SettingRow>
               <SettingRow
+                title="Cloud autosave"
+                description="Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only with Ctrl/Cmd+S."
+                scope="Account"
+              >
+                <Toggle
+                  label="Cloud autosave"
+                  checked={settings.files.cloudAutosave}
+                  onChange={(cloudAutosave) =>
+                    onChange({
+                      ...settings,
+                      files: { ...settings.files, cloudAutosave }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Cloud autosave delay"
+                description="Quiet time before the copy is written. A continuous edit is still written at least once a minute."
+                scope="Account"
+              >
+                <input
+                  type="number"
+                  aria-label="Cloud autosave delay in seconds"
+                  disabled={!settings.files.cloudAutosave}
+                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
+                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
+                  step={1}
+                  value={settings.files.cloudAutosaveDelaySeconds}
+                  onChange={(event) =>
+                    onChange({
+                      ...settings,
+                      files: {
+                        ...settings.files,
+                        cloudAutosaveDelaySeconds: clampAutosaveDelay(
+                          event.target.valueAsNumber
+                        )
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
                 title="Cloud revisions"
-                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint when the beta API is available."
+                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint. Autosave does not add to this history."
                 scope="Current project"
               >
                 <span className="settings-state">Manual</span>
+              </SettingRow>
+              <SettingRow
+                title="Account storage"
+                description={storageDescription(storageUsage)}
+                scope="Account"
+              >
+                <span className="settings-state">
+                  {storageUsage
+                    ? formatBytes(
+                        storageUsage.documentBytes + storageUsage.revisionBytes
+                      )
+                    : '—'}
+                </span>
               </SettingRow>
               <SettingRow
                 title="STEP and STL exports"

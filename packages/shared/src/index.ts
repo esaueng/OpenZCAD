@@ -932,6 +932,13 @@ export interface ProjectSummary {
   revisionCount: number;
   updatedAt: string;
   /**
+   * The document version this store holds. Present so a device can ask "am I
+   * behind?" from the project listing it already fetches, instead of pulling
+   * whole documents to find out. Absent on summaries built by stores that
+   * predate it, where the answer is simply unknown.
+   */
+  documentVersion?: number;
+  /**
    * Absent when the store holding this summary has no shelf state for the
    * project — an older row, or a device that has never organised it. Read it
    * through {@link projectOrganization} so a missing record reads as defaults
@@ -1058,6 +1065,14 @@ export function duplicateProjectName(
 export interface CreateProjectRequest {
   name: string;
   units?: UnitSystem;
+  /**
+   * An existing device-local document to adopt into the account rather than a
+   * fresh project to mint. The document keeps its `projectId`, so the device's
+   * local copy and the shelf metadata it has already accumulated stay pointed
+   * at the same project once it has an account record. `units` is ignored when
+   * this is present — the document already has them.
+   */
+  document?: ProjectDocument;
 }
 
 export interface CreateProjectResponse {
@@ -1112,6 +1127,28 @@ export interface SaveRevisionRequest {
   document: ProjectDocument;
 }
 
+/**
+ * A continuous-sync write: the same fenced update as a revision save, without
+ * the history entry. Autosave uses this so a long editing session costs a
+ * bounded number of row updates rather than one full document snapshot per
+ * save; explicit checkpoints still go through {@link SaveRevisionRequest}.
+ */
+export interface SaveProjectDocumentRequest {
+  projectId: ProjectId;
+  expectedVersion: number;
+  document: ProjectDocument;
+}
+
+/**
+ * Acknowledgement only. The whole document does not come back — the client
+ * already has it, and returning it would double the cost of every autosave.
+ */
+export interface SaveProjectDocumentResponse {
+  projectId: ProjectId;
+  version: number;
+  updatedAt: string;
+}
+
 export interface CreateUploadSessionRequest {
   projectId: ProjectId;
   fileName: string;
@@ -1149,6 +1186,11 @@ export interface HealthResponse {
   projectSharingEnabled?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
   projectEditLeasesEnforced?: boolean;
+  /**
+   * Whether the owner's own devices may join a live room. Independent of
+   * sharing: this being on says nothing about invitations, roles, or leases.
+   */
+  projectPersonalSyncEnabled?: boolean;
 }
 
 export interface AuthSession {
@@ -1234,6 +1276,16 @@ export interface AppSettings {
     linearSnap: number;
     angleSnap: number;
   };
+  /**
+   * How work reaches the account. There is no toggle for the device write —
+   * that is what protects the work, and it is not a preference.
+   */
+  files: {
+    /** Copy the open project to the account as you work. */
+    cloudAutosave: boolean;
+    /** Quiet time before a copy is written, in seconds. */
+    cloudAutosaveDelaySeconds: number;
+  };
   assistant: {
     enabled: boolean;
     credentialSource: AssistantCredentialSource;
@@ -1272,6 +1324,18 @@ export const PANEL_WIDTH_LIMITS: {
   assistant: { min: 300, max: 900, default: 360 }
 };
 
+/**
+ * Bounds on the cloud-autosave quiet time, in seconds. Shared so the browser,
+ * the Worker's parser, and the settings control agree. The floor is not zero:
+ * a write on every keystroke would spend the account's write budget on
+ * intermediate states nobody asked to keep.
+ */
+export const CLOUD_AUTOSAVE_DELAY_BOUNDS = {
+  min: 1,
+  max: 60,
+  default: 3
+} as const;
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
   general: {
@@ -1299,6 +1363,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     snapEnabled: true,
     linearSnap: 1,
     angleSnap: 15
+  },
+  files: {
+    cloudAutosave: true,
+    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default
   },
   assistant: {
     enabled: false,
@@ -1487,6 +1555,50 @@ export type CollaborationErrorCode =
  * limit from a rejected request.
  */
 export const MAX_PROJECT_NAME_LENGTH = 200;
+
+/**
+ * Largest document the account will store, as serialized JSON bytes. D1 keeps
+ * each document as one blob, so this is a row ceiling rather than a quota.
+ * Shared because three layers have to agree on it: the collaboration room
+ * refuses oversize frames, the persistence layer refuses oversize writes, and
+ * the client needs to name the limit instead of reporting a generic failure.
+ */
+export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
+
+/** Serialized size of `document`, measured the way the store measures it. */
+export function persistedDocumentBytes(document: ProjectDocument): number {
+  return new TextEncoder().encode(JSON.stringify(document)).byteLength;
+}
+
+/**
+ * How many revisions a project keeps before the oldest are dropped.
+ *
+ * Each revision is a whole copy of the document, so an unbounded history is an
+ * unbounded multiple of the project itself. Fifty explicit saves is far more
+ * history than the UI exposes any way to reach, and continuous sync no longer
+ * adds to this count — every remaining revision is a save somebody chose to
+ * make.
+ */
+export const MAX_PROJECT_REVISIONS = 50;
+
+/** What an account is currently storing, for the settings panel. */
+export interface AccountStorageUsage {
+  projectCount: number;
+  /** Bytes held by the current copy of each project. */
+  documentBytes: number;
+  /** Bytes held by saved revisions, across every project. */
+  revisionBytes: number;
+  /**
+   * How many revisions are retained in total. Reported separately from the
+   * bytes because retention bounds the count, not the size — later revisions of
+   * a project are larger than earlier ones, so a flat byte total cannot show
+   * that pruning is working.
+   */
+  revisionCount: number;
+  /** The per-document ceiling, so the client can name it without hardcoding. */
+  documentLimitBytes: number;
+  maxRevisionsPerProject: number;
+}
 
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },

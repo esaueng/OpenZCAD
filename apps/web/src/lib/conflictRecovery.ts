@@ -4,24 +4,32 @@ import type {
   ProjectEditLease
 } from '@openzcad/shared';
 
-const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-collaboration-conflict:';
+const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-project-conflict:';
 
-export interface CollaborationConflict {
+/**
+ * Where the divergent copy came from. The resolutions are identical either
+ * way — this only decides how the winning document gets written back, and lets
+ * the UI name the other side accurately.
+ */
+export type ConflictSource = 'room' | 'account';
+
+export interface ProjectConflict {
   projectId: string;
+  source: ConflictSource;
   localDocument: ProjectDocument;
-  roomDocument: ProjectDocument;
-  /** The exact room version against which a keep-mine write must be based. */
-  expectedRoomVersion: number;
+  remoteDocument: ProjectDocument;
+  /** The exact remote version against which a keep-mine write must be based. */
+  expectedRemoteVersion: number;
 }
 
 export interface UnresolvedConflictMarker {
   projectId: string;
   localVersion: number;
-  roomVersion: number;
+  remoteVersion: number;
   detectedAt: number;
 }
 
-export type ConflictResolution = 'use-room' | 'keep-mine' | 'save-local-copy';
+export type ConflictResolution = 'use-remote' | 'keep-mine' | 'save-local-copy';
 
 export interface ConflictRecoveryCopyWriter {
   /** Persist the untouched divergent document before any resolution mutates state. */
@@ -29,11 +37,12 @@ export interface ConflictRecoveryCopyWriter {
 }
 
 export interface ConflictResolutionHandlers extends ConflictRecoveryCopyWriter {
-  useRoomVersion(document: ProjectDocument): Promise<void> | void;
+  useRemoteVersion(document: ProjectDocument): Promise<void> | void;
   keepMyVersion(input: {
     document: ProjectDocument;
-    expectedRoomVersion: number;
-    leaseId: string;
+    expectedRemoteVersion: number;
+    /** Absent outside a room, where nothing hands out leases. */
+    leaseId?: string;
   }): Promise<void> | void;
   saveLocalAsCopy(document: ProjectDocument): Promise<void> | void;
 }
@@ -41,6 +50,12 @@ export interface ConflictResolutionHandlers extends ConflictRecoveryCopyWriter {
 export interface ConflictResolutionContext {
   role: ProjectAccessRole | null;
   lease: ProjectEditLease | null;
+  /**
+   * Whether this deployment enforces the project edit lease. A conflict against
+   * the account rather than a room has no lease to hold, and demanding one
+   * would make the divergence unresolvable.
+   */
+  leasesEnforced?: boolean;
   now?: number;
 }
 
@@ -48,7 +63,7 @@ export class ConflictRecoveryError extends Error {
   constructor(
     readonly code:
       | 'PROJECT_MISMATCH'
-      | 'ROOM_VERSION_MISMATCH'
+      | 'REMOTE_VERSION_MISMATCH'
       | 'VIEWER_FORBIDDEN'
       | 'LEASE_REQUIRED',
     message: string
@@ -65,7 +80,7 @@ function markerKey(projectId: string): string {
 /**
  * Persist only the small conflict sentinel. The full local document remains in
  * the normal IndexedDB project store and is supplied again by the app after a
- * reload; the next room state reconstructs the conflict without putting a CAD
+ * reload; the next remote state reconstructs the conflict without putting a CAD
  * document in synchronous Web Storage.
  */
 export function rememberUnresolvedConflict(
@@ -88,7 +103,7 @@ export function readUnresolvedConflict(
     if (
       marker.projectId !== projectId ||
       !Number.isSafeInteger(marker.localVersion) ||
-      !Number.isSafeInteger(marker.roomVersion) ||
+      !Number.isSafeInteger(marker.remoteVersion) ||
       typeof marker.detectedAt !== 'number' ||
       !Number.isFinite(marker.detectedAt)
     ) {
@@ -109,26 +124,28 @@ export function clearUnresolvedConflict(
 
 export function conflictFromDocuments(
   localDocument: ProjectDocument,
-  roomDocument: ProjectDocument,
+  remoteDocument: ProjectDocument,
+  source: ConflictSource = 'room',
   detectedAt = Date.now()
-): CollaborationConflict {
-  if (localDocument.projectId !== roomDocument.projectId) {
+): ProjectConflict {
+  if (localDocument.projectId !== remoteDocument.projectId) {
     throw new ConflictRecoveryError(
       'PROJECT_MISMATCH',
-      'Local and room documents belong to different projects.'
+      'Local and remote documents belong to different projects.'
     );
   }
   rememberUnresolvedConflict({
     projectId: localDocument.projectId,
     localVersion: localDocument.version,
-    roomVersion: roomDocument.version,
+    remoteVersion: remoteDocument.version,
     detectedAt
   });
   return {
     projectId: localDocument.projectId,
+    source,
     localDocument: structuredClone(localDocument),
-    roomDocument: structuredClone(roomDocument),
-    expectedRoomVersion: roomDocument.version
+    remoteDocument: structuredClone(remoteDocument),
+    expectedRemoteVersion: remoteDocument.version
   };
 }
 
@@ -137,39 +154,45 @@ export function conflictFromDocuments(
  * are known to be valid, every path writes the recovery copy before invoking a
  * handler that can replace either side of the conflict.
  */
-export async function resolveCollaborationConflict(
-  conflict: CollaborationConflict,
+export async function resolveProjectConflict(
+  conflict: ProjectConflict,
   resolution: ConflictResolution,
   context: ConflictResolutionContext,
   handlers: ConflictResolutionHandlers
 ): Promise<void> {
   if (
     conflict.projectId !== conflict.localDocument.projectId ||
-    conflict.projectId !== conflict.roomDocument.projectId
+    conflict.projectId !== conflict.remoteDocument.projectId
   ) {
     throw new ConflictRecoveryError(
       'PROJECT_MISMATCH',
       'Conflict documents no longer identify one project.'
     );
   }
-  if (conflict.expectedRoomVersion !== conflict.roomDocument.version) {
+  if (conflict.expectedRemoteVersion !== conflict.remoteDocument.version) {
     throw new ConflictRecoveryError(
-      'ROOM_VERSION_MISMATCH',
-      'The room version changed before conflict recovery began.'
+      'REMOTE_VERSION_MISMATCH',
+      'The remote version changed before conflict recovery began.'
     );
   }
   if (resolution === 'keep-mine') {
     if (context.role === 'viewer') {
       throw new ConflictRecoveryError(
         'VIEWER_FORBIDDEN',
-        'Viewers cannot replace the room version.'
+        'Viewers cannot replace the remote version.'
       );
     }
+    // A lease is a room concept. Requiring one for a conflict against the
+    // account — where none is ever issued — would leave the user with a
+    // divergence they are not permitted to resolve.
+    const leaseRequired =
+      conflict.source === 'room' && context.leasesEnforced !== false;
     const now = context.now ?? Date.now();
     if (
-      !context.lease ||
-      context.lease.projectId !== conflict.projectId ||
-      context.lease.expiresAt <= now
+      leaseRequired &&
+      (!context.lease ||
+        context.lease.projectId !== conflict.projectId ||
+        context.lease.expiresAt <= now)
     ) {
       throw new ConflictRecoveryError(
         'LEASE_REQUIRED',
@@ -180,16 +203,16 @@ export async function resolveCollaborationConflict(
 
   await handlers.writeRecoveryCopy(structuredClone(conflict.localDocument));
 
-  if (resolution === 'use-room') {
-    await handlers.useRoomVersion(structuredClone(conflict.roomDocument));
+  if (resolution === 'use-remote') {
+    await handlers.useRemoteVersion(structuredClone(conflict.remoteDocument));
   } else if (resolution === 'keep-mine') {
     await handlers.keepMyVersion({
       document: structuredClone(conflict.localDocument),
-      expectedRoomVersion: conflict.expectedRoomVersion,
-      leaseId: context.lease!.leaseId
+      expectedRemoteVersion: conflict.expectedRemoteVersion,
+      ...(context.lease ? { leaseId: context.lease.leaseId } : {})
     });
   } else {
     await handlers.saveLocalAsCopy(structuredClone(conflict.localDocument));
-    await handlers.useRoomVersion(structuredClone(conflict.roomDocument));
+    await handlers.useRemoteVersion(structuredClone(conflict.remoteDocument));
   }
 }
