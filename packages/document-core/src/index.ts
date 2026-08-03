@@ -712,6 +712,105 @@ export function updateSketch(
   return next;
 }
 
+export interface SketchTranslateInput {
+  sketchId: SketchId;
+  /** In-plane translation along the sketch plane's U axis. */
+  du: number;
+  /** In-plane translation along the sketch plane's V axis. */
+  dv: number;
+  /**
+   * Translation along the plane normal. Only a canonical-plane sketch can
+   * carry it (as a plane offset change); a frame- or face-attached sketch is
+   * bound to its surface, so a non-zero `dn` on one is an error rather than
+   * a silently dropped component.
+   */
+  dn?: number;
+}
+
+/**
+ * Translates every object of a sketch in plane coordinates, as one edit.
+ *
+ * This is the document half of dragging a sketch with the move gizmo. Object
+ * coordinates may be parameter expressions; a translated axis bakes the
+ * resolved number (the same contract as every other direct manipulation),
+ * while a zero-delta axis leaves the stored value — expression or number —
+ * untouched, so dragging along X does not destroy a `w / 2` on Y.
+ *
+ * Downstream extrudes survive because profile resolution falls back to
+ * source-entity matching when fingerprints move, and text extrudes reference
+ * their entity directly.
+ */
+export function translateSketch(
+  document: ProjectDocument,
+  input: SketchTranslateInput
+): ProjectDocument {
+  const { du, dv } = input;
+  const dn = input.dn ?? 0;
+  if (![du, dv, dn].every(Number.isFinite)) {
+    throw new Error('Sketch translation must be finite.');
+  }
+  const next = cloneDocument(document);
+  const sketch = findSketch(next, input.sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${input.sketchId} not found.`);
+  }
+  if (dn !== 0) {
+    if (sketch.planeRef.type !== 'canonical') {
+      throw new Error(
+        'A face-attached sketch cannot move along its normal; it is bound to its surface.'
+      );
+    }
+    const { scope } = getParameterScope(next);
+    sketch.planeRef = {
+      ...sketch.planeRef,
+      offset:
+        resolveParamValue(sketch.planeRef.offset, scope, 'sketch offset') + dn
+    };
+  }
+  if (du !== 0 || dv !== 0) {
+    const { scope } = getParameterScope(next);
+    const shift = (value: ParamValue, delta: number, label: string): ParamValue =>
+      delta === 0 ? value : resolveParamValue(value, scope, label) + delta;
+    for (const objectId of sketch.objectIds) {
+      const node = next.nodes[objectId];
+      if (node?.kind !== 'sketch-object') {
+        continue;
+      }
+      const data = node.data;
+      switch (data.objectKind) {
+        case 'line':
+          node.data = {
+            ...data,
+            x1: shift(data.x1, du, 'line x1'),
+            y1: shift(data.y1, dv, 'line y1'),
+            x2: shift(data.x2, du, 'line x2'),
+            y2: shift(data.y2, dv, 'line y2')
+          };
+          break;
+        case 'rectangle':
+        case 'circle':
+        case 'polygon':
+        case 'arc':
+          node.data = {
+            ...data,
+            centerX: shift(data.centerX, du, 'center X'),
+            centerY: shift(data.centerY, dv, 'center Y')
+          };
+          break;
+        case 'text':
+          node.data = {
+            ...data,
+            x: shift(data.x, du, 'text X'),
+            y: shift(data.y, dv, 'text Y')
+          };
+          break;
+      }
+    }
+  }
+  next.version += 1;
+  return next;
+}
+
 export function addSketchObjects(
   document: ProjectDocument,
   input: SketchObjectAddInput

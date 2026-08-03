@@ -1952,6 +1952,24 @@ export function App() {
       return;
     }
     if (nextTool === 'transform') {
+      // A selected sketch takes the gizmo too: translation-only, committed as
+      // a sketch translation rather than a Move feature, so every downstream
+      // extrude rebuilds in place.
+      if (selectedSketch) {
+        setExtrudePreview(null);
+        setMovePreview({
+          bodyId: selectedSketch.sketchId,
+          target: 'sketch',
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        });
+        setMoveSnap(null);
+        setTool('transform');
+        setStatus(
+          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
+        );
+        return;
+      }
       // Prefer the gizmo flow when a target body is unambiguous; the classic
       // form remains for multi-body documents with nothing selected.
       const targetBodyId =
@@ -2020,9 +2038,63 @@ export function App() {
     }
   }
 
+  /**
+   * Commits a sketch drag: the world translation projects onto the sketch
+   * plane's axes, becoming an in-plane object translation plus — for a
+   * canonical-plane sketch — a plane-offset change. A face-attached sketch
+   * is bound to its surface, so any normal component of the drag is dropped
+   * and said out loud rather than silently discarded.
+   */
+  function confirmSketchMove(preview: MovePreview) {
+    if (!doc) {
+      return;
+    }
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === preview.bodyId
+    );
+    const sketch = findSketch(doc, preview.bodyId as SketchId);
+    if (!view || !sketch) {
+      setMovePreview(null);
+      return;
+    }
+    const basis = view.basis;
+    const t = preview.translation;
+    const round = (value: number) => Math.round(value * 1000) / 1000;
+    const du = round(t.x * basis.u.x + t.y * basis.u.y + t.z * basis.u.z);
+    const dv = round(t.x * basis.v.x + t.y * basis.v.y + t.z * basis.v.z);
+    const rawDn =
+      t.x * basis.normal.x + t.y * basis.normal.y + t.z * basis.normal.z;
+    const canonical = sketch.planeRef.type === 'canonical';
+    const dn = canonical ? round(rawDn) : 0;
+    setMovePreview(null);
+    if (du === 0 && dv === 0 && dn === 0) {
+      setTool(null);
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.translateSketch(
+          { sketchId: preview.bodyId as SketchId, du, dv, dn },
+          `Move ${sketch.name}`
+        )
+      )
+    ) {
+      setTool(null);
+      setStatus(
+        !canonical && Math.abs(rawDn) > 1e-6
+          ? `Moved ${sketch.name} in its plane · the out-of-plane part was dropped (a face sketch stays on its face).`
+          : `Moved ${sketch.name}.`
+      );
+    }
+  }
+
   function confirmMove() {
     const preview = movePreview;
     if (!preview || !doc) {
+      return;
+    }
+    if (preview.target === 'sketch') {
+      confirmSketchMove(preview);
       return;
     }
     const body = representations[preview.bodyId as BodyId];
@@ -6140,9 +6212,13 @@ export function App() {
               ) : movePreview ? (
                 <MoveOverlay
                   bodyName={
-                    representations[movePreview.bodyId as BodyId]?.name ??
-                    'Selected body'
+                    movePreview.target === 'sketch'
+                      ? (findSketch(doc, movePreview.bodyId as SketchId)
+                          ?.name ?? 'Selected sketch')
+                      : (representations[movePreview.bodyId as BodyId]?.name ??
+                        'Selected body')
                   }
+                  hideRotation={movePreview.target === 'sketch'}
                   values={{
                     translation: movePreview.translation,
                     rotationDeg: movePreview.rotationDeg
