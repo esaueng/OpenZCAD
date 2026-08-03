@@ -31,7 +31,7 @@ const SAVE_STATE_LABELS: Record<
 > = {
   saving: { label: 'Saving', title: 'Saving to this device…' },
   local: {
-    label: 'This device',
+    label: 'Local only',
     title: 'Saved on this device. Not in your account.'
   },
   syncing: {
@@ -43,7 +43,7 @@ const SAVE_STATE_LABELS: Record<
     title: 'Saved on this device and in your account.'
   },
   offline: {
-    label: 'This device',
+    label: 'Offline',
     title: 'Saved on this device · your account is unreachable right now.'
   },
   conflict: {
@@ -55,7 +55,7 @@ const SAVE_STATE_LABELS: Record<
     title: 'Too large for your account. Saved on this device.'
   },
   paused: {
-    label: 'This device',
+    label: 'Autosave off',
     title:
       'Saved on this device · cloud autosave is off. Ctrl/Cmd+S updates your account.'
   }
