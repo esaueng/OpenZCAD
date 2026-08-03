@@ -121,8 +121,13 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'advanced',
     label: 'Advanced',
-    detail: 'Architecture and diagnostics',
-    settings: ['Geometry kernel', 'Document authority', 'Settings schema']
+    detail: 'Architecture, kernel version, and diagnostics',
+    settings: [
+      'Geometry kernel',
+      'Kernel version',
+      'Document authority',
+      'Settings schema'
+    ]
   }
 ];
 
