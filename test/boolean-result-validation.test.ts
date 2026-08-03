@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   countFaceConnectedComponents,
+  droppedUnionOperandWarning,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   selectSafelyUnifiedSolid
@@ -10,6 +11,128 @@ const TETRAHEDRON_POSITIONS = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
 const TETRAHEDRON_INDICES = [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3];
 
 describe('boolean result validation', () => {
+  it('diagnoses the exact extent lost by the M4 tangent-boss fuse', () => {
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Plate',
+            bounds: {
+              min: { x: 0, y: 0, z: 0 },
+              max: { x: 60, y: 40, z: 8 }
+            }
+          },
+          {
+            name: 'Boss',
+            bounds: {
+              min: { x: 0, y: 10, z: 0 },
+              max: { x: 20, y: 30, z: 16 }
+            }
+          }
+        ],
+        result: {
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 60, y: 40, z: 8 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toBe(
+      'Union dropped geometry from operand "Boss": the result\'s maximum z is 8 mm, but the operand reaches 16 mm (8 mm missing). A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.'
+    );
+  });
+
+  it('preserves contained, touching, overlapping, and crossing union extents', () => {
+    const result = {
+      min: { x: -3, y: 0, z: 0 },
+      max: { x: 60, y: 40, z: 20 }
+    };
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Plate',
+            bounds: {
+              min: { x: 0, y: 0, z: 0 },
+              max: { x: 60, y: 40, z: 8 }
+            }
+          },
+          {
+            name: 'Crossing boss',
+            bounds: {
+              min: { x: -3, y: 6, z: 0 },
+              max: { x: 9, y: 18, z: 20 }
+            }
+          },
+          {
+            name: 'Contained insert',
+            bounds: {
+              min: { x: 10, y: 10, z: 1 },
+              max: { x: 12, y: 12, z: 3 }
+            }
+          }
+        ],
+        result,
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toBeNull();
+  });
+
+  it('tolerates scale-aware AABB noise without hiding a material loss', () => {
+    const operand = {
+      name: 'Large body',
+      bounds: {
+        min: { x: 1_000_000, y: 0, z: 0 },
+        max: { x: 2_000_000, y: 1_000_000, z: 1_000_000 }
+      }
+    };
+    expect(
+      droppedUnionOperandWarning({
+        operands: [operand],
+        result: {
+          min: { ...operand.bounds.min },
+          max: { ...operand.bounds.max, z: operand.bounds.max.z - 0.0001 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toBeNull();
+    expect(
+      droppedUnionOperandWarning({
+        operands: [operand],
+        result: {
+          min: { ...operand.bounds.min },
+          max: { ...operand.bounds.max, z: operand.bounds.max.z - 1 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toContain('1 mm missing');
+  });
+
+  it('leaves faceted curved-surface AABB shrinkage to the facet diagnostic', () => {
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Cylinder',
+            bounds: {
+              min: { x: -20, y: -20, z: 0 },
+              max: { x: 20, y: 20, z: 40 }
+            }
+          }
+        ],
+        result: {
+          min: { x: -19.98754125, y: -20, z: 0 },
+          max: { x: 20, y: 20, z: 40 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toBeNull();
+  });
+
   it('counts exact face-connected components from edge adjacency', () => {
     expect(
       countFaceConnectedComponents([10, 20, 30, 40], {
