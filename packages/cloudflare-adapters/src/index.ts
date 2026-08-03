@@ -1,7 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactStorageError,
+  assertPersistableDocument,
   getInMemoryPersistence,
+  ProjectAdoptionError,
   PROJECT_ACTIVE_INVITATION_CAP,
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
@@ -19,6 +21,7 @@ import {
   applyOrganizationUpdate,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  MAX_PERSISTED_DOCUMENT_BYTES,
   nowIso,
   projectOrganization,
   PROJECT_STATUSES,
@@ -57,10 +60,12 @@ import {
   type UserId
 } from '@openzcad/shared';
 import {
+  adoptProjectDocument,
   createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
-  normalizeDocument
+  normalizeDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 
 export interface CloudflareEnv {
@@ -640,11 +645,46 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createProject(userId, request);
     }
-    const document = createProjectDocument(request.name, userId, request.units);
+    const document = request.document
+      ? await this.prepareAdoption(userId, request.document, request.name)
+      : createProjectDocument(request.name, userId, request.units);
     return {
       project: await this.insertProject(userId, document),
       document
     };
+  }
+
+  /**
+   * Validates a device-local document on its way into the account. The id check
+   * is a pre-flight rather than the guard: the primary key would refuse a
+   * duplicate anyway, but a bare constraint violation cannot tell the device
+   * whether it should sync this project or upload it as a new one.
+   */
+  private async prepareAdoption(
+    userId: UserId,
+    source: ProjectDocument,
+    name: string
+  ): Promise<ProjectDocument> {
+    const existing = await this.env
+      .DB!.prepare(`SELECT user_id FROM projects WHERE id = ?`)
+      .bind(source.projectId)
+      .first<{ user_id: string }>();
+    if (existing) {
+      throw existing.user_id === userId
+        ? new ProjectAdoptionError(
+            'ALREADY_ADOPTED',
+            'This project is already saved to your account.'
+          )
+        : new ProjectAdoptionError(
+            'PROJECT_ID_TAKEN',
+            'That project id is already in use.'
+          );
+    }
+    const document = withoutDerivedProjection(
+      adoptProjectDocument(source, userId, name)
+    );
+    assertPersistableDocument(document);
+    return document;
   }
 
   async duplicateProject(
@@ -1367,14 +1407,15 @@ const ROOM_STORAGE_SCHEMA = 1;
 const MAX_ROOM_HISTORY = 20;
 
 /**
- * Ceiling for any document the room stores. SQLite-backed Durable Object
- * storage rejects a single value over 2 MiB, and every document now occupies a
- * key of its own, so this is the real limit rather than a guess at how far the
- * whole room may grow. Documents above it are refused before any in-memory
- * state moves, because a write that fails after the mutation leaves the room
- * serving state that no longer survives eviction.
+ * The room reuses the account's document ceiling
+ * ({@link MAX_PERSISTED_DOCUMENT_BYTES}) rather than setting its own, so a
+ * document cannot be small enough to live in the room and too large to be
+ * saved. SQLite-backed Durable Object storage independently rejects a single
+ * value over 2 MiB, and every document now occupies a key of its own, so the
+ * shared limit is also below the hard one. Documents above it are refused
+ * before any in-memory state moves, because a write that fails after the
+ * mutation leaves the room serving state that no longer survives eviction.
  */
-const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
 
 /**
  * Structural limits applied to client JSON before it reaches `normalizeDocument`
