@@ -200,6 +200,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       projectEditLeasesEnforced: isCloudflareFeatureEnabled(
         env,
         'PROJECT_EDIT_LEASES_ENFORCED'
+      ),
+      projectPersonalSyncEnabled: isCloudflareFeatureEnabled(
+        env,
+        'PROJECT_PERSONAL_SYNC_ENABLED'
       )
     });
   }
