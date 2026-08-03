@@ -15,6 +15,7 @@ import {
   type ProjectDocument,
   type ProjectStatus,
   type ReorderProjectsRequest,
+  type SaveProjectDocumentRequest,
   type SaveRevisionRequest,
   type UnitSystem,
   type UpdateProjectRequest
@@ -294,6 +295,30 @@ export function parseSaveRevisionRequest(
   return {
     projectId: toProjectId(projectIdFromPath),
     reason,
+    expectedVersion: record.expectedVersion,
+    document
+  };
+}
+
+export function parseSaveProjectDocumentRequest(
+  body: unknown,
+  projectIdFromPath: string
+): SaveProjectDocumentRequest {
+  const record = asRecord(body, 'Request body');
+  if (record.projectId !== projectIdFromPath) {
+    throw badRequest('"projectId" must match the project id in the URL.');
+  }
+  if (
+    typeof record.expectedVersion !== 'number' ||
+    !Number.isInteger(record.expectedVersion) ||
+    record.expectedVersion < 0
+  ) {
+    throw badRequest('"expectedVersion" must be a non-negative integer.');
+  }
+  const document = parseProjectDocument(record.document, projectIdFromPath);
+  assertDocumentWithinCeiling(document);
+  return {
+    projectId: toProjectId(projectIdFromPath),
     expectedVersion: record.expectedVersion,
     document
   };

@@ -54,6 +54,8 @@ import {
   type ProjectStatus,
   type ProjectSummary,
   type ReorderProjectsRequest,
+  type SaveProjectDocumentRequest,
+  type SaveProjectDocumentResponse,
   type SaveRevisionRequest,
   type UpdateProjectRequest,
   type UploadSessionRecord,
@@ -883,6 +885,66 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     return document;
+  }
+
+  /**
+   * The continuous-sync write: the same fenced update as `saveRevision`,
+   * without the `revisions` insert. Splitting them is what makes autosave
+   * affordable — a revision row is a whole extra copy of the document, and
+   * writing one per autosave would make stored bytes a function of how fast
+   * somebody types rather than of how much work they did.
+   */
+  async saveDocument(
+    userId: UserId,
+    request: SaveProjectDocumentRequest
+  ): Promise<SaveProjectDocumentResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().saveDocument(userId, request);
+    }
+    const access = await this.requireProjectEdit(userId, request.projectId);
+    const normalized = withoutDerivedProjection(
+      normalizeDocument(request.document)
+    );
+    if (
+      normalized.projectId !== request.projectId ||
+      normalized.ownerUserId !== access.ownerUserId
+    ) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    assertPersistableDocument(normalized);
+    const updatedAt = nowIso();
+    const result = await this.env.DB.prepare(
+      `UPDATE projects SET document_json = ?, document_version = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
+    )
+      .bind(
+        JSON.stringify(normalized),
+        normalized.version,
+        updatedAt,
+        normalized.name,
+        request.projectId,
+        access.ownerUserId,
+        request.expectedVersion
+      )
+      .run();
+    if (result.meta?.changes === 0) {
+      const current = await this.env.DB.prepare(
+        `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
+      )
+        .bind(request.projectId, access.ownerUserId)
+        .first<{ document_version: number }>();
+      if (!current) {
+        throw new ProjectNotFoundError(request.projectId);
+      }
+      throw new RevisionConflictError(
+        request.projectId,
+        current.document_version
+      );
+    }
+    return {
+      projectId: request.projectId,
+      version: normalized.version,
+      updatedAt
+    };
   }
 
   async createUploadSession(
