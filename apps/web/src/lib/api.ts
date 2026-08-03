@@ -17,6 +17,8 @@ import type {
   ReorderProjectsRequest,
   ReorderProjectsResponse,
   SaveAssistantCredentialRequest,
+  SaveProjectDocumentRequest,
+  SaveProjectDocumentResponse,
   SaveRevisionRequest,
   StartEmailLoginRequest,
   StartEmailLoginResponse,
@@ -42,7 +44,13 @@ export class ApiError extends Error {
      * "already in your account" or "someone else edited this", and those want
      * opposite responses from the client.
      */
-    readonly code?: string
+    readonly code?: string,
+    /**
+     * The rest of the refusal body. A fenced write reports the version the
+     * account actually holds, and a size refusal reports the ceiling; both let
+     * the client explain itself without a second round trip.
+     */
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'ApiError';
@@ -71,21 +79,24 @@ async function requestJson<T>(
     const text = await response.text();
     let message = text;
     let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
     try {
-      const payload = JSON.parse(text) as { error?: unknown; code?: unknown };
+      const payload = JSON.parse(text) as Record<string, unknown>;
       if (typeof payload.error === 'string') {
         message = payload.error;
       }
       if (typeof payload.code === 'string') {
         code = payload.code;
       }
+      details = payload;
     } catch {
       // Plain-text responses remain useful as-is.
     }
     throw new ApiError(
       response.status,
       message || `${response.status} ${response.statusText}`,
-      code
+      code,
+      details
     );
   }
 
@@ -193,6 +204,18 @@ export const api = {
       `/api/projects/${payload.projectId}/revisions`,
       {
         method: 'POST',
+        body: JSON.stringify(payload)
+      }
+    ),
+  /**
+   * The continuous-sync write. Same fencing as `saveRevision`, no history
+   * entry, and only an acknowledgement comes back.
+   */
+  saveProjectDocument: (payload: SaveProjectDocumentRequest) =>
+    requestJson<SaveProjectDocumentResponse>(
+      `/api/projects/${payload.projectId}/document`,
+      {
+        method: 'PUT',
         body: JSON.stringify(payload)
       }
     ),

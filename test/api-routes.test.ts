@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import { getInMemoryPersistence } from '@openzcad/persistence';
+import { createProjectDocument } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_PROJECT_NAME_LENGTH,
@@ -67,6 +68,13 @@ function post(path: string, body: unknown): Request {
 function patch(path: string, body: unknown): Request {
   return new Request(`https://example.com${path}`, {
     method: 'PATCH',
+    body: JSON.stringify(body)
+  });
+}
+
+function put(path: string, body: unknown): Request {
+  return new Request(`https://example.com${path}`, {
+    method: 'PUT',
     body: JSON.stringify(body)
   });
 }
@@ -1210,4 +1218,99 @@ describe('worker api routes', () => {
       });
     }
   );
+
+  it('adopts a device-local document under its own project id', async () => {
+    const local = createProjectDocument('Adopted', toUserId('user_local'));
+    const response = await worker.fetch(
+      post('/api/projects', { name: local.name, document: local }),
+      env
+    );
+    expect(response.status).toBe(201);
+    const created = (await response.json()) as CreateProjectResponse;
+    expect(created.document.projectId).toBe(local.projectId);
+
+    const loaded = await worker.fetch(
+      new Request(`https://example.com/api/projects/${local.projectId}`),
+      env
+    );
+    expect(loaded.status).toBe(200);
+    expect(((await loaded.json()) as ProjectDocument).name).toBe('Adopted');
+  });
+
+  it('answers a second adoption of the same project with 409 ALREADY_ADOPTED', async () => {
+    const local = createProjectDocument('Twice', toUserId('user_local'));
+    await worker.fetch(
+      post('/api/projects', { name: local.name, document: local }),
+      env
+    );
+    const again = await worker.fetch(
+      post('/api/projects', { name: local.name, document: local }),
+      env
+    );
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ code: 'ALREADY_ADOPTED' });
+  });
+
+  it('saves a document without adding a revision', async () => {
+    const created = await createProject('Autosaved');
+    const projectId = created.document.projectId;
+
+    const response = await worker.fetch(
+      put(`/api/projects/${projectId}/document`, {
+        projectId,
+        expectedVersion: created.document.version,
+        document: created.document
+      }),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      projectId,
+      version: created.document.version
+    });
+
+    // The whole point of the split: continuous sync must not grow history.
+    const loaded = (await (
+      await worker.fetch(
+        new Request(`https://example.com/api/projects/${projectId}`),
+        env
+      )
+    ).json()) as ProjectDocument;
+    expect(loaded.checkpoints).toHaveLength(
+      created.document.checkpoints.length
+    );
+  });
+
+  it('fences a document save against the version the account holds', async () => {
+    const created = await createProject('Fenced');
+    const projectId = created.document.projectId;
+
+    const stale = await worker.fetch(
+      put(`/api/projects/${projectId}/document`, {
+        projectId,
+        expectedVersion: created.document.version + 5,
+        document: created.document
+      }),
+      env
+    );
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      code: 'REVISION_CONFLICT',
+      currentVersion: created.document.version
+    });
+  });
+
+  it('refuses a document save whose body disagrees with the url', async () => {
+    const created = await createProject('Mismatched');
+    const other = await createProject('Other');
+    const response = await worker.fetch(
+      put(`/api/projects/${created.document.projectId}/document`, {
+        projectId: other.document.projectId,
+        expectedVersion: created.document.version,
+        document: other.document
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+  });
 });

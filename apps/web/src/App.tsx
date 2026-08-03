@@ -49,7 +49,8 @@ import {
   listNodesByKind,
   listParameters,
   normalizeDocument,
-  resolveParamValue
+  resolveParamValue,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -106,6 +107,10 @@ import type {
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
 import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
+import {
+  CloudProjectAutosave,
+  type WorkspaceSaveState
+} from './lib/cloudProjectAutosave';
 import { mark, measure, timed, timedAsync } from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
 import {
@@ -586,6 +591,7 @@ export function App() {
     'Changes save on this device immediately.'
   );
   const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
+  const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const cloudSettingsSessionUserRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
@@ -652,9 +658,7 @@ export function App() {
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
-  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
-    'saving'
-  );
+  const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [collaborationRollout, setCollaborationRollout] = useState({
     sharingEnabled: false,
@@ -1047,6 +1051,95 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const controller = new CloudProjectAutosave({
+      api,
+      onStatus(status) {
+        setSaveState(status.state);
+        if (status.state === 'refused') {
+          setStatus(
+            errorMessage(
+              status.error,
+              'This document is too large for the account. It stays saved on this device.'
+            )
+          );
+        }
+      },
+      onSynced({ projectId, version }) {
+        remoteVersionsRef.current.set(projectId, version);
+      },
+      onConflict({ accountVersion }) {
+        // Phase 4 replaces this with the recovery-copy dialog. Until then the
+        // honest thing is to stop and say so rather than pick a winner.
+        setStatus(
+          `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device; cloud sync is paused.`
+        );
+      },
+      onSessionExpired() {
+        remoteVersionsRef.current.clear();
+        setCloudAvailable(false);
+        endCloudSettingsSession();
+      }
+    });
+    cloudProjectAutosaveRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (cloudProjectAutosaveRef.current === controller) {
+        cloudProjectAutosaveRef.current = null;
+      }
+    };
+  }, []);
+
+  /**
+   * Points the autosave controller at whichever project is open, and only when
+   * the account actually holds it. A project the account has never seen is not
+   * a sync failure — it is something to adopt, which the start screen offers.
+   */
+  useEffect(() => {
+    const controller = cloudProjectAutosaveRef.current;
+    if (!controller) {
+      return;
+    }
+    const projectId = doc?.projectId;
+    const accountVersion = projectId
+      ? remoteVersionsRef.current.get(projectId)
+      : undefined;
+    if (!projectId || !session || accountVersion === undefined) {
+      controller.closeProject();
+      return;
+    }
+    controller.openProject(projectId, accountVersion);
+  }, [doc?.projectId, session]);
+
+  /**
+   * Last call before the tab goes away. `pagehide` is the only one of these
+   * that fires reliably on mobile, and `visibilitychange` is the only one that
+   * fires when a tab is merely backgrounded — which on a phone is usually the
+   * last thing that happens before it is discarded.
+   */
+  useEffect(() => {
+    const flush = () => {
+      void cloudProjectAutosaveRef.current?.flushPending();
+    };
+    const onVisibilityChange = () => {
+      if (globalThis.document.visibilityState === 'hidden') {
+        flush();
+      }
+    };
+    window.addEventListener('pagehide', flush);
+    globalThis.document.addEventListener(
+      'visibilitychange',
+      onVisibilityChange
+    );
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      globalThis.document.removeEventListener(
+        'visibilitychange',
+        onVisibilityChange
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     const controller = cloudSettingsAutosaveRef.current;
     const userId = session?.userId ?? null;
     if (!controller) {
@@ -1165,7 +1258,7 @@ export function App() {
             cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
         }
-        setSaveState(canUseCloud ? 'saved' : 'offline');
+        setSaveState(canUseCloud ? 'synced' : 'local');
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
           setStatus(`Reopened ${restoredDocument.name}.`);
@@ -1728,7 +1821,16 @@ export function App() {
     }
     try {
       await saveLocalProject(pending);
-      setSaveState(cloudAvailable ? 'saved' : 'offline');
+      // The device write is the save; the account copy follows on its own
+      // schedule. Handing the document over here rather than from the edit
+      // effect means nothing is ever queued for the account that this device
+      // has not already stored.
+      const controller = cloudProjectAutosaveRef.current;
+      if (controller) {
+        controller.schedule(pending);
+      } else {
+        setSaveState(cloudAvailable ? 'synced' : 'local');
+      }
     } catch {
       setSaveState('offline');
       setStatus('Local autosave failed. Export your model before closing.');
@@ -2462,7 +2564,7 @@ export function App() {
       );
       setCloudAvailable(activeProjectIsCloud);
       if (doc) {
-        setSaveState(activeProjectIsCloud ? 'saved' : 'offline');
+        setSaveState(activeProjectIsCloud ? 'synced' : 'local');
       }
       // Signing in does not upload anything on its own. Projects made while
       // signed out are still the user's to keep on one device if they want, so
@@ -2487,6 +2589,10 @@ export function App() {
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
+      // Both queues drain before the session goes away, or their contents
+      // become unsendable the moment the cookie does.
+      await cloudProjectAutosaveRef.current?.flushPending();
+      cloudProjectAutosaveRef.current?.closeProject();
       await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
       const listed = await loadProjectSummaries(false);
@@ -2502,7 +2608,7 @@ export function App() {
       // Nothing is in "the account" once there is no account in session, so the
       // shelf must stop claiming otherwise.
       setCloudProjectIds(new Set());
-      setSaveState('offline');
+      setSaveState('local');
       setSettingsMessage('Signed out · device settings remain active.');
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
@@ -2556,7 +2662,7 @@ export function App() {
           ...current
         ]);
         setCloudAvailable(false);
-        setSaveState('offline');
+        setSaveState('local');
         setStatus(`Created ${localDocument.name} locally.`);
         return;
       }
@@ -2599,7 +2705,7 @@ export function App() {
         ...current
       ]);
       setCloudAvailable(false);
-      setSaveState('offline');
+      setSaveState('local');
       setStatus(
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
@@ -2657,7 +2763,11 @@ export function App() {
         managerRef.current.document = merged;
         setDoc(merged);
         setCloudAvailable(true);
-        setSaveState('saved');
+        setSaveState('synced');
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          merged.projectId,
+          merged.version
+        );
       }
       return 'adopted';
     } catch (error) {
@@ -2805,6 +2915,7 @@ export function App() {
 
   async function handleGoHome() {
     await flushPendingLocalSave();
+    await cloudProjectAutosaveRef.current?.flushPending();
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
@@ -3121,23 +3232,33 @@ export function App() {
       const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
       if (!session || expectedVersion === undefined) {
         setCloudAvailable(false);
-        setSaveState('offline');
-        setStatus('Saved locally.');
+        setSaveState('local');
+        setStatus('Saved on this device.');
         return;
       }
+      // A queued autosave writing the same document behind this one would race
+      // the checkpoint for the version fence, and the loser reports a conflict
+      // that does not exist. Drain it first; a manual save is worth the wait.
+      await cloudProjectAutosaveRef.current?.flushPending();
       const saved = await api.saveRevision({
         projectId: doc.projectId,
         reason: 'Manual save',
-        expectedVersion,
-        document: doc
+        expectedVersion:
+          cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
+        document: withoutDerivedProjection(doc)
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
+      const restored = withLocalDerived(saved, doc);
       if (managerRef.current) {
-        managerRef.current.document = saved;
+        managerRef.current.document = restored;
       }
-      setDoc(saved);
+      setDoc(restored);
       setCloudAvailable(true);
-      setSaveState('saved');
+      setSaveState('synced');
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        restored.projectId,
+        restored.version
+      );
       setStatus('Saved revision.');
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -3145,8 +3266,14 @@ export function App() {
         endCloudSettingsSession();
       }
       setCloudAvailable(false);
-      setSaveState('offline');
-      setStatus(`${errorMessage(error, 'Cloud save failed')} Saved locally.`);
+      setSaveState(
+        error instanceof ApiError && error.status === 409
+          ? 'conflict'
+          : 'offline'
+      );
+      setStatus(
+        `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
+      );
     }
   }
 
