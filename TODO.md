@@ -53,6 +53,10 @@ the current branch; production enablement is a separate rollout decision.
 
 ## Release gates / next
 
+- Carry projects between a user's own devices: adopt local-only projects into the
+  account, autosave documents to the cloud rather than only on manual save, and
+  recover divergence outside a live room. Planned in
+  `docs/plans/project-cloud-sync-plan.md`; nothing implemented yet.
 - Run the collaboration recovery-copy reload E2E against a real beta session;
   apply the sharing migration and verify revocation/lease expiry before enabling
   viewer sharing, then editor sharing.
