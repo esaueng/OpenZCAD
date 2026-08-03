@@ -78,6 +78,13 @@ export interface CloudflareEnv {
   AUTH_MODE?: 'development' | 'email-code';
   PROJECT_SHARING_ENABLED?: string;
   PROJECT_EDIT_LEASES_ENFORCED?: string;
+  /**
+   * Lets the project owner's own devices join a live room, independent of
+   * sharing. Deliberately a separate flag: sharing carries invitations, roles,
+   * and lease enforcement, and turning on device sync must not turn any of
+   * those on with it.
+   */
+  PROJECT_PERSONAL_SYNC_ENABLED?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_FACE_SKETCH_ENABLED?: string;
   AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED?: string;
@@ -136,6 +143,7 @@ export interface CloudflareEnv {
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',
+  'PROJECT_PERSONAL_SYNC_ENABLED',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_FACE_SKETCH_ENABLED',
   'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
@@ -1449,6 +1457,10 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       revisionCount: document.revisions.length,
       updatedAt: row.updated_at,
+      // Read from the document rather than the row's `document_version` so the
+      // number always describes the blob this summary was built from, even if
+      // the two ever disagree.
+      documentVersion: document.version,
       organization: organizationFromRow(row)
     };
   } catch {

@@ -932,6 +932,13 @@ export interface ProjectSummary {
   revisionCount: number;
   updatedAt: string;
   /**
+   * The document version this store holds. Present so a device can ask "am I
+   * behind?" from the project listing it already fetches, instead of pulling
+   * whole documents to find out. Absent on summaries built by stores that
+   * predate it, where the answer is simply unknown.
+   */
+  documentVersion?: number;
+  /**
    * Absent when the store holding this summary has no shelf state for the
    * project — an older row, or a device that has never organised it. Read it
    * through {@link projectOrganization} so a missing record reads as defaults
@@ -1179,6 +1186,11 @@ export interface HealthResponse {
   projectSharingEnabled?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
   projectEditLeasesEnforced?: boolean;
+  /**
+   * Whether the owner's own devices may join a live room. Independent of
+   * sharing: this being on says nothing about invitations, roles, or leases.
+   */
+  projectPersonalSyncEnabled?: boolean;
 }
 
 export interface AuthSession {
