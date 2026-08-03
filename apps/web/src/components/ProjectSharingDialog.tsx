@@ -7,8 +7,8 @@ import type {
   ProjectSharingResponse
 } from '@openzcad/shared';
 import {
-  resolveCollaborationConflict,
-  type CollaborationConflict,
+  resolveProjectConflict,
+  type ProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers
 } from '../lib/conflictRecovery';
@@ -27,7 +27,7 @@ export interface ProjectSharingDialogProps {
   collaborationStatus: CollaborationStatus;
   lease: ProjectEditLease | null;
   liveMembers?: readonly CollaborationMember[];
-  conflict?: CollaborationConflict | null;
+  conflict?: ProjectConflict | null;
   conflictHandlers?: ConflictResolutionHandlers;
   client?: ProjectSharingClient;
   onClose(): void;
@@ -104,7 +104,7 @@ export function ProjectSharingDialog({
       return;
     }
     await mutate(`conflict:${resolution}`, () =>
-      resolveCollaborationConflict(
+      resolveProjectConflict(
         conflict,
         resolution,
         { role, lease },
@@ -186,14 +186,14 @@ export function ProjectSharingDialog({
             <h3 id="conflict-recovery-title">Resolve local changes</h3>
             <p>
               Local version {conflict.localDocument.version} differs from room
-              version {conflict.expectedRoomVersion}. Your local document
+              version {conflict.expectedRemoteVersion}. Your local document
               remains unresolved if this dialog is closed.
             </p>
             <div>
               <button
                 type="button"
                 disabled={!conflictHandlers || busy !== null}
-                onClick={() => void resolve('use-room')}
+                onClick={() => void resolve('use-remote')}
               >
                 Use room version
               </button>
