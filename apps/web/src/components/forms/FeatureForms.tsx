@@ -15,6 +15,7 @@ import {
   type SketchObjectKind
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
+import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
   REVOLVE_AXIS_LABELS,
@@ -269,6 +270,122 @@ const SHAPE_LABELS: Record<ClosedShapeKind, string> = {
   circle: 'Circle',
   polygon: 'Polygon'
 };
+
+export interface TextSketchFormValue {
+  name: string;
+  data: Extract<SketchObjectData, { objectKind: 'text' }>;
+}
+
+interface TextSketchFormProps {
+  scope: Record<string, number>;
+  initial: {
+    name: string;
+    object: Extract<SketchObjectData, { objectKind: 'text' }>;
+  };
+  onSubmit(value: TextSketchFormValue): void;
+  onCancel?: () => void;
+  /** Opens the sketch in the viewport for spatial edits. */
+  onEditInViewport?: () => void;
+}
+
+/**
+ * The edit form for a sketch whose object is text.
+ *
+ * `SketchForm` below only understands closed one-object profiles, and its
+ * fallback for anything else was a rectangle — so selecting a finished text
+ * sketch in the history presented it as "Rectangle 32×18", and Apply would
+ * have replaced the text with that rectangle and re-planed a face-attached
+ * sketch onto a canonical plane. This form owns the text case instead: the
+ * same fields as the in-sketch entity editor, applied through
+ * `updateSketchObject`, which never touches the sketch's plane.
+ */
+export function TextSketchForm({
+  scope,
+  initial,
+  onSubmit,
+  onCancel,
+  onEditInViewport
+}: TextSketchFormProps) {
+  const [name, setName] = useState(initial.name);
+  const [text, setText] = useState<TextAttributes>({
+    text: initial.object.text,
+    fontFamily: initial.object.fontFamily,
+    fontStyle: initial.object.fontStyle
+  });
+  const [values, setValues] = useState<Record<string, string>>(() => ({
+    size: paramValueText(initial.object.size),
+    rotation: paramValueText(initial.object.rotation ?? 0),
+    x: paramValueText(initial.object.x),
+    y: paramValueText(initial.object.y)
+  }));
+  const canSubmit =
+    name.trim().length > 0 &&
+    text.text.length > 0 &&
+    fieldsValid(scope, Object.values(values));
+
+  const setValue = (key: string) => (value: string) =>
+    setValues((current) => ({ ...current, [key]: value }));
+
+  return (
+    <FormShell
+      name={name}
+      onName={setName}
+      submitLabel="Apply"
+      canSubmit={canSubmit}
+      onSubmit={() =>
+        onSubmit({
+          name,
+          data: {
+            // Spread first so fields this form does not own — alignment,
+            // construction — survive the edit.
+            ...initial.object,
+            ...text,
+            size: coerceParamValue(values.size ?? ''),
+            rotation: coerceParamValue(values.rotation ?? '0'),
+            x: coerceParamValue(values.x ?? '0'),
+            y: coerceParamValue(values.y ?? '0')
+          }
+        })
+      }
+      {...(onCancel ? { onCancel } : {})}
+    >
+      <TextObjectFields value={text} onChange={setText} />
+      <div className="field-pair">
+        <ExprInput
+          label="Size"
+          value={values.size ?? ''}
+          scope={scope}
+          onChange={setValue('size')}
+        />
+        <ExprInput
+          label="Rotation"
+          value={values.rotation ?? ''}
+          scope={scope}
+          onChange={setValue('rotation')}
+        />
+      </div>
+      <div className="field-pair">
+        <ExprInput
+          label="X"
+          value={values.x ?? ''}
+          scope={scope}
+          onChange={setValue('x')}
+        />
+        <ExprInput
+          label="Y"
+          value={values.y ?? ''}
+          scope={scope}
+          onChange={setValue('y')}
+        />
+      </div>
+      {onEditInViewport && (
+        <button type="button" className="secondary" onClick={onEditInViewport}>
+          Edit sketch in viewport
+        </button>
+      )}
+    </FormShell>
+  );
+}
 
 export function SketchForm({
   scope,
