@@ -51,6 +51,11 @@ function clampAutosaveDelay(seconds: number): number {
 }
 import { api } from '../lib/api';
 import {
+  KERNEL_BUILD,
+  kernelBuildDetail,
+  kernelBuildLabel
+} from '../lib/kernelBuild';
+import {
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
@@ -1560,6 +1565,15 @@ export function SettingsPage({
                 scope="Required"
               >
                 <span className="settings-state good">Exact</span>
+              </SettingRow>
+              <SettingRow
+                title="Kernel version"
+                description="The pinned kernel build this app was compiled against. Quote it when reporting a geometry defect."
+                scope="Diagnostics"
+              >
+                <span className="mono" title={kernelBuildDetail(KERNEL_BUILD)}>
+                  {kernelBuildLabel(KERNEL_BUILD)}
+                </span>
               </SettingRow>
               <SettingRow
                 title="Document authority"
