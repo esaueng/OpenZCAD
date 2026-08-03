@@ -1,10 +1,30 @@
 # Project Cloud Sync Plan — save projects to the account, sync between devices
 
-Status: planned, not started
-Scope: `apps/web` (client + worker), `packages/shared`, `packages/cloudflare-adapters`
+Status: all phases implemented. Decisions are recorded in
+[ADR-016](../adrs/ADR-016-project-cloud-sync.md); the phase notes below are kept
+as the record of what each one covered and why.
+Scope: `apps/web` (client + worker), `packages/shared`, `packages/persistence`,
+`packages/document-core`, `packages/cloudflare-adapters`
 Related: [ADR-003](../adrs/ADR-003-cloudflare-storage-split.md) (D1/R2 split),
 [ADR-007](../adrs/ADR-007-access-auth-and-live-rooms.md) (live rooms),
 [ADR-012](../adrs/ADR-012-email-code-identity.md) (identity)
+
+## What shipped, against what was planned
+
+Two things came out differently from the plan above, both for the better:
+
+- **Retention is a plain count, not "last N plus every named checkpoint".**
+  Once autosave stopped writing revisions, every remaining revision was already
+  a save somebody chose to make, so the second half of the rule had nothing left
+  to protect.
+- **Documents are stored without their derived projection**, on every write
+  path rather than only the new ones. Meshes rebuild from canonical history on
+  load, so a document is now refused for the size of its history rather than the
+  size of its last rebuild. This was not in the plan and belongs to the size
+  work.
+
+One thing was added: a `paused` sync state, for a user who turned cloud autosave
+off. It is neither offline nor conflicted, and the next step differs from both.
 
 ## Goal
 
@@ -43,7 +63,7 @@ building a cloud backend.
 ## The seven gaps
 
 1. **No cloud autosave for documents.** `handleSave()` (`apps/web/src/App.tsx:2951`) is the
-   *only* code path that writes a document to the account. Everything between two manual
+   _only_ code path that writes a document to the account. Everything between two manual
    saves exists on one device only. This is the largest gap and the one users will feel.
 
 2. **Local-only projects can never reach the account.** `CreateProjectRequest` is
@@ -102,12 +122,12 @@ inserts.
 
 A third input turns guesswork into a decision:
 
-| local vs `lastSyncedVersion` | remote vs `lastSyncedVersion` | outcome |
-| --- | --- | --- |
-| unchanged | unchanged | in sync, nothing to do |
-| ahead | unchanged | push |
-| unchanged | ahead | pull and hydrate |
-| ahead | ahead | conflict — recovery copy, then ask |
+| local vs `lastSyncedVersion` | remote vs `lastSyncedVersion` | outcome                            |
+| ---------------------------- | ----------------------------- | ---------------------------------- |
+| unchanged                    | unchanged                     | in sync, nothing to do             |
+| ahead                        | unchanged                     | push                               |
+| unchanged                    | ahead                         | pull and hydrate                   |
+| ahead                        | ahead                         | conflict — recovery copy, then ask |
 
 This replaces the timestamp tiebreak in `selectProjectDocument` and is the prerequisite for
 gaps 4 and 5. It lives beside the shelf metadata in the `projectMeta` IndexedDB store, which
@@ -117,7 +137,7 @@ is already device-owned and already excluded from document sync by design.
 
 The Durable Object room is the ideal push channel for a user's own devices, but sharing
 carries invitations, roles, and lease enforcement that are deliberately still off. Introduce
-`PROJECT_PERSONAL_SYNC_ENABLED`, gating rooms joined by the *owner only*, independent of
+`PROJECT_PERSONAL_SYNC_ENABLED`, gating rooms joined by the _owner only_, independent of
 `PROJECT_SHARING_ENABLED`. Until it is on, Phase 3's polling is the sync channel; the room
 is an upgrade, not a dependency.
 
@@ -141,7 +161,7 @@ Closes gap 2. Independent of every later phase, and the one that makes "save to 
 profile" true at all.
 
 - `packages/shared`: extend `CreateProjectRequest` with an optional `document?:
-  ProjectDocument`. Present means adoption: keep the client's `projectId` so the device's
+ProjectDocument`. Present means adoption: keep the client's `projectId` so the device's
   local copy and its shelf metadata stay linked to the account record.
 - `packages/cloudflare-adapters`: in `createProject`, when a document is supplied, run it
   through `normalizeDocument`, re-stamp `ownerUserId`, and insert. Refuse when the
