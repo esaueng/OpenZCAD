@@ -202,6 +202,8 @@ interface MoveOverlayProps {
   onChange(values: MoveOverlayValues): void;
   onConfirm(): void;
   onCancel(): void;
+  /** Sketch moves translate only; the rotation grid and copy are hidden. */
+  hideRotation?: boolean;
 }
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
@@ -213,7 +215,8 @@ export function MoveOverlay({
   snap,
   onChange,
   onConfirm,
-  onCancel
+  onCancel,
+  hideRotation
 }: MoveOverlayProps) {
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
@@ -239,7 +242,11 @@ export function MoveOverlay({
           <MousePointer2 size={17} aria-hidden="true" />
         </span>
         <span>
-          <strong>Drag an arrow to move, a ring to rotate</strong>
+          <strong>
+            {hideRotation
+              ? 'Drag an arrow to move the sketch'
+              : 'Drag an arrow to move, a ring to rotate'}
+          </strong>
           <small>
             Snaps to{' '}
             {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
@@ -289,7 +296,12 @@ export function MoveOverlay({
             </label>
           ))}
         </div>
-        <div className="move-grid" role="group" aria-label="Rotation">
+        <div
+          className="move-grid"
+          role="group"
+          aria-label="Rotation"
+          hidden={hideRotation}
+        >
           {MOVE_AXES.map((axis) => (
             <label key={`r-${axis}`}>
               <span className={`move-axis move-axis-${axis}`}>
