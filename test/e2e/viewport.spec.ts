@@ -806,9 +806,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   await expect(edgeChip).toHaveClass(/automatic/);
 });
 
-test('shift-dragging a box selects several bodies at once', async ({
-  page
-}) => {
+test('dragging a box selects several bodies at once', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Box Select Part');
@@ -855,7 +853,7 @@ test('shift-dragging a box selects several bodies at once', async ({
   const status = page.getByRole('contentinfo');
 
   /**
-   * Shift-drags a rectangle. Only the press has to land on the canvas — the
+   * Drags a rectangle. Only the press has to land on the canvas — the
    * drag takes pointer capture — which matters because the tool palette
    * overlays the viewport's left edge.
    */
@@ -884,14 +882,13 @@ test('shift-dragging a box selects several bodies at once', async ({
       };
     }
     const to = at(toX, toY);
-    await page.keyboard.down('Shift');
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     // Two steps so the band gets a move before the release decides.
     await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2);
+    await expect(page.locator('.selection-band')).toBeVisible();
     await page.mouse.move(to.x, to.y);
     await page.mouse.up();
-    await page.keyboard.up('Shift');
   }
 
   // Right to left is a crossing sweep: everything it touches comes with it.
@@ -1001,16 +998,15 @@ test('box selection releases the previous direct-edit target', async ({
   if (!drag) {
     throw new Error('no unobstructed canvas path found for box selection');
   }
-  await page.keyboard.down('Shift');
   await page.mouse.move(drag.from.x, drag.from.y);
   await page.mouse.down();
   await page.mouse.move(
     (drag.from.x + drag.to.x) / 2,
     (drag.from.y + drag.to.y) / 2
   );
+  await expect(page.locator('.selection-band')).toBeVisible();
   await page.mouse.move(drag.to.x, drag.to.y);
   await page.mouse.up();
-  await page.keyboard.up('Shift');
 
   await expect(status).toContainText('Nothing in the box');
   await expect(status).not.toContainText('push or pull');
@@ -1180,12 +1176,14 @@ test('releasing an orbit eases out instead of stopping dead', async ({
   }
   const startX = bounds.x + bounds.width / 2;
   const startY = bounds.y + bounds.height * 0.6;
+  await page.keyboard.down('Shift');
   await page.mouse.move(startX, startY);
   await page.mouse.down();
   for (let step = 1; step <= 12; step += 1) {
     await page.mouse.move(startX + step * 12, startY - step * 6);
   }
   await page.mouse.up();
+  await page.keyboard.up('Shift');
   await page.waitForTimeout(1_400);
 
   const result = await page.evaluate(() => {
