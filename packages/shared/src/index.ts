@@ -1532,6 +1532,36 @@ export function persistedDocumentBytes(document: ProjectDocument): number {
   return new TextEncoder().encode(JSON.stringify(document)).byteLength;
 }
 
+/**
+ * How many revisions a project keeps before the oldest are dropped.
+ *
+ * Each revision is a whole copy of the document, so an unbounded history is an
+ * unbounded multiple of the project itself. Fifty explicit saves is far more
+ * history than the UI exposes any way to reach, and continuous sync no longer
+ * adds to this count — every remaining revision is a save somebody chose to
+ * make.
+ */
+export const MAX_PROJECT_REVISIONS = 50;
+
+/** What an account is currently storing, for the settings panel. */
+export interface AccountStorageUsage {
+  projectCount: number;
+  /** Bytes held by the current copy of each project. */
+  documentBytes: number;
+  /** Bytes held by saved revisions, across every project. */
+  revisionBytes: number;
+  /**
+   * How many revisions are retained in total. Reported separately from the
+   * bytes because retention bounds the count, not the size — later revisions of
+   * a project are larger than earlier ones, so a flat byte total cannot show
+   * that pruning is working.
+   */
+  revisionCount: number;
+  /** The per-document ceiling, so the client can name it without hardcoding. */
+  documentLimitBytes: number;
+  maxRevisionsPerProject: number;
+}
+
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
   rotationDeg: { x: 0, y: 0, z: 0 }
