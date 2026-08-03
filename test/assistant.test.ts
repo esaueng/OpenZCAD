@@ -490,6 +490,7 @@ describe('assistant integration', () => {
     await streamAssistantProposal(
       input,
       {
+        AI_PROVIDER: 'responses-compatible',
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses',
         AI_PATCH_FACE_SKETCH_ENABLED: 'true',
@@ -530,6 +531,7 @@ describe('assistant integration', () => {
       await streamAssistantProposal(
         input,
         {
+          AI_PROVIDER: 'responses-compatible',
           AI_API_KEY: 'key',
           AI_BASE_URL: 'https://models.example.test/v1/responses',
           ...env
