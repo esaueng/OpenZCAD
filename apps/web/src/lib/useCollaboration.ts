@@ -12,7 +12,7 @@ import {
   clearUnresolvedConflict,
   conflictFromDocuments,
   readUnresolvedConflict,
-  type CollaborationConflict
+  type ProjectConflict
 } from './conflictRecovery';
 
 export type CollaborationStatus =
@@ -41,9 +41,9 @@ export interface CollaborationClientState {
   /** The lease held by this browser client, never another member's lease. */
   lease: ProjectEditLease | null;
   roomVersion: number | null;
-  conflict: CollaborationConflict | null;
-  useRoomVersion(expectedRoomVersion: number): boolean;
-  keepLocalVersion(expectedRoomVersion: number): Promise<void>;
+  conflict: ProjectConflict | null;
+  useRemoteVersion(expectedRemoteVersion: number): boolean;
+  keepLocalVersion(expectedRemoteVersion: number): Promise<void>;
 }
 
 const MAX_MESSAGE_BYTES = 900_000;
@@ -97,7 +97,7 @@ export function useCollaboration({
   const [role, setRole] = useState<ProjectAccessRole | null>(null);
   const [lease, setLease] = useState<ProjectEditLease | null>(null);
   const [roomVersion, setRoomVersion] = useState<number | null>(null);
-  const [conflict, setConflict] = useState<CollaborationConflict | null>(null);
+  const [conflict, setConflict] = useState<ProjectConflict | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const documentRef = useRef(document);
   const remoteHandlerRef = useRef(onRemoteDocument);
@@ -107,7 +107,7 @@ export function useCollaboration({
   const roleRef = useRef<ProjectAccessRole | null>(null);
   const leaseIdRef = useRef<string | null>(null);
   const leaseRef = useRef<ProjectEditLease | null>(null);
-  const conflictRef = useRef<CollaborationConflict | null>(null);
+  const conflictRef = useRef<ProjectConflict | null>(null);
   const keepMinePendingRef = useRef(false);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
@@ -573,18 +573,18 @@ export function useCollaboration({
     return () => window.clearTimeout(timeout);
   }, [document?.projectId, document?.version]);
 
-  const useRoomVersion = useCallback(
-    (expectedRoomVersion: number): boolean => {
+  const useRemoteVersion = useCallback(
+    (expectedRemoteVersion: number): boolean => {
       const pending = conflictRef.current;
       if (
         !pending ||
         pending.projectId !== projectId ||
-        pending.expectedRoomVersion !== expectedRoomVersion ||
-        serverVersionRef.current !== expectedRoomVersion
+        pending.expectedRemoteVersion !== expectedRemoteVersion ||
+        serverVersionRef.current !== expectedRemoteVersion
       ) {
         return false;
       }
-      const roomDocument = structuredClone(pending.roomDocument);
+      const roomDocument = structuredClone(pending.remoteDocument);
       clearUnresolvedConflict(pending.projectId);
       conflictRef.current = null;
       setConflict(null);
@@ -599,7 +599,7 @@ export function useCollaboration({
   );
 
   const keepLocalVersion = useCallback(
-    async (expectedRoomVersion: number): Promise<void> => {
+    async (expectedRemoteVersion: number): Promise<void> => {
       const pending = conflictRef.current;
       const activeLease = leaseRef.current;
       const socket = socketRef.current;
@@ -608,8 +608,8 @@ export function useCollaboration({
         !pending ||
         !current ||
         pending.projectId !== projectId ||
-        pending.expectedRoomVersion !== expectedRoomVersion ||
-        serverVersionRef.current !== expectedRoomVersion
+        pending.expectedRemoteVersion !== expectedRemoteVersion ||
+        serverVersionRef.current !== expectedRemoteVersion
       ) {
         throw new Error(
           'The room version changed before Keep my version was submitted.'
@@ -631,7 +631,7 @@ export function useCollaboration({
       const body = {
         type: 'document' as const,
         clientId: clientId(),
-        baseVersion: expectedRoomVersion,
+        baseVersion: expectedRemoteVersion,
         document: collaborationDocument(current),
         leaseId: activeLease.leaseId
       };
@@ -708,7 +708,7 @@ export function useCollaboration({
     lease,
     roomVersion,
     conflict,
-    useRoomVersion,
+    useRemoteVersion,
     keepLocalVersion
   };
 }

@@ -158,6 +158,7 @@ import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AssistantPanel } from './components/assistant/AssistantPanel';
 import { ProjectSharingDialog } from './components/ProjectSharingDialog';
+import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExtrudeOverlay,
   MoveOverlay,
@@ -237,11 +238,14 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   );
 }
 import {
+  chooseProjectDocument,
   deleteLocalProject,
   listLocalProjectOrganizations,
   listLocalProjects,
+  loadLastSyncedVersion,
   loadLocalProject,
   purgeExpiredLocalProjects,
+  saveLastSyncedVersion,
   saveLocalProjectOrganization,
   selectProjectDocument,
   saveLocalProject
@@ -258,7 +262,14 @@ import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
-import type { ConflictResolutionHandlers } from './lib/conflictRecovery';
+import {
+  clearUnresolvedConflict,
+  conflictFromDocuments,
+  resolveProjectConflict,
+  type ConflictResolution,
+  type ConflictResolutionHandlers,
+  type ProjectConflict
+} from './lib/conflictRecovery';
 import {
   modelingFaceOptions,
   modelingOperationDisabledReason,
@@ -778,6 +789,13 @@ export function App() {
   const [cloudProjectIds, setCloudProjectIds] = useState<ReadonlySet<string>>(
     new Set()
   );
+  /**
+   * A divergence against the account, as opposed to against a live room. Held
+   * here rather than in the collaboration hook because it can happen with no
+   * room in the picture at all — which, with sharing off, is every time.
+   */
+  const [accountConflict, setAccountConflict] =
+    useState<ProjectConflict | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
@@ -991,8 +1009,8 @@ export function App() {
         )
       );
     },
-    useRoomVersion(roomDocument) {
-      if (!collaboration.useRoomVersion(roomDocument.version)) {
+    useRemoteVersion(remoteDocument) {
+      if (!collaboration.useRemoteVersion(remoteDocument.version)) {
         throw new Error(
           'The room version changed before recovery could complete.'
         );
@@ -1001,14 +1019,90 @@ export function App() {
         'Using the current room version; a local recovery copy was saved.'
       );
     },
-    async keepMyVersion({ expectedRoomVersion }) {
-      await collaboration.keepLocalVersion(expectedRoomVersion);
+    async keepMyVersion({ expectedRemoteVersion }) {
+      await collaboration.keepLocalVersion(expectedRemoteVersion);
       setStatus('Submitting the preserved local version to the room.');
     },
     saveLocalAsCopy() {
       setStatus('Saved the divergent document as a local recovery project.');
     }
   };
+
+  /**
+   * The same three resolutions, for a conflict the account raised rather than a
+   * room. There is no lease and no live channel here: taking the account's copy
+   * is a local hydrate, and keeping this device's is an ordinary fenced write
+   * against the version the account reported.
+   */
+  const accountConflictHandlers: ConflictResolutionHandlers = {
+    writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
+    async useRemoteVersion(remoteDocument) {
+      await saveLocalProject(remoteDocument);
+      remoteVersionsRef.current.set(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      await saveLastSyncedVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      hydrateDocument(remoteDocument, { restoreView: false });
+      setAccountConflict(null);
+      setStatus(
+        'Using the version from your account; a local recovery copy was saved.'
+      );
+    },
+    async keepMyVersion({ document, expectedRemoteVersion }) {
+      const saved = await api.saveRevision({
+        projectId: document.projectId,
+        reason: 'Kept this device’s version',
+        expectedVersion: expectedRemoteVersion,
+        document: withoutDerivedProjection(document)
+      });
+      const restored = withLocalDerived(saved, document);
+      await saveLocalProject(restored);
+      remoteVersionsRef.current.set(restored.projectId, restored.version);
+      await saveLastSyncedVersion(restored.projectId, restored.version);
+      if (managerRef.current) {
+        managerRef.current.document = restored;
+      }
+      setDoc(restored);
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        restored.projectId,
+        restored.version
+      );
+      setAccountConflict(null);
+      setSaveState('synced');
+      setStatus('Kept this device’s version; a recovery copy was saved.');
+    },
+    saveLocalAsCopy() {
+      setStatus('Saved the divergent document as a local recovery project.');
+    }
+  };
+
+  async function resolveAccountConflict(resolution: ConflictResolution) {
+    if (!accountConflict) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await resolveProjectConflict(
+        accountConflict,
+        resolution,
+        { role: collaboration.role, lease: null, leasesEnforced: false },
+        accountConflictHandlers
+      );
+      clearUnresolvedConflict(accountConflict.projectId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (collaboration.conflict) {
@@ -1101,13 +1195,25 @@ export function App() {
       },
       onSynced({ projectId, version }) {
         remoteVersionsRef.current.set(projectId, version);
+        // The durable baseline. Everything the conflict machinery decides is
+        // measured from here, so it has to be written on the acknowledgement
+        // rather than inferred later from versions alone.
+        void saveLastSyncedVersion(projectId, version);
       },
-      onConflict({ accountVersion }) {
-        // Phase 4 replaces this with the recovery-copy dialog. Until then the
-        // honest thing is to stop and say so rather than pick a winner.
+      onConflict({ projectId, localDocument, accountVersion }) {
         setStatus(
-          `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device; cloud sync is paused.`
+          `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
         );
+        // Fetch the account's copy so the user is choosing between two real
+        // documents rather than two version numbers.
+        void api
+          .loadProject(projectId)
+          .then((remote) => {
+            setAccountConflict(
+              conflictFromDocuments(localDocument, remote, 'account')
+            );
+          })
+          .catch(() => undefined);
       },
       onSessionExpired() {
         remoteVersionsRef.current.clear();
@@ -1320,10 +1426,19 @@ export function App() {
           return;
         }
         const merged = listed.projects;
-        const restoredDocument = selectProjectDocument(
+        const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
-          rememberedRemote
+          rememberedRemote,
+          startupProjectId
+            ? await loadLastSyncedVersion(startupProjectId)
+            : null
         );
+        const restoredDocument =
+          restoredOutcome.choice === 'none'
+            ? null
+            : restoredOutcome.choice === 'diverged'
+              ? restoredOutcome.local
+              : restoredOutcome.document;
         const canUseCloud = Boolean(activeSession && rememberedRemote);
         setCollaborationRollout({
           sharingEnabled: health?.projectSharingEnabled === true,
@@ -1380,6 +1495,20 @@ export function App() {
         setSaveState(canUseCloud ? 'synced' : 'local');
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
+          if (restoredOutcome.choice === 'diverged') {
+            setAccountConflict(
+              conflictFromDocuments(
+                restoredOutcome.local,
+                restoredOutcome.remote,
+                'account'
+              )
+            );
+            setSaveState('conflict');
+            setStatus(
+              `${restoredDocument.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+            );
+            return;
+          }
           setStatus(`Reopened ${restoredDocument.name}.`);
           return;
         }
@@ -3002,14 +3131,20 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      const [localDocument, remoteDocument] = await Promise.all([
-        loadLocalProject(projectId),
-        session
-          ? api.loadProject(projectId).catch(() => null)
-          : Promise.resolve(null)
-      ]);
-      const loaded = selectProjectDocument(localDocument, remoteDocument);
-      if (!loaded) {
+      const [localDocument, remoteDocument, lastSyncedVersion] =
+        await Promise.all([
+          loadLocalProject(projectId),
+          session
+            ? api.loadProject(projectId).catch(() => null)
+            : Promise.resolve(null),
+          loadLastSyncedVersion(projectId)
+        ]);
+      const outcome = chooseProjectDocument(
+        localDocument,
+        remoteDocument,
+        lastSyncedVersion
+      );
+      if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
       }
       setCloudAvailable(Boolean(remoteDocument));
@@ -3019,11 +3154,29 @@ export function App() {
           remoteDocument.version
         );
       }
-      hydrateDocument(loaded);
+      if (outcome.choice === 'diverged') {
+        // Both copies moved since this device last agreed with the account.
+        // Open the local one — it is the work in front of the user — and ask
+        // rather than discarding either side.
+        hydrateDocument(outcome.local);
+        setAccountConflict(
+          conflictFromDocuments(outcome.local, outcome.remote, 'account')
+        );
+        setSaveState('conflict');
+        setStatus(
+          `${outcome.local.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
+      hydrateDocument(outcome.document);
+      if (outcome.choice === 'remote') {
+        await saveLocalProject(outcome.document);
+        await saveLastSyncedVersion(projectId, outcome.document.version);
+      }
       setStatus(
-        loaded === localDocument && remoteDocument
-          ? `Opened newer local edits for ${loaded.name}.`
-          : `Opened ${loaded.name}.`
+        outcome.choice === 'local' && remoteDocument
+          ? `Opened newer local edits for ${outcome.document.name}.`
+          : `Opened ${outcome.document.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
@@ -7197,6 +7350,16 @@ export function App() {
               conflict={collaboration.conflict}
               conflictHandlers={conflictHandlers}
               onClose={() => setSharingOpen(false)}
+            />
+          )}
+          {accountConflict && (
+            <ProjectConflictDialog
+              conflict={accountConflict}
+              busy={busy}
+              onResolve={(resolution) =>
+                void resolveAccountConflict(resolution)
+              }
+              onClose={() => setAccountConflict(null)}
             />
           )}
           {settingsOverlay}
