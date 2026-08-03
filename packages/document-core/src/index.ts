@@ -498,6 +498,62 @@ export function duplicateProjectDocument(
   );
 }
 
+/**
+ * `source` prepared to become an account record under `ownerUserId`, keeping
+ * its project id.
+ *
+ * This is deliberately not `duplicateProjectDocument`: a duplicate is a new
+ * project that happens to start from an old one, whereas adoption is the same
+ * project gaining an account home. Keeping the id is the whole point — the
+ * device already has this document in IndexedDB and shelf metadata filed under
+ * it, and minting a new id would strand both and leave the user looking at what
+ * appears to be a second copy of their part.
+ */
+export function adoptProjectDocument(
+  source: ProjectDocument,
+  ownerUserId: UserId,
+  name = source.name
+): ProjectDocument {
+  const copy = cloneDocument(normalizeDocument(source));
+  const rootNode = copy.nodes[copy.rootNodeId];
+  if (rootNode?.kind === 'project') {
+    copy.nodes[copy.rootNodeId] = { ...rootNode, name };
+  }
+  const adopted: ProjectDocument = {
+    ...copy,
+    ownerUserId,
+    name,
+    derived: { ...copy.derived, updatedAt: nowIso() }
+  };
+  // A document with no revision at all cannot carry a checkpoint. That should
+  // not happen, but adoption is a rescue path for documents this code has never
+  // seen, so it declines to be the thing that refuses them.
+  return adopted.revisions.length === 0
+    ? adopted
+    : createCheckpoint(adopted, 'Saved to account');
+}
+
+/**
+ * `document` without its derived projection. Meshes and exportable-body lists
+ * are rebuilt from canonical history on load, so storing or transmitting them
+ * costs bytes that buy nothing — and for a dense import they are most of the
+ * document. `updatedAt` and `warnings` stay: they are conclusions about the
+ * document rather than geometry, and the shelf reads `updatedAt`.
+ */
+export function withoutDerivedProjection(
+  document: ProjectDocument
+): ProjectDocument {
+  return {
+    ...document,
+    derived: {
+      bodyRepresentations: {},
+      exportableBodyIds: [],
+      warnings: document.derived.warnings,
+      updatedAt: document.derived.updatedAt
+    }
+  };
+}
+
 export function getNode<TNode extends DocumentNode>(
   document: ProjectDocument,
   nodeId: string
@@ -769,7 +825,11 @@ export function translateSketch(
   }
   if (du !== 0 || dv !== 0) {
     const { scope } = getParameterScope(next);
-    const shift = (value: ParamValue, delta: number, label: string): ParamValue =>
+    const shift = (
+      value: ParamValue,
+      delta: number,
+      label: string
+    ): ParamValue =>
       delta === 0 ? value : resolveParamValue(value, scope, label) + delta;
     for (const objectId of sketch.objectIds) {
       const node = next.nodes[objectId];

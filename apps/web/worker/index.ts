@@ -6,6 +6,8 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import {
   ArtifactStorageError,
+  DocumentTooLargeError,
+  ProjectAdoptionError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError
@@ -736,6 +738,19 @@ export default {
               ? 404
               : 409;
         return json({ error: error.message, code: error.code }, status);
+      }
+      if (error instanceof ProjectAdoptionError) {
+        return json({ error: error.message, code: error.code }, 409);
+      }
+      if (error instanceof DocumentTooLargeError) {
+        return json(
+          {
+            error: error.message,
+            code: 'DOCUMENT_TOO_LARGE',
+            limitBytes: error.limitBytes
+          },
+          413
+        );
       }
       if (error instanceof RevisionConflictError) {
         return json(

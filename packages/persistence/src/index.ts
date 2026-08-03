@@ -4,7 +4,9 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   isPurgeDue,
+  MAX_PERSISTED_DOCUMENT_BYTES,
   nowIso,
+  persistedDocumentBytes,
   sanitizeFileName,
   toArtifactId,
   toUploadSessionId,
@@ -32,10 +34,12 @@ import {
   type UserId
 } from '@openzcad/shared';
 import {
+  adoptProjectDocument,
   createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
-  normalizeDocument
+  normalizeDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 
 export const UPLOAD_SESSION_TTL_MS = 15 * 60 * 1000;
@@ -112,6 +116,48 @@ export class RevisionConflictError extends Error {
   ) {
     super(`Project ${projectId} has a newer remote revision.`);
     this.name = 'RevisionConflictError';
+  }
+}
+
+/**
+ * Adoption refused. The two codes are kept apart because they mean opposite
+ * things to the device holding the document: `ALREADY_ADOPTED` says the account
+ * already has this project and the device should sync rather than upload, while
+ * `PROJECT_ID_TAKEN` says the id belongs to someone else and the document can
+ * only enter the account as a new project.
+ */
+export class ProjectAdoptionError extends Error {
+  constructor(
+    readonly code: 'ALREADY_ADOPTED' | 'PROJECT_ID_TAKEN',
+    message: string
+  ) {
+    super(message);
+    this.name = 'ProjectAdoptionError';
+  }
+}
+
+/**
+ * A document too big for the store to hold. Distinct from a transport failure
+ * on purpose: retrying will never help, and the client has to say so instead of
+ * leaving the user waiting for a sync that cannot happen.
+ */
+export class DocumentTooLargeError extends Error {
+  constructor(
+    readonly bytes: number,
+    readonly limitBytes: number
+  ) {
+    super(
+      `Document is ${bytes} bytes; the account stores at most ${limitBytes}.`
+    );
+    this.name = 'DocumentTooLargeError';
+  }
+}
+
+/** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
+export function assertPersistableDocument(document: ProjectDocument): void {
+  const bytes = persistedDocumentBytes(document);
+  if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
+    throw new DocumentTooLargeError(bytes, MAX_PERSISTED_DOCUMENT_BYTES);
   }
 }
 
@@ -526,12 +572,38 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: CreateProjectRequest
   ): Promise<CreateProjectResponse> {
-    const document = createProjectDocument(request.name, userId, request.units);
+    const document = request.document
+      ? this.prepareAdoption(userId, request.document, request.name)
+      : createProjectDocument(request.name, userId, request.units);
     this.projects.set(document.projectId, document);
     return {
       project: this.summarize(document),
       document
     };
+  }
+
+  private prepareAdoption(
+    userId: UserId,
+    source: ProjectDocument,
+    name: string
+  ): ProjectDocument {
+    const existing = this.projects.get(source.projectId);
+    if (existing) {
+      throw existing.ownerUserId === userId
+        ? new ProjectAdoptionError(
+            'ALREADY_ADOPTED',
+            'This project is already saved to your account.'
+          )
+        : new ProjectAdoptionError(
+            'PROJECT_ID_TAKEN',
+            'That project id is already in use.'
+          );
+    }
+    const document = withoutDerivedProjection(
+      adoptProjectDocument(source, userId, name)
+    );
+    assertPersistableDocument(document);
+    return document;
   }
 
   async duplicateProject(

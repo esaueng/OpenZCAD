@@ -1,5 +1,8 @@
 import {
+  MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
+  persistedDocumentBytes,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
   toArtifactId,
   toProjectId,
@@ -106,6 +109,14 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     }
     request.units = record.units as UnitSystem;
   }
+  if (record.document !== undefined) {
+    // Adoption. The id comes from the document rather than the URL, which is
+    // the point — the device is asking to keep the id it already filed this
+    // project under.
+    const document = parseProjectDocument(record.document);
+    assertDocumentWithinCeiling(document);
+    request.document = document;
+  }
   return request;
 }
 
@@ -199,13 +210,23 @@ export function parseReorderProjectsRequest(
  * Structural sanity check of the posted document, not a full schema
  * validation: the document blob is round-tripped as-is, so this guards the
  * fields the server itself reads plus path/payload consistency.
+ *
+ * `projectIdFromPath` is omitted on adoption, where the document supplies the
+ * id instead of the URL; the id is still required to be a usable string.
  */
 function parseProjectDocument(
   value: unknown,
-  projectIdFromPath: string
+  projectIdFromPath?: string
 ): ProjectDocument {
   const record = asRecord(value, '"document"');
-  if (record.projectId !== projectIdFromPath) {
+  if (projectIdFromPath === undefined) {
+    if (
+      typeof record.projectId !== 'string' ||
+      record.projectId.trim().length === 0
+    ) {
+      throw badRequest('"document.projectId" must be a non-empty string.');
+    }
+  } else if (record.projectId !== projectIdFromPath) {
     throw badRequest(
       '"document.projectId" must match the project id in the URL.'
     );
@@ -221,7 +242,35 @@ function parseProjectDocument(
   ) {
     throw badRequest('"document" is missing required collections.');
   }
+  // A document written by a newer client can carry node kinds and references
+  // this deployment does not understand. Normalization migrates forward, never
+  // back, so storing one would hand the account a document it cannot rebuild.
+  if (
+    record.schemaVersion !== undefined &&
+    (typeof record.schemaVersion !== 'number' ||
+      record.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION)
+  ) {
+    throw badRequest(
+      `"document.schemaVersion" is newer than this deployment supports (${PROJECT_DOCUMENT_SCHEMA_VERSION}). Reload to update.`
+    );
+  }
   return value as ProjectDocument;
+}
+
+/**
+ * Refuses an oversize document at the edge. The persistence layer checks this
+ * again — it is the layer that owns the invariant — but doing it here keeps a
+ * document that can never be stored from being parsed, normalized, and
+ * serialized first.
+ */
+function assertDocumentWithinCeiling(document: ProjectDocument): void {
+  const bytes = persistedDocumentBytes(document);
+  if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
+    throw new HttpError(
+      413,
+      `Document is ${bytes} bytes; the account stores at most ${MAX_PERSISTED_DOCUMENT_BYTES}.`
+    );
+  }
 }
 
 export function parseSaveRevisionRequest(
@@ -241,6 +290,7 @@ export function parseSaveRevisionRequest(
     throw badRequest('"expectedVersion" must be a non-negative integer.');
   }
   const document = parseProjectDocument(record.document, projectIdFromPath);
+  assertDocumentWithinCeiling(document);
   return {
     projectId: toProjectId(projectIdFromPath),
     reason,

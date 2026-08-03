@@ -306,9 +306,17 @@ function summarizeLocalDocument(
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
  */
-async function loadProjectSummaries(
-  signedIn: boolean
-): Promise<{ projects: ProjectSummary[]; remoteReached: boolean }> {
+async function loadProjectSummaries(signedIn: boolean): Promise<{
+  projects: ProjectSummary[];
+  remoteReached: boolean;
+  /**
+   * Which of `projects` the account actually holds. Everything else exists on
+   * this device alone and can be adopted. Empty when the listing never reached
+   * the account, which is why callers must pair it with `remoteReached` rather
+   * than reading an absence as "local-only".
+   */
+  cloudProjectIds: Set<string>;
+}> {
   const [local, localOrganizations, remote] = await Promise.all([
     listLocalProjects().catch(() => []),
     listLocalProjectOrganizations().catch(
@@ -338,7 +346,11 @@ async function loadProjectSummaries(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
   );
-  return { projects, remoteReached: Boolean(remote) };
+  return {
+    projects,
+    remoteReached: Boolean(remote),
+    cloudProjectIds: remoteIds
+  };
 }
 
 function sameWritableOrganization(
@@ -736,6 +748,15 @@ export function App() {
     return ready;
   }
   const remoteVersionsRef = useRef(new Map<string, number>());
+  /**
+   * Projects the account holds, as of the last listing that reached it. Kept
+   * apart from `remoteVersionsRef`, which only knows about projects this
+   * session has opened or written: the shelf has to mark every local-only
+   * project, including ones never opened here.
+   */
+  const [cloudProjectIds, setCloudProjectIds] = useState<ReadonlySet<string>>(
+    new Set()
+  );
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
@@ -1106,6 +1127,7 @@ export function App() {
           );
         }
         setProjects(merged);
+        setCloudProjectIds(listed.cloudProjectIds);
         setCloudAvailable(canUseCloud);
         sessionRef.current = activeSession;
         setSession(activeSession);
@@ -2434,6 +2456,7 @@ export function App() {
         cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
       }
       setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
       const activeProjectIsCloud = Boolean(
         doc && remoteVersionsRef.current.has(doc.projectId)
       );
@@ -2441,8 +2464,16 @@ export function App() {
       if (doc) {
         setSaveState(activeProjectIsCloud ? 'saved' : 'offline');
       }
+      // Signing in does not upload anything on its own. Projects made while
+      // signed out are still the user's to keep on one device if they want, so
+      // the count is an offer the start screen makes, not an action taken here.
+      const localOnly = listed.projects.filter(
+        (project) => !listed.cloudProjectIds.has(project.projectId)
+      ).length;
       setSettingsMessage(
-        `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+        localOnly === 0
+          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
       );
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-in failed.'));
@@ -2468,6 +2499,9 @@ export function App() {
       setAccountSettings(null);
       setCloudAvailable(false);
       setProjects(listed.projects);
+      // Nothing is in "the account" once there is no account in session, so the
+      // shelf must stop claiming otherwise.
+      setCloudProjectIds(new Set());
       setSaveState('offline');
       setSettingsMessage('Signed out · device settings remain active.');
     } catch (error) {
@@ -2566,7 +2600,131 @@ export function App() {
       ]);
       setCloudAvailable(false);
       setSaveState('offline');
-      setStatus(`${errorMessage(error, 'Cloud unavailable')} Working locally.`);
+      setStatus(
+        `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * The account's copy of a just-adopted project, wearing this device's derived
+   * geometry. Adoption changes ownership and appends a checkpoint but leaves
+   * canonical history and `version` alone, so the meshes the device already has
+   * still describe the document — and reusing them keeps the viewport from
+   * blanking while an identical rebuild runs.
+   */
+  function withLocalDerived(
+    remote: ProjectDocument,
+    local: ProjectDocument
+  ): ProjectDocument {
+    return {
+      ...remote,
+      derived: {
+        ...remote.derived,
+        bodyRepresentations: local.derived.bodyRepresentations,
+        exportableBodyIds: local.derived.exportableBodyIds
+      }
+    };
+  }
+
+  /**
+   * Gives one device-local project an account record, keeping its id so the
+   * device's own copy and shelf state stay pointed at the same project.
+   *
+   * Returns whether anything changed rather than reporting status itself: the
+   * bulk path has to summarize many of these, and one line per project would
+   * bury the result.
+   */
+  async function adoptLocalProject(
+    projectId: string
+  ): Promise<'adopted' | 'already-adopted' | 'missing'> {
+    const local = await loadLocalProject(projectId);
+    if (!local) {
+      return 'missing';
+    }
+    try {
+      const response = await api.adoptProject(local);
+      const merged = withLocalDerived(response.document, local);
+      await saveLocalProject(merged);
+      remoteVersionsRef.current.set(merged.projectId, merged.version);
+      setCloudProjectIds((current) => new Set(current).add(merged.projectId));
+      setProjects((current) =>
+        mergeProjectSummaries([response.project], current)
+      );
+      if (managerRef.current?.document.projectId === merged.projectId) {
+        managerRef.current.document = merged;
+        setDoc(merged);
+        setCloudAvailable(true);
+        setSaveState('saved');
+      }
+      return 'adopted';
+    } catch (error) {
+      // The account already has it — the device was simply out of date about
+      // that, which is not a failure and must not be reported as one.
+      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
+        setCloudProjectIds((current) => new Set(current).add(projectId));
+        return 'already-adopted';
+      }
+      throw error;
+    }
+  }
+
+  async function handleSaveToAccount(project: ProjectSummary) {
+    if (!session) {
+      setStatus('Sign in to save this project to your account.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      const outcome = await adoptLocalProject(project.projectId);
+      setStatus(
+        outcome === 'adopted'
+          ? `Saved ${project.name} to your account.`
+          : outcome === 'already-adopted'
+            ? `${project.name} was already in your account.`
+            : `${project.name} has no copy on this device to save.`
+      );
+    } catch (error) {
+      setStatus(
+        errorMessage(error, `Could not save ${project.name} to your account.`)
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Uploads every project this device holds alone. Failures are counted rather
+   * than thrown: one document the account refuses — too large, say — must not
+   * strand the rest, and the user needs to know how many made it either way.
+   */
+  async function handleSaveAllToAccount(candidates: ProjectSummary[]) {
+    if (!session || candidates.length === 0) {
+      return;
+    }
+    setBusy(true);
+    setStatus(`Saving ${candidates.length} project(s) to your account…`);
+    try {
+      await flushPendingLocalSave();
+      let saved = 0;
+      const failures: string[] = [];
+      for (const candidate of candidates) {
+        try {
+          if ((await adoptLocalProject(candidate.projectId)) === 'adopted') {
+            saved += 1;
+          }
+        } catch {
+          failures.push(candidate.name);
+        }
+      }
+      setStatus(
+        failures.length === 0
+          ? `Saved ${saved} project(s) to your account.`
+          : `Saved ${saved} project(s) · ${failures.length} could not be saved: ${failures.join(', ')}.`
+      );
     } finally {
       setBusy(false);
     }
@@ -2663,6 +2821,7 @@ export function App() {
     try {
       const listed = await loadProjectSummaries(Boolean(session));
       setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
       setCloudAvailable(listed.remoteReached);
       setStatus(`${listed.projects.length} project(s) available.`);
     } catch (error) {
@@ -5498,6 +5657,12 @@ export function App() {
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          cloudProjectIds={cloudProjectIds}
+          signedIn={Boolean(session)}
+          onSaveToAccount={(project) => void handleSaveToAccount(project)}
+          onSaveAllToAccount={(candidates) =>
+            void handleSaveAllToAccount(candidates)
+          }
           onMoveToShelf={(project, shelf) =>
             void handleMoveProjectToShelf(project, shelf)
           }
