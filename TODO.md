@@ -43,6 +43,14 @@ the current branch; production enablement is a separate rollout decision.
   measured viewport edge batching.
 - Debounced cloud-settings autosave with serialized requests, revision-safe
   retry, flush-before-logout, offline pause/resume, and dirty-state recovery.
+- Project cloud sync between a user's own devices ([ADR-016](docs/adrs/ADR-016-project-cloud-sync.md)):
+  adoption of device-only projects into the account keeping their id; debounced
+  cloud document autosave on a separate endpoint from revision checkpoints;
+  freshness polling on focus, reconnect, and interval; a recorded per-device
+  sync baseline that makes both-moved divergence detectable and recoverable
+  outside a live room; bounded revision retention with per-account byte
+  accounting; and a switchable, visible sync state. `PROJECT_PERSONAL_SYNC_ENABLED`
+  is off in checked-in configuration and is independent of sharing.
 - Signed-off orientation cube with face and corner snapping, an origin-corner
   XYZ triad, drag orbiting, and pointer-lifecycle cleanup.
 - Start-screen archive, recycle bin, pinning, and manual project ordering.
@@ -53,10 +61,10 @@ the current branch; production enablement is a separate rollout decision.
 
 ## Release gates / next
 
-- Carry projects between a user's own devices: adopt local-only projects into the
-  account, autosave documents to the cloud rather than only on manual save, and
-  recover divergence outside a live room. Planned in
-  `docs/plans/project-cloud-sync-plan.md`; nothing implemented yet.
+- Apply migration 0010 and enable `PROJECT_PERSONAL_SYNC_ENABLED` for the
+  owner's own devices once cross-device sync has been exercised against a real
+  beta session. The flag is deliberately separate from `PROJECT_SHARING_ENABLED`
+  and must not be enabled together with it by accident.
 - Run the collaboration recovery-copy reload E2E against a real beta session;
   apply the sharing migration and verify revocation/lease expiry before enabling
   viewer sharing, then editor sharing.
