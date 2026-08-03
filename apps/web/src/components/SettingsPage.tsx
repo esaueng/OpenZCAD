@@ -17,6 +17,7 @@ import {
   LogOut,
   Mail,
   Monitor,
+  MousePointer2,
   RefreshCcw,
   Search,
   ShieldCheck,
@@ -59,6 +60,11 @@ import {
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
+import {
+  KEYBOARD_CONTROL_GROUPS,
+  POINTER_CONTROL_GROUPS,
+  type ControlReferenceGroup
+} from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
 
 function formatBytes(bytes: number): string {
@@ -124,17 +130,6 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   advanced: <Info size={15} aria-hidden="true" />
 };
 
-const SHORTCUTS: Array<[string, string]> = [
-  ['Ctrl/Cmd+,', 'Open settings'],
-  ['Ctrl/Cmd+K', 'Command palette'],
-  ['Ctrl/Cmd+S', 'Save revision'],
-  ['1 / 2 / 3 / 4', 'Front / top / right / isometric view'],
-  ['G', 'Toggle grid'],
-  ['W', 'Cycle display mode'],
-  ['P', 'Toggle projection'],
-  ['?', 'Open shortcut reference']
-];
-
 function Scope({ children }: { children: ReactNode }) {
   return <span className="settings-scope">{children}</span>;
 }
@@ -189,19 +184,85 @@ function Toggle({
 function Section({
   title,
   intro,
+  wide = false,
   children
 }: {
   title: string;
   intro: string;
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section className="settings-section">
+    <section
+      className={`settings-section${wide ? ' settings-section-wide' : ''}`}
+    >
       <header>
         <h2>{title}</h2>
         <p>{intro}</p>
       </header>
       <div className="settings-card">{children}</div>
+    </section>
+  );
+}
+
+function ControlReferenceGroups({
+  groups
+}: {
+  groups: readonly ControlReferenceGroup[];
+}) {
+  return (
+    <div className="settings-control-groups">
+      {groups.map((group) => (
+        <section className="settings-control-group" key={group.id}>
+          <header>
+            <h4>{group.title}</h4>
+            <span>{group.items.length} controls</span>
+          </header>
+          <p>{group.description}</p>
+          <dl>
+            {group.items.map((item) => (
+              <div className="settings-control-row" key={item.id}>
+                <dt>
+                  <span className="settings-control-keys">
+                    {item.keys.map((key) => (
+                      <kbd key={key}>{key}</kbd>
+                    ))}
+                  </span>
+                </dt>
+                <dd>
+                  <strong>{item.action}</strong>
+                  <small>{item.detail}</small>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ControlReferenceCollection({
+  icon,
+  title,
+  description,
+  groups
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  groups: readonly ControlReferenceGroup[];
+}) {
+  return (
+    <section className="settings-control-collection">
+      <header>
+        <span className="settings-control-collection-icon">{icon}</span>
+        <span>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </span>
+      </header>
+      <ControlReferenceGroups groups={groups} />
     </section>
   );
 }
@@ -1511,17 +1572,32 @@ export function SettingsPage({
 
           {active === 'shortcuts' && (
             <Section
-              title="Keyboard shortcuts"
-              intro="Current shortcuts remain fixed so CAD commands stay predictable across shared workstations."
+              title="Controls & shortcuts"
+              intro="A complete reference for keyboard commands, viewport navigation, selection, sketching, and direct modeling."
+              wide
             >
-              <div className="settings-shortcuts">
-                {SHORTCUTS.map(([shortcut, action]) => (
-                  <div key={shortcut}>
-                    <kbd>{shortcut}</kbd>
-                    <span>{action}</span>
-                  </div>
-                ))}
+              <div className="settings-controls-note">
+                <Keyboard size={18} aria-hidden="true" />
+                <span>
+                  <strong>Shortcuts are fixed and context-aware.</strong>
+                  <small>
+                    Workspace commands pause while you type or while Settings is
+                    open. Sketch mode reuses C and R for Circle and Rectangle.
+                  </small>
+                </span>
               </div>
+              <ControlReferenceCollection
+                icon={<Keyboard size={18} aria-hidden="true" />}
+                title="Keyboard"
+                description="Commands are grouped by the part of the workspace that owns them."
+                groups={KEYBOARD_CONTROL_GROUPS}
+              />
+              <ControlReferenceCollection
+                icon={<MousePointer2 size={18} aria-hidden="true" />}
+                title="Mouse & pointer"
+                description="Directional gestures matter: selection-box behavior changes with drag direction."
+                groups={POINTER_CONTROL_GROUPS}
+              />
             </Section>
           )}
 
