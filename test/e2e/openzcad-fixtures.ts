@@ -13,14 +13,20 @@ export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
  */
 export async function stubApi(
   page: Page,
-  { assistantEnabled = false }: { assistantEnabled?: boolean } = {}
+  {
+    assistantEnabled = false,
+    collaborationRole
+  }: {
+    assistantEnabled?: boolean;
+    collaborationRole?: 'owner' | 'editor' | 'viewer';
+  } = {}
 ) {
   const settings = structuredClone(DEFAULT_APP_SETTINGS);
   settings.assistant.enabled = assistantEnabled;
   // The preview server serves the static bundle without the Worker Durable
   // Object. Keep cloud project tests authenticated while leaving collaboration
   // transport coverage to its focused unit tests.
-  await page.addInitScript(() => {
+  await page.addInitScript((role) => {
     class StaticPreviewWebSocket extends EventTarget {
       static readonly CONNECTING = 0;
       static readonly OPEN = 1;
@@ -32,17 +38,43 @@ export async function stubApi(
       constructor(url: string | URL) {
         super();
         this.url = String(url);
+        if (role) {
+          queueMicrotask(() => {
+            this.readyState = StaticPreviewWebSocket.OPEN;
+            this.dispatchEvent(new Event('open'));
+          });
+        }
       }
 
-      send() {}
+      send(raw: string | ArrayBufferLike | Blob | ArrayBufferView) {
+        if (!role || typeof raw !== 'string') {
+          return;
+        }
+        const message = JSON.parse(raw) as { type?: string };
+        if (message.type === 'hello') {
+          queueMicrotask(() =>
+            this.dispatchEvent(
+              new MessageEvent('message', {
+                data: JSON.stringify({
+                  type: 'state',
+                  members: [],
+                  document: null,
+                  role
+                })
+              })
+            )
+          );
+        }
+      }
 
-      close() {
+      close(_code?: number, _reason?: string) {
         this.readyState = StaticPreviewWebSocket.CLOSED;
+        this.dispatchEvent(new CloseEvent('close'));
       }
     }
     window.WebSocket =
       StaticPreviewWebSocket as unknown as typeof window.WebSocket;
-  });
+  }, collaborationRole);
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({
       json: {
@@ -85,7 +117,10 @@ export async function stubApi(
       json: {
         status: 'ok',
         environment: 'beta',
-        time: new Date().toISOString()
+        time: new Date().toISOString(),
+        projectSharingEnabled: Boolean(collaborationRole),
+        projectEditLeasesEnforced: Boolean(collaborationRole),
+        projectPersonalSyncEnabled: false
       }
     })
   );
