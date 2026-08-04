@@ -212,7 +212,12 @@ export function validateAssistantBaseUrl(
   }
   if (
     hostname === 'localhost' ||
+    bareHostname === '::' ||
     bareHostname === '::1' ||
+    // IPv4-mapped and NAT64 forms tunnel private IPv4 targets through the
+    // IPv6 grammar; no legitimate public provider uses them, so block all.
+    bareHostname.startsWith('::ffff:') ||
+    bareHostname.startsWith('64:ff9b::') ||
     /^(?:fc|fd|fe8|fe9|fea|feb)/i.test(bareHostname) ||
     hostname.endsWith('.local') ||
     hostname.endsWith('.internal') ||
