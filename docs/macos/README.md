@@ -41,8 +41,10 @@ exact-body click selection, capture-requested box selection, Shift-drag orbit,
 secondary-drag pan, and fine pixel-delta wheel zoom. Because the embedded driver
 turns W3C pointer actions into MouseEvents, a debug-only bridge feeds equivalent
 PointerEvent packets into OrbitControls; WheelEvents use the live canvas route.
-Physical two-finger hardware testing on the minimum supported macOS version
-remains a signed-beta release gate.
+When a hosted Mac exposes only a 1x virtual display, the smoke first verifies
+that native scale and then uses the same debug-only bridge to exercise hit
+testing against a 2x WebGL backing store. Physical two-finger hardware testing
+on the minimum supported macOS version remains a signed-beta release gate.
 
 ## Release boundary
 
