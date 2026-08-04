@@ -11,6 +11,7 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   persistedDocumentBytes,
@@ -282,13 +283,27 @@ describe('create-project request validation', () => {
     ).not.toThrow();
   });
 
-  it('refuses an oversize document with 413 rather than a generic 400', () => {
+  it('accepts a cloud document above the former D1 row ceiling', () => {
     const source = localDocument();
     const local: ProjectDocument = {
       ...source,
       derived: {
         ...source.derived,
         warnings: ['x'.repeat(MAX_PERSISTED_DOCUMENT_BYTES + 1)]
+      }
+    };
+    expect(() =>
+      parseCreateProjectRequest({ name: local.name, document: local })
+    ).not.toThrow();
+  });
+
+  it('refuses an oversize document with 413 rather than a generic 400', () => {
+    const source = localDocument();
+    const local: ProjectDocument = {
+      ...source,
+      derived: {
+        ...source.derived,
+        warnings: ['x'.repeat(MAX_CLOUD_PROJECT_DOCUMENT_BYTES + 1)]
       }
     };
     let thrown: unknown;
