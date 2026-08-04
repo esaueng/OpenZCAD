@@ -144,7 +144,34 @@ export class CameraController {
     this.active = this.perspective;
     this.orbit = this.createOrbit(this.perspective);
     this.orbit.target.set(0, 0, 0);
+    // Capture phase so this runs before OrbitControls' own pointerdown
+    // handler reads the button mapping for the gesture.
+    this.options.domElement.addEventListener(
+      'pointerdown',
+      this.applyRightButtonModifier,
+      true
+    );
   }
+
+  /**
+   * Ctrl (or ⌘) + right-drag orbits; a plain right-drag pans. Shift must NOT
+   * be the orbit modifier: Firefox reserves shift+right-click as an escape
+   * hatch that always opens the native context menu, page suppression
+   * ignored.
+   *
+   * OrbitControls itself flips rotate↔pan whenever ANY modifier is held, so
+   * the trick is to present the mapping whose flip lands on the intended
+   * action: plain → pan stays pan; ctrl/⌘ → pan flips to rotate; shift alone
+   * → present rotate so the flip lands back on pan.
+   */
+  private applyRightButtonModifier = (event: PointerEvent) => {
+    if (event.button !== 2) {
+      return;
+    }
+    const orbitModifier = event.ctrlKey || event.metaKey;
+    this.orbit.mouseButtons.RIGHT =
+      event.shiftKey && !orbitModifier ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  };
 
   get controls(): OrbitControls<THREE.Camera> {
     return this.orbit;
@@ -432,6 +459,13 @@ export class CameraController {
     this.settleDamping();
   }
 
+  /** Keeps screen-space projections in lockstep with OrbitControls' pose. */
+  private updateOrbitForFrame(): boolean {
+    const changed = this.orbit.update();
+    this.active.updateMatrixWorld(true);
+    return changed;
+  }
+
   /**
    * Advances pointer-driven orbit damping with a real-time upper bound.
    *
@@ -446,13 +480,13 @@ export class CameraController {
     if (this.orbitGlideEndsAt !== null && now >= this.orbitGlideEndsAt) {
       this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
-      const changed = this.orbit.update();
+      const changed = this.updateOrbitForFrame();
       this.orbit.enableDamping = true;
       this.orbit.dampingFactor = DRAG_DAMPING;
       this.emitViewChange();
       return changed;
     }
-    const changed = this.orbit.update();
+    const changed = this.updateOrbitForFrame();
     if (this.orbitGlideEndsAt !== null && !changed) {
       this.orbitGlideEndsAt = null;
       this.orbit.dampingFactor = DRAG_DAMPING;
@@ -638,6 +672,11 @@ export class CameraController {
       return;
     }
     this.disposed = true;
+    this.options.domElement.removeEventListener(
+      'pointerdown',
+      this.applyRightButtonModifier,
+      true
+    );
     this.gestureActive = false;
     this.externalOrbitActive = false;
     this.orbitGlideEndsAt = null;

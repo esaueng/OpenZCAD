@@ -1,4 +1,8 @@
-import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
+import {
+  findSketch,
+  listFeaturesInOrder,
+  listParameters
+} from '@openzcad/document-core';
 import { isFeatureSuppressed } from '@openzcad/shared';
 import type {
   SketchObjectData,
@@ -656,7 +660,7 @@ const MAX_DIGEST_EDGES = 128;
 const MAX_DIGEST_FACES = 128;
 const MAX_DIGEST_TOPOLOGY_PER_BODY = 64;
 
-function compactFeatureData(data: unknown): unknown {
+function compactFeatureData(document: ProjectDocument, data: unknown): unknown {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return data;
   }
@@ -676,6 +680,21 @@ function compactFeatureData(data: unknown): unknown {
       artifactId: feature.artifactId,
       sourceName: feature.sourceName,
       triangleCount: feature.triangleCount
+    };
+  }
+  if (feature.featureKind === 'sketch') {
+    const sketch = findSketch(document, feature.sketchId as SketchId);
+    if (!sketch) {
+      return feature;
+    }
+    return {
+      featureKind: feature.featureKind,
+      sketchId: sketch.sketchId,
+      planeRef: sketch.planeRef,
+      objects: sketch.objectIds.flatMap((objectId) => {
+        const object = document.nodes[objectId];
+        return object?.kind === 'sketch-object' ? [object.data] : [];
+      })
     };
   }
   return feature;
@@ -761,7 +780,7 @@ export function createCadDocumentDigest(
       featureKind: feature.featureKind,
       bodyId: feature.bodyId ?? null,
       suppressed: isFeatureSuppressed(feature),
-      data: compactFeatureData(feature.data)
+      data: compactFeatureData(document, feature.data)
     })),
     // Meshes are deliberately dropped here: the model needs each body's
     // identity, liveness, and placement, never its triangles.

@@ -51,6 +51,15 @@
       "migrations_dir": "apps/web/migrations"
     }
   ],
+  // Private R2 storage for import artifacts and namespaced project objects.
+  // This binds the existing beta bucket; resource creation remains a separate
+  // operator-controlled step and is never performed by deployment scripts.
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "openzcad-beta-artifacts"
+    }
+  ],
   "send_email": [
     {
       "name": "EMAIL",

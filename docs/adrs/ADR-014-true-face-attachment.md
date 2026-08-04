@@ -81,3 +81,6 @@ copy the current exact face reference and deterministic attachment frame.
 Product unit and interaction coverage also prove that hash-only planar faces
 retain Offset Face while refusing Sketch, and that legacy-to-fixed conversion
 removes the diagnostic without changing the derived body representation.
+Rendered browser acceptance creates a current face attachment, suppresses its
+source feature, verifies the named history-position warning, and resumes the
+source to prove that the warning clears and the attachment rebuilds.
