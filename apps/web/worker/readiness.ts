@@ -21,6 +21,50 @@ interface ProjectObjectStorageSchema {
   pointer_indexes: number;
 }
 
+interface DesktopAuthSchema {
+  tables: number;
+  indexes: number;
+}
+
+/** Whether migration 0012 installed every native-auth table and lookup index. */
+export async function isDesktopAuthReady(
+  db: D1Database | undefined
+): Promise<boolean> {
+  if (!db) {
+    return false;
+  }
+
+  try {
+    const schema = await db
+      .prepare(
+        `SELECT
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'table' AND name IN (
+              'desktop_auth_attempts',
+              'desktop_refresh_tokens',
+              'desktop_access_tokens'
+            )
+          ) AS tables,
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'index' AND name IN (
+              'idx_desktop_auth_attempts_expires',
+              'idx_desktop_refresh_tokens_session',
+              'idx_desktop_refresh_tokens_user',
+              'idx_desktop_refresh_tokens_expires',
+              'idx_desktop_access_tokens_session',
+              'idx_desktop_access_tokens_expires'
+            )
+          ) AS indexes`
+      )
+      .first<DesktopAuthSchema>();
+    return schema?.tables === 3 && schema.indexes === 6;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Whether D1 can satisfy every storage-accounting query added by migration
  * 0010. Missing bindings and query failures deliberately return false: a

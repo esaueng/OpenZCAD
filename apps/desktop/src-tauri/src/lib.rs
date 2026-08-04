@@ -6,6 +6,13 @@ use tauri::{
     Emitter,
 };
 
+mod desktop_auth;
+
+use desktop_auth::{
+    cancel_desktop_sign_in, desktop_api_request, poll_desktop_sign_in, start_desktop_sign_in,
+    DesktopAuthState,
+};
+
 const MAX_NATIVE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 #[derive(Serialize)]
@@ -181,7 +188,7 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().manage(DesktopAuthState::new());
     #[cfg(all(debug_assertions, feature = "webdriver"))]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
@@ -219,7 +226,14 @@ pub fn run() {
                 let _ = app.emit("openzcad://menu", id);
             }
         })
-        .invoke_handler(tauri::generate_handler![open_cad_file, save_cad_file])
+        .invoke_handler(tauri::generate_handler![
+            open_cad_file,
+            save_cad_file,
+            start_desktop_sign_in,
+            poll_desktop_sign_in,
+            cancel_desktop_sign_in,
+            desktop_api_request
+        ])
         .run(tauri::generate_context!())
         .expect("error while running OpenZCAD");
 }
