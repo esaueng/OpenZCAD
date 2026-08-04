@@ -62,7 +62,10 @@ import {
   parseProjectMemberRole,
   SharingRequestError
 } from './sharing';
-import { isDocumentStorageAccountingReady } from './readiness';
+import {
+  isDocumentStorageAccountingReady,
+  isProjectObjectStorageReady
+} from './readiness';
 import { toUserId } from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
@@ -192,11 +195,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'GET' && pathname === '/api/health') {
     const documentStorageAccountingReady =
       await isDocumentStorageAccountingReady(env.DB);
+    const projectObjectStorageReady = await isProjectObjectStorageReady(
+      env.DB,
+      env.PROJECT_STORAGE ?? env.ARTIFACTS
+    );
     return json({
       status: 'ok',
       environment: env.ENVIRONMENT ?? 'beta',
       time: new Date().toISOString(),
       documentStorageAccountingReady,
+      projectObjectStorageReady,
       projectSharingEnabled: isCloudflareFeatureEnabled(
         env,
         'PROJECT_SHARING_ENABLED'
@@ -207,6 +215,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       ),
       projectPersonalSyncEnabled:
         documentStorageAccountingReady &&
+        projectObjectStorageReady &&
         isCloudflareFeatureEnabled(env, 'PROJECT_PERSONAL_SYNC_ENABLED')
     });
   }
