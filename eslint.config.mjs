@@ -7,8 +7,23 @@ export default tseslint.config(
     ignores: ["dist/**", "**/dist/**", "coverage/**", ".wrangler/**", "node_modules/**"]
   },
   js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  ...tseslint.configs.recommendedTypeChecked.map((config) => ({
+    ...config,
+    files: ["**/*.ts", "**/*.tsx"]
+  })),
   prettier,
+  {
+    files: ["apps/desktop/e2e/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        Buffer: "readonly",
+        console: "readonly",
+        fetch: "readonly",
+        process: "readonly",
+        setTimeout: "readonly"
+      }
+    }
+  },
   {
     files: ["**/*.ts", "**/*.tsx"],
     languageOptions: {
