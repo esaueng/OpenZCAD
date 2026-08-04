@@ -79,10 +79,17 @@ async function connectToApp() {
   );
 }
 
-async function execute(sessionId, script) {
+async function execute(sessionId, script, args = []) {
   return driverRequest('POST', `/session/${sessionId}/execute/sync`, {
     script,
-    args: []
+    args
+  });
+}
+
+async function executeAsync(sessionId, script, args = []) {
+  return driverRequest('POST', `/session/${sessionId}/execute/async`, {
+    script,
+    args
   });
 }
 
@@ -106,7 +113,160 @@ async function waitForScript(sessionId, description, script, timeout = 20_000) {
 
 async function saveScreenshot(sessionId, fileName) {
   const base64 = await driverRequest('GET', `/session/${sessionId}/screenshot`);
-  await writeFile(fileName, Buffer.from(base64, 'base64'));
+  const png = Buffer.from(base64, 'base64');
+  await writeFile(fileName, png);
+  assert.equal(png.toString('ascii', 1, 4), 'PNG');
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20)
+  };
+}
+
+const delay = (duration) =>
+  new Promise((resolveDelay) => setTimeout(resolveDelay, duration));
+
+function vectorDistance(left, right) {
+  return Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2]);
+}
+
+async function readDisplayState(sessionId) {
+  return execute(
+    sessionId,
+    `var canvas = document.querySelector('.viewer-host canvas');
+    var rect = canvas.getBoundingClientRect();
+    return {
+      devicePixelRatio: window.devicePixelRatio,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      cssWidth: rect.width,
+      cssHeight: rect.height,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height
+    };`
+  );
+}
+
+async function setE2EPixelRatio(sessionId, value) {
+  await execute(
+    sessionId,
+    `var canvas = document.querySelector('.viewer-host canvas');
+    canvas.dispatchEvent(new CustomEvent('openzcad:e2e-pixel-ratio', {
+      detail: { value: arguments[0] }
+    }));
+    return true;`,
+    [value]
+  );
+  return readDisplayState(sessionId);
+}
+
+async function readCameraPose(sessionId) {
+  return execute(
+    sessionId,
+    `var value = null;
+    var canvas = document.querySelector('.viewer-host canvas');
+    if (!canvas) return null;
+    canvas.dispatchEvent(new CustomEvent('openzcad:e2e-input-state', {
+      detail: { resolve: function (next) { value = next; } }
+    }));
+    return value;`
+  );
+}
+
+async function waitForCameraChange(
+  sessionId,
+  description,
+  before,
+  measure,
+  minimum = 0.01
+) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const latest = await readCameraPose(sessionId);
+    if (latest && measure(before, latest) > minimum) {
+      return latest;
+    }
+    await delay(100);
+  }
+  throw new Error(`${description} did not change the live camera pose.`);
+}
+
+async function dispatchPointer(sessionId, type, init) {
+  return execute(
+    sessionId,
+    `var type = arguments[0];
+    var init = arguments[1];
+    var canvas = document.querySelector('.viewer-host canvas');
+    if (!canvas) throw new Error('The WebGL canvas is unavailable.');
+    var event = new PointerEvent(type, Object.assign({
+      bubbles: true,
+      cancelable: true,
+      pointerType: 'mouse',
+      isPrimary: true
+    }, init));
+    return canvas.dispatchEvent(event);`,
+    [type, init]
+  );
+}
+
+async function dispatchControlPointer(sessionId, type, init) {
+  return execute(
+    sessionId,
+    `var value = null;
+    var canvas = document.querySelector('.viewer-host canvas');
+    if (!canvas) throw new Error('The WebGL canvas is unavailable.');
+    canvas.dispatchEvent(new CustomEvent('openzcad:e2e-control-pointer', {
+      detail: {
+        type: arguments[0],
+        init: arguments[1],
+        resolve: function (next) { value = next; }
+      }
+    }));
+    return value;`,
+    [type, init]
+  );
+}
+
+async function dispatchControlWheel(sessionId, init) {
+  return execute(
+    sessionId,
+    `var canvas = document.querySelector('.viewer-host canvas');
+    if (!canvas) throw new Error('The WebGL canvas is unavailable.');
+    var event = new WheelEvent('wheel', Object.assign({
+      bubbles: true,
+      cancelable: true,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL
+    }, arguments[0]));
+    return canvas.dispatchEvent(event);`,
+    [init]
+  );
+}
+
+async function locatePickableEdge(sessionId) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const point = await executeAsync(
+      sessionId,
+      `var done = arguments[arguments.length - 1];
+      var canvas = document.querySelector('.viewer-host canvas');
+      if (!canvas) return done(null);
+      var finished = false;
+      var finish = function (value) {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        done(value);
+      };
+      var timer = setTimeout(function () { finish(null); }, 1_000);
+      canvas.dispatchEvent(new CustomEvent('openzcad:e2e-locate-edge', {
+        detail: { resolve: finish }
+      }));`
+    );
+    if (point) {
+      return point;
+    }
+    await delay(200);
+  }
+  throw new Error('The exact model did not expose a pickable edge.');
 }
 
 let sessionId;
@@ -161,13 +321,339 @@ try {
     /Mounting Bracket/
   );
 
+  const nativeDisplay = await readDisplayState(sessionId);
+  const nativeBackingScale = nativeDisplay.backingWidth / nativeDisplay.cssWidth;
+  const expectedNativeScale = Math.min(nativeDisplay.devicePixelRatio, 2);
+  assert.ok(
+    Math.abs(nativeBackingScale - expectedNativeScale) < 0.02,
+    'The WebGL backing width does not match the WKWebView device scale.'
+  );
+  assert.ok(
+    Math.abs(
+      nativeDisplay.backingHeight / nativeDisplay.cssHeight -
+        expectedNativeScale
+    ) < 0.02,
+    'The WebGL backing height does not match the WKWebView device scale.'
+  );
+
+  // Let a Retina workstation exercise the hosted-runner fallback explicitly.
+  if (process.env.OPENZCAD_E2E_FORCE_1X === '1') {
+    await setE2EPixelRatio(sessionId, 1);
+  }
+
+  // Some hosted macOS runners expose only a 1x virtual display. Keep the
+  // native scale assertion, then raise only the E2E renderer backing store so
+  // CSS-coordinate hit testing is still exercised against a 2x WebGL canvas.
+  let display = await readDisplayState(sessionId);
+  if (display.backingWidth / display.cssWidth < 1.98) {
+    await setE2EPixelRatio(sessionId, 2);
+    await waitForScript(
+      sessionId,
+      'The 2x WebGL backing scale',
+      `var canvas = document.querySelector('.viewer-host canvas');
+      var rect = canvas.getBoundingClientRect();
+      return Math.abs(canvas.width / rect.width - 2) < 0.02 &&
+        Math.abs(canvas.height / rect.height - 2) < 0.02;`
+    );
+    display = await readDisplayState(sessionId);
+  }
+  assert.ok(
+    Math.abs(display.backingWidth / display.cssWidth - 2) < 0.02 &&
+      Math.abs(display.backingHeight / display.cssHeight - 2) < 0.02,
+    'The smoke test did not establish a 2x CSS-to-backing-pixel scale.'
+  );
+
+  // The embedded driver currently translates W3C pointer actions into
+  // MouseEvents. OpenZCAD deliberately routes the viewport with PointerEvents,
+  // so inject that WKWebView event family directly and record the real
+  // setPointerCapture calls made by the production gesture router.
+  await execute(
+    sessionId,
+    `var canvas = document.querySelector('.viewer-host canvas');
+    window.__ozPointerCaptureRequests = [];
+    var setPointerCapture = canvas.setPointerCapture.bind(canvas);
+    canvas.setPointerCapture = function (pointerId) {
+      window.__ozPointerCaptureRequests.push(pointerId);
+      return setPointerCapture(pointerId);
+    };
+    return true;`
+  );
+
+  const inputArea = await execute(
+    sessionId,
+    `var rect = document.querySelector('.viewer-host canvas')
+      .getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    };`
+  );
+  await waitForScript(
+    sessionId,
+    'The camera input probe',
+    `var ready = false;
+    var canvas = document.querySelector('.viewer-host canvas');
+    if (canvas) {
+      canvas.dispatchEvent(new CustomEvent('openzcad:e2e-input-state', {
+        detail: { resolve: function () { ready = true; } }
+      }));
+    }
+    return ready;`
+  );
+  const gestureStart = {
+    x: inputArea.left + inputArea.width * 0.62,
+    y: inputArea.top + inputArea.height * 0.48
+  };
+
+  // WKWebView reports trackpad press-drags as mouse-like PointerEvents. Shift
+  // preserves the app's left-drag orbit contract; secondary drag exercises
+  // pan; fine DOM_DELTA_PIXEL wheel packets match two-finger zoom input.
+  const beforeOrbit = await readCameraPose(sessionId);
+  await dispatchControlPointer(sessionId, 'pointerdown', {
+    pointerId: 403,
+    button: 0,
+    buttons: 1,
+    shiftKey: true,
+    clientX: gestureStart.x,
+    clientY: gestureStart.y
+  });
+  for (const [deltaX, deltaY] of [
+    [20, 8],
+    [42, 18],
+    [68, 30]
+  ]) {
+    await dispatchControlPointer(sessionId, 'pointermove', {
+      pointerId: 403,
+      button: 0,
+      buttons: 1,
+      shiftKey: true,
+      clientX: gestureStart.x + deltaX,
+      clientY: gestureStart.y + deltaY
+    });
+  }
+  await dispatchControlPointer(sessionId, 'pointerup', {
+    pointerId: 403,
+    button: 0,
+    buttons: 0,
+    shiftKey: true,
+    clientX: gestureStart.x + 68,
+    clientY: gestureStart.y + 30
+  });
+  const afterOrbit = await waitForCameraChange(
+    sessionId,
+    'Shift-drag orbit',
+    beforeOrbit,
+    (before, after) => vectorDistance(before.position, after.position),
+    0.1
+  );
+
+  await dispatchControlPointer(sessionId, 'pointerdown', {
+    pointerId: 404,
+    button: 2,
+    buttons: 2,
+    clientX: gestureStart.x,
+    clientY: gestureStart.y
+  });
+  for (const [deltaX, deltaY] of [
+    [18, -6],
+    [38, -14],
+    [58, -22]
+  ]) {
+    await dispatchControlPointer(sessionId, 'pointermove', {
+      pointerId: 404,
+      button: 2,
+      buttons: 2,
+      clientX: gestureStart.x + deltaX,
+      clientY: gestureStart.y + deltaY
+    });
+  }
+  await dispatchControlPointer(sessionId, 'pointerup', {
+    pointerId: 404,
+    button: 2,
+    buttons: 0,
+    clientX: gestureStart.x + 58,
+    clientY: gestureStart.y - 22
+  });
+  const afterPan = await waitForCameraChange(
+    sessionId,
+    'Secondary-drag pan',
+    afterOrbit,
+    (before, after) => vectorDistance(before.target, after.target),
+    0.01
+  );
+
+  const distanceBeforeZoom = vectorDistance(afterPan.position, afterPan.target);
+  for (let step = 0; step < 8; step += 1) {
+    await dispatchControlWheel(sessionId, {
+      clientX: gestureStart.x,
+      clientY: gestureStart.y,
+      deltaX: 0,
+      deltaY: -12
+    });
+    await delay(16);
+  }
+  const afterZoom = await waitForCameraChange(
+    sessionId,
+    'Pixel-delta trackpad zoom',
+    afterPan,
+    (before, after) =>
+      Math.abs(
+        vectorDistance(before.position, before.target) -
+          vectorDistance(after.position, after.target)
+      ),
+    0.01
+  );
+  assert.ok(
+    vectorDistance(afterZoom.position, afterZoom.target) < distanceBeforeZoom,
+    'Negative trackpad deltas did not zoom the camera toward the model.'
+  );
+
+  const edge = await locatePickableEdge(sessionId);
+  await execute(
+    sessionId,
+    `var group = document.querySelector('[role="group"][aria-label="Selection filter"]');
+    var button = Array.from(group.querySelectorAll('button')).find(
+      function (candidate) { return candidate.textContent.trim() === 'Body'; }
+    );
+    button.click();
+    return true;`
+  );
+  await waitForScript(
+    sessionId,
+    'The body selection filter',
+    `var group = document.querySelector('[role="group"][aria-label="Selection filter"]');
+    var button = Array.from(group.querySelectorAll('button')).find(
+      function (candidate) { return candidate.textContent.trim() === 'Body'; }
+    );
+    return button && button.getAttribute('aria-pressed') === 'true';`
+  );
+  await dispatchPointer(sessionId, 'pointerdown', {
+    pointerId: 401,
+    button: 0,
+    buttons: 1,
+    clientX: edge.x,
+    clientY: edge.y
+  });
+  await dispatchPointer(sessionId, 'pointerup', {
+    pointerId: 401,
+    button: 0,
+    buttons: 0,
+    clientX: edge.x,
+    clientY: edge.y
+  });
+  await waitForScript(
+    sessionId,
+    'High-DPI click selection',
+    `var label = document.querySelector('.selection-chip-label');
+    return Boolean(label && /Mounting Bracket/i.test(label.textContent));`
+  );
+  assert.ok(
+    (
+      await execute(
+        sessionId,
+        'return window.__ozPointerCaptureRequests.slice();'
+      )
+    ).includes(401),
+    'The selection press did not request WKWebView pointer capture.'
+  );
+
+  const boxFrom = {
+    x: inputArea.left + inputArea.width * 0.88,
+    y: inputArea.top + inputArea.height * 0.08
+  };
+  const boxMid = {
+    x: inputArea.left + inputArea.width * 0.45,
+    y: inputArea.top + inputArea.height * 0.5
+  };
+  // Release beyond the canvas edge to prove that the box-selection route still
+  // completes after its press requested capture.
+  const boxTo = {
+    x: inputArea.left - 24,
+    y: inputArea.top + inputArea.height * 0.92
+  };
+  await dispatchPointer(sessionId, 'pointerdown', {
+    pointerId: 402,
+    button: 0,
+    buttons: 1,
+    clientX: boxFrom.x,
+    clientY: boxFrom.y
+  });
+  assert.ok(
+    (
+      await execute(
+        sessionId,
+        'return window.__ozPointerCaptureRequests.slice();'
+      )
+    ).includes(402),
+    'The box-selection press did not request WKWebView pointer capture.'
+  );
+  await dispatchPointer(sessionId, 'pointermove', {
+    pointerId: 402,
+    button: 0,
+    buttons: 1,
+    clientX: boxMid.x,
+    clientY: boxMid.y
+  });
+  await waitForScript(
+    sessionId,
+    'The box-selection band',
+    `var band = document.querySelector('.selection-band');
+    return Boolean(band && !band.hidden && band.getBoundingClientRect().width > 0);`
+  );
+  await dispatchPointer(sessionId, 'pointermove', {
+    pointerId: 402,
+    button: 0,
+    buttons: 1,
+    clientX: boxTo.x,
+    clientY: boxTo.y
+  });
+  await dispatchPointer(sessionId, 'pointerup', {
+    pointerId: 402,
+    button: 0,
+    buttons: 0,
+    clientX: boxTo.x,
+    clientY: boxTo.y
+  });
+  await waitForScript(
+    sessionId,
+    'Box selection',
+    `return document.body.innerText.includes('1 body selected');`
+  );
+
+  const statusAfterInputs = await execute(
+    sessionId,
+    `return document.querySelector('[aria-label="Workspace status"]')
+      .textContent;`
+  );
+  assert.equal(
+    statusAfterInputs,
+    statusText,
+    'Viewport input changed the exact document/kernel status.'
+  );
+
   const artifactDir = resolve('artifacts');
   await mkdir(artifactDir, { recursive: true });
-  await saveScreenshot(
+  const screenshot = await saveScreenshot(
     sessionId,
     resolve(artifactDir, 'macos-wkwebview-cad.png')
   );
-  console.log('WKWebView CAD smoke passed: exact kernel, zero warnings.');
+  assert.ok(
+    Math.abs(
+      screenshot.width - display.viewportWidth * display.devicePixelRatio
+    ) <= 2,
+    'The native screenshot width does not preserve the WKWebView device scale.'
+  );
+  assert.ok(
+    Math.abs(
+      screenshot.height - display.viewportHeight * display.devicePixelRatio
+    ) <= 2,
+    'The native screenshot height does not preserve the WKWebView device scale.'
+  );
+  console.log(
+    'WKWebView CAD smoke passed: exact kernel, 2x selection, capture-requested box selection, orbit, pan, and trackpad zoom.'
+  );
 } finally {
   if (sessionId) {
     const diagnosticDir = resolve('artifacts');
