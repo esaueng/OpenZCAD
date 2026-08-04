@@ -2086,6 +2086,29 @@ export class ProjectCollaborationRoom extends DurableObject {
     );
   }
 
+  /**
+   * The room learns role changes through an internal PATCH from the Worker,
+   * which can fail after the D1 change has committed: a 500 there leaves the
+   * member row removed while an open socket keeps its old in-memory role. The
+   * membership row is the source of truth, so every authored document from a
+   * non-owner re-checks it. Owners cannot be demoted, and without a database
+   * or a known project the in-memory role is all the room has.
+   */
+  private async membershipStillAllowsAuthoring(connection: {
+    userId: UserId;
+    role: SharedProjectAccessRole;
+  }): Promise<boolean> {
+    if (connection.role === 'owner' || !this.projectId || !this.roomEnv.DB) {
+      return true;
+    }
+    const row = await this.roomEnv.DB.prepare(
+      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`
+    )
+      .bind(this.projectId, connection.userId)
+      .first<{ role: string }>();
+    return row?.role === 'editor';
+  }
+
   private async canAuthor(
     connection: {
       clientId: string;
@@ -2100,6 +2123,14 @@ export class ProjectCollaborationRoom extends DurableObject {
         type: 'error',
         code: 'permission-denied',
         message: 'Viewers cannot change the collaboration document.'
+      });
+      return false;
+    }
+    if (!(await this.membershipStillAllowsAuthoring(connection))) {
+      this.send(socket, {
+        type: 'error',
+        code: 'permission-denied',
+        message: 'Project membership no longer allows editing.'
       });
       return false;
     }
