@@ -5,9 +5,12 @@ import {
   Cone,
   CopyPlus,
   Cylinder,
+  Expand,
+  FlipHorizontal2,
   Globe,
   Layers,
   Move3d,
+  PanelTopOpen,
   PenLine,
   RotateCw,
   Scissors,
@@ -30,6 +33,9 @@ export type ToolId =
   | 'subtract'
   | 'intersect'
   | 'transform'
+  | 'mirror'
+  | 'shell'
+  | 'solid-offset'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -139,6 +145,24 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     shortcut: 'M',
     hint: 'Translate or rotate a body'
   },
+  mirror: {
+    label: 'Mirror',
+    icon: icon(<FlipHorizontal2 size={16} aria-hidden="true" />),
+    group: 'modify',
+    hint: 'Create a separate reflected copy of a body'
+  },
+  shell: {
+    label: 'Shell',
+    icon: icon(<PanelTopOpen size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Open selected faces and add an inward wall thickness'
+  },
+  'solid-offset': {
+    label: 'Solid offset',
+    icon: icon(<Expand size={16} aria-hidden="true" />),
+    group: 'finish',
+    hint: 'Offset every face outward with sharp joins'
+  },
   fillet: {
     label: 'Fillet',
     icon: icon(<Spline size={16} aria-hidden="true" />),
@@ -172,18 +196,29 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'modify',
       label: 'Modify',
-      tools: ['union', 'subtract', 'intersect', 'transform']
+      tools: ['union', 'subtract', 'intersect', 'transform', 'mirror']
     },
     {
       id: 'finish',
       label: 'Finish & repeat',
-      tools: ['fillet', 'chamfer', 'linear-pattern', 'circular-pattern']
+      tools: [
+        'shell',
+        'solid-offset',
+        'fillet',
+        'chamfer',
+        'linear-pattern',
+        'circular-pattern'
+      ]
     }
   ];
 
 export interface ToolAvailability {
+  /** Central collaboration/lease refusal applied to every mutating tool. */
+  editDisabledReason?: string | null;
   sketchCount: number;
   liveBodyCount: number;
+  /** Exact projection matches the visible project/version (not stale). */
+  exactGeometryReady: boolean;
   /** An exact edge is picked in the viewport (enables fillet/chamfer). */
   hasEdgeSelected: boolean;
 }
@@ -193,6 +228,18 @@ export function toolDisabledReason(
   tool: ToolId,
   avail: ToolAvailability
 ): string | null {
+  if (avail.editDisabledReason) {
+    return avail.editDisabledReason;
+  }
+  if ((tool === 'fillet' || tool === 'chamfer') && !avail.exactGeometryReady) {
+    return 'Waiting for exact geometry';
+  }
+  if (
+    (tool === 'mirror' || tool === 'shell' || tool === 'solid-offset') &&
+    !avail.exactGeometryReady
+  ) {
+    return 'Waiting for exact geometry';
+  }
   if ((tool === 'extrude' || tool === 'revolve') && avail.sketchCount === 0) {
     return 'Create a sketch first';
   }
@@ -202,7 +249,17 @@ export function toolDisabledReason(
   ) {
     return 'Needs at least two bodies';
   }
-  if (tool === 'transform' && avail.liveBodyCount < 1) {
+  if (
+    tool === 'transform' &&
+    avail.liveBodyCount < 1 &&
+    avail.sketchCount < 1
+  ) {
+    return 'Needs a body or a sketch';
+  }
+  if (
+    (tool === 'mirror' || tool === 'shell' || tool === 'solid-offset') &&
+    avail.liveBodyCount < 1
+  ) {
     return 'Needs a body';
   }
   if ((tool === 'fillet' || tool === 'chamfer') && avail.liveBodyCount < 1) {

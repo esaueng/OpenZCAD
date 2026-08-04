@@ -42,3 +42,17 @@ The implementation intentionally preserves the OpenZCAD application chrome and v
 ## Final result
 
 Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, visually verified against the supplied references, and functional in the real application flow.
+
+## Feature suppression and rollback addendum
+
+- Each history row exposes semantic pause/resume and rollback controls on
+  hover or keyboard focus; an active pause remains visible without hover.
+- Suppressed rows use muted italic text, a warning-colored strike, and an
+  explicit `suppressed` label. They are not styled as failed geometry.
+- The active rollback boundary is a persistent accent rule after the selected
+  row, while every later row shows its suppressed state.
+- Pause and rollback buttons expose accessible names and `aria-pressed` state.
+  Undo/redo moves the rendered boundary and exact body count with the canonical
+  document rather than keeping local UI state.
+- Compact-width acceptance must confirm the two new 20 px controls do not hide
+  the feature name, visibility control, or delete action.

@@ -5,10 +5,7 @@ import { toUserId } from '@openzcad/shared';
 // Measurement, not a pass/fail check: timings vary far too much between
 // machines and GPU states to gate CI on. Run deliberately:
 //   OZ_PERF=1 pnpm exec playwright test perf-probe
-test.skip(
-  !process.env.OZ_PERF,
-  'Performance probe; set OZ_PERF=1 to run it.'
-);
+test.skip(!process.env.OZ_PERF, 'Performance probe; set OZ_PERF=1 to run it.');
 
 async function stubApi(page: Page) {
   await page.route('**/api/health', (route) =>
@@ -53,6 +50,19 @@ async function stubApi(page: Page) {
 }
 
 test('perf probe', async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  const failedRequests: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      runtimeErrors.push(`console: ${message.text()}`);
+    }
+  });
+  page.on('pageerror', (error) => runtimeErrors.push(`page: ${error.message}`));
+  page.on('requestfailed', (request) =>
+    failedRequests.push(
+      `${request.method()} ${request.url()} — ${request.failure()?.errorText ?? 'failed'}`
+    )
+  );
   await stubApi(page);
 
   await page.addInitScript(() => {
@@ -162,10 +172,42 @@ test('perf probe', async ({ page }) => {
   await page.reload();
   const restored = await page
     .getByRole('button', { name: /^Box \(B\)/ })
-    .isVisible()
+    .waitFor({ state: 'visible', timeout: 10_000 })
+    .then(() => true)
     .catch(() => false);
   await expect(page.locator('body')).toBeVisible();
   const reload = Date.now() - r0;
+
+  const thresholds = { pageLoadMs: 3_000, interactionMs: 1_000 };
+  const violations = [
+    shellVisible > thresholds.pageLoadMs
+      ? { phase: 'launcher', ms: shellVisible, budget: thresholds.pageLoadMs }
+      : null,
+    coldCreate > thresholds.interactionMs
+      ? {
+          phase: 'cold project creation',
+          ms: coldCreate,
+          budget: thresholds.interactionMs
+        }
+      : null,
+    firstBox > thresholds.interactionMs
+      ? {
+          phase: 'first exact operation',
+          ms: firstBox,
+          budget: thresholds.interactionMs
+        }
+      : null,
+    secondBox > thresholds.interactionMs
+      ? {
+          phase: 'warm exact operation',
+          ms: secondBox,
+          budget: thresholds.interactionMs
+        }
+      : null,
+    reload > thresholds.pageLoadMs
+      ? { phase: 'workspace reload', ms: reload, budget: thresholds.pageLoadMs }
+      : null
+  ].filter(Boolean);
 
   console.log(
     'PERF ' +
@@ -179,10 +221,16 @@ test('perf probe', async ({ page }) => {
           secondBox,
           afterGeometry,
           reload,
-          restoredIntoWorkspace: restored
+          restoredIntoWorkspace: restored,
+          thresholds,
+          violations,
+          runtimeErrors,
+          failedRequests
         },
         null,
         2
       )
   );
+  expect(runtimeErrors).toEqual([]);
+  expect(failedRequests).toEqual([]);
 });

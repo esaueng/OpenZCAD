@@ -1,8 +1,11 @@
 import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   deepClone,
   nowIso,
+  PANEL_WIDTH_LIMITS,
   type AppSettings,
+  type PanelWidthLimits,
   type AppSettingsResponse,
   type AssistantCredentialMetadata,
   type AssistantProvider,
@@ -93,6 +96,34 @@ function optionalMember<T extends string>(
     : fallback;
 }
 
+/**
+ * A panel width from a client that may predate the preference, or postdate this
+ * Worker's limits. Chrome geometry is cosmetic, so an absent or out-of-range
+ * width is clamped rather than made a reason to reject the whole save.
+ */
+function optionalPanelWidth(value: unknown, limits: PanelWidthLimits): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return limits.default;
+  }
+  return Math.round(Math.min(limits.max, Math.max(limits.min, value)));
+}
+
+/**
+ * An optional bounded preference: unusable becomes the default, out of range
+ * becomes the nearest bound. Clamping rather than rejecting keeps one bad
+ * number from failing a whole settings save, and matches how panel widths and
+ * the browser's own normalization treat the same shape of value.
+ */
+function optionalBoundedNumber(
+  value: unknown,
+  bounds: { min: number; max: number; default: number }
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return bounds.default;
+  }
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, value)));
+}
+
 function requiredNumber(
   record: Record<string, unknown>,
   key: string,
@@ -155,7 +186,8 @@ function isPrivateIpv4(hostname: string): boolean {
 
 export function validateAssistantBaseUrl(
   value: string,
-  environment: CloudflareEnv['ENVIRONMENT']
+  environment: CloudflareEnv['ENVIRONMENT'],
+  allowedBaseUrlHosts?: string
 ): string {
   let url: URL;
   try {
@@ -180,7 +212,12 @@ export function validateAssistantBaseUrl(
   }
   if (
     hostname === 'localhost' ||
+    bareHostname === '::' ||
     bareHostname === '::1' ||
+    // IPv4-mapped and NAT64 forms tunnel private IPv4 targets through the
+    // IPv6 grammar; no legitimate public provider uses them, so block all.
+    bareHostname.startsWith('::ffff:') ||
+    bareHostname.startsWith('64:ff9b::') ||
     /^(?:fc|fd|fe8|fe9|fea|feb)/i.test(bareHostname) ||
     hostname.endsWith('.local') ||
     hostname.endsWith('.internal') ||
@@ -190,13 +227,28 @@ export function validateAssistantBaseUrl(
       throw new HttpError(400, 'Private-network AI endpoints are not allowed.');
     }
   }
+  if (environment !== 'development') {
+    const allowedHosts = new Set(
+      (allowedBaseUrlHosts ?? '')
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (!allowedHosts.has(hostname)) {
+      throw new HttpError(
+        400,
+        'The AI endpoint hostname is not approved for this deployment.'
+      );
+    }
+  }
   url.hash = '';
   return url.toString();
 }
 
 export function parseUpdateAppSettingsRequest(
   value: unknown,
-  environment: CloudflareEnv['ENVIRONMENT']
+  environment: CloudflareEnv['ENVIRONMENT'],
+  allowedBaseUrlHosts?: string
 ): UpdateAppSettingsRequest {
   const root = asRecord(value, 'Request body');
   const expectedRevision = requiredNumber(
@@ -208,16 +260,24 @@ export function parseUpdateAppSettingsRequest(
   const settings = asRecord(root.settings, '"settings"');
   const general = asRecord(settings.general, '"settings.general"');
   const appearance = asRecord(settings.appearance, '"settings.appearance"');
+  // Layout widths are optional in the payload so older clients keep saving.
+  const layout = asRecord(settings.layout ?? {}, '"settings.layout"');
   const viewport = asRecord(settings.viewport, '"settings.viewport"');
   const sketching = asRecord(settings.sketching, '"settings.sketching"');
+  // Optional in the payload so a client from before cloud autosave was
+  // configurable keeps saving instead of being rejected.
+  const files = asRecord(settings.files ?? {}, '"settings.files"');
   const assistant = asRecord(settings.assistant, '"settings.assistant"');
   // Experiments are optional in the payload so older clients keep saving.
-  const experiments = asRecord(settings.experiments ?? {}, '"settings.experiments"');
+  const experiments = asRecord(
+    settings.experiments ?? {},
+    '"settings.experiments"'
+  );
   const provider = requiredMember(assistant, 'provider', PROVIDERS);
   const rawBaseUrl = requiredString(assistant, 'baseUrl', 2_048, true);
   const baseUrl =
     provider === 'responses-compatible'
-      ? validateAssistantBaseUrl(rawBaseUrl, environment)
+      ? validateAssistantBaseUrl(rawBaseUrl, environment, allowedBaseUrlHosts)
       : '';
   return {
     expectedRevision,
@@ -235,6 +295,16 @@ export function parseUpdateAppSettingsRequest(
         theme: requiredMember(appearance, 'theme', THEMES),
         density: requiredMember(appearance, 'density', DENSITIES),
         reducedMotion: requiredBoolean(appearance, 'reducedMotion')
+      },
+      layout: {
+        sidebarWidth: optionalPanelWidth(
+          layout.sidebarWidth,
+          PANEL_WIDTH_LIMITS.sidebar
+        ),
+        assistantWidth: optionalPanelWidth(
+          layout.assistantWidth,
+          PANEL_WIDTH_LIMITS.assistant
+        )
       },
       viewport: {
         defaultProjection: requiredMember(
@@ -256,6 +326,17 @@ export function parseUpdateAppSettingsRequest(
         snapEnabled: requiredBoolean(sketching, 'snapEnabled'),
         linearSnap: requiredNumber(sketching, 'linearSnap', 0.001, 10_000),
         angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90)
+      },
+      files: {
+        cloudAutosave:
+          typeof files.cloudAutosave === 'boolean' ? files.cloudAutosave : true,
+        // Falls back to the default rather than clamping or rejecting, matching
+        // how the browser normalizes the same field and how the other optional
+        // preferences behave. A cosmetic number is never worth failing a save.
+        cloudAutosaveDelaySeconds: optionalBoundedNumber(
+          files.cloudAutosaveDelaySeconds,
+          CLOUD_AUTOSAVE_DELAY_BOUNDS
+        )
       },
       assistant: {
         enabled: requiredBoolean(assistant, 'enabled'),
@@ -413,7 +494,8 @@ async function readSettings(
           expectedRevision: row.revision,
           settings: parsedSettings
         },
-        env.ENVIRONMENT
+        env.ENVIRONMENT,
+        env.AI_ALLOWED_BASE_URL_HOSTS
       ).settings,
       revision: row.revision,
       synced: true
@@ -470,10 +552,30 @@ function deploymentEffective(env: CloudflareEnv): EffectiveAssistantSettings {
   };
 }
 
+export function deploymentAssistantAllowed(
+  email: string | undefined,
+  env: CloudflareEnv
+): boolean {
+  if (env.ENVIRONMENT === 'development') {
+    return true;
+  }
+  if (!email) {
+    return false;
+  }
+  const normalizedEmail = email.trim().toLowerCase();
+  return (
+    env.AI_DEPLOYMENT_ALLOWED_EMAILS?.split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean)
+      .includes(normalizedEmail) ?? false
+  );
+}
+
 function effectiveAssistantStatus(
   settings: AppSettings,
   credential: CredentialRow | null,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): EffectiveAssistantSettings {
   if (!settings.assistant.enabled) {
     return {
@@ -485,7 +587,12 @@ function effectiveAssistantStatus(
     };
   }
   if (settings.assistant.credentialSource === 'deployment') {
-    return deploymentEffective(env);
+    return deploymentAssistantAllowed(email, env)
+      ? deploymentEffective(env)
+      : {
+          ...deploymentEffective(env),
+          configured: false
+        };
   }
   return {
     configured: Boolean(credential && env.SETTINGS_ENCRYPTION_KEY?.trim()),
@@ -498,7 +605,8 @@ function effectiveAssistantStatus(
 
 export async function resolveUserAssistant(
   userId: UserId,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<{
   effective: EffectiveAssistantSettings;
   runtime: AssistantRuntimeConfig | null;
@@ -517,7 +625,15 @@ export async function resolveUserAssistant(
     };
   }
   if (settings.assistant.credentialSource === 'deployment') {
-    return { effective: deploymentEffective(env), runtime: null };
+    return {
+      effective: deploymentAssistantAllowed(email, env)
+        ? deploymentEffective(env)
+        : {
+            ...deploymentEffective(env),
+            configured: false
+          },
+      runtime: null
+    };
   }
   const row = await readCredential(userId, env);
   const secret = env.SETTINGS_ENCRYPTION_KEY?.trim();
@@ -561,7 +677,8 @@ export async function resolveUserAssistant(
 
 export async function getAppSettings(
   userId: UserId,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   const [stored, credential] = await Promise.all([
     readSettings(userId, env),
@@ -575,7 +692,8 @@ export async function getAppSettings(
     effectiveAssistant: effectiveAssistantStatus(
       stored.settings,
       credential,
-      env
+      env,
+      email
     )
   };
 }
@@ -583,7 +701,8 @@ export async function getAppSettings(
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
@@ -620,7 +739,7 @@ export async function updateAppSettings(
       'Settings changed elsewhere. Reload and try again.'
     );
   }
-  return getAppSettings(userId, env);
+  return getAppSettings(userId, env, email);
 }
 
 export function parseAssistantCredential(value: unknown): string {
@@ -635,7 +754,8 @@ export function parseAssistantCredential(value: unknown): string {
 export async function saveAssistantCredential(
   userId: UserId,
   token: string,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   const secret = env.SETTINGS_ENCRYPTION_KEY?.trim();
   if (!env.DB || !secret) {
@@ -658,12 +778,13 @@ export async function saveAssistantCredential(
   )
     .bind(userId, encrypted.ciphertext, encrypted.iv, hint, timestamp)
     .run();
-  return getAppSettings(userId, env);
+  return getAppSettings(userId, env, email);
 }
 
 export async function deleteAssistantCredential(
   userId: UserId,
-  env: CloudflareEnv
+  env: CloudflareEnv,
+  email?: string
 ): Promise<AppSettingsResponse> {
   if (!env.DB) {
     throw new HttpError(503, 'Personal AI credential storage is unavailable.');
@@ -671,7 +792,7 @@ export async function deleteAssistantCredential(
   await env.DB.prepare('DELETE FROM user_ai_credentials WHERE user_id = ?')
     .bind(userId)
     .run();
-  return getAppSettings(userId, env);
+  return getAppSettings(userId, env, email);
 }
 
 export async function markAssistantCredentialValidated(

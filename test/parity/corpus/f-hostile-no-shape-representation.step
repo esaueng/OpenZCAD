@@ -1,0 +1,23 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Header plus PRODUCT entities and nothing else — the same class as samples/simple-assembly.step but minimal and self-describing. The refusal message is the whole test.'),'2;1');
+FILE_NAME('f-hostile-no-shape-representation.step','2026-01-01T00:00:00',
+  ('OpenZCAD parity corpus'),('OpenZCAD'),
+  'OpenZCAD parity corpus authoring','OpenZCAD','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+/* corpus: f-hostile-no-shape-representation
+   product structure only: no ADVANCED_BREP_SHAPE_REPRESENTATION and no
+   solid anywhere in the file. The refusal message is the whole test. */
+#1=APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#2=APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2010,#1);
+#3=PRODUCT_CONTEXT('',#1,'mechanical');
+#4=PRODUCT('Empty part','Empty part','',(#3));
+#5=PRODUCT_DEFINITION_FORMATION('','',#4);
+#6=PRODUCT_DEFINITION_CONTEXT('part definition',#1,'design');
+#7=PRODUCT_DEFINITION('design','',#5,#6);
+#8=PRODUCT_DEFINITION_SHAPE('','',#7);
+#9=PRODUCT_RELATED_PRODUCT_CATEGORY('part','',(#4));
+ENDSEC;
+END-ISO-10303-21;

@@ -12,10 +12,7 @@ permissions:
 
 jobs:
   validate:
-    # Fork PRs would otherwise consume the private Depot runners; maintainers
-    # push a branch to this repo when an outside contribution needs CI.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: depot-ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
@@ -29,7 +26,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test:coverage
-      # The web app has its own vitest project (jsdom); the root run only
+      # The web app has its own Vitest project (happy-dom); the root run only
       # covers test/**, so its suites need an explicit step.
       - run: pnpm test:web
       - run: pnpm build
@@ -39,3 +36,25 @@ jobs:
           path: coverage/
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
+
+  # The Z1.3 STEP + geometry parity corpus: every corpus file measured through
+  # BOTH kernels (BrepKit and OpenCascade), re-exported and re-imported. It is
+  # its own job rather than part of `validate` because it runs seconds of WASM
+  # geometry per file and the root suite already had to bound its worker count
+  # to keep kernel startup out of unrelated test timeouts.
+  #
+  # This job is a hard gate on the STEP routing flip (Z3) and the OCCT deletion
+  # (Z5): neither may start while it is red. See test/parity/corpus/README.md.
+  corpus:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:parity-corpus

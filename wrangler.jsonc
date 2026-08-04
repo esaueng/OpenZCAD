@@ -4,6 +4,8 @@
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
+  // Cloudflare does not generate Preview URLs for Workers that implement a DO.
+  "preview_urls": false,
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -23,8 +25,24 @@
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
     "AI_PROVIDER": "openai",
     "AI_MODEL": "gpt-5.6-sol",
-    "AI_REASONING_EFFORT": "high"
+    "AI_REASONING_EFFORT": "high",
+    "PROJECT_SHARING_ENABLED": "false",
+    "PROJECT_EDIT_LEASES_ENFORCED": "false",
+    // The owner's own devices joining a live room. Off pending the same
+    // controlled rollout as sharing, but tracked separately: enabling this must
+    // never be a way to enable invitations, roles, or lease enforcement.
+    "PROJECT_PERSONAL_SYNC_ENABLED": "false",
+    "AI_GLOBAL_DAILY_REQUEST_LIMIT": "100",
+    "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "400"
   },
+  // Secrets a deployment cannot run without (set with `wrangler secret put`;
+  // wrangler has no schema key to declare them, so this is documentation only):
+  //   AUTH_OTP_PEPPER, TURNSTILE_SECRET_KEY, SETTINGS_ENCRYPTION_KEY,
+  //   AI_IDENTITY_PEPPER
+  // AI_DEPLOYMENT_ALLOWED_EMAILS is deliberately absent: it is the allowlist
+  // for spending the deployment's own provider key, and
+  // `deploymentAssistantAllowed` fails closed when it is unset, so a
+  // deployment without it simply offers no deployment-funded AI.
   "d1_databases": [
     {
       "binding": "DB",
@@ -37,6 +55,20 @@
     {
       "name": "EMAIL",
       "allowed_sender_addresses": ["login@auth.esau.app"]
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_ROOM",
+        "class_name": "ProjectCollaborationRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectCollaborationRoom"]
     }
   ]
 }

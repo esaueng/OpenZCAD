@@ -1,34 +1,95 @@
 # OpenZCAD Roadmap
 
+Status snapshot: 2026-07-31, schema v6. “Working” below means implemented on
+the current branch; production enablement is a separate rollout decision.
+
 ## Working now
 
-- Schema-v2 canonical documents with migrations, checkpoints, asset references, command replay, transactions, undo/redo, and local-first autosave.
-- OpenCascade browser-worker kernel with exact primitives, sweeps, transforms, booleans, validity checks, measurements, and exact STEP/STL export.
-- Editable exact STEP import, deterministic face/edge selection, fillet/chamfer, and linear/circular patterns.
-- CAD workspace with feature editing, diagnostics, contextual topology actions, responsive compact layout, a collapsible tool palette, and a docked assistant panel that one setting removes entirely.
-- Model browser with a selectable/visibility-toggleable bodies tree and a feature history list, in collapsible sections that remember their state per device.
-- Human-readable topology naming (directional faces, holes, edge ordinals) across the viewport callout, selection chip, and inspector — no raw fingerprints.
-- Explicit command lifecycle states on the operation card (ready, dragging, exact entry, validating, failed).
-- Edge-length measurements in the selection chip, including multi-edge totals.
-- Sketch entity snapping to endpoints, midpoints, and centers with cursor glyphs, layered over grid snapping and axis inference.
-- Configurable streamed AI proposals with compact topology-aware context, broad feature commands, strict structured output, dry-run preview, explicit approval, and undoable application.
-- Conversational assistant: it returns a patch, clarifying questions with tappable suggested answers, or a plain refusal, and carries the conversation forward as bounded history.
-- Modeling from formal 2D drawings: PNG/JPEG/WebP and PDF attachments (rasterized client-side), a drawing-interpretation protocol covering projection convention, units, and scale, and a dimension audit table showing every value read and the view it came from.
-- Cloudflare Access identity, owner-scoped beta APIs, and legacy-owner mapping.
-- Live per-project Durable Object rooms with presence, version-aware synchronization, and conflict preservation.
+- Schema-v6 canonical documents with v1–v5 normalization, checkpoints, asset
+  references, command replay, transactions, undo/redo, and local-first autosave.
+- A browser-worker BrepKit exact adapter with primitives, multi-profile
+  sweeps, transforms, booleans, finishing, patterns, mirror-copy, shell, solid
+  offset, validity checks, measurements, and exact STEP/STL export.
+- Exact schema-v5 topology witnesses plus semantic lineage for the proved
+  primitive, sweep, and supported rigid-transform subset. Unsupported evolution
+  remains explicitly hash-only and every ambiguous resolution fails closed.
+- True face-attached sketches on both exact adapters: a lineage reference is
+  resolved at the sketch’s history position and its deterministic planar frame
+  is rebuilt from the evolved face. Deleted, ambiguous, non-planar, or
+  unsupported faces stop the rebuild; legacy attachments use their stored
+  migration frame with a warning.
+- Modeling UI and command preflight for mirror, shell opening-face selection,
+  and positive-outward solid offset. BrepKit mirror refuses dense
+  blended/boolean bodies when the pinned kernel does not preserve measured
+  solid volume. (The OpenCascade convex-planar solid-offset refusal is gone
+  with the kernel — Z5.)
+- A bounded, kernel-neutral imported-feature recognizer for blind holes,
+  counterbores, countersinks, bosses, prismatic pockets, and conical tapers.
+  This is a tested read-only proof module, not live product editing yet.
+- Owner/editor/viewer sharing APIs and UI, one persisted project-wide edit
+  lease, per-message authorization, and recovery-copy-first conflict actions.
+  Unresolved local divergence survives dialog close/reload. Deployment flags
+  remain off in checked-in development and beta configuration.
+- Strict AI contracts and digest-bound preflight for the existing operations
+  plus face sketches, multi-profile extrusion, mirror, shell, solid offset, and
+  validated direct edits. The six newer families are independently dark behind
+  rollout flags; recognized imported-feature operations remain explicitly
+  disabled.
+- Lazy exact-adapter/BrepKit loading in the geometry worker,
+  tagged loading/rebuild lifecycle, coalesced broadcasts, and a canonical
+  rebuild LRU bounded to 8 entries, 32 MiB, and 4 in-flight loads.
+- CAD workspace, selection/topology labels, on-model direct manipulation,
+  command palette, orientation widget, assistant panel, and the existing
+  measured viewport edge batching.
+- Debounced cloud-settings autosave with serialized requests, revision-safe
+  retry, flush-before-logout, offline pause/resume, and dirty-state recovery.
+- Project cloud sync between a user's own devices ([ADR-016](docs/adrs/ADR-016-project-cloud-sync.md)):
+  adoption of device-only projects into the account keeping their id; debounced
+  cloud document autosave on a separate endpoint from revision checkpoints;
+  freshness polling on focus, reconnect, and interval; a recorded per-device
+  sync baseline that makes both-moved divergence detectable and recoverable
+  outside a live room; bounded revision retention with per-account byte
+  accounting; and a switchable, visible sync state. `PROJECT_PERSONAL_SYNC_ENABLED`
+  is off in checked-in configuration and is independent of sharing.
+- Signed-off orientation cube with face and corner snapping, an origin-corner
+  XYZ triad, drag orbiting, and pointer-lifecycle cleanup.
+- Start-screen archive, recycle bin, pinning, and manual project ordering.
+- Model browser visibility/selection controls, human-readable topology labels,
+  explicit command lifecycle states, edge measurements, and sketch snapping.
+- Drawing-assisted proposals from raster images and PDFs with projection,
+  units, scale, and dimension-audit metadata.
 
-## Next
+## Release gates / next
 
-- Invitations, viewer/editor roles, edit locks, and durable collaboration history.
-- Face-attached sketches, shell/offset, mirror, and persistent topology naming.
-- Multi-profile sketches, holes/pockets, partial revolve, and symmetric/two-sided extrude.
-- AI-created sketches and symbolic references between newly generated operations in one proposal.
-- Cache and loading UX improvements for the exact-kernel WASM module.
-- Region-of-interest cropping for a drawing sheet, so a detail view can be sent at full resolution.
-- Turning a drawing's dimension audit into editable parameter overrides applied without a new proposal.
+- Apply migration 0010 and enable `PROJECT_PERSONAL_SYNC_ENABLED` for the
+  owner's own devices once cross-device sync has been exercised against a real
+  beta session. The flag is deliberately separate from `PROJECT_SHARING_ENABLED`
+  and must not be enabled together with it by accident.
+- Run the collaboration recovery-copy reload E2E against a real beta session;
+  apply the sharing migration and verify revocation/lease expiry before enabling
+  viewer sharing, then editor sharing.
+- Connect the imported-feature proof query to live kernel face adjacency and add
+  deterministic coordinated edit commands before enabling those UI or AI paths.
+- Extend verified lineage through production boolean post-processing, blends,
+  patterns, direct edits, and STEP provenance. Do not substitute nearest-face
+  or traversal-order rebinding.
+- Benchmark cold first rebuild, warm cache hits, eviction, retained worker
+  memory, and large-document cloning on target hardware. Current cache limits
+  are safety bounds, not a measured performance promise.
+- Measure the consolidated viewport edge overlays on target hardware and retain
+  the Heat Sink interaction probe as the acceptance signal.
+- Add multi-profile editing refinements, partial revolve, symmetric/two-sided
+  extrude, and richer sketch constraints only through deterministic commands.
+- Enable AI imported-feature operations only after the equivalent manual
+  command and exact preflight are shipping and tested.
 
 ## Later
 
 - Assemblies and mates.
 - Drawings, dimensions, and inspection tools.
 - Constraint solving, design tables, and variant management.
+- Partial revolve and symmetric/two-sided extrude.
+- Region-of-interest cropping for a drawing sheet, so a detail view can be
+  sent at full resolution.
+- Turning a drawing's dimension audit into editable parameter overrides
+  applied without a new proposal.

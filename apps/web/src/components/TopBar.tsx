@@ -9,6 +9,7 @@ import {
   Pencil,
   Redo2,
   Settings as SettingsIcon,
+  TriangleAlert,
   Undo2,
   Upload,
   Users
@@ -16,6 +17,49 @@ import {
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { CollaborationStatus } from '../lib/useCollaboration';
+import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+
+/**
+ * What the save button says, per state. Every one of these except `saving`
+ * means the work is already stored on this device — the wording differentiates
+ * how far it has got beyond that, and never implies work is at risk when it is
+ * not.
+ */
+const SAVE_STATE_LABELS: Record<
+  WorkspaceSaveState,
+  { label: string; title: string }
+> = {
+  saving: { label: 'Saving', title: 'Saving to this device…' },
+  local: {
+    label: 'Local only',
+    title: 'Saved on this device. Not in your account.'
+  },
+  syncing: {
+    label: 'Syncing',
+    title: 'Saved on this device · copying to your account…'
+  },
+  synced: {
+    label: 'Saved',
+    title: 'Saved on this device and in your account.'
+  },
+  offline: {
+    label: 'Offline',
+    title: 'Saved on this device · your account is unreachable right now.'
+  },
+  conflict: {
+    label: 'Conflict',
+    title: 'This project changed elsewhere. Your work is safe on this device.'
+  },
+  refused: {
+    label: 'Too large',
+    title: 'Too large for your account. Saved on this device.'
+  },
+  paused: {
+    label: 'Autosave off',
+    title:
+      'Saved on this device · cloud autosave is off. Ctrl/Cmd+S updates your account.'
+  }
+};
 
 interface TopBarProps {
   projectName: string | null;
@@ -25,7 +69,7 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
-  saveState: 'saved' | 'saving' | 'offline';
+  saveState: WorkspaceSaveState;
   artifacts: ArtifactRecord[];
   session: AuthSession | null;
   collaborationStatus: CollaborationStatus;
@@ -35,8 +79,10 @@ interface TopBarProps {
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
+  onExportDiagnostics(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
+  onOpenSharing(): void;
   onOpenSettings(): void;
 }
 
@@ -57,19 +103,43 @@ export function TopBar({
   onSave,
   onImportFile,
   onExport,
+  onExportDiagnostics,
   onRenameProject,
   onGoHome,
+  onOpenSharing,
   onOpenSettings
 }: TopBarProps) {
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
   const projectNameInputRef = useRef<HTMLInputElement>(null);
+  const fileMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     if (editingProjectName) {
       projectNameInputRef.current?.select();
     }
   }, [editingProjectName]);
+
+  useEffect(() => {
+    function closeFileMenuOnOutsidePointer(event: PointerEvent) {
+      const fileMenu = fileMenuRef.current;
+      if (
+        fileMenu?.open &&
+        event.target instanceof Node &&
+        !fileMenu.contains(event.target)
+      ) {
+        fileMenu.open = false;
+      }
+    }
+
+    document.addEventListener('pointerdown', closeFileMenuOnOutsidePointer);
+    return () => {
+      document.removeEventListener(
+        'pointerdown',
+        closeFileMenuOnOutsidePointer
+      );
+    };
+  }, []);
 
   function beginProjectRename() {
     if (!projectName) {
@@ -172,13 +242,16 @@ export function TopBar({
         a flat row with the sync state and settings, so nothing read as a group.
         They are one file menu now; the row is identity | history | file | state.
       */}
-      <details className="topbar-menu file-menu">
+      <details ref={fileMenuRef} className="topbar-menu file-menu">
         <summary className="secondary topbar-action" title="Import and export">
           <FolderOpen size={14} aria-hidden="true" />
           File{artifacts.length > 0 ? ` ${artifacts.length}` : ''}
         </summary>
         <div className="topbar-menu-panel">
-          <label className="topbar-menu-item" title="Import an editable STEP solid or STL mesh">
+          <label
+            className="topbar-menu-item"
+            title="Import an editable STEP solid or STL mesh"
+          >
             <Upload size={13} aria-hidden="true" />
             <span>Import STEP or STL…</span>
             <input
@@ -216,6 +289,16 @@ export function TopBar({
             <span>Export STL</span>
             <small>{exportScope ?? 'all bodies'}</small>
           </button>
+          <button
+            type="button"
+            className="topbar-menu-item"
+            title="Export a sanitized feature-history snapshot for troubleshooting"
+            onClick={onExportDiagnostics}
+          >
+            <Download size={13} aria-hidden="true" />
+            <span>Export diagnostics</span>
+            <small>sanitized JSON</small>
+          </button>
           <div className="topbar-menu-sep" />
           <strong className="topbar-menu-label">
             <Files size={12} aria-hidden="true" />
@@ -246,24 +329,22 @@ export function TopBar({
         </div>
       </details>
       <button
-        className="save-state topbar-action"
+        className={`save-state topbar-action is-${saveState}`}
         type="button"
         disabled={!projectName}
         onClick={onSave}
-        title="Save a revision (Ctrl+S)"
+        title={`${SAVE_STATE_LABELS[saveState].title} Click to save a revision (Ctrl+S).`}
       >
-        {saveState === 'saving' ? (
+        {saveState === 'saving' || saveState === 'syncing' ? (
           <LoaderCircle className="spin" size={14} aria-hidden="true" />
-        ) : saveState === 'offline' ? (
-          <CloudOff size={14} aria-hidden="true" />
-        ) : (
+        ) : saveState === 'conflict' || saveState === 'refused' ? (
+          <TriangleAlert size={14} aria-hidden="true" />
+        ) : saveState === 'synced' ? (
           <Check size={14} aria-hidden="true" />
+        ) : (
+          <CloudOff size={14} aria-hidden="true" />
         )}
-        {saveState === 'saving'
-          ? 'Saving'
-          : saveState === 'offline'
-            ? 'Local only'
-            : 'Saved'}
+        {SAVE_STATE_LABELS[saveState].label}
       </button>
       {session && (
         <span className="session-user" title={session.email ?? session.userId}>
@@ -271,17 +352,12 @@ export function TopBar({
         </span>
       )}
       <button
-        className="icon-button"
         type="button"
-        title="Settings (Ctrl+,)"
-        aria-label="Open settings"
-        onClick={onOpenSettings}
-      >
-        <SettingsIcon size={15} aria-hidden="true" />
-      </button>
-      <span
         className={`collaboration-state ${collaborationStatus}`}
-        title={`Collaboration: ${collaborationStatus}`}
+        title={`Project sharing · collaboration: ${collaborationStatus}`}
+        aria-label="Open project sharing"
+        disabled={!projectName || !session}
+        onClick={onOpenSharing}
       >
         <Users size={13} aria-hidden="true" />
         {collaborationStatus === 'live'
@@ -295,7 +371,16 @@ export function TopBar({
                 : collaborationStatus === 'update-required'
                   ? 'Update required'
                   : collaborationStatus}
-      </span>
+      </button>
+      <button
+        className="icon-button"
+        type="button"
+        title="Settings (Ctrl+,)"
+        aria-label="Open settings"
+        onClick={onOpenSettings}
+      >
+        <SettingsIcon size={15} aria-hidden="true" />
+      </button>
     </header>
   );
 }

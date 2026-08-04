@@ -402,6 +402,41 @@ describe('worker authentication', () => {
     });
   });
 
+  it('pins the Turnstile hostname outside explicit development', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          success: true,
+          action: 'email-code',
+          hostname: 'attacker.example'
+        })
+      )
+    );
+
+    await expect(
+      startEmailLogin(
+        new Request('https://example.com/api/auth/email/start'),
+        {
+          email: 'person@example.com',
+          turnstileToken: 'turnstile-token'
+        },
+        {
+          AUTH_MODE: 'email-code',
+          DB: emptyD1(),
+          EMAIL: { send: async () => ({ messageId: 'message-test' }) },
+          AUTH_EMAIL_FROM: 'login@auth.example.com',
+          AUTH_OTP_PEPPER: 'test-pepper',
+          TURNSTILE_SITE_KEY: 'site-key',
+          TURNSTILE_SECRET_KEY: 'turnstile-secret'
+        }
+      )
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'AUTH_CHALLENGE_INVALID'
+    });
+  });
+
   it('consumes an email code once and creates an opaque authenticated session', async () => {
     const fixture = await verificationD1('123456');
     const env = {
@@ -492,7 +527,8 @@ describe('assistant request identity', () => {
   it('uses a stable opaque identity for public email-code requests', async () => {
     const env = {
       AUTH_MODE: 'email-code' as const,
-      DB: emptyD1()
+      DB: emptyD1(),
+      AI_IDENTITY_PEPPER: 'identity-test-pepper'
     };
     const request = new Request('https://example.com/api/assistant/proposals', {
       headers: { 'cf-connecting-ip': '203.0.113.42' }
@@ -504,6 +540,29 @@ describe('assistant request identity', () => {
     expect(first).toBe(second);
     expect(first).toMatch(/^user_anon_[a-f0-9]{24}$/);
     expect(first).not.toContain('203.0.113.42');
+    await expect(
+      identifyAssistantRequest(request, {
+        ...env,
+        AI_IDENTITY_PEPPER: 'different-pepper'
+      })
+    ).resolves.not.toBe(first);
+  });
+
+  it('fails closed when the public assistant identity pepper is absent', async () => {
+    await expect(
+      identifyAssistantRequest(
+        new Request('https://example.com/api/assistant/proposals', {
+          headers: { 'cf-connecting-ip': '203.0.113.42' }
+        }),
+        {
+          AUTH_MODE: 'email-code',
+          DB: emptyD1()
+        }
+      )
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'AI_IDENTITY_UNAVAILABLE'
+    });
   });
 
   it('does not downgrade an invalid session cookie to public identity', async () => {
@@ -517,7 +576,8 @@ describe('assistant request identity', () => {
     await expect(
       identifyAssistantRequest(request, {
         AUTH_MODE: 'email-code',
-        DB: emptyD1()
+        DB: emptyD1(),
+        AI_IDENTITY_PEPPER: 'identity-test-pepper'
       })
     ).rejects.toThrow('session expired');
   });

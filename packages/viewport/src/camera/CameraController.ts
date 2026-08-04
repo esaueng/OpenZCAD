@@ -1,8 +1,17 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CameraPose } from '../render/scene';
-import { orbitPivotForPoint, tweenDurationFor } from './views';
-import { pointerBindingsFor, type MiddleDragAction } from '../input/bindings';
+import {
+  orbitPivotForPoint,
+  tweenDurationFor,
+  tweenOrientationFor,
+  VIEW_DIRECTIONS
+} from './views';
+import {
+  pointerBindingsFor,
+  shiftOrbitBindingsFor,
+  type MiddleDragAction
+} from '../input/bindings';
 import type { ProjectionMode } from '../types';
 
 /** A durable camera pose: what a reload restores. */
@@ -35,13 +44,26 @@ const GLIDE_DAMPING = 0.15;
 /** Keep low-frame-rate devices from stretching a short CAD glide into a coast. */
 const ORBIT_GLIDE_MAX_MS = 800;
 
+/** Orbit radius of the home pose on a fresh document, before any fit runs. */
+const DEFAULT_ORBIT_RADIUS = 150;
+
+/**
+ * A glide is parameterized as orientation + orbit, not as two positions: the
+ * quaternions slerp while the target and orbit radius lerp. A straight
+ * position lerp degrades exactly where view changes are biggest — flipping to
+ * the opposite face drives the camera through the model at the midpoint, and
+ * near a pole the roll that `lookAt` derives from the interpolated position
+ * snaps in the last few frames.
+ */
 interface CameraTween {
   startTime: number;
   duration: number;
-  fromPosition: THREE.Vector3;
-  toPosition: THREE.Vector3;
   fromTarget: THREE.Vector3;
   toTarget: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  toQuaternion: THREE.Quaternion;
+  fromDistance: number;
+  toDistance: number;
   near: number;
   far: number;
   onComplete?: () => void;
@@ -85,6 +107,9 @@ export class CameraController {
   private tween: CameraTween | null = null;
   private settleTimeout: number | null = null;
   private orbitGlideEndsAt: number | null = null;
+  private gestureActive = false;
+  private externalOrbitActive = false;
+  private disposed = false;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -97,7 +122,11 @@ export class CameraController {
     // in its constructor and never refreshes it, so assigning `up` afterwards
     // leaves the orbit axis on +Y while `camera.up` reads (0,0,1).
     this.perspective.up.set(0, 0, 1);
-    this.perspective.position.set(90, -90, 80);
+    // Home pose: the shared iso direction, so a fresh document, the ISO view
+    // preset, and the fit action all agree on one default orientation.
+    this.perspective.position
+      .copy(VIEW_DIRECTIONS.iso)
+      .multiplyScalar(DEFAULT_ORBIT_RADIUS);
 
     this.orthographic = new THREE.OrthographicCamera(
       -90,
@@ -144,7 +173,12 @@ export class CameraController {
 
   /** Restores tight tracking; a grab mid-glide folds the residue into it. */
   private beginGesture = () => {
+    this.gestureActive = true;
     this.orbitGlideEndsAt = null;
+    if (this.settleTimeout !== null) {
+      window.clearTimeout(this.settleTimeout);
+      this.settleTimeout = null;
+    }
     this.orbit.dampingFactor = DRAG_DAMPING;
   };
 
@@ -156,6 +190,7 @@ export class CameraController {
    * kick here is enough to play the whole glide out.
    */
   private settleDamping = () => {
+    this.gestureActive = false;
     if (this.options.reducedMotion()) {
       this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
@@ -182,6 +217,9 @@ export class CameraController {
     }
     this.settleTimeout = window.setTimeout(() => {
       this.settleTimeout = null;
+      if (this.gestureActive || this.disposed) {
+        return;
+      }
       this.orbitGlideEndsAt = null;
       // The glide has decayed below OrbitControls' movement epsilon by now,
       // but a sub-epsilon offset still sits frozen on the controls; thawed
@@ -296,9 +334,21 @@ export class CameraController {
       return;
     }
     // Starting from wherever the camera is right now — mid-glide included —
-    // is what lets one view request interrupt another without a jump.
+    // is what lets one view request interrupt another without a jump. The
+    // from-orientation is the camera's live quaternion for the same reason:
+    // re-deriving it from the position would erase an in-flight roll.
     const fromPosition = this.perspective.position.clone();
     const fromTarget = this.orbit.target.clone();
+    const toOffset = pose.position.clone().sub(pose.target);
+    const toDistance = toOffset.length();
+    // A pose that parks the camera on its own target has no view direction;
+    // hold the current one and let the distance collapse express it.
+    const toDirection =
+      toDistance > 1e-9
+        ? toOffset.divideScalar(toDistance)
+        : new THREE.Vector3(0, 0, 1).applyQuaternion(
+            this.perspective.quaternion
+          );
     this.tween = {
       startTime: performance.now(),
       duration: tweenDurationFor(
@@ -307,10 +357,12 @@ export class CameraController {
         fromTarget,
         pose.target
       ),
-      fromPosition,
-      toPosition: pose.position.clone(),
       fromTarget,
       toTarget: pose.target.clone(),
+      fromQuaternion: this.perspective.quaternion.clone(),
+      toQuaternion: tweenOrientationFor(toDirection),
+      fromDistance: Math.max(fromPosition.distanceTo(fromTarget), 1e-6),
+      toDistance,
       near: pose.near,
       far: pose.far,
       onComplete
@@ -319,7 +371,65 @@ export class CameraController {
   }
 
   cancelTween() {
-    this.tween = null;
+    if (this.tween) {
+      this.tween = null;
+      this.restoreWorldUp();
+    }
+  }
+
+  /**
+   * Hands roll authority back to `lookAt`'s world-up projection once a glide
+   * ends. The glide's final frame was built from the same projection, so
+   * nothing moves — but leaving a slerped up vector behind would roll every
+   * subsequent orbit.
+   */
+  private restoreWorldUp() {
+    this.perspective.up.set(0, 0, 1);
+    this.orthographic.up.copy(this.perspective.up);
+  }
+
+  /**
+   * Starts an orbit owned by an external viewport control such as the view
+   * cube. This mirrors OrbitControls' pointer lifecycle without synthesizing
+   * DOM events onto the canvas.
+   */
+  beginOrbitDrag() {
+    if (this.disposed || this.externalOrbitActive) {
+      return;
+    }
+    this.cancelTween();
+    this.externalOrbitActive = true;
+    this.beginGesture();
+  }
+
+  /**
+   * Applies the same screen-space rotation scale OrbitControls uses for a
+   * canvas drag. Keeping this conversion here makes cube and canvas orbiting
+   * feel identical at every viewport size.
+   */
+  orbitByPixels(deltaX: number, deltaY: number) {
+    if (
+      this.disposed ||
+      !this.externalOrbitActive ||
+      !Number.isFinite(deltaX) ||
+      !Number.isFinite(deltaY)
+    ) {
+      return;
+    }
+    const height = Math.max(this.options.domElement.clientHeight, 1);
+    this.orbit.rotateLeft((2 * Math.PI * deltaX) / height);
+    this.orbit.rotateUp((2 * Math.PI * deltaY) / height);
+    this.orbit.update();
+    this.options.requestRender();
+  }
+
+  /** Releases an external orbit into the same short damping tail as canvas. */
+  endOrbitDrag() {
+    if (this.disposed || !this.externalOrbitActive) {
+      return;
+    }
+    this.externalOrbitActive = false;
+    this.settleDamping();
   }
 
   /**
@@ -330,6 +440,9 @@ export class CameraController {
    * longer wall-clock coast and drifts beyond the framing the user released.
    */
   stepOrbit(now: number): boolean {
+    if (this.disposed) {
+      return false;
+    }
     if (this.orbitGlideEndsAt !== null && now >= this.orbitGlideEndsAt) {
       this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
@@ -377,8 +490,23 @@ export class CameraController {
     this.applyPointerBindings(this.orbit);
   }
 
-  private applyPointerBindings(orbit: OrbitControls<THREE.Camera>) {
-    const bindings = pointerBindingsFor(this.options.middleDrag());
+  /**
+   * OrbitControls normally turns Shift+left-drag into a pan. Temporarily
+   * presenting the left button as pan makes its built-in modifier swap choose
+   * rotate instead, without replacing or patching the third-party controls.
+   */
+  setShiftOrbitActive(active: boolean) {
+    this.applyPointerBindings(this.orbit, active);
+  }
+
+  private applyPointerBindings(
+    orbit: OrbitControls<THREE.Camera>,
+    shiftOrbit = false
+  ) {
+    const middleDrag = this.options.middleDrag();
+    const bindings = shiftOrbit
+      ? shiftOrbitBindingsFor(middleDrag)
+      : pointerBindingsFor(middleDrag);
     const toMouse = (action: string) =>
       action === 'orbit'
         ? THREE.MOUSE.ROTATE
@@ -402,17 +530,41 @@ export class CameraController {
     }
     const t = Math.min((now - tween.startTime) / tween.duration, 1);
     const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    this.perspective.position.lerpVectors(
-      tween.fromPosition,
-      tween.toPosition,
+    const quaternion = tween.fromQuaternion
+      .clone()
+      .slerp(tween.toQuaternion, eased);
+    const target = new THREE.Vector3().lerpVectors(
+      tween.fromTarget,
+      tween.toTarget,
       eased
     );
-    this.orbit.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
+    const distance = THREE.MathUtils.lerp(
+      tween.fromDistance,
+      tween.toDistance,
+      eased
+    );
+    // The camera sits along its own view axis: local +Z, taken to world.
+    this.perspective.position
+      .copy(target)
+      .addScaledVector(
+        new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion),
+        distance
+      );
+    this.perspective.quaternion.copy(quaternion);
+    // OrbitControls' update() runs right after this and re-derives the
+    // orientation with `lookAt`. Handing both cameras the slerped frame's own
+    // up axis makes that lookAt reproduce the slerp exactly instead of
+    // stomping its roll with a world-up projection of the mid-glide view.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
+    this.perspective.up.copy(up);
+    this.orthographic.up.copy(up);
+    this.orbit.target.copy(target);
     if (this.mode === 'orthographic') {
       this.syncOrthographic(false);
     }
     if (t >= 1) {
       this.tween = null;
+      this.restoreWorldUp();
       this.perspective.near = tween.near;
       this.perspective.far = tween.far;
       this.perspective.updateProjectionMatrix();
@@ -482,6 +634,13 @@ export class CameraController {
   }
 
   dispose() {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.gestureActive = false;
+    this.externalOrbitActive = false;
+    this.orbitGlideEndsAt = null;
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;

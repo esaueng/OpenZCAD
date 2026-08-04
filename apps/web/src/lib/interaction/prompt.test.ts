@@ -57,6 +57,7 @@ function regionState(phase: OperationPhase): InteractionState {
       sketchId: 'sketch-1',
       regionFingerprint: 1,
       samplePoint: { x: 0, y: 0 },
+      sourceEntityIds: [],
       area: 10
     },
     phase,

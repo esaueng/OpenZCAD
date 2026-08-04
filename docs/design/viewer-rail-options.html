@@ -1,0 +1,1167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Viewer rail — five redesigns</title>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="mast-id">
+      <span class="stamp">OpenZCAD · viewport chrome</span>
+      <h1>The viewer rail, five ways</h1>
+      <p class="deck">
+        Today the rail is a 143&nbsp;px labelled panel wedged under the orientation cube, and it reads
+        like a settings list instead of a control surface. Every option below moves it to a compact
+        vertical strip on the right edge, centred. They differ in one decision: <em>how much text
+        survives, and where the standard views go.</em> Every number on this page was measured off
+        the specimen beside it, not estimated.
+      </p>
+    </div>
+    <div class="mast-controls">
+      <button type="button" id="peek" class="ctl" aria-pressed="false">
+        <span class="ctl-dot" aria-hidden="true"></span>Peek labels
+      </button>
+      <p class="ctl-note">Forces every hover/expanded state on, so you can read the options without a mouse.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Baseline ─────────────────────────────────────────── -->
+  <section class="block baseline" id="current">
+    <div class="block-head">
+      <span class="tag tag-now">Now</span>
+      <h2>What ships today</h2>
+    </div>
+    <div class="split">
+      <div class="stage-wrap">
+        <div class="stage">
+          <div class="stage-grid" aria-hidden="true"></div>
+          <div class="stage-axis" aria-hidden="true"><span class="ax ax-x">X</span><span class="ax ax-y">Y</span></div>
+          <div class="cube" aria-hidden="true">
+            <svg viewBox="0 0 44 44" width="44" height="44"><g fill="none" stroke="currentColor" stroke-width="1"><path d="M22 6 36 14v16L22 38 8 30V14Z"/><path d="M22 6v10l14 8M22 16 8 24"/></g></svg>
+          </div>
+          <div class="rail rail-legacy" role="toolbar" aria-label="Viewer controls (current)">
+            <div class="lg-views" role="group" aria-label="Standard views">
+              <button type="button" class="lg-view" data-viewgroup="now">F</button>
+              <button type="button" class="lg-view" data-viewgroup="now">T</button>
+              <button type="button" class="lg-view" data-viewgroup="now">R</button>
+              <button type="button" class="lg-view is-view" data-viewgroup="now">Iso</button>
+            </div>
+            <button type="button" class="lg-row"><span>Fit</span><i class="ic">ICON_FIT</i></button>
+            <button type="button" class="lg-row is-on" data-toggle aria-pressed="true"><span>Grid</span><i class="ic">ICON_GRID</i></button>
+            <button type="button" class="lg-row" data-toggle aria-pressed="false"><span>Ortho</span><i class="ic">ICON_CAM</i></button>
+            <button type="button" class="lg-row" data-shade><span data-shade-label>Shaded + edges</span><i class="ic" data-shade-icon>ICON_EYE</i></button>
+          </div>
+        </div>
+        <div class="dim" style="--w:143px"><span class="dim-val">143 × 148 px</span></div>
+      </div>
+      <div class="notes">
+        <dl class="spec">
+          <div><dt>Footprint</dt><dd>143 × 148 px</dd></div>
+          <div><dt>Placement</dt><dd>Top right, stacked under the cube</dd></div>
+          <div><dt>Controls</dt><dd>4 views + 4 toggles</dd></div>
+        </dl>
+        <ul class="crit">
+          <li><b>It competes with the cube.</b> Two panels stacked in the same corner, both about orientation, neither obviously primary.</li>
+          <li><b>Width is set by its longest string.</b> “Shaded&nbsp;+&nbsp;edges” alone dictates the panel width; switch to “Wireframe” and the panel visibly shrinks.</li>
+          <li><b>Labels and icons say the same thing twice</b> — and the right-aligned text ragged-lefts against the icons.</li>
+          <li><b>Views are duplicated.</b> The cube directly above already navigates to every face by click.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="rule-major" aria-hidden="true"><span>five options</span></div>
+
+  <!-- ── A ────────────────────────────────────────────────── -->
+  <section class="block" id="opt-a">
+    <div class="block-head">
+      <span class="tag">A</span>
+      <h2>Icon rail</h2>
+      <p class="lede">Straight reduction. Same eight controls, no text, tooltips carry the names.</p>
+    </div>
+    <div class="split">
+      <div class="stage-wrap">
+        <div class="stage">
+          <div class="stage-grid" aria-hidden="true"></div>
+          <div class="stage-axis" aria-hidden="true"><span class="ax ax-x">X</span><span class="ax ax-y">Y</span></div>
+          <div class="cube" aria-hidden="true">
+            <svg viewBox="0 0 44 44" width="44" height="44"><g fill="none" stroke="currentColor" stroke-width="1"><path d="M22 6 36 14v16L22 38 8 30V14Z"/><path d="M22 6v10l14 8M22 16 8 24"/></g></svg>
+          </div>
+          <div class="rail rail-a centred" role="toolbar" aria-label="Viewer controls">
+            <button type="button" class="sq glyph" data-viewgroup="a" data-tip="Front view · 1">F</button>
+            <button type="button" class="sq glyph" data-viewgroup="a" data-tip="Top view · 2">T</button>
+            <button type="button" class="sq glyph" data-viewgroup="a" data-tip="Right view · 3">R</button>
+            <button type="button" class="sq glyph is-view" data-viewgroup="a" data-tip="Isometric view · 4">Iso</button>
+            <span class="hair" aria-hidden="true"></span>
+            <button type="button" class="sq" data-tip="Fit view · F">ICON_FIT</button>
+            <button type="button" class="sq is-on" data-toggle aria-pressed="true" data-tip="Grid · G">ICON_GRID</button>
+            <button type="button" class="sq" data-toggle aria-pressed="false" data-tip="Orthographic · P">ICON_CAM</button>
+            <button type="button" class="sq" data-shade data-tip="Shaded + edges · W"><i data-shade-icon>ICON_EYE</i></button>
+          </div>
+        </div>
+        <div class="dim" style="--w:36px"><span class="dim-val">36 × 241 px</span></div>
+      </div>
+      <div class="notes">
+        <dl class="spec">
+          <div><dt>Footprint</dt><dd>36 × 241 px</dd></div>
+          <div><dt>Buttons</dt><dd>8, all 26 px</dd></div>
+          <div><dt>State at rest</dt><dd>Fill tint only</dd></div>
+        </dl>
+        <ul class="crit">
+          <li class="good">Smallest change to make: delete the label spans, square up the buttons, re-anchor the container.</li>
+          <li class="good">Views stay one click away for anyone who learned them there.</li>
+          <li class="warn">Current shading mode is unreadable at rest — the eye/box icon is the only tell, and two of three modes share the eye.</li>
+          <li class="warn">Eight stacked squares is 241 px — the tallest of the five, and half that height goes to view buttons the cube already duplicates.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── B ────────────────────────────────────────────────── -->
+  <section class="block" id="opt-b">
+    <div class="block-head">
+      <span class="tag">B</span>
+      <h2>Hover-expand rail</h2>
+      <p class="lede">Icons at rest; approach it and the strip slides open to the left with names, live state, and the full view row.</p>
+    </div>
+    <div class="split">
+      <div class="stage-wrap">
+        <div class="stage">
+          <div class="stage-grid" aria-hidden="true"></div>
+          <div class="stage-axis" aria-hidden="true"><span class="ax ax-x">X</span><span class="ax ax-y">Y</span></div>
+          <div class="cube" aria-hidden="true">
+            <svg viewBox="0 0 44 44" width="44" height="44"><g fill="none" stroke="currentColor" stroke-width="1"><path d="M22 6 36 14v16L22 38 8 30V14Z"/><path d="M22 6v10l14 8M22 16 8 24"/></g></svg>
+          </div>
+          <div class="rail rail-b centred" role="toolbar" aria-label="Viewer controls">
+            <div class="b-views" role="group" aria-label="Standard views">
+              <button type="button" class="bv" data-viewgroup="b">F</button>
+              <button type="button" class="bv" data-viewgroup="b">T</button>
+              <button type="button" class="bv" data-viewgroup="b">R</button>
+              <button type="button" class="bv is-view" data-viewgroup="b">Iso</button>
+            </div>
+            <span class="hair" aria-hidden="true"></span>
+            <button type="button" class="brow"><span class="lbl">Fit</span><i class="ic">ICON_FIT</i></button>
+            <button type="button" class="brow is-on" data-toggle aria-pressed="true"><span class="lbl">Grid</span><i class="ic">ICON_GRID</i></button>
+            <button type="button" class="brow" data-toggle aria-pressed="false"><span class="lbl">Ortho</span><i class="ic">ICON_CAM</i></button>
+            <button type="button" class="brow" data-shade><span class="lbl" data-shade-label>Shaded + edges</span><i class="ic" data-shade-icon>ICON_EYE</i></button>
+          </div>
+        </div>
+        <div class="dim" style="--w:36px"><span class="dim-val">36 px at rest → 142 px open</span></div>
+      </div>
+      <div class="notes">
+        <dl class="spec">
+          <div><dt>Footprint</dt><dd>36 × 153 px</dd></div>
+          <div><dt>Open</dt><dd>142 × 153 px</dd></div>
+          <div><dt>Trigger</dt><dd>hover · focus-within</dd></div>
+        </dl>
+        <ul class="crit">
+          <li class="good">Compact where it matters — at rest, over the model — and fully self-describing the moment you reach for it.</li>
+          <li class="good">Keyboard users get the same reveal through <code>:focus-within</code>; no tooltip dependency.</li>
+          <li class="good">At rest the view row collapses to just the <em>active</em> view — so <code>Iso</code> sits there as a live readout — and unfolds to F&nbsp;T&nbsp;R&nbsp;Iso on approach. No other option tells you which view you’re in.</li>
+          <li class="warn">Motion over live geometry. It needs a short 120&nbsp;ms ease and a <code>prefers-reduced-motion</code> path that snaps instead.</li>
+          <li class="warn">Touch has no hover — the expanded state has to be the tap target on coarse pointers.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── C ────────────────────────────────────────────────── -->
+  <section class="block chosen" id="opt-c">
+    <div class="block-head">
+      <span class="tag">C</span>
+      <span class="tag tag-built">Built</span>
+      <h2>Four toggles, views in a flyout</h2>
+      <p class="lede">Accepts that the cube already owns navigation. The rail keeps only the four things the cube can’t do.</p>
+    </div>
+    <div class="split">
+      <div class="stage-wrap">
+        <div class="stage">
+          <div class="stage-grid" aria-hidden="true"></div>
+          <div class="stage-axis" aria-hidden="true"><span class="ax ax-x">X</span><span class="ax ax-y">Y</span></div>
+          <div class="cube cube-lit" aria-hidden="true">
+            <svg viewBox="0 0 44 44" width="44" height="44"><g fill="none" stroke="currentColor" stroke-width="1"><path d="M22 6 36 14v16L22 38 8 30V14Z"/><path d="M22 6v10l14 8M22 16 8 24"/></g></svg>
+          </div>
+          <div class="rail rail-c centred" role="toolbar" aria-label="Viewer controls">
+            <button type="button" class="sq" data-tip="Fit view · F">ICON_FIT</button>
+            <button type="button" class="sq is-on" data-toggle aria-pressed="true" data-tip="Grid · G">ICON_GRID</button>
+            <button type="button" class="sq" data-toggle aria-pressed="false" data-tip="Orthographic · P">ICON_CAM</button>
+            <button type="button" class="sq" data-shade data-tip="Shaded + edges · W"><i data-shade-icon>ICON_EYE</i></button>
+            <span class="hair" aria-hidden="true"></span>
+            <div class="fly-anchor">
+              <button type="button" class="sq sq-more" data-fly aria-expanded="false" data-tip="Standard views">ICON_AXES</button>
+              <div class="fly" role="group" aria-label="Standard views" hidden>
+                <button type="button" data-viewgroup="c">Front</button>
+                <button type="button" data-viewgroup="c">Back</button>
+                <button type="button" data-viewgroup="c">Left</button>
+                <button type="button" data-viewgroup="c">Right</button>
+                <button type="button" data-viewgroup="c">Top</button>
+                <button type="button" data-viewgroup="c">Bottom</button>
+                <button type="button" class="fly-wide is-view" data-viewgroup="c">Isometric</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="dim" style="--w:36px"><span class="dim-val">36 × 157 px</span></div>
+      </div>
+      <div class="notes">
+        <dl class="spec">
+          <div><dt>Footprint</dt><dd>36 × 157 px</dd></div>
+          <div><dt>Buttons</dt><dd>5</dd></div>
+          <div><dt>Views</dt><dd>Cube + flyout (all 7)</dd></div>
+        </dl>
+        <ul class="crit">
+          <li class="good">The only option that <em>resolves</em> the duplication rather than shrinking it — the cube keeps navigation, the rail keeps state.</li>
+          <li class="good">The flyout exposes all seven views — Back, Left and Bottom are reachable without orbiting the cube.</li>
+          <li class="warn">One click becomes two for F/T/R. Keyboard shortcuts 1–4 stay, so it mostly costs the mouse-only user.</li>
+          <li class="warn">New popover behaviour to build: outside-click, Escape, focus return.</li>
+          <li class="good">The display-mode control now draws the mode instead of naming it — one isometric cube, three treatments: lit faces with edges, lit faces alone, and all twelve edges with the hidden three ghosted. The old eye icon covered two of the three modes identically.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── D ────────────────────────────────────────────────── -->
+  <section class="block" id="opt-d">
+    <div class="block-head">
+      <span class="tag">D</span>
+      <h2>Icon + state caption</h2>
+      <p class="lede">Each tile carries an 8.5&nbsp;px mono caption that reports the current value, not the control’s name.</p>
+    </div>
+    <div class="split">
+      <div class="stage-wrap">
+        <div class="stage">
+          <div class="stage-grid" aria-hidden="true"></div>
+          <div class="stage-axis" aria-hidden="true"><span class="ax ax-x">X</span><span class="ax ax-y">Y</span></div>
+          <div class="cube" aria-hidden="true">
+            <svg viewBox="0 0 44 44" width="44" height="44"><g fill="none" stroke="currentColor" stroke-width="1"><path d="M22 6 36 14v16L22 38 8 30V14Z"/><path d="M22 6v10l14 8M22 16 8 24"/></g></svg>
+          </div>
+          <div class="rail rail-d centred" role="toolbar" aria-label="Viewer controls">
+            <div class="d-views" role="group" aria-label="Standard views">
+              <button type="button" data-viewgroup="d">F</button>
+              <button type="button" data-viewgroup="d">T</button>
+              <button type="button" data-viewgroup="d">R</button>
+              <button type="button" class="is-view" data-viewgroup="d">Iso</button>
+            </div>
+            <span class="hair" aria-hidden="true"></span>
+            <button type="button" class="tile">ICON_FIT<em>FIT</em></button>
+            <button type="button" class="tile is-on" data-toggle data-cap-on="GRID ON" data-cap-off="GRID OFF" aria-pressed="true">ICON_GRID<em>GRID ON</em></button>
+            <button type="button" class="tile" data-toggle data-cap-on="ORTHO" data-cap-off="PERSP" aria-pressed="false">ICON_CAM<em>PERSP</em></button>
+            <button type="button" class="tile" data-shade><i data-shade-icon>ICON_EYE</i><em data-shade-cap>S+E</em></button>
+          </div>
+        </div>
+        <div class="dim" style="--w:54px"><span class="dim-val">54 × 203 px</span></div>
+      </div>
+      <div class="notes">
+        <dl class="spec">
+          <div><dt>Footprint</dt><dd>54 × 203 px</dd></div>
+          <div><dt>Caption</dt><dd>8.5 px mono</dd></div>
+          <div><dt>State at rest</dt><dd>Readable, no hover</dd></div>
+        </dl>
+        <ul class="crit">
+          <li class="good">The only option where projection and shading state are legible without touching anything — and captions report the value (<code>PERSP</code> → <code>ORTHO</code>), which the current labels never did.</li>
+          <li class="good">Fits the existing mono/technical voice of the HUD chips in the corner.</li>
+          <li class="warn">54 px wide — the widest of the five — and 8.5 px type is at the floor of comfortable reading.</li>
+          <li class="warn">Captions must stay under ~6 characters, which constrains any future mode names.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── E ────────────────────────────────────────────────── -->
+  <section class="block" id="opt-e">
+    <div class="block-head">
+      <span class="tag">E</span>
+      <h2>Segmented capsule</h2>
+      <p class="lede">One continuous pill, hairline-divided instead of gapped, with the views folded into a 2×2 pad at the cap.</p>
+    </div>
+    <div class="split">
+      <div class="stage-wrap">
+        <div class="stage">
+          <div class="stage-grid" aria-hidden="true"></div>
+          <div class="stage-axis" aria-hidden="true"><span class="ax ax-x">X</span><span class="ax ax-y">Y</span></div>
+          <div class="cube" aria-hidden="true">
+            <svg viewBox="0 0 44 44" width="44" height="44"><g fill="none" stroke="currentColor" stroke-width="1"><path d="M22 6 36 14v16L22 38 8 30V14Z"/><path d="M22 6v10l14 8M22 16 8 24"/></g></svg>
+          </div>
+          <div class="rail rail-e centred" role="toolbar" aria-label="Viewer controls">
+            <div class="e-pad" role="group" aria-label="Standard views">
+              <button type="button" data-viewgroup="e">F</button>
+              <button type="button" data-viewgroup="e">T</button>
+              <button type="button" data-viewgroup="e">R</button>
+              <button type="button" class="is-view" data-viewgroup="e">I</button>
+            </div>
+            <button type="button" class="eseg" data-tip="Fit view · F">ICON_FIT</button>
+            <button type="button" class="eseg is-on" data-toggle aria-pressed="true" data-tip="Grid · G">ICON_GRID</button>
+            <button type="button" class="eseg" data-toggle aria-pressed="false" data-tip="Orthographic · P">ICON_CAM</button>
+            <button type="button" class="eseg" data-shade data-tip="Shaded + edges · W"><i data-shade-icon>ICON_EYE</i></button>
+          </div>
+        </div>
+        <div class="dim" style="--w:41px"><span class="dim-val">41 × 173 px</span></div>
+      </div>
+      <div class="notes">
+        <dl class="spec">
+          <div><dt>Footprint</dt><dd>41 × 173 px</dd></div>
+          <div><dt>Radius</dt><dd>17 px caps</dd></div>
+          <div><dt>Dividers</dt><dd>1 px, no gaps</dd></div>
+        </dl>
+        <ul class="crit">
+          <li class="good">Reads as a single object rather than a list of five, so it sits quietly over geometry.</li>
+          <li class="good">The 2×2 pad halves the height the views cost in option A.</li>
+          <li class="warn">Full-round caps are a new shape language — everything else in the app is 3–4 px radius. It will look imported unless the sketch rail follows.</li>
+          <li class="warn">Flush segments make the active tint touch its neighbours; the pressed state needs inset rounding to stay crisp.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Comparison ───────────────────────────────────────── -->
+  <section class="block" id="compare">
+    <div class="block-head">
+      <span class="tag tag-quiet">Side by side</span>
+      <h2>The trade-off, in one table</h2>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Option</th><th>Rest width</th><th>Height</th><th>Area vs now</th><th>Views</th><th>State legible at rest</th><th>Build cost</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="rowid">Now</td><td>143 px</td><td>148 px</td><td>—</td><td>4 in rail</td><td>Yes, verbosely</td><td>—</td></tr>
+          <tr><td class="rowid">A · Icon rail</td><td>36 px</td><td>241 px</td><td>−59%</td><td>4 in rail</td><td>No</td><td class="c-low">Low</td></tr>
+          <tr><td class="rowid">B · Hover-expand</td><td>36 px</td><td>153 px</td><td>−74%</td><td>Active view, unfolds to 4</td><td>On approach</td><td class="c-mid">Medium</td></tr>
+          <tr class="pick"><td class="rowid">C · Flyout</td><td>36 px</td><td>157 px</td><td>−73%</td><td>Cube + 7 in flyout</td><td>No</td><td class="c-mid">Medium</td></tr>
+          <tr><td class="rowid">D · Captions</td><td>54 px</td><td>203 px</td><td>−48%</td><td>4 in rail</td><td>Yes</td><td class="c-low">Low</td></tr>
+          <tr><td class="rowid">E · Capsule</td><td>41 px</td><td>173 px</td><td>−67%</td><td>4, 2×2 pad</td><td>No</td><td class="c-low">Low</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rec">
+      <p class="rec-eyebrow">Decision</p>
+      <p><b>C shipped.</b> The rail is now four state toggles and a views flyout, centred on the right edge at 36&nbsp;×&nbsp;157 — a 73% cut in footprint, with the orientation cube keeping navigation and the flyout adding Back, Left and Bottom, which never had buttons before.</p>
+      <p>Its one real weakness — no state visible at rest — is answered in the display-mode control, which now <em>draws</em> the mode: a lit cube with its edges, a lit cube alone, and an all-edges cube with the hidden three ghosted. The eye icon it replaces was identical across two of the three modes.</p>
+      <p class="rec-alt">B remains the alternative if hover-reveal is ever wanted: 36&nbsp;px at rest, 142&nbsp;px open, with the collapsed view row doubling as a current-view readout.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>Specimens render at 1∶1 CSS pixels against <code>#070b10</code>, using the app’s live tokens — <code>--color-surface</code>, <code>--color-accent</code>, <code>--radius-sm</code> — and the same Lucide icon set at 15 px. Sandboxed pages can’t load IBM Plex, so type falls back to the stack <code>tokens.css</code> already declares behind it.</p>
+</footer>
+
+<style>
+  :root {
+    --paper: #eaeef4;
+    --card: #ffffff;
+    --card-2: #f4f7fa;
+    --ink: #0e151d;
+    --muted: #59656f;
+    --line: #d2dae3;
+    --line-soft: #e2e8ef;
+    --accent: #1f6fbf;
+    --accent-soft: rgba(31, 111, 191, 0.09);
+    --flag: #9a6410;
+    --stage-bg: #070b10;
+
+    --sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    /* app tokens, used inside the specimens */
+    --color-surface: #111821;
+    --color-surface-2: #17202b;
+    --color-border: #2a3441;
+    --color-text: #e6edf3;
+    --color-text-muted: #8b949e;
+    --color-accent: #4da3ff;
+    --color-accent-dim: rgba(77, 163, 255, 0.12);
+    --color-accent-border: rgba(77, 163, 255, 0.45);
+    --radius-sm: 3px;
+    --radius-md: 4px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #080c11;
+      --card: #0f151d;
+      --card-2: #141c26;
+      --ink: #e4ebf2;
+      --muted: #8e9aa6;
+      --line: #232d39;
+      --line-soft: #1a222c;
+      --accent: #57a8ff;
+      --accent-soft: rgba(87, 168, 255, 0.12);
+      --flag: #d99a34;
+    }
+  }
+  :root[data-theme='dark'] {
+    --paper: #080c11;
+    --card: #0f151d;
+    --card-2: #141c26;
+    --ink: #e4ebf2;
+    --muted: #8e9aa6;
+    --line: #232d39;
+    --line-soft: #1a222c;
+    --accent: #57a8ff;
+    --accent-soft: rgba(87, 168, 255, 0.12);
+    --flag: #d99a34;
+  }
+  :root[data-theme='light'] {
+    --paper: #eaeef4;
+    --card: #ffffff;
+    --card-2: #f4f7fa;
+    --ink: #0e151d;
+    --muted: #59656f;
+    --line: #d2dae3;
+    --line-soft: #e2e8ef;
+    --accent: #1f6fbf;
+    --accent-soft: rgba(31, 111, 191, 0.09);
+    --flag: #9a6410;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  /* Mirrors the app's own button reset — the UA default padding of 1px 6px
+     otherwise stops the collapsible controls in option B from reaching zero. */
+  button {
+    padding: 0;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+  }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── masthead ─────────────────────────────────────────── */
+  .masthead {
+    border-bottom: 1px solid var(--line);
+    background:
+      linear-gradient(180deg, var(--card) 0%, var(--paper) 100%);
+  }
+  .masthead-inner {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 40px 28px 30px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 232px;
+    gap: 40px;
+    align-items: end;
+  }
+  .stamp {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 14px;
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: clamp(28px, 4.4vw, 42px);
+    line-height: 1.08;
+    letter-spacing: -0.022em;
+    font-weight: 550;
+    text-wrap: balance;
+  }
+  .deck {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 15px;
+  }
+  .deck em { color: var(--ink); font-style: normal; box-shadow: inset 0 -0.55em 0 var(--accent-soft); }
+
+  .mast-controls { display: flex; flex-direction: column; gap: 8px; }
+  .ctl {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 13px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .ctl:hover { border-color: var(--accent); }
+  .ctl-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 1px solid var(--muted);
+    background: transparent;
+  }
+  .ctl[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); }
+  .ctl[aria-pressed='true'] .ctl-dot { background: var(--accent); border-color: var(--accent); }
+  .ctl-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+
+  /* ── layout ───────────────────────────────────────────── */
+  main { max-width: 1160px; margin: 0 auto; padding: 0 28px 64px; }
+
+  .block { padding: 46px 0; border-bottom: 1px solid var(--line-soft); }
+  .block:last-child { border-bottom: 0; }
+
+  .block-head { margin-bottom: 24px; }
+  .block-head h2 {
+    margin: 0;
+    font-size: 23px;
+    font-weight: 550;
+    letter-spacing: -0.016em;
+  }
+  .lede { margin: 8px 0 0; max-width: 64ch; color: var(--muted); font-size: 14.5px; }
+
+  .tag {
+    display: inline-block;
+    margin-bottom: 10px;
+    padding: 3px 9px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+  }
+  .tag-built {
+    margin-left: 6px;
+    color: var(--ink);
+    background: transparent;
+    border-color: var(--ink);
+    text-transform: uppercase;
+  }
+  .chosen .block-head h2 { color: var(--accent); }
+
+  .tag-now, .tag-quiet {
+    color: var(--muted);
+    background: transparent;
+    border-color: var(--line);
+    text-transform: uppercase;
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: 420px minmax(0, 1fr);
+    gap: 36px;
+    align-items: start;
+  }
+
+  /* ── dimension line ───────────────────────────────────── */
+  .stage-wrap { display: flex; flex-direction: column; gap: 10px; }
+  .dim {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+  }
+  .dim::after {
+    content: '';
+    width: var(--w);
+    height: 7px;
+    flex: none;
+    border-left: 1px solid currentColor;
+    border-right: 1px solid currentColor;
+    background: linear-gradient(currentColor, currentColor) center/100% 1px no-repeat;
+  }
+
+  /* ── specimen stage ───────────────────────────────────── */
+  .stage {
+    position: relative;
+    height: 364px;
+    background: var(--stage-bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    font-family: var(--sans);
+    contain: paint;
+  }
+  .stage-grid {
+    position: absolute;
+    inset: -60% -40%;
+    background:
+      repeating-linear-gradient(0deg, rgba(126, 168, 220, 0.16) 0 1px, transparent 1px 34px),
+      repeating-linear-gradient(90deg, rgba(126, 168, 220, 0.16) 0 1px, transparent 1px 34px);
+    transform: perspective(420px) rotateX(64deg);
+    transform-origin: 50% 42%;
+    -webkit-mask-image: radial-gradient(ellipse 62% 58% at 44% 60%, #000 10%, transparent 82%);
+    mask-image: radial-gradient(ellipse 62% 58% at 44% 60%, #000 10%, transparent 82%);
+  }
+  .stage::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 46% 40% at 40% 58%, rgba(77, 163, 255, 0.09), transparent 70%);
+    pointer-events: none;
+  }
+  .stage-axis { position: absolute; inset: 0; }
+  .ax {
+    position: absolute;
+    font-family: var(--mono);
+    font-size: 10px;
+    opacity: 0.65;
+  }
+  .ax-x { color: #ef6a6a; left: 40px; top: 18px; }
+  .ax-x::before {
+    content: ''; position: absolute; left: 12px; top: 6px;
+    width: 78px; height: 1px; background: currentColor; opacity: 0.5;
+  }
+  .ax-y { color: #6fd66f; left: 24px; bottom: 30px; }
+  .ax-y::before {
+    content: ''; position: absolute; left: 4px; bottom: 14px;
+    width: 1px; height: 62px; background: currentColor; opacity: 0.5;
+  }
+  .cube {
+    position: absolute; top: 10px; right: 10px;
+    color: rgba(160, 185, 215, 0.42);
+  }
+  .cube-lit { color: rgba(77, 163, 255, 0.72); }
+  .cube-lit::after {
+    content: 'owns views';
+    position: absolute; right: 48px; top: 15px;
+    white-space: nowrap;
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em;
+    color: rgba(77, 163, 255, 0.75);
+  }
+
+  /* shared rail chrome */
+  .rail {
+    position: absolute;
+    z-index: 3;
+    color: var(--color-text-muted);
+  }
+  .centred { right: 10px; top: 50%; transform: translateY(-50%); }
+  .rail button { font-family: inherit; cursor: pointer; border: 1px solid transparent; background: transparent; color: inherit; }
+  .rail button:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 1px; }
+  .rail svg { display: block; }
+  .hair { display: block; height: 1px; background: var(--color-border); margin: 3px 2px; }
+
+  /* ── legacy rail ──────────────────────────────────────── */
+  .rail-legacy {
+    top: 62px; right: 10px;
+    display: flex; flex-direction: column; align-items: stretch; gap: 2px;
+    padding: 5px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  .lg-views { display: flex; gap: 2px; justify-content: flex-end; margin-bottom: 2px; }
+  .lg-view {
+    min-width: 26px; min-height: 22px; padding: 0 5px;
+    font-family: var(--mono); font-size: 10.5px;
+    border-radius: var(--radius-sm);
+  }
+  .lg-view:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .lg-view.is-view { color: var(--color-text); }
+  .lg-row {
+    min-height: 26px;
+    display: flex; align-items: center; justify-content: flex-end; gap: 7px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .lg-row:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .lg-row.is-on { color: var(--color-accent); background: var(--color-accent-dim); border-color: var(--color-accent-border); }
+  .ic { display: inline-grid; place-items: center; font-style: normal; }
+
+  /* ── A / C / E square buttons ─────────────────────────── */
+  .rail-a, .rail-c {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 4px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  .sq {
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    border-radius: var(--radius-sm);
+    position: relative;
+  }
+  .sq:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .sq.glyph { font-family: var(--mono); font-size: 11px; }
+  .sq.glyph.is-view { color: var(--color-text); background: var(--color-surface-2); }
+  .sq.is-on { color: var(--color-accent); background: var(--color-accent-dim); border-color: var(--color-accent-border); }
+
+  /* tooltips for icon-only rails */
+  .sq[data-tip]::after, .eseg[data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    padding: 3px 7px;
+    color: var(--color-text);
+    background: rgba(17, 24, 33, 0.94);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 90ms ease;
+  }
+  .sq[data-tip]:hover::after, .eseg[data-tip]:hover::after,
+  .peek .sq[data-tip]::after, .peek .eseg[data-tip]::after { opacity: 1; }
+  .peek .sq[data-tip]::after, .peek .eseg[data-tip]::after { opacity: 0.85; }
+
+  /* ── B: hover-expand ──────────────────────────────────── */
+  .rail-b {
+    /* Both states are pinned: CSS can't transition a width to `auto`, and the
+       longest label ("Shaded + edges") sets the open width at 142 px. */
+    width: 36px;
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 4px;
+    overflow: hidden;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    transition: width 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .rail-b:hover, .rail-b:focus-within, .peek .rail-b { width: 142px; }
+  .b-views { display: flex; justify-content: flex-end; }
+  .bv {
+    flex: none;
+    min-width: 0;
+    width: 26px; height: 22px;
+    display: grid; place-items: center;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono); font-size: 10.5px;
+    overflow: hidden;
+    transition: width 140ms cubic-bezier(0.16, 1, 0.3, 1), opacity 110ms ease;
+  }
+  .rail-b .bv + .bv { margin-left: 2px; }
+  /* At rest only the active view shows — it doubles as the current-view readout. */
+  .rail-b .bv:not(.is-view),
+  .rail-b .bv:not(.is-view) + .bv { margin-left: 0; }
+  .rail-b .bv:not(.is-view) { width: 0; border-width: 0; opacity: 0; }
+  .bv:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .bv.is-view { color: var(--color-text); background: var(--color-surface-2); }
+  .brow {
+    height: 26px;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  /* The icon keeps a 26 px square cell, so the rail's rest width matches option A exactly. */
+  .brow .ic { flex: none; width: 26px; height: 26px; }
+  .brow:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .brow.is-on { color: var(--color-accent); background: var(--color-accent-dim); border-color: var(--color-accent-border); }
+  .brow .lbl {
+    flex: none;
+    min-width: 0; /* flex items default to min-width:auto, which outranks max-width:0 */
+    max-width: 0;
+    padding-left: 8px;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-width 140ms cubic-bezier(0.16, 1, 0.3, 1), opacity 110ms ease;
+  }
+  .rail-b:hover .brow .lbl,
+  .rail-b:focus-within .brow .lbl,
+  .peek .rail-b .brow .lbl { max-width: 110px; opacity: 1; }
+  .rail-b:hover .bv,
+  .rail-b:focus-within .bv,
+  .peek .rail-b .bv { width: 26px; opacity: 1; }
+  .rail-b:hover .bv + .bv,
+  .rail-b:focus-within .bv + .bv,
+  .peek .rail-b .bv + .bv { margin-left: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .brow .lbl, .bv { transition: none; }
+  }
+
+  /* ── D: caption tiles ─────────────────────────────────── */
+  .rail-d {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 4px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  .d-views { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px; }
+  .d-views button {
+    height: 20px;
+    display: grid; place-items: center;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono); font-size: 10px;
+  }
+  .d-views button:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .d-views button.is-view { color: var(--color-text); background: var(--color-surface-2); }
+  .tile {
+    width: 44px;
+    display: grid; justify-items: center; gap: 1px;
+    padding: 4px 0 3px;
+    border-radius: var(--radius-sm);
+  }
+  .tile em {
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
+  .tile:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .tile.is-on { color: var(--color-accent); background: var(--color-accent-dim); border-color: var(--color-accent-border); }
+
+  /* ── E: capsule ───────────────────────────────────────── */
+  .rail-e {
+    display: flex; flex-direction: column;
+    padding: 4px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 17px;
+    overflow: hidden;
+  }
+  .e-pad {
+    display: grid;
+    grid-template-columns: repeat(2, 15px);
+    gap: 1px;
+    justify-content: center;
+    padding: 5px 0 7px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .e-pad button {
+    height: 15px;
+    display: grid; place-items: center;
+    border-radius: 2px;
+    font-family: var(--mono); font-size: 9px;
+  }
+  .e-pad button:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .e-pad button.is-view { color: var(--color-accent); }
+  .eseg {
+    position: relative;
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    border-radius: 14px;
+  }
+  .eseg + .eseg { margin-top: 1px; }
+  .eseg:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .eseg.is-on { color: var(--color-accent); background: var(--color-accent-dim); border-color: var(--color-accent-border); }
+
+  /* ── C: flyout ────────────────────────────────────────── */
+  .fly-anchor { position: relative; }
+  .sq-more[aria-expanded='true'] { color: var(--color-text); background: var(--color-surface-2); }
+  .fly {
+    position: absolute;
+    right: calc(100% + 7px);
+    bottom: -4px;
+    display: grid;
+    grid-template-columns: repeat(2, 62px);
+    gap: 2px;
+    padding: 4px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  }
+  .fly[hidden] { display: none; }
+  .fly button {
+    height: 22px;
+    display: grid; place-items: center;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+  }
+  .fly button:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .fly .fly-wide { grid-column: 1 / -1; }
+  .fly button.is-view { color: var(--color-accent); background: var(--color-accent-dim); border-color: var(--color-accent-border); }
+
+  /* ── notes ────────────────────────────────────────────── */
+  .spec {
+    margin: 0 0 18px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .spec > div { background: var(--card); padding: 10px 12px; }
+  .spec dt {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+  .spec dd {
+    margin: 0;
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .crit { margin: 0; padding: 0; list-style: none; display: grid; gap: 11px; }
+  .crit li {
+    position: relative;
+    padding-left: 20px;
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 66ch;
+  }
+  .crit li b { color: var(--ink); font-weight: 550; }
+  .crit li::before {
+    content: '';
+    position: absolute;
+    left: 2px; top: 8px;
+    width: 7px; height: 7px;
+    border: 1px solid var(--muted);
+  }
+  .crit li.good::before { border-color: var(--accent); background: var(--accent); }
+  .crit li.warn::before { border-color: var(--flag); background: transparent; transform: rotate(45deg); }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    padding: 1px 4px;
+    background: var(--card-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 2px;
+  }
+
+  /* ── major rule ───────────────────────────────────────── */
+  .rule-major {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 0 0;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+  .rule-major::before, .rule-major::after {
+    content: ''; height: 1px; background: var(--line); flex: 1;
+  }
+  .rule-major::before { flex: 0 0 40px; }
+
+  /* ── table ────────────────────────────────────────────── */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 660px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); }
+  th {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    background: var(--card-2);
+    border-bottom-color: var(--line);
+  }
+  td { background: var(--card); font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .rowid { font-weight: 550; }
+  tr.pick td { background: var(--accent-soft); }
+  tr.pick .rowid { color: var(--accent); }
+  .c-low { color: var(--accent); }
+  .c-mid { color: var(--flag); }
+
+  /* ── recommendation ───────────────────────────────────── */
+  .rec {
+    margin-top: 26px;
+    padding: 22px 24px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    border-radius: 3px;
+  }
+  .rec-eyebrow {
+    margin: 0 0 8px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .rec p { margin: 0 0 10px; max-width: 72ch; }
+  .rec p:last-child { margin-bottom: 0; }
+  .rec-alt { color: var(--muted); font-size: 14px; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    background: var(--card);
+  }
+  footer p {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 22px 28px 30px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 940px) {
+    .masthead-inner { grid-template-columns: 1fr; gap: 22px; align-items: start; }
+    .split { grid-template-columns: 1fr; gap: 24px; }
+    .stage { height: 300px; }
+  }
+</style>
+
+<script>
+  (function () {
+    const CUBE = {
+      outline: 'M12 3 20.5 7.75V16.25L12 21 3.5 16.25V7.75Z',
+      front: 'M12 12V21M12 12 3.5 7.75M12 12 20.5 7.75',
+      back: 'M12 12V3M12 12 3.5 16.25M12 12 20.5 16.25',
+      top: 'M12 3 20.5 7.75 12 12 3.5 7.75Z',
+      left: 'M3.5 7.75 12 12 12 21 3.5 16.25Z',
+      right: 'M20.5 7.75 12 12 12 21 20.5 16.25Z'
+    };
+    const FACES = { shaded: [0.85, 0.3, 0.55], 'shaded-edges': [0.55, 0.18, 0.34] };
+
+    function cube(mode) {
+      const fill = FACES[mode];
+      return (
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+        (fill
+          ? '<g fill="currentColor" stroke="none">' +
+            '<path d="' + CUBE.top + '" opacity="' + fill[0] + '"/>' +
+            '<path d="' + CUBE.left + '" opacity="' + fill[1] + '"/>' +
+            '<path d="' + CUBE.right + '" opacity="' + fill[2] + '"/></g>'
+          : '') +
+        (mode === 'wireframe' ? '<path d="' + CUBE.back + '" opacity="0.4"/>' : '') +
+        (mode === 'shaded' ? '' : '<path d="' + CUBE.front + '"/><path d="' + CUBE.outline + '"/>') +
+        '</svg>'
+      );
+    }
+
+    const ICONS = {
+      ICON_FIT:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>',
+      ICON_GRID:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>',
+      ICON_CAM:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>',
+      // The shipped display-mode glyphs: one isometric cube, three treatments.
+      ICON_EYE: cube('shaded-edges'),
+      ICON_SHADED: cube('shaded'),
+      ICON_BOX: cube('wireframe'),
+      ICON_AXES:
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 15V3.5M9 15h11.5M9 15l-5.5 5.5"/><path d="M7 5.5 9 3.5l2 2M18.5 13l2 2-2 2"/></svg>'
+    };
+
+    // Swap the icon placeholders for real SVG.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      if (/ICON_[A-Z]+/.test(node.nodeValue)) hits.push(node);
+    }
+    hits.forEach((textNode) => {
+      const span = document.createElement('span');
+      span.style.display = 'contents';
+      span.innerHTML = textNode.nodeValue.replace(/ICON_[A-Z]+/g, (key) => ICONS[key] || '');
+      textNode.parentNode.replaceChild(span, textNode);
+    });
+
+    const SHADES = [
+      { label: 'Shaded + edges', cap: 'S+E', icon: 'ICON_EYE' },
+      { label: 'Shaded', cap: 'SHADED', icon: 'ICON_SHADED' },
+      { label: 'Wireframe', cap: 'WIRE', icon: 'ICON_BOX' }
+    ];
+    const shadeStep = new WeakMap();
+
+    document.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const peek = target.closest('#peek');
+      if (peek) {
+        const on = peek.getAttribute('aria-pressed') === 'true';
+        peek.setAttribute('aria-pressed', String(!on));
+        document.body.classList.toggle('peek', !on);
+        return;
+      }
+
+      const fly = target.closest('[data-fly]');
+      if (fly) {
+        const panel = fly.parentElement.querySelector('.fly');
+        const open = fly.getAttribute('aria-expanded') === 'true';
+        fly.setAttribute('aria-expanded', String(!open));
+        panel.hidden = open;
+        return;
+      }
+      document.querySelectorAll('[data-fly][aria-expanded="true"]').forEach((btn) => {
+        if (target.closest('.fly')) return;
+        btn.setAttribute('aria-expanded', 'false');
+        btn.parentElement.querySelector('.fly').hidden = true;
+      });
+
+      const view = target.closest('[data-viewgroup]');
+      if (view) {
+        const group = view.getAttribute('data-viewgroup');
+        document
+          .querySelectorAll('[data-viewgroup="' + group + '"]')
+          .forEach((btn) => btn.classList.remove('is-view'));
+        view.classList.add('is-view');
+        const owner = view.closest('.fly');
+        if (owner) {
+          const trigger = owner.parentElement.querySelector('[data-fly]');
+          trigger.setAttribute('aria-expanded', 'false');
+          owner.hidden = true;
+        }
+        return;
+      }
+
+      const toggle = target.closest('[data-toggle]');
+      if (toggle) {
+        const on = !toggle.classList.contains('is-on');
+        toggle.classList.toggle('is-on', on);
+        toggle.setAttribute('aria-pressed', String(on));
+        const cap = toggle.querySelector('em');
+        if (cap) cap.textContent = on ? toggle.dataset.capOn : toggle.dataset.capOff;
+        return;
+      }
+
+      const shade = target.closest('[data-shade]');
+      if (shade) {
+        const next = ((shadeStep.get(shade) || 0) + 1) % SHADES.length;
+        shadeStep.set(shade, next);
+        const mode = SHADES[next];
+        const label = shade.querySelector('[data-shade-label]');
+        if (label) label.textContent = mode.label;
+        const cap = shade.querySelector('[data-shade-cap]');
+        if (cap) cap.textContent = mode.cap;
+        const icon = shade.querySelector('[data-shade-icon]');
+        if (icon) icon.innerHTML = ICONS[mode.icon];
+        if (shade.hasAttribute('data-tip')) {
+          shade.setAttribute('data-tip', mode.label + ' · W');
+        }
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      document.querySelectorAll('[data-fly][aria-expanded="true"]').forEach((btn) => {
+        btn.setAttribute('aria-expanded', 'false');
+        btn.parentElement.querySelector('.fly').hidden = true;
+        btn.focus();
+      });
+    });
+  })();
+</script>
+</body>
+</html>

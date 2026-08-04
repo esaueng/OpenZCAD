@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { toBodyId } from '@openzcad/shared';
 import {
   PickService,
   type ProfilePickTarget,
   type PickServiceOptions
 } from './PickService';
 import type { RegionPickData, SelectionFilter } from '../types';
+import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 
 /**
  * The service only calls `getBoundingClientRect`, so a stub keeps these tests
@@ -36,6 +38,32 @@ function planeAt(z: number, userData: Record<string, unknown>): THREE.Mesh {
   mesh.userData = userData;
   mesh.updateMatrixWorld(true);
   return mesh;
+}
+
+function batchedBody(bodyId: string, z = 0) {
+  const body = new THREE.Group();
+  body.position.z = z;
+  body.userData.bodyId = bodyId;
+  body.add(
+    createBodyEdgeOverlay(
+      {
+        bodyId: toBodyId(bodyId),
+        topology: {
+          faces: [],
+          edges: [
+            {
+              topologyId: `edge-${bodyId}`,
+              hash: bodyId.length,
+              points: [-4, 0, 0, 0, 0, 0, 4, 0, 0]
+            }
+          ]
+        }
+      },
+      { width: 100, height: 100 }
+    )
+  );
+  body.updateMatrixWorld(true);
+  return body;
 }
 
 interface Groups {
@@ -292,6 +320,80 @@ describe('topology resolution', () => {
     const { service } = makeService({ bodyGroup });
 
     expect(service.pick(centreEvent())?.selection?.bodyId).toBe('body-9');
+  });
+});
+
+describe('batched topology edge picking', () => {
+  it('resolves a segment hit through the batch ownership map', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(batchedBody('body-batch'));
+    const { service } = makeService({ bodyGroup });
+
+    const pick = service.pick(centreEvent());
+    expect(pick?.kind).toBe('edge');
+    expect(pick?.selection).toEqual({
+      bodyId: 'body-batch',
+      kind: 'edge',
+      topologyId: 'edge-body-batch',
+      hash: 10
+    });
+  });
+
+  it('deduplicates adjacent segments of one edge for depth cycling', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(batchedBody('body-batch'));
+    const { service } = makeService({ bodyGroup });
+
+    expect(service.pickAll(centreEvent())).toHaveLength(1);
+  });
+
+  it('keeps distinct batched bodies in near-to-far cycle order', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(batchedBody('far', 0), batchedBody('near', 5));
+    const { service } = makeService({ bodyGroup });
+
+    expect(
+      service
+        .pickAll(centreEvent())
+        .map((candidate) => candidate.selection?.bodyId)
+    ).toEqual(['near', 'far']);
+  });
+
+  it('does not pick a visible batch beneath a hidden body parent', () => {
+    const bodyGroup = new THREE.Group();
+    const body = batchedBody('hidden');
+    body.visible = false;
+    bodyGroup.add(body);
+    const { service } = makeService({ bodyGroup });
+
+    expect(service.pick(centreEvent())).toBeNull();
+  });
+
+  it('keeps edge and face filters correct with a batched edge in front', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(
+      planeAt(0, {
+        bodyId: 'face-body',
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-1',
+              hash: 7,
+              triangleStart: 0,
+              triangleCount: 2
+            }
+          ]
+        }
+      }),
+      batchedBody('edge-body', 5)
+    );
+
+    expect(
+      makeService({ bodyGroup }, 'edge').service.pick(centreEvent())?.kind
+    ).toBe('edge');
+    expect(
+      makeService({ bodyGroup }, 'face').service.pick(centreEvent())?.kind
+    ).toBe('face');
   });
 });
 
