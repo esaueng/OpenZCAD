@@ -1,3 +1,5 @@
+import { CONTROL_REFERENCE_SEARCH_TERMS } from './controlReference';
+
 /**
  * Settings navigation metadata and the rules for which sections a user can see.
  *
@@ -29,6 +31,8 @@ export interface SettingsSectionMeta {
    * Kept in step with the rendered SettingRow titles by a test.
    */
   settings: string[];
+  /** Additional searchable copy that is not rendered as a SettingRow title. */
+  searchTerms?: readonly string[];
 }
 
 export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
@@ -109,8 +113,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'shortcuts',
     label: 'Shortcuts',
-    detail: 'Keyboard controls',
-    settings: []
+    detail: 'Keyboard, mouse, and viewport controls',
+    settings: [],
+    searchTerms: CONTROL_REFERENCE_SEARCH_TERMS
   },
   {
     id: 'privacy',
@@ -127,7 +132,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Kernel version',
       'Document authority',
       'Settings schema',
-      'D1 storage migration'
+      'Cloud project storage'
     ]
   }
 ];
@@ -154,7 +159,7 @@ export function visibleSettingsSections({
   const normalized = query.trim().toLowerCase();
   return normalized
     ? available.filter((section) =>
-        `${section.label} ${section.detail} ${section.settings.join(' ')}`
+        `${section.label} ${section.detail} ${section.settings.join(' ')} ${section.searchTerms?.join(' ') ?? ''}`
           .toLowerCase()
           .includes(normalized)
       )
