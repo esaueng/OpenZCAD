@@ -1030,7 +1030,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
-    await this.pruneExpiredUploads();
+    await this.purgeExpiredUploadSessions();
     const session = createUploadSessionRecord(request);
     await this.env.DB.prepare(
       `INSERT INTO upload_sessions (id, artifact_id, project_id, object_key, file_name, content_type, kind, metadata_json, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -1365,9 +1365,12 @@ export class D1R2PersistenceService implements PersistenceService {
     };
   }
 
-  private async pruneExpiredUploads(): Promise<void> {
-    if (!this.env.DB || !this.env.ARTIFACTS) {
-      return;
+  async purgeExpiredUploadSessions(): Promise<number> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().purgeExpiredUploadSessions();
+    }
+    if (!this.env.ARTIFACTS) {
+      return 0;
     }
     const expired = await this.env.DB.prepare(
       `SELECT id, object_key FROM upload_sessions WHERE expires_at < ? LIMIT 100`
@@ -1376,18 +1379,25 @@ export class D1R2PersistenceService implements PersistenceService {
       .all<{ id: string; object_key: string }>();
     const rows = expired.results ?? [];
     if (rows.length === 0) {
-      return;
+      return 0;
     }
-    await Promise.allSettled(
+    const deletions = await Promise.allSettled(
       rows.map((row) => this.env.ARTIFACTS!.delete(row.object_key))
     );
+    const deletedRows = rows.filter(
+      (_row, index) => deletions[index]?.status === 'fulfilled'
+    );
+    if (deletedRows.length === 0) {
+      return 0;
+    }
     await this.env.DB.batch(
-      rows.map((row) =>
+      deletedRows.map((row) =>
         this.env
           .DB!.prepare(`DELETE FROM upload_sessions WHERE id = ?`)
           .bind(row.id)
       )
     );
+    return deletedRows.length;
   }
 }
 

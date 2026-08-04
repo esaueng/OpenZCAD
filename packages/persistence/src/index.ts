@@ -240,6 +240,8 @@ export interface PersistenceService {
   deleteProject(userId: UserId, projectId: string): Promise<void>;
   /** Destroys deleted projects whose retention window has run out. */
   purgeExpiredProjects(userId: UserId): Promise<ProjectId[]>;
+  /** Removes expired upload bytes and their tracking records. */
+  purgeExpiredUploadSessions(): Promise<number>;
   loadProject(
     userId: UserId,
     projectId: string
@@ -825,7 +827,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     request: CreateUploadSessionRequest
   ): Promise<CreateUploadSessionResponse> {
     await this.requireProjectEdit(userId, request.projectId);
-    this.pruneExpiredUploads();
+    await this.purgeExpiredUploadSessions();
     const session: UploadSessionRecord = {
       uploadSessionId: toUploadSessionId(`upload_${crypto.randomUUID()}`),
       artifactId: toArtifactId(`artifact_${crypto.randomUUID()}`),
@@ -983,13 +985,17 @@ export class InMemoryPersistenceService implements PersistenceService {
     };
   }
 
-  private pruneExpiredUploads(): void {
+  async purgeExpiredUploadSessions(): Promise<number> {
     const now = Date.now();
+    let purged = 0;
     for (const [sessionId, session] of this.uploads) {
       if (Date.parse(session.expiresAt) < now) {
         this.uploads.delete(sessionId);
+        this.uploadBodies.delete(session.objectKey);
+        purged += 1;
       }
     }
+    return purged;
   }
 }
 
