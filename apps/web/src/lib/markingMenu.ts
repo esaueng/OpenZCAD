@@ -28,17 +28,57 @@
 export const MARKING_DEAD_ZONE_PX = 40;
 
 /**
+ * Degrees around the horizontal that the ring keeps empty on each side.
+ *
+ * The hub pill grows sideways with its label, so the ring's equator is the
+ * one place a slot can always be collided with. Excluding a band around it
+ * gathers the slots into a crown above and a cradle below the pill — the
+ * ring reads as two symmetric arcs — while every slot keeps a direction
+ * close to its evenly-spaced one.
+ */
+export const HORIZONTAL_EXCLUSION_DEG = 30;
+
+/**
+ * A sector's home direction in degrees clockwise from straight up, with the
+ * horizontal band squeezed out.
+ *
+ * Each quadrant compresses linearly toward its pole, so ordering is kept
+ * and no two sectors collapse together. The two dead-horizontal sectors of
+ * an even ring both resolve upward, framing the pill symmetrically rather
+ * than one hanging on each side.
+ */
+export function clusteredAngle(
+  index: number,
+  count: number,
+  exclusionDeg = HORIZONTAL_EXCLUSION_DEG
+): number {
+  const angle = (index / Math.max(count, 1)) * 360;
+  const squeeze = (90 - exclusionDeg) / 90;
+  if (angle <= 90) {
+    return angle * squeeze;
+  }
+  if (angle <= 180) {
+    return 180 - (180 - angle) * squeeze;
+  }
+  if (angle < 270) {
+    return 180 + (angle - 180) * squeeze;
+  }
+  return 360 - (360 - angle) * squeeze;
+}
+
+/**
  * Where a sector's label sits, in pixels from the menu's centre.
  *
- * Index 0 is straight up and the ring runs clockwise, matching how the
- * sectors are aimed at.
+ * Index 0 is straight up and the ring runs clockwise. Positions follow the
+ * clustered angles, so the label sits exactly where the aim for that
+ * sector points.
  */
 export function sectorPosition(
   index: number,
   count: number,
   radius: number
 ): { x: number; y: number } {
-  const angle = (index / Math.max(count, 1)) * Math.PI * 2 - Math.PI / 2;
+  const angle = ((clusteredAngle(index, count) - 90) * Math.PI) / 180;
   return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
 }
 
@@ -82,13 +122,24 @@ export function sectorForVector(
   if (count <= 0 || Math.hypot(dx, dy) < deadZonePx) {
     return null;
   }
-  // Rotate so straight up is 0 and the ring runs clockwise, then land on the
-  // nearest sector centre rather than a boundary — aiming between two
-  // choices should resolve to one, not to neither.
-  const degrees = (Math.atan2(dy, dx) * 180) / Math.PI + 90;
-  const step = 360 / count;
-  const normalized = ((degrees % 360) + 360) % 360;
-  return Math.round(normalized / step) % count;
+  // Rotate so straight up is 0 and the ring runs clockwise, then land on
+  // the nearest sector's clustered direction — the same angles the slots
+  // are drawn at, or the menu would show one thing and pick another. An
+  // aim equidistant between two sectors resolves to the earlier one;
+  // picking neither would read as a dead spot in the ring.
+  const degrees =
+    ((((Math.atan2(dy, dx) * 180) / Math.PI + 90) % 360) + 360) % 360;
+  let best = 0;
+  let bestDistance = Infinity;
+  for (let index = 0; index < count; index += 1) {
+    const offset = Math.abs(degrees - clusteredAngle(index, count));
+    const distance = Math.min(offset, 360 - offset);
+    if (distance < bestDistance - 1e-9) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 /**
