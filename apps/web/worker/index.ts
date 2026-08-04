@@ -81,6 +81,8 @@ type Env = CloudflareEnv & {
 /** Upper bound for JSON request bodies; protects against oversized payloads. */
 const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
+/** Cache only a proven-ready schema; failures stay retryable without a deploy. */
+const projectStorageReadyEnvironments = new WeakSet<Env>();
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
@@ -99,6 +101,20 @@ const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
+
+async function projectStorageIsReady(
+  env: Env,
+  bucket: R2Bucket
+): Promise<boolean> {
+  if (projectStorageReadyEnvironments.has(env)) {
+    return true;
+  }
+  const ready = await isProjectObjectStorageReady(env.DB, bucket);
+  if (ready) {
+    projectStorageReadyEnvironments.add(env);
+  }
+  return ready;
+}
 
 export function assertSafeRuntimeConfiguration(env: CloudflareEnv): void {
   if (
@@ -329,6 +345,27 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
     assertSameOrigin(request);
+  }
+
+  const projectStorageBucket = env.PROJECT_STORAGE ?? env.ARTIFACTS;
+  const requiresProjectStorage =
+    pathname === '/api/account/storage' ||
+    pathname === '/api/projects' ||
+    pathname.startsWith('/api/projects/');
+  if (
+    requiresProjectStorage &&
+    env.DB &&
+    projectStorageBucket &&
+    !(await projectStorageIsReady(env, projectStorageBucket))
+  ) {
+    return json(
+      {
+        error:
+          'Cloud project storage is temporarily unavailable. Projects remain saved on this device.',
+        code: 'PROJECT_STORAGE_UNAVAILABLE'
+      },
+      503
+    );
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/start') {
