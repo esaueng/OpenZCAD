@@ -31,7 +31,8 @@ import {
   type AppSettings,
   type AppSettingsResponse,
   type AuthConfigResponse,
-  type AuthSession
+  type AuthSession,
+  type HealthResponse
 } from '@openzcad/shared';
 
 /**
@@ -96,6 +97,7 @@ interface SettingsPageProps {
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
   authConfigStatus: AuthConfigStatus;
+  health: HealthResponse | null;
   session: AuthSession | null;
   busy: boolean;
   message: string;
@@ -442,6 +444,7 @@ export function SettingsPage({
   accountState,
   authConfig,
   authConfigStatus,
+  health,
   session,
   busy,
   message,
@@ -1664,6 +1667,21 @@ export function SettingsPage({
                 scope="Diagnostics"
               >
                 <span className="mono">v{settings.schemaVersion}</span>
+              </SettingRow>
+              <SettingRow
+                title="D1 storage migration"
+                description="Migration 0010_document_storage_accounting must be ready before personal device sync can be enabled."
+                scope="Diagnostics"
+              >
+                <span
+                  className={`settings-state ${health?.documentStorageAccountingReady === true ? 'good' : 'warning'}`}
+                >
+                  {health === null
+                    ? 'Unavailable'
+                    : health.documentStorageAccountingReady === true
+                      ? 'Ready'
+                      : 'Not ready'}
+                </span>
               </SettingRow>
             </Section>
           )}
