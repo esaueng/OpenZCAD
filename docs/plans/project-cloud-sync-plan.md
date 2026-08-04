@@ -240,12 +240,14 @@ existing marker already does this); a viewer-role conflict cannot keep-mine.
 
 Closes gap 6. Needed before Phase 2 is enabled for real users, not before it is written.
 
-- A pruning policy for `revisions`: keep the last N per project plus every named checkpoint.
-  New migration under `apps/web/migrations/` (0009 is current).
+- Implemented in migration 0010: continuous autosave does not create revision
+  rows, and explicit revisions retain the newest bounded set per project.
 - Per-account accounting of stored document bytes, and a refusal message that names the
   ceiling instead of failing generically.
-- If 1.5 MB starts binding, move document bodies to R2 with D1 holding metadata and a
-  pointer — the split ADR-003 already describes. Do not do this speculatively.
+- Implemented by `0011_r2_project_storage.sql` and the R2 project projection:
+  D1 holds metadata, summary fields, accounting, and immutable-object pointers;
+  R2 holds gzip-compressed documents plus content-addressed STEP/mesh payloads.
+  Legacy D1 rows remain readable.
 
 **Tests:** pruning keeps named checkpoints; the ceiling refuses before the D1 write; the
 refusal is distinguishable from an offline failure at the client.

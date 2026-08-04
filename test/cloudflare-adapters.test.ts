@@ -212,8 +212,15 @@ describe('cloudflare adapters', () => {
             if (query.includes('SELECT user_id AS owner_user_id')) {
               return { owner_user_id: userId };
             }
-            if (query.includes('SELECT document_json FROM projects')) {
-              return { document_json: JSON.stringify(source) };
+            if (
+              query.includes(
+                'SELECT document_json, document_object_id FROM projects'
+              )
+            ) {
+              return {
+                document_json: JSON.stringify(source),
+                document_object_id: null
+              };
             }
             if (query.includes('SELECT sort_order FROM projects')) {
               return { sort_order: 7 };
@@ -296,6 +303,58 @@ describe('cloudflare adapters', () => {
       service.purgeExpiredProjects(toUserId('user_test'))
     ).rejects.toThrow('R2 unavailable');
     expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('keeps failed expired-upload deletions tracked for the next sweep', async () => {
+    const prepared: Array<{ query: string; bindings: unknown[] }> = [];
+    let deletedStatements: Array<{ query: string; bindings: unknown[] }> = [];
+    const batch = vi.fn(async (statements: D1PreparedStatement[]) => {
+      deletedStatements = statements as unknown as typeof deletedStatements;
+      return [];
+    });
+    const prepare = vi.fn((query: string) => ({
+      bind: (...bindings: unknown[]) => {
+        const statement = {
+          query,
+          bindings,
+          all: async () => ({
+            results: query.includes('SELECT id, object_key')
+              ? [
+                  { id: 'upload_deleted', object_key: 'project/uploads/a' },
+                  { id: 'upload_retry', object_key: 'project/uploads/b' }
+                ]
+              : []
+          })
+        };
+        prepared.push(statement);
+        return statement;
+      }
+    }));
+    const deleteObject = vi.fn(async (key: string) => {
+      if (key.endsWith('/b')) {
+        throw new Error('R2 temporarily unavailable');
+      }
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      ARTIFACTS: { delete: deleteObject } as unknown as R2Bucket
+    });
+
+    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
+
+    expect(deleteObject).toHaveBeenCalledTimes(2);
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(deletedStatements).toHaveLength(1);
+    expect(deletedStatements[0]).toMatchObject({
+      query: 'DELETE FROM upload_sessions WHERE id = ?',
+      bindings: ['upload_deleted']
+    });
+    expect(prepared).not.toContainEqual(
+      expect.objectContaining({
+        query: 'DELETE FROM upload_sessions WHERE id = ?',
+        bindings: ['upload_retry']
+      })
+    );
   });
 
   it('accepts newer collaboration documents and rejects divergent peers', () => {
