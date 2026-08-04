@@ -874,6 +874,78 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Filleted Cylinder Resize');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('4.6');
+  await inspector.getByLabel('Height', { exact: true }).fill('12');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('1');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
+  const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
+  await expect(fillet).toBeVisible();
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+
+  await cylinder.locator('.feature-row-main').click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('6.4');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edit Cylinder');
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+
+  // A radius smaller than the stored 1 mm fillet is invalid. Exact preflight
+  // must refuse it without adding an undo entry or changing the live document.
+  await inspector.getByLabel('Radius', { exact: true }).fill('0.5');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Fillet could not be created on 2 selected edges with radius 1.'
+  );
+  await fillet.locator('.feature-row-main').click();
+  await cylinder.locator('.feature-row-main').click();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '6.4'
+  );
+
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await cylinder.locator('.feature-row-main').click();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '4.6'
+  );
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await cylinder.locator('.feature-row-main').click();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '6.4'
+  );
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('preflights and creates an exact open-top shell', async ({ page }) => {
   await stubApi(page);
   const consoleErrors: string[] = [];
