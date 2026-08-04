@@ -56,3 +56,19 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
   document rather than keeping local UI state.
 - Compact-width acceptance must confirm the two new 20 px controls do not hide
   the feature name, visibility control, or delete action.
+
+## Durable collaboration and roles addendum
+
+- A real browser fixture opens a cloud-backed project as a room `viewer`; the
+  collaboration control reports `read-only` after the room state arrives.
+- Modeling controls such as **Box** are disabled by the central edit gate. A
+  direct parameter submission is also refused and leaves canonical history
+  unchanged, covering a mutation path outside the tool palette.
+- The sharing dialog states `Your role: viewer`, marks the edit lease as not
+  available, and replaces member/invitation management with owner-only copy.
+- Server-focused coverage independently verifies that viewer/editor/owner
+  rules cannot be bypassed through REST writes, WebSocket frames, the oversized
+  HTTP snapshot fallback, or lease acquisition/renewal after membership
+  revocation.
+- Collaboration and lease rollout flags stay off; this acceptance validates
+  the dark implementation and does not claim beta or production enablement.
