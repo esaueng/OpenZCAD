@@ -56,3 +56,16 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
   document rather than keeping local UI state.
 - Compact-width acceptance must confirm the two new 20 px controls do not hide
   the feature name, visibility control, or delete action.
+
+## Face attachment failure-state addendum
+
+- Face-sketch entry remains limited to a current exact planar selection with a
+  schema-v5 lineage reference; a nearby or hash-only face is not substituted.
+- Browser acceptance draws a real face-attached rectangle, then suppresses its
+  source box. The model browser retains both canonical features while
+  **Diagnostics** names the source-body/history-position failure.
+- Resuming the source clears the diagnostic and rebuilds the sketch without a
+  replacement-face choice or manual reattachment.
+- Kernel acceptance separately proves that benign upstream dimension changes
+  move the attached extrusion to the evolved exact face before the stale-state
+  case is exercised.
