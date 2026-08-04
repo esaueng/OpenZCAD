@@ -512,7 +512,8 @@ test('the middle-button drag preference changes what a middle drag does', async 
   );
   expect(panned).toBeGreaterThan(1);
 
-  // Switching to orbit turns the camera instead, leaving the target alone.
+  // Switching to orbit first re-pivots onto the pointed geometry without
+  // moving the camera, then turns the camera around that new target.
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Viewport', exact: true }).click();
   await page.getByLabel('Middle-button drag').selectOption('orbit');
@@ -522,20 +523,40 @@ test('the middle-button drag preference changes what a middle drag does', async 
     .click();
   await expect(canvas).toBeVisible();
 
+  await page.mouse.move(
+    area!.x + area!.width * 0.5,
+    area!.y + area!.height * 0.5
+  );
   const beforeOrbit = await camera();
-  await middleDrag();
+  await page.mouse.down({ button: 'middle' });
+  await page.waitForTimeout(400);
+  const afterPivot = await camera();
+  for (const axis of [0, 1, 2]) {
+    expect(afterPivot!.position[axis]!).toBeCloseTo(
+      beforeOrbit!.position[axis]!,
+      3
+    );
+  }
+  const pivotTravel = Math.hypot(
+    afterPivot!.target[0]! - beforeOrbit!.target[0]!,
+    afterPivot!.target[1]! - beforeOrbit!.target[1]!,
+    afterPivot!.target[2]! - beforeOrbit!.target[2]!
+  );
+  expect(pivotTravel).toBeGreaterThan(0.1);
+
+  await page.mouse.move(
+    area!.x + area!.width * 0.5 + 70,
+    area!.y + area!.height * 0.5,
+    { steps: 8 }
+  );
+  await page.mouse.up({ button: 'middle' });
+  await page.waitForTimeout(400);
   const afterOrbit = await camera();
-  const targetMoved = Math.hypot(
-    afterOrbit!.target[0]! - beforeOrbit!.target[0]!,
-    afterOrbit!.target[1]! - beforeOrbit!.target[1]!,
-    afterOrbit!.target[2]! - beforeOrbit!.target[2]!
-  );
   const cameraMoved = Math.hypot(
-    afterOrbit!.position[0]! - beforeOrbit!.position[0]!,
-    afterOrbit!.position[1]! - beforeOrbit!.position[1]!,
-    afterOrbit!.position[2]! - beforeOrbit!.position[2]!
+    afterOrbit!.position[0]! - afterPivot!.position[0]!,
+    afterOrbit!.position[1]! - afterPivot!.position[1]!,
+    afterOrbit!.position[2]! - afterPivot!.position[2]!
   );
-  expect(targetMoved).toBeLessThan(0.5);
   expect(cameraMoved).toBeGreaterThan(1);
 });
 
