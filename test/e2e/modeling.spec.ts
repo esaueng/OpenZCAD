@@ -7,6 +7,56 @@ import {
   stubApi
 } from './openzcad-fixtures';
 
+test('suppresses features and rolls the timeline back as one undoable edit', async ({
+  page
+}) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Suppression Timeline');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  for (const tool of [/^Box \(B\)/, /^Cylinder \(C\)/]) {
+    await page.getByRole('button', { name: tool }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+  }
+  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+
+  const box = page.locator('.feature-row', { hasText: /^Box/ });
+  const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
+  await box.getByRole('button', { name: 'Suppress Box' }).click();
+  await expect(box).toContainText('suppressed');
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+
+  await box.getByRole('button', { name: 'Resume Box' }).click();
+  await expect(box).not.toContainText('suppressed');
+  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+
+  const rollback = box.getByRole('button', {
+    name: 'Roll back history after Box'
+  });
+  await rollback.click();
+  await expect(rollback).toHaveAttribute('aria-pressed', 'true');
+  await expect(cylinder).toContainText('suppressed');
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(cylinder).not.toContainText('suppressed');
+  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await page.getByRole('button', { name: 'Redo' }).click();
+  await expect(cylinder).toContainText('suppressed');
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
   page
 }) => {
