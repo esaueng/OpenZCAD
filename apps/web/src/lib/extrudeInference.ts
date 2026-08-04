@@ -54,6 +54,20 @@ function inferenceBody(
     : null;
 }
 
+function isMeasuredZeroOverlap(
+  derived: DerivedState,
+  featureName: string,
+  target: ExtrudeInferenceBody
+): boolean {
+  const expected =
+    `Feature "${featureName}": Stored add extrusion no longer overlaps ` +
+    `${target.name}; operation was not re-inferred.`;
+  return (
+    derived.bodyRepresentations[target.bodyId]?.consumed === false &&
+    derived.warnings.includes(expected)
+  );
+}
+
 /**
  * Resolve an extrusion once from exact union measurements, then rebuild the
  * stored result operation. Every geometry call remains in the browser worker.
@@ -100,6 +114,17 @@ export async function resolveExtrudeOperation(
       const derived = await options.derive(document);
       const result = inferenceBody(resultBodyId, derived);
       if (!result) {
+        // The stored-add rebuild deliberately omits a result when its exact
+        // common-volume measurement is zero. For inference that is a valid
+        // measurement, not a kernel refusal: record the disjoint union volume
+        // so a bounding-box-only decoy cannot veto another unambiguous target.
+        if (isMeasuredZeroOverlap(derived, command.payload.name, target)) {
+          measurements.push({
+            target,
+            unionVolume: target.volume + extrusion.volume
+          });
+          continue;
+        }
         throw new Error('Stored add preview produced no exact result body.');
       }
       measurements.push({ target, unionVolume: result.volume });

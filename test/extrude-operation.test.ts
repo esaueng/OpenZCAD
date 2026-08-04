@@ -8,6 +8,7 @@ import {
   getLatestBodyId,
   getLatestSketchId,
   listFeaturesInOrder,
+  transformBody,
   updateFeature
 } from '@openzcad/document-core';
 import {
@@ -215,6 +216,57 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
       expect(resolved.inference.operation).toBe(expectation.operation);
       expect(resolved.command.payload.operation).toBe(expectation.operation);
     }
+  });
+
+  it('ignores an exact zero-overlap candidate whose bounds overlap', async () => {
+    let document = createProjectDocument(
+      'Extrude overlap decoy',
+      toUserId('user_extrude_overlap_decoy')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Base',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    const targetBodyId = getLatestBodyId(document)!;
+    document = addPrimitiveFeature(document, {
+      name: 'Decoy',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 4 }
+    });
+    const decoyBodyId = getLatestBodyId(document)!;
+    document = transformBody(document, {
+      name: 'Place decoy',
+      targetBodyId: decoyBodyId,
+      translation: { x: 13.5, y: 13.5, z: 2 }
+    }).document;
+    document = addSketchFeature(document, {
+      name: 'Round cut',
+      plane: 'XY',
+      offset: 2,
+      object: {
+        objectKind: 'circle',
+        radius: 4,
+        centerX: 10,
+        centerY: 10
+      }
+    }).document;
+
+    const resolved = await resolveExtrudeOperation({
+      base: document,
+      input: {
+        name: 'Preview',
+        sketchId: getLatestSketchId(document)!,
+        distance: 4
+      },
+      derive: (candidate) => kernel.syncDocument(candidate)
+    });
+
+    expect(resolved.inference).toMatchObject({
+      operation: 'cut',
+      targetBodyId,
+      reason: 'enclosed'
+    });
   });
 
   it('stores a partial-overlap add and preserves the legacy new-body default', async () => {
