@@ -50,3 +50,17 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
 - A kernel regression builds a filleted solid, requests an impossible 100 mm shell, and verifies that the feature warning path receives the refusal while the source remains live and no result body is published.
 - The implementation now runs on the pinned BrepKit browser kernel rather than the brief's older `occt-wasm` API. BrepKit does not expose the proposed `*WithHistory` calls, so these operations retain their documented hash-only lineage instead of claiming unverified topology evolution.
 - Press-pull remains explicitly out of scope; Solid offset is whole-body only.
+
+## Feature suppression and rollback addendum
+
+- Each history row exposes semantic pause/resume and rollback controls on
+  hover or keyboard focus; an active pause remains visible without hover.
+- Suppressed rows use muted italic text, a warning-colored strike, and an
+  explicit `suppressed` label. They are not styled as failed geometry.
+- The active rollback boundary is a persistent accent rule after the selected
+  row, while every later row shows its suppressed state.
+- Pause and rollback buttons expose accessible names and `aria-pressed` state.
+  Undo/redo moves the rendered boundary and exact body count with the canonical
+  document rather than keeping local UI state.
+- Compact-width acceptance must confirm the two new 20 px controls do not hide
+  the feature name, visibility control, or delete action.
