@@ -735,6 +735,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
+  async scheduled(_controller: unknown, env: Env): Promise<void> {
+    assertSafeRuntimeConfiguration(env);
+    await createPersistenceService(env).purgeExpiredUploadSessions();
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     assertSafeRuntimeConfiguration(env);
     const { pathname } = new URL(request.url);
