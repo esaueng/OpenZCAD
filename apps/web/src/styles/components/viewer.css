@@ -364,7 +364,7 @@
   border-radius: 999px;
 }
 
-/* Shift-drag rubber band. Solid for window select, dashed for crossing —
+/* Drag-selection rubber band. Solid for window select, dashed for crossing —
    the same shorthand mechanical CAD has used for decades, so the rule in
    force is readable while the drag is still happening. */
 .selection-band {

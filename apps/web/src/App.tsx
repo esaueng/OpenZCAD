@@ -102,7 +102,8 @@ import type {
   AppSettings,
   AppSettingsResponse,
   AuthConfigResponse,
-  AuthSession
+  AuthSession,
+  HealthResponse
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
@@ -684,6 +685,8 @@ export function App() {
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [deploymentHealth, setDeploymentHealth] =
+    useState<HealthResponse | null>(null);
   const [collaborationRollout, setCollaborationRollout] = useState({
     sharingEnabled: false,
     editLeasesEnforced: false,
@@ -1437,6 +1440,7 @@ export function App() {
         if (cancelled) {
           return;
         }
+        setDeploymentHealth(health);
         const merged = listed.projects;
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
@@ -2635,6 +2639,10 @@ export function App() {
     setPaletteOpen(false);
     setSettingsMessage('Changes save on this device immediately.');
     setAuthConfigStatus('loading');
+    void api
+      .health()
+      .then(setDeploymentHealth)
+      .catch(() => setDeploymentHealth(null));
     void Promise.all([
       api
         .authConfig()
@@ -4168,12 +4176,12 @@ export function App() {
   }
 
   /**
-   * Bodies swept by a shift-drag rectangle.
+   * Bodies swept by an unmodified drag rectangle.
    *
-   * Replaces the selection rather than adding to it, even though the gesture
-   * is on Shift: the rectangle is the statement of what the user wants, and
-   * accumulating across sweeps would make a second attempt at aiming
-   * impossible to distinguish from a deliberate addition.
+   * Replaces the selection rather than adding to it: the rectangle is the
+   * statement of what the user wants, and accumulating across sweeps would
+   * make a second attempt at aiming impossible to distinguish from a
+   * deliberate addition.
    */
   function handleBoxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
@@ -6056,6 +6064,7 @@ export function App() {
         accountState={accountSettings}
         authConfig={authConfig}
         authConfigStatus={authConfigStatus}
+        health={deploymentHealth}
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
