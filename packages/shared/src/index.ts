@@ -392,6 +392,9 @@ export type RevolveAxis = 'horizontal' | 'vertical';
  */
 export const FULL_REVOLVE_ANGLE_DEG = 360;
 
+/** Persistent result mode chosen when an extrusion is first created. */
+export type ExtrudeOperation = 'new-body' | 'add' | 'cut';
+
 /**
  * Persistent reference to one derived bounded sketch cell.
  *
@@ -446,6 +449,13 @@ export type FeatureData =
       featureKind: 'extrude';
       sketchId: SketchId;
       distance: ParamValue;
+      /**
+       * Resolved once at creation time. Absent preserves the legacy new-body
+       * behavior; rebuilds never infer a different operation.
+       */
+      operation?: ExtrudeOperation;
+      /** Required for stored add/cut operations and absent for new-body. */
+      targetBodyId?: BodyId;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the

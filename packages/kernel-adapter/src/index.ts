@@ -9,6 +9,7 @@
  */
 export * from './topology-lineage';
 export * from './face-attachment';
+export * from './extrude-inference';
 
 export {
   importedMeshStl,
