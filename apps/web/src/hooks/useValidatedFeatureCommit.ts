@@ -30,6 +30,8 @@ export interface ValidatedFeatureTarget {
 
 export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
   successMessage: string;
+  /** Exact result features reachable from the edited source feature. */
+  targets?: readonly ValidatedFeatureTarget[];
   onSuccess?(): void;
 }
 
@@ -93,6 +95,9 @@ export function useValidatedFeatureCommit(
           throw new Error(rejection);
         }
       }
+      if (input.targets.length === 0 && documentMoved) {
+        throw new Error('The document changed while the operation validated.');
+      }
       if (!input.commit(host, derived)) {
         throw new Error(input.commitFailure);
       }
@@ -115,7 +120,7 @@ export function useValidatedFeatureCommit(
       runOptions: ValidatedFeatureRunOptions
     ): Promise<boolean> {
       return validateAndCommit({
-        targets: [runOptions],
+        targets: runOptions.targets ?? [runOptions],
         successMessage: runOptions.successMessage,
         onSuccess: runOptions.onSuccess,
         preview(current) {

@@ -3556,6 +3556,250 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
+  it.each(['fillet', 'chamfer'] as const)(
+    'keeps a two-rim cylinder %s through the 4.6 to 6.4 mm radius edit',
+    async (modifier) => {
+      const base = addPrimitiveFeature(
+        createProjectDocument(
+          `Cylinder ${modifier} lineage`,
+          toUserId('user_exact')
+        ),
+        {
+          name: 'Cylinder',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 4.6, height: 12 }
+        }
+      );
+      const sourceBodyId = base.bodyOrder[0]!;
+      const sourceFeature = listFeaturesInOrder(base)[0]!;
+      const sourceDerived = await adapter.syncDocument(base);
+      const rims = sourceDerived.bodyRepresentations[
+        sourceBodyId
+      ]!.topology!.edges.filter((edge) => edge.displayRole !== 'seam');
+      expect(rims).toHaveLength(2);
+      expect(rims.every((edge) => edge.reference?.kind === 'edge')).toBe(true);
+
+      const created =
+        modifier === 'fillet'
+          ? filletEdges(base, {
+              name: 'Two rim fillet',
+              targetBodyId: sourceBodyId,
+              edgeHashes: rims.map((edge) => edge.hash),
+              edgeReferences: rims.map((edge) => edge.reference!),
+              size: 1
+            })
+          : chamferEdges(base, {
+              name: 'Two rim chamfer',
+              targetBodyId: sourceBodyId,
+              edgeHashes: rims.map((edge) => edge.hash),
+              edgeReferences: rims.map((edge) => edge.reference!),
+              size: 1
+            });
+      const manager = new CommandManager(created.document);
+      const resize = commandFactories.updateFeature(
+        {
+          featureId: sourceFeature.featureId,
+          data: { dimensions: { radius: 6.4 } }
+        },
+        'Resize cylinder radius'
+      );
+
+      const resizedPrimitive = await adapter.syncDocument(resize.apply(base));
+      const resizedRimHashes = resizedPrimitive.bodyRepresentations[
+        sourceBodyId
+      ]!.topology!.edges.filter((edge) => edge.displayRole !== 'seam').map(
+        (edge) => edge.hash
+      );
+      expect(resizedRimHashes).not.toEqual(rims.map((edge) => edge.hash));
+
+      const resized = manager.execute(resize);
+      const resizedDerived = await adapter.syncDocument(resized);
+      const result = resizedDerived.bodyRepresentations[created.bodyId];
+      expect(resizedDerived.warnings).toEqual([]);
+      expect(result).toBeDefined();
+      expect(result!.volume).toBeGreaterThan(0);
+      expect(result!.volume).toBeLessThan(Math.PI * 6.4 ** 2 * 12);
+
+      const step = await adapter.exportStep(resized, [created.bodyId]);
+      const inspection = await adapter.inspectStep(step);
+      expect(inspection).toMatchObject({ solid: true, valid: true });
+      expect(
+        Math.abs(inspection.volume - result!.volume) / result!.volume
+      ).toBeLessThan(0.01);
+
+      const undoneDerived = await adapter.syncDocument(manager.undo());
+      expect(undoneDerived.warnings).toEqual([]);
+      expect(undoneDerived.bodyRepresentations[created.bodyId]).toBeDefined();
+      const redoneDerived = await adapter.syncDocument(manager.redo());
+      expect(redoneDerived.warnings).toEqual([]);
+      expect(redoneDerived.bodyRepresentations[created.bodyId]).toBeDefined();
+    }
+  );
+
+  it.each(['start', 'end'] as const)(
+    'keeps the cylinder %s rim identity through a height edit',
+    async (rimRole) => {
+      const base = addPrimitiveFeature(
+        createProjectDocument(
+          `Cylinder ${rimRole} rim lineage`,
+          toUserId('user_exact')
+        ),
+        {
+          name: 'Cylinder',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 4.6, height: 8 }
+        }
+      );
+      const sourceBodyId = base.bodyOrder[0]!;
+      const sourceFeature = listFeaturesInOrder(base)[0]!;
+      const sourceDerived = await adapter.syncDocument(base);
+      const rim = sourceDerived.bodyRepresentations[
+        sourceBodyId
+      ]!.topology!.edges.find((edge) =>
+        edge.reference?.lineageName.endsWith(`.rim.${rimRole}`)
+      );
+      expect(rim?.reference?.kind).toBe('edge');
+
+      const filleted = filletEdges(base, {
+        name: `${rimRole} rim fillet`,
+        targetBodyId: sourceBodyId,
+        edgeHashes: [rim!.hash],
+        edgeReferences: [rim!.reference!],
+        size: 1
+      });
+      const resized = commandFactories
+        .updateFeature({
+          featureId: sourceFeature.featureId,
+          data: { dimensions: { height: 14 } }
+        })
+        .apply(filleted.document);
+      const derived = await adapter.syncDocument(resized);
+      const body = derived.bodyRepresentations[filleted.bodyId];
+      const band = body?.topology?.faces.find(
+        (face) => face.geometry?.surfaceType === 'torus'
+      );
+
+      expect(derived.warnings).toEqual([]);
+      expect(band?.geometry).toBeDefined();
+      if (rimRole === 'start') {
+        expect(band!.geometry!.center.z).toBeLessThan(7);
+      } else {
+        expect(band!.geometry!.center.z).toBeGreaterThan(7);
+      }
+    }
+  );
+
+  it('resolves a resized box edge by v5 lineage and keeps legacy hash-only failure behavior', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Box edge lineage', toUserId('user_exact')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceFeature = listFeaturesInOrder(base)[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const edge = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.edges.find((candidate) =>
+      candidate.reference?.lineageName.includes('primitive.box.edge.x.')
+    );
+    expect(edge?.reference?.kind).toBe('edge');
+
+    const resize = commandFactories.updateFeature({
+      featureId: sourceFeature.featureId,
+      data: { dimensions: { width: 16 } }
+    });
+    const withLineage = filletEdges(base, {
+      name: 'Lineage box fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [edge!.hash],
+      edgeReferences: [edge!.reference!],
+      size: 1
+    });
+    const lineageDerived = await adapter.syncDocument(
+      resize.apply(withLineage.document)
+    );
+    expect(lineageDerived.warnings).toEqual([]);
+    expect(
+      lineageDerived.bodyRepresentations[withLineage.bodyId]
+    ).toBeDefined();
+
+    const legacy = filletEdges(base, {
+      name: 'Legacy box fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [edge!.hash],
+      size: 1
+    });
+    const legacyDerived = await adapter.syncDocument(
+      resize.apply(legacy.document)
+    );
+    expect(legacyDerived.warnings).toEqual([
+      'Feature "Legacy box fillet": A selected edge no longer exists.'
+    ]);
+    expect(legacyDerived.bodyRepresentations[legacy.bodyId]).toBeUndefined();
+  });
+
+  it('fails closed when edge-modifier lineage contains duplicate claims', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Duplicate edge lineage', toUserId('user_exact')),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 4.6, height: 12 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const rim = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.edges.find((edge) => edge.displayRole !== 'seam')!;
+    const invalid = filletEdges(base, {
+      name: 'Duplicate lineage fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [rim.hash],
+      edgeReferences: [rim.reference!, rim.reference!],
+      size: 1
+    });
+    const derived = await adapter.syncDocument(invalid.document);
+
+    expect(derived.warnings).toEqual([
+      'Feature "Duplicate lineage fillet": Edge modifier lineage contains duplicate references for one selected edge.'
+    ]);
+    expect(derived.bodyRepresentations[invalid.bodyId]).toBeUndefined();
+  });
+
+  it('fails closed when edge-modifier lineage omits a selected edge', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Missing edge lineage', toUserId('user_exact')),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 4.6, height: 12 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const rim = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.edges.find((edge) => edge.displayRole !== 'seam')!;
+    const invalid = filletEdges(base, {
+      name: 'Missing lineage fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [rim.hash],
+      edgeReferences: [],
+      size: 1
+    });
+    const derived = await adapter.syncDocument(invalid.document);
+
+    expect(derived.warnings).toEqual([
+      'Feature "Missing lineage fillet": Edge modifier lineage is missing a reference for one selected edge.'
+    ]);
+    expect(derived.bodyRepresentations[invalid.bodyId]).toBeUndefined();
+  });
+
   it('fillets a cylinder cap rim across the whole radius range', async () => {
     // The upper half of this range (f/r >= 0.5) is the part the deleted
     // workaround existed to serve. Every ratio has to build the same analytic
@@ -4745,12 +4989,14 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const mirrorBodyId = mirrored.bodyOrder.at(-1)!;
     const mirrorDerived = await adapter.syncDocument(mirrored);
     expect(mirrorDerived.warnings).toEqual([]);
-    expect(
-      mirrorDerived.bodyRepresentations[sourceBodyId]?.volume
-    ).toBeCloseTo(6000, 4);
-    expect(
-      mirrorDerived.bodyRepresentations[mirrorBodyId]?.volume
-    ).toBeCloseTo(6000, 4);
+    expect(mirrorDerived.bodyRepresentations[sourceBodyId]?.volume).toBeCloseTo(
+      6000,
+      4
+    );
+    expect(mirrorDerived.bodyRepresentations[mirrorBodyId]?.volume).toBeCloseTo(
+      6000,
+      4
+    );
 
     const sourceProjection = await adapter.syncDocument(base);
     const opening = sourceProjection.bodyRepresentations[
