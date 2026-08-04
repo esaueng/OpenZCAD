@@ -14,9 +14,10 @@ import {
   type HandleVec3
 } from './DragRig';
 
-const ARROW_SHAFT_RADIUS = 0.035;
-const ARROW_HEAD_RADIUS = 0.11;
+const ARROW_SHAFT_RADIUS = 0.05;
+const ARROW_HEAD_RADIUS = 0.14;
 const ARROW_HEAD_LENGTH = 0.3;
+const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
 
@@ -24,6 +25,44 @@ const GHOST_OPACITY = 0.28;
 const DIMENSION_LINE_COLOR = 0xf4f7fb;
 const DIMENSION_ARROW_RADIUS = 0.055;
 const DIMENSION_ARROW_LENGTH = 0.22;
+
+/**
+ * The shared drag-arrow affordance: a double-headed arrow centered on the
+ * pick point, saying "this adjusts in either direction".
+ */
+function doubleArrowParts(kind: string): THREE.Mesh[] {
+  const solid = handleMaterial();
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(
+      ARROW_SHAFT_RADIUS,
+      ARROW_SHAFT_RADIUS,
+      2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH),
+      12
+    ),
+    solid
+  );
+  const headOut = new THREE.Mesh(
+    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
+    solid
+  );
+  headOut.position.y = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2;
+  const headIn = new THREE.Mesh(
+    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
+    solid
+  );
+  headIn.rotation.z = Math.PI;
+  headIn.position.y = -(ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2);
+  const hit = createHitMesh(
+    new THREE.CylinderGeometry(
+      ARROW_HIT_RADIUS,
+      ARROW_HIT_RADIUS,
+      2 * ARROW_HALF_LENGTH + 0.3,
+      8
+    ),
+    kind
+  );
+  return [shaft, headOut, headIn, hit];
+}
 
 const EDGE_HANDLE_RADIUS = 0.16;
 const EDGE_HIT_RADIUS = 0.65;
@@ -104,28 +143,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  const solid = handleMaterial();
-  const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(
-      ARROW_SHAFT_RADIUS,
-      ARROW_SHAFT_RADIUS,
-      1 - ARROW_HEAD_LENGTH,
-      12
-    ),
-    solid
-  );
-  shaft.position.y = (1 - ARROW_HEAD_LENGTH) / 2;
-  const head = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
-  );
-  head.position.y = 1 - ARROW_HEAD_LENGTH / 2;
-  const hit = createHitMesh(
-    new THREE.CylinderGeometry(ARROW_HIT_RADIUS, ARROW_HIT_RADIUS, 1.8, 8),
-    kind
-  );
-  hit.position.y = 0.7;
-  addHandleParts(group, [shaft, head, hit]);
+  addHandleParts(group, doubleArrowParts(kind));
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
@@ -259,28 +277,7 @@ export function buildCylinderRadiusHandle(
     )
   );
 
-  const solid = handleMaterial();
-  const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(
-      ARROW_SHAFT_RADIUS,
-      ARROW_SHAFT_RADIUS,
-      1 - ARROW_HEAD_LENGTH,
-      12
-    ),
-    solid
-  );
-  shaft.position.y = (1 - ARROW_HEAD_LENGTH) / 2;
-  const head = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
-  );
-  head.position.y = 1 - ARROW_HEAD_LENGTH / 2;
-  const hit = createHitMesh(
-    new THREE.CylinderGeometry(ARROW_HIT_RADIUS, ARROW_HIT_RADIUS, 1.8, 8),
-    kind
-  );
-  hit.position.y = 0.7;
-  addHandleParts(group, [shaft, head, hit]);
+  addHandleParts(group, doubleArrowParts(kind));
 
   // The measurement graphic is a radius callout: a dashed line from the axis
   // out to the handle on the wall, with a small arrowhead at each end. It is
