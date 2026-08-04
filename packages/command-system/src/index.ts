@@ -84,6 +84,7 @@ import {
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
+  computeSketchProfileAnalysis,
   computeSketchRegions,
   regionAtPoint,
   type SketchRegion
@@ -1237,6 +1238,28 @@ export function commandsForCadPatch(
       }
       case 'add_sketch': {
         const ids = createSketchFeatureIds(operation.objects.length);
+        const analysis = computeSketchProfileAnalysis(
+          operation.objects.map((data, index) => ({
+            id: ids.objectNodeIds[index] ?? `object_${index}`,
+            data
+          })),
+          (value) =>
+            resolveParamValue(value, parameterScope, 'sketch dimension')
+        );
+        const blockingDiagnostic = analysis.diagnostics.find(
+          (diagnostic) =>
+            // Text outlines are expanded asynchronously by the browser
+            // worker; this synchronous command layer has no font provider.
+            diagnostic.code !== 'unresolved-outline' &&
+            (diagnostic.severity === 'error' ||
+              diagnostic.code === 'open-endpoint' ||
+              diagnostic.code === 'gap-within-tolerance')
+        );
+        if (blockingDiagnostic) {
+          throw new Error(
+            `add_sketch requires closed, valid profile paths: ${blockingDiagnostic.message}`
+          );
+        }
         if (operation.localId) {
           localSketches.set(normalizeLocalId(operation.localId), {
             sketchId: ids.sketchId,
