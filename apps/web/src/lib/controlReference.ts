@@ -288,7 +288,7 @@ export const POINTER_CONTROL_GROUPS = [
     items: [
       {
         id: 'orbit',
-        keys: ['Left-drag'],
+        keys: ['Shift + left-drag'],
         action: 'Orbit',
         detail: 'Rotate around the most recently selected point.'
       },
@@ -343,13 +343,13 @@ export const POINTER_CONTROL_GROUPS = [
       },
       {
         id: 'window-select',
-        keys: ['Shift + drag left → right'],
+        keys: ['Drag left → right'],
         action: 'Window select',
         detail: 'Selects bodies fully enclosed by the selection box.'
       },
       {
         id: 'crossing-select',
-        keys: ['Shift + drag right → left'],
+        keys: ['Drag right → left'],
         action: 'Crossing select',
         detail: 'Selects bodies touched by the selection box.'
       },
