@@ -737,6 +737,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     assertSafeRuntimeConfiguration(env);
+    const { pathname } = new URL(request.url);
     try {
       return await handleApiRequest(request, env);
     } catch (error) {
@@ -799,7 +800,7 @@ export default {
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
       }
-      console.error('Unhandled API error.');
+      console.error('Unhandled API error.', request.method, pathname, error);
       return json({ error: 'Internal error' }, 500);
     }
   }

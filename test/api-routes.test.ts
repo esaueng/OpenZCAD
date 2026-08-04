@@ -1494,4 +1494,34 @@ describe('worker api routes', () => {
     );
     expect(response.status).toBe(400);
   });
+
+  it('logs route context for unhandled API errors without exposing internals', async () => {
+    const failure = new Error('D1 schema mismatch');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await worker.fetch(
+        new Request('https://example.com/api/projects?status=active'),
+        {
+          ...env,
+          DB: {
+            prepare() {
+              throw failure;
+            }
+          }
+        } as never
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Internal error' });
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Unhandled API error.',
+        'GET',
+        '/api/projects',
+        failure
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
