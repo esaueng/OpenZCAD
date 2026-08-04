@@ -84,6 +84,7 @@ import {
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
+  computeSketchProfileAnalysis,
   computeSketchRegions,
   regionAtPoint,
   type SketchRegion
@@ -189,6 +190,29 @@ function makeCommand<TPayload>(
 function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
   if (!document.bodyOrder.includes(bodyId)) {
     throw new Error(`Target body ${bodyId} not found.`);
+  }
+}
+
+function validateExtrudeInput(
+  document: ProjectDocument,
+  input: ExtrudeInput
+): void {
+  if (!findSketch(document, input.sketchId)) {
+    throw new Error('Extrude requires an existing sketch.');
+  }
+  const operation = input.operation ?? 'new-body';
+  if (operation === 'new-body') {
+    if (input.targetBodyId !== undefined) {
+      throw new Error('A new-body extrusion cannot store a target body.');
+    }
+    return;
+  }
+  if (input.targetBodyId === undefined) {
+    throw new Error(`Extrude ${operation} requires a stored target body.`);
+  }
+  validateBodyTarget(document, input.targetBodyId);
+  if (input.ids?.bodyId === input.targetBodyId) {
+    throw new Error('An extrusion cannot target its own result body.');
   }
 }
 
@@ -306,6 +330,17 @@ function validateModelingFeatureUpdate(
   const preview = updateFeature(document, input);
   const feature = findFeature(preview, input.featureId)!;
   switch (feature.data.featureKind) {
+    case 'extrude':
+      validateExtrudeInput(preview, {
+        name: feature.name,
+        sketchId: feature.data.sketchId,
+        distance: feature.data.distance,
+        operation: feature.data.operation,
+        targetBodyId: feature.data.targetBodyId,
+        profile: feature.data.profile,
+        profiles: feature.data.profiles
+      });
+      break;
     case 'mirror':
       validateMirrorInput(preview, {
         name: feature.name,
@@ -444,9 +479,7 @@ export const commandFactories = {
       payload,
       (document) => translateSketch(document, payload),
       (document) => {
-        if (
-          ![payload.du, payload.dv, payload.dn ?? 0].every(Number.isFinite)
-        ) {
+        if (![payload.du, payload.dv, payload.dn ?? 0].every(Number.isFinite)) {
           throw new Error('Sketch translation must be finite.');
         }
         const sketch = findSketch(document, payload.sketchId);
@@ -468,11 +501,7 @@ export const commandFactories = {
       'Extrude sketch',
       withIds,
       (document) => extrudeSketch(document, withIds).document,
-      (document) => {
-        if (!findSketch(document, payload.sketchId)) {
-          throw new Error('Extrude requires an existing sketch.');
-        }
-      }
+      (document) => validateExtrudeInput(document, withIds)
     );
   },
   revolveSketch(payload: RevolveInput): CommandDefinition<RevolveInput> {
@@ -1209,6 +1238,28 @@ export function commandsForCadPatch(
       }
       case 'add_sketch': {
         const ids = createSketchFeatureIds(operation.objects.length);
+        const analysis = computeSketchProfileAnalysis(
+          operation.objects.map((data, index) => ({
+            id: ids.objectNodeIds[index] ?? `object_${index}`,
+            data
+          })),
+          (value) =>
+            resolveParamValue(value, parameterScope, 'sketch dimension')
+        );
+        const blockingDiagnostic = analysis.diagnostics.find(
+          (diagnostic) =>
+            // Text outlines are expanded asynchronously by the browser
+            // worker; this synchronous command layer has no font provider.
+            diagnostic.code !== 'unresolved-outline' &&
+            (diagnostic.severity === 'error' ||
+              diagnostic.code === 'open-endpoint' ||
+              diagnostic.code === 'gap-within-tolerance')
+        );
+        if (blockingDiagnostic) {
+          throw new Error(
+            `add_sketch requires closed, valid profile paths: ${blockingDiagnostic.message}`
+          );
+        }
         if (operation.localId) {
           localSketches.set(normalizeLocalId(operation.localId), {
             sketchId: ids.sketchId,

@@ -829,6 +829,7 @@ export function ModelViewer({
     if (!host) {
       return;
     }
+    const viewerHost = host;
     const e2eCanvasHooksEnabled =
       (
         import.meta.env as unknown as {
@@ -1043,6 +1044,7 @@ export function ModelViewer({
 
     let animationFrame: number | null = null;
     let pendingHoverEvent: PointerEvent | null = null;
+    let resizePending = false;
 
     function requestRender() {
       if (animationFrame === null) {
@@ -1121,13 +1123,10 @@ export function ModelViewer({
     }
 
     const observer = new ResizeObserver(() => {
-      cameraRig.handleResize();
-      renderer.setSize(host.clientWidth, host.clientHeight);
-      labelRenderer.setSize(host.clientWidth, host.clientHeight);
-      // Screen-space fat lines rasterize against the viewport size. Walking the
-      // scene covers body edges, sketches, previews and handle rigs alike, so
-      // no creation site has to remember to register its material.
-      syncFatLineResolution(scene, host.clientWidth, host.clientHeight);
+      // setSize clears the WebGL drawing buffer. Keep that clear in the same
+      // animation frame as the next scene draw so continuous panel resizing
+      // cannot present an empty buffer between two frames.
+      resizePending = true;
       requestRender();
     });
     observer.observe(host);
@@ -1372,6 +1371,13 @@ export function ModelViewer({
     };
     offsetChip.addEventListener('click', handleChipClick);
     offsetChipRef.current = offsetChip;
+
+    // Companion "Radius" label pill for the cylinder dimension line, sitting
+    // just ahead of the value chip like a drawing callout's name tag. Tapping
+    // either pill opens the same exact-entry keypad.
+    const radiusLabelChip = hud.create('handle-label-chip');
+    radiusLabelChip.textContent = 'Radius';
+    radiusLabelChip.addEventListener('click', handleChipClick);
 
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
@@ -2014,6 +2020,7 @@ export function ModelViewer({
       }
       if (!anchor) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         if (e2eCanvasHooksEnabled) {
           delete renderer.domElement.dataset.e2eHandleX;
@@ -2032,6 +2039,7 @@ export function ModelViewer({
       );
       if (!screen) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
@@ -2065,8 +2073,27 @@ export function ModelViewer({
           );
         }
       }
-      chip.textContent = text;
+      if (rig?.kind === 'cylinder-radius') {
+        // Drawing-annotation typography: the units render small after the
+        // number, so the chip reads "R 35ₘₘ" rather than uniform text.
+        const units = document.createElement('small');
+        units.textContent = unitsRef.current;
+        chip.replaceChildren(
+          `R ${formatNumber(rig.value())}\u00a0`,
+          units
+        );
+      } else {
+        chip.textContent = text;
+      }
+      chip.dataset.variant =
+        rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       hud.showAt(chip, screen.x, screen.y);
+      if (rig?.kind === 'cylinder-radius') {
+        // Same anchor; CSS shifts it to sit flush against the value pill.
+        hud.showAt(radiusLabelChip, screen.x, screen.y);
+      } else {
+        radiusLabelChip.hidden = true;
+      }
       keypadAnchorRef.current?.(screen);
     }
 
@@ -3443,6 +3470,11 @@ export function ModelViewer({
       // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
     };
+    // The canvas listener alone is not enough: HUD chips and the CSS2D label
+    // layer sit above the canvas, and a right-click landing on them surfaces
+    // the browser's own menu (Safari offers "Save Image As…" for the canvas
+    // beneath). The host wrapper sees the event whichever layer was hit.
+    host.addEventListener('contextmenu', handleContextMenu);
 
     const handleWheel = () => {
       cameraRig.cancelTween();
@@ -3474,6 +3506,18 @@ export function ModelViewer({
     const lastQuaternion = new THREE.Quaternion();
     function animate(now: number) {
       animationFrame = null;
+      if (resizePending) {
+        resizePending = false;
+        const width = viewerHost.clientWidth;
+        const height = viewerHost.clientHeight;
+        cameraRig.handleResize();
+        renderer.setSize(width, height);
+        labelRenderer.setSize(width, height);
+        // Screen-space fat lines rasterize against the viewport size. Walking
+        // the scene covers body edges, sketches, previews and handle rigs
+        // alike, so no creation site has to remember to register its material.
+        syncFatLineResolution(scene, width, height);
+      }
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const controlsChanged = cameraRig.stepOrbit(now);
@@ -3531,6 +3575,9 @@ export function ModelViewer({
           0.55;
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
+        // Re-run the rig's layout so its dimension-line arrowheads track the
+        // freshly stamped screen-constant scale.
+        cylinderRig.setValue(cylinderRig.value());
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
@@ -3660,6 +3707,7 @@ export function ModelViewer({
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
+      host.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
@@ -3679,6 +3727,7 @@ export function ModelViewer({
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
+      radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
