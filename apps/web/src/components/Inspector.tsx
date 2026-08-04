@@ -553,9 +553,7 @@ export function Inspector(props: InspectorProps) {
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
           liveRadius={
-            data.primitiveKind === 'cylinder'
-              ? liveCylinderRadius
-              : undefined
+            data.primitiveKind === 'cylinder' ? liveCylinderRadius : undefined
           }
           submitLabel="Apply"
           onSubmit={(name, dimensions) =>
@@ -636,7 +634,8 @@ export function Inspector(props: InspectorProps) {
           initial={{
             name: selectedFeature.name,
             sketchId: data.sketchId,
-            distance: data.distance
+            distance: data.distance,
+            operation: data.operation
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyExtrude(selectedFeature, value)}

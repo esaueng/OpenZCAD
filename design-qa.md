@@ -56,3 +56,17 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
   document rather than keeping local UI state.
 - Compact-width acceptance must confirm the two new 20 px controls do not hide
   the feature name, visibility control, or delete action.
+
+## Extrude inference addendum
+
+- The direct extrude controller keeps Operation visible throughout the drag.
+  It reads `Inferring…` while the worker measures and then `New Body`, `Add`,
+  or `Cut` with a short explanation naming the target where applicable.
+- Apply stays disabled until the exact preview matches the current document
+  version, distance, and profile selection.
+- Operation is feedback rather than an editable guess. The feature inspector
+  shows the stored value and explains that later distance edits preserve it.
+- Tangency, multiple overlaps, coincident material, and refused measurements
+  use explicit New Body explanations instead of silently consuming a target.
+- Desktop and compact-width acceptance must verify the operation detail wraps
+  inside the controller without covering Distance or Apply Extrude.
