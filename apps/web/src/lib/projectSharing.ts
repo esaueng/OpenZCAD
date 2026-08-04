@@ -5,6 +5,7 @@ import type {
   ProjectSharingResponse,
   UserId
 } from '@openzcad/shared';
+import { desktopFetch } from './desktopBridge';
 
 export class ProjectSharingApiError extends Error {
   constructor(
@@ -99,7 +100,7 @@ async function requestEmpty(
 
 /** Typed client for the already-shipped sharing/member/invitation routes. */
 export function createProjectSharingClient(
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = desktopFetch
 ): ProjectSharingClient {
   return {
     getProjectSharing(projectId) {
