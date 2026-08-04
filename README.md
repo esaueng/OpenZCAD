@@ -155,7 +155,7 @@ AI_MODEL=openai/gpt-5.6-terra
 Runtime bindings are configured as Wrangler vars or secrets:
 
 - `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
-- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret; never shipped to the browser or committed.
+- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret for the configured provider; `AI_API_KEY` is never sent to OpenRouter (see below). Never shipped to the browser or committed.
 - `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
 - `AI_MODEL` — defaults to `openai/gpt-5.6-terra` (balanced). Use `openai/gpt-5.6-sol` when quality matters more than cost/latency, `openai/gpt-5.6-luna` for cheap latency-sensitive edits.
 - `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
