@@ -254,6 +254,12 @@ interface ModelViewerProps {
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
   movePreview: MovePreview | null;
+  /**
+   * A committed Move whose rebuild is still in flight. The body stays posed
+   * at this transform (no gizmo) until new meshes arrive and the hold clears
+   * in the same commit.
+   */
+  moveCommitHold: MovePreview | null;
   projection: ProjectionMode;
   /** Per-project camera pose restored before the first automatic fit. */
   initialView: ViewportCameraState | null;
@@ -546,6 +552,7 @@ export function ModelViewer({
   editableBodyIds,
   extrudePreview,
   movePreview,
+  moveCommitHold,
   projection,
   initialView,
   onViewChange,
@@ -608,6 +615,8 @@ export function ModelViewer({
   extrudePreviewRef.current = extrudePreview;
   const movePreviewRef = useRef(movePreview);
   movePreviewRef.current = movePreview;
+  const moveCommitHoldRef = useRef(moveCommitHold);
+  moveCommitHoldRef.current = moveCommitHold;
   const onMovePreviewChangeRef = useRef(onMovePreviewChange);
   onMovePreviewChangeRef.current = onMovePreviewChange;
   /** Base (untranslated) gizmo pivot: the target body's bbox center. */
@@ -891,7 +900,7 @@ export function ModelViewer({
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
     ) {
-      const preview = movePreviewRef.current;
+      const preview = movePreviewRef.current ?? moveCommitHoldRef.current;
       if (!preview) {
         return;
       }
@@ -3675,6 +3684,25 @@ export function ModelViewer({
       if (moveGizmoHudRef.current) {
         moveGizmoHudRef.current.hidden = true;
       }
+      if (moveCommitHold) {
+        // Committed move, rebuild in flight: keep the (still old) mesh posed
+        // at the applied transform so it never flashes at the resting pose.
+        const held = bodies.find(
+          (candidate) => candidate.bodyId === moveCommitHold.bodyId
+        );
+        if (held) {
+          moveCenterRef.current.set(
+            (held.bbox.min.x + held.bbox.max.x) / 2,
+            (held.bbox.min.y + held.bbox.max.y) / 2,
+            (held.bbox.min.z + held.bbox.max.z) / 2
+          );
+          context.applyMovePreview(
+            moveCommitHold.translation,
+            moveCommitHold.rotationDeg
+          );
+        }
+        return;
+      }
       // Cancel without a document change must restore the resting pose.
       for (const object of context.objectsByBodyId.values()) {
         object.position.set(0, 0, 0);
@@ -3715,7 +3743,7 @@ export function ModelViewer({
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
         null
     );
-  }, [movePreview, bodies]);
+  }, [movePreview, moveCommitHold, bodies]);
 
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
