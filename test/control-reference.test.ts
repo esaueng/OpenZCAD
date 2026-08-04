@@ -52,8 +52,8 @@ describe('controls reference', () => {
     expect(keyboardItem('sketch-circle')?.keys).toEqual(['C']);
     expect(keyboardItem('sketch-rectangle')?.keys).toEqual(['R']);
     expect(keyboardItem('sketch-text')?.keys).toEqual(['T']);
-    expect(pointerItem('orbit')?.keys).toEqual(['Left-drag']);
-    expect(pointerItem('window-select')?.keys[0]).toContain('Shift');
+    expect(pointerItem('orbit')?.keys[0]).toContain('Shift');
+    expect(pointerItem('window-select')?.keys).toEqual(['Drag left → right']);
     expect(pointerItem('window-select')?.detail).toContain('fully enclosed');
     expect(pointerItem('crossing-select')?.detail).toContain('touched');
     expect(pointerItem('middle-drag')?.detail).toContain('Viewport settings');

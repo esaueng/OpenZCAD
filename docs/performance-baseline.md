@@ -32,7 +32,7 @@ OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
 The probe opens the Heat Sink demo, the existing model with the busiest edge
-set, then drives a left-button orbit and right-button pan for about five
+set, then drives a Shift+left-button orbit and right-button pan for about five
 seconds. `ModelViewer` emits one `oz:viewer.frame` mark per rendered frame only
 in an `OZ_PERF=1` build; each mark carries the frame interval plus
 `renderer.info.render` draw-call and triangle counts. The spec is excluded from

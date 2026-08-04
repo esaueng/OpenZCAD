@@ -131,7 +131,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Geometry kernel',
       'Kernel version',
       'Document authority',
-      'Settings schema'
+      'Settings schema',
+      'D1 storage migration'
     ]
   }
 ];

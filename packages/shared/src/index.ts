@@ -1182,6 +1182,11 @@ export interface HealthResponse {
   status: 'ok';
   environment: 'development' | 'beta';
   time: string;
+  /**
+   * Whether D1 has every schema object installed by
+   * 0010_document_storage_accounting. Absent older Workers are not ready.
+   */
+  documentStorageAccountingReady?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
   projectSharingEnabled?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */

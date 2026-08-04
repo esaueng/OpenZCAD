@@ -50,6 +50,7 @@ import {
   booleanFacetFallbackWarning,
   censusOfSolids,
   countFaceConnectedComponents,
+  droppedUnionOperandWarning,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   selectSafelyUnifiedSolid,
@@ -4216,26 +4217,31 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             let solid: number;
             if (feature.data.operation === 'union') {
-              const unionSolids = operands.flatMap((shape) => shape.solids);
-              const connectivity = analyzeUnionConnectivity(
-                unionSolids.map((candidate) => {
-                  const bounds = kernel.boundingBox(candidate);
-                  return {
-                    solid: candidate,
-                    bounds: {
-                      min: {
-                        x: bounds[0]!,
-                        y: bounds[1]!,
-                        z: bounds[2]!
-                      },
-                      max: {
-                        x: bounds[3]!,
-                        y: bounds[4]!,
-                        z: bounds[5]!
+              const unionOperands = feature.data.targetBodyIds.flatMap(
+                (bodyId, operandIndex) =>
+                  operands[operandIndex]!.solids.map((candidate) => {
+                    const bounds = kernel.boundingBox(candidate);
+                    return {
+                      solid: candidate,
+                      name: bodyName(document, bodyId),
+                      bounds: {
+                        min: {
+                          x: bounds[0]!,
+                          y: bounds[1]!,
+                          z: bounds[2]!
+                        },
+                        max: {
+                          x: bounds[3]!,
+                          y: bounds[4]!,
+                          z: bounds[5]!
+                        }
                       }
-                    }
-                  };
-                }),
+                    };
+                  })
+              );
+              const unionSolids = unionOperands.map((operand) => operand.solid);
+              const connectivity = analyzeUnionConnectivity(
+                unionOperands,
                 (left, right) =>
                   kernel.solidToSolidDistance(left, right)[0] ?? NaN,
                 (left, right) => {
@@ -4252,6 +4258,32 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 }
               );
               solid = fuseUniformSolid(kernel, unionSolids);
+              const resultBounds = kernel.boundingBox(solid);
+              const droppedOperand = droppedUnionOperandWarning({
+                operands: unionOperands.map((operand) => ({
+                  name: operand.name,
+                  bounds: operand.bounds
+                })),
+                result: {
+                  min: {
+                    x: resultBounds[0]!,
+                    y: resultBounds[1]!,
+                    z: resultBounds[2]!
+                  },
+                  max: {
+                    x: resultBounds[3]!,
+                    y: resultBounds[4]!,
+                    z: resultBounds[5]!
+                  }
+                },
+                units: document.units,
+                approximationTolerance: MEASUREMENT_DEFLECTION
+              });
+              if (droppedOperand) {
+                result.warnings.push(
+                  `Feature "${feature.name}": ${droppedOperand}`
+                );
+              }
               if (
                 !connectivity.connected &&
                 !isFaceConnectedSolid(kernel, solid)
