@@ -1,7 +1,7 @@
 # OpenZCAD E1-E7 expansion plan
 
-Status: amended plan of record. No expansion is active until it is named
-explicitly for execution.
+Status: amended plan of record. The full E1-E7 program was authorized for
+execution on 2026-08-03; expansions still land as separately scoped branches.
 
 This document records the E1-E7 feature-development program supplied on
 2026-08-03. It governs these expansions when they are implemented. If an
@@ -17,8 +17,8 @@ correction, and preserve the product and architecture intent.
   and remains the last topology-dependent expansion.
 - Press-pull and hash/ordinal-based face re-anchoring are not in scope.
 
-No E1-E7 expansion was selected in the source brief. Creating this plan is the
-only expansion-independent implementation step.
+The source brief did not select an expansion. The subsequent full-program
+authorization selects E1-E7 while retaining the one-expansion-per-branch gate.
 
 ## Verified baseline corrections
 
@@ -32,11 +32,9 @@ was added:
   the current feature-history UI before changing it.
 - The design QA document is `design-qa.md` at the repository root, not
   `docs/design-qa.md`.
-- The current suite discovers 547 tests in 41 files, not 184 tests in 21 files.
-  The pre-change run passed typecheck and 544 tests; three untouched assistant
-  route tests failed because their generic test key no longer configures the
-  default OpenRouter provider. This is baseline debt, not an E1-E7 acceptance
-  result.
+- On clean `origin/main` at `9de27d7`, typecheck and lint pass. The suite
+  discovers 1,238 tests in 97 files: 1,227 pass and 11 are explicitly marked as
+  expected failures. The source brief's 184-test/21-file baseline is stale.
 - The current exact adapter is BrepKit-first and routes STEP documents through
   OCCT. Kernel API availability must be rechecked against the pinned
   dependencies before E1.
