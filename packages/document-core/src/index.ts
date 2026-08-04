@@ -22,6 +22,7 @@ import {
   type FaceTopologyReferenceV5,
   type EntityId,
   type FeatureData,
+  type ExtrudeOperation,
   type FeatureId,
   type FeatureNode,
   type ParameterId,
@@ -195,6 +196,10 @@ export interface ExtrudeInput {
   name: string;
   sketchId: SketchId;
   distance: ParamValue;
+  /** Explicitly stored by new clients; absent reads as the legacy new body. */
+  operation?: ExtrudeOperation;
+  /** Existing live body consumed by an add or cut extrusion. */
+  targetBodyId?: BodyId;
   /** Extrude one detected region of the sketch instead of the whole profile. */
   profile?: SketchProfileReference;
   /** Extrude one or more explicitly selected bounded cells. */
@@ -968,6 +973,10 @@ export function extrudeSketch(
       featureKind: 'extrude',
       sketchId: input.sketchId,
       distance: input.distance,
+      ...(input.operation === undefined ? {} : { operation: input.operation }),
+      ...(input.targetBodyId === undefined
+        ? {}
+        : { targetBodyId: input.targetBodyId }),
       ...(input.profile ? { profile: input.profile } : {}),
       ...(input.profiles && input.profiles.length > 0
         ? { profiles: input.profiles }
