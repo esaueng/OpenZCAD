@@ -223,6 +223,21 @@ have been evaluated.
 - One Playwright scenario covers attachment and a fail-visible stale state.
 - Add an ADR for attachment and re-anchoring semantics.
 
+### Verified implementation correction
+
+The repository acquired schema-v5 exact topology witnesses and persistent
+lineage before this expansion was closed. ADR-014 therefore uses the stronger
+history-position lineage resolver instead of a centroid/normal/area proximity
+matcher. The measured snapshot remains diagnostic evidence, and even a
+zero-distance geometric candidate is refused when it cannot prove the selected
+lineage. This removes tolerance-boundary rebinding as an acceptance category:
+there is no proximity threshold that can silently choose another face.
+
+OpenCascade is no longer a production adapter. The shared resolver remains
+kernel-neutral, BrepKit exercises the production path, and the retained OCCT
+reference adapter consumes the same resolver for corpus comparisons. Browser
+acceptance must still demonstrate a named stale warning and recovery.
+
 ## E6 - Export and artifact pipeline
 
 ### Scope
