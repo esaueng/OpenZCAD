@@ -18,7 +18,7 @@ the real WKWebView DOM, and captures a full-resolution screenshot.
 | Native menus                  | Verified                 | macOS application, File, Edit, View, and Window menus were present.                                             |
 | STEP/STL picker/export        | Unit/build verified      | Native commands validate extensions and a 50 MB boundary; interactive cancel/write paths still need release QA. |
 | Command shortcuts             | Inherited                | The web app already treats Control and Command as equivalent; native menu events route undo/redo/settings.      |
-| Selection/hit testing         | Automated on Retina host       | Native smoke selects exact geometry in CSS coordinates at 2x scale and box-selects after a capture request.     |
+| Selection/hit testing         | Automated at 2x backing scale  | Native smoke selects exact geometry in CSS coordinates at 2x scale and box-selects after a capture request.     |
 | Orbit/pan/trackpad zoom       | Automated; hardware QA remains | Smoke covers Shift orbit, secondary pan, and pixel-delta zoom; minimum-OS physical trackpad QA remains.         |
 | Right-click/context menus     | Not yet release-verified | Test native and application menu interaction together.                                                          |
 | STEP/STL round trip           | Not yet release-verified | Validate exported geometry with the existing parity/corpus rules.                                               |

@@ -1737,6 +1737,18 @@ export function ModelViewer({
       }
       detail.resolve(cameraRig.capture());
     };
+    /** Force a high-DPI backing store when a hosted Mac exposes a 1x display. */
+    const handleE2EPixelRatio = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const value = (event as CustomEvent<{ value?: number }>).detail?.value;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+        return;
+      }
+      renderer.setPixelRatio(Math.min(value, 2));
+      requestRender();
+    };
     /**
      * Route a synthetic macOS pointer packet through OrbitControls itself.
      * The embedded WebDriver's W3C action endpoint emits MouseEvents, so it
@@ -1810,6 +1822,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-input-state',
         handleE2EInputState
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-pixel-ratio',
+        handleE2EPixelRatio
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-control-pointer',
@@ -3804,6 +3820,10 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'openzcad:e2e-input-state',
         handleE2EInputState
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-pixel-ratio',
+        handleE2EPixelRatio
       );
       renderer.domElement.removeEventListener(
         'openzcad:e2e-control-pointer',
