@@ -47,7 +47,21 @@ The browser reads an imported STEP file (up to 12 MB), records the source text a
 
 ## Collaboration lifecycle
 
-After project read access is authorized, the client upgrades `GET /api/projects/:id/collaboration` to a WebSocket. A per-project Durable Object broadcasts presence and canonical document snapshots, enforces owner/editor/viewer roles per message, and persists one project-wide edit lease before granting it. Editors submit against an expected room version; viewers never request a lease. Same-version divergence becomes an explicit conflict instead of an automatic winner.
+After D1 resolves current project read access, the client upgrades
+`GET /api/projects/:id/collaboration` to a WebSocket. The Worker authenticates
+the email-code session, replaces caller-controlled identity/role headers, and
+reaches the per-project Durable Object only through its binding. The room
+requires that trusted role for WebSocket and HTTP snapshot traffic, rechecks a
+non-owner's D1 membership before document writes and lease acquisition/renewal,
+and broadcasts presence plus canonical snapshots. Editors submit against an
+expected room version; viewers never request a lease. Same-version divergence
+becomes an explicit conflict instead of an automatic winner.
+
+D1 remains the durable membership source of truth. Durable Object storage holds
+the latest document, bounded snapshot history, and one project-wide edit lease,
+not a second membership copy. The 30-second server-time lease survives an
+abrupt socket disconnect and is renewed by a 10-second client heartbeat; a
+clean project change releases it, while another editor can take over after TTL.
 
 The client strips derived meshes before transmission, debounces edits, and uses
 the authenticated HTTP snapshot path above 900 KB. An unresolved conflict
@@ -55,7 +69,8 @@ blocks autosend and survives dialog close/reload through a small sentinel while
 the full divergent document remains in IndexedDB. Every resolution first saves
 a recovery project. “Keep my version” additionally requires this client's
 unexpired lease and the exact expected room version. Sharing and lease
-enforcement remain disabled in checked-in configuration.
+enforcement remain disabled in checked-in configuration. See
+[ADR-019](docs/adrs/ADR-019-durable-collaboration-authorization.md).
 
 ## AI lifecycle
 

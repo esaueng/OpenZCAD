@@ -15,6 +15,37 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
+test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
+  await stubApi(page, { collaborationRole: 'viewer' });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Viewer Role Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const sharingButton = page.getByRole('button', {
+    name: 'Open project sharing'
+  });
+  await expect(sharingButton).toContainText('read-only');
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled();
+
+  await page.getByLabel('New parameter name').fill('viewerLength');
+  await page.getByLabel('New parameter expression').fill('25 mm');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Cannot run this command: This shared project is read-only.'
+  );
+  await expect(
+    page.locator('.param-row', { hasText: 'viewerLength' })
+  ).toHaveCount(0);
+
+  await sharingButton.click();
+  const dialog = page.getByRole('dialog', { name: 'Project sharing' });
+  await expect(dialog).toContainText('Your role: viewer');
+  await expect(dialog).toContainText('Not available to viewers');
+  await expect(dialog).toContainText(
+    'Only the project owner can manage members and invitations.'
+  );
+});
+
 test('renders saved part geometry in the project thumbnail', async ({
   page
 }) => {

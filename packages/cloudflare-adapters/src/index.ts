@@ -1751,12 +1751,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     const displayName = request.headers.get('x-openzcad-display-name');
     const role = trustedProjectRole(request.headers);
     const projectId = new URL(request.url).searchParams.get('projectId');
-    if (
-      !userId ||
-      !displayName ||
-      !projectId ||
-      (this.leaseEnforced() && !role)
-    ) {
+    if (!userId || !displayName || !projectId || !role) {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
     if (this.projectId && this.projectId !== projectId) {
@@ -1994,7 +1989,17 @@ export class ProjectCollaborationRoom extends DurableObject {
       role: SharedProjectAccessRole;
     }
   ): Promise<void> {
-    if (connection.role === 'viewer') {
+    if (
+      connection.role === 'viewer' ||
+      !(await this.membershipStillAllowsAuthoring(connection))
+    ) {
+      if (
+        this.editLease?.userId === connection.userId &&
+        this.editLease.clientId === connection.clientId
+      ) {
+        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+        this.editLease = null;
+      }
       this.send(socket, { type: 'lease-denied', reason: 'read-only' });
       return;
     }
@@ -2026,10 +2031,28 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   private async renewEditLease(
     socket: WebSocket,
-    connection: { clientId: string; userId: UserId },
+    connection: {
+      clientId: string;
+      userId: UserId;
+      role: SharedProjectAccessRole;
+    },
     leaseId: string
   ): Promise<void> {
     await this.expireEditLease();
+    if (!(await this.membershipStillAllowsAuthoring(connection))) {
+      if (
+        this.editLease?.clientId === connection.clientId &&
+        this.editLease.userId === connection.userId
+      ) {
+        const lost = this.editLease;
+        await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
+        this.editLease = null;
+        this.notifyLeaseHolder(lost, 'role-changed');
+      } else {
+        this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
+      }
+      return;
+    }
     if (
       !this.editLease ||
       this.editLease.leaseId !== leaseId ||
@@ -2168,13 +2191,13 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async acceptInternalRoleUpdate(request: Request): Promise<Response> {
     const projectId = new URL(request.url).searchParams.get('projectId');
     const userId = request.headers.get('x-openzcad-internal-user-id');
-    const role = trustedProjectRole(
-      request.headers,
-      'x-openzcad-internal-project-role'
-    );
+    const roleValue = request.headers.get('x-openzcad-internal-project-role');
+    const role =
+      roleValue === 'editor' || roleValue === 'viewer' ? roleValue : null;
     if (
       !projectId ||
       !userId ||
+      (roleValue !== null && role === null) ||
       (this.projectId && this.projectId !== projectId)
     ) {
       return new Response('Invalid project role update.', { status: 400 });
@@ -2238,12 +2261,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     const displayName = request.headers.get('x-openzcad-display-name');
     const role = trustedProjectRole(request.headers);
     const projectId = new URL(request.url).searchParams.get('projectId');
-    if (
-      !userId ||
-      !displayName ||
-      !projectId ||
-      (this.leaseEnforced() && !role)
-    ) {
+    if (!userId || !displayName || !projectId || !role) {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
     if (role === 'viewer') {
@@ -2273,6 +2291,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     return this.enqueueLeaseOperation(() =>
       this.acceptHttpSnapshotPayload(
         userId as UserId,
+        role,
         projectId,
         payload as {
           clientId: string;
@@ -2286,6 +2305,7 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   private async acceptHttpSnapshotPayload(
     userId: UserId,
+    role: SharedProjectAccessRole,
     projectId: string,
     payload: {
       clientId: string;
@@ -2294,6 +2314,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       leaseId?: string;
     }
   ): Promise<Response> {
+    if (!(await this.membershipStillAllowsAuthoring({ userId, role }))) {
+      return rejectionResponse({
+        code: 'permission-denied',
+        message: 'Project membership no longer allows editing.'
+      });
+    }
     if (this.leaseEnforced()) {
       await this.expireEditLease();
       if (!this.matchesActiveLease(userId, payload.clientId, payload.leaseId)) {

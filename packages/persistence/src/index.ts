@@ -635,9 +635,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     request: DuplicateProjectRequest
   ): Promise<CreateProjectResponse> {
     const source = this.projects.get(request.projectId);
-    if (!source || source.ownerUserId !== userId) {
+    if (!source) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    await this.requireProjectRead(userId, request.projectId);
     const owned = this.ownedProjects(userId);
     const name =
       request.name ??
@@ -653,7 +654,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     // place on the desk.
     this.organization.set(document.projectId, {
       ...DEFAULT_PROJECT_ORGANIZATION,
-      sortOrder: this.organizationOf(request.projectId).sortOrder
+      sortOrder:
+        source.ownerUserId === userId
+          ? this.organizationOf(request.projectId).sortOrder
+          : 0
     });
     return { project: this.summarize(document), document };
   }
@@ -943,6 +947,17 @@ export class InMemoryPersistenceService implements PersistenceService {
   private destroyProject(projectId: string): void {
     this.projects.delete(projectId);
     this.organization.delete(projectId);
+    this.projectMembers.delete(projectId);
+    for (const [invitationId, invitation] of this.projectInvitations) {
+      if (invitation.projectId === projectId) {
+        this.projectInvitations.delete(invitationId);
+      }
+    }
+    for (const key of this.invitationRateEvents.keys()) {
+      if (key.startsWith(`${projectId}:`)) {
+        this.invitationRateEvents.delete(key);
+      }
+    }
     for (const [artifactId, artifact] of this.artifacts) {
       if (artifact.projectId === projectId) {
         this.artifacts.delete(artifactId);

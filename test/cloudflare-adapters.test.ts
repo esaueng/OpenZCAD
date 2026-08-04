@@ -32,7 +32,8 @@ function roomRequest(
     headers: {
       'content-type': 'application/json',
       'x-openzcad-user-id': 'user_room',
-      'x-openzcad-display-name': 'Room user'
+      'x-openzcad-display-name': 'Room user',
+      'x-openzcad-project-role': 'owner'
     },
     body: JSON.stringify(body)
   });
@@ -590,7 +591,8 @@ describe('cloudflare adapters', () => {
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'x-openzcad-user-id': 'user_room',
-      'x-openzcad-display-name': 'Room user'
+      'x-openzcad-display-name': 'Room user',
+      'x-openzcad-project-role': 'owner'
     };
     if (contentLength !== undefined) {
       headers['content-length'] = contentLength;
