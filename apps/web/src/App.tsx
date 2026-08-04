@@ -1037,12 +1037,10 @@ export function App() {
   const collaboration = useCollaboration({
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
-    // account cookies to a collaboration room after this exact project has
-    // been resolved as a cloud-backed document. Native WebSockets cannot add
-    // the in-memory bearer header, so desktop stays on the HTTP sync path until
-    // a ticketed socket handshake is implemented.
+    // account credentials to a collaboration room after this exact project has
+    // been resolved as a cloud-backed document. Desktop exchanges its native
+    // bearer credential for a short-lived, one-use WebSocket ticket.
     session:
-      !isDesktopApp() &&
       cloudAvailable &&
       (collaborationRollout.sharingEnabled ||
         collaborationRollout.personalSyncEnabled)

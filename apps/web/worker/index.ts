@@ -87,6 +87,8 @@ const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
+const PROJECT_COLLABORATION_TICKET_ROUTE =
+  /^\/api\/projects\/([^/]+)\/collaboration\/ticket$/;
 const PROJECT_SHARING_ROUTE = /^\/api\/projects\/([^/]+)\/sharing$/;
 const PROJECT_INVITATIONS_ROUTE = /^\/api\/projects\/([^/]+)\/invitations$/;
 const PROJECT_INVITATION_ROUTE =
@@ -235,6 +237,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
+  const collaborationTicketMatch =
+    PROJECT_COLLABORATION_TICKET_ROUTE.exec(pathname);
   const sharingMatch = PROJECT_SHARING_ROUTE.exec(pathname);
   const invitationsMatch = PROJECT_INVITATIONS_ROUTE.exec(pathname);
   const invitationMatch = PROJECT_INVITATION_ROUTE.exec(pathname);
@@ -257,7 +261,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
   if (
     (request.method === 'GET' || request.method === 'POST') &&
-    collaborationMatch &&
+    (collaborationMatch || collaborationTicketMatch) &&
     !env.PROJECT_ROOM
   ) {
     // The beta deployment omits collaboration bindings pending a product decision.
@@ -268,6 +272,36 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       },
       501
     );
+  }
+
+  if (
+    request.method === 'GET' &&
+    collaborationMatch &&
+    url.searchParams.has('ticket')
+  ) {
+    const ticketValues = url.searchParams.getAll('ticket');
+    if (
+      request.headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
+      ticketValues.length !== 1
+    ) {
+      return new Response('Collaboration ticket is invalid or expired.', {
+        status: 401
+      });
+    }
+    const projectId = collaborationMatch[1]!;
+    const roomUrl = new URL('https://project-room.internal/');
+    roomUrl.searchParams.set('projectId', projectId);
+    roomUrl.searchParams.set('ticket', ticketValues[0]!);
+    const headers = new Headers(request.headers);
+    headers.delete('authorization');
+    headers.delete('cookie');
+    headers.delete('x-openzcad-user-id');
+    headers.delete('x-openzcad-display-name');
+    headers.delete('x-openzcad-project-role');
+    headers.delete('x-openzcad-internal-ticket-request');
+    return env
+      .PROJECT_ROOM!.getByName(projectId)
+      .fetch(new Request(roomUrl, { method: 'GET', headers }));
   }
 
   const requiresArtifactStorage =
@@ -655,6 +689,22 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json({
       purgedProjectIds: await persistence.purgeExpiredProjects(userId)
     });
+  }
+
+  if (request.method === 'POST' && collaborationTicketMatch) {
+    const projectId = collaborationTicketMatch[1]!;
+    const access = await persistence.requireProjectRead(userId, projectId);
+    const headers = new Headers({
+      'x-openzcad-internal-ticket-request': 'v1',
+      'x-openzcad-user-id': userId,
+      'x-openzcad-display-name': session.displayName,
+      'x-openzcad-project-role': access.role
+    });
+    const roomUrl = new URL('https://project-room.internal/');
+    roomUrl.searchParams.set('projectId', projectId);
+    return env
+      .PROJECT_ROOM!.getByName(projectId)
+      .fetch(new Request(roomUrl, { method: 'PUT', headers }));
   }
 
   const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);

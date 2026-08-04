@@ -7,6 +7,8 @@ import {
   stubEmailLoginApi,
   stubTurnstileLoadFailureApi
 } from './openzcad-fixtures';
+import { createProjectDocument } from '@openzcad/document-core';
+import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 
 test('loads the OpenZCAD shell', async ({ page }) => {
   await stubApi(page);
@@ -44,6 +46,198 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
   await expect(dialog).toContainText(
     'Only the project owner can manage members and invitations.'
   );
+});
+
+test('uses a one-use native ticket for desktop collaboration without exposing a bearer', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Desktop Ticket Part',
+    toUserId('user_e2e')
+  );
+  const ticket = 'e'.repeat(43);
+  const settings = structuredClone(DEFAULT_APP_SETTINGS);
+  await stubApi(page, { collaborationRole: 'owner' });
+  await page.addInitScript(
+    ({ document, settings, ticket }) => {
+      const browserWindow = window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke(
+            command: string,
+            args?: Record<string, unknown>
+          ): Promise<unknown>;
+          transformCallback(
+            callback?: (...args: unknown[]) => unknown,
+            once?: boolean
+          ): number;
+          unregisterCallback(id: number): void;
+        };
+        __desktopInvocations: Array<{
+          command: string;
+          args?: Record<string, unknown>;
+        }>;
+        __desktopSocketUrls: string[];
+      };
+      browserWindow.__desktopInvocations = [];
+      browserWindow.__desktopSocketUrls = [];
+      const NativeWebSocket = window.WebSocket;
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols);
+          browserWindow.__desktopSocketUrls.push(String(url));
+        }
+      };
+
+      const jsonResponse = (value: unknown, status = 200) => ({
+        status,
+        contentType: 'application/json',
+        body: Array.from(new TextEncoder().encode(JSON.stringify(value)))
+      });
+      let callbackId = 0;
+      browserWindow.__TAURI_INTERNALS__ = {
+        async invoke(command, args) {
+          browserWindow.__desktopInvocations.push({ command, args });
+          if (command === 'desktop_collaboration_url') {
+            return `wss://zcad.esau.app/api/projects/${String(document.projectId)}/collaboration?ticket=${ticket}`;
+          }
+          if (command !== 'desktop_api_request') {
+            return 1;
+          }
+          const request = (args?.request ?? {}) as {
+            method?: string;
+            path?: string;
+          };
+          if (request.path === '/api/health') {
+            return jsonResponse({
+              status: 'ok',
+              environment: 'beta',
+              time: new Date().toISOString(),
+              projectSharingEnabled: true,
+              projectEditLeasesEnforced: true,
+              projectPersonalSyncEnabled: false
+            });
+          }
+          if (request.path === '/api/auth/config') {
+            return jsonResponse({
+              mode: 'email-code',
+              emailCodeEnabled: true,
+              desktopAuthEnabled: true
+            });
+          }
+          if (request.path === '/api/session') {
+            return jsonResponse({
+              userId: 'user_e2e',
+              displayName: 'E2E user',
+              email: 'e2e@example.com',
+              mode: 'email-code'
+            });
+          }
+          if (request.path === '/api/settings') {
+            return jsonResponse({
+              settings,
+              revision: 1,
+              synced: true,
+              credential: { stored: false, storageAvailable: false },
+              effectiveAssistant: {
+                configured: false,
+                source: 'deployment',
+                provider: 'openrouter',
+                model: 'openai/gpt-5.6-terra',
+                reasoningEffort: 'high'
+              }
+            });
+          }
+          if (request.path === '/api/projects' && request.method === 'POST') {
+            return jsonResponse(
+              {
+                project: {
+                  projectId: document.projectId,
+                  name: document.name,
+                  revisionCount: 0,
+                  documentVersion: document.version,
+                  updatedAt: document.derived.updatedAt
+                },
+                document
+              },
+              201
+            );
+          }
+          if (request.path === '/api/projects') {
+            return jsonResponse({ projects: [] });
+          }
+          if (request.path?.endsWith('/document')) {
+            return jsonResponse({
+              projectId: document.projectId,
+              version: document.version,
+              updatedAt: new Date().toISOString()
+            });
+          }
+          if (request.path === '/api/account/storage') {
+            return jsonResponse({
+              projectCount: 1,
+              documentBytes: 0,
+              revisionBytes: 0,
+              revisionCount: 0,
+              documentLimitBytes: 1_500_000,
+              maxRevisionsPerProject: 50
+            });
+          }
+          return jsonResponse({ error: 'Not found' }, 404);
+        },
+        transformCallback(callback, once = false) {
+          callbackId += 1;
+          const key = `_${callbackId}`;
+          Object.defineProperty(window, key, {
+            value: (...args: unknown[]) => {
+              const result = callback?.(...args);
+              if (once) {
+                delete (window as unknown as Record<string, unknown>)[key];
+              }
+              return result;
+            },
+            configurable: true
+          });
+          return callbackId;
+        },
+        unregisterCallback(id) {
+          delete (window as unknown as Record<string, unknown>)[`_${id}`];
+        }
+      };
+    },
+    { document, settings, ticket }
+  );
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Desktop Ticket Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { __desktopSocketUrls: string[] })
+            .__desktopSocketUrls
+      )
+    )
+    .toContain(
+      `wss://zcad.esau.app/api/projects/${document.projectId}/collaboration?ticket=${ticket}`
+    );
+  const invocations = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __desktopInvocations: Array<{
+            command: string;
+            args?: Record<string, unknown>;
+          }>;
+        }
+      ).__desktopInvocations
+  );
+  expect(invocations).toContainEqual({
+    command: 'desktop_collaboration_url',
+    args: { projectId: document.projectId }
+  });
+  expect(JSON.stringify(invocations)).not.toContain('Bearer');
 });
 
 test('renders saved part geometry in the project thumbnail', async ({
