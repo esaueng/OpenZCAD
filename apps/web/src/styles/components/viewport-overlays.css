@@ -193,16 +193,6 @@
   visibility: hidden;
 }
 
-/* Drawn at the dead zone's radius, so the rule it stands for is visible:
-   while the pointer is still inside the ring, nothing is chosen. */
-.marking-menu-deadzone {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  border: 1px dashed var(--color-border-strong);
-  border-radius: 999px;
-  pointer-events: none;
-}
-
 /* The readout is a pill that hugs whatever it is naming: a fixed disc has
    to choose between clipping long labels and hanging them over bare
    geometry, and a pill never has to. */
@@ -210,10 +200,10 @@
   position: absolute;
   transform: translate(-50%, -50%);
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   max-width: 240px;
-  padding: 6px 14px;
+  padding: 5px 14px 5px 8px;
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
   background: rgba(11, 15, 20, 0.94);
@@ -221,6 +211,29 @@
   white-space: nowrap;
   line-height: var(--lh-tight);
   pointer-events: none;
+}
+
+/* At rest there is no icon to lead with, so the padding evens out. */
+.marking-menu-hub:not(.armed) {
+  padding: 5px 14px;
+}
+
+/* The aimed slot's icon, echoed at the centre of the flick. */
+.marking-menu-hub-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+  font-size: var(--fs-mini);
+}
+
+.marking-menu-hub.armed.danger .marking-menu-hub-icon {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
 }
 
 /* Naming what a release would run is the hub's whole job, so it says so as
