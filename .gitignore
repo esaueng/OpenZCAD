@@ -1,6 +1,12 @@
 node_modules
 .pnpm-store
 dist
+dist-desktop
+target
+artifacts
+apps/desktop/src-tauri/gen
+apps/desktop/src-tauri/icons/*
+!apps/desktop/src-tauri/icons/icon.icns
 coverage
 .turbo
 .wrangler
