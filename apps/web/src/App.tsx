@@ -303,6 +303,7 @@ import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
+import { affectedFeatureTargets } from './lib/affectedFeatureTargets';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import {
@@ -4487,7 +4488,8 @@ export function App() {
         bodyId: body.bodyId,
         kind: 'edge',
         topologyId: edge.topologyId,
-        hash: edge.hash
+        hash: edge.hash,
+        reference: edge.reference
       }));
     setSelectedEdges(edges);
     setSelectedBodyIds([body.bodyId]);
@@ -7474,18 +7476,29 @@ export function App() {
                 onCreatePattern={(value) =>
                   createFeature(commandFactories.patternBody(value))
                 }
-                onApplyPrimitive={(feature, name, dimensions) =>
-                  executeCommand(
-                    commandFactories.updateFeature(
-                      {
-                        featureId: feature.featureId,
-                        name,
-                        data: { dimensions }
-                      },
-                      `Edit ${name}`
-                    )
-                  )
-                }
+                onApplyPrimitive={(feature, name, dimensions) => {
+                  const command = commandFactories.updateFeature(
+                    {
+                      featureId: feature.featureId,
+                      name,
+                      data: { dimensions }
+                    },
+                    `Edit ${name}`
+                  );
+                  if (!doc || !feature.bodyId) {
+                    executeCommand(command);
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: name,
+                    resultBodyId: feature.bodyId,
+                    targets: affectedFeatureTargets(doc, feature.featureId).map(
+                      (target, index) =>
+                        index === 0 ? { ...target, featureName: name } : target
+                    ),
+                    successMessage: command.label
+                  });
+                }}
                 onApplySketch={(feature, value) => {
                   if (
                     feature.data.featureKind !== 'sketch' ||
@@ -7682,12 +7695,18 @@ export function App() {
                                 featureKind: 'fillet',
                                 targetBodyId: value.targetBodyId,
                                 edgeHashes: value.edgeHashes,
+                                ...(value.edgeReferences
+                                  ? { edgeReferences: value.edgeReferences }
+                                  : {}),
                                 radius: value.size
                               }
                             : {
                                 featureKind: 'chamfer',
                                 targetBodyId: value.targetBodyId,
                                 edgeHashes: value.edgeHashes,
+                                ...(value.edgeReferences
+                                  ? { edgeReferences: value.edgeReferences }
+                                  : {}),
                                 distance: value.size
                               }
                       },
