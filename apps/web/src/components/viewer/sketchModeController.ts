@@ -102,8 +102,8 @@ export function buildSketchModeRig(
   const grid = new THREE.GridHelper(
     PLANE_EXTENT,
     PLANE_EXTENT / 10,
-    0x2c3a4d,
-    0x1b2634
+    0x64789c,
+    0x46587a
   );
   const gridMaterial = grid.material;
   gridMaterial.transparent = true;

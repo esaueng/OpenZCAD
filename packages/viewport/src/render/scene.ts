@@ -486,8 +486,8 @@ export function createStudioGrid(): THREE.Mesh {
     uniforms: {
       minorStep: { value: 1 },
       levelFract: { value: 0 },
-      minorColor: { value: new THREE.Color('#3d5073') },
-      majorColor: { value: new THREE.Color('#4e5f7d') },
+      minorColor: { value: new THREE.Color('#64789c') },
+      majorColor: { value: new THREE.Color('#8b9dc0') },
       fadeRadius: { value: 300 },
       fadeCenter: { value: new THREE.Vector2(0, 0) }
     },
@@ -520,10 +520,10 @@ export function createStudioGrid(): THREE.Mesh {
         // equals the next-finer tier's weight at f=0, so the step change when
         // the floor increments never moves a line's alpha. Coarser lines
         // always coincide with finer ones, so max() keeps them additive-free.
-        float g0 = gridLine(worldXY, minorStep) * (0.22 * (1.0 - f));
-        float g1 = gridLine(worldXY, minorStep * 10.0) * mix(0.38, 0.22, f);
-        float g2 = gridLine(worldXY, minorStep * 100.0) * mix(0.55, 0.38, f);
-        float g3 = gridLine(worldXY, minorStep * 1000.0) * 0.55;
+        float g0 = gridLine(worldXY, minorStep) * (0.30 * (1.0 - f));
+        float g1 = gridLine(worldXY, minorStep * 10.0) * mix(0.48, 0.30, f);
+        float g2 = gridLine(worldXY, minorStep * 100.0) * mix(0.68, 0.48, f);
+        float g3 = gridLine(worldXY, minorStep * 1000.0) * 0.68;
         float lineA = max(max(g0, g1), max(g2, g3));
         float fade = 1.0 - smoothstep(
           fadeRadius * 0.45,
@@ -536,7 +536,7 @@ export function createStudioGrid(): THREE.Mesh {
         // world axes, and the grid rendering over it — transparent meshes
         // sort nearer than the distant line midpoints — would tint and
         // stipple those lines wherever the two coincide.
-        vec3 color = mix(minorColor, majorColor, smoothstep(0.22, 0.55, lineA));
+        vec3 color = mix(minorColor, majorColor, smoothstep(0.30, 0.68, lineA));
         float alpha = lineA;
         if (alpha * fade < 0.004) discard;
         gl_FragColor = vec4(color, alpha * fade);
