@@ -50,6 +50,28 @@ afterEach(() => {
 
 describe('CameraController external orbit lifecycle', () => {
   it.each(['perspective', 'orthographic'] as const)(
+    'keeps %s camera matrices current after an orbit step',
+    (projection) => {
+      const { controller } = createController();
+      controller.applyProjection(projection);
+      controller.beginOrbitDrag();
+      controller.orbitByPixels(28, -16);
+      controller.stepOrbit(performance.now());
+
+      const camera = controller.activeCamera;
+      const anchor = new THREE.Vector3(12, -7, 5);
+      const projectedBeforeMatrixRefresh = anchor.clone().project(camera);
+      camera.updateMatrixWorld(true);
+      const projectedAfterMatrixRefresh = anchor.clone().project(camera);
+
+      expect(
+        projectedBeforeMatrixRefresh.distanceTo(projectedAfterMatrixRefresh)
+      ).toBeLessThan(1e-10);
+      controller.dispose();
+    }
+  );
+
+  it.each(['perspective', 'orthographic'] as const)(
     'preserves target, finite distance, and %s projection',
     (projection) => {
       const { controller } = createController();
