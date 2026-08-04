@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useEffect, useRef, useState } from 'react';
 import type { ContextMenuItem } from './ContextMenu';
 import {
   clampMenuOrigin,
   MARKING_DEAD_ZONE_PX,
   sectorForVector,
-  sectorPosition
+  sectorPosition,
+  slotPositionClearOfHub
 } from '../lib/markingMenu';
 
 /** How far from the centre the slots sit. */
 const RING_RADIUS = 96;
-/** Ring plus half a slot and a margin, so no slot can fall off screen. */
-const RING_REACH = RING_RADIUS + 48;
+/** Half a slot plus breathing room; added to every clearance the ring keeps. */
+const SLOT_CLEARANCE = 27;
 
 interface MarkingMenuProps {
   x: number;
@@ -46,8 +47,35 @@ export function MarkingMenu({
   onClose
 }: MarkingMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
   const [aimed, setAimed] = useState<number | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
+  // Half the widest pill this menu can show, plus half its height. The ring
+  // is laid out against the widest label rather than the hovered one, so the
+  // slots never move while the hand is mid-gesture.
+  const [pillHalf, setPillHalf] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const host = measureRef.current;
+    if (!host) {
+      return;
+    }
+    let width = 0;
+    let height = 0;
+    for (const child of host.children) {
+      const rect = child.getBoundingClientRect();
+      width = Math.max(width, rect.width);
+      height = Math.max(height, rect.height);
+    }
+    setPillHalf({ width: width / 2, height: height / 2 });
+  }, [items]);
+
+  // Slots never share the pill's horizontal band (they settle above or
+  // below it), but the pill itself still widens with its longest label, so
+  // the screen-edge clamp and the dismiss radius follow whichever is wider.
+  const clearWidth = pillHalf.width + SLOT_CLEARANCE;
+  const clearHeight = pillHalf.height + SLOT_CLEARANCE;
+  const reach = Math.max(RING_RADIUS, clearWidth) + 48;
   // Aiming is measured from where the menu actually is, so the clamped
   // centre has to be what both the layout and the flick use.
   const origin = clampMenuOrigin(
@@ -55,7 +83,7 @@ export function MarkingMenu({
     y,
     window.innerWidth,
     window.innerHeight,
-    RING_REACH
+    reach
   );
   // A flick outranks the pointer resting somewhere: while one is in progress
   // it is what a release would take.
@@ -101,11 +129,11 @@ export function MarkingMenu({
       // The menu draws nothing between the slots, so that press lands on the
       // model behind it and would otherwise dismiss the menu before the
       // gesture it was beginning could finish.
-      const reach = Math.hypot(
+      const travel = Math.hypot(
         event.clientX - origin.x,
         event.clientY - origin.y
       );
-      if (reach > RING_REACH) {
+      if (travel > reach) {
         onClose();
       }
     }
@@ -125,7 +153,7 @@ export function MarkingMenu({
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [origin.x, origin.y, items, onSelect, onClose]);
+  }, [origin.x, origin.y, items, onSelect, onClose, reach]);
 
   return (
     <div
@@ -135,14 +163,21 @@ export function MarkingMenu({
       aria-label="Selection actions"
       style={{ left: origin.x, top: origin.y }}
     >
+      {/* The dead zone is drawn by its own ring now that the hub sizes to
+          its text: the rule it stands for — no travel, no choice — is about
+          distance, so the thing that shows it has to keep the radius. */}
       <span
-        className={`marking-menu-hub${readItem ? ' armed' : ''}${
-          readItem?.danger ? ' danger' : ''
-        }`}
+        className="marking-menu-deadzone"
         style={{
           width: MARKING_DEAD_ZONE_PX * 2,
           height: MARKING_DEAD_ZONE_PX * 2
         }}
+        aria-hidden="true"
+      />
+      <span
+        className={`marking-menu-hub${readItem ? ' armed' : ''}${
+          readItem?.danger ? ' danger' : ''
+        }`}
         aria-hidden="true"
       >
         {readItem ? (
@@ -162,8 +197,25 @@ export function MarkingMenu({
           <span className="marking-menu-rest">Aim</span>
         )}
       </span>
+      {/* One hidden pill per item, rendered with the hub's own classes so
+          the measurement is the truth rather than an estimate. */}
+      <div ref={measureRef} className="marking-menu-measure" aria-hidden="true">
+        {items.map((item) => (
+          <span key={item.id} className="marking-menu-hub">
+            <span className="marking-menu-read">
+              {item.label.replace(/…$/, '')}
+            </span>
+            <small>
+              {item.disabled ? 'unavailable' : (item.shortcut ?? 'release')}
+            </small>
+          </span>
+        ))}
+      </div>
       {items.map((item, index) => {
-        const at = sectorPosition(index, items.length, RING_RADIUS);
+        const at = slotPositionClearOfHub(
+          sectorPosition(index, items.length, RING_RADIUS),
+          clearHeight
+        );
         return (
           <button
             key={item.id}
