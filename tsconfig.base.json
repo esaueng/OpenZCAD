@@ -18,6 +18,9 @@
     "paths": {
       "@openzcad/shared": ["packages/shared/src/index.ts"],
       "@openzcad/geometry": ["packages/geometry/src/index.ts"],
+      "@openzcad/geometry/text-loader": [
+        "packages/geometry/src/text/loader.ts"
+      ],
       "@openzcad/document-core": ["packages/document-core/src/index.ts"],
       "@openzcad/command-system": ["packages/command-system/src/index.ts"],
       "@openzcad/kernel-adapter": ["packages/kernel-adapter/src/index.ts"],
@@ -26,6 +29,13 @@
       ],
       "@openzcad/ai-contracts": ["packages/ai-contracts/src/index.ts"],
       "@openzcad/viewport": ["packages/viewport/src/index.ts"],
+      "@openzcad/viewport/input-bindings": [
+        "packages/viewport/src/input/bindings.ts"
+      ],
+      "@openzcad/viewport/move-transform": [
+        "packages/viewport/src/gizmo/moveTransform.ts"
+      ],
+      "@openzcad/viewport/types": ["packages/viewport/src/types.ts"],
       "@openzcad/io-step": ["packages/io-step/src/index.ts"],
       "@openzcad/io-stl": ["packages/io-stl/src/index.ts"],
       "@openzcad/persistence": ["packages/persistence/src/index.ts"],

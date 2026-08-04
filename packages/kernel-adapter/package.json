@@ -2,10 +2,12 @@
   "name": "@openzcad/kernel-adapter",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./exact": "./src/exact.ts"
+    "./exact": "./src/exact.ts",
+    "./face-attachment": "./src/face-attachment.ts"
   },
   "dependencies": {
     "@openzcad/document-core": "workspace:*",
@@ -13,7 +15,6 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
-    "brepkit-wasm": "github:esaueng/brepkit#main&path:/crates/wasm/pkg",
-    "occt-wasm": "3.8.0"
+    "brepkit-wasm": "github:esaueng/brepkit#c4edaeb539a74feae8e03333ccc5337a3e6e151d&path:/crates/wasm/pkg"
   }
 }

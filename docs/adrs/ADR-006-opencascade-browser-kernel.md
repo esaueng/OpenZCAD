@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by ADR-009. This records the previous OpenCascade implementation; the polyhedral kernel remains a compatibility path for imported mesh bodies.
+Superseded by ADR-009. This records the previous OpenCascade implementation. The polyhedral compatibility kernel it refers to has since been deleted (see ADR-005).
 
 ## Decision
 

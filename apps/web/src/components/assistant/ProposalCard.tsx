@@ -4,6 +4,8 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
+  EyeOff,
+  LoaderCircle,
   Ruler,
   X
 } from 'lucide-react';
@@ -12,11 +14,14 @@ import {
   describeOperation,
   summarizeOperations
 } from '../../lib/assistant/describe';
+import { RichText } from './RichText';
 
 interface ProposalCardProps {
   entry: AssistantProposalEntry;
   previewing: boolean;
   busy: boolean;
+  /** This card's own patch is going through the kernel right now. */
+  applying?: boolean;
   onPreview(): void;
   onApply(): void;
   onReject(): void;
@@ -32,6 +37,7 @@ export function ProposalCard({
   entry,
   previewing,
   busy,
+  applying = false,
   onPreview,
   onApply,
   onReject
@@ -42,15 +48,40 @@ export function ProposalCard({
   const resolved = entry.status !== 'open';
 
   return (
-    <div className={`assistant-card proposal ${entry.status}`}>
+    <div
+      className={`assistant-card proposal ${entry.status}${
+        previewing ? ' previewing' : ''
+      }`}
+    >
       <span className="assistant-card-label">
+        {entry.status === 'applied' ? (
+          <Check size={12} aria-hidden="true" />
+        ) : entry.status === 'rejected' ? (
+          <X size={12} aria-hidden="true" />
+        ) : null}
         {entry.status === 'applied'
           ? 'Applied'
           : entry.status === 'rejected'
             ? 'Rejected'
             : 'Proposed change'}
+        {previewing && (
+          <span className="assistant-live-pill">
+            <Eye size={10} aria-hidden="true" />
+            in the viewport
+          </span>
+        )}
       </span>
-      <p className="assistant-card-copy">{entry.proposal.summary}</p>
+      <RichText text={entry.proposal.summary} className="assistant-card-copy" />
+      {resolved && (
+        // Once a proposal is decided, its detail is reference material rather
+        // than a decision to make — the reading table stays reachable, but the
+        // card stops competing with the live turn below it.
+        <span className="assistant-card-note">
+          {entry.status === 'applied'
+            ? 'This change is in the document history — undo reverses it.'
+            : 'Nothing was changed.'}
+        </span>
+      )}
 
       {entry.readings.length > 0 && (
         <div className="assistant-readings">
@@ -150,7 +181,11 @@ export function ProposalCard({
             disabled={busy}
             onClick={onPreview}
           >
-            <Eye size={13} aria-hidden="true" />
+            {previewing ? (
+              <EyeOff size={13} aria-hidden="true" />
+            ) : (
+              <Eye size={13} aria-hidden="true" />
+            )}
             {previewing ? 'Hide preview' : 'Preview'}
           </button>
           <button
@@ -159,8 +194,16 @@ export function ProposalCard({
             disabled={busy}
             onClick={onApply}
           >
-            <Check size={13} aria-hidden="true" />
-            Apply
+            {applying ? (
+              <LoaderCircle
+                size={13}
+                aria-hidden="true"
+                className="assistant-spin"
+              />
+            ) : (
+              <Check size={13} aria-hidden="true" />
+            )}
+            {applying ? 'Applying…' : 'Apply'}
           </button>
           <button type="button" disabled={busy} onClick={onReject}>
             <X size={13} aria-hidden="true" />

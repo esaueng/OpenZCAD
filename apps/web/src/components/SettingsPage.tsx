@@ -1,4 +1,4 @@
-import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport';
+import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport/input-bindings';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Accessibility,
@@ -17,25 +17,78 @@ import {
   LogOut,
   Mail,
   Monitor,
+  MousePointer2,
   RefreshCcw,
-  Save,
   Search,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type {
-  AppSettings,
-  AppSettingsResponse,
-  AuthConfigResponse,
-  AuthSession
+import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  type AccountStorageUsage,
+  type AppSettings,
+  type AppSettingsResponse,
+  type AuthConfigResponse,
+  type AuthSession,
+  type HealthResponse
 } from '@openzcad/shared';
+
+/**
+ * A typed number input still hands back NaN for an empty field, and the bounds
+ * are the store's rather than a suggestion — a delay outside them is normalized
+ * away on the way to the account, so it should never be reachable here.
+ */
+function clampAutosaveDelay(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return CLOUD_AUTOSAVE_DELAY_BOUNDS.default;
+  }
+  return Math.round(
+    Math.min(
+      Math.max(seconds, CLOUD_AUTOSAVE_DELAY_BOUNDS.min),
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
+    )
+  );
+}
+import { api } from '../lib/api';
+import {
+  KERNEL_BUILD,
+  kernelBuildDetail,
+  kernelBuildLabel
+} from '../lib/kernelBuild';
 import {
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
+import {
+  KEYBOARD_CONTROL_GROUPS,
+  POINTER_CONTROL_GROUPS,
+  type ControlReferenceGroup
+} from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const megabytes = bytes / (1024 * 1024);
+  return megabytes >= 1
+    ? `${megabytes.toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * Names the ceiling even before anyone is near it. A limit discovered only at
+ * the moment a save is refused reads as a bug; a limit stated up front reads as
+ * a limit.
+ */
+function storageDescription(usage: AccountStorageUsage | null): string {
+  if (!usage) {
+    return 'Sign in to see what your account is storing.';
+  }
+  return `${usage.projectCount} project(s) · ${formatBytes(usage.documentBytes)} current, ${formatBytes(usage.revisionBytes)} across ${usage.revisionCount} saved revision(s). Each project may be up to ${formatBytes(usage.documentLimitBytes)} and keeps its last ${usage.maxRevisionsPerProject} revisions.`;
+}
 
 type SectionId = SettingsSectionId;
 
@@ -44,11 +97,11 @@ interface SettingsPageProps {
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
   authConfigStatus: AuthConfigStatus;
+  health: HealthResponse | null;
   session: AuthSession | null;
   busy: boolean;
   message: string;
   onChange(settings: AppSettings): void;
-  onSave(): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
   onTestAssistant(): void;
@@ -78,17 +131,6 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   privacy: <ShieldCheck size={15} aria-hidden="true" />,
   advanced: <Info size={15} aria-hidden="true" />
 };
-
-const SHORTCUTS: Array<[string, string]> = [
-  ['Ctrl/Cmd+,', 'Open settings'],
-  ['Ctrl/Cmd+K', 'Command palette'],
-  ['Ctrl/Cmd+S', 'Save revision'],
-  ['1 / 2 / 3 / 4', 'Front / top / right / isometric view'],
-  ['G', 'Toggle grid'],
-  ['W', 'Cycle display mode'],
-  ['P', 'Toggle projection'],
-  ['?', 'Open shortcut reference']
-];
 
 function Scope({ children }: { children: ReactNode }) {
   return <span className="settings-scope">{children}</span>;
@@ -144,19 +186,85 @@ function Toggle({
 function Section({
   title,
   intro,
+  wide = false,
   children
 }: {
   title: string;
   intro: string;
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section className="settings-section">
+    <section
+      className={`settings-section${wide ? ' settings-section-wide' : ''}`}
+    >
       <header>
         <h2>{title}</h2>
         <p>{intro}</p>
       </header>
       <div className="settings-card">{children}</div>
+    </section>
+  );
+}
+
+function ControlReferenceGroups({
+  groups
+}: {
+  groups: readonly ControlReferenceGroup[];
+}) {
+  return (
+    <div className="settings-control-groups">
+      {groups.map((group) => (
+        <section className="settings-control-group" key={group.id}>
+          <header>
+            <h4>{group.title}</h4>
+            <span>{group.items.length} controls</span>
+          </header>
+          <p>{group.description}</p>
+          <dl>
+            {group.items.map((item) => (
+              <div className="settings-control-row" key={item.id}>
+                <dt>
+                  <span className="settings-control-keys">
+                    {item.keys.map((key) => (
+                      <kbd key={key}>{key}</kbd>
+                    ))}
+                  </span>
+                </dt>
+                <dd>
+                  <strong>{item.action}</strong>
+                  <small>{item.detail}</small>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function ControlReferenceCollection({
+  icon,
+  title,
+  description,
+  groups
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  groups: readonly ControlReferenceGroup[];
+}) {
+  return (
+    <section className="settings-control-collection">
+      <header>
+        <span className="settings-control-collection-icon">{icon}</span>
+        <span>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </span>
+      </header>
+      <ControlReferenceGroups groups={groups} />
     </section>
   );
 }
@@ -336,11 +444,11 @@ export function SettingsPage({
   accountState,
   authConfig,
   authConfigStatus,
+  health,
   session,
   busy,
   message,
   onChange,
-  onSave,
   onSaveCredential,
   onDeleteCredential,
   onTestAssistant,
@@ -361,6 +469,30 @@ export function SettingsPage({
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
+    null
+  );
+
+  // Fetched only when the panel that shows it is open, and dropped on sign-out
+  // so one account's totals never linger in front of another.
+  useEffect(() => {
+    if (active !== 'files' || !session) {
+      setStorageUsage(null);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .storageUsage()
+      .then((usage) => {
+        if (!cancelled) {
+          setStorageUsage(usage);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [active, session]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -422,23 +554,9 @@ export function SettingsPage({
         <span className="settings-save-message" aria-live="polite">
           {message}
         </span>
-        <button className="secondary" type="button" onClick={onClose}>
+        <button className="primary" type="button" onClick={onClose}>
           <ChevronLeft size={14} aria-hidden="true" />
           Back to workspace
-        </button>
-        <button
-          className="primary"
-          type="button"
-          disabled={busy || !session || !accountState}
-          onClick={onSave}
-          title={
-            session && accountState
-              ? 'Save preferences to your account'
-              : 'Sign in to save preferences to a cloud profile; device settings are already saved'
-          }
-        >
-          <Save size={14} aria-hidden="true" />
-          Save to account
         </button>
       </header>
 
@@ -870,11 +988,66 @@ export function SettingsPage({
                 <span className="settings-state good">Active</span>
               </SettingRow>
               <SettingRow
+                title="Cloud autosave"
+                description="Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only with Ctrl/Cmd+S."
+                scope="Account"
+              >
+                <Toggle
+                  label="Cloud autosave"
+                  checked={settings.files.cloudAutosave}
+                  onChange={(cloudAutosave) =>
+                    onChange({
+                      ...settings,
+                      files: { ...settings.files, cloudAutosave }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Cloud autosave delay"
+                description="Quiet time before the copy is written. A continuous edit is still written at least once a minute."
+                scope="Account"
+              >
+                <input
+                  type="number"
+                  aria-label="Cloud autosave delay in seconds"
+                  disabled={!settings.files.cloudAutosave}
+                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
+                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
+                  step={1}
+                  value={settings.files.cloudAutosaveDelaySeconds}
+                  onChange={(event) =>
+                    onChange({
+                      ...settings,
+                      files: {
+                        ...settings.files,
+                        cloudAutosaveDelaySeconds: clampAutosaveDelay(
+                          event.target.valueAsNumber
+                        )
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
                 title="Cloud revisions"
-                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint when the beta API is available."
+                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint. Autosave does not add to this history."
                 scope="Current project"
               >
                 <span className="settings-state">Manual</span>
+              </SettingRow>
+              <SettingRow
+                title="Account storage"
+                description={storageDescription(storageUsage)}
+                scope="Account"
+              >
+                <span className="settings-state">
+                  {storageUsage
+                    ? formatBytes(
+                        storageUsage.documentBytes + storageUsage.revisionBytes
+                      )
+                    : '—'}
+                </span>
               </SettingRow>
               <SettingRow
                 title="STEP and STL exports"
@@ -1402,17 +1575,32 @@ export function SettingsPage({
 
           {active === 'shortcuts' && (
             <Section
-              title="Keyboard shortcuts"
-              intro="Current shortcuts remain fixed so CAD commands stay predictable across shared workstations."
+              title="Controls & shortcuts"
+              intro="A complete reference for keyboard commands, viewport navigation, selection, sketching, and direct modeling."
+              wide
             >
-              <div className="settings-shortcuts">
-                {SHORTCUTS.map(([shortcut, action]) => (
-                  <div key={shortcut}>
-                    <kbd>{shortcut}</kbd>
-                    <span>{action}</span>
-                  </div>
-                ))}
+              <div className="settings-controls-note">
+                <Keyboard size={18} aria-hidden="true" />
+                <span>
+                  <strong>Shortcuts are fixed and context-aware.</strong>
+                  <small>
+                    Workspace commands pause while you type or while Settings is
+                    open. Sketch mode reuses C and R for Circle and Rectangle.
+                  </small>
+                </span>
               </div>
+              <ControlReferenceCollection
+                icon={<Keyboard size={18} aria-hidden="true" />}
+                title="Keyboard"
+                description="Commands are grouped by the part of the workspace that owns them."
+                groups={KEYBOARD_CONTROL_GROUPS}
+              />
+              <ControlReferenceCollection
+                icon={<MousePointer2 size={18} aria-hidden="true" />}
+                title="Mouse & pointer"
+                description="Directional gestures matter: selection-box behavior changes with drag direction."
+                groups={POINTER_CONTROL_GROUPS}
+              />
             </Section>
           )}
 
@@ -1458,6 +1646,15 @@ export function SettingsPage({
                 <span className="settings-state good">Exact</span>
               </SettingRow>
               <SettingRow
+                title="Kernel version"
+                description="The pinned kernel build this app was compiled against. Quote it when reporting a geometry defect."
+                scope="Diagnostics"
+              >
+                <span className="mono" title={kernelBuildDetail(KERNEL_BUILD)}>
+                  {kernelBuildLabel(KERNEL_BUILD)}
+                </span>
+              </SettingRow>
+              <SettingRow
                 title="Document authority"
                 description="Canonical feature history is the source of truth; viewport meshes are disposable projections."
                 scope="Required"
@@ -1470,6 +1667,21 @@ export function SettingsPage({
                 scope="Diagnostics"
               >
                 <span className="mono">v{settings.schemaVersion}</span>
+              </SettingRow>
+              <SettingRow
+                title="D1 storage migration"
+                description="Migration 0010_document_storage_accounting must be ready before personal device sync can be enabled."
+                scope="Diagnostics"
+              >
+                <span
+                  className={`settings-state ${health?.documentStorageAccountingReady === true ? 'good' : 'warning'}`}
+                >
+                  {health === null
+                    ? 'Unavailable'
+                    : health.documentStorageAccountingReady === true
+                      ? 'Ready'
+                      : 'Not ready'}
+                </span>
               </SettingRow>
             </Section>
           )}

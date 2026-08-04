@@ -1,11 +1,11 @@
 import type { MutableRefObject } from 'react';
-import { Box, Cylinder, Globe, Sparkles } from 'lucide-react';
 import {
   ModelViewer,
   type ExtrudePreview,
   type FaceResizeCommit,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
+  type OrientationDragControls,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
@@ -19,10 +19,10 @@ import type {
   ProjectionMode,
   SelectionFilter,
   SketchOverlay,
-  StandardView,
-  ViewerSettings
+  ViewerSettings,
+  ViewTarget
 } from '@openzcad/viewport';
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
@@ -42,7 +42,8 @@ interface ViewerShellProps {
   selectedEdges: TopologySelection[];
   settings: ViewerSettings;
   fitSignal: number;
-  viewRequest: { view: StandardView; nonce: number } | null;
+  viewRequest: { view: ViewTarget; nonce: number } | null;
+  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
@@ -54,10 +55,6 @@ interface ViewerShellProps {
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
-  /** Starts a primitive from the empty-state card. */
-  onStartPrimitive(tool: 'box' | 'cylinder' | 'sphere'): void;
-  /** Focuses the assistant prompt; null when the assistant is turned off. */
-  onAskAssistant: (() => void) | null;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -116,7 +113,8 @@ interface ViewerShellProps {
   ): void;
   onToggleGrid(): void;
   onFit(): void;
-  onView(view: StandardView): void;
+  onView(view: ViewTarget): void;
+  onRotateView(direction: 'cw' | 'ccw'): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
 }
@@ -131,6 +129,7 @@ export function ViewerShell({
   settings,
   fitSignal,
   viewRequest,
+  rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
@@ -139,8 +138,6 @@ export function ViewerShell({
   modeOverlay,
   hideViewerToolbar = false,
   selectionChip,
-  onStartPrimitive,
-  onAskAssistant,
   onClearSelection,
   projection,
   initialView,
@@ -184,9 +181,12 @@ export function ViewerShell({
   onToggleGrid,
   onFit,
   onView,
+  onRotateView,
   onCycleDisplayMode,
   onToggleProjection
 }: ViewerShellProps) {
+  const orientationDragRef = useRef<OrientationDragControls | null>(null);
+
   return (
     <section className="viewer-shell" aria-label="3D viewport">
       <ModelViewer
@@ -199,6 +199,7 @@ export function ViewerShell({
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
@@ -208,6 +209,7 @@ export function ViewerShell({
         initialView={initialView}
         onViewChange={onViewChange}
         orientationRef={orientationRef}
+        orientationDragRef={orientationDragRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -245,11 +247,19 @@ export function ViewerShell({
         onContextMenu={onContextMenu}
       />
       {!hideViewerToolbar && (
-        <div className="viewer-rail-stack">
-          <OrientationWidget
-            orientationRef={orientationRef}
-            onSelectView={onView}
-          />
+        <>
+          <div className="viewer-rail-stack">
+            <OrientationWidget
+              orientationRef={orientationRef}
+              onSelectView={onView}
+              onRotateView={onRotateView}
+              onDragStart={() => orientationDragRef.current?.begin()}
+              onDrag={(deltaX, deltaY) =>
+                orientationDragRef.current?.move(deltaX, deltaY)
+              }
+              onDragEnd={() => orientationDragRef.current?.end()}
+            />
+          </div>
           <ViewerToolbar
             settings={settings}
             projection={projection}
@@ -259,50 +269,7 @@ export function ViewerShell({
             onCycleDisplayMode={onCycleDisplayMode}
             onToggleProjection={onToggleProjection}
           />
-        </div>
-      )}
-      {bodies.length === 0 && sketches.length === 0 && (
-        <div className="viewer-notice">
-          <div>
-            <strong>No geometry yet</strong>
-            {/*
-              Restating the palette hint wastes the one moment the user is
-              definitely looking here, so the card starts the work instead.
-            */}
-            <small>Start with a solid, or describe the part you want.</small>
-            <div className="viewer-notice-actions">
-              <button type="button" onClick={() => onStartPrimitive('box')}>
-                <Box size={14} aria-hidden="true" />
-                Box <kbd>B</kbd>
-              </button>
-              <button
-                type="button"
-                onClick={() => onStartPrimitive('cylinder')}
-              >
-                <Cylinder size={14} aria-hidden="true" />
-                Cylinder <kbd>C</kbd>
-              </button>
-              <button type="button" onClick={() => onStartPrimitive('sphere')}>
-                <Globe size={14} aria-hidden="true" />
-                Sphere
-              </button>
-              {onAskAssistant && (
-                <button
-                  type="button"
-                  className="viewer-notice-assistant"
-                  onClick={onAskAssistant}
-                >
-                  <Sparkles size={14} aria-hidden="true" />
-                  Describe a part
-                </button>
-              )}
-            </div>
-            <small className="viewer-notice-keys">
-              <kbd>S</kbd> sketch · <kbd>Ctrl</kbd>+<kbd>K</kbd> all commands ·{' '}
-              <kbd>?</kbd> shortcuts
-            </small>
-          </div>
-        </div>
+        </>
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">

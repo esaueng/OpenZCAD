@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { BrepKernel } from '../packages/kernel-adapter/node_modules/brepkit-wasm/brepkit_wasm.js';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -10,23 +11,71 @@ import {
   extrudeSketch,
   filletEdges,
   findSketch,
+  importMeshBody,
+  listFeaturesInOrder,
+  mirrorBody,
+  offsetSolidBody,
   patternBody,
+  shellBody,
   transformBody,
+  updateSketch,
   updateSketchObject
 } from '@openzcad/document-core';
 import {
+  BrepKitKernelAdapter,
+  brepEdgeCurve,
   createExactKernelAdapter,
+  edgeCircleMisfit,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  type BodyRepresentation,
+  type DerivedState,
+  type DirectEditOperation,
+  type EdgeTopology,
   type ParamValue,
   type PrimitiveKind
 } from '@openzcad/shared';
 import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  inspectTriangleMeshClosure,
+  isClosedConsistentlyOrientedMesh
+} from '../packages/kernel-adapter/src/boolean-result-validation';
 
 const NORMAL_PROJECTED_RADIUS_PX = 240;
+
+/** The two message shapes `booleanFacetFallbackWarning` can produce. */
+const FACET_CENSUS_MESSAGE =
+  /faceted approximation instead of exact surfaces|replaced every curved surface with planar faces|produced far more faces than its operands/;
+
+/**
+ * The boolean face census either fires or it does not, and today's answer is
+ * not the one to pin: the kernel facets these contacts now and may well stop,
+ * and asserting the warning is present would turn that improvement into an
+ * unrelated test failure here. Two things must hold either way — no warning
+ * other than the census's appears, and the census agrees with the faces
+ * actually on the resulting body.
+ */
+function expectCensusConsistentWithFaces(
+  derived: DerivedState,
+  body: BodyRepresentation
+): void {
+  const censusWarnings = derived.warnings.filter((warning) =>
+    FACET_CENSUS_MESSAGE.test(warning)
+  );
+  expect(derived.warnings).toEqual(censusWarnings);
+  const curvedFaces = (body.topology?.faces ?? []).filter(
+    (face) => face.geometry && face.geometry.surfaceType !== 'plane'
+  ).length;
+  if (censusWarnings.length > 0) {
+    // Every census message this path can produce is the lost-curvature one.
+    expect(curvedFaces).toBe(0);
+  } else {
+    expect(curvedFaces).toBeGreaterThan(0);
+  }
+}
 const CLOSE_PROJECTED_RADIUS_PX = 1200;
 const MAX_PROJECTED_CHORD_ERROR_PX = 0.5;
 
@@ -72,7 +121,11 @@ function circularMeshRing(
   return [...ordered, ordered[0]!].flat();
 }
 
-describe('exact hybrid kernel adapter', () => {
+// Real-kernel suite: several tests run seconds of WASM geometry and have
+// tripped the 5 s default one at a time on slow CI runners (three different
+// victims across three runs). Give every test here the same generous budget;
+// individual tests may still raise it further.
+describe('exact kernel adapter', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
 
   beforeAll(async () => {
@@ -133,7 +186,317 @@ describe('exact hybrid kernel adapter', () => {
       true
     );
     expect(edgeHashes).not.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(
+      body?.topology?.faces.map((face) => face.reference?.lineageName).sort()
+    ).toEqual([
+      'primitive.box.face.x-max',
+      'primitive.box.face.x-min',
+      'primitive.box.face.y-max',
+      'primitive.box.face.y-min',
+      'primitive.box.face.z-max',
+      'primitive.box.face.z-min'
+    ]);
+    expect(body?.topology?.edges.every((edge) => edge.reference)).toBe(true);
+    expect(body?.topology?.lineageDiagnostics).toBeUndefined();
     expect(derived.warnings).toEqual([]);
+  });
+
+  it('preserves BrepKit semantic lineage through an exact rigid transform', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Lineage box', toUserId('user_lineage_transform')),
+      {
+        name: 'Lineage box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = base.bodyOrder[0]!;
+    const before = await adapter.syncDocument(base);
+    const beforeTopology = before.bodyRepresentations[bodyId]!.topology!;
+    const transformedDocument = transformBody(base, {
+      name: 'Place lineage box',
+      targetBodyId: bodyId,
+      translation: { x: 40, y: -15, z: 7 },
+      rotationDeg: { x: 0, y: 0, z: 90 }
+    }).document;
+
+    const transformed = await adapter.syncDocument(transformedDocument);
+    const afterTopology = transformed.bodyRepresentations[bodyId]!.topology!;
+    const referenceNames = (topology: typeof beforeTopology) =>
+      [...topology.faces, ...topology.edges]
+        .map((entry) => entry.reference?.lineageName)
+        .sort();
+
+    expect(referenceNames(afterTopology)).toEqual(
+      referenceNames(beforeTopology)
+    );
+    expect(
+      [...afterTopology.faces, ...afterTopology.edges].every(
+        (entry) => entry.reference
+      )
+    ).toBe(true);
+    expect(
+      afterTopology.lineageDiagnostics?.filter(({ status }) =>
+        ['deleted', 'split', 'merged'].includes(status)
+      ) ?? []
+    ).toEqual([]);
+    expect(new Set(afterTopology.faces.map((face) => face.hash))).not.toEqual(
+      new Set(beforeTopology.faces.map((face) => face.hash))
+    );
+    expect(transformed.warnings).toEqual([]);
+  });
+
+  it('names every face and edge of a box from its semantic lineage', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Parity box', toUserId('user_lineage_parity')),
+      {
+        name: 'Parity box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const bodyId = document.bodyOrder[0]!;
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(document);
+      const topology = derived.bodyRepresentations[bodyId]!.topology!;
+      const names = [...topology.faces, ...topology.edges]
+        .map((entry) => entry.reference?.lineageName)
+        .filter((name): name is string => name !== undefined)
+        .sort();
+
+      // Six faces and twelve edges, every one of them named.
+      expect(names).toHaveLength(18);
+    } finally {
+      brepKit.dispose();
+    }
+  });
+
+  it('rebuilds face-attached sketches from evolved exact lineage', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Attached sketch', toUserId('user_attachment')),
+      {
+        name: 'Attachment box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const sourceFace = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
+    )!;
+    expect(sourceFace.reference?.kind).toBe('face');
+    expect(sourceFace.geometry?.normal).toBeDefined();
+
+    const geometry = sourceFace.geometry!;
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...base, derived: sourceDerived },
+      {
+        name: 'Top attachment',
+        planeRef: {
+          type: 'face',
+          bodyId: sourceBodyId,
+          faceHash: sourceFace.hash,
+          faceReference:
+            sourceFace.reference?.kind === 'face'
+              ? sourceFace.reference
+              : undefined,
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal!,
+          frame: {
+            origin: geometry.center,
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: geometry.normal!
+          }
+        },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 4,
+            height: 6,
+            centerX: 0,
+            centerY: 0
+          }
+        ]
+      }
+    );
+    const { document: attached, bodyId: extrusionBodyId } = extrudeSketch(
+      withSketch,
+      { name: 'Attached extrusion', sketchId, distance: 5 }
+    );
+    const primitive = listFeaturesInOrder(attached).find(
+      (feature) => feature.data.featureKind === 'primitive'
+    )!;
+    const evolved = new CommandManager(attached).execute(
+      commandFactories.updateFeature(
+        {
+          featureId: primitive.featureId,
+          data: { dimensions: { width: 24, height: 20, depth: 42 } }
+        },
+        'Resize attachment source'
+      )
+    );
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(evolved);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[extrusionBodyId]).toBeDefined();
+      expect(
+        derived.bodyRepresentations[extrusionBodyId]!.bbox.min.z
+      ).toBeCloseTo(42, 5);
+    } finally {
+      brepKit.dispose();
+    }
+  });
+
+  it('converts a legacy face attachment to the same fixed geometry without a warning', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument(
+        'Legacy attachment conversion',
+        toUserId('user_legacy_attachment_conversion')
+      ),
+      {
+        name: 'Legacy attachment box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const sourceDerived = await adapter.syncDocument(base);
+    const sourceFace = sourceDerived.bodyRepresentations[
+      sourceBodyId
+    ]!.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'primitive.box.face.z-max'
+    )!;
+    const geometry = sourceFace.geometry!;
+    const frame = {
+      origin: { ...geometry.center },
+      xAxis: { x: 0, y: -1, z: 0 },
+      yAxis: { x: 1, y: 0, z: 0 },
+      zAxis: { ...geometry.normal! }
+    };
+    const { document: withSketch, sketchId } = addSketchFeature(
+      { ...base, derived: sourceDerived },
+      {
+        name: 'Legacy face sketch',
+        planeRef: {
+          type: 'face',
+          bodyId: sourceBodyId,
+          faceHash: sourceFace.hash,
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal!,
+          frame
+        },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 4,
+            height: 6,
+            centerX: 0,
+            centerY: 0
+          }
+        ]
+      }
+    );
+    const { document: legacyDocument, bodyId: extrusionBodyId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Legacy extrusion',
+        sketchId,
+        distance: 5
+      }
+    );
+
+    const legacy = await adapter.syncDocument(legacyDocument);
+    expect(legacy.warnings).toContain(
+      'Sketch "Legacy face sketch": legacy face attachment has no schema-v5 lineage reference; using its stored migration frame.'
+    );
+
+    const fixedDocument = updateSketch(legacyDocument, {
+      sketchId,
+      planeRef: { type: 'frame', frame }
+    });
+    const fixed = await adapter.syncDocument(fixedDocument);
+    expect(fixed.warnings).toEqual([]);
+    expect(fixed.bodyRepresentations[extrusionBodyId]).toEqual(
+      legacy.bodyRepresentations[extrusionBodyId]
+    );
+  });
+
+  it('publishes an imported-mesh body as a hash-only, unreferenced solid', async () => {
+    // A 12-triangle block, the shape a real STL export of a part has.
+    const corners: [number, number, number][] = [
+      [0, 0, 0],
+      [10, 0, 0],
+      [10, 20, 0],
+      [0, 20, 0],
+      [0, 0, 30],
+      [10, 0, 30],
+      [10, 20, 30],
+      [0, 20, 30]
+    ];
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    for (const quad of [
+      [0, 3, 2, 1],
+      [4, 5, 6, 7],
+      [0, 1, 5, 4],
+      [3, 7, 6, 2],
+      [0, 4, 7, 3],
+      [1, 2, 6, 5]
+    ]) {
+      const base = vertices.length / 3;
+      for (const corner of quad) {
+        vertices.push(...corners[corner]!);
+      }
+      indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    const { document, bodyId } = importMeshBody(
+      createProjectDocument('Mesh parity', toUserId('user_mesh_parity')),
+      {
+        name: 'Imported block',
+        artifactId: 'artifact_parity_block',
+        sourceName: 'block.stl',
+        triangleCount: indices.length / 3,
+        vertices,
+        indices
+      }
+    );
+
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.exportableBodyIds).toEqual([bodyId]);
+      const body = derived.bodyRepresentations[bodyId]!;
+      expect(body.source).toBe('imported-mesh');
+      expect(body.name).toBe('Imported block');
+      expect(body.consumed).toBe(false);
+      expect(body.exportableStep).toBe(true);
+      expect(body.volume).toBeCloseTo(6000, 6);
+      // A mesh import carries no feature contract to name its topology from,
+      // so the adapter publishes one body-level hash-only diagnostic and no
+      // verified face or edge references at all.
+      expect(
+        body.topology!.lineageDiagnostics?.map((diagnostic) => [
+          diagnostic.kind,
+          diagnostic.status
+        ])
+      ).toEqual([['body', 'hash-only']]);
+      expect(
+        [...body.topology!.faces, ...body.topology!.edges].filter(
+          (entry) => entry.reference !== undefined
+        )
+      ).toHaveLength(0);
+    } finally {
+      brepKit.dispose();
+    }
   });
 
   it('keeps cylinder surfaces and exact edge outlines smooth across scale and zoom', async () => {
@@ -311,6 +674,454 @@ describe('exact hybrid kernel adapter', () => {
     expect(importedDerived.warnings).toEqual([]);
   });
 
+  it('publishes the faces each edge bounds, agreeing with displayRole', async () => {
+    let document = createProjectDocument(
+      'Edge adjacency',
+      toUserId('user_adjacency')
+    );
+    const ids = new Map<string, (typeof document.bodyOrder)[number]>();
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    ids.set('Box', document.bodyOrder.at(-1)!);
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    ids.set('Cylinder', document.bodyOrder.at(-1)!);
+    document = addPrimitiveFeature(document, {
+      name: 'Sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 10 }
+    });
+    ids.set('Sphere', document.bodyOrder.at(-1)!);
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const edgesOf = (name: string) =>
+      derived.bodyRepresentations[ids.get(name)!]!.topology!.edges;
+    const faceHashesOf = (name: string) =>
+      new Set(
+        derived.bodyRepresentations[ids.get(name)!]!.topology!.faces.map(
+          (face) => face.hash
+        )
+      );
+    // Fails rather than silently building an empty Set, which would make every
+    // `.size` assertion below read 0 and pass nothing.
+    const adjacencyOf = (edge: { adjacentFaceHashes?: number[] }): number[] => {
+      expect(edge.adjacentFaceHashes).toBeDefined();
+      return edge.adjacentFaceHashes as number[];
+    };
+
+    for (const name of ids.keys()) {
+      const published = faceHashesOf(name);
+      for (const edge of edgesOf(name)) {
+        // Present on every edge, sorted, and naming only faces this body
+        // actually published — an unsorted array would pass the corpus digests
+        // (which sort first) while making rebuild output non-reproducible.
+        const hashes = adjacencyOf(edge);
+        expect(hashes.length).toBeGreaterThan(0);
+        expect([...hashes].sort((a, b) => a - b)).toEqual(hashes);
+        for (const hash of hashes) {
+          expect(published.has(hash)).toBe(true);
+        }
+      }
+    }
+
+    // A box is the clean case: every edge divides two distinct faces, and
+    // nothing is a seam.
+    const boxEdges = edgesOf('Box');
+    expect(boxEdges).toHaveLength(12);
+    for (const edge of boxEdges) {
+      expect(edge.displayRole).toBe('feature');
+      expect(new Set(adjacencyOf(edge)).size).toBe(2);
+    }
+
+    // The cylinder's seam closes one face's UV parameterization, so that face
+    // is listed twice. This is the fact `displayRole` already derives, and the
+    // two must not be able to disagree.
+    const cylinderSeams = edgesOf('Cylinder').filter(
+      (edge) => edge.displayRole === 'seam'
+    );
+    expect(cylinderSeams).toHaveLength(1);
+    expect(new Set(adjacencyOf(cylinderSeams[0]!)).size).toBe(1);
+    expect(adjacencyOf(cylinderSeams[0]!)).toHaveLength(2);
+    for (const edge of edgesOf('Cylinder').filter(
+      (edge) => edge.displayRole === 'feature'
+    )) {
+      expect(new Set(adjacencyOf(edge)).size).toBe(2);
+    }
+
+    // The sphere pins the limit rather than hiding it. BrepKit builds it from
+    // two same-surface hemispheres that share one exact witness, so BOTH
+    // patches hash identically and every edge reports a single distinct hash —
+    // even the equator, which genuinely divides two faces. A consumer cannot
+    // use these hashes to tell the hemispheres apart. That collision is why
+    // face picks on spheres are unavailable, and if it ever stops being true
+    // this assertion should turn red and be revisited deliberately.
+    expect(faceHashesOf('Sphere').size).toBe(1);
+    for (const edge of edgesOf('Sphere')) {
+      expect(new Set(adjacencyOf(edge)).size).toBe(1);
+    }
+  });
+
+  it('publishes the two vertices each edge runs between', async () => {
+    let document = createProjectDocument(
+      'Edge vertices',
+      toUserId('user_vertex_ids')
+    );
+    const ids = new Map<string, (typeof document.bodyOrder)[number]>();
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    ids.set('Box', document.bodyOrder.at(-1)!);
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    ids.set('Cylinder', document.bodyOrder.at(-1)!);
+    // Two solids in one body, spaced exactly their own extent, so they touch
+    // face to face. Coincident geometry, distinct topology.
+    document = addPrimitiveFeature(document, {
+      name: 'Pair',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const pairId = document.bodyOrder.at(-1)!;
+    const patterned = patternBody(document, {
+      name: 'Touching pair',
+      targetBodyId: pairId,
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 10
+    });
+    document = patterned.document;
+    ids.set('Pair', patterned.bodyId);
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const edgesOf = (name: string) =>
+      derived.bodyRepresentations[ids.get(name)!]!.topology!.edges;
+    // Fails rather than defaulting, which would make every count below read
+    // from an empty pair and assert nothing.
+    const verticesOf = (edge: { vertexIds?: [number, number] }) => {
+      expect(edge.vertexIds).toBeDefined();
+      return edge.vertexIds as [number, number];
+    };
+
+    // A box: twelve edges over eight vertices, each edge joining two distinct
+    // ones, each vertex used by exactly three edges.
+    const boxEdges = edgesOf('Box');
+    expect(boxEdges).toHaveLength(12);
+    const boxUse = new Map<number, number>();
+    for (const edge of boxEdges) {
+      const [start, end] = verticesOf(edge);
+      expect(start).not.toBe(end);
+      boxUse.set(start, (boxUse.get(start) ?? 0) + 1);
+      boxUse.set(end, (boxUse.get(end) ?? 0) + 1);
+    }
+    expect(boxUse.size).toBe(8);
+    expect([...boxUse.values()]).toEqual(Array(8).fill(3));
+
+    // The fact that makes this worth publishing next to adjacentFaceHashes:
+    // some pair of box edges shares a face and shares NO vertex, so adjacency
+    // alone would have joined two opposite sides of the top face into one run.
+    const shareFaceNotVertex = boxEdges.some((edge) =>
+      boxEdges.some(
+        (other) =>
+          other !== edge &&
+          !verticesOf(other).some((id) => verticesOf(edge).includes(id)) &&
+          (edge.adjacentFaceHashes ?? []).some((hash) =>
+            (other.adjacentFaceHashes ?? []).includes(hash)
+          )
+      )
+    );
+    expect(shareFaceNotVertex).toBe(true);
+
+    // A closed edge names one vertex twice rather than publishing a single
+    // entry. The cylinder's two rims are the case; its seam is a normal open
+    // edge running between them.
+    const cylinderEdges = edgesOf('Cylinder');
+    const closedRims = cylinderEdges.filter(
+      (edge) => new Set(verticesOf(edge)).size === 1
+    );
+    expect(closedRims).toHaveLength(2);
+    for (const rim of closedRims) {
+      expect(verticesOf(rim)).toHaveLength(2);
+    }
+    expect(
+      cylinderEdges.filter((edge) => new Set(verticesOf(edge)).size === 2)
+    ).toHaveLength(1);
+    // The seam joins the two rims, so between them the three edges use exactly
+    // the two vertices the body has.
+    expect(new Set(cylinderEdges.flatMap(verticesOf)).size).toBe(2);
+
+    // Two solids touching exactly still share no vertex id. The ids are
+    // numbered body-wide but the handle map is per solid, so a run cannot walk
+    // from one solid to the other along coincident geometry.
+    const pairEdges = edgesOf('Pair');
+    expect(pairEdges).toHaveLength(24);
+    expect(new Set(pairEdges.flatMap(verticesOf)).size).toBe(16);
+    const pairUse = new Map<number, number>();
+    for (const edge of pairEdges) {
+      for (const id of verticesOf(edge)) {
+        pairUse.set(id, (pairUse.get(id) ?? 0) + 1);
+      }
+    }
+    expect([...pairUse.values()]).toEqual(Array(16).fill(3));
+  });
+
+  it('publishes the exact circle each arc lies on, and a bare type otherwise', async () => {
+    let document = createProjectDocument(
+      'Edge curves',
+      toUserId('user_edge_curve')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    const boxId = document.bodyOrder.at(-1)!;
+    document = addPrimitiveFeature(document, {
+      name: 'Cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 20 }
+    });
+    const cylinderId = document.bodyOrder.at(-1)!;
+    const base = await adapter.syncDocument(document);
+    expect(base.warnings).toEqual([]);
+    const boxEdges = base.bodyRepresentations[boxId]!.topology!.edges;
+    const filleted = filletEdges(document, {
+      name: 'Filleted box',
+      targetBodyId: boxId,
+      edgeHashes: boxEdges.map((edge) => edge.hash),
+      size: 3
+    });
+    const derived = await adapter.syncDocument(filleted.document);
+    expect(derived.warnings).toEqual([]);
+    const curveOf = (edge: EdgeTopology) => {
+      expect(edge.curve).toBeDefined();
+      return edge.curve!;
+    };
+
+    // A box is straight everywhere: every edge names its type and carries no
+    // analytic payload, because there is no circle to publish.
+    expect(boxEdges).toHaveLength(12);
+    for (const edge of boxEdges) {
+      expect(curveOf(edge).type).toBe('LINE');
+      expect(curveOf(edge).circle).toBeUndefined();
+      // The record is a type plus, for circles, a circle — nothing else. This
+      // pins what the shape deliberately omits: the kernel's parameter range
+      // describes the UNDERLYING curve rather than the edge's trim of it, so a
+      // quarter fillet arc reports a full turn. A range here would be a wrong
+      // answer published in a field that looks authoritative.
+      expect(Object.keys(curveOf(edge))).toEqual(['type']);
+    }
+
+    // The cylinder's two rims are exact circles at the ends of its axis, and
+    // its seam is a straight line up the wall.
+    const cylinderEdges = base.bodyRepresentations[cylinderId]!.topology!.edges;
+    const rims = cylinderEdges.filter((edge) => curveOf(edge).circle);
+    expect(rims).toHaveLength(2);
+    for (const rim of rims) {
+      const circle = curveOf(rim).circle!;
+      expect(circle.radius).toBeCloseTo(10, 9);
+      expect(circle.center.x).toBeCloseTo(0, 9);
+      expect(circle.center.y).toBeCloseTo(0, 9);
+      expect(Math.abs(circle.axis.z)).toBeCloseTo(1, 9);
+    }
+    expect(
+      rims.map((rim) => curveOf(rim).circle!.center.z).sort((a, b) => a - b)
+    ).toEqual([0, 20]);
+    for (const seam of cylinderEdges.filter(
+      (edge) => edge.displayRole === 'seam'
+    )) {
+      expect(curveOf(seam).type).toBe('LINE');
+      expect(curveOf(seam).circle).toBeUndefined();
+    }
+
+    // Rounding all twelve edges of the box at radius 3 leaves a quarter arc at
+    // each of the 8 corners about each of the 3 axes: 24 arcs of radius 3,
+    // each centred where that corner's three offset fillet axes meet. Those
+    // centres are the corner points pulled 3 inboard, so they are enumerable
+    // in closed form rather than recorded from a run.
+    const filletedEdges =
+      derived.bodyRepresentations[filleted.bodyId]!.topology!.edges;
+    const arcs = filletedEdges.filter(
+      (edge) => curveOf(edge).type === 'CIRCLE'
+    );
+    expect(filletedEdges).toHaveLength(48);
+    expect(arcs).toHaveLength(24);
+    const round = (value: number) => Number(value.toFixed(6));
+    const placements = new Set<string>();
+    for (const arc of arcs) {
+      const circle = curveOf(arc).circle;
+      expect(circle).toBeDefined();
+      expect(circle!.radius).toBeCloseTo(3, 9);
+      expect([3, 17]).toContain(round(circle!.center.x));
+      expect([3, 17]).toContain(round(circle!.center.y));
+      expect([3, 7]).toContain(round(circle!.center.z));
+      // The axis is the arc plane's normal, canonically signed — one of the
+      // three positive basis directions here and never their negatives,
+      // because the Frenet sign the kernel hands back follows its
+      // parameterization phase and is not stable across rebuilds.
+      const axis = [circle!.axis.x, circle!.axis.y, circle!.axis.z].map(round);
+      expect([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ]).toContainEqual(axis);
+      placements.add(
+        `${round(circle!.center.x)},${round(circle!.center.y)},${round(circle!.center.z)}|${axis.join(',')}`
+      );
+      // Re-derived from the edge's own sampled points rather than from the
+      // kernel call that produced the circle: every sample sits at the
+      // published radius from the published centre, in the published plane.
+      for (let offset = 0; offset + 2 < arc.points.length; offset += 3) {
+        const toPoint = {
+          x: arc.points[offset]! - circle!.center.x,
+          y: arc.points[offset + 1]! - circle!.center.y,
+          z: arc.points[offset + 2]! - circle!.center.z
+        };
+        const axial =
+          toPoint.x * circle!.axis.x +
+          toPoint.y * circle!.axis.y +
+          toPoint.z * circle!.axis.z;
+        expect(axial).toBeCloseTo(0, 9);
+        expect(Math.hypot(toPoint.x, toPoint.y, toPoint.z)).toBeCloseTo(3, 9);
+      }
+    }
+    // 8 corners x 3 axes, all distinct. A collapsed or duplicated centre would
+    // otherwise pass every per-arc assertion above.
+    expect(placements.size).toBe(24);
+    for (const straight of filletedEdges.filter(
+      (edge) => curveOf(edge).type === 'LINE'
+    )) {
+      expect(curveOf(straight).circle).toBeUndefined();
+    }
+  });
+
+  it('publishes no analytic circle for a curve the kernel measures wrongly', () => {
+    // Nothing the document model can build is an ellipse, and the parity
+    // corpus holds no elliptical or spline edge either, so the gate that keeps
+    // garbage out of the payload has no fixture that reaches it. Build one on
+    // a bare kernel instead, rather than leave the branch untested.
+    const kernel = new BrepKernel();
+    try {
+      // Semi-major 3, semi-minor 1.5 in the z = 0 plane.
+      const ellipse = kernel.makeEllipseEdge(0, 0, 0, 0, 0, 1, 3, 1.5);
+      const ellipsePoints = Array.from(kernel.tessellateEdge(ellipse, 1e-3));
+      const published = brepEdgeCurve(kernel, ellipse, ellipsePoints);
+      // The type is still worth publishing. The analytic payload is not.
+      expect(published?.type).toBe('ELLIPSE');
+      expect(published?.circle).toBeUndefined();
+
+      // Why it must not be: the kernel's edge curvature reading is silently
+      // wrong for ellipses by about twelve orders of magnitude. At the
+      // major-axis end the true curvature radius is b^2/a = 0.75. Pinned so a
+      // kernel bump that fixes it turns this red and gets the gate revisited,
+      // rather than leaving a branch guarding nothing.
+      const measured = Array.from(kernel.measureCurvatureAtEdge(ellipse, 0));
+      const impliedRadius = 1 / measured[0]!;
+      expect(impliedRadius).toBeGreaterThan(1e11);
+
+      // The second line of defence, independent of the type gate: score the
+      // circle that reading implies against the ellipse's own polyline. Note
+      // the misfit is measured against the EDGE's extent, not the candidate
+      // radius — scaled by its own 7.5e11 radius this miss would read as about
+      // 1e-12 and sail through a relative test.
+      const anchor = Array.from(kernel.evaluateEdgeCurve(ellipse, 0));
+      const implied = {
+        center: {
+          x: anchor[0]! + measured[4]! * impliedRadius,
+          y: anchor[1]! + measured[5]! * impliedRadius,
+          z: anchor[2]! + measured[6]! * impliedRadius
+        },
+        axis: { x: 0, y: 0, z: 1 },
+        radius: impliedRadius
+      };
+      expect(edgeCircleMisfit(implied, ellipsePoints)).toBeGreaterThan(0.1);
+
+      // Controls, so that rejection is not just a function that always
+      // rejects: an honest circle scores at rounding level, the same circle
+      // with a micron of error in its radius or centre does not, and a
+      // candidate with nothing to check against fails closed rather than
+      // passing vacuously.
+      const circle = kernel.makeCircleEdge(1, 2, 3, 0, 1, 0, 7);
+      const circlePoints = Array.from(kernel.tessellateEdge(circle, 1e-3));
+      const truth = {
+        center: { x: 1, y: 2, z: 3 },
+        axis: { x: 0, y: 1, z: 0 },
+        radius: 7
+      };
+      expect(edgeCircleMisfit(truth, circlePoints)).toBeLessThan(1e-9);
+      expect(
+        edgeCircleMisfit({ ...truth, radius: 7.001 }, circlePoints)
+      ).toBeGreaterThan(1e-6);
+      expect(
+        edgeCircleMisfit(
+          { ...truth, center: { x: 1, y: 2, z: 3.001 } },
+          circlePoints
+        )
+      ).toBeGreaterThan(1e-6);
+      expect(edgeCircleMisfit(truth, [])).toBe(Number.POSITIVE_INFINITY);
+
+      // And the published circle for that edge agrees with a truth it was
+      // never told.
+      const publishedCircle = brepEdgeCurve(kernel, circle, circlePoints);
+      expect(publishedCircle?.type).toBe('CIRCLE');
+      expect(publishedCircle?.circle?.radius).toBeCloseTo(7, 9);
+      expect(publishedCircle?.circle?.center.x).toBeCloseTo(1, 9);
+      expect(publishedCircle?.circle?.center.y).toBeCloseTo(2, 9);
+      expect(publishedCircle?.circle?.center.z).toBeCloseTo(3, 9);
+      expect(Math.abs(publishedCircle!.circle!.axis.y)).toBeCloseTo(1, 9);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('survives a torus, whose only edges are zero length, and a dead handle', async () => {
+    // BrepKit's torus closes in both directions, so its two edges are
+    // degenerate: LINE type, a domain of [0, 0], start vertex equal to end
+    // vertex. The trim-aware NURBS curve reader throws on exactly these, which
+    // is why the record is not built from it — one unguarded call would take
+    // measurement down for every torus in a document rather than for one edge.
+    const document = addPrimitiveFeature(
+      createProjectDocument('Torus', toUserId('user_edge_curve_torus')),
+      {
+        name: 'Torus',
+        primitiveKind: 'torus',
+        dimensions: { majorRadius: 20, minorRadius: 5 }
+      }
+    );
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    const edges =
+      derived.bodyRepresentations[document.bodyOrder.at(-1)!]!.topology!.edges;
+    expect(edges).toHaveLength(2);
+    for (const edge of edges) {
+      expect(edge.curve?.type).toBe('LINE');
+      expect(edge.curve?.circle).toBeUndefined();
+    }
+
+    // An edge the kernel will not describe leaves the record absent — not
+    // wrong, and not fatal. Same discipline the analytic surface reader
+    // already applies to a face it cannot read.
+    const kernel = new BrepKernel();
+    try {
+      expect(() => kernel.getEdgeCurveType(999_999)).toThrow();
+      expect(brepEdgeCurve(kernel, 999_999, [])).toBeUndefined();
+    } finally {
+      kernel.free();
+    }
+  });
+
   it('removes boolean seams from a unioned physical part', async () => {
     const withBase = addPrimitiveFeature(
       createProjectDocument('Uniform bracket', toUserId('user_exact')),
@@ -356,12 +1167,379 @@ describe('exact hybrid kernel adapter', () => {
     // Coplanar boolean fragments inflate this to fourteen faces and render
     // false seams in the shaded-with-edges viewport.
     expect(body?.faceCount).toBe(8);
+    expect(body?.topology?.lineageDiagnostics).toContainEqual(
+      expect.objectContaining({ kind: 'body', status: 'hash-only' })
+    );
+    expect(
+      [
+        ...(body?.topology?.faces ?? []),
+        ...(body?.topology?.edges ?? [])
+      ].every((entry) => entry.reference === undefined)
+    ).toBe(true);
 
     const step = await adapter.exportStep(document, [resultId]);
     await expect(adapter.inspectStep(step)).resolves.toMatchObject({
       solid: true,
       valid: true
     });
+  });
+
+  it('keeps a shallow cylinder and circular-extrude union closed', async () => {
+    const withCylinder = addPrimitiveFeature(
+      createProjectDocument('Shallow circular union', toUserId('user_exact')),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 40 }
+      }
+    );
+    const cylinderId = withCylinder.bodyOrder.at(-1)!;
+    const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
+      name: 'Offset circle',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 39.999 },
+      objects: [{ objectKind: 'circle', radius: 25, centerX: 10, centerY: 0 }]
+    });
+    const { document: withExtrude, bodyId: extrudeId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Circular extrude',
+        sketchId,
+        distance: 20
+      }
+    );
+    const manager = new CommandManager(withExtrude);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Shallow circular union',
+        operation: 'union',
+        targetBodyIds: [cylinderId, extrudeId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId]!;
+    const closure = inspectTriangleMeshClosure(
+      body.mesh.vertices,
+      body.mesh.indices
+    );
+
+    // A 1 µm overlap between two cylinders is the sliver case, and the kernel
+    // silently answers it with a faceted approximation: two exact cylindrical
+    // surfaces become 193 planar faces, and the volume lands ~0.08 % low.
+    // Closure, validity and volume all still pass — the face-count census is
+    // the only thing that sees it, which is why it exists. What is asserted is
+    // that the census and the faces agree, not that the kernel keeps faceting.
+    expectCensusConsistentWithFaces(derived, body);
+    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
+    expect(body.volume).toBeGreaterThan(0);
+    // Runs in under a second locally but has tripped the 5 s default on slow
+    // CI runners; give it the same headroom as the other kernel-heavy tests.
+  }, 30_000);
+
+  it('keeps a face-contact cylinder and circular-extrude union closed', async () => {
+    const withCylinder = addPrimitiveFeature(
+      createProjectDocument(
+        'Face-contact circular union',
+        toUserId('user_exact')
+      ),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 40 }
+      }
+    );
+    const cylinderId = withCylinder.bodyOrder.at(-1)!;
+    const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
+      name: 'Top-face circle',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 40 },
+      objects: [{ objectKind: 'circle', radius: 25, centerX: 10, centerY: 0 }]
+    });
+    const { document: withExtrude, bodyId: extrudeId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Circular extrude',
+        sketchId,
+        distance: 20
+      }
+    );
+    const manager = new CommandManager(withExtrude);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Face-contact circular union',
+        operation: 'union',
+        targetBodyIds: [cylinderId, extrudeId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId]!;
+    const closure = inspectTriangleMeshClosure(
+      body.mesh.vertices,
+      body.mesh.indices
+    );
+
+    // Exact face contact degrades the same way the 1 µm sliver above does.
+    expectCensusConsistentWithFaces(derived, body);
+    expect(isClosedConsistentlyOrientedMesh(closure)).toBe(true);
+    expect(body.volume).toBeGreaterThan(0);
+  });
+
+  it('rejects the M4 tangent cylindrical-boss union when the kernel drops the boss', async () => {
+    const withPlate = addPrimitiveFeature(
+      createProjectDocument('Tangent boss', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 60, height: 40, depth: 8 }
+      }
+    );
+    const plateId = withPlate.bodyOrder.at(-1)!;
+    const withBoss = addPrimitiveFeature(withPlate, {
+      name: 'Boss',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 16 }
+    });
+    const bossId = withBoss.bodyOrder.at(-1)!;
+    const positioned = transformBody(withBoss, {
+      name: 'Make boss tangent to x wall',
+      targetBodyId: bossId,
+      translation: { x: 10, y: 20, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Tangent boss union',
+        operation: 'union',
+        targetBodyIds: [plateId, bossId]
+      })
+    );
+
+    // Fault injection pins the historical M4 kernel answer deterministically:
+    // fuseAll reports success but returns its plate operand unchanged.
+    const fuse = vi
+      .spyOn(BrepKernel.prototype, 'fuseAll')
+      .mockImplementation((solids) => solids[0]!);
+    let derived: DerivedState;
+    try {
+      derived = await adapter.syncDocument(document);
+    } finally {
+      fuse.mockRestore();
+    }
+    const resultId = document.bodyOrder.at(-1)!;
+    const body = derived.bodyRepresentations[resultId]!;
+
+    // M4: fuseAll returns a valid six-plane solid, but it is exactly the plate
+    // and silently loses the boss above z=8. The product must surface this as
+    // a precommit warning instead of allowing the plausible result into undo.
+    expect(body.volume).toBeCloseTo(60 * 40 * 8, 6);
+    expect(body.bbox.max.z).toBeCloseTo(8, 7);
+    expect(derived.warnings[0]).toBe(
+      'Feature "Tangent boss union": Union dropped geometry from operand "Boss Body": the result\'s maximum z is 8 mm, but the operand reaches 16 mm (8 mm missing). A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.'
+    );
+  });
+
+  it('preserves inward-overlapping and wall-crossing boss unions as exact STEP', async () => {
+    for (const [placement, centerX] of [
+      ['inward-overlapping', 7],
+      ['wall-crossing', 3]
+    ] as const) {
+      const manager = new CommandManager(
+        createProjectDocument(
+          `${placement} boss`,
+          toUserId(`user_exact_${placement}`)
+        )
+      );
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Imported plate',
+          artifactId: `artifact_${placement}_boss`,
+          sourceName: 'modeling-base-plate.step',
+          stepText: readFileSync(
+            resolve('test/parity/corpus/modeling-base-plate.step'),
+            'utf8'
+          )
+        })
+      );
+      const plateId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Boss',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 6, height: 20 }
+        })
+      );
+      const bossId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        commandFactories.transformBody({
+          name: `Place ${placement} boss`,
+          targetBodyId: bossId,
+          translation: { x: centerX, y: 12, z: 0 }
+        })
+      );
+      const document = manager.execute(
+        commandFactories.booleanBodies({
+          name: `${placement} boss union`,
+          operation: 'union',
+          targetBodyIds: [plateId, bossId]
+        })
+      );
+      const resultId = document.bodyOrder.at(-1)!;
+      const derived = await adapter.syncDocument(document);
+      const body = derived.bodyRepresentations[resultId]!;
+
+      expect(derived.warnings).toEqual([]);
+      expect(body.bbox.min.x).toBeCloseTo(Math.min(0, centerX - 6), 7);
+      expect(body.bbox.max.z).toBeCloseTo(20, 7);
+      expect(
+        body.topology?.faces.some(
+          (face) => face.geometry?.surfaceType === 'cylinder'
+        )
+      ).toBe(true);
+
+      const step = await adapter.exportStep(document, [resultId]);
+      expect(step).toContain('CYLINDRICAL_SURFACE');
+      await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
+    }
+  });
+
+  it('attributes a strict Union validation failure to the feature', async () => {
+    const validate = vi
+      .spyOn(BrepKernel.prototype, 'validateSolid')
+      .mockReturnValue(1);
+    try {
+      const withFirst = addPrimitiveFeature(
+        createProjectDocument('Rejected union', toUserId('user_exact')),
+        {
+          name: 'First',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        }
+      );
+      const firstId = withFirst.bodyOrder.at(-1)!;
+      const withSecond = addPrimitiveFeature(withFirst, {
+        name: 'Second',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+      const secondId = withSecond.bodyOrder.at(-1)!;
+      const positioned = transformBody(withSecond, {
+        name: 'Overlap boxes',
+        targetBodyId: secondId,
+        translation: { x: 5, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      }).document;
+      const manager = new CommandManager(positioned);
+      const document = manager.execute(
+        commandFactories.booleanBodies({
+          name: 'Rejected union',
+          operation: 'union',
+          targetBodyIds: [firstId, secondId]
+        })
+      );
+
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toContain(
+        'Feature "Rejected union": Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.'
+      );
+    } finally {
+      validate.mockRestore();
+    }
+  });
+
+  it('diagnoses a disconnected BrepKit union without rewriting legacy history', async () => {
+    const withLower = addPrimitiveFeature(
+      createProjectDocument('Separated union', toUserId('user_exact')),
+      {
+        name: 'Lower',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const lowerId = withLower.bodyOrder.at(-1)!;
+    const withUpper = addPrimitiveFeature(withLower, {
+      name: 'Upper',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const upperId = withUpper.bodyOrder.at(-1)!;
+    const positioned = transformBody(withUpper, {
+      name: 'Leave a gap',
+      targetBodyId: upperId,
+      translation: { x: 0, y: 0, z: 12 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Separated union',
+        operation: 'union',
+        targetBodyIds: [lowerId, upperId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    const resultId = document.bodyOrder.at(-1)!;
+    expect(derived.warnings).toContain(
+      'Feature "Separated union": Union does not fill empty space. The selected solids form 2 disconnected groups. The closest gap is 2 mm. Move or extend a body until every solid touches or overlaps.'
+    );
+    expect(derived.bodyRepresentations[resultId]?.volume).toBeCloseTo(2000, 4);
+    expect(derived.bodyRepresentations[lowerId]?.consumed).toBe(true);
+    expect(derived.bodyRepresentations[upperId]?.consumed).toBe(true);
+  });
+
+  it('diagnoses the same disconnected union when one body is imported', async () => {
+    const source = addPrimitiveFeature(
+      createProjectDocument('Source box', toUserId('user_exact')),
+      {
+        name: 'Source box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const step = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+    const importManager = new CommandManager(
+      createProjectDocument('Imported separated union', toUserId('user_exact'))
+    );
+    const imported = importManager.execute(
+      commandFactories.importStep({
+        name: 'Imported lower',
+        artifactId: 'artifact_union_gap',
+        sourceName: 'lower.step',
+        stepText: step
+      })
+    );
+    const lowerId = imported.bodyOrder.at(-1)!;
+    const withUpper = addPrimitiveFeature(imported, {
+      name: 'Upper',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const upperId = withUpper.bodyOrder.at(-1)!;
+    const positioned = transformBody(withUpper, {
+      name: 'Leave a gap',
+      targetBodyId: upperId,
+      translation: { x: 0, y: 0, z: 12 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Imported separated union',
+        operation: 'union',
+        targetBodyIds: [lowerId, upperId]
+      })
+    );
+
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toContain(
+      'Feature "Imported separated union": Union does not fill empty space. The selected solids form 2 disconnected groups. The closest gap is 2 mm. Move or extend a body until every solid touches or overlaps.'
+    );
   });
 
   it('keeps a coaxial cylinder cut as smooth analytic B-rep surfaces', async () => {
@@ -1051,12 +2229,7 @@ describe('exact hybrid kernel adapter', () => {
       const pointDistance = (
         left: { x: number; y: number; z: number },
         right: { x: number; y: number; z: number }
-      ) =>
-        Math.hypot(
-          left.x - right.x,
-          left.y - right.y,
-          left.z - right.z
-        );
+      ) => Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
       const aligned = Math.max(
         pointDistance(sourceStart, resizedStart),
         pointDistance(sourceEnd, resizedEnd)
@@ -1332,7 +2505,7 @@ describe('exact hybrid kernel adapter', () => {
     expect(grownWall?.geometry?.radius).toBeCloseTo(15, 4);
   });
 
-  it('imports STEP through OCCT with complete exact topology', async () => {
+  it('imports STEP with complete exact topology', async () => {
     const source = addPrimitiveFeature(
       createProjectDocument('Source', toUserId('user_exact')),
       {
@@ -1390,10 +2563,49 @@ describe('exact hybrid kernel adapter', () => {
       size: 0.5
     }).document;
     const filletDerived = await adapter.syncDocument(filleted);
+    const filletedBody =
+      filletDerived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
     expect(filletDerived.warnings).toEqual([]);
+    // Z3: blending an imported edge is one of the operations the flip newly
+    // sends to BrepKit, so pin the ANSWER, not just its direction. Rounding a
+    // straight box edge of length L at radius r removes (1 - pi/4) r^2 L.
+    const filletedEdge = body!.topology!.edges[0]!.points;
+    const edgeLength = Math.hypot(
+      filletedEdge[3]! - filletedEdge[0]!,
+      filletedEdge[4]! - filletedEdge[1]!,
+      filletedEdge[5]! - filletedEdge[2]!
+    );
+    expect(edgeLength).toBeCloseTo(7, 9);
+    const analyticFilletVolume =
+      504 - (1 - Math.PI / 4) * 0.5 * 0.5 * edgeLength;
+    expect(analyticFilletVolume).toBeCloseTo(503.6244467862, 9);
+    // The band is now the EXACT quarter cylinder, not a B-spline fitted just
+    // inside it, so this asserts the closed form rather than a recorded
+    // literal. The retired literal was 503.61290074080404 — 2.29e-5 relative
+    // BELOW the analytic answer, because the spline undercut the true
+    // surface. What is left is 2.33e-6 and is measurement, not geometry:
+    // `volume()` integrates a tessellation, and refining the deflection walks
+    // this body 503.62327 -> 503.62411 -> 503.62436 toward 503.62445 rather
+    // than converging anywhere else. So the residue shrinks with the mesh and
+    // the surface itself is exact — which is the claim the surfaceType below
+    // makes directly.
     expect(
-      filletDerived.bodyRepresentations[filleted.bodyOrder.at(-1)!]?.volume
-    ).toBeLessThan(504);
+      Math.abs(filletedBody!.volume - analyticFilletVolume) /
+        analyticFilletVolume
+    ).toBeLessThan(5e-6);
+    // One edge rounded: six box faces plus the blend band, twelve box edges
+    // plus the three the band introduces.
+    expect(filletedBody?.topology?.faces).toHaveLength(7);
+    expect(filletedBody?.topology?.edges).toHaveLength(15);
+    // The band is the one non-planar face, and it is an analytic cylinder of
+    // exactly the requested radius sitting on the rounded edge.
+    const band = filletedBody!.topology!.faces.filter(
+      (face) => face.geometry?.surfaceType !== 'plane'
+    );
+    expect(band).toHaveLength(1);
+    expect(band[0]!.geometry?.surfaceType).toBe('cylinder');
+    expect(band[0]!.geometry?.radius).toBeCloseTo(0.5, 9);
+    expect(band[0]!.geometry?.axialLength).toBeCloseTo(edgeLength, 9);
     expect(manager.document.commandLog[0]?.kind).toBe('import.step');
   });
 
@@ -1584,6 +2796,413 @@ describe('exact hybrid kernel adapter', () => {
     );
   });
 
+  it('resizes and removes a through hole against its closed form at every stage', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Cross-kernel hole', toUserId('user_direct_edit')),
+      {
+        name: 'Outer cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 15, height: 10 }
+      }
+    );
+    const outerId = withOuter.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withOuter, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 4, height: 20 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Pass tool through part',
+      targetBodyId: toolId,
+      translation: { x: 0, y: 0, z: -5 }
+    }).document;
+    const tube = new CommandManager(positioned).execute(
+      commandFactories.booleanBodies({
+        name: 'Tube',
+        operation: 'subtract',
+        targetBodyIds: [outerId, toolId]
+      })
+    );
+    const bodyId = tube.bodyOrder.at(-1)!;
+
+    /**
+     * Drive the edit sequence, always addressing the hole through the
+     * adapter's own face fingerprints and its own recorded source
+     * measurements, so each reading is a statement about the geometry
+     * produced rather than about a hash being stable.
+     */
+    async function editSequence(kernelAdapter: ExactKernelAdapter) {
+      const manager = new CommandManager(tube);
+      const readings: {
+        volume: number;
+        faceCount: number;
+        holeDiameter?: number;
+        holeCount: number;
+      }[] = [];
+      const read = async () => {
+        const derived = await kernelAdapter.syncDocument(manager.document);
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[bodyId]!;
+        const holes = (body.topology?.faces ?? []).filter(
+          (face) => face.geometry?.featureType === 'through-hole'
+        );
+        readings.push({
+          volume: body.volume,
+          faceCount: body.faceCount,
+          holeDiameter: holes[0]?.geometry?.diameter,
+          holeCount: holes.length
+        });
+        return holes[0];
+      };
+
+      const source = await read();
+      expect(source?.geometry).toMatchObject({
+        surfaceType: 'cylinder',
+        editableDimension: 'diameter'
+      });
+
+      for (const diameter of [12, 4]) {
+        const hole = (await read())!;
+        manager.execute(
+          commandFactories.directEditBody({
+            name: `Resize to ${diameter}`,
+            targetBodyId: bodyId,
+            operation: {
+              kind: 'resize-through-hole',
+              faceHash: hole.hash,
+              sourceDiameter: hole.geometry!.diameter!,
+              sourceAxisStart: hole.geometry!.axisStart!,
+              sourceAxisEnd: hole.geometry!.axisEnd!,
+              diameter
+            }
+          })
+        );
+      }
+
+      const remaining = (await read())!;
+      manager.execute(
+        commandFactories.directEditBody({
+          name: 'Remove the hole',
+          targetBodyId: bodyId,
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: remaining.hash,
+            sourceSurfaceType: 'cylinder',
+            sourceArea: remaining.geometry!.area,
+            sourceCenter: remaining.geometry!.center,
+            sourceDiameter: remaining.geometry!.diameter,
+            sourceAxisStart: remaining.geometry!.axisStart,
+            sourceAxisEnd: remaining.geometry!.axisEnd
+          }
+        })
+      );
+      await read();
+      return readings;
+    }
+
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const readings = await editSequence(brepKit);
+
+      // Every stage: the source tube, the same tube re-read before each edit,
+      // the 12 mm hole, the 4 mm hole and finally the filled body. Each
+      // volume is the closed form of the intended solid, which says the edit
+      // landed on the right geometry rather than merely that it succeeded.
+      const expected = [
+        { hole: 8, radius: 4 },
+        { hole: 8, radius: 4 },
+        { hole: 12, radius: 6 },
+        { hole: 4, radius: 2 },
+        { hole: undefined, radius: 0 }
+      ];
+      expect(readings).toHaveLength(expected.length);
+      readings.forEach((reading, index) => {
+        const stage = expected[index]!;
+        expect(reading.volume).toBeCloseTo(
+          Math.PI * (15 ** 2 - stage.radius ** 2) * 10,
+          4
+        );
+        expect(reading.holeDiameter).toBe(
+          stage.hole === undefined ? undefined : stage.hole
+        );
+      });
+      expect(readings.at(-1)).toMatchObject({ faceCount: 3, holeCount: 0 });
+    } finally {
+      brepKit.dispose();
+    }
+  }, 60_000);
+
+  it('refuses BrepKit through-hole edits it cannot prove correct', async () => {
+    const withOuter = addPrimitiveFeature(
+      createProjectDocument('Refusal source', toUserId('user_direct_edit')),
+      {
+        name: 'Outer cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 15, height: 10 }
+      }
+    );
+    const outerId = withOuter.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withOuter, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 4, height: 20 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Pass tool through part',
+      targetBodyId: toolId,
+      translation: { x: 0, y: 0, z: -5 }
+    }).document;
+    const tube = new CommandManager(positioned).execute(
+      commandFactories.booleanBodies({
+        name: 'Tube',
+        operation: 'subtract',
+        targetBodyIds: [outerId, toolId]
+      })
+    );
+    const bodyId = tube.bodyOrder.at(-1)!;
+
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(tube);
+      const faces = derived.bodyRepresentations[bodyId]!.topology!.faces;
+      const bore = faces.find(
+        (face) => face.geometry?.featureType === 'through-hole'
+      )!;
+      // The tube's outer wall shares the bore's void axis and open ends, so
+      // it is exactly the face the classifier has to keep out.
+      const outerWall = faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'cylinder' &&
+          face.geometry.featureType === undefined
+      )!;
+      expect(outerWall.geometry?.radius).toBeCloseTo(15, 6);
+      const cap = faces.find((face) => face.geometry?.surfaceType === 'plane')!;
+
+      const refusals: { name: string; operation: DirectEditOperation }[] = [
+        {
+          name: 'Outer wall is not a hole',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: outerWall.hash,
+            sourceDiameter: outerWall.geometry!.diameter!,
+            sourceAxisStart: outerWall.geometry!.axisStart!,
+            sourceAxisEnd: outerWall.geometry!.axisEnd!,
+            diameter: 20
+          }
+        },
+        {
+          name: 'Stale diameter',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: 9,
+            sourceAxisStart: bore.geometry!.axisStart!,
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 6
+          }
+        },
+        {
+          name: 'Stale axis',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: bore.geometry!.diameter!,
+            sourceAxisStart: {
+              ...bore.geometry!.axisStart!,
+              x: bore.geometry!.axisStart!.x + 1
+            },
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 6
+          }
+        },
+        {
+          name: 'Diameter breaks the body',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: bore.geometry!.diameter!,
+            sourceAxisStart: bore.geometry!.axisStart!,
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 40
+          }
+        },
+        {
+          name: 'Unchanged diameter',
+          operation: {
+            kind: 'resize-through-hole',
+            faceHash: bore.hash,
+            sourceDiameter: bore.geometry!.diameter!,
+            sourceAxisStart: bore.geometry!.axisStart!,
+            sourceAxisEnd: bore.geometry!.axisEnd!,
+            diameter: 8
+          }
+        },
+        {
+          name: 'Defeature needs planar faces',
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: cap.hash,
+            sourceSurfaceType: 'plane',
+            sourceArea: cap.geometry!.area,
+            sourceCenter: cap.geometry!.center
+          }
+        }
+      ];
+
+      const messages: string[] = [];
+      for (const refusal of refusals) {
+        const manager = new CommandManager(tube);
+        manager.execute(
+          commandFactories.directEditBody({
+            name: refusal.name,
+            targetBodyId: bodyId,
+            operation: refusal.operation
+          })
+        );
+        const failed = await brepKit.syncDocument(manager.document);
+        expect(failed.warnings).toHaveLength(1);
+        messages.push(failed.warnings[0]!);
+        // A refused edit leaves the body exactly as the history built it.
+        expect(failed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+          Math.PI * (15 ** 2 - 4 ** 2) * 10,
+          4
+        );
+      }
+
+      expect(messages).toEqual([
+        'Feature "Outer wall is not a hole": The selected cylindrical face has material only on its inside, so it is an external wall rather than a bore.',
+        'Feature "Stale diameter": Selected face no longer matches its recorded source diameter.',
+        'Feature "Stale axis": Selected face no longer matches its recorded hole axis.',
+        expect.stringContaining(
+          'Feature "Diameter breaks the body": Through-hole diameter 40 does not fit this body'
+        ),
+        'Feature "Unchanged diameter": Through-hole diameter must differ from its current diameter.',
+        'Feature "Defeature needs planar faces": Removing a plane face needs BrepKit\'s defeature operation, which only supports bodies whose every remaining face is planar; this body still has cylinder faces.'
+      ]);
+    } finally {
+      brepKit.dispose();
+    }
+  }, 60_000);
+
+  it('defeatures a chamfer away and names the removals it cannot do', async () => {
+    // Defeature removes a face by extending the faces around it until they
+    // close again, so it is defined exactly when three of those faces meet in
+    // a corner. Both halves of that are asserted here: the case that HAS a
+    // corner must reconstruct the pre-chamfer solid exactly, and the case that
+    // does not must be refused by name with the body left untouched.
+    //
+    // This used to assert only the refusal, and a much vaguer one: the kernel
+    // reassembled a closed-looking body with the wrong walls and the adapter
+    // caught it after the fact with 'did not produce a valid solid'. The
+    // rewritten defeature refuses the unsupported configuration up front and
+    // says which configuration it is. The strict `validate_solid` gate after
+    // the call is deliberately still there — it is defence in depth, not the
+    // thing that fails here any more.
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Defeature gate', toUserId('user_direct_edit')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 30, depth: 10 }
+      }
+    );
+    const plateId = plate.bodyOrder[0]!;
+    const brepKit = new BrepKitKernelAdapter();
+    try {
+      const derived = await brepKit.syncDocument(plate);
+      const plateBody = derived.bodyRepresentations[plateId]!;
+
+      // --- the supported case: undo a chamfer -----------------------------
+      const chamfered = chamferEdges(plate, {
+        name: 'Break an edge',
+        targetBodyId: plateId,
+        edgeHashes: [plateBody.topology!.edges[0]!.hash],
+        size: 3
+      }).document;
+      const chamferBodyId = chamfered.bodyOrder.at(-1)!;
+      const chamferDerived = await brepKit.syncDocument(chamfered);
+      const chamferBody = chamferDerived.bodyRepresentations[chamferBodyId]!;
+      expect(chamferDerived.warnings).toEqual([]);
+      // A 45-degree chamfer of leg 3 along a 30 mm edge removes half of a
+      // 3x3 square prism.
+      expect(chamferBody.volume).toBeCloseTo(9000 - 0.5 * 3 * 3 * 30, 6);
+      expect(chamferBody.faceCount).toBe(7);
+      const chamferFace = chamferBody.topology!.faces.find(
+        (face) =>
+          Math.abs((face.geometry?.area ?? 0) - 3 * Math.SQRT2 * 30) < 1e-3
+      )!;
+      expect(chamferFace).toBeTruthy();
+
+      const undone = new CommandManager(chamfered);
+      undone.execute(
+        commandFactories.directEditBody({
+          name: 'Remove the chamfer',
+          targetBodyId: chamferBodyId,
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: chamferFace.hash,
+            sourceSurfaceType: 'plane',
+            sourceArea: chamferFace.geometry!.area,
+            sourceCenter: chamferFace.geometry!.center
+          }
+        })
+      );
+      const restored = await brepKit.syncDocument(undone.document);
+      const restoredBody = restored.bodyRepresentations[chamferBodyId]!;
+      expect(restored.warnings).toEqual([]);
+      // The closed form is the plate the chamfer was cut from: the three
+      // faces around the removed patch extend back to their original corner,
+      // so this is exact rather than approximate.
+      expect(restoredBody.volume).toBeCloseTo(9000, 9);
+      expect(restoredBody.faceCount).toBe(6);
+      expect(
+        isClosedConsistentlyOrientedMesh(
+          inspectTriangleMeshClosure(
+            restoredBody.mesh.vertices,
+            restoredBody.mesh.indices
+          )
+        )
+      ).toBe(true);
+      expect(restoredBody.bbox.min.x).toBeCloseTo(0, 9);
+      expect(restoredBody.bbox.min.y).toBeCloseTo(0, 9);
+      expect(restoredBody.bbox.min.z).toBeCloseTo(0, 9);
+      expect(restoredBody.bbox.max.x).toBeCloseTo(30, 9);
+      expect(restoredBody.bbox.max.y).toBeCloseTo(30, 9);
+      expect(restoredBody.bbox.max.z).toBeCloseTo(10, 9);
+
+      // --- the unsupported case: remove a face of a plain box -------------
+      const target = plateBody.topology!.faces.find(
+        (face) => Math.abs((face.geometry?.area ?? 0) - 900) < 1e-6
+      )!;
+      const manager = new CommandManager(plate);
+      manager.execute(
+        commandFactories.directEditBody({
+          name: 'Remove a plate face',
+          targetBodyId: plateId,
+          operation: {
+            kind: 'remove-face-feature',
+            faceHash: target.hash,
+            sourceSurfaceType: 'plane',
+            sourceArea: target.geometry!.area,
+            sourceCenter: target.geometry!.center
+          }
+        })
+      );
+      const failed = await brepKit.syncDocument(manager.document);
+      expect(failed.warnings).toEqual([
+        'Feature "Remove a plate face": Removing the selected face failed: ' +
+          'defeature: unsupported configuration: no three faces around the ' +
+          'removed patch meet in a corner; the adjacent faces are parallel ' +
+          'and would have to be merged rather than extended.'
+      ]);
+      expect(failed.bodyRepresentations[plateId]!.volume).toBeCloseTo(9000, 4);
+    } finally {
+      brepKit.dispose();
+    }
+  }, 60_000);
+
   it('offsets a planar face of an imported STEP body in both directions', async () => {
     const source = addPrimitiveFeature(
       createProjectDocument('Offset source', toUserId('user_exact')),
@@ -1705,15 +3324,19 @@ describe('exact hybrid kernel adapter', () => {
       })
     );
     const overcut = await adapter.syncDocument(manager.document);
-    expect(
-      overcut.warnings.some((warning) =>
-        warning.includes('does not produce a valid solid')
-      )
-    ).toBe(true);
+    // Z3 pin. OpenCascade answered this with a generic "Offsetting the
+    // selected face does not produce a valid solid."; BrepKit names the
+    // boolean that came back empty. Both fail closed, which is the property
+    // that matters — an overcut must never yield a body.
+    expect(overcut.warnings).toEqual([
+      'Feature "Sink past the floor": empty result: Cut with target fully ' +
+        'contained in tool'
+    ]);
     expect(overcut.bodyRepresentations[importedBodyId]?.volume).toBeCloseTo(
       10 * 20 * 25,
       4
     );
+    expect(overcut.bodyRepresentations[importedBodyId]?.faceCount).toBe(6);
   });
 
   it('offsets a planar face on the dense sample bracket without unify breakage', async () => {
@@ -1769,7 +3392,9 @@ describe('exact hybrid kernel adapter', () => {
       volumeBefore + 3 * target!.geometry!.area,
       3
     );
-  });
+    // 17 s has been observed on slow CI runners against the previous 15 s
+    // cap; the dense bracket legitimately takes that long to fuse twice.
+  }, 60_000);
 
   it('builds selected-edge fillet and chamfer features', async () => {
     const base = addPrimitiveFeature(
@@ -1821,6 +3446,346 @@ describe('exact hybrid kernel adapter', () => {
     expect(chamferDerived.warnings).toEqual([]);
     expect(chamferBody?.volume).toBeLessThan(8000);
     expect(chamferBody?.faceCount).toBeGreaterThan(6);
+  });
+
+  // Convex cap-rim fillets on a plain cylinder. This began life as the test
+  // for an adapter workaround that rebuilt the rims from a 64-segment revolved
+  // profile, because the kernel refused the blend at f/r >= 0.5. The kernel
+  // builds the rim torus itself at every 0 < f < r now, the workaround is
+  // gone, and these are kernel regressions: they pin the behaviour the
+  // deletion depends on.
+  //
+  // Volume is checked against Pappus, which is independent of the kernel.
+  // Surface types are checked because the failure mode that matters here is a
+  // silent downgrade from an analytic torus band to a faceted approximation —
+  // that keeps the volume and loses the geometry.
+  const rimFilletVolume = (
+    radius: number,
+    height: number,
+    fillet: number,
+    rims: number
+  ): number => {
+    const squareMoment = fillet ** 2 * (radius - fillet / 2);
+    const quarterCircleMoment =
+      ((Math.PI * fillet ** 2) / 4) *
+      (radius - fillet + (4 * fillet) / (3 * Math.PI));
+    return (
+      Math.PI * radius ** 2 * height -
+      rims * (2 * Math.PI * (squareMoment - quarterCircleMoment))
+    );
+  };
+
+  const surfaceTypeCounts = (
+    body:
+      | { topology?: { faces: { geometry?: { surfaceType?: string } }[] } }
+      | undefined
+  ): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    for (const face of body?.topology?.faces ?? []) {
+      const type = face.geometry?.surfaceType ?? 'unknown';
+      counts[type] = (counts[type] ?? 0) + 1;
+    }
+    return counts;
+  };
+
+  it('fillets both rims of a small circular sketch extrusion together', async () => {
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument(
+        'Small extruded cylinder fillet',
+        toUserId('user_exact')
+      ),
+      {
+        name: 'Circle',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }]
+      }
+    );
+    const { document: extruded, bodyId } = extrudeSketch(withSketch, {
+      name: 'Extrude',
+      sketchId,
+      distance: 6
+    });
+    const baseDerived = await adapter.syncDocument(extruded);
+    const baseBody = baseDerived.bodyRepresentations[bodyId]!;
+    const rimHashes =
+      baseBody.topology?.edges
+        .filter((edge) => edge.displayRole !== 'seam')
+        .map((edge) => edge.hash) ?? [];
+
+    expect(rimHashes).toHaveLength(2);
+    // f/r is exactly 0.5 here — the radius at which the kernel used to throw
+    // `partial-result` and hand the case to the workaround.
+    const filletRadius = 1;
+    const filleted = filletEdges(extruded, {
+      name: 'Both rim fillets',
+      targetBodyId: bodyId,
+      edgeHashes: rimHashes,
+      size: filletRadius
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+    expect(derived.warnings).toEqual([]);
+    expect(body?.volume).toBeCloseTo(rimFilletVolume(2, 6, filletRadius, 2), 2);
+    expect(body?.bbox).toEqual(baseBody.bbox);
+    // One wall, two caps, two rim bands — all analytic.
+    expect(body?.faceCount).toBe(5);
+    expect(surfaceTypeCounts(body)).toEqual({
+      cylinder: 1,
+      plane: 2,
+      torus: 2
+    });
+  });
+
+  it('fillets a cylinder cap rim across the whole radius range', async () => {
+    // The upper half of this range (f/r >= 0.5) is the part the deleted
+    // workaround existed to serve. Every ratio has to build the same analytic
+    // body and hit its closed form, or the deletion was premature.
+    const radius = 2;
+    const height = 6;
+    for (const ratio of [0.1, 0.25, 0.4999, 0.5, 0.5001, 0.75, 0.9, 0.99]) {
+      const filletRadius = radius * ratio;
+      const base = addPrimitiveFeature(
+        createProjectDocument(`Rim ${ratio}`, toUserId('user_exact')),
+        {
+          name: 'Post',
+          primitiveKind: 'cylinder',
+          dimensions: { radius, height }
+        }
+      );
+      const bodyId = base.bodyOrder.at(-1)!;
+      const baseDerived = await adapter.syncDocument(base);
+      const rims =
+        baseDerived.bodyRepresentations[bodyId]?.topology?.edges.filter(
+          (edge) => edge.displayRole !== 'seam'
+        ) ?? [];
+      expect(rims).toHaveLength(2);
+
+      const filleted = filletEdges(base, {
+        name: 'Rim fillet',
+        targetBodyId: bodyId,
+        edgeHashes: [rims[0]!.hash],
+        size: filletRadius
+      }).document;
+      const derived = await adapter.syncDocument(filleted);
+      const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!];
+
+      expect(derived.warnings, `f/r = ${ratio}`).toEqual([]);
+      expect(body?.faceCount, `f/r = ${ratio}`).toBe(4);
+      expect(surfaceTypeCounts(body), `f/r = ${ratio}`).toEqual({
+        cylinder: 1,
+        plane: 2,
+        torus: 1
+      });
+      expect(body?.volume, `f/r = ${ratio}`).toBeCloseTo(
+        rimFilletVolume(radius, height, filletRadius, 1),
+        6
+      );
+    }
+  });
+
+  it('refuses a cap-rim fillet at f = r with an actionable message', async () => {
+    // f = r is the one radius in the workaround's old guard range the kernel
+    // still will not build. It has to refuse in a way the adapter can dress
+    // up, rather than returning a body.
+    const radius = 3;
+    const base = addPrimitiveFeature(
+      createProjectDocument('Rim at f = r', toUserId('user_exact')),
+      {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius, height: 9 }
+      }
+    );
+    const bodyId = base.bodyOrder.at(-1)!;
+    const baseDerived = await adapter.syncDocument(base);
+    const rim = baseDerived.bodyRepresentations[bodyId]?.topology?.edges.find(
+      (edge) => edge.displayRole !== 'seam'
+    );
+    expect(rim).toBeTruthy();
+
+    const filleted = filletEdges(base, {
+      name: 'Rim fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [rim!.hash],
+      size: radius
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toContain(
+      `Fillet could not be created on 1 selected edge with radius ${radius}.`
+    );
+    expect(derived.warnings[0]).not.toContain('WebAssembly.Exception');
+  });
+
+  it('keeps all-edges box fillet corners exact and seam-smooth', async () => {
+    // Regression for the fillet corner-patch defect (docs/qa/2026-07-31):
+    // the kernel's vertex blends used to sag up to 5% of R below the corner
+    // ball, fold triangles inward, and meet the fillet cylinders at a 105.8
+    // degree crease — rendered as a pinched blob on every corner. Corner
+    // caps are exact analytic spheres since brepkit#33/#34; this pins that
+    // at the display-mesh level the app actually renders.
+    const radius = 2;
+    const [width, height, depth] = [30, 18, 24];
+    const base = addPrimitiveFeature(
+      createProjectDocument('Fillet corner regression', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width, height, depth }
+      }
+    );
+    const baseDerived = await adapter.syncDocument(base);
+    const baseBody = Object.values(baseDerived.bodyRepresentations)[0]!;
+    const edgeHashes = baseBody.topology!.edges.map((edge) => edge.hash);
+    expect(edgeHashes).toHaveLength(12);
+
+    const filleted = filletEdges(base, {
+      name: 'Fillet all edges',
+      targetBodyId: base.bodyOrder[0]!,
+      edgeHashes,
+      size: radius
+    }).document;
+    const derived = await adapter.syncDocument(filleted);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[filleted.bodyOrder.at(-1)!]!;
+
+    // Closed-form rounded-box volume (Minkowski sum of the inner box with a
+    // ball). The pre-fix corner sag measured 0.137% low, so a 0.05%
+    // relative bound separates cleanly.
+    const inner = [width - 2 * radius, height - 2 * radius, depth - 2 * radius];
+    const exactVolume =
+      inner[0]! * inner[1]! * inner[2]! +
+      2 *
+        radius *
+        (inner[0]! * inner[1]! +
+          inner[1]! * inner[2]! +
+          inner[0]! * inner[2]!) +
+      Math.PI * radius ** 2 * (inner[0]! + inner[1]! + inner[2]!) +
+      (4 / 3) * Math.PI * radius ** 3;
+    expect(Math.abs(body.volume - exactVolume) / exactVolume).toBeLessThan(
+      5e-4
+    );
+
+    // 6 trimmed planes + 12 fillet cylinders + 8 spherical corner caps.
+    const faces = body.topology!.faces;
+    expect(faces).toHaveLength(26);
+    const sphereFaces = faces.filter(
+      (face) => face.geometry?.surfaceType === 'sphere'
+    );
+    expect(sphereFaces).toHaveLength(8);
+
+    const positions = body.mesh.vertices;
+    const indices = body.mesh.indices;
+    const point = (index: number): [number, number, number] => [
+      positions[index * 3]!,
+      positions[index * 3 + 1]!,
+      positions[index * 3 + 2]!
+    ];
+    const sub = (a: number[], b: number[]) => [
+      a[0]! - b[0]!,
+      a[1]! - b[1]!,
+      a[2]! - b[2]!
+    ];
+    const cross = (a: number[], b: number[]) => [
+      a[1]! * b[2]! - a[2]! * b[1]!,
+      a[2]! * b[0]! - a[0]! * b[2]!,
+      a[0]! * b[1]! - a[1]! * b[0]!
+    ];
+    const dot3 = (a: number[], b: number[]) =>
+      a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+    const norm = (a: number[]) => Math.hypot(a[0]!, a[1]!, a[2]!);
+
+    // Every corner-cap vertex sits exactly on its corner ball (the ball
+    // centre is the nearest bbox corner pulled inward by R on each axis)
+    // and every cap triangle faces outward — the old patch folded 7
+    // triangles per corner into the body.
+    const { min, max } = body.bbox;
+    for (const face of sphereFaces) {
+      const start = face.triangleStart * 3;
+      const end = start + face.triangleCount * 3;
+      const sample = point(indices[start]!);
+      const center = [
+        sample[0] - min.x < max.x - sample[0] ? min.x + radius : max.x - radius,
+        sample[1] - min.y < max.y - sample[1] ? min.y + radius : max.y - radius,
+        sample[2] - min.z < max.z - sample[2] ? min.z + radius : max.z - radius
+      ];
+      for (let cursor = start; cursor < end; cursor += 3) {
+        const a = point(indices[cursor]!);
+        const b = point(indices[cursor + 1]!);
+        const c = point(indices[cursor + 2]!);
+        for (const p of [a, b, c]) {
+          // Display vertices are float32 across the WASM boundary, so allow
+          // that quantization — still five orders below the 0.1 mm sag the
+          // old approximate corner patch produced.
+          expect(Math.abs(norm(sub(p, center)) - radius)).toBeLessThan(1e-5);
+        }
+        const normal = cross(sub(b, a), sub(c, a));
+        const mid = [
+          (a[0] + b[0] + c[0]) / 3,
+          (a[1] + b[1] + c[1]) / 3,
+          (a[2] + b[2] + c[2]) / 3
+        ];
+        expect(dot3(normal, sub(mid, center))).toBeGreaterThan(0);
+      }
+    }
+
+    // Every adjacency in this model is tangent (plane–cylinder,
+    // cylinder–sphere), so no seam between triangles of different B-rep
+    // faces may crease beyond a few degrees. The old corner patch met its
+    // cylinders at up to 105.8 degrees.
+    const faceOfTriangle = new Int32Array(indices.length / 3).fill(-1);
+    faces.forEach((face, faceIndex) => {
+      for (
+        let triangle = face.triangleStart;
+        triangle < face.triangleStart + face.triangleCount;
+        triangle += 1
+      ) {
+        faceOfTriangle[triangle] = faceIndex;
+      }
+    });
+    const triangleNormals: number[][] = [];
+    const edgeUse = new Map<string, number[]>();
+    for (let triangle = 0; triangle < indices.length / 3; triangle += 1) {
+      const a = indices[triangle * 3]!;
+      const b = indices[triangle * 3 + 1]!;
+      const c = indices[triangle * 3 + 2]!;
+      const normal = cross(sub(point(b), point(a)), sub(point(c), point(a)));
+      const length = norm(normal) || 1;
+      triangleNormals.push([
+        normal[0]! / length,
+        normal[1]! / length,
+        normal[2]! / length
+      ]);
+      for (const [first, second] of [
+        [a, b],
+        [b, c],
+        [c, a]
+      ] as const) {
+        const key =
+          first < second ? `${first}:${second}` : `${second}:${first}`;
+        const users = edgeUse.get(key) ?? [];
+        users.push(triangle);
+        edgeUse.set(key, users);
+      }
+    }
+    let worstSeamDot = 1;
+    for (const users of edgeUse.values()) {
+      // Watertight display mesh: every edge is shared by exactly two
+      // triangles. A count of one is a crack; three is an overlap fold.
+      expect(users).toHaveLength(2);
+      const [first, second] = users as [number, number];
+      if (faceOfTriangle[first] === faceOfTriangle[second]) {
+        continue;
+      }
+      worstSeamDot = Math.min(
+        worstSeamDot,
+        dot3(triangleNormals[first]!, triangleNormals[second]!)
+      );
+    }
+    const worstSeamDegrees =
+      (Math.acos(Math.max(-1, worstSeamDot)) * 180) / Math.PI;
+    expect(worstSeamDegrees).toBeLessThan(8);
   });
 
   it('allows a fillet radius larger than half the selected edge length', async () => {
@@ -1912,9 +3877,19 @@ describe('exact hybrid kernel adapter', () => {
   });
 
   it('fillets an edge of an already-filleted body (sequential fillets)', async () => {
-    // BrepKit can extend a second blend from most planar-adjacent edges. Edges
-    // bounded entirely by an existing NURBS blend are reported as an
-    // actionable failure instead of BrepKit's no-op fallback being accepted.
+    // BrepKit can extend a second blend from most planar-adjacent edges. What
+    // this pins is not which edges those are but that every REFUSAL carries
+    // advice the kernel agrees with: a refusal that says "try a smaller
+    // radius" is checked by actually trying smaller radii, and one that says
+    // to edit the earlier feature is checked by confirming no smaller radius
+    // works either.
+    //
+    // That replaces a pin on the wording. The wording used to be inferred
+    // from surface type — a blend face WAS a `bspline`, so an edge touching
+    // one was blend-adjacent. The kernel now returns exact cylinders for
+    // straight-edge fillets, which made every second-fillet refusal here fall
+    // through to "try a smaller radius" whether or not a smaller radius could
+    // work. Both halves are now derived from what the kernel accepts.
     const base = addPrimitiveFeature(
       createProjectDocument('Sequential fillets', toUserId('user_exact')),
       {
@@ -1940,33 +3915,71 @@ describe('exact hybrid kernel adapter', () => {
     expect(firstDerived.warnings).toEqual([]);
     expect(firstBody?.topology?.edges.length).toBeGreaterThan(12);
 
-    // Fillet every edge of the filleted body one at a time. Successful convex
-    // or concave blends may remove or add volume, but must produce a distinct,
-    // positive solid. Unsupported blend-on-blend cases must fail cleanly.
-    let succeeded = 0;
-    let failed = 0;
-    for (const edge of firstBody!.topology!.edges) {
+    // The first fillet's band is an exact cylinder of the requested radius,
+    // not a spline fitted near one.
+    const firstBand = firstBody!.topology!.faces.filter(
+      (face) => face.geometry?.surfaceType !== 'plane'
+    );
+    expect(firstBand).toHaveLength(1);
+    expect(firstBand[0]!.geometry?.surfaceType).toBe('cylinder');
+    expect(firstBand[0]!.geometry?.radius).toBeCloseTo(2, 9);
+
+    const secondFillet = async (edgeHash: number, size: number) => {
       const second = filletEdges(first, {
-        name: `Second fillet ${edge.hash}`,
+        name: `Second fillet ${edgeHash} at ${size}`,
         targetBodyId: firstBodyId,
-        edgeHashes: [edge.hash],
-        size: 2
+        edgeHashes: [edgeHash],
+        size
       }).document;
       const derived = await adapter.syncDocument(second);
-      if (derived.warnings.length === 0) {
+      return {
+        warnings: derived.warnings,
+        body: derived.bodyRepresentations[second.bodyOrder.at(-1)!]
+      };
+    };
+
+    // Fillet every edge of the filleted body one at a time. Successful convex
+    // or concave blends may remove or add volume, but must produce a distinct,
+    // positive solid. Every failure must carry advice that is TRUE of this
+    // body, which is asserted by re-running the same pick at smaller radii.
+    let succeeded = 0;
+    let sizeBound = 0;
+    let structural = 0;
+    for (const edge of firstBody!.topology!.edges) {
+      const attempt = await secondFillet(edge.hash, 2);
+      if (attempt.warnings.length === 0) {
         succeeded += 1;
-        const body = derived.bodyRepresentations[second.bodyOrder.at(-1)!];
-        expect(body?.volume).toBeGreaterThan(0);
-        expect(body?.volume).not.toBeCloseTo(firstBody!.volume, 6);
+        expect(attempt.body?.volume).toBeGreaterThan(0);
+        expect(attempt.body?.volume).not.toBeCloseTo(firstBody!.volume, 6);
+        continue;
+      }
+      expect(attempt.warnings).toHaveLength(1);
+      expect(attempt.warnings[0]).not.toContain('WebAssembly.Exception');
+      const smallerRadiiThatWork = (
+        await Promise.all(
+          [1, 0.5, 0.25, 0.1].map((size) => secondFillet(edge.hash, size))
+        )
+      ).filter((result) => result.warnings.length === 0);
+      if (/Try a smaller radius/.test(attempt.warnings[0]!)) {
+        sizeBound += 1;
+        // The advice has to be actionable, so a smaller radius must actually
+        // produce a body.
+        expect(smallerRadiiThatWork.length).toBeGreaterThan(0);
+        expect(smallerRadiiThatWork[0]!.body?.volume).toBeGreaterThan(0);
       } else {
-        failed += 1;
-        // The failure must carry the actionable diagnostic, not a raw crash.
-        expect(derived.warnings[0]).toMatch(/edit that earlier feature/i);
+        structural += 1;
+        // The structural advice claims no radius helps, so nothing smaller
+        // may quietly succeed.
+        expect(smallerRadiiThatWork).toHaveLength(0);
+        expect(attempt.warnings[0]).toMatch(/edit that earlier feature/i);
       }
     }
     expect(succeeded).toBeGreaterThanOrEqual(7);
-    expect(failed).toBeLessThanOrEqual(8);
-  });
+    expect(sizeBound + structural).toBeLessThanOrEqual(8);
+    // Blend-on-blend is still the dominant refusal on this body; if that ever
+    // becomes zero the classifier has stopped recognising its own bands.
+    expect(structural).toBeGreaterThan(0);
+  }, 60_000);
 
   it('fillets the result of a boolean subtract', async () => {
     const withBase = addPrimitiveFeature(
@@ -2038,6 +4051,511 @@ describe('exact hybrid kernel adapter', () => {
     expect(derived.warnings[0]).not.toContain('WebAssembly.Exception');
   });
 
+  it('fillets corner chains and hole rims on a boolean-result plate', async () => {
+    // Regression for docs/qa/2026-08-01, inverted. That investigation found
+    // the kernel refusing corner chains and closed rims on a boolean-subtract
+    // body at EVERY radius, and this test existed to prove the refusal was at
+    // least named honestly. The kernel's blend phases landed: both picks now
+    // build, so the test proves the blends instead.
+    //
+    // What is asserted is the geometry, not that a call returned. The hole rim
+    // is checked against its Pappus closed form, the single edge against the
+    // straight-band closed form, and both results have to be watertight solids
+    // with the surfaces a rolling-ball blend is defined to produce.
+    //
+    // The corner chain's VOLUME is deliberately not asserted here: it builds a
+    // valid solid but removes more material than the closed form, which
+    // 'blends a corner chain to its closed-form volume' below measures and
+    // fails on. Recording the number it produces today is exactly how that
+    // would stop being findable.
+    const withPlate = addPrimitiveFeature(
+      createProjectDocument('Holed plate fillets', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 80, height: 60, depth: 6 }
+      }
+    );
+    const plateId = withPlate.bodyOrder.at(-1)!;
+    const withTool = addPrimitiveFeature(withPlate, {
+      name: 'Hole tool',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 2.25, height: 6 }
+    });
+    const toolId = withTool.bodyOrder.at(-1)!;
+    const positioned = transformBody(withTool, {
+      name: 'Place hole',
+      targetBodyId: toolId,
+      translation: { x: 10, y: 10, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Holed plate',
+        operation: 'subtract',
+        targetBodyIds: [plateId, toolId]
+      })
+    );
+    const bodyId = document.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+
+    const edges = derived.bodyRepresentations[bodyId]!.topology!.edges;
+    const polylineLength = (points: number[]): number => {
+      let total = 0;
+      for (let index = 0; index + 5 < points.length; index += 3) {
+        total += Math.hypot(
+          points[index + 3]! - points[index]!,
+          points[index + 4]! - points[index + 1]!,
+          points[index + 5]! - points[index + 2]!
+        );
+      }
+      return total;
+    };
+    const onTop = (points: number[]): boolean =>
+      points.every(
+        (value, index) => index % 3 !== 2 || Math.abs(value - 6) < 1e-6
+      );
+    const topOfLength = (length: number) =>
+      edges.filter(
+        (edge) =>
+          onTop(edge.points) &&
+          Math.abs(polylineLength(edge.points) - length) < 1e-3
+      );
+    const long = topOfLength(80)[0]!;
+    const sharesEndpoint = (a: number[], b: number[]): boolean => {
+      const ends = (points: number[]) => [points.slice(0, 3), points.slice(-3)];
+      return ends(a).some((p) =>
+        ends(b).some(
+          (q) => Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!) < 1e-6
+        )
+      );
+    };
+    const short = topOfLength(60).find((edge) =>
+      sharesEndpoint(edge.points, long.points)
+    )!;
+    const rim = edges.find(
+      (edge) =>
+        onTop(edge.points) &&
+        Math.abs(polylineLength(edge.points) - 2 * Math.PI * 2.25) < 0.05
+    )!;
+    expect(long).toBeTruthy();
+    expect(short).toBeTruthy();
+    expect(rim).toBeTruthy();
+
+    const plateVolume = derived.bodyRepresentations[bodyId]!.volume;
+    const plateClosedForm = 80 * 60 * 6 - Math.PI * 2.25 ** 2 * 6;
+    expect(
+      Math.abs(plateVolume - plateClosedForm) / plateClosedForm
+    ).toBeLessThan(1e-5);
+
+    const filletPlate = async (
+      name: string,
+      edgeHashes: number[],
+      size: number
+    ) => {
+      const candidate = filletEdges(document, {
+        name,
+        targetBodyId: bodyId,
+        edgeHashes,
+        size
+      }).document;
+      const result = await adapter.syncDocument(candidate);
+      return {
+        warnings: result.warnings,
+        body: result.bodyRepresentations[candidate.bodyOrder.at(-1)!]
+      };
+    };
+    const watertight = (body: {
+      mesh: { vertices: number[]; indices: number[] };
+    }) =>
+      isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(body.mesh.vertices, body.mesh.indices)
+      );
+    const surfaceTypes = (body: {
+      topology?: { faces: { geometry?: { surfaceType?: string } }[] };
+    }) =>
+      (body.topology?.faces ?? [])
+        .map((face) => face.geometry?.surfaceType)
+        .sort();
+
+    // --- the corner chain: used to be refused at every radius ---------------
+    const corner = await filletPlate(
+      'Corner fillet',
+      [long.hash, short.hash],
+      2
+    );
+    expect(corner.warnings).toEqual([]);
+    const cornerClosure = inspectTriangleMeshClosure(
+      corner.body!.mesh.vertices,
+      corner.body!.mesh.indices
+    );
+    expect(cornerClosure.boundaryEdges).toBe(0);
+    expect(cornerClosure.nonManifoldEdges).toBe(0);
+    expect(cornerClosure.inconsistentWindingEdges).toBe(0);
+    // Two blend bands, the spherical octant that joins them, and the flat
+    // remnant between that octant and the sharp vertical edge it stops at —
+    // over the plate's six planes and its bore.
+    expect(surfaceTypes(corner.body!)).toEqual([
+      'cylinder',
+      'cylinder',
+      'cylinder',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'sphere'
+    ]);
+    const cornerBands = corner.body!.topology!.faces.filter(
+      (face) =>
+        face.geometry?.surfaceType === 'cylinder' &&
+        Math.abs((face.geometry.radius ?? 0) - 2) < 1e-9
+    );
+    expect(cornerBands).toHaveLength(2);
+    // The vertex patch is a sphere of the blend radius, not an approximation.
+    const cornerPatch = corner.body!.topology!.faces.filter(
+      (face) => face.geometry?.surfaceType === 'sphere'
+    );
+    expect(cornerPatch).toHaveLength(1);
+    expect(cornerPatch[0]!.geometry!.radius).toBeCloseTo(2, 9);
+    // Closed form. Away from the corner each band removes r^2 - pi r^2 / 4 per
+    // unit length. Inside the r x r x r corner cube the two bands overlap and
+    // the octant takes over, so that cube keeps only the octant's volume.
+    //
+    // The tolerance is measurement, not geometry: this reads the volume
+    // through syncDocument at MEASUREMENT_DEFLECTION (0.08), where the blend's
+    // curved faces cost ~1.1e-5 relative. Measured on the same solid at a
+    // converged deflection the agreement is 2.8e-8 — see 'blends a corner
+    // chain to its closed-form volume', which measures the kernel directly.
+    const r = 2;
+    const bandArea = r ** 2 - (Math.PI * r ** 2) / 4;
+    const cornerCube = r ** 3 - ((4 / 3) * Math.PI * r ** 3) / 8;
+    const cornerClosedForm =
+      plateClosedForm - bandArea * (80 - r) - bandArea * (60 - r) - cornerCube;
+    expect(
+      Math.abs(corner.body!.volume - cornerClosedForm) / cornerClosedForm
+    ).toBeLessThan(5e-5);
+    // The bore survives the blend untouched.
+    expect(
+      corner.body!.topology!.faces.some(
+        (face) => Math.abs((face.geometry?.radius ?? 0) - 2.25) < 1e-9
+      )
+    ).toBe(true);
+
+    // --- the hole rim: used to be refused at every radius -------------------
+    const rimFillet = await filletPlate('Rim fillet', [rim.hash], 1);
+    expect(rimFillet.warnings).toEqual([]);
+    expect(watertight(rimFillet.body!)).toBe(true);
+    // Rounding a bore's mouth turns the rim into a torus and leaves the bore
+    // wall and the six planes alone.
+    expect(surfaceTypes(rimFillet.body!)).toEqual([
+      'cylinder',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'plane',
+      'torus'
+    ]);
+    // Pappus on the removed cross-section: the r x r corner square between the
+    // top plane and the bore wall, less the quarter disc the rolling ball
+    // leaves behind, revolved about the bore axis at its own centroid radius.
+    const boreRadius = 2.25;
+    const rimRadius = 1;
+    const removedArea = rimRadius ** 2 - (Math.PI * rimRadius ** 2) / 4;
+    const removedCentroid =
+      (rimRadius ** 2 * (boreRadius + rimRadius / 2) -
+        ((Math.PI * rimRadius ** 2) / 4) *
+          (boreRadius + rimRadius - (4 * rimRadius) / (3 * Math.PI))) /
+      removedArea;
+    const rimClosedForm =
+      plateClosedForm - removedArea * 2 * Math.PI * removedCentroid;
+    expect(rimClosedForm).toBeCloseTo(28701.239075601843, 9);
+    expect(
+      Math.abs(rimFillet.body!.volume - rimClosedForm) / rimClosedForm
+    ).toBeLessThan(1e-5);
+
+    // --- a single straight edge, and the radius advice that survives --------
+    const single = await filletPlate('Single fillet', [long.hash], 2);
+    expect(single.warnings).toEqual([]);
+    expect(watertight(single.body!)).toBe(true);
+    // Rounding a straight edge of length L at radius r removes (1 - pi/4) r^2 L.
+    const singleClosedForm = plateClosedForm - (1 - Math.PI / 4) * 4 * 80;
+    // Loose because `volume()` integrates at MEASUREMENT_DEFLECTION (0.08),
+    // which under-measures an r2 band by ~4.7e-4 relative; refining the
+    // deflection walks this body onto the closed form (-1.1e-6 at 1e-5).
+    expect(
+      Math.abs(single.body!.volume - singleClosedForm) / singleClosedForm
+    ).toBeLessThan(1e-3);
+    expect(single.body!.volume).toBeLessThan(plateVolume);
+
+    const oversized = await filletPlate('Oversized fillet', [long.hash], 50);
+    expect(oversized.warnings).toHaveLength(1);
+    expect(oversized.warnings[0]).toContain('Try a smaller radius');
+    expect(oversized.warnings[0]).not.toContain('WebAssembly.Exception');
+  }, 60_000);
+
+  it('blends a corner chain to its closed-form volume', async () => {
+    // Measured on a plain 80x60x6 box at a deflection fine enough that the
+    // mesh has converged (successive refinements move these by <1e-8
+    // relative), so this is geometry, not measurement.
+    //
+    // This test was written failing, when a corner chain read +147% over the
+    // closed form and four edges read +259%. The geometry was never wrong:
+    // the vertex patch was emitted INVERTED, so the divergence integral
+    // counted its faces with the wrong sign. The tell was that the excess
+    // moved when the solid did — divergence contributions are origin
+    // dependent — which is why two reproductions of the same pick disagreed.
+    // Fixed kernel-side by orienting the patch outward; the closed form was
+    // the right answer all along.
+    //
+    // Do not re-record these numbers. The closed form is the answer.
+    const kernel = new BrepKernel();
+    try {
+      const box = kernel.makeBox(80, 60, 6);
+      const converged = (solid: number) => kernel.volume(solid, 1e-5);
+      const boxVolume = converged(box);
+      expect(boxVolume).toBeCloseTo(28800, 6);
+
+      const edgeLength = (edge: number) => {
+        const points = Array.from(kernel.tessellateEdge(edge, 1e-3));
+        let total = 0;
+        for (let index = 0; index + 5 < points.length; index += 3) {
+          total += Math.hypot(
+            points[index + 3]! - points[index]!,
+            points[index + 4]! - points[index + 1]!,
+            points[index + 5]! - points[index + 2]!
+          );
+        }
+        return { total, points };
+      };
+      const top = Array.from(kernel.getSolidEdges(box))
+        .map((handle) => ({ handle, ...edgeLength(handle) }))
+        .filter((edge) =>
+          edge.points.every(
+            (value, index) => index % 3 !== 2 || Math.abs(value - 6) < 1e-6
+          )
+        );
+      expect(top).toHaveLength(4);
+      const long = top.filter((edge) => Math.abs(edge.total - 80) < 1e-6);
+      const short = top.filter((edge) => Math.abs(edge.total - 60) < 1e-6);
+      expect(long).toHaveLength(2);
+      expect(short).toHaveLength(2);
+
+      const band = (length: number) => (1 - Math.PI / 4) * 4 * length;
+      // A rolling ball of radius r at a convex corner leaves a spherical
+      // octant, so the corner cube gives up 8 - pi r^3 / 6 of its volume.
+      const cornerPatch = 8 - (Math.PI * 8) / 6;
+      const removedBy = (handles: number[], size: number) =>
+        boxVolume -
+        converged(kernel.fillet(box, Uint32Array.from(handles), size));
+      // 1e-4 relative: the converged mesh still carries ~1e-5 of residue on a
+      // curved band, and every gap below is orders of magnitude larger.
+      const removes = (
+        label: string,
+        handles: number[],
+        closedForm: number
+      ) => {
+        const measured = removedBy(handles, 2);
+        expect
+          .soft(
+            Math.abs(measured - closedForm) / closedForm,
+            `${label}: removed ${measured.toFixed(3)} mm3, closed form ${closedForm.toFixed(3)} mm3`
+          )
+          .toBeLessThan(1e-4);
+      };
+
+      // Controls: a single band and two disjoint bands are exact.
+      removes('one 80 mm edge', [long[0]!.handle], band(80));
+      removes(
+        'two opposite 80 mm edges',
+        [long[0]!.handle, long[1]!.handle],
+        2 * band(80)
+      );
+
+      // One vertex blend.
+      removes(
+        'one corner chain',
+        [long[0]!.handle, short[0]!.handle],
+        band(80 - 2) + band(60 - 2) + cornerPatch
+      );
+
+      // Four vertex blends.
+      removes(
+        'the whole top perimeter',
+        top.map((edge) => edge.handle),
+        2 * band(80 - 4) + 2 * band(60 - 4) + 4 * cornerPatch
+      );
+    } finally {
+      kernel.free();
+    }
+  }, 120_000);
+
+  it('tessellates a vertex blend with consistent winding', async () => {
+    // Written failing alongside the volume test above, and a separate defect
+    // from it. The corner chain's B-rep passed `validate_solid` with zero
+    // errors and its triangle projection was closed and manifold — but 56 of
+    // its edges carried two triangle uses pointing the SAME way. That is the
+    // mesh the viewport shades and the STL exporter writes, so the winding is
+    // user-visible even though every B-rep-level check reported the body as
+    // sound. Fixed kernel-side; this holds the tessellation to it.
+    const withPlate = addPrimitiveFeature(
+      createProjectDocument('Winding', toUserId('user_exact')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 80, height: 60, depth: 6 }
+      }
+    );
+    const plateId = withPlate.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(withPlate);
+    const edges = derived.bodyRepresentations[plateId]!.topology!.edges;
+    const onTop = (points: number[]): boolean =>
+      points.every(
+        (value, index) => index % 3 !== 2 || Math.abs(value - 6) < 1e-6
+      );
+    const span = (points: number[]) =>
+      Math.hypot(
+        points.at(-3)! - points[0]!,
+        points.at(-2)! - points[1]!,
+        points.at(-1)! - points[2]!
+      );
+    const top = edges.filter((edge) => onTop(edge.points));
+    const long = top.find((edge) => Math.abs(span(edge.points) - 80) < 1e-6)!;
+    const short = top.find((edge) => Math.abs(span(edge.points) - 60) < 1e-6)!;
+    const corner = filletEdges(withPlate, {
+      name: 'Corner fillet',
+      targetBodyId: plateId,
+      edgeHashes: [long.hash, short.hash],
+      size: 2
+    }).document;
+    const cornerDerived = await adapter.syncDocument(corner);
+    expect(cornerDerived.warnings).toEqual([]);
+    const body = cornerDerived.bodyRepresentations[corner.bodyOrder.at(-1)!]!;
+    const closure = inspectTriangleMeshClosure(
+      body.mesh.vertices,
+      body.mesh.indices
+    );
+    expect(closure.boundaryEdges).toBe(0);
+    expect(closure.nonManifoldEdges).toBe(0);
+    expect(closure.inconsistentWindingEdges).toBe(0);
+  }, 60_000);
+
+  it('never silently drops an edge a multi-edge selection names', async () => {
+    // Written failing: a selection mixing the top perimeter with the bore's
+    // closed rim came back blended on the four straight edges only. The rim
+    // was dropped, the result was byte-identical to the four-edge selection,
+    // and the kernel reported no error — so a user got a silent partial edit
+    // that the adapter had no way to detect, since a partial result is itself
+    // a valid, in-envelope solid.
+    //
+    // The contract this test holds is that the operation either rounds
+    // everything it was given, or it fails loudly saying what it missed.
+    // Never a quiet subset.
+    //
+    // Both defects behind it are now fixed kernel-side. The silence went
+    // first: the kernel began refusing the whole selection and naming the
+    // dropped edge. Then the refusal itself went — it turned out the rim
+    // never reached the corner the error blamed. The dispatcher chose ONE
+    // engine for the whole selection, and only the planar rebuild closes a
+    // vertex blend while only the walking builder assembles a closed rim, so
+    // one circle in the selection sent the four straight edges to a builder
+    // whose first guard refuses any two-chain vertex. Those corners failed in
+    // that builder with no rim present at all.
+    //
+    // Both branches stay accepted. The refusal branch is the one that must
+    // never regress into silence, and keeping it costs nothing.
+    const kernel = new BrepKernel();
+    try {
+      const plate = kernel.makeBox(80, 60, 6);
+      const bore = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(2.25, 6),
+        new Float64Array([1, 0, 0, 10, 0, 1, 0, 10, 0, 0, 1, 0, 0, 0, 0, 1])
+      );
+      const holed = kernel.cut(plate, bore);
+      const onTop = (edge: number) =>
+        Array.from(kernel.tessellateEdge(edge, 1e-3)).every(
+          (value, index) => index % 3 !== 2 || Math.abs(value - 6) < 1e-6
+        );
+      const topEdges = Array.from(kernel.getSolidEdges(holed)).filter(onTop);
+      const rims = topEdges.filter((edge) => {
+        const handles = Array.from(kernel.getEdgeVertexHandles(edge));
+        return new Set(handles).size === 1;
+      });
+      const perimeter = topEdges.filter((edge) => !rims.includes(edge));
+      expect(rims).toHaveLength(1);
+      expect(perimeter).toHaveLength(4);
+
+      const faceTypes = (solid: number) =>
+        Array.from(kernel.getSolidFaces(solid))
+          .map((face) => kernel.getSurfaceType(face))
+          .sort();
+
+      // Each half of the selection rounds on its own.
+      const perimeterOnly = kernel.fillet(
+        holed,
+        Uint32Array.from(perimeter),
+        2
+      );
+      const perimeterVolume = kernel.volume(perimeterOnly, 1e-5);
+      expect(faceTypes(perimeterOnly)).toContain('sphere');
+      const rimOnly = kernel.fillet(holed, Uint32Array.from(rims), 2);
+      expect(faceTypes(rimOnly)).toContain('torus');
+
+      let withRim: number | null = null;
+      let refusal = '';
+      try {
+        withRim = kernel.fillet(
+          holed,
+          Uint32Array.from([...perimeter, ...rims]),
+          2
+        );
+      } catch (error) {
+        refusal = String((error as Error)?.message ?? error);
+      }
+
+      if (withRim !== null) {
+        // One measurement, reused. `volume` at 1e-5 is the expensive call in
+        // this test and it was being made twice on the same solid; under load
+        // the whole test ran to 125s against its 120s budget.
+        const measured = kernel.volume(withRim, 1e-5);
+        // It took the whole selection, so the rim has to be rounded — a result
+        // that matches the perimeter-only solid means the rim went missing.
+        const types = faceTypes(withRim);
+        expect(types).toContain('torus');
+        expect(measured).not.toBeCloseTo(perimeterVolume, 6);
+        // Every corner patch survives alongside it: four octants, five
+        // cylinders (four bands plus the bore) and the rim's torus.
+        expect(types.filter((type) => type === 'sphere')).toHaveLength(4);
+        expect(types.filter((type) => type === 'cylinder')).toHaveLength(5);
+        // The perimeter and rim removals are disjoint, so the combined body is
+        // the bored plate less both. 28800 - 30.375pi of plate, less
+        // 1088 - 808pi/3 for the perimeter and 94pi/3 - 17pi^2/2 for the rim,
+        // which collects to 27712 + 207.625pi + 8.5pi^2. A holed body is
+        // integrated off its inscribed mesh, so this converges from below.
+        const combinedClosedForm =
+          27712 + 207.625 * Math.PI + 8.5 * Math.PI ** 2;
+        expect(measured).toBeLessThan(combinedClosedForm);
+        expect(
+          (combinedClosedForm - measured) / combinedClosedForm
+        ).toBeLessThan(1e-6);
+      } else {
+        // It refused, so it has to say which edge it could not take, in prose
+        // rather than an opaque trap.
+        expect(refusal).toContain('edges-not-blended');
+        expect(refusal).toContain(String(rims[0]));
+        expect(refusal).not.toContain('[object WebAssembly.Exception]');
+      }
+    } finally {
+      kernel.free();
+    }
+  }, 120_000);
+
   it('builds linear and circular exact body patterns', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Patterns', toUserId('user_exact')),
@@ -2101,6 +4619,160 @@ describe('exact hybrid kernel adapter', () => {
     expect(inspection.solid).toBe(true);
     expect(inspection.valid).toBe(true);
     expect(inspection.volume).toBeCloseTo(480, 4);
+  });
+
+  it('keeps mirror, shell, and solid offset conformant on an IMPORTED body', async () => {
+    // Z3. Before the flip these three operations on an imported document ran
+    // on OpenCascade, and the UI additionally refused solid offset outright
+    // because that kernel's sharp offset was limited to proven convex planar
+    // bodies. BrepKit builds them now, and each answer is pinned against its
+    // closed form.
+    const source = addPrimitiveFeature(
+      createProjectDocument('Import modeling source', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const step = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+    const manager = new CommandManager(
+      createProjectDocument('Import modeling', toUserId('user_exact'))
+    );
+    const imported = manager.execute(
+      commandFactories.importStep({
+        name: 'Imported block',
+        artifactId: 'artifact_import_modeling',
+        sourceName: 'block.step',
+        stepText: step
+      })
+    );
+    const importedBodyId = imported.bodyOrder[0]!;
+
+    const projection = await adapter.syncDocument(imported);
+    const opening = projection.bodyRepresentations[
+      importedBodyId
+    ]?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 30) < 1e-6
+    );
+    expect(opening).toBeTruthy();
+
+    const mirrored = mirrorBody(imported, {
+      name: 'Mirrored import',
+      targetBodyId: importedBodyId,
+      plane: { origin: { x: 20, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    }).document;
+    const shelled = shellBody(imported, {
+      name: 'Shelled import',
+      targetBodyId: importedBodyId,
+      openingFaceHashes: [opening!.hash],
+      ...(opening!.reference
+        ? { openingFaceReferences: [opening!.reference] }
+        : {}),
+      thickness: 1
+    }).document;
+    const offset = offsetSolidBody(imported, {
+      name: 'Offset import',
+      targetBodyId: importedBodyId,
+      distance: 1
+    }).document;
+
+    for (const [document, expectedVolume] of [
+      [mirrored, 6000],
+      [shelled, 6000 - 8 * 18 * 29],
+      [offset, 12 * 22 * 32]
+    ] as const) {
+      const bodyId = document.bodyOrder.at(-1)!;
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      expect(body?.consumed).toBe(false);
+      expect(body?.volume).toBeCloseTo(expectedVolume, 3);
+      const exported = await adapter.exportStep(document, [bodyId]);
+      await expect(adapter.inspectStep(exported)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
+    }
+  });
+
+  it('keeps mirror, shell, and solid offset conformant on a modelled body', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Modeling parity', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const moved = transformBody(base, {
+      name: 'Rotate source',
+      targetBodyId: sourceBodyId,
+      translation: { x: 4, y: -3, z: 2 },
+      rotationDeg: { x: 15, y: 20, z: 35 }
+    }).document;
+    const mirrored = mirrorBody(moved, {
+      name: 'Mirrored copy',
+      targetBodyId: sourceBodyId,
+      plane: {
+        origin: { x: 12, y: 5, z: -2 },
+        normal: { x: '1 / sqrt(2)', y: '1 / sqrt(2)', z: 0 }
+      }
+    }).document;
+    const mirrorBodyId = mirrored.bodyOrder.at(-1)!;
+    const mirrorDerived = await adapter.syncDocument(mirrored);
+    expect(mirrorDerived.warnings).toEqual([]);
+    expect(
+      mirrorDerived.bodyRepresentations[sourceBodyId]?.volume
+    ).toBeCloseTo(6000, 4);
+    expect(
+      mirrorDerived.bodyRepresentations[mirrorBodyId]?.volume
+    ).toBeCloseTo(6000, 4);
+
+    const sourceProjection = await adapter.syncDocument(base);
+    const opening = sourceProjection.bodyRepresentations[
+      sourceBodyId
+    ]?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 30) < 1e-7
+    );
+    expect(opening).toBeTruthy();
+    const shelled = shellBody(base, {
+      name: 'Open shell',
+      targetBodyId: sourceBodyId,
+      openingFaceHashes: [opening!.hash],
+      ...(opening!.reference
+        ? { openingFaceReferences: [opening!.reference] }
+        : {}),
+      thickness: 1
+    }).document;
+    const shellBodyId = shelled.bodyOrder.at(-1)!;
+    const offset = offsetSolidBody(base, {
+      name: 'Outward offset',
+      targetBodyId: sourceBodyId,
+      distance: 1
+    }).document;
+    const offsetBodyId = offset.bodyOrder.at(-1)!;
+
+    for (const [document, bodyId, expectedVolume] of [
+      [shelled, shellBodyId, 6000 - 8 * 18 * 29],
+      [offset, offsetBodyId, 12 * 22 * 32]
+    ] as const) {
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      expect(body?.consumed).toBe(false);
+      expect(body?.volume).toBeCloseTo(expectedVolume, 3);
+      const step = await adapter.exportStep(document, [bodyId]);
+      await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+        solid: true,
+        valid: true
+      });
+    }
   });
 
   it.each([

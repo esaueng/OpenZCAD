@@ -1,11 +1,15 @@
 import {
+  lazy,
+  Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
-  type ChangeEvent
+  type ChangeEvent,
+  type ComponentProps
 } from 'react';
 import {
   Camera,
@@ -30,7 +34,6 @@ import {
 import {
   CommandManager,
   commandFactories,
-  commandsForCadPatch,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -39,13 +42,15 @@ import type {
 } from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
+  duplicateProjectDocument,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
   listNodesByKind,
   listParameters,
   normalizeDocument,
-  resolveParamValue
+  resolveParamValue,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -54,11 +59,15 @@ import {
   frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
+  type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
+import {
+  resolveFaceAttachment,
+  type FaceAttachmentCandidate
+} from '@openzcad/kernel-adapter/face-attachment';
 import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import type {
   ArtifactKind,
   ArtifactRecord,
@@ -70,6 +79,8 @@ import type {
   FaceGeometry,
   ParamValue,
   ProjectDocument,
+  ProjectOrganization,
+  ProjectStatus,
   ProjectSummary,
   SketchId,
   SketchNode,
@@ -78,15 +89,46 @@ import type {
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
+import {
+  applyOrganizationUpdate,
+  compareProjectSummaries,
+  DEFAULT_PROJECT_ORGANIZATION,
+  duplicateProjectName,
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  isFeatureRollbackSuppressed,
+  isFeatureSuppressed,
+  projectOrganization,
+  toProjectId,
+  TRASH_RETENTION_DAYS
+} from '@openzcad/shared';
 import type {
   AppSettings,
   AppSettingsResponse,
   AuthConfigResponse,
-  AuthSession
+  AuthSession,
+  HealthResponse
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
-import { timed } from './lib/perf';
+import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
+import {
+  CloudProjectAutosave,
+  type WorkspaceSaveState
+} from './lib/cloudProjectAutosave';
+import {
+  decideProjectSync,
+  shouldPollForFreshness
+} from './lib/projectSyncDecision';
+
+/**
+ * How often an open cloud project checks whether another device has moved it.
+ * Focus and reconnect cover the cases that matter most; the interval is the
+ * backstop for a tab left open and in front of somebody.
+ */
+const FRESHNESS_POLL_INTERVAL_MS = 60_000;
+import { mark, measure, timed, timedAsync } from './lib/perf';
+import { useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
   downloadText,
@@ -95,6 +137,9 @@ import {
   formatNumber,
   inferContentType
 } from './lib/model';
+import { useDocumentFonts } from './lib/textFonts';
+import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
+import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
   SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
@@ -104,12 +149,13 @@ import {
   type ToolId
 } from './lib/tools';
 import { AppShell } from './components/AppShell';
+import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { Sidebar } from './components/Sidebar';
-import { ViewerShell } from './components/ViewerShell';
 import { Inspector } from './components/Inspector';
+import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
 import { StatusBar } from './components/StatusBar';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
@@ -117,12 +163,15 @@ import { SettingsPage, type AuthConfigStatus } from './components/SettingsPage';
 import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AssistantPanel } from './components/assistant/AssistantPanel';
+import { ProjectSharingDialog } from './components/ProjectSharingDialog';
+import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExtrudeOverlay,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform, SELECTION_FILTERS } from '@openzcad/viewport';
+import { composeMoveTransform } from '@openzcad/viewport/move-transform';
+import { SELECTION_FILTERS } from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import { commandPromptText } from './lib/interaction/prompt';
 import {
@@ -139,19 +188,26 @@ import {
   type FaceTarget
 } from './lib/interaction/machine';
 import { updateProfileSelection } from './lib/profileSelection';
+import {
+  isEntityWideProfileSource,
+  profileReferencesForSelection
+} from './lib/profileReferences';
 import type { SelectionActionId } from './lib/interaction/capabilities';
-import { frameFromFace } from './lib/sketch/session';
+import {
+  faceSketchAttachment,
+  fixedPlaneRefForLegacyAttachment
+} from './lib/faceSketchAttachment';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
 import { SketchToolRail } from './components/SketchToolRail';
 import { SketchEntityEditor } from './components/SketchEntityEditor';
-import { objectPolyline } from './components/viewer/sketchModeController';
+import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
   CommandPalette,
   type PaletteCommand
 } from './components/CommandPalette';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
-import { DISPLAY_MODE_LABELS } from './components/ViewerToolbar';
+import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
 import type {
@@ -162,24 +218,73 @@ import type {
   SelectionFilter,
   AxisProjection,
   DisplayMode,
-  MovePreview,
-  MoveSnap,
   PickDetail,
   SketchOverlay,
-  StandardView
-} from '@openzcad/viewport';
+  ViewTarget
+} from '@openzcad/viewport/types';
+import type { MovePreview, MoveSnap } from '@openzcad/viewport';
+
+const LazyViewerShell = lazy(() =>
+  import('./components/ViewerShell').then((module) => ({
+    default: module.ViewerShell
+  }))
+);
+
+function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
+  return (
+    <Suspense
+      fallback={
+        <div className="viewer" role="status" aria-live="polite">
+          Loading 3D viewport…
+        </div>
+      }
+    >
+      <LazyViewerShell {...props} />
+    </Suspense>
+  );
+}
 import {
+  chooseProjectDocument,
+  clearAllLastSyncedVersions,
+  deleteLocalProject,
+  listLocalProjectOrganizations,
   listLocalProjects,
+  loadLastSyncedVersion,
   loadLocalProject,
+  purgeExpiredLocalProjects,
+  saveLastSyncedVersion,
+  saveLocalProjectOrganization,
   selectProjectDocument,
   saveLocalProject
 } from './lib/localProjectStore';
+import {
+  applyLocalProjectOrganizations,
+  mergeProjectSummaries
+} from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
 import { errorMessage } from './lib/errors';
+import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
+import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
 import { useCollaboration } from './lib/useCollaboration';
+import { preflightCadPatch } from './lib/aiPatchPreflight';
+import {
+  clearUnresolvedConflict,
+  conflictFromDocuments,
+  readUnresolvedConflict,
+  resolveProjectConflict,
+  type ConflictResolution,
+  type ConflictResolutionHandlers,
+  type ProjectConflict
+} from './lib/conflictRecovery';
+import {
+  modelingFaceOptions,
+  modelingOperationDisabledReason,
+  type ModelingOperationKind,
+  type ModelingOperationSubmission
+} from './lib/modelingOperations';
 import {
   clearActiveProject,
   loadActiveProjectId,
@@ -199,8 +304,16 @@ import {
   type PanelState,
   type SidebarSectionId
 } from './lib/panelState';
+import {
+  ASSISTANT_WIDTH_LIMITS,
+  clampAssistantWidth,
+  clampSidebarWidth,
+  maxAssistantWidth,
+  maxSidebarWidth,
+  savedPanelWidths,
+  SIDEBAR_WIDTH_LIMITS
+} from './lib/panelWidths';
 
-const kernel = createKernelAdapter();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
@@ -209,20 +322,208 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'wireframe'
 ];
 
-function mergeProjectSummaries(
-  local: ProjectSummary[],
-  remote: ProjectSummary[]
-): ProjectSummary[] {
-  const merged = new Map(local.map((project) => [project.projectId, project]));
-  for (const project of remote) {
-    const existing = merged.get(project.projectId);
-    if (!existing || project.updatedAt > existing.updatedAt) {
-      merged.set(project.projectId, project);
-    }
-  }
-  return [...merged.values()].sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt)
+/** Start-screen summary of a document held on this device. */
+function summarizeLocalDocument(
+  document: ProjectDocument,
+  organization?: ProjectOrganization
+): ProjectSummary {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    ...(organization ? { organization } : {})
+  };
+}
+
+/**
+ * Every project this device can reach. Device shelf state is reconciled before
+ * expired local copies are purged so a temporarily failed cloud mirror cannot
+ * resurrect a project after its local retention window closes.
+ */
+async function loadProjectSummaries(signedIn: boolean): Promise<{
+  projects: ProjectSummary[];
+  remoteReached: boolean;
+  /**
+   * Which of `projects` the account actually holds. Everything else exists on
+   * this device alone and can be adopted. Empty when the listing never reached
+   * the account, which is why callers must pair it with `remoteReached` rather
+   * than reading an absence as "local-only".
+   */
+  cloudProjectIds: Set<string>;
+}> {
+  const [local, localOrganizations, remote] = await Promise.all([
+    listLocalProjects().catch(() => []),
+    listLocalProjectOrganizations().catch(
+      () => new Map<string, ProjectOrganization>()
+    ),
+    signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
+  ]);
+  const remoteProjects = remote?.projects ?? [];
+  const mirrorFailures = remote
+    ? await reconcileRemoteOrganizations(localOrganizations, remoteProjects)
+    : new Set<string>();
+  // While signed in but offline, defer irreversible local purging until the
+  // cloud copy can be reconciled. Otherwise a failed mirror could later make
+  // an active remote row reappear after the local tombstone was destroyed.
+  const purgedProjectIds =
+    !signedIn || remote
+      ? await purgeExpiredLocalProjects(Date.now(), mirrorFailures).catch(
+          () => []
+        )
+      : [];
+  const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
+  const purged = new Set(purgedProjectIds);
+  const projects = applyLocalProjectOrganizations(
+    mergeProjectSummaries(local, remoteProjects),
+    localOrganizations
+  ).filter(
+    (project) =>
+      !purged.has(project.projectId) || remoteIds.has(project.projectId)
   );
+  return {
+    projects,
+    remoteReached: Boolean(remote),
+    cloudProjectIds: remoteIds
+  };
+}
+
+function sameWritableOrganization(
+  left: ProjectOrganization,
+  right: ProjectOrganization
+): boolean {
+  return (
+    left.status === right.status &&
+    left.pinned === right.pinned &&
+    left.sortOrder === right.sortOrder
+  );
+}
+
+/**
+ * Adopts account metadata only when this device has none. Once the device has
+ * organised a project, its copy stays authoritative and any failed account
+ * mirror is retried on the next successful listing.
+ */
+async function reconcileRemoteOrganizations(
+  local: ReadonlyMap<string, ProjectOrganization>,
+  remote: ProjectSummary[]
+): Promise<Set<string>> {
+  const mirrorFailures = new Set<string>();
+  await Promise.all(
+    remote.map(async (project) => {
+      const localOrganization = local.get(project.projectId);
+      if (!localOrganization) {
+        if (project.organization) {
+          await saveLocalProjectOrganization(
+            project.projectId,
+            project.organization
+          ).catch(() => undefined);
+        }
+        return;
+      }
+      if (
+        sameWritableOrganization(
+          localOrganization,
+          projectOrganization(project)
+        )
+      ) {
+        return;
+      }
+      try {
+        await api.updateProject({
+          projectId: toProjectId(project.projectId),
+          status: localOrganization.status,
+          pinned: localOrganization.pinned,
+          sortOrder: localOrganization.sortOrder
+        });
+      } catch {
+        mirrorFailures.add(project.projectId);
+      }
+    })
+  );
+  return mirrorFailures;
+}
+
+function localRecoveryCopy(
+  source: ProjectDocument,
+  label: 'Recovery' | 'Local copy'
+): ProjectDocument {
+  const copy = structuredClone(source);
+  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
+  const name = `${source.name} (${label})`;
+  copy.projectId = projectId;
+  copy.name = name;
+  copy.revisions = [];
+  copy.checkpoints = [];
+  copy.derived.updatedAt = new Date().toISOString();
+  const root = copy.nodes[copy.rootNodeId];
+  if (root?.kind === 'project') {
+    root.projectId = projectId;
+    root.name = name;
+    root.revisionId = null;
+  }
+  return copy;
+}
+
+function resolvedSketchPlaneBasis(
+  document: ProjectDocument,
+  planeRef: SketchPlaneRef,
+  resolveOffset: (value: ParamValue) => number,
+  sketchName: string
+): PlaneBasis {
+  if (planeRef.type !== 'face' || !planeRef.faceReference) {
+    return frameForPlaneRef(planeRef, resolveOffset);
+  }
+  const body = document.derived.bodyRepresentations[planeRef.bodyId];
+  const candidates: FaceAttachmentCandidate[] = (body?.topology?.faces ?? [])
+    .filter(
+      (face) => face.reference?.kind === 'face' && face.geometry !== undefined
+    )
+    .map((face) => {
+      const reference = face.reference!;
+      const geometry = face.geometry!;
+      return {
+        kind: 'face',
+        currentHash: face.hash,
+        witnessVersion: 1,
+        witness: reference.witness,
+        plane:
+          geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
+            ? { center: geometry.center, normal: geometry.normal }
+            : null,
+        lineage: {
+          source: 'derived',
+          identity: {
+            producingFeatureId: reference.producingFeatureId,
+            lineageName: reference.lineageName
+          }
+        }
+      };
+    });
+  const sourceFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.featureId === planeRef.faceReference?.producingFeatureId
+  );
+  const frame = resolveFaceAttachment({
+    reference: planeRef.faceReference,
+    candidates,
+    snapshot: {
+      sourceArea: planeRef.sourceArea,
+      sourceCenter: planeRef.sourceCenter,
+      sourceNormal: planeRef.sourceNormal,
+      frame: planeRef.frame
+    },
+    sketchName,
+    sourceFeatureName:
+      sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
+  });
+  return {
+    origin: frame.origin,
+    u: frame.xAxis,
+    v: frame.yAxis,
+    normal: frame.zAxis
+  };
 }
 
 export function App() {
@@ -235,6 +536,8 @@ export function App() {
   const [appSettings, setAppSettings] = useState<AppSettings>(
     () => bootSettingsRef.current?.settings ?? defaultAppSettings()
   );
+  const appSettingsRef = useRef(appSettings);
+  appSettingsRef.current = appSettings;
   /**
    * The account revision `appSettings` is in step with, or null once edited
    * here without being saved. Persisted with the settings so a reload can tell
@@ -252,22 +555,75 @@ export function App() {
   const [startupState, setStartupState] = useState<'restoring' | 'ready'>(() =>
     startupProjectId ? 'restoring' : 'ready'
   );
+  const shellMarkedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (shellMarkedRef.current) {
+      return;
+    }
+    shellMarkedRef.current = true;
+    mark('app.mounted');
+    measure('startup.shell', 'bundle.evaluated', 'app.mounted');
+  }, []);
   const [accountSettings, setAccountSettings] =
     useState<AppSettingsResponse | null>(null);
+  const accountSettingsRef = useRef(accountSettings);
+  accountSettingsRef.current = accountSettings;
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
-  const [assistantCollapsed, setAssistantCollapsed] = useState(false);
-  /** Bumped to move focus into the assistant prompt, like `viewRequest`. */
-  const [assistantFocusNonce, setAssistantFocusNonce] = useState(0);
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
+  // Collapsing the assistant is chrome layout, so it is remembered with the
+  // rest of it rather than reset on every reload.
+  const assistantCollapsed = panelState.assistantCollapsed;
+  const setAssistantCollapsed = useCallback((collapsed: boolean) => {
+    setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
+  }, []);
+  const workspaceRef = useRef<HTMLElement | null>(null);
+  // Panel widths are capped against the window, so a narrower window has to
+  // recompute them. The stored preference is never rewritten by a resize: it is
+  // what the user asked for, and it applies again on a screen that can hold it.
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof globalThis.innerWidth === 'number' ? globalThis.innerWidth : 0
+  );
+  useEffect(() => {
+    const onResize = () => setWindowWidth(globalThis.innerWidth);
+    onResize();
+    globalThis.addEventListener('resize', onResize);
+    return () => globalThis.removeEventListener('resize', onResize);
+  }, []);
+  const savedWidths = savedPanelWidths(appSettings);
+  const sidebarWidth = clampSidebarWidth(savedWidths.sidebar, windowWidth);
+  const assistantWidth = clampAssistantWidth(
+    savedWidths.assistant,
+    windowWidth
+  );
+  /**
+   * The width under the pointer, written straight to the grid. A drag emits one
+   * of these a frame; sending them through React would re-render the editor and
+   * the viewport with them, which is what makes a splitter feel heavy.
+   */
+  const previewPanelWidth = useCallback(
+    (variable: '--sidebar-w' | '--assistant-w', width: number) => {
+      workspaceRef.current?.style.setProperty(variable, `${width}px`);
+    },
+    []
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsDialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(settingsDialogRef, {
+    enabled: settingsOpen,
+    autoFocus: true
+  });
+  const [sharingOpen, setSharingOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
     'Changes save on this device immediately.'
   );
+  const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
+  const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
+  const cloudSettingsSessionUserRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
@@ -308,6 +664,15 @@ export function App() {
   );
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
+  const [modelingTargetBodyId, setModelingTargetBodyId] =
+    useState<BodyId | null>(null);
+  const modelingPreflightRef = useRef<{
+    signature: string;
+    command: AnyCommand;
+    resultBodyId: BodyId;
+    featureName: string;
+    baseVersion: number;
+  } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
     { x: number; y: number }[]
@@ -332,14 +697,54 @@ export function App() {
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
-  const [saveState, setSaveState] = useState<'saved' | 'saving' | 'offline'>(
-    'saving'
-  );
+  const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [deploymentHealth, setDeploymentHealth] =
+    useState<HealthResponse | null>(null);
+  const [collaborationRollout, setCollaborationRollout] = useState({
+    sharingEnabled: false,
+    editLeasesEnforced: false,
+    /**
+     * The owner's own devices may join a room. Independent of `sharingEnabled`
+     * on purpose — it must never be read as permission to invite anyone, show
+     * sharing UI, or enforce a lease.
+     */
+    personalSyncEnabled: false
+  });
   const [session, setSession] = useState<AuthSession | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const loadThumbnailBodies = useCallback(
+    async (project: ProjectSummary): Promise<BodyRepresentation[]> => {
+      const localDocument = await loadLocalProject(project.projectId).catch(
+        () => null
+      );
+      const localRevisionId = localDocument?.revisions.at(-1)?.revisionId;
+      const localMatchesSummary =
+        localDocument !== null &&
+        (!project.lastRevisionId || localRevisionId === project.lastRevisionId);
+
+      const remoteDocument =
+        !localMatchesSummary && session
+          ? await api.loadProject(project.projectId).catch(() => null)
+          : null;
+      const thumbnailDocument = selectProjectDocument(
+        localDocument,
+        remoteDocument
+      );
+      return thumbnailDocument
+        ? Object.values(thumbnailDocument.derived.bodyRepresentations)
+        : [];
+    },
+    [session]
+  );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
-    view: StandardView;
+    view: ViewTarget;
+    nonce: number;
+  } | null>(null);
+  const [rotateRequest, setRotateRequest] = useState<{
+    direction: 'cw' | 'ccw';
     nonce: number;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -391,7 +796,40 @@ export function App() {
       setStatus(message);
     }
   });
+  const exactGeometryReady = geometry.isReadyFor(doc);
+  function requireExactGeometryReady(): boolean {
+    const ready = geometry.isReadyFor(managerRef.current?.document ?? null);
+    if (!ready) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+    }
+    return ready;
+  }
   const remoteVersionsRef = useRef(new Map<string, number>());
+  /**
+   * Projects the account holds, as of the last listing that reached it. Kept
+   * apart from `remoteVersionsRef`, which only knows about projects this
+   * session has opened or written: the shelf has to mark every local-only
+   * project, including ones never opened here.
+   */
+  const [cloudProjectIds, setCloudProjectIds] = useState<ReadonlySet<string>>(
+    new Set()
+  );
+  /**
+   * A divergence against the account, as opposed to against a live room. Held
+   * here rather than in the collaboration hook because it can happen with no
+   * room in the picture at all — which, with sharing off, is every time.
+   */
+  const [accountConflict, setAccountConflict] =
+    useState<ProjectConflict | null>(null);
+  /**
+   * The save-to-account run currently on screen, one entry per project in
+   * attempt order. Deliberately not cleared when the loop finishes: the
+   * failures and their reasons are the whole point, and they stay up until
+   * the user dismisses them or starts another run.
+   */
+  const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
@@ -499,13 +937,26 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
+  const { run: executeValidatedFeature } = useValidatedFeatureCommit({
+    manager: () => managerRef.current,
+    derive: (document) => geometry.syncOnce(document),
+    commit: (command) => executeCommand(command),
+    commitTransaction: (label, commands) => executeTransaction(label, commands),
+    onBusy: setBusy,
+    onStatus: setStatus
+  });
 
   const collaboration = useCollaboration({
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
     // account cookies to a collaboration room after this exact project has
     // been resolved as a cloud-backed document.
-    session: cloudAvailable ? session : null,
+    session:
+      cloudAvailable &&
+      (collaborationRollout.sharingEnabled ||
+        collaborationRollout.personalSyncEnabled)
+        ? session
+        : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -515,12 +966,26 @@ export function App() {
       ) {
         return;
       }
+      // The room and the freshness poll are two routes to the same place, so
+      // they have to leave the same state behind: without re-baselining here,
+      // the next autosave would be fenced against a version this device has
+      // already moved past and would report a conflict that does not exist.
+      remoteVersionsRef.current.set(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
       hydrateDocument(remoteDocument, {
         restoreView: false,
         rememberProject: false
       });
       setStatus(
-        `Applied live revision ${remoteDocument.version} from a collaborator.`
+        collaborationRollout.sharingEnabled
+          ? `Applied live revision ${remoteDocument.version} from a collaborator.`
+          : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
     },
     onConflict(remoteDocument) {
@@ -529,6 +994,155 @@ export function App() {
       );
     }
   });
+
+  const activeCollaborationLease = Boolean(
+    collaboration.lease &&
+    collaboration.lease.projectId === doc?.projectId &&
+    collaboration.lease.expiresAt > Date.now()
+  );
+  const editDisabledReason =
+    !cloudAvailable || !session || !collaborationRollout.sharingEnabled
+      ? null
+      : collaboration.conflict
+        ? 'Resolve the collaboration conflict before editing'
+        : collaboration.role === 'viewer' ||
+            collaboration.status === 'read-only'
+          ? 'This shared project is read-only'
+          : collaboration.role === null
+            ? 'Waiting for project access'
+            : collaborationRollout.editLeasesEnforced &&
+                !activeCollaborationLease
+              ? collaboration.status === 'lease-denied'
+                ? 'Another collaborator holds the edit lease'
+                : 'Waiting for the project edit lease'
+              : null;
+
+  function ensureCanEdit(action = 'edit this project'): boolean {
+    if (!editDisabledReason) {
+      return true;
+    }
+    setStatus(`Cannot ${action}: ${editDisabledReason}.`);
+    return false;
+  }
+
+  const conflictHandlers: ConflictResolutionHandlers = {
+    async writeRecoveryCopy(source) {
+      const copy = localRecoveryCopy(source, 'Recovery');
+      await saveLocalProject(copy);
+      setProjects((current) =>
+        mergeProjectSummaries(
+          [
+            {
+              projectId: copy.projectId,
+              name: copy.name,
+              updatedAt: copy.derived.updatedAt,
+              revisionCount: 0
+            }
+          ],
+          current
+        )
+      );
+    },
+    useRemoteVersion(remoteDocument) {
+      if (!collaboration.useRemoteVersion(remoteDocument.version)) {
+        throw new Error(
+          'The room version changed before recovery could complete.'
+        );
+      }
+      setStatus(
+        'Using the current room version; a local recovery copy was saved.'
+      );
+    },
+    async keepMyVersion({ expectedRemoteVersion }) {
+      await collaboration.keepLocalVersion(expectedRemoteVersion);
+      setStatus('Submitting the preserved local version to the room.');
+    },
+    saveLocalAsCopy() {
+      setStatus('Saved the divergent document as a local recovery project.');
+    }
+  };
+
+  /**
+   * The same three resolutions, for a conflict the account raised rather than a
+   * room. There is no lease and no live channel here: taking the account's copy
+   * is a local hydrate, and keeping this device's is an ordinary fenced write
+   * against the version the account reported.
+   */
+  const accountConflictHandlers: ConflictResolutionHandlers = {
+    writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
+    async useRemoteVersion(remoteDocument) {
+      await saveLocalProject(remoteDocument);
+      remoteVersionsRef.current.set(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      await saveLastSyncedVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        remoteDocument.projectId,
+        remoteDocument.version
+      );
+      hydrateDocument(remoteDocument, { restoreView: false });
+      setAccountConflict(null);
+      setStatus(
+        'Using the version from your account; a local recovery copy was saved.'
+      );
+    },
+    async keepMyVersion({ document, expectedRemoteVersion }) {
+      const saved = await api.saveRevision({
+        projectId: document.projectId,
+        reason: 'Kept this device’s version',
+        expectedVersion: expectedRemoteVersion,
+        document: withoutDerivedProjection(document)
+      });
+      const restored = withLocalDerived(saved, document);
+      await saveLocalProject(restored);
+      remoteVersionsRef.current.set(restored.projectId, restored.version);
+      await saveLastSyncedVersion(restored.projectId, restored.version);
+      if (managerRef.current) {
+        managerRef.current.document = restored;
+      }
+      setDoc(restored);
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        restored.projectId,
+        restored.version
+      );
+      setAccountConflict(null);
+      setSaveState('synced');
+      setStatus('Kept this device’s version; a recovery copy was saved.');
+    },
+    saveLocalAsCopy() {
+      setStatus('Saved the divergent document as a local recovery project.');
+    }
+  };
+
+  async function resolveAccountConflict(resolution: ConflictResolution) {
+    if (!accountConflict) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await resolveProjectConflict(
+        accountConflict,
+        resolution,
+        { role: collaboration.role, lease: null, leasesEnforced: false },
+        accountConflictHandlers
+      );
+      clearUnresolvedConflict(accountConflict.projectId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (collaboration.conflict) {
+      setSharingOpen(true);
+    }
+  }, [collaboration.conflict]);
 
   useEffect(() => {
     savePanelState(panelState);
@@ -551,48 +1165,333 @@ export function App() {
   }, [appSettings]);
 
   useEffect(() => {
+    const controller = new CloudSettingsAutosave({
+      initialSettings: appSettingsRef.current,
+      initialSyncedRevision: syncedRevisionRef.current,
+      api,
+      onAccountSettings(response) {
+        accountSettingsRef.current = response;
+        setAccountSettings(response);
+      },
+      onLocalSettings(settings, syncedRevision) {
+        syncedRevisionRef.current = syncedRevision;
+        saveLocalAppSettings(settings, syncedRevision);
+      },
+      onStatus(status) {
+        switch (status.state) {
+          case 'pending':
+            setSettingsMessage(
+              'Saved on this device · saving to cloud profile…'
+            );
+            break;
+          case 'offline':
+            setSettingsMessage(
+              'Saved on this device · cloud sync paused until you are online.'
+            );
+            break;
+          case 'saved':
+            setSettingsMessage('Saved to this device and cloud profile.');
+            break;
+          case 'error':
+            setSettingsMessage(
+              errorMessage(
+                status.error,
+                'Cloud autosave failed · changes remain saved on this device.'
+              )
+            );
+            break;
+        }
+      }
+    });
+    cloudSettingsAutosaveRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (cloudSettingsAutosaveRef.current === controller) {
+        cloudSettingsAutosaveRef.current = null;
+      }
+      cloudSettingsSessionUserRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const controller = new CloudProjectAutosave({
+      api,
+      onStatus(status) {
+        setSaveState(status.state);
+        if (status.state === 'refused') {
+          setStatus(
+            errorMessage(
+              status.error,
+              'This document is too large for the account. It stays saved on this device.'
+            )
+          );
+        }
+      },
+      onSynced({ projectId, version }) {
+        remoteVersionsRef.current.set(projectId, version);
+        // The durable baseline. Everything the conflict machinery decides is
+        // measured from here, so it has to be written on the acknowledgement
+        // rather than inferred later from versions alone.
+        void saveLastSyncedVersion(projectId, version);
+      },
+      onConflict({ projectId, localDocument, accountVersion }) {
+        setStatus(
+          `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
+        );
+        // Fetch the account's copy so the user is choosing between two real
+        // documents rather than two version numbers.
+        void api
+          .loadProject(projectId)
+          .then((remote) => {
+            setAccountConflict(
+              conflictFromDocuments(localDocument, remote, 'account')
+            );
+          })
+          .catch(() => undefined);
+      },
+      onSessionExpired() {
+        remoteVersionsRef.current.clear();
+        setCloudAvailable(false);
+        endCloudSettingsSession();
+      }
+    });
+    cloudProjectAutosaveRef.current = controller;
+    return () => {
+      controller.dispose();
+      if (cloudProjectAutosaveRef.current === controller) {
+        cloudProjectAutosaveRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    cloudProjectAutosaveRef.current?.configure({
+      enabled: appSettings.files.cloudAutosave,
+      idleDelayMs: appSettings.files.cloudAutosaveDelaySeconds * 1000
+    });
+  }, [
+    appSettings.files.cloudAutosave,
+    appSettings.files.cloudAutosaveDelaySeconds
+  ]);
+
+  /**
+   * Points the autosave controller at whichever project is open, and only when
+   * the account actually holds it. A project the account has never seen is not
+   * a sync failure — it is something to adopt, which the start screen offers.
+   */
+  useEffect(() => {
+    const controller = cloudProjectAutosaveRef.current;
+    if (!controller) {
+      return;
+    }
+    const projectId = doc?.projectId;
+    const accountVersion = projectId
+      ? remoteVersionsRef.current.get(projectId)
+      : undefined;
+    if (!projectId || !session || accountVersion === undefined) {
+      controller.closeProject();
+      return;
+    }
+    controller.openProject(projectId, accountVersion);
+  }, [doc?.projectId, session]);
+
+  /**
+   * Last call before the tab goes away. `pagehide` is the only one of these
+   * that fires reliably on mobile, and `visibilitychange` is the only one that
+   * fires when a tab is merely backgrounded — which on a phone is usually the
+   * last thing that happens before it is discarded.
+   */
+  useEffect(() => {
+    const flush = () => {
+      void cloudProjectAutosaveRef.current?.flushPending();
+    };
+    const onVisibilityChange = () => {
+      if (globalThis.document.visibilityState === 'hidden') {
+        flush();
+      }
+    };
+    window.addEventListener('pagehide', flush);
+    globalThis.document.addEventListener(
+      'visibilitychange',
+      onVisibilityChange
+    );
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      globalThis.document.removeEventListener(
+        'visibilitychange',
+        onVisibilityChange
+      );
+    };
+  }, []);
+
+  /**
+   * Asks the account whether the open project has moved elsewhere, and pulls it
+   * when this device has nothing of its own outstanding.
+   *
+   * A version comparison, not a document fetch — cheap enough to be the
+   * permanent answer rather than a placeholder for the live room. It narrows
+   * the window in which two devices diverge unnoticed; it does not close it,
+   * which is what the room is for.
+   */
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (
+      !shouldPollForFreshness({
+        projectId,
+        signedIn: Boolean(session),
+        accountHoldsProject: Boolean(
+          projectId && remoteVersionsRef.current.has(projectId)
+        ),
+        awaitingResolution: cloudProjectAutosaveRef.current?.isHalted !== false
+      })
+    ) {
+      return;
+    }
     let cancelled = false;
+
+    async function check() {
+      const controller = cloudProjectAutosaveRef.current;
+      const current = managerRef.current?.document;
+      if (cancelled || !controller || !current || controller.isHalted) {
+        return;
+      }
+      const summary = (
+        await api.listProjects().catch(() => null)
+      )?.projects.find((project) => project.projectId === current.projectId);
+      if (cancelled || summary?.documentVersion === undefined) {
+        return;
+      }
+      const action = decideProjectSync({
+        localVersion: current.version,
+        accountVersion: summary.documentVersion,
+        lastSyncedVersion: controller.syncedVersion,
+        hasUnsentChanges: controller.hasPendingChanges
+      });
+      if (action !== 'pull') {
+        // `push` is already the autosave controller's job, and `conflict` is
+        // raised by the write that gets fenced rather than guessed at here.
+        return;
+      }
+      const remote = await api.loadProject(current.projectId).catch(() => null);
+      const live = managerRef.current?.document;
+      // Anything the user did while the document was in flight makes it stale.
+      if (
+        cancelled ||
+        !remote ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version ||
+        controller.hasPendingChanges
+      ) {
+        return;
+      }
+      await saveLocalProject(remote);
+      remoteVersionsRef.current.set(remote.projectId, remote.version);
+      controller.adoptAccountVersion(remote.projectId, remote.version);
+      hydrateDocument(remote);
+      setStatus(`Updated to the version saved on another device.`);
+    }
+
+    const onFocus = () => void check();
+    const interval = window.setInterval(
+      () => void check(),
+      FRESHNESS_POLL_INTERVAL_MS
+    );
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onFocus);
+    };
+  }, [doc?.projectId, session]);
+
+  useEffect(() => {
+    const controller = cloudSettingsAutosaveRef.current;
+    const userId = session?.userId ?? null;
+    if (!controller) {
+      return;
+    }
+    if (!userId || !accountSettings) {
+      if (cloudSettingsSessionUserRef.current !== null) {
+        controller.endSession();
+        cloudSettingsSessionUserRef.current = null;
+      }
+      return;
+    }
+    if (cloudSettingsSessionUserRef.current !== userId) {
+      if (cloudSettingsSessionUserRef.current !== null) {
+        controller.endSession();
+      }
+      controller.connectSession(userId, accountSettings);
+      cloudSettingsSessionUserRef.current = userId;
+      return;
+    }
+    controller.updateAccountSettings(accountSettings);
+  }, [accountSettings, session]);
+
+  useEffect(() => {
+    let cancelled = false;
+    mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
     void (async () => {
       try {
-        const [local, health, rememberedLocal, currentAuth] = await Promise.all(
-          [
-            listLocalProjects().catch(() => []),
-            api.health().catch(() => null),
-            startupProjectId
-              ? loadLocalProject(startupProjectId).catch(() => null)
-              : Promise.resolve(null),
-            api
-              .authConfig()
-              .then((config) => ({
-                config,
-                status: 'ready' as const
-              }))
-              .catch(() => ({
-                config: null,
-                status: 'unavailable' as const
-              }))
-          ]
+        const [health, rememberedLocal, currentAuth] = await Promise.all([
+          api.health().catch(() => null),
+          startupProjectId
+            ? timedAsync('startup.localProject', () =>
+                loadLocalProject(startupProjectId).catch(() => null)
+              )
+            : Promise.resolve(null),
+          api
+            .authConfig()
+            .then((config) => ({
+              config,
+              status: 'ready' as const
+            }))
+            .catch(() => ({
+              config: null,
+              status: 'unavailable' as const
+            }))
+        ]);
+        const activeSession = await timedAsync('startup.session', () =>
+          api.session().catch(() => null)
         );
-        const activeSession = await api.session().catch(() => null);
-        const [remote, rememberedRemote, remoteSettings] = activeSession
-          ? await Promise.all([
-              api.listProjects().catch(() => null),
-              startupProjectId
-                ? api.loadProject(startupProjectId).catch(() => null)
-                : Promise.resolve(null),
-              api.getSettings().catch(() => null)
-            ])
-          : [null, null, null];
+        const [listed, rememberedRemote, remoteSettings] = await Promise.all([
+          timedAsync('startup.projectList', () =>
+            loadProjectSummaries(Boolean(activeSession))
+          ),
+          activeSession && startupProjectId
+            ? api.loadProject(startupProjectId).catch(() => null)
+            : Promise.resolve(null),
+          activeSession ? api.getSettings().catch(() => null) : null
+        ]);
         if (cancelled) {
           return;
         }
-        const remoteProjects = remote?.projects ?? [];
-        const merged = mergeProjectSummaries(local, remoteProjects);
-        const restoredDocument = selectProjectDocument(
+        setDeploymentHealth(health);
+        const merged = listed.projects;
+        const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
-          rememberedRemote
+          rememberedRemote,
+          startupProjectId
+            ? await loadLastSyncedVersion(startupProjectId)
+            : null
         );
+        const restoredDocument =
+          restoredOutcome.choice === 'none'
+            ? null
+            : restoredOutcome.choice === 'diverged'
+              ? restoredOutcome.local
+              : restoredOutcome.document;
         const canUseCloud = Boolean(activeSession && rememberedRemote);
+        setCollaborationRollout({
+          sharingEnabled: health?.projectSharingEnabled === true,
+          editLeasesEnforced:
+            health?.projectSharingEnabled === true &&
+            health.projectEditLeasesEnforced === true,
+          personalSyncEnabled: health?.projectPersonalSyncEnabled === true
+        });
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -600,11 +1499,14 @@ export function App() {
           );
         }
         setProjects(merged);
+        setCloudProjectIds(listed.cloudProjectIds);
         setCloudAvailable(canUseCloud);
+        sessionRef.current = activeSession;
         setSession(activeSession);
         setAuthConfig(currentAuth.config);
         setAuthConfigStatus(currentAuth.status);
         if (remoteSettings) {
+          accountSettingsRef.current = remoteSettings;
           setAccountSettings(remoteSettings);
           // Adopting the account copy over an unsaved local change would revert
           // it silently — for the assistant switch, that reads as the switch
@@ -613,21 +1515,45 @@ export function App() {
             remoteSettings.synced &&
             shouldAdoptAccountSettings(bootSettingsRef.current)
           ) {
-            syncedRevisionRef.current = remoteSettings.revision;
+            appSettingsRef.current = remoteSettings.settings;
             setAppSettings(remoteSettings.settings);
-            saveLocalAppSettings(
-              remoteSettings.settings,
-              remoteSettings.revision
-            );
-          } else if (remoteSettings.synced) {
+            const controller = cloudSettingsAutosaveRef.current;
+            if (controller) {
+              controller.adoptSyncedSettings(
+                remoteSettings.settings,
+                remoteSettings
+              );
+            } else {
+              syncedRevisionRef.current = remoteSettings.revision;
+              saveLocalAppSettings(
+                remoteSettings.settings,
+                remoteSettings.revision
+              );
+            }
+          } else {
             setSettingsMessage(
-              'This device has settings that are not saved to your account yet.'
+              'This device has settings that are not saved to your account yet · saving to cloud profile…'
             );
+            cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
         }
-        setSaveState(canUseCloud ? 'saved' : 'offline');
+        setSaveState(canUseCloud ? 'synced' : 'local');
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
+          if (restoredOutcome.choice === 'diverged') {
+            setAccountConflict(
+              conflictFromDocuments(
+                restoredOutcome.local,
+                restoredOutcome.remote,
+                'account'
+              )
+            );
+            setSaveState('conflict');
+            setStatus(
+              `${restoredDocument.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+            );
+            return;
+          }
           setStatus(`Reopened ${restoredDocument.name}.`);
           return;
         }
@@ -635,7 +1561,7 @@ export function App() {
           clearActiveProject();
         }
         setStatus(
-          activeSession && remote
+          activeSession && listed.remoteReached
             ? `Cloud profile ready · ${merged.length} project(s)`
             : health
               ? `Local workspace · ${merged.length} local project(s)`
@@ -648,6 +1574,9 @@ export function App() {
         }
       } finally {
         if (!cancelled) {
+          mark('startup.ready');
+          measure('startup.restore', 'startup.begin', 'startup.ready');
+          measure('startup.total', 'bundle.evaluated', 'startup.ready');
           setStartupState('ready');
         }
       }
@@ -714,6 +1643,10 @@ export function App() {
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
   );
+
+  // Text profiles resolve faces synchronously on this thread as well as in the
+  // worker, so the faces this document names have to be parsed here too.
+  const textFontsVersion = useDocumentFonts(doc ?? null);
 
   const representations = doc?.derived.bodyRepresentations ?? {};
   const renderedRepresentations =
@@ -1041,6 +1974,11 @@ export function App() {
         // Open curves have no fill; region overlays render them separately.
         return [];
       }
+      if (data.objectKind === 'text') {
+        // Text has no single closed profile — it is many regions with holes,
+        // and the region overlay renders it.
+        return [];
+      }
       const centerX = evalParamValue(data.centerX, scope);
       const centerY = evalParamValue(data.centerY, scope);
       if (centerX === null || centerY === null) {
@@ -1072,10 +2010,17 @@ export function App() {
       } catch {
         return [];
       }
-      const basis = frameForPlaneRef(
-        sketch.planeRef,
-        (value) => evalParamValue(value, scope) ?? 0
-      );
+      let basis: PlaneBasis;
+      try {
+        basis = resolvedSketchPlaneBasis(
+          doc,
+          sketch.planeRef,
+          (value) => evalParamValue(value, scope) ?? 0,
+          sketch.name
+        );
+      } catch {
+        return [];
+      }
       const points = profile.map((point) => ({
         x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
         y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
@@ -1107,8 +2052,10 @@ export function App() {
   );
 
   const availability: ToolAvailability = {
+    editDisabledReason,
     sketchCount: sketchOptions.length,
     liveBodyCount: viewerBodies.length,
+    exactGeometryReady,
     hasEdgeSelected: selectedEdges.length > 0
   };
 
@@ -1168,7 +2115,16 @@ export function App() {
     }
     try {
       await saveLocalProject(pending);
-      setSaveState(cloudAvailable ? 'saved' : 'offline');
+      // The device write is the save; the account copy follows on its own
+      // schedule. Handing the document over here rather than from the edit
+      // effect means nothing is ever queued for the account that this device
+      // has not already stored.
+      const controller = cloudProjectAutosaveRef.current;
+      if (controller) {
+        controller.schedule(pending);
+      } else {
+        setSaveState(cloudAvailable ? 'synced' : 'local');
+      }
     } catch {
       setSaveState('offline');
       setStatus('Local autosave failed. Export your model before closing.');
@@ -1180,7 +2136,7 @@ export function App() {
   }
 
   function executeCommand(command: AnyCommand): boolean {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('run this command')) {
       return false;
     }
     try {
@@ -1195,7 +2151,11 @@ export function App() {
   }
 
   function executeTransaction(label: string, commands: AnyCommand[]): boolean {
-    if (!managerRef.current || commands.length === 0) {
+    if (
+      !managerRef.current ||
+      commands.length === 0 ||
+      !ensureCanEdit('apply this edit')
+    ) {
       return false;
     }
     try {
@@ -1209,17 +2169,21 @@ export function App() {
     }
   }
 
+  function finishFeatureCreation(): void {
+    // Back to an idle viewport so sequential adds stay one key away; the
+    // new feature is selectable from the history or the viewport.
+    setTool(null);
+    setSelectedFeatureNodeId(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+    setExtrudePreview(null);
+  }
+
   function createFeature(command: AnyCommand): boolean {
     if (executeCommand(command)) {
-      // Back to an idle viewport so sequential adds stay one key away; the
-      // new feature is selectable from the history or the viewport.
-      setTool(null);
-      setSelectedFeatureNodeId(null);
-      setSelectedTopology(null);
-      setSelectedEdges([]);
-      setSelectedBodyIds([]);
-      setSelectedSketchProfileId(null);
-      setExtrudePreview(null);
+      finishFeatureCreation();
       return true;
     }
     return false;
@@ -1233,6 +2197,23 @@ export function App() {
     profiles: RegionPickData[];
     sketchId: SketchId | null;
   } | null>(null);
+
+  /**
+   * True for a sketch entity whose profiles must be referenced as a whole.
+   *
+   * Text is the case: the region count itself changes when the string does,
+   * so a geometry-identity reference to one glyph breaks on exactly the edit
+   * the feature is for. See `lib/profileReferences.ts`.
+   */
+  const entityWideProfileSource = useCallback(
+    (entityId: string): boolean => {
+      const node = doc?.nodes[entityId as EntityId];
+      return (
+        node?.kind === 'sketch-object' && isEntityWideProfileSource(node.data)
+      );
+    },
+    [doc]
+  );
 
   function startExtrude(sketchId: SketchId) {
     if (tool !== 'extrude') {
@@ -1312,13 +2293,10 @@ export function App() {
       name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
       sketchId: extrudePreview.sketchId as SketchId,
       distance: extrudePreview.distance,
-      profiles: selectedProfiles.map((profile) => ({
-        profileId: profile.profileId,
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        sourceEntityIds: profile.sourceEntityIds
-      }))
+      profiles: profileReferencesForSelection(
+        selectedProfiles,
+        entityWideProfileSource
+      )
     });
     const createdBodyId = command.payload.ids!.bodyId;
     profileExtrudePreview.clear();
@@ -1397,6 +2375,24 @@ export function App() {
       return;
     }
     if (nextTool === 'transform') {
+      // A selected sketch takes the gizmo too: translation-only, committed as
+      // a sketch translation rather than a Move feature, so every downstream
+      // extrude rebuilds in place.
+      if (selectedSketch) {
+        setExtrudePreview(null);
+        setMovePreview({
+          bodyId: selectedSketch.sketchId,
+          target: 'sketch',
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        });
+        setMoveSnap(null);
+        setTool('transform');
+        setStatus(
+          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
+        );
+        return;
+      }
       // Prefer the gizmo flow when a target body is unambiguous; the classic
       // form remains for multi-body documents with nothing selected.
       const targetBodyId =
@@ -1417,6 +2413,18 @@ export function App() {
         );
         return;
       }
+    }
+    if (
+      nextTool === 'mirror' ||
+      nextTool === 'shell' ||
+      nextTool === 'solid-offset'
+    ) {
+      setModelingTargetBodyId(
+        selectedTopology?.bodyId ??
+          selectedBodyIds.at(-1) ??
+          viewerBodies[0]?.bodyId ??
+          null
+      );
     }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
     setExtrudePreview(null);
@@ -1453,9 +2461,63 @@ export function App() {
     }
   }
 
+  /**
+   * Commits a sketch drag: the world translation projects onto the sketch
+   * plane's axes, becoming an in-plane object translation plus — for a
+   * canonical-plane sketch — a plane-offset change. A face-attached sketch
+   * is bound to its surface, so any normal component of the drag is dropped
+   * and said out loud rather than silently discarded.
+   */
+  function confirmSketchMove(preview: MovePreview) {
+    if (!doc) {
+      return;
+    }
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === preview.bodyId
+    );
+    const sketch = findSketch(doc, preview.bodyId as SketchId);
+    if (!view || !sketch) {
+      setMovePreview(null);
+      return;
+    }
+    const basis = view.basis;
+    const t = preview.translation;
+    const round = (value: number) => Math.round(value * 1000) / 1000;
+    const du = round(t.x * basis.u.x + t.y * basis.u.y + t.z * basis.u.z);
+    const dv = round(t.x * basis.v.x + t.y * basis.v.y + t.z * basis.v.z);
+    const rawDn =
+      t.x * basis.normal.x + t.y * basis.normal.y + t.z * basis.normal.z;
+    const canonical = sketch.planeRef.type === 'canonical';
+    const dn = canonical ? round(rawDn) : 0;
+    setMovePreview(null);
+    if (du === 0 && dv === 0 && dn === 0) {
+      setTool(null);
+      return;
+    }
+    if (
+      executeCommand(
+        commandFactories.translateSketch(
+          { sketchId: preview.bodyId as SketchId, du, dv, dn },
+          `Move ${sketch.name}`
+        )
+      )
+    ) {
+      setTool(null);
+      setStatus(
+        !canonical && Math.abs(rawDn) > 1e-6
+          ? `Moved ${sketch.name} in its plane · the out-of-plane part was dropped (a face sketch stays on its face).`
+          : `Moved ${sketch.name}.`
+      );
+    }
+  }
+
   function confirmMove() {
     const preview = movePreview;
     if (!preview || !doc) {
+      return;
+    }
+    if (preview.target === 'sketch') {
+      confirmSketchMove(preview);
       return;
     }
     const body = representations[preview.bodyId as BodyId];
@@ -1518,8 +2580,12 @@ export function App() {
     }
   }
 
-  function requestView(view: StandardView) {
+  function requestView(view: ViewTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function requestRotate(direction: 'cw' | 'ccw') {
+    setRotateRequest({ direction, nonce: ++viewNonceRef.current });
   }
 
   function cycleDisplayMode() {
@@ -1557,17 +2623,55 @@ export function App() {
   }
 
   function handleAppSettingsChange(next: AppSettings) {
-    syncedRevisionRef.current = null;
+    appSettingsRef.current = next;
     setAppSettings(next);
-    setSettingsMessage(
-      accountSettings?.synced
-        ? 'Saved on this device · not yet saved to your account.'
-        : 'Saved on this device.'
-    );
+    const controller = cloudSettingsAutosaveRef.current;
+    if (controller) {
+      controller.schedule(next);
+    } else {
+      syncedRevisionRef.current = null;
+      saveLocalAppSettings(next, null);
+    }
+    if (sessionRef.current && accountSettingsRef.current) {
+      setSettingsMessage('Saved on this device · saving to cloud profile…');
+    } else {
+      setSettingsMessage('Saved on this device.');
+    }
   }
 
-  function focusAssistantPrompt() {
-    setAssistantFocusNonce((nonce) => nonce + 1);
+  /**
+   * Keeps a resized panel. It goes down the same road as every other
+   * preference: the device copy is written immediately, and a signed-in session
+   * syncs it to the account profile, so the width follows the person rather
+   * than the browser they set it in.
+   */
+  function commitPanelWidth(panel: 'sidebar' | 'assistant', width: number) {
+    const current = appSettingsRef.current;
+    const saved = savedPanelWidths(current);
+    if (saved[panel] === width) {
+      return;
+    }
+    handleAppSettingsChange({
+      ...current,
+      layout: {
+        sidebarWidth: panel === 'sidebar' ? width : saved.sidebar,
+        assistantWidth: panel === 'assistant' ? width : saved.assistant
+      }
+    });
+  }
+
+  function endCloudSettingsSession() {
+    if (cloudSettingsSessionUserRef.current !== null) {
+      cloudSettingsAutosaveRef.current?.endSession();
+      cloudSettingsSessionUserRef.current = null;
+    }
+    // The next session on this device may be a different account; it must not
+    // reconcile against this account's sync baselines.
+    void clearAllLastSyncedVersions();
+    sessionRef.current = null;
+    accountSettingsRef.current = null;
+    setSession(null);
+    setAccountSettings(null);
   }
 
   function openSettings() {
@@ -1575,6 +2679,10 @@ export function App() {
     setPaletteOpen(false);
     setSettingsMessage('Changes save on this device immediately.');
     setAuthConfigStatus('loading');
+    void api
+      .health()
+      .then(setDeploymentHealth)
+      .catch(() => setDeploymentHealth(null));
     void Promise.all([
       api
         .authConfig()
@@ -1584,9 +2692,10 @@ export function App() {
     ]).then(async ([nextAuth, activeSession]) => {
       setAuthConfig(nextAuth.config);
       setAuthConfigStatus(nextAuth.status);
+      sessionRef.current = activeSession;
       setSession(activeSession);
       if (!activeSession) {
-        setAccountSettings(null);
+        endCloudSettingsSession();
         setSettingsMessage(
           nextAuth.status === 'ready'
             ? 'Device settings active · sign in for cloud sync.'
@@ -1595,7 +2704,9 @@ export function App() {
         return;
       }
       try {
-        setAccountSettings(await api.getSettings());
+        const remoteSettings = await api.getSettings();
+        accountSettingsRef.current = remoteSettings;
+        setAccountSettings(remoteSettings);
         setSettingsMessage('Cloud profile connected.');
       } catch {
         setSettingsMessage(
@@ -1626,41 +2737,32 @@ export function App() {
     }
   }
 
-  async function handleSaveAppSettings() {
-    if (!session || !accountSettings) {
-      setSettingsMessage('Account sync unavailable · device settings active.');
-      return;
-    }
-    setSettingsBusy(true);
-    setSettingsMessage('Saving account settings…');
-    try {
-      const response = await api.updateSettings({
-        settings: appSettings,
-        expectedRevision: accountSettings.revision
-      });
-      setAccountSettings(response);
-      syncedRevisionRef.current = response.revision;
-      saveLocalAppSettings(appSettings, response.revision);
-      setSettingsMessage('Saved to this device and account.');
-    } catch (error) {
-      setSettingsMessage(errorMessage(error, 'Account settings save failed.'));
-    } finally {
-      setSettingsBusy(false);
-    }
-  }
-
   async function syncSettingsBeforeAssistantAction() {
-    if (!session || !accountSettings) {
+    const controller = cloudSettingsAutosaveRef.current;
+    if (!sessionRef.current || !accountSettingsRef.current || !controller) {
       throw new Error('Account settings storage is unavailable.');
     }
-    const response = await api.updateSettings({
-      settings: appSettings,
-      expectedRevision: accountSettings.revision
-    });
-    setAccountSettings(response);
-    syncedRevisionRef.current = response.revision;
-    saveLocalAppSettings(appSettings, response.revision);
-    return response;
+    if (
+      !controller.hasPendingChanges &&
+      controller.syncedRevision === accountSettingsRef.current.revision
+    ) {
+      return accountSettingsRef.current;
+    }
+    if (!controller.hasPendingChanges) {
+      controller.schedule(appSettingsRef.current, 0);
+    }
+    const response = await controller.flushPending();
+    const currentAccount = accountSettingsRef.current;
+    if (
+      !currentAccount ||
+      controller.hasPendingChanges ||
+      controller.syncedRevision !== currentAccount.revision
+    ) {
+      throw new Error(
+        'Cloud settings could not be saved. Your device copy is still safe.'
+      );
+    }
+    return response ?? currentAccount;
   }
 
   async function handleSaveAssistantCredential(token: string) {
@@ -1739,27 +2841,49 @@ export function App() {
         challengeId,
         code
       });
-      const [remoteSettings, localProjects, remoteProjects] = await Promise.all(
-        [
-          api.getSettings(),
-          listLocalProjects().catch(() => []),
-          api.listProjects().catch(() => ({ projects: [] }))
-        ]
-      );
+      const [remoteSettings, listed] = await Promise.all([
+        api.getSettings(),
+        loadProjectSummaries(true)
+      ]);
+      sessionRef.current = activeSession;
       setSession(activeSession);
+      accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
-      setProjects(
-        mergeProjectSummaries(localProjects, remoteProjects.projects)
-      );
+      if (
+        remoteSettings.synced &&
+        shouldAdoptAccountSettings({
+          settings: appSettingsRef.current,
+          syncedRevision: syncedRevisionRef.current
+        })
+      ) {
+        appSettingsRef.current = remoteSettings.settings;
+        setAppSettings(remoteSettings.settings);
+        cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
+          remoteSettings.settings,
+          remoteSettings
+        );
+      } else {
+        cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
+      }
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
       const activeProjectIsCloud = Boolean(
         doc && remoteVersionsRef.current.has(doc.projectId)
       );
       setCloudAvailable(activeProjectIsCloud);
       if (doc) {
-        setSaveState(activeProjectIsCloud ? 'saved' : 'offline');
+        setSaveState(activeProjectIsCloud ? 'synced' : 'local');
       }
+      // Signing in does not upload anything on its own. Projects made while
+      // signed out are still the user's to keep on one device if they want, so
+      // the count is an offer the start screen makes, not an action taken here.
+      const localOnly = listed.projects.filter(
+        (project) => !listed.cloudProjectIds.has(project.projectId)
+      ).length;
       setSettingsMessage(
-        `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+        localOnly === 0
+          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
       );
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-in failed.'));
@@ -1773,14 +2897,28 @@ export function App() {
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
+      // Both queues drain before the session goes away, or their contents
+      // become unsendable the moment the cookie does.
+      await cloudProjectAutosaveRef.current?.flushPending();
+      cloudProjectAutosaveRef.current?.closeProject();
+      await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
-      const localProjects = await listLocalProjects().catch(() => []);
+      const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
+      cloudSettingsAutosaveRef.current?.endSession();
+      cloudSettingsSessionUserRef.current = null;
+      // The next sign-in on this device may be a different account.
+      void clearAllLastSyncedVersions();
+      sessionRef.current = null;
       setSession(null);
+      accountSettingsRef.current = null;
       setAccountSettings(null);
       setCloudAvailable(false);
-      setProjects(localProjects);
-      setSaveState('offline');
+      setProjects(listed.projects);
+      // Nothing is in "the account" once there is no account in session, so the
+      // shelf must stop claiming otherwise.
+      setCloudProjectIds(new Set());
+      setSaveState('local');
       setSettingsMessage('Signed out · device settings remain active.');
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
@@ -1802,10 +2940,12 @@ export function App() {
     const defaults = defaultAppSettings();
     // A reset is a local edit like any other: it must survive the next boot
     // rather than being undone by the account copy.
-    syncedRevisionRef.current = null;
-    setAppSettings(defaults);
-    saveLocalAppSettings(defaults, null);
-    setSettingsMessage('Application settings reset on this device.');
+    handleAppSettingsChange(defaults);
+    setSettingsMessage(
+      sessionRef.current && accountSettingsRef.current
+        ? 'Application settings reset · saving to cloud profile…'
+        : 'Application settings reset on this device.'
+    );
   }
 
   function applyViewportDefaults() {
@@ -1819,6 +2959,7 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    setAssistantCollapsed(true);
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -1827,16 +2968,11 @@ export function App() {
         await saveLocalProject(localDocument);
         hydrateDocument(localDocument);
         setProjects((current) => [
-          {
-            projectId: localDocument.projectId,
-            name: localDocument.name,
-            updatedAt: localDocument.derived.updatedAt,
-            revisionCount: localDocument.checkpoints.length
-          },
+          summarizeLocalDocument(localDocument),
           ...current
         ]);
         setCloudAvailable(false);
-        setSaveState('offline');
+        setSaveState('local');
         setStatus(`Created ${localDocument.name} locally.`);
         return;
       }
@@ -1865,8 +3001,7 @@ export function App() {
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
         remoteVersionsRef.current.clear();
-        setSession(null);
-        setAccountSettings(null);
+        endCloudSettingsSession();
       }
       const localDocument = createProjectDocument(
         name,
@@ -1876,17 +3011,233 @@ export function App() {
       await saveLocalProject(localDocument);
       hydrateDocument(localDocument);
       setProjects((current) => [
-        {
-          projectId: localDocument.projectId,
-          name: localDocument.name,
-          updatedAt: localDocument.derived.updatedAt,
-          revisionCount: localDocument.checkpoints.length
-        },
+        summarizeLocalDocument(localDocument),
         ...current
       ]);
       setCloudAvailable(false);
-      setSaveState('offline');
-      setStatus(`${errorMessage(error, 'Cloud unavailable')} Working locally.`);
+      setSaveState('local');
+      setStatus(
+        `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * The account's copy of a just-adopted project, wearing this device's derived
+   * geometry. Adoption changes ownership and appends a checkpoint but leaves
+   * canonical history and `version` alone, so the meshes the device already has
+   * still describe the document — and reusing them keeps the viewport from
+   * blanking while an identical rebuild runs.
+   */
+  function withLocalDerived(
+    remote: ProjectDocument,
+    local: ProjectDocument
+  ): ProjectDocument {
+    return {
+      ...remote,
+      derived: {
+        ...remote.derived,
+        bodyRepresentations: local.derived.bodyRepresentations,
+        exportableBodyIds: local.derived.exportableBodyIds
+      }
+    };
+  }
+
+  /**
+   * Gives one device-local project an account record, keeping its id so the
+   * device's own copy and shelf state stay pointed at the same project.
+   *
+   * Returns whether anything changed rather than reporting status itself: the
+   * bulk path has to summarize many of these, and one line per project would
+   * bury the result.
+   */
+  async function adoptLocalProject(
+    projectId: string
+  ): Promise<'adopted' | 'already-adopted' | 'missing'> {
+    const local = await loadLocalProject(projectId);
+    if (!local) {
+      return 'missing';
+    }
+    try {
+      const response = await api.adoptProject(local);
+      const merged = withLocalDerived(response.document, local);
+      await saveLocalProject(merged);
+      remoteVersionsRef.current.set(merged.projectId, merged.version);
+      setCloudProjectIds((current) => new Set(current).add(merged.projectId));
+      setProjects((current) =>
+        mergeProjectSummaries([response.project], current)
+      );
+      if (managerRef.current?.document.projectId === merged.projectId) {
+        managerRef.current.document = merged;
+        setDoc(merged);
+        setCloudAvailable(true);
+        setSaveState('synced');
+        cloudProjectAutosaveRef.current?.adoptAccountVersion(
+          merged.projectId,
+          merged.version
+        );
+      }
+      return 'adopted';
+    } catch (error) {
+      // The account already has it — the device was simply out of date about
+      // that, which is not a failure and must not be reported as one.
+      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
+        setCloudProjectIds((current) => new Set(current).add(projectId));
+        return 'already-adopted';
+      }
+      throw error;
+    }
+  }
+
+  async function handleSaveToAccount(project: ProjectSummary) {
+    if (!session) {
+      setStatus('Sign in to save this project to your account.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      const outcome = await adoptLocalProject(project.projectId);
+      setStatus(
+        outcome === 'adopted'
+          ? `Saved ${project.name} to your account.`
+          : outcome === 'already-adopted'
+            ? `${project.name} was already in your account.`
+            : `${project.name} has no copy on this device to save.`
+      );
+    } catch (error) {
+      setStatus(
+        errorMessage(error, `Could not save ${project.name} to your account.`)
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function patchSyncEntry(projectId: string, patch: Partial<SyncEntry>) {
+    setSyncRun((current) =>
+      current
+        ? current.map((entry) =>
+            entry.projectId === projectId ? { ...entry, ...patch } : entry
+          )
+        : current
+    );
+  }
+
+  /**
+   * Runs one project's adoption and records the outcome on its sync entry.
+   * Returns whether the attempt should stop the run: an expired session fails
+   * every later project identically, so retrying N more times is just noise.
+   */
+  async function syncOneToAccount(candidate: {
+    projectId: string;
+    name: string;
+  }): Promise<{ adopted: boolean; failed: boolean; halt: boolean }> {
+    patchSyncEntry(candidate.projectId, {
+      state: 'syncing',
+      detail: undefined
+    });
+    try {
+      const outcome = await adoptLocalProject(candidate.projectId);
+      if (outcome === 'missing') {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail: 'No copy of this project exists on this device.'
+        });
+        return { adopted: false, failed: true, halt: false };
+      }
+      patchSyncEntry(candidate.projectId, {
+        state: 'synced',
+        detail:
+          outcome === 'already-adopted'
+            ? 'Was already in your account.'
+            : undefined
+      });
+      return { adopted: outcome === 'adopted', failed: false, halt: false };
+    } catch (error) {
+      const { detail, auth } = describeSyncFailure(error);
+      patchSyncEntry(candidate.projectId, { state: 'failed', detail });
+      if (auth) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      return { adopted: false, failed: true, halt: auth };
+    }
+  }
+
+  /**
+   * Uploads every project this device holds alone. Failures are recorded
+   * rather than thrown: one document the account refuses — too large, say —
+   * must not strand the rest. Progress is published per project through
+   * `syncRun` so the shelf can show each upload as it happens and keep the
+   * failures, with reasons, on screen afterwards.
+   */
+  async function handleSaveAllToAccount(candidates: ProjectSummary[]) {
+    if (!session || candidates.length === 0) {
+      return;
+    }
+    setBusy(true);
+    setStatus(`Saving ${candidates.length} project(s) to your account…`);
+    setSyncRun(
+      candidates.map((candidate) => ({
+        projectId: candidate.projectId,
+        name: candidate.name,
+        state: 'pending'
+      }))
+    );
+    try {
+      await flushPendingLocalSave();
+      let saved = 0;
+      let failed = 0;
+      let halted = false;
+      for (const candidate of candidates) {
+        if (halted) {
+          failed += 1;
+          patchSyncEntry(candidate.projectId, {
+            state: 'failed',
+            detail: 'Not attempted — sign in again first.'
+          });
+          continue;
+        }
+        const result = await syncOneToAccount(candidate);
+        if (result.adopted) {
+          saved += 1;
+        }
+        if (result.failed) {
+          failed += 1;
+        }
+        halted = result.halt;
+      }
+      // The names and reasons live in the sync panel; repeating them here
+      // would overflow the status line with the very names that failed.
+      setStatus(
+        failed === 0
+          ? `Saved ${saved} project(s) to your account.`
+          : `Saved ${saved} project(s) · ${failed} could not be saved. See the list above for why.`
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Re-attempts a single failed entry from the sync panel. */
+  async function handleRetrySync(projectId: string) {
+    if (!session) {
+      setStatus('Sign in to retry saving this project.');
+      return;
+    }
+    const entry = syncRun?.find(
+      (candidate) => candidate.projectId === projectId
+    );
+    if (!entry) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      await syncOneToAccount(entry);
     } finally {
       setBusy(false);
     }
@@ -1918,12 +3269,7 @@ export function App() {
       hydrateDocument(document);
       setCloudAvailable(false);
       setProjects((current) => [
-        {
-          projectId: document.projectId,
-          name: document.name,
-          updatedAt: document.derived.updatedAt,
-          revisionCount: document.checkpoints.length
-        },
+        summarizeLocalDocument(document),
         ...current.filter((project) => project.projectId !== document.projectId)
       ]);
       setStatus(
@@ -1940,14 +3286,20 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      const [localDocument, remoteDocument] = await Promise.all([
-        loadLocalProject(projectId),
-        session
-          ? api.loadProject(projectId).catch(() => null)
-          : Promise.resolve(null)
-      ]);
-      const loaded = selectProjectDocument(localDocument, remoteDocument);
-      if (!loaded) {
+      const [localDocument, remoteDocument, lastSyncedVersion] =
+        await Promise.all([
+          loadLocalProject(projectId),
+          session
+            ? api.loadProject(projectId).catch(() => null)
+            : Promise.resolve(null),
+          loadLastSyncedVersion(projectId)
+        ]);
+      const outcome = chooseProjectDocument(
+        localDocument,
+        remoteDocument,
+        lastSyncedVersion
+      );
+      if (outcome.choice === 'none') {
         throw new Error('Project not found locally or in the beta API.');
       }
       setCloudAvailable(Boolean(remoteDocument));
@@ -1957,11 +3309,29 @@ export function App() {
           remoteDocument.version
         );
       }
-      hydrateDocument(loaded);
+      if (outcome.choice === 'diverged') {
+        // Both copies moved since this device last agreed with the account.
+        // Open the local one — it is the work in front of the user — and ask
+        // rather than discarding either side.
+        hydrateDocument(outcome.local);
+        setAccountConflict(
+          conflictFromDocuments(outcome.local, outcome.remote, 'account')
+        );
+        setSaveState('conflict');
+        setStatus(
+          `${outcome.local.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
+      hydrateDocument(outcome.document);
+      if (outcome.choice === 'remote') {
+        await saveLocalProject(outcome.document);
+        await saveLastSyncedVersion(projectId, outcome.document.version);
+      }
       setStatus(
-        loaded === localDocument && remoteDocument
-          ? `Opened newer local edits for ${loaded.name}.`
-          : `Opened ${loaded.name}.`
+        outcome.choice === 'local' && remoteDocument
+          ? `Opened newer local edits for ${outcome.document.name}.`
+          : `Opened ${outcome.document.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
@@ -1972,6 +3342,7 @@ export function App() {
 
   async function handleGoHome() {
     await flushPendingLocalSave();
+    await cloudProjectAutosaveRef.current?.flushPending();
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
@@ -1986,21 +3357,274 @@ export function App() {
     setExtrudePreview(null);
     setTool(null);
     try {
-      const [local, remote] = await Promise.all([
-        listLocalProjects(),
-        session ? api.listProjects().catch(() => null) : Promise.resolve(null)
-      ]);
-      const merged = mergeProjectSummaries(local, remote?.projects ?? []);
-      setProjects(merged);
-      setCloudAvailable(Boolean(remote));
-      setStatus(`${merged.length} project(s) available.`);
+      const listed = await loadProjectSummaries(Boolean(session));
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setCloudAvailable(listed.remoteReached);
+      setStatus(`${listed.projects.length} project(s) available.`);
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
   }
 
+  /**
+   * Records shelf state in both stores. The device copy is written first and
+   * is the one the UI trusts, so organising a part keeps working with the
+   * cloud unreachable or the project local-only; the account write is a
+   * best-effort mirror for the owner's other devices.
+   */
+  async function persistOrganization(
+    projectId: string,
+    organization: ProjectOrganization
+  ): Promise<void> {
+    // The device copy is authoritative. Do not claim success unless it is
+    // durable locally; a failed account mirror is retried during discovery.
+    await saveLocalProjectOrganization(projectId, organization);
+    setProjects((current) =>
+      current
+        .map((project) =>
+          project.projectId === projectId
+            ? { ...project, organization }
+            : project
+        )
+        .sort(compareProjectSummaries)
+    );
+    if (!session) {
+      return;
+    }
+    await api
+      .updateProject({
+        projectId: toProjectId(projectId),
+        status: organization.status,
+        pinned: organization.pinned,
+        sortOrder: organization.sortOrder
+      })
+      .catch(() => undefined);
+  }
+
+  async function handleMoveProjectToShelf(
+    project: ProjectSummary,
+    status: ProjectStatus
+  ) {
+    try {
+      const organization = applyOrganizationUpdate(
+        projectOrganization(project),
+        { status }
+      );
+      await persistOrganization(project.projectId, organization);
+      setStatus(
+        status === 'deleted'
+          ? `Moved ${project.name} to the trash · restorable for ${TRASH_RETENTION_DAYS} days.`
+          : status === 'archived'
+            ? `Archived ${project.name}.`
+            : `Restored ${project.name}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not move ${project.name}.`));
+    }
+  }
+
+  async function handleTogglePin(project: ProjectSummary) {
+    try {
+      const current = projectOrganization(project);
+      await persistOrganization(
+        project.projectId,
+        applyOrganizationUpdate(current, { pinned: !current.pinned })
+      );
+      setStatus(
+        current.pinned ? `Unpinned ${project.name}.` : `Pinned ${project.name}.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, `Could not update ${project.name}.`));
+    }
+  }
+
+  async function handleReorderProjects(projectIds: string[]) {
+    const positions = new Map(projectIds.map((id, index) => [id, index]));
+    const organizations = new Map(
+      projects
+        .filter((project) => positions.has(project.projectId))
+        .map((project) => [
+          project.projectId,
+          {
+            ...projectOrganization(project),
+            sortOrder: positions.get(project.projectId)!
+          }
+        ])
+    );
+    try {
+      await Promise.all(
+        [...organizations].map(([projectId, organization]) =>
+          saveLocalProjectOrganization(projectId, organization)
+        )
+      );
+      setProjects((current) =>
+        current
+          .map((project) => {
+            const organization = organizations.get(project.projectId);
+            return organization ? { ...project, organization } : project;
+          })
+          .sort(compareProjectSummaries)
+      );
+      if (session) {
+        await api
+          .reorderProjects({ projectIds: projectIds.map(toProjectId) })
+          .catch(() => undefined);
+      }
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not reorder the projects.'));
+    }
+  }
+
+  async function handleDuplicateProject(project: ProjectSummary) {
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      if (session) {
+        try {
+          const response = await api.duplicateProject(project.projectId);
+          // Kept on the device too, so the copy opens offline exactly like the
+          // original it was made from.
+          await saveLocalProject(response.document).catch(() => undefined);
+          if (response.project.organization) {
+            await saveLocalProjectOrganization(
+              response.project.projectId,
+              response.project.organization
+            ).catch(() => undefined);
+          }
+          setProjects((current) =>
+            [...current, response.project].sort(compareProjectSummaries)
+          );
+          setStatus(`Duplicated ${project.name} as ${response.project.name}.`);
+          return;
+        } catch (error) {
+          // A project the account has never seen is not a failure — it just
+          // means the device holding it has to make the copy.
+          const missing =
+            error instanceof ApiError &&
+            (error.status === 404 || error.status === 401);
+          if (!missing) {
+            throw error;
+          }
+        }
+      }
+      const source = await loadLocalProject(project.projectId);
+      if (!source) {
+        throw new Error('The project could not be read from this device.');
+      }
+      const copy = duplicateProjectDocument(
+        source,
+        duplicateProjectName(
+          source.name,
+          projects.map((summary) => summary.name)
+        ),
+        session?.userId ?? localUserId
+      );
+      const organization: ProjectOrganization = {
+        ...DEFAULT_PROJECT_ORGANIZATION,
+        sortOrder: projectOrganization(project).sortOrder
+      };
+      await saveLocalProject(copy);
+      await saveLocalProjectOrganization(copy.projectId, organization).catch(
+        () => undefined
+      );
+      setProjects((current) =>
+        [...current, summarizeLocalDocument(copy, organization)].sort(
+          compareProjectSummaries
+        )
+      );
+      setStatus(`Duplicated ${project.name} as ${copy.name}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not duplicate the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Destroys projects in both stores. There is no undo past this point. */
+  async function destroyProjects(targets: ProjectSummary[]): Promise<void> {
+    const outcomes = await Promise.all(
+      targets.map(async (project) => {
+        let failure: unknown;
+        try {
+          await deleteLocalProject(project.projectId);
+        } catch (error) {
+          failure = error;
+        }
+        if (session) {
+          try {
+            await api.deleteProject(project.projectId);
+          } catch (error) {
+            // A signed-in user can still have local-only projects. Missing from
+            // the account is therefore success, but every other failure must be
+            // visible and retryable.
+            if (!(error instanceof ApiError && error.status === 404)) {
+              failure ??= error;
+            }
+          }
+        }
+        return { projectId: project.projectId, failure };
+      })
+    );
+    const destroyed = new Set(
+      outcomes
+        .filter((outcome) => outcome.failure === undefined)
+        .map((outcome) => outcome.projectId)
+    );
+    setProjects((current) =>
+      current.filter((project) => !destroyed.has(project.projectId))
+    );
+    const failed = outcomes.find((outcome) => outcome.failure !== undefined);
+    if (failed) {
+      throw failed.failure;
+    }
+  }
+
+  async function handleDeleteProjectForever(project: ProjectSummary) {
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Permanently delete “${project.name}”? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects([project]);
+      setStatus(`Deleted ${project.name} permanently.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not delete the project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEmptyTrash(trashed: ProjectSummary[]) {
+    if (trashed.length === 0) {
+      return;
+    }
+    if (
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Permanently delete ${trashed.length} project(s) in the trash? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await destroyProjects(trashed);
+      setStatus(`Emptied the trash · ${trashed.length} project(s) deleted.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not empty the trash.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleUndo() {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('undo')) {
       return;
     }
     setDoc(managerRef.current.undo());
@@ -2012,7 +3636,7 @@ export function App() {
   }
 
   function handleRedo() {
-    if (!managerRef.current) {
+    if (!managerRef.current || !ensureCanEdit('redo')) {
       return;
     }
     setDoc(managerRef.current.redo());
@@ -2030,79 +3654,131 @@ export function App() {
     try {
       setSaveState('saving');
       await saveLocalProject(doc);
+      if (!ensureCanEdit('save a shared revision')) {
+        setSaveState('offline');
+        return;
+      }
       const expectedVersion = remoteVersionsRef.current.get(doc.projectId);
       if (!session || expectedVersion === undefined) {
         setCloudAvailable(false);
-        setSaveState('offline');
-        setStatus('Saved locally.');
+        setSaveState('local');
+        setStatus('Saved on this device.');
         return;
       }
+      // A queued autosave writing the same document behind this one would race
+      // the checkpoint for the version fence, and the loser reports a conflict
+      // that does not exist. Drain it first; a manual save is worth the wait.
+      await cloudProjectAutosaveRef.current?.flushPending();
       const saved = await api.saveRevision({
         projectId: doc.projectId,
         reason: 'Manual save',
-        expectedVersion,
-        document: doc
+        expectedVersion:
+          cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
+        document: withoutDerivedProjection(doc)
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
+      const restored = withLocalDerived(saved, doc);
       if (managerRef.current) {
-        managerRef.current.document = saved;
+        managerRef.current.document = restored;
       }
-      setDoc(saved);
+      setDoc(restored);
       setCloudAvailable(true);
-      setSaveState('saved');
+      setSaveState('synced');
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        restored.projectId,
+        restored.version
+      );
       setStatus('Saved revision.');
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         remoteVersionsRef.current.clear();
-        setSession(null);
-        setAccountSettings(null);
+        endCloudSettingsSession();
       }
       setCloudAvailable(false);
-      setSaveState('offline');
-      setStatus(`${errorMessage(error, 'Cloud save failed')} Saved locally.`);
+      setSaveState(
+        error instanceof ApiError && error.status === 409
+          ? 'conflict'
+          : 'offline'
+      );
+      setStatus(
+        `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
+      );
     }
   }
 
-  function handlePreviewPatch(proposal: CadPatchProposal | null): boolean {
-    if (!proposal || !doc) {
+  const aiPreviewEpochRef = useRef(0);
+
+  async function handlePreviewPatch(
+    proposal: CadPatchProposal | null
+  ): Promise<boolean> {
+    const epoch = ++aiPreviewEpochRef.current;
+    if (!proposal) {
       setPreviewDoc(null);
       setStatus('Preview cleared.');
       return true;
     }
+    const current = managerRef.current?.document;
+    if (!current) {
+      return false;
+    }
     try {
-      const previewManager = new CommandManager(doc);
-      const preview = previewManager.runTransaction(
-        'Preview AI patch',
-        commandsForCadPatch(doc, proposal)
+      setStatus('Validating AI preview with the exact geometry kernel…');
+      const preflight = await preflightCadPatch(
+        current,
+        proposal,
+        (candidate) => geometry.syncOnce(candidate)
       );
-      // The compat kernel shares the exact kernel's primitive frame, so
-      // placement is faithful, but it cannot build every feature kind. Say so
-      // when it had to skip something rather than showing a quietly partial
-      // model.
-      const derived = kernel.syncDocument(preview);
-      setPreviewDoc({ ...preview, derived });
-      setStatus(
-        derived.warnings.length > 0
-          ? `Previewing proposed patch · ${derived.warnings.length} warning(s) · exact rebuild occurs after apply.`
-          : 'Previewing proposed patch · exact rebuild occurs after apply.'
-      );
+      const live = managerRef.current?.document;
+      if (
+        epoch !== aiPreviewEpochRef.current ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version
+      ) {
+        return false;
+      }
+      setPreviewDoc(preflight.candidate);
+      setStatus('Previewing exact proposed geometry.');
       return true;
     } catch (error) {
+      if (epoch !== aiPreviewEpochRef.current) {
+        return false;
+      }
       setPreviewDoc(null);
       setStatus(errorMessage(error, 'Patch preview failed.'));
       return false;
     }
   }
 
-  function handleApplyPatch(proposal: CadPatchProposal): boolean {
-    if (!doc) {
+  async function handleApplyPatch(
+    proposal: CadPatchProposal
+  ): Promise<boolean> {
+    if (!ensureCanEdit('apply this AI proposal')) {
       return false;
     }
+    const current = managerRef.current?.document;
+    if (!current) {
+      return false;
+    }
+    setBusy(true);
     try {
-      const applied = executeTransaction(
-        'Apply AI patch',
-        commandsForCadPatch(doc, proposal)
+      setStatus('Validating AI patch with the exact geometry kernel…');
+      const preflight = await preflightCadPatch(
+        current,
+        proposal,
+        (candidate) => geometry.syncOnce(candidate)
       );
+      const live = managerRef.current?.document;
+      if (
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version
+      ) {
+        throw new Error(
+          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+        );
+      }
+      const applied = executeTransaction('Apply AI patch', preflight.commands);
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -2114,6 +3790,8 @@ export function App() {
     } catch (error) {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
       return false;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -2126,6 +3804,9 @@ export function App() {
   }): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
+    }
+    if (!ensureCanEdit('upload a project artifact')) {
+      throw new Error(editDisabledReason ?? 'Project editing is unavailable.');
     }
     const { session: upload } = await api.createUploadSession({
       projectId: doc.projectId,
@@ -2158,7 +3839,7 @@ export function App() {
   }
 
   async function handleImportFile(file: File) {
-    if (!managerRef.current || !doc) {
+    if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
     }
     const contentType = file.type || inferContentType(file.name);
@@ -2303,6 +3984,28 @@ export function App() {
     }
   }
 
+  function handleExportDiagnostics() {
+    if (!doc) {
+      setStatus('Open a project before exporting diagnostics.');
+      return;
+    }
+    try {
+      const bundle = createProjectDiagnosticBundle(doc, {
+        brepkitVersion: KERNEL_BUILD.packageVersion,
+        brepkitCommit: KERNEL_BUILD.sourceCommit
+      });
+      const fileName = `${exportFileStem(doc.name)}.openzcad-diagnostic.json`;
+      downloadText(
+        fileName,
+        `${JSON.stringify(bundle, null, 2)}\n`,
+        'application/json'
+      );
+      setStatus(`Exported sanitized diagnostics to ${fileName}.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Diagnostic export failed.'));
+    }
+  }
+
   function featureNodeIdForBody(bodyId: BodyId): string | null {
     if (!doc) {
       return null;
@@ -2350,33 +4053,18 @@ export function App() {
     const faceTopology = representations[
       target.bodyId as BodyId
     ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
-    const geometry = faceTopology?.geometry;
-    if (geometry?.surfaceType !== 'plane' || target.hash === undefined) {
-      setStatus('Pick a planar face to sketch on, or choose a plane.');
+    const attachment = faceSketchAttachment({
+      bodyId: target.bodyId as BodyId,
+      pickedHash: target.hash,
+      face: faceTopology
+    });
+    if (!attachment.ok) {
+      setStatus(attachment.reason);
       return false;
     }
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: {
-        type: 'face',
-        bodyId: target.bodyId as BodyId,
-        faceHash: target.hash,
-        sourceArea: geometry.area,
-        sourceCenter: geometry.center,
-        sourceNormal: geometry.normal ?? {
-          x: target.normal[0],
-          y: target.normal[1],
-          z: target.normal[2]
-        },
-        frame: frameFromFace(
-          geometry.center,
-          geometry.normal ?? {
-            x: target.normal[0],
-            y: target.normal[1],
-            z: target.normal[2]
-          }
-        )
-      }
+      plane: attachment.planeRef
     });
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
@@ -2406,6 +4094,12 @@ export function App() {
       }
       return;
     }
+    if (selection.kind !== 'body' && !exactGeometryReady) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -2425,13 +4119,15 @@ export function App() {
           bodyId: selection.bodyId,
           topologyId: selection.topologyId,
           hash: selection.hash,
+          ...(faceTopology?.reference
+            ? { reference: faceTopology.reference }
+            : {}),
           point: [detail.point.x, detail.point.y, detail.point.z],
           normal: [detail.normal.x, detail.normal.y, detail.normal.z],
           surfaceType: 'planar'
         };
-        if (startSketchOnFace(target)) {
-          return;
-        }
+        startSketchOnFace(target);
+        return;
       }
       setStatus('Pick a planar face to sketch on, or choose a plane.');
       return;
@@ -2466,6 +4162,9 @@ export function App() {
         bodyId: selection.bodyId,
         topologyId: selection.topologyId,
         hash: selection.hash,
+        ...(faceTopology?.reference
+          ? { reference: faceTopology.reference }
+          : {}),
         point: [detail.point.x, detail.point.y, detail.point.z],
         normal: [detail.normal.x, detail.normal.y, detail.normal.z],
         surfaceType:
@@ -2614,12 +4313,12 @@ export function App() {
   }
 
   /**
-   * Bodies swept by a shift-drag rectangle.
+   * Bodies swept by an unmodified drag rectangle.
    *
-   * Replaces the selection rather than adding to it, even though the gesture
-   * is on Shift: the rectangle is the statement of what the user wants, and
-   * accumulating across sweeps would make a second attempt at aiming
-   * impossible to distinguish from a deliberate addition.
+   * Replaces the selection rather than adding to it: the rectangle is the
+   * statement of what the user wants, and accumulating across sweeps would
+   * make a second attempt at aiming impossible to distinguish from a
+   * deliberate addition.
    */
   function handleBoxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
@@ -2691,19 +4390,29 @@ export function App() {
    */
   const sketchSessionPlane =
     interaction.mode === 'sketch' ? interaction.session.plane : null;
+  const sketchSessionName =
+    interaction.mode === 'sketch' && interaction.session.sketchId && doc
+      ? (listNodesByKind(doc, 'sketch').find(
+          (candidate) => candidate.sketchId === interaction.session.sketchId
+        )?.name ?? 'Sketch')
+      : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
-  const sketchBasis = useMemo(
-    () =>
-      sketchSessionPlane
-        ? frameForPlaneRef(
-            sketchSessionPlane,
-            (value) =>
-              evalParamValue(value, parameterScopeRef.current.scope) ?? 0
-          )
-        : null,
-    [sketchSessionPlane]
-  );
+  const sketchBasis = useMemo(() => {
+    if (!sketchSessionPlane || !doc) {
+      return null;
+    }
+    try {
+      return resolvedSketchPlaneBasis(
+        doc,
+        sketchSessionPlane,
+        (value) => evalParamValue(value, parameterScopeRef.current.scope) ?? 0,
+        sketchSessionName
+      );
+    } catch {
+      return null;
+    }
+  }, [doc, sketchSessionName, sketchSessionPlane]);
 
   /** Active in-viewport sketch session for the viewport. */
   const sketchModeState = useMemo(() => {
@@ -2767,6 +4476,29 @@ export function App() {
       ...object,
       ...(sketchConstruction ? { construction: true } : {})
     };
+    /**
+     * A placed text object says "Text" in a default face — useless until it is
+     * edited, and the editor is where every one of its parameters lives. So
+     * placing one selects it and hands over to Select, the way a drawing app
+     * drops you into the caret.
+     *
+     * This has to run for the first object of a brand-new sketch as well as
+     * for later ones. Start a sketch, press T, click — that is the common
+     * path, and it is the one that goes through `addSketch`.
+     */
+    const selectIfText = (sketchId: SketchId) => {
+      if (committedObject.objectKind !== 'text') {
+        return;
+      }
+      const objectId = managerRef.current
+        ? findSketch(managerRef.current.document, sketchId)?.objectIds.at(-1)
+        : undefined;
+      if (objectId) {
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+        dispatchInteraction({ type: 'sketch-select-object', objectId });
+      }
+    };
+
     if (!session.sketchId) {
       const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
       if (
@@ -2783,19 +4515,24 @@ export function App() {
       const sketchId = managerRef.current?.document.sketchOrder.at(-1);
       if (sketchId) {
         dispatchInteraction({ type: 'sketch-created', sketchId });
+        selectIfText(sketchId);
       }
       setStatus(`${name} started.`);
       return;
     }
-    executeCommand(
-      commandFactories.addSketchObjects(
-        {
-          sketchId: session.sketchId as SketchId,
-          objects: [committedObject]
-        },
-        `Add ${committedObject.objectKind}`
+    if (
+      executeCommand(
+        commandFactories.addSketchObjects(
+          {
+            sketchId: session.sketchId as SketchId,
+            objects: [committedObject]
+          },
+          `Add ${committedObject.objectKind}`
+        )
       )
-    );
+    ) {
+      selectIfText(session.sketchId as SketchId);
+    }
   }
 
   function showProfileDiagnostics() {
@@ -2938,20 +4675,27 @@ export function App() {
       if (objects.length === 0) {
         return [];
       }
-      const basis = frameForPlaneRef(sketch.planeRef, resolve);
+      let basis: PlaneBasis;
+      try {
+        basis = resolvedSketchPlaneBasis(
+          doc,
+          sketch.planeRef,
+          resolve,
+          sketch.name
+        );
+      } catch {
+        return [];
+      }
       const curves = active
         ? []
         : objects.flatMap((object) => {
             try {
-              const polyline = objectPolyline(object.data, resolve);
-              return polyline
-                ? [
-                    {
-                      ...polyline,
-                      construction: object.data.construction === true
-                    }
-                  ]
-                : [];
+              // A text object draws one run per glyph region plus one per
+              // counter, so this is many runs from one object.
+              return objectPolylines(object.data, resolve).map((polyline) => ({
+                ...polyline,
+                construction: object.data.construction === true
+              }));
             } catch {
               return [];
             }
@@ -3003,7 +4747,11 @@ export function App() {
     parameterScope,
     interaction,
     selectedSketch,
-    selectedSketchProfileId
+    selectedSketchProfileId,
+    // Text outlines resolve from already-parsed faces, so a face arriving
+    // after this memo last ran has to re-run it or the glyph stays a
+    // diagnostic until something unrelated invalidates the memo.
+    textFontsVersion
   ]);
 
   useEffect(() => {
@@ -3170,7 +4918,8 @@ export function App() {
         sketchId: region.sketchId,
         regionFingerprint: region.regionFingerprint,
         samplePoint: region.samplePoint,
-        area: region.area
+        area: region.area,
+        sourceEntityIds: region.sourceEntityIds
       }
     });
     setStatus(
@@ -3230,7 +4979,11 @@ export function App() {
                 min: target.samplePoint,
                 max: target.samplePoint
               },
-              sourceEntityIds: [],
+              // The target's source entities, not [] — over a text region this
+              // is what lets profileReferencesForSelection store the
+              // entity-wide reference, so a drag-extruded label still rebuilds
+              // after its string is edited.
+              sourceEntityIds: target.sourceEntityIds,
               area: target.area
             }
           ];
@@ -3238,17 +4991,7 @@ export function App() {
       name: 'Extrude',
       sketchId: target.sketchId as SketchId,
       distance: exact ?? rounded,
-      profiles: profiles.map((profile) => ({
-        ...(profile.profileId.startsWith('legacy_')
-          ? {}
-          : { profileId: profile.profileId }),
-        regionFingerprint: profile.regionFingerprint,
-        samplePoint: profile.samplePoint,
-        sourceArea: profile.area,
-        ...(profile.sourceEntityIds.length > 0
-          ? { sourceEntityIds: profile.sourceEntityIds }
-          : {})
-      }))
+      profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     });
     const resultBodyId =
       command.payload.ids?.bodyId ?? (target.sketchId as unknown as BodyId);
@@ -3436,6 +5179,7 @@ export function App() {
       operation: {
         kind: 'resize-cylindrical-face',
         faceHash: target.hash,
+        ...(target.reference ? { faceReference: target.reference } : {}),
         sourceRadius: target.radius,
         sourceAxisStart: {
           x: target.axisStart[0],
@@ -3473,6 +5217,9 @@ export function App() {
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const current = interactionRef.current;
     if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
       return;
@@ -3526,6 +5273,9 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
+    const edgeReferences = edges.flatMap((edge) =>
+      edge.reference?.kind === 'edge' ? [edge.reference] : []
+    );
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }
@@ -3534,6 +5284,10 @@ export function App() {
         currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
       targetBodyId: bodyId,
       edgeHashes,
+      ...(edges.length === edgeHashes.length &&
+      edgeReferences.length === edges.length
+        ? { edgeReferences }
+        : {}),
       size
     };
     return currentInteraction.op === 'fillet'
@@ -3543,6 +5297,9 @@ export function App() {
 
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
   function handleEdgeCommit(size: number, exact?: ParamValue) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (interaction.mode !== 'edges') {
       return;
     }
@@ -3613,6 +5370,14 @@ export function App() {
   }
 
   function handleSelectionAction(action: SelectionActionId) {
+    if (
+      (action === 'sketch-on-face' ||
+        action === 'fillet' ||
+        action === 'chamfer') &&
+      !requireExactGeometryReady()
+    ) {
+      return;
+    }
     if (action === 'sketch-on-face' && interaction.mode === 'face') {
       startSketchOnFace(interaction.target);
       return;
@@ -3639,6 +5404,9 @@ export function App() {
     if (interaction.mode !== 'face' || interaction.op !== 'offset-face') {
       return;
     }
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const target = interaction.target;
     const bodyId = target.bodyId as BodyId;
     const faceTopology = representations[bodyId]?.topology?.faces.find(
@@ -3661,6 +5429,9 @@ export function App() {
         operation: {
           kind: 'offset-face',
           faceHash: target.hash,
+          ...(faceTopology.reference
+            ? { faceReference: faceTopology.reference }
+            : {}),
           sourceSurfaceType: 'plane',
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
@@ -3686,6 +5457,9 @@ export function App() {
     geometry: FaceGeometry,
     diameter: ParamValue
   ) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (
       geometry.diameter === undefined ||
       !geometry.axisStart ||
@@ -3702,6 +5476,9 @@ export function App() {
         operation: {
           kind: 'resize-through-hole',
           faceHash: selection.hash ?? -1,
+          ...(selection.reference?.kind === 'face'
+            ? { faceReference: selection.reference }
+            : {}),
           sourceDiameter: geometry.diameter,
           sourceAxisStart: geometry.axisStart,
           sourceAxisEnd: geometry.axisEnd,
@@ -3718,6 +5495,9 @@ export function App() {
     selection: TopologySelection,
     geometry: FaceGeometry
   ) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     const label = 'Remove imported feature';
     void executeValidatedDirectEdit(
       commandFactories.directEditBody({
@@ -3726,6 +5506,9 @@ export function App() {
         operation: {
           kind: 'remove-face-feature',
           faceHash: selection.hash ?? -1,
+          ...(selection.reference?.kind === 'face'
+            ? { faceReference: selection.reference }
+            : {}),
           sourceSurfaceType: geometry.surfaceType,
           sourceArea: geometry.area,
           sourceCenter: geometry.center,
@@ -3740,6 +5523,9 @@ export function App() {
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (!requireExactGeometryReady()) {
+      return;
+    }
     if (!doc) {
       return;
     }
@@ -3805,7 +5591,22 @@ export function App() {
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === extrudeData.sketchId
       );
-      const highlighted = references.flatMap((reference) => {
+      // Mirrors resolveRegionProfiles: an `all: true` reference covers every
+      // region its entities bound, so it can legitimately light up many
+      // regions — or, after a text edit, a different number than last time.
+      const perReference = references.map((reference) => {
+        if (reference.all === true) {
+          const referenced = new Set(reference.sourceEntityIds);
+          return (
+            view?.regions.filter(
+              (candidate) =>
+                candidate.sourceEntityIds.length > 0 &&
+                candidate.sourceEntityIds.every((entityId) =>
+                  referenced.has(entityId)
+                )
+            ) ?? []
+          );
+        }
         const sourceMatches = reference.sourceEntityIds
           ? (view?.regions.filter(
               (candidate) =>
@@ -3825,23 +5626,20 @@ export function App() {
                 Math.max(reference.sourceArea * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return region
-          ? [
-              {
-                sketchId: extrudeData.sketchId,
-                profileId: region.profileId,
-                regionFingerprint: region.regionFingerprint,
-                samplePoint: region.samplePoint,
-                centroid: region.centroid,
-                boundingBox: region.boundingBox,
-                sourceEntityIds: region.sourceEntityIds,
-                area: region.area
-              }
-            ]
-          : [];
+        return region ? [region] : [];
       });
+      const highlighted = perReference.flat().map((region) => ({
+        sketchId: extrudeData.sketchId,
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        centroid: region.centroid,
+        boundingBox: region.boundingBox,
+        sourceEntityIds: region.sourceEntityIds,
+        area: region.area
+      }));
       setSelectedProfiles(highlighted);
-      if (references.length > 0 && highlighted.length !== references.length) {
+      if (perReference.some((regions) => regions.length === 0)) {
         setStatus(
           'Broken profile reference — edit the source sketch or reselect the extrusion profiles.'
         );
@@ -3890,6 +5688,60 @@ export function App() {
     ) {
       clearSelection();
     }
+  }
+
+  function handleToggleFeatureSuppression(feature: FeatureNode) {
+    const resume = isFeatureSuppressed(feature);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        {
+          nodeId: feature.id,
+          metadata: resume
+            ? {
+                [FEATURE_SUPPRESSED_METADATA_KEY]: null,
+                [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
+              }
+            : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        },
+        resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+      )
+    );
+  }
+
+  function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
+    const markerIndex = features.findIndex(
+      (feature) => feature.featureId === featureId
+    );
+    if (markerIndex < 0) {
+      setStatus('The rollback feature is no longer in this document.');
+      return;
+    }
+    const commands = features.flatMap((feature, index) => {
+      const rollbackSuppressed = index > markerIndex;
+      if (isFeatureRollbackSuppressed(feature) === rollbackSuppressed) {
+        return [];
+      }
+      return [
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: feature.id,
+            metadata: {
+              [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: rollbackSuppressed
+                ? true
+                : null
+            }
+          },
+          rollbackSuppressed
+            ? `Roll back ${feature.name}`
+            : `Resume ${feature.name}`
+        )
+      ];
+    });
+    if (commands.length === 0) {
+      setStatus(`History is already rolled back after ${name}.`);
+      return;
+    }
+    executeTransaction(`Roll back after ${name}`, commands);
   }
 
   function openContextMenu(
@@ -4120,7 +5972,7 @@ export function App() {
    * edit a model the user cannot see. The palette and the shortcut overlay are
    * not listed — they are handled inside the map, which they need to reach.
    */
-  const workspaceInputEnabled = !settingsOpen;
+  const workspaceInputEnabled = !settingsOpen && !sharingOpen;
 
   // Workspace keyboard map (ignored while typing in a field). The ref must be
   // refreshed before paint: a keydown arriving between a commit and a passive
@@ -4240,7 +6092,9 @@ export function App() {
                   ? ('circle' as const)
                   : event.key.toLowerCase() === 'r'
                     ? ('rectangle' as const)
-                    : null;
+                    : event.key.toLowerCase() === 't'
+                      ? ('text' as const)
+                      : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
@@ -4360,6 +6214,26 @@ export function App() {
     return () => window.removeEventListener('keydown', listener);
   }, []);
 
+  /**
+   * Projects carrying an unresolved divergence marker. Recomputed from the
+   * shelf rather than tracked in state: the markers outlive the session that
+   * wrote them, so reading them is the only way the shelf can be right after a
+   * reload.
+   *
+   * Must stay above the restore-screen return below — every hook does. Putting
+   * it after meant the hook count changed as the app left that screen, which
+   * React treats as a broken component rather than a late memo.
+   */
+  const conflictedProjectIds = useMemo(
+    () =>
+      new Set(
+        projects
+          .map((project) => project.projectId)
+          .filter((projectId) => readUnresolvedConflict(projectId) !== null)
+      ),
+    [projects]
+  );
+
   if (startupState === 'restoring') {
     return <StartupScreen />;
   }
@@ -4369,21 +6243,23 @@ export function App() {
   // it the assistant's conversation and any request still streaming.
   const settingsOverlay = settingsOpen ? (
     <div
+      ref={settingsDialogRef}
       className="settings-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
+      tabIndex={-1}
     >
       <SettingsPage
         settings={appSettings}
         accountState={accountSettings}
         authConfig={authConfig}
         authConfigStatus={authConfigStatus}
+        health={deploymentHealth}
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
         onChange={handleAppSettingsChange}
-        onSave={() => void handleSaveAppSettings()}
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
         onTestAssistant={() => void handleTestAssistantConnection()}
@@ -4411,14 +6287,61 @@ export function App() {
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
+          onDuplicate={(project) => void handleDuplicateProject(project)}
+          cloudProjectIds={cloudProjectIds}
+          conflictedProjectIds={conflictedProjectIds}
+          signedIn={Boolean(session)}
+          onSaveToAccount={(project) => void handleSaveToAccount(project)}
+          onSaveAllToAccount={(candidates) =>
+            void handleSaveAllToAccount(candidates)
+          }
+          syncRun={syncRun}
+          onRetrySync={(projectId) => void handleRetrySync(projectId)}
+          onDismissSyncRun={() => setSyncRun(null)}
+          onMoveToShelf={(project, shelf) =>
+            void handleMoveProjectToShelf(project, shelf)
+          }
+          onTogglePin={(project) => void handleTogglePin(project)}
+          onReorder={(projectIds) => void handleReorderProjects(projectIds)}
+          onDeleteForever={(project) =>
+            void handleDeleteProjectForever(project)
+          }
+          onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
+          loadThumbnailBodies={loadThumbnailBodies}
         />
         {settingsOverlay}
       </>
     );
   }
 
+  const geometryPhaseLabel: Record<typeof geometry.state.phase, string> = {
+    starting: 'Starting geometry worker',
+    'loading-brepkit': 'Loading exact BrepKit kernel',
+    rebuilding: 'Rebuilding exact geometry',
+    ready: 'Exact geometry ready',
+    failed: 'Exact geometry failed'
+  };
+  const staleProjectionLabel =
+    Object.keys(representations).length > 0
+      ? 'showing the last valid projection as stale'
+      : 'no exact projection is available yet';
+  const visibleStatus = exactGeometryReady
+    ? status
+    : `${
+        geometry.state.phase === 'ready'
+          ? 'Waiting for exact geometry for this revision'
+          : geometry.state.phase === 'failed' && geometry.state.error
+            ? `Exact geometry failed: ${geometry.state.error}`
+            : geometryPhaseLabel[geometry.state.phase]
+      } · ${staleProjectionLabel}`;
   const tone: 'ready' | 'warning' | 'running' =
-    /fail|error|invalid|unable|denied/i.test(status) ? 'warning' : 'ready';
+    geometry.state.phase === 'failed'
+      ? 'warning'
+      : !exactGeometryReady
+        ? 'running'
+        : /fail|error|invalid|unable|denied/i.test(status)
+          ? 'warning'
+          : 'ready';
 
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
@@ -4613,9 +6536,157 @@ export function App() {
       : baseToolCard;
   const inspectorActive =
     !directMode && (tool !== null || selectedFeature !== null);
+  const modelingOperation: ModelingOperationKind | null =
+    tool === 'mirror' || tool === 'shell' || tool === 'solid-offset'
+      ? tool
+      : null;
+  const modelingTargetBody = modelingTargetBodyId
+    ? representations[modelingTargetBodyId]
+    : undefined;
+  const modelingFaces = modelingFaceOptions(modelingTargetBody?.topology);
+  const modelingUnsupportedReason = modelingOperation
+    ? (editDisabledReason ??
+      modelingOperationDisabledReason(modelingOperation, {
+        exactState: exactGeometryReady
+          ? 'ready'
+          : geometry.state.phase === 'failed'
+            ? 'failed'
+            : 'pending',
+        exactFailureReason: geometry.state.error,
+        hasTargetBody: Boolean(modelingTargetBody),
+        openingFaceCount: modelingFaces.length
+      }))
+    : null;
+
+  function commandForModelingSubmission(
+    submission: ModelingOperationSubmission
+  ): AnyCommand {
+    switch (submission.operation) {
+      case 'mirror':
+        return commandFactories.mirrorBody(submission.input);
+      case 'shell':
+        return commandFactories.shellBody(submission.input);
+      case 'solid-offset':
+        return commandFactories.offsetSolidBody(submission.input);
+    }
+  }
+
+  async function preflightModelingSubmission(
+    submission: ModelingOperationSubmission
+  ): Promise<{ status: 'ready' } | { status: 'refused'; reason: string }> {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEdit('preflight this modeling operation')) {
+      return {
+        status: 'refused',
+        reason: editDisabledReason ?? 'Project editing is unavailable.'
+      };
+    }
+    const current = manager.document;
+    const signature = JSON.stringify(submission);
+    try {
+      const command = commandForModelingSubmission(submission);
+      command.validate(current);
+      const candidate = command.apply(current);
+      const derived = await geometry.syncOnce(candidate);
+      const existingWarnings = new Set(current.derived.warnings);
+      const warning = derived.warnings.find(
+        (candidateWarning) => !existingWarnings.has(candidateWarning)
+      );
+      if (warning) {
+        throw new Error(warning);
+      }
+      const ids = (
+        command.payload as unknown as {
+          ids?: { bodyId?: BodyId };
+        }
+      ).ids;
+      const resultBodyId = ids?.bodyId;
+      if (!resultBodyId || !derived.bodyRepresentations[resultBodyId]) {
+        throw new Error(
+          `${submission.input.name} did not produce its expected exact result body.`
+        );
+      }
+      if (
+        managerRef.current !== manager ||
+        manager.document.projectId !== current.projectId ||
+        manager.document.version !== current.version
+      ) {
+        throw new Error(
+          'The document changed during exact preflight. Recheck the operation.'
+        );
+      }
+      modelingPreflightRef.current = {
+        signature,
+        command,
+        resultBodyId,
+        featureName: submission.input.name,
+        baseVersion: current.version
+      };
+      return { status: 'ready' };
+    } catch (error) {
+      modelingPreflightRef.current = null;
+      return {
+        status: 'refused',
+        reason: errorMessage(error, 'Exact preflight failed.')
+      };
+    }
+  }
+
+  function submitModelingOperation(submission: ModelingOperationSubmission) {
+    const approved = modelingPreflightRef.current;
+    const manager = managerRef.current;
+    if (
+      !approved ||
+      !manager ||
+      approved.signature !== JSON.stringify(submission) ||
+      approved.baseVersion !== manager.document.version
+    ) {
+      setStatus(
+        'The modeling preflight is stale. Check the exact result again.'
+      );
+      return;
+    }
+    void executeValidatedFeature(approved.command, {
+      featureName: approved.featureName,
+      resultBodyId: approved.resultBodyId,
+      successMessage: approved.command.label,
+      onSuccess: finishFeatureCreation
+    });
+  }
 
   return (
     <AppShell
+      workspaceRef={workspaceRef}
+      sidebarWidth={sidebarWidth}
+      assistantWidth={assistantWidth}
+      sidebarResizer={
+        <PanelResizer
+          label="Resize the sidebar"
+          edge="left"
+          width={sidebarWidth}
+          min={SIDEBAR_WIDTH_LIMITS.min}
+          max={maxSidebarWidth(windowWidth)}
+          onPreview={(width) => previewPanelWidth('--sidebar-w', width)}
+          onCommit={(width) => commitPanelWidth('sidebar', width)}
+          onReset={() =>
+            commitPanelWidth('sidebar', SIDEBAR_WIDTH_LIMITS.default)
+          }
+        />
+      }
+      assistantResizer={
+        <PanelResizer
+          label="Resize the assistant"
+          edge="right"
+          width={assistantWidth}
+          min={ASSISTANT_WIDTH_LIMITS.min}
+          max={maxAssistantWidth(windowWidth)}
+          onPreview={(width) => previewPanelWidth('--assistant-w', width)}
+          onCommit={(width) => commitPanelWidth('assistant', width)}
+          onReset={() =>
+            commitPanelWidth('assistant', ASSISTANT_WIDTH_LIMITS.default)
+          }
+        />
+      }
       topBar={
         <TopBar
           projectName={doc.name}
@@ -4640,12 +6711,14 @@ export function App() {
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
+          onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
             executeCommand(
               commandFactories.renameNode({ nodeId: doc.rootNodeId, name })
             )
           }
           onGoHome={() => void handleGoHome()}
+          onOpenSharing={() => setSharingOpen(true)}
           onOpenSettings={openSettings}
         />
       }
@@ -4694,6 +6767,8 @@ export function App() {
           selectedBodyIds={selectedBodyIds}
           onToggleBodyVisibility={toggleBodyVisibility}
           onFeatureContextMenu={handleFeatureContextMenu}
+          onToggleFeatureSuppression={handleToggleFeatureSuppression}
+          onRollbackAfterFeature={handleRollbackAfterFeature}
           onSetParameter={(name, expression) =>
             executeCommand(commandFactories.setParameter({ name, expression }))
           }
@@ -4726,6 +6801,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
+            rotateRequest={rotateRequest}
             units={doc.units}
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
@@ -4734,15 +6810,6 @@ export function App() {
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
-            onStartPrimitive={launchTool}
-            onAskAssistant={
-              assistantAvailable
-                ? () => {
-                    setAssistantCollapsed(false);
-                    focusAssistantPrompt();
-                  }
-                : null
-            }
             initialView={initialView}
             onViewChange={handleViewportChange}
             onMovePreviewChange={(translation, rotationDeg, snap) => {
@@ -4932,9 +6999,13 @@ export function App() {
               ) : movePreview ? (
                 <MoveOverlay
                   bodyName={
-                    representations[movePreview.bodyId as BodyId]?.name ??
-                    'Selected body'
+                    movePreview.target === 'sketch'
+                      ? (findSketch(doc, movePreview.bodyId as SketchId)
+                          ?.name ?? 'Selected sketch')
+                      : (representations[movePreview.bodyId as BodyId]?.name ??
+                        'Selected body')
                   }
+                  hideRotation={movePreview.target === 'sketch'}
                   values={{
                     translation: movePreview.translation,
                     rotationDeg: movePreview.rotationDeg
@@ -5052,6 +7123,7 @@ export function App() {
             }
             onFit={() => setFitSignal((value) => value + 1)}
             onView={requestView}
+            onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
@@ -5063,152 +7135,278 @@ export function App() {
             label="Inspector"
             resetKey={`${doc.projectId}:${doc.version}`}
           >
-            <Inspector
-              tool={tool}
-              selectedFeature={selectedFeature}
-              selectedSketch={selectedSketch}
-              selectedSketchObject={selectedSketchObject}
-              selectedBody={selectedBody}
-              selectedTopology={renderedSelectedTopology}
-              selectedEdges={selectedEdges}
-              edgeModifierBody={edgeModifierBody}
-              scope={parameterScope.scope}
-              sketches={sketchOptions}
-              bodies={bodyOptions}
-              units={doc.units}
-              selectedBodyIds={selectedBodyIds}
-              preferredSketchId={selectedSketch?.sketchId ?? null}
-              cylinderRadiusEdit={cylinderRadiusInspectorEdit}
-              cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
-              onLaunchTool={launchTool}
-              onCancel={cancelPanel}
-              onSelectAllEdges={handleSelectAllEdges}
-              onClearSelectedEdges={handleClearSelectedEdges}
-              onCreatePrimitive={(kind, name, dimensions) =>
-                createFeature(
-                  commandFactories.addPrimitive({
-                    name,
-                    primitiveKind: kind,
-                    dimensions
-                  })
-                )
-              }
-              onCreateSketch={(value) =>
-                createFeature(commandFactories.addSketch(value))
-              }
-              onCreateExtrude={(value) =>
-                createFeature(commandFactories.extrudeSketch(value))
-              }
-              onCreateRevolve={(value) =>
-                createFeature(commandFactories.revolveSketch(value))
-              }
-              onCreateBoolean={(value) =>
-                createFeature(commandFactories.booleanBodies(value))
-              }
-              onCreateTransform={(value) =>
-                createFeature(
-                  commandFactories.transformBody({
-                    name: value.name,
-                    targetBodyId: value.targetBodyId,
-                    translation: value.translation,
-                    rotationDeg: value.rotationDeg
-                  })
-                )
-              }
-              onCreateEdgeModifier={(kind, value) =>
-                createFeature(
-                  kind === 'fillet'
-                    ? commandFactories.filletEdges(value)
-                    : commandFactories.chamferEdges(value)
-                )
-              }
-              onCreatePattern={(value) =>
-                createFeature(commandFactories.patternBody(value))
-              }
-              onApplyPrimitive={(feature, name, dimensions) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name,
-                      data: { dimensions }
-                    },
-                    `Edit ${name}`
-                  )
-                )
-              }
-              onApplySketch={(feature, value) => {
-                if (feature.data.featureKind !== 'sketch' || !selectedSketch) {
-                  return;
-                }
-                const commands: AnyCommand[] = [
-                  commandFactories.updateSketch(
-                    {
-                      sketchId: feature.data.sketchId,
-                      plane: value.plane,
-                      offset: value.offset,
-                      object: value.object
-                    },
-                    `Edit ${value.name}`
-                  )
-                ];
-                if (value.name !== feature.name) {
-                  commands.push(
-                    commandFactories.renameNode({
-                      nodeId: feature.id,
-                      name: value.name
-                    }),
-                    commandFactories.renameNode({
-                      nodeId: selectedSketch.id,
-                      name: value.name
-                    })
+            {modelingOperation ? (
+              <ModelingOperationsForm
+                key={modelingOperation}
+                operation={modelingOperation}
+                scope={parameterScope.scope}
+                bodies={bodyOptions}
+                faceOptions={modelingFaces}
+                initialTarget={modelingTargetBodyId ?? undefined}
+                unsupportedReason={modelingUnsupportedReason ?? undefined}
+                onPreflight={preflightModelingSubmission}
+                onSubmit={submitModelingOperation}
+                onCancel={cancelPanel}
+                onTargetBodyChange={(bodyId) => {
+                  modelingPreflightRef.current = null;
+                  setModelingTargetBodyId(bodyId);
+                  setSelectedBodyIds([bodyId]);
+                  setSelectedTopology(null);
+                }}
+                onOpeningFaceSelectionChange={(hashes) => {
+                  const selectedHash = hashes.at(-1);
+                  const face = modelingTargetBody?.topology?.faces.find(
+                    (candidate) => candidate.hash === selectedHash
                   );
-                }
-                executeTransaction(`Edit ${value.name}`, commands);
-              }}
-              onApplyExtrude={(feature, value) => {
-                if (
-                  feature.data.featureKind !== 'extrude' ||
-                  value.sketchId !== feature.data.sketchId
-                ) {
+                  setSelectedTopology(
+                    selectedHash !== undefined && face && modelingTargetBodyId
+                      ? {
+                          kind: 'face',
+                          bodyId: modelingTargetBodyId,
+                          topologyId: face.topologyId,
+                          hash: face.hash,
+                          reference: face.reference
+                        }
+                      : null
+                  );
+                }}
+                onRequestOpeningFaceSelection={() => {
+                  setManualSelectionFilter('face');
                   setStatus(
-                    'Changing an Extrude source sketch requires profile reselection.'
+                    'Shell: pick an exact opening face, then select it in the face list.'
                   );
-                  return;
+                }}
+              />
+            ) : (
+              <Inspector
+                tool={tool}
+                selectedFeature={selectedFeature}
+                selectedSketch={selectedSketch}
+                selectedSketchObject={selectedSketchObject}
+                selectedBody={selectedBody}
+                selectedTopology={renderedSelectedTopology}
+                selectedEdges={selectedEdges}
+                edgeModifierBody={edgeModifierBody}
+                scope={parameterScope.scope}
+                sketches={sketchOptions}
+                bodies={bodyOptions}
+                units={doc.units}
+                selectedBodyIds={selectedBodyIds}
+                preferredSketchId={selectedSketch?.sketchId ?? null}
+                cylinderRadiusEdit={cylinderRadiusInspectorEdit}
+                cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
+                onLaunchTool={launchTool}
+                onCancel={cancelPanel}
+                onSelectAllEdges={handleSelectAllEdges}
+                onClearSelectedEdges={handleClearSelectedEdges}
+                onCreatePrimitive={(kind, name, dimensions) =>
+                  createFeature(
+                    commandFactories.addPrimitive({
+                      name,
+                      primitiveKind: kind,
+                      dimensions
+                    })
+                  )
                 }
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
+                onCreateSketch={(value) =>
+                  createFeature(commandFactories.addSketch(value))
+                }
+                onCreateExtrude={(value) =>
+                  createFeature(commandFactories.extrudeSketch(value))
+                }
+                onCreateRevolve={(value) =>
+                  createFeature(commandFactories.revolveSketch(value))
+                }
+                onCreateBoolean={(value) => {
+                  const command = commandFactories.booleanBodies(value);
+                  if (value.operation !== 'union') {
+                    createFeature(command);
+                    return;
+                  }
+                  const resultBodyId = command.payload.ids?.bodyId;
+                  if (!resultBodyId) {
+                    setStatus('Union could not reserve a result body.');
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: value.name,
+                    resultBodyId,
+                    successMessage: command.label,
+                    onSuccess: finishFeatureCreation
+                  });
+                }}
+                onCreateTransform={(value) =>
+                  createFeature(
+                    commandFactories.transformBody({
                       name: value.name,
-                      data: {
-                        ...feature.data,
-                        distance: value.distance
-                      }
-                    },
-                    `Edit ${value.name}`
+                      targetBodyId: value.targetBodyId,
+                      translation: value.translation,
+                      rotationDeg: value.rotationDeg
+                    })
                   )
-                );
-              }}
-              onApplyRevolve={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'revolve',
-                        sketchId: value.sketchId,
-                        axis: value.axis
-                      }
-                    },
-                    `Edit ${value.name}`
+                }
+                onCreateEdgeModifier={(kind, value) =>
+                  createFeature(
+                    kind === 'fillet'
+                      ? commandFactories.filletEdges(value)
+                      : commandFactories.chamferEdges(value)
                   )
-                )
-              }
-              onApplyBoolean={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
+                }
+                onCreatePattern={(value) =>
+                  createFeature(commandFactories.patternBody(value))
+                }
+                onApplyPrimitive={(feature, name, dimensions) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name,
+                        data: { dimensions }
+                      },
+                      `Edit ${name}`
+                    )
+                  )
+                }
+                onApplySketch={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'sketch' ||
+                    !selectedSketch
+                  ) {
+                    return;
+                  }
+                  const commands: AnyCommand[] = [
+                    commandFactories.updateSketch(
+                      {
+                        sketchId: feature.data.sketchId,
+                        plane: value.plane,
+                        offset: value.offset,
+                        object: value.object
+                      },
+                      `Edit ${value.name}`
+                    )
+                  ];
+                  if (value.name !== feature.name) {
+                    commands.push(
+                      commandFactories.renameNode({
+                        nodeId: feature.id,
+                        name: value.name
+                      }),
+                      commandFactories.renameNode({
+                        nodeId: selectedSketch.id,
+                        name: value.name
+                      })
+                    );
+                  }
+                  executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onConvertSketchToFixedPlane={(sketch) => {
+                  const planeRef = fixedPlaneRefForLegacyAttachment(
+                    sketch.planeRef
+                  );
+                  if (!planeRef) {
+                    setStatus(
+                      `${sketch.name} is not a legacy face attachment.`
+                    );
+                    return;
+                  }
+                  executeCommand(
+                    commandFactories.updateSketch(
+                      { sketchId: sketch.sketchId, planeRef },
+                      `Convert ${sketch.name} to fixed plane`
+                    )
+                  );
+                }}
+                onApplyTextSketch={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'sketch' ||
+                    !selectedSketch ||
+                    !selectedSketch.objectIds[0]
+                  ) {
+                    return;
+                  }
+                  // updateSketchObject, not updateSketch: the object changes
+                  // and the plane must not — a face-attached text sketch has
+                  // to stay on its face.
+                  const commands: AnyCommand[] = [
+                    commandFactories.updateSketchObject(
+                      {
+                        sketchId: feature.data.sketchId,
+                        objectId: selectedSketch.objectIds[0],
+                        data: value.data
+                      },
+                      `Edit ${value.name}`
+                    )
+                  ];
+                  if (value.name !== feature.name) {
+                    commands.push(
+                      commandFactories.renameNode({
+                        nodeId: feature.id,
+                        name: value.name
+                      }),
+                      commandFactories.renameNode({
+                        nodeId: selectedSketch.id,
+                        name: value.name
+                      })
+                    );
+                  }
+                  executeTransaction(`Edit ${value.name}`, commands);
+                }}
+                onEditSketchInViewport={(feature) => {
+                  if (feature.data.featureKind !== 'sketch' || !doc) {
+                    return;
+                  }
+                  const sketch = findSketch(doc, feature.data.sketchId);
+                  if (sketch) {
+                    dispatchInteraction({
+                      type: 'enter-sketch',
+                      plane: sketch.planeRef,
+                      sketchId: sketch.sketchId
+                    });
+                  }
+                }}
+                onApplyExtrude={(feature, value) => {
+                  if (
+                    feature.data.featureKind !== 'extrude' ||
+                    value.sketchId !== feature.data.sketchId
+                  ) {
+                    setStatus(
+                      'Changing an Extrude source sketch requires profile reselection.'
+                    );
+                    return;
+                  }
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          ...feature.data,
+                          distance: value.distance
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  );
+                }}
+                onApplyRevolve={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'revolve',
+                          sketchId: value.sketchId,
+                          axis: value.axis,
+                          angleDeg: value.angleDeg
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
+                  )
+                }
+                onApplyBoolean={(feature, value) => {
+                  const command = commandFactories.updateFeature(
                     {
                       featureId: feature.featureId,
                       name: value.name,
@@ -5219,79 +7417,92 @@ export function App() {
                       }
                     },
                     `Edit ${value.name}`
-                  )
-                )
-              }
-              onApplyTransform={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'transform',
-                        targetBodyId: value.targetBodyId,
-                        transform: {
-                          translation: value.translation,
-                          rotationDeg: value.rotationDeg
+                  );
+                  if (value.operation !== 'union') {
+                    executeCommand(command);
+                    return;
+                  }
+                  if (!feature.bodyId) {
+                    setStatus('Boolean feature has no result body.');
+                    return;
+                  }
+                  void executeValidatedFeature(command, {
+                    featureName: value.name,
+                    resultBodyId: feature.bodyId,
+                    successMessage: command.label
+                  });
+                }}
+                onApplyTransform={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'transform',
+                          targetBodyId: value.targetBodyId,
+                          transform: {
+                            translation: value.translation,
+                            rotationDeg: value.rotationDeg
+                          }
                         }
-                      }
-                    },
-                    `Edit ${value.name}`
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onApplyEdgeModifier={(feature, kind, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data:
-                        kind === 'fillet'
-                          ? {
-                              featureKind: 'fillet',
-                              targetBodyId: value.targetBodyId,
-                              edgeHashes: value.edgeHashes,
-                              radius: value.size
-                            }
-                          : {
-                              featureKind: 'chamfer',
-                              targetBodyId: value.targetBodyId,
-                              edgeHashes: value.edgeHashes,
-                              distance: value.size
-                            }
-                    },
-                    `Edit ${value.name}`
+                }
+                onApplyEdgeModifier={(feature, kind, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data:
+                          kind === 'fillet'
+                            ? {
+                                featureKind: 'fillet',
+                                targetBodyId: value.targetBodyId,
+                                edgeHashes: value.edgeHashes,
+                                radius: value.size
+                              }
+                            : {
+                                featureKind: 'chamfer',
+                                targetBodyId: value.targetBodyId,
+                                edgeHashes: value.edgeHashes,
+                                distance: value.size
+                              }
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onApplyPattern={(feature, value) =>
-                executeCommand(
-                  commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name: value.name,
-                      data: {
-                        featureKind: 'pattern',
-                        targetBodyId: value.targetBodyId,
-                        patternKind: value.patternKind,
-                        count: value.count,
-                        axis: value.axis,
-                        spacing: value.spacing,
-                        angleDeg: value.angleDeg
-                      }
-                    },
-                    `Edit ${value.name}`
+                }
+                onApplyPattern={(feature, value) =>
+                  executeCommand(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        name: value.name,
+                        data: {
+                          featureKind: 'pattern',
+                          targetBodyId: value.targetBodyId,
+                          patternKind: value.patternKind,
+                          count: value.count,
+                          axis: value.axis,
+                          spacing: value.spacing,
+                          angleDeg: value.angleDeg
+                        }
+                      },
+                      `Edit ${value.name}`
+                    )
                   )
-                )
-              }
-              onResizeThroughHole={handleResizeThroughHole}
-              onRemoveFaceFeature={handleRemoveFaceFeature}
-              onDeleteFeature={(feature) =>
-                handleDeleteFeature(feature.featureId, feature.name)
-              }
-            />
+                }
+                onResizeThroughHole={handleResizeThroughHole}
+                onRemoveFaceFeature={handleRemoveFaceFeature}
+                onDeleteFeature={(feature) =>
+                  handleDeleteFeature(feature.featureId, feature.name)
+                }
+              />
+            )}
           </ErrorBoundary>
         ) : null
       }
@@ -5305,16 +7516,16 @@ export function App() {
               onPreview={handlePreviewPatch}
               collapsed={assistantCollapsed}
               onCollapsedChange={setAssistantCollapsed}
-              focusNonce={assistantFocusNonce}
               hidden={assistantHidden}
             />
           </ErrorBoundary>
         ) : null
       }
       assistantHidden={assistantHidden}
+      assistantCollapsed={assistantCollapsed}
       statusBar={
         <StatusBar
-          status={status}
+          status={visibleStatus}
           tone={tone}
           hint={hint}
           projectName={doc.name}
@@ -5368,6 +7579,28 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
+          {sharingOpen && doc && (
+            <ProjectSharingDialog
+              projectId={doc.projectId}
+              role={collaboration.role}
+              collaborationStatus={collaboration.status}
+              lease={collaboration.lease}
+              liveMembers={collaboration.members}
+              conflict={collaboration.conflict}
+              conflictHandlers={conflictHandlers}
+              onClose={() => setSharingOpen(false)}
+            />
+          )}
+          {accountConflict && (
+            <ProjectConflictDialog
+              conflict={accountConflict}
+              busy={busy}
+              onResolve={(resolution) =>
+                void resolveAccountConflict(resolution)
+              }
+              onClose={() => setAccountConflict(null)}
+            />
+          )}
           {settingsOverlay}
         </>
       }

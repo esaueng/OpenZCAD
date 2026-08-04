@@ -8,7 +8,27 @@ import {
   type InteractionState,
   type RegionTarget
 } from './machine';
-import type { SketchPlaneRef, TopologySelection } from '@openzcad/shared';
+import type {
+  FaceTopologyReferenceV5,
+  FeatureId,
+  SketchPlaneRef,
+  TopologySelection
+} from '@openzcad/shared';
+
+const faceReference: FaceTopologyReferenceV5 = {
+  kind: 'face',
+  producingFeatureId: 'feature_box' as FeatureId,
+  lineageName: 'primitive.box.face.z-max',
+  currentHash: 3,
+  witnessVersion: 1,
+  witness: {
+    surfaceType: 'plane',
+    perimeter: 40,
+    centroid: [0, 0, 5],
+    analytic: { kind: 'plane', normal: [0, 0, 1], offset: 5 },
+    closure: { u: 'open', v: 'open' }
+  }
+};
 
 const face = (overrides: Partial<FaceTarget> = {}): FaceTarget => ({
   bodyId: 'body_1',
@@ -17,6 +37,7 @@ const face = (overrides: Partial<FaceTarget> = {}): FaceTarget => ({
   point: [1, 2, 3],
   normal: [0, 0, 1],
   surfaceType: 'planar',
+  reference: faceReference,
   ...overrides
 });
 
@@ -32,6 +53,7 @@ const region: RegionTarget = {
   sketchId: 'sketch_1',
   regionFingerprint: 42,
   samplePoint: { x: 1, y: 2 },
+  sourceEntityIds: [],
   area: 100
 };
 
@@ -271,6 +293,7 @@ describe('toolCardFor', () => {
       'Offset Face',
       'Sketch'
     ]);
+    expect(faceCard?.actions?.every((action) => action.enabled)).toBe(true);
     const holeCard = toolCardFor(
       interactionReducer(IDLE, {
         type: 'select-face',
@@ -294,5 +317,23 @@ describe('toolCardFor', () => {
         interactionReducer(IDLE, { type: 'select-region', target: region })
       )?.title
     ).toBe('Extrude');
+  });
+
+  it('exposes why sketch is unavailable on a hash-only planar face', () => {
+    const card = toolCardFor(
+      interactionReducer(IDLE, {
+        type: 'select-face',
+        target: face({ reference: undefined })
+      })
+    );
+    expect(
+      card?.actions?.find((action) => action.id === 'sketch-on-face')
+    ).toMatchObject({
+      enabled: false
+    });
+    expect(
+      card?.actions?.find((action) => action.id === 'sketch-on-face')
+        ?.disabledReason
+    ).toContain('no stable topology reference');
   });
 });

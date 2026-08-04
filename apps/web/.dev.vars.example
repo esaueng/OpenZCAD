@@ -7,10 +7,18 @@ AI_MODEL=openai/gpt-5.6-terra
 # Required only for encrypted per-user API tokens in Settings. Generate a
 # base64-encoded 32-byte key, keep it secret, and use the same key after restarts.
 # SETTINGS_ENCRYPTION_KEY=
+# Hosted email-code environments also require a stable AI_IDENTITY_PEPPER for
+# public assistant identity and quota HMACs. Local development bypasses hosted
+# assistant guards.
+# AI_IDENTITY_PEPPER=
 
-# Generic secret alternative: AI_API_KEY=
+# Generic secret alternative for OpenAI or responses-compatible: AI_API_KEY=
 # Optional attribution: AI_SITE_URL=http://localhost:5173
 # Optional attribution: AI_APP_NAME=OpenZCAD
+# Hosted deployment-key access: AI_DEPLOYMENT_ALLOWED_EMAILS=owner@example.com
+# Hosted custom endpoints: AI_ALLOWED_BASE_URL_HOSTS=models.example.com
+# Optional daily ceilings: AI_GLOBAL_DAILY_REQUEST_LIMIT=100
+# Optional weighted ceiling: AI_GLOBAL_DAILY_COST_LIMIT_UNITS=400
 
 # Direct OpenAI alternative: AI_PROVIDER=openai and OPENAI_API_KEY=
 # For another Responses-compatible provider, set AI_PROVIDER=responses-compatible
@@ -20,7 +28,7 @@ AI_MODEL=openai/gpt-5.6-terra
 #
 # Beta email-code authentication requires Worker secrets AUTH_OTP_PEPPER and
 # TURNSTILE_SECRET_KEY, the public TURNSTILE_SITE_KEY binding,
-# AUTH_EMAIL_FROM, a D1 binding with migration 0005 applied, and an EMAIL
+# AUTH_EMAIL_FROM, a D1 binding with all migrations applied, and an EMAIL
 # sending binding backed by an onboarded sender domain.
 # AUTH_LEGACY_OWNER_EMAIL can map historical user_beta_dev projects to one
 # verified owner email without rewriting document ownership.
