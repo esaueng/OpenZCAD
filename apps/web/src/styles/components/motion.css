@@ -13,16 +13,19 @@
 .icon-button,
 .topbar-action,
 .palette-item,
-.rail-row,
-.rail-views button,
+.rail-button,
+.rail-views-panel button,
 .feature-row-main,
 .body-row-main,
 .param-add button,
-.start-project-list button,
+.start-tile-project,
+.start-expand,
 .callout-value,
 .context-menu-item,
 .assistant-card-actions button,
 .row-delete,
+.row-suppression,
+.row-rollback,
 .row-visibility,
 .selection-chip-clear,
 .save-state {
@@ -39,7 +42,7 @@
 .secondary:active:not(:disabled),
 .icon-button:active:not(:disabled),
 .palette-item:active:not(:disabled),
-.rail-views button:active:not(:disabled),
+.rail-views-panel button:active:not(:disabled),
 .context-menu-item:active:not(:disabled),
 .assistant-card-actions button:active:not(:disabled) {
   transform: translateY(1px);
@@ -75,6 +78,8 @@ textarea {
 }
 
 .row-delete,
+.row-suppression,
+.row-rollback,
 .row-visibility {
   transition:
     opacity var(--dur-fast) var(--ease-out),
@@ -145,10 +150,6 @@ textarea {
   animation: oz-rise var(--dur-base) var(--ease-out);
 }
 
-.viewer-notice > div {
-  animation: oz-rise var(--dur-base) var(--ease-out);
-}
-
 .modal-backdrop {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
@@ -158,9 +159,14 @@ textarea {
   transform-origin: top left;
 }
 
-/* Start screen project/demo rows lift slightly toward the pointer. */
-.start-project-list button:not(:disabled):hover {
-  transform: translateX(2px);
+/* Start screen part tiles lift slightly toward the pointer. */
+.start-tile-project:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+}
+
+.start-tile-project:not(:disabled):active {
+  transform: translateY(0);
 }
 
 /* Status bar flashes subtly when the status text changes (class toggle
@@ -177,4 +183,3 @@ textarea {
 .status-pulse {
   animation: oz-status-pulse 600ms var(--ease-out);
 }
-

@@ -10,6 +10,7 @@ export * from './types';
 
 // Rendering: meshes, materials, lighting, grid, and camera fitting.
 export * from './render/scene';
+export * from './render/edgeOverlay';
 
 // Camera: the controller that owns cameras/controls/projection/glides,
 // plus standard view poses and screen-space projection math.
@@ -37,6 +38,8 @@ export * from './selection/boxSelect';
 export * from './gizmo/DragRig';
 export * from './gizmo/rigs';
 export * from './gizmo/move';
+export * from './gizmo/centerAlign';
+export * from './gizmo/moveTransform';
 
 // Input: pointer gesture classification and drag-session bookkeeping.
 export * from './input/bindings';

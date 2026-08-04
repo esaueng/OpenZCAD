@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -15,7 +17,6 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -30,13 +31,29 @@ import {
 
 /**
  * Kernel-seam correctness: a document must mean the same geometry whichever
- * exact kernel builds it. Adding or removing a STEP import reroutes the whole
- * document between BrepKit and OpenCascade, so every persisted reference —
- * region fingerprints, edge and face hashes — and every export path has to
- * either resolve to the same geometry or fail closed. These tests are
- * deliberately adversarial: they assert *positions*, not just success, because
- * a positional (ordinal) resolution scheme passes success-only tests while
- * silently editing the wrong geometry.
+ * exact kernel builds it. Every persisted reference — region fingerprints,
+ * edge and face hashes — and every export path has to either resolve to the
+ * same geometry on both kernels or fail closed. These tests are deliberately
+ * adversarial: they assert *positions*, not just success, because a positional
+ * (ordinal) resolution scheme passes success-only tests while silently editing
+ * the wrong geometry.
+ *
+ * There is one exact kernel now, so "the seam" is no longer a seam between
+ * two kernels. Z3 made BrepKit build every document, imported STEP included,
+ * and Z5 deleted OpenCascade from the adapter; the cross-kernel leg of each
+ * case went with it. What these tests still hold is the seam that remains and
+ * that regressions actually crossed:
+ *
+ *   - a persisted reference must resolve to the same GEOMETRY, asserted by
+ *     position, or fail closed by name — never land silently elsewhere;
+ *   - `withImport` — the same document with an imported body ALONGSIDE the
+ *     modelled one. Before Z3 this was indistinguishable from the OCCT leg;
+ *     it is now the mixed-document case in its own right, and an import must
+ *     not disturb what its neighbours resolve to.
+ *
+ * Bulk cross-kernel comparison lives on in the parity corpus
+ * (`test/parity/`), which still measures BrepKit against OpenCascade file by
+ * file. This suite no longer does.
  */
 
 const user = toUserId('user_seam');
@@ -210,7 +227,9 @@ function fnv(signature: string): number {
   return unsigned === 0 ? 1 : unsigned;
 }
 
-describe('kernel seam correctness', () => {
+// Real-kernel suite: the kernel starts up here, well past the 5 s default
+// when the whole test pool is contending for CPU.
+describe('kernel seam correctness', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
   let referenceStep: string;
 
@@ -231,7 +250,7 @@ describe('kernel seam correctness', () => {
     adapter.dispose();
   });
 
-  it('keeps a region-extrude hole through a STEP-import reroute and back', async () => {
+  it('keeps a region-extrude hole beside a STEP import', async () => {
     const { document, bodyId, exactVolume } = plateWithHoleDocument();
 
     const onBrepKit = await adapter.syncDocument(document);
@@ -246,21 +265,23 @@ describe('kernel seam correctness', () => {
       )
     ).toBe(true);
 
-    // A STEP import reroutes the whole document to OpenCascade. The hole must
-    // not silently disappear (the historic failure sweeps the rectangle's
-    // whole profile: volume 12000 instead of ~9989).
+    // The hole must not silently disappear when an imported body joins the
+    // document (the historic failure sweeps the rectangle's whole profile:
+    // volume 12000 instead of ~9989).
     const withStep = addStepImport(document, referenceStep);
-    const onOcct = await adapter.syncDocument(withStep);
-    expect(onOcct.warnings).toEqual([]);
-    const occtBody = onOcct.bodyRepresentations[bodyId];
-    expect(
-      Math.abs((occtBody?.volume ?? 0) - exactVolume) / exactVolume
-    ).toBeLessThan(0.005);
-    expect(
-      occtBody?.topology?.faces.some(
-        (face) => face.geometry?.surfaceType === 'cylinder'
-      )
-    ).toBe(true);
+    {
+      const derived = await adapter.syncDocument(withStep);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      expect(
+        Math.abs((body?.volume ?? 0) - exactVolume) / exactVolume
+      ).toBeLessThan(0.005);
+      expect(
+        body?.topology?.faces.some(
+          (face) => face.geometry?.surfaceType === 'cylinder'
+        )
+      ).toBe(true);
+    }
 
     // Removing the STEP source must return to identical BrepKit geometry.
     const backToBrepKit = await adapter.syncDocument(
@@ -273,7 +294,7 @@ describe('kernel seam correctness', () => {
     );
   });
 
-  it('fails closed naming the feature when OCCT cannot resolve the region', async () => {
+  it('fails closed naming the feature when a region cannot be resolved', async () => {
     const { document: withSketch, sketchId } = addSketchFeature(
       createProjectDocument('Ghost region', user),
       {
@@ -292,21 +313,23 @@ describe('kernel seam correctness', () => {
         sourceArea: 42
       }
     });
-    const derived = await adapter.syncDocument(
-      addStepImport(document, referenceStep)
-    );
-    expect(
-      derived.warnings.some(
-        (warning) =>
-          warning.includes('Ghost extrude') &&
-          warning.includes('Broken profile reference')
-      )
-    ).toBe(true);
-    // Never the fallback shape: the body must be absent, not the whole disk.
-    expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+    for (const derived of [
+      await adapter.syncDocument(document),
+      await adapter.syncDocument(addStepImport(document, referenceStep))
+    ]) {
+      expect(
+        derived.warnings.some(
+          (warning) =>
+            warning.includes('Ghost extrude') &&
+            warning.includes('Broken profile reference')
+        )
+      ).toBe(true);
+      // Never the fallback shape: the body must be absent, not the whole disk.
+      expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+    }
   });
 
-  it('keeps a fillet on the same geometric edge across reroutes and upstream edits', async () => {
+  it('keeps a fillet on the same geometric edge across upstream edits', async () => {
     const { document, resultBodyId } = notchedBlockDocument(6);
     const base = await adapter.syncDocument(document);
     expect(base.warnings).toEqual([]);
@@ -334,23 +357,10 @@ describe('kernel seam correctness', () => {
     // The other intact corner survives untouched.
     expect(edgeOnVerticalLine(brepkitBody, 30, 0)).toBeTruthy();
 
-    // Reroute to OpenCascade: the same persisted hash must land on the same
-    // geometric edge — asserted by position, not by success.
-    const onOcct = await adapter.syncDocument(
-      addStepImport(filleted, referenceStep)
-    );
-    expect(onOcct.warnings).toEqual([]);
-    const occtBody = onOcct.bodyRepresentations[filletBodyId];
-    expect(hasEdgePointNearLine(occtBody, 30, 18, 0.3)).toBe(false);
-    expect(edgeOnVerticalLine(occtBody, 30, 0)).toBeTruthy();
-    expect(
-      Math.abs(occtBody!.volume - brepkitBody!.volume) / brepkitBody!.volume
-    ).toBeLessThan(0.005);
-
     // Adversarial upstream edit: widening the cutter shifts edge enumeration
     // but leaves the filleted edge's geometry identical. Under a positional
     // scheme the fillet silently lands elsewhere; under the geometric scheme
-    // it must stay at (30, 18) — on both kernels.
+    // it must stay at (30, 18).
     const cutterFeature = listFeaturesInOrder(filleted).find(
       (feature) => feature.name === 'Cutter'
     )!;
@@ -358,8 +368,10 @@ describe('kernel seam correctness', () => {
       featureId: cutterFeature.featureId,
       data: { dimensions: { width: 9 } }
     });
-    for (const candidate of [edited, addStepImport(edited, referenceStep)]) {
-      const derived = await adapter.syncDocument(candidate);
+    for (const derived of [
+      await adapter.syncDocument(edited),
+      await adapter.syncDocument(addStepImport(edited, referenceStep))
+    ]) {
       expect(derived.warnings).toEqual([]);
       const body = derived.bodyRepresentations[filletBodyId];
       expect(hasEdgePointNearLine(body, 30, 18, 0.3)).toBe(false);
@@ -369,70 +381,106 @@ describe('kernel seam correctness', () => {
     }
   });
 
-  it('persists identical edge fingerprints on both kernels for the same history', async () => {
-    const documents: Array<{ document: ProjectDocument; bodyId: BodyId }> = [];
-
-    const box = addPrimitiveFeature(createProjectDocument('Box', user), {
-      name: 'Box',
-      primitiveKind: 'box',
-      dimensions: { width: 10, height: 20, depth: 30 }
-    });
-    documents.push({ document: box, bodyId: box.bodyOrder[0]! });
-
-    const withBlock = addPrimitiveFeature(
-      createProjectDocument('Bored block', user),
+  it('fails closed on an edge pick an imported body no longer publishes', async () => {
+    // The Z3 migration case, and the one that decides whether the flip is
+    // safe for documents that already exist. Until Z3, a document with a STEP
+    // import was built by OpenCascade, so any edge or face the user picked
+    // was stored against that kernel's topology. BrepKit builds those
+    // documents now.
+    //
+    // On analytic planar imports the two kernels published the SAME hashes
+    // and nothing changed. They diverged on periodic surfaces: for this cone
+    // OpenCascade published three edges to BrepKit's two (the seam-edge pin
+    // in corpus-pins.ts, owner K0.6), and BrepKit's two were a subset — so a
+    // pick on that extra seam edge has no counterpart after the flip. Z5
+    // deleted the kernel that could still produce the orphan hash, so the
+    // absent pick is now stated directly; the corpus keeps the seam-count
+    // divergence itself under measurement.
+    //
+    // The requirement is not that it resolves. It is that it REFUSES: names
+    // the feature, drops the result body, and leaves the imported body intact
+    // at its correct size. A stale pick silently landing on a neighbouring
+    // edge is the failure this whole identity scheme exists to prevent.
+    const source = addPrimitiveFeature(
+      createProjectDocument('Cone source', user),
       {
-        name: 'Block',
-        primitiveKind: 'box',
-        dimensions: { width: 40, height: 40, depth: 10 }
+        name: 'Cone',
+        primitiveKind: 'cone',
+        dimensions: { bottomRadius: 10, topRadius: 0, height: 10 }
       }
     );
-    const blockId = withBlock.bodyOrder.at(-1)!;
-    const withDrill = addPrimitiveFeature(withBlock, {
-      name: 'Drill',
-      primitiveKind: 'cylinder',
-      dimensions: { radius: 3, height: 10 }
-    });
-    const drillId = withDrill.bodyOrder.at(-1)!;
-    const positioned = transformBody(withDrill, {
-      name: 'Center drill',
-      targetBodyId: drillId,
-      translation: { x: 20, y: 20, z: 0 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
+    const coneStep = await adapter.exportStep(source, [source.bodyOrder[0]!]);
+    const { document, bodyId } = importStepBody(
+      createProjectDocument('Imported cone', user),
+      {
+        name: 'Imported cone',
+        artifactId: 'artifact_seam_cone',
+        sourceName: 'cone.step',
+        stepText: coneStep
+      }
+    );
+
+    const onBrepKit = await adapter.syncDocument(document);
+    const edges = onBrepKit.bodyRepresentations[bodyId]!.topology!.edges;
+    // Pinned: BrepKit publishes two edges for this cone and no seam edge.
+    expect(edges).toHaveLength(2);
+    const published = new Set(edges.map((edge) => edge.hash));
+    const orphan = 2_863_311_530;
+    expect(published.has(orphan)).toBe(false);
+
+    const stale = filletEdges(document, {
+      name: 'Pre-flip fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [orphan],
+      size: 0.5
     }).document;
-    const bored = booleanBodies(positioned, {
-      name: 'Bore',
-      operation: 'subtract',
-      targetBodyIds: [blockId, drillId]
-    }).document;
-    documents.push({ document: bored, bodyId: bored.bodyOrder.at(-1)! });
+    const derived = await adapter.syncDocument(stale);
+    expect(derived.warnings).toEqual([
+      'Feature "Pre-flip fillet": A selected edge no longer exists.'
+    ]);
+    expect(
+      derived.bodyRepresentations[stale.bodyOrder.at(-1)!]
+    ).toBeUndefined();
+    // The import itself is untouched: pi * 10^2 * 10 / 3.
+    expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
+      (Math.PI * 1000) / 3,
+      6
+    );
+  });
 
-    const plate = plateWithHoleDocument();
-    documents.push({ document: plate.document, bodyId: plate.bodyId });
+  it('publishes a stable topology count for an imported tessellated body', async () => {
+    // The counts are the pin. Until Z5 this test also measured how many of
+    // those hashes an OpenCascade-built version of the same import shared
+    // (739 of 821 faces, 1,646 of 1,722 edges) — the migration cost of the Z3
+    // flip, which has now been paid and cannot be re-measured without the
+    // second kernel. What survives is the claim that matters going forward:
+    // this body's topology must not silently change size, because every
+    // stored pick on it is resolved against exactly these sets.
+    const { document, bodyId } = importStepBody(
+      createProjectDocument('Bracket', user),
+      {
+        name: 'Bracket',
+        artifactId: 'artifact_seam_bracket',
+        sourceName: 'parametric-bracket.step',
+        stepText: readFileSync(
+          resolve('samples/parametric-bracket.step'),
+          'utf8'
+        )
+      }
+    );
+    const onBrepKit = await adapter.syncDocument(document);
+    const body = onBrepKit.bodyRepresentations[bodyId]!;
 
-    for (const { document, bodyId } of documents) {
-      const onBrepKit = await adapter.syncDocument(document);
-      const onOcct = await adapter.syncDocument(
-        addStepImport(document, referenceStep)
-      );
-      expect(onBrepKit.warnings).toEqual([]);
-      expect(onOcct.warnings).toEqual([]);
-      const brepkitEdges = onBrepKit.bodyRepresentations[
-        bodyId
-      ]!.topology!.edges.map((edge) => edge.hash).sort((a, b) => a - b);
-      const occtEdges = onOcct.bodyRepresentations[bodyId]!.topology!.edges.map(
-        (edge) => edge.hash
-      ).sort((a, b) => a - b);
-      expect(occtEdges).toEqual(brepkitEdges);
-
-      const brepkitFaces = onBrepKit.bodyRepresentations[
-        bodyId
-      ]!.topology!.faces.map((face) => face.hash).sort((a, b) => a - b);
-      const occtFaces = onOcct.bodyRepresentations[bodyId]!.topology!.faces.map(
-        (face) => face.hash
-      ).sort((a, b) => a - b);
-      expect(occtFaces).toEqual(brepkitFaces);
-    }
+    expect(body.topology!.faces).toHaveLength(821);
+    expect(body.topology!.edges).toHaveLength(1722);
+    // Every published hash is distinct: a collision would make two different
+    // picks resolve to the same geometry.
+    expect(new Set(body.topology!.faces.map((face) => face.hash)).size).toBe(
+      821
+    );
+    expect(new Set(body.topology!.edges.map((edge) => edge.hash)).size).toBe(
+      1722
+    );
   });
 
   it('fails closed on an unresolvable fillet hash instead of changing shape', async () => {
@@ -447,8 +495,10 @@ describe('kernel seam correctness', () => {
       size: 2
     }).document;
 
-    for (const candidate of [bogus, addStepImport(bogus, referenceStep)]) {
-      const derived = await adapter.syncDocument(candidate);
+    for (const derived of [
+      await adapter.syncDocument(bogus),
+      await adapter.syncDocument(addStepImport(bogus, referenceStep))
+    ]) {
       expect(
         derived.warnings.some(
           (warning) =>
@@ -467,11 +517,12 @@ describe('kernel seam correctness', () => {
     }
   });
 
-  it('rejects legacy positional references from older OCCT documents', async () => {
+  it('rejects legacy positional references from older documents', async () => {
     const { document, resultBodyId } = notchedBlockDocument(6);
-    // Documents saved by the old OCCT scheme persisted 1-based traversal
-    // ordinals. Interpreting 3 as "the third edge" would silently fillet an
-    // arbitrary edge; it must instead fail closed with a clear message.
+    // Documents saved by the old OpenCascade scheme persisted 1-based
+    // traversal ordinals. Interpreting 3 as "the third edge" would silently
+    // fillet an arbitrary edge; it must instead fail closed with a clear
+    // message.
     const legacy = filletEdges(document, {
       name: 'Legacy fillet',
       targetBodyId: resultBodyId,
@@ -479,8 +530,10 @@ describe('kernel seam correctness', () => {
       size: 2
     }).document;
 
-    for (const candidate of [legacy, addStepImport(legacy, referenceStep)]) {
-      const derived = await adapter.syncDocument(candidate);
+    for (const derived of [
+      await adapter.syncDocument(legacy),
+      await adapter.syncDocument(addStepImport(legacy, referenceStep))
+    ]) {
       expect(
         derived.warnings.some(
           (warning) =>
@@ -598,26 +651,7 @@ describe('kernel seam correctness', () => {
     );
   });
 
-  it('scales compatibility-path STL exports to millimetres for inch documents', () => {
-    const compat = createKernelAdapter();
-    const document = addPrimitiveFeature(
-      createProjectDocument('Inch mesh part', user, 'inch'),
-      {
-        name: 'Inch box',
-        primitiveKind: 'box',
-        dimensions: { width: 1, height: 2, depth: 3 }
-      }
-    );
-    const stl = compat.exportStl(document, [document.bodyOrder[0]!]);
-    const vertices = asciiStlVertices(stl);
-    expect(vertices.length).toBeGreaterThan(0);
-    expect(Math.max(...vertices.map((vertex) => vertex[2]!))).toBeCloseTo(
-      76.2,
-      6
-    );
-  });
-
-  it('routes imported-mesh documents through a millimetre-scaled STL export', async () => {
+  it('scales imported-mesh STL exports to millimetres for inch documents', async () => {
     const tetrahedron = {
       vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
       indices: [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]

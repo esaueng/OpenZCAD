@@ -1,20 +1,60 @@
 import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
+import { isFeatureSuppressed } from '@openzcad/shared';
 import type {
   SketchObjectData,
   AxisId,
   BodyId,
   BodyTopology,
   BooleanOperation,
+  DirectEditOperation,
+  FaceTopologyReferenceV5,
   FeatureId,
   PatternKind,
+  ParametricPlane,
   ParamValue,
   PrimitiveKind,
   ProjectDocument,
   RevolveAxis,
   SketchId,
+  SketchPlaneFrame,
+  SketchPlaneRef,
+  TextAlign,
+  TextFontStyle,
+  TopologyReferenceV5,
   TopologySelection,
   Vector3
 } from '@openzcad/shared';
+
+const TEXT_FONT_STYLES: readonly TextFontStyle[] = [
+  'regular',
+  'bold',
+  'italic',
+  'boldItalic'
+];
+const TEXT_ALIGNMENTS: readonly TextAlign[] = ['left', 'center', 'right'];
+/**
+ * Every bundled font family id, as a constraint rather than a hint.
+ *
+ * `fontFamily` used to be validated only as "a non-empty string", so a
+ * proposal naming `Arial` or `Helvetica` — the obvious guesses — was accepted,
+ * persisted, and only failed at geometry rebuild, with a message about a face
+ * not being loaded that reads like a transient problem rather than an
+ * unsupported font. `fontStyle` and `align` in the same expression were
+ * already checked against literal sets.
+ *
+ * Duplicated rather than imported: this package depends only on
+ * `document-core` and `shared`, never on `@openzcad/geometry` where the font
+ * registry lives. `ai-contracts.test.ts` asserts the two lists agree.
+ */
+export const TEXT_FONT_FAMILY_IDS = [
+  'inter',
+  'open-sans',
+  'lora',
+  'roboto-slab',
+  'jetbrains-mono',
+  'oswald',
+  'pacifico'
+] as const;
 
 /**
  * A body reference inside a proposal. Either a `bodyId` that already exists in
@@ -38,6 +78,28 @@ export function normalizeLocalId(value: string): string {
 export function isLocalBodyRef(value: string): boolean {
   return value.startsWith('$');
 }
+
+type RequiredFaceReference<T extends DirectEditOperation> = Omit<
+  T,
+  'faceReference'
+> & {
+  /** Must be copied verbatim from the current digest. */
+  faceReference: FaceTopologyReferenceV5;
+};
+
+export type CadDirectEditOperation = DirectEditOperation extends infer Operation
+  ? Operation extends DirectEditOperation
+    ? RequiredFaceReference<Operation>
+    : never
+  : never;
+
+/** A face plane whose reference and geometry snapshots came from the digest. */
+export type CadFaceSketchPlaneRef = Omit<
+  Extract<SketchPlaneRef, { type: 'face' }>,
+  'faceReference'
+> & {
+  faceReference: FaceTopologyReferenceV5;
+};
 
 export type CadPatchOperation =
   | {
@@ -104,6 +166,17 @@ export type CadPatchOperation =
       localId?: LocalBodyId;
       sketchId: SketchId;
       axis: RevolveAxis;
+      /**
+       * Optional sweep angle in degrees, `(0, 360]`. Omitted means a full
+       * turn. Rollout-controlled by `AI_PATCH_PARTIAL_REVOLVE_ENABLED`: the
+       * property is pruned from the request schema while the flag is off, so
+       * `add_revolve` itself stays available either way.
+       *
+       * Strict structured output requires every declared property in
+       * `required`, so "omit this" travels as an explicit null, exactly as it
+       * does for `add_primitive` dimensions.
+       */
+      angleDeg?: ParamValue | null;
     }
   | {
       kind: 'add_boolean';
@@ -118,6 +191,52 @@ export type CadPatchOperation =
       targetBodyId: BodyRef;
       translation: { x: ParamValue; y: ParamValue; z: ParamValue };
       rotationDeg: { x: ParamValue; y: ParamValue; z: ParamValue };
+    }
+  | {
+      kind: 'add_direct_edit';
+      name: string;
+      targetBodyId: BodyRef;
+      operation: CadDirectEditOperation;
+    }
+  | {
+      kind: 'add_face_sketch';
+      name: string;
+      /** \$alias other operations may use to reference this sketch. */
+      localId?: LocalBodyId;
+      planeRef: CadFaceSketchPlaneRef;
+      objects: SketchObjectData[];
+    }
+  | {
+      kind: 'add_multi_profile_extrude';
+      name: string;
+      localId?: LocalBodyId;
+      sketchId: SketchId;
+      distance: ParamValue;
+      /** One sketch-local point inside each distinct closed region. */
+      samplePoints: Array<{ x: number; y: number }>;
+    }
+  | {
+      kind: 'add_mirror';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      plane: ParametricPlane;
+    }
+  | {
+      kind: 'add_shell';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      openingFaceHashes: number[];
+      openingFaceReferences: FaceTopologyReferenceV5[];
+      thickness: ParamValue;
+    }
+  | {
+      kind: 'add_solid_offset';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      distance: ParamValue;
     }
   | {
       kind: 'add_edge_modifier';
@@ -167,7 +286,22 @@ export interface CadDigestSelection {
     kind: TopologySelection['kind'];
     topologyId: string;
     hash: number | null;
+    /** Exact schema-v5 reference; absent for bodies and legacy topology. */
+    reference?: TopologyReferenceV5;
   }>;
+}
+
+export interface CadDigestFaceSnapshot {
+  surfaceType: string;
+  area: number;
+  center: Vector3;
+  normal?: Vector3;
+  radius?: number;
+  diameter?: number;
+  axisStart?: Vector3;
+  axisEnd?: Vector3;
+  axialLength?: number;
+  featureType?: 'through-hole';
 }
 
 export interface CadDigestBodyTopology {
@@ -187,6 +321,12 @@ export interface CadDigestBodyTopology {
   faces: Array<{
     topologyId: string;
     hash: number;
+    /** Exact lineage reference that AI operations must copy verbatim. */
+    reference?: FaceTopologyReferenceV5;
+    /** Unrounded command-validation snapshot; display fields below are compact. */
+    snapshot?: CadDigestFaceSnapshot;
+    /** Deterministic frame available only for referenced planar faces. */
+    attachmentFrame?: SketchPlaneFrame;
     surfaceType?: string;
     area?: number;
     center?: Vector3;
@@ -230,6 +370,7 @@ export interface CadDocumentDigest {
     name: string;
     featureKind: string;
     bodyId: string | null;
+    suppressed: boolean;
     data: unknown;
   }>;
   /**
@@ -275,6 +416,88 @@ function roundVector(vector: Vector3): Vector3 {
     x: round(vector.x),
     y: round(vector.y),
     z: round(vector.z)
+  };
+}
+
+const VECTOR_EPSILON = 1e-12;
+
+function finiteVector(vector: Vector3): boolean {
+  return [vector.x, vector.y, vector.z].every(Number.isFinite);
+}
+
+function normalized(vector: Vector3): Vector3 | null {
+  if (!finiteVector(vector)) {
+    return null;
+  }
+  const length = Math.hypot(vector.x, vector.y, vector.z);
+  return length > VECTOR_EPSILON
+    ? { x: vector.x / length, y: vector.y / length, z: vector.z / length }
+    : null;
+}
+
+/**
+ * Kernel-neutral copy of the face-attachment axis rule. The digest must carry
+ * the same frame the command persists; asking a model to choose an in-plane
+ * axis would make identical requests replay differently.
+ */
+function deterministicFaceFrame(
+  center: Vector3,
+  normal: Vector3
+): SketchPlaneFrame | null {
+  let zAxis = normalized(normal);
+  if (!zAxis || !finiteVector(center)) {
+    return null;
+  }
+  const sign = [zAxis.x, zAxis.y, zAxis.z].find(
+    (component) => Math.abs(component) > VECTOR_EPSILON
+  );
+  if (sign === undefined) {
+    return null;
+  }
+  if (sign < 0) {
+    zAxis = { x: -zAxis.x, y: -zAxis.y, z: -zAxis.z };
+  }
+  const helpers: Vector3[] = [
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 1, z: 0 },
+    { x: 0, y: 0, z: 1 }
+  ];
+  const dot = (left: Vector3, right: Vector3) =>
+    left.x * right.x + left.y * right.y + left.z * right.z;
+  const helper = helpers.reduce((best, candidate) =>
+    Math.abs(dot(zAxis, candidate)) < Math.abs(dot(zAxis, best))
+      ? candidate
+      : best
+  );
+  const projection = dot(helper, zAxis);
+  const xAxis = normalized({
+    x: helper.x - zAxis.x * projection,
+    y: helper.y - zAxis.y * projection,
+    z: helper.z - zAxis.z * projection
+  });
+  if (!xAxis) {
+    return null;
+  }
+  const yAxis = normalized({
+    x: zAxis.y * xAxis.z - zAxis.z * xAxis.y,
+    y: zAxis.z * xAxis.x - zAxis.x * xAxis.z,
+    z: zAxis.x * xAxis.y - zAxis.y * xAxis.x
+  });
+  if (!yAxis) {
+    return null;
+  }
+  const clean = (value: number) =>
+    Math.abs(value) <= VECTOR_EPSILON ? 0 : value;
+  const cleaned = (vector: Vector3): Vector3 => ({
+    x: clean(vector.x),
+    y: clean(vector.y),
+    z: clean(vector.z)
+  });
+  return {
+    origin: { ...center },
+    xAxis: cleaned(xAxis),
+    yAxis: cleaned(yAxis),
+    zAxis: cleaned(zAxis)
   };
 }
 
@@ -370,9 +593,38 @@ function compactFace(
   face: BodyTopology['faces'][number]
 ): CadDigestBodyTopology['faces'][number] {
   const geometry = face.geometry;
+  const reference =
+    face.reference?.kind === 'face' && face.reference.currentHash === face.hash
+      ? face.reference
+      : undefined;
+  const snapshot = geometry
+    ? {
+        surfaceType: geometry.surfaceType,
+        area: geometry.area,
+        center: { ...geometry.center },
+        ...(geometry.normal ? { normal: { ...geometry.normal } } : {}),
+        ...(geometry.radius !== undefined ? { radius: geometry.radius } : {}),
+        ...(geometry.diameter !== undefined
+          ? { diameter: geometry.diameter }
+          : {}),
+        ...(geometry.axisStart ? { axisStart: { ...geometry.axisStart } } : {}),
+        ...(geometry.axisEnd ? { axisEnd: { ...geometry.axisEnd } } : {}),
+        ...(geometry.axialLength !== undefined
+          ? { axialLength: geometry.axialLength }
+          : {}),
+        ...(geometry.featureType ? { featureType: geometry.featureType } : {})
+      }
+    : undefined;
+  const attachmentFrame =
+    reference && geometry?.surfaceType === 'plane' && geometry.normal
+      ? deterministicFaceFrame(geometry.center, geometry.normal)
+      : null;
   return {
     topologyId: face.topologyId,
     hash: face.hash,
+    ...(reference ? { reference } : {}),
+    ...(reference && snapshot ? { snapshot } : {}),
+    ...(attachmentFrame ? { attachmentFrame } : {}),
     ...(geometry
       ? {
           surfaceType: geometry.surfaceType,
@@ -508,6 +760,7 @@ export function createCadDocumentDigest(
       name: feature.name,
       featureKind: feature.featureKind,
       bodyId: feature.bodyId ?? null,
+      suppressed: isFeatureSuppressed(feature),
       data: compactFeatureData(feature.data)
     })),
     // Meshes are deliberately dropped here: the model needs each body's
@@ -547,9 +800,9 @@ export function createCadDocumentDigest(
       topologies: context.topologies.map((topology) => ({
         bodyId: String(topology.bodyId),
         kind: topology.kind,
-        topologyId:
-          topology.topologyId ?? `body:${String(topology.bodyId)}`,
-        hash: topology.hash ?? null
+        topologyId: topology.topologyId ?? `body:${String(topology.bodyId)}`,
+        hash: topology.hash ?? null,
+        ...(topology.reference ? { reference: topology.reference } : {})
       }))
     },
     warnings: document.derived.warnings
@@ -674,7 +927,10 @@ export function groundCadPatchProposalToSelection(
     ) {
       if (
         operation.targetBodyId === selectedEdgeBodyId &&
-        sameStrings(operation.edgeHashes.map(String), selectedEdgeHashes.map(String))
+        sameStrings(
+          operation.edgeHashes.map(String),
+          selectedEdgeHashes.map(String)
+        )
       ) {
         return operation;
       }
@@ -701,7 +957,8 @@ export function groundCadPatchProposalToSelection(
     if (
       referencesSelectedBody &&
       selectedBodyId &&
-      (operation.kind === 'add_transform' || operation.kind === 'add_pattern') &&
+      (operation.kind === 'add_transform' ||
+        operation.kind === 'add_pattern') &&
       operation.targetBodyId !== selectedBodyId
     ) {
       changed = true;
@@ -806,6 +1063,49 @@ const sketchObjectSchema = {
         'startAngleDeg',
         'endAngleDeg'
       ]
+    },
+    {
+      // `rotation` and `align` are deliberately absent: strict structured
+      // output requires every declared property in `required`, so an optional
+      // field has to be offered as an explicit null, and a null would land in
+      // the document as a ParamValue that cannot resolve. They stay editor-only
+      // until there is a reason to spend a nullable field on them.
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        objectKind: { type: 'string', const: 'text' },
+        text: { type: 'string', description: 'The string to render.' },
+        fontFamily: {
+          type: 'string',
+          enum: [
+            'inter',
+            'open-sans',
+            'lora',
+            'roboto-slab',
+            'jetbrains-mono',
+            'oswald',
+            'pacifico'
+          ],
+          description:
+            'Bundled font family id. Open Sans keeps its glyph curves exact through the kernel; Inter, JetBrains Mono and Pacifico have self-overlapping glyphs that arrive faceted.'
+        },
+        fontStyle: {
+          type: 'string',
+          enum: ['regular', 'bold', 'italic', 'boldItalic']
+        },
+        size: scalarSchema,
+        x: scalarSchema,
+        y: scalarSchema
+      },
+      required: [
+        'objectKind',
+        'text',
+        'fontFamily',
+        'fontStyle',
+        'size',
+        'x',
+        'y'
+      ]
     }
   ]
 } as const;
@@ -819,6 +1119,281 @@ const bodyRefSchema = {
   type: 'string',
   description:
     'An existing bodyId from the digest, or "$localId" naming a body created earlier in this proposal.'
+} as const;
+
+const existingBodyRefSchema = {
+  type: 'string',
+  pattern: '^(?!\\$).+',
+  description:
+    'An existing live bodyId from the current digest. Topology-dependent operations cannot target a same-proposal alias.'
+} as const;
+
+const numberVectorSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    x: { type: 'number' },
+    y: { type: 'number' },
+    z: { type: 'number' }
+  },
+  required: ['x', 'y', 'z']
+} as const;
+
+const faceReferenceSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'Schema-v5 face reference copied verbatim from the current digest. Never invent or edit any field.',
+  properties: {
+    kind: { type: 'string', const: 'face' },
+    producingFeatureId: { type: 'string' },
+    lineageName: { type: 'string' },
+    currentHash: { type: 'integer', minimum: 1 },
+    witnessVersion: { type: 'number', const: 1 },
+    witness: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        surfaceType: { type: 'string' },
+        perimeter: { type: 'integer', minimum: 0 },
+        centroid: {
+          anyOf: [
+            {
+              type: 'array',
+              minItems: 3,
+              maxItems: 3,
+              items: { type: 'integer' }
+            },
+            { type: 'null' }
+          ]
+        },
+        analytic: {
+          anyOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                kind: { type: 'string', const: 'plane' },
+                normal: {
+                  type: 'array',
+                  minItems: 3,
+                  maxItems: 3,
+                  items: { type: 'integer' }
+                },
+                offset: { type: 'integer' }
+              },
+              required: ['kind', 'normal', 'offset']
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                kind: { type: 'string', const: 'cylinder' },
+                axis: {
+                  type: 'array',
+                  minItems: 3,
+                  maxItems: 3,
+                  items: { type: 'integer' }
+                },
+                axisFoot: {
+                  type: 'array',
+                  minItems: 3,
+                  maxItems: 3,
+                  items: { type: 'integer' }
+                },
+                radius: { type: 'integer', minimum: 0 }
+              },
+              required: ['kind', 'axis', 'axisFoot', 'radius']
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              properties: { kind: { type: 'string', const: 'none' } },
+              required: ['kind']
+            }
+          ]
+        },
+        closure: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            u: { type: 'string', enum: ['open', 'closed', 'unknown'] },
+            v: { type: 'string', enum: ['open', 'closed', 'unknown'] }
+          },
+          required: ['u', 'v']
+        }
+      },
+      required: ['surfaceType', 'perimeter', 'centroid', 'analytic', 'closure']
+    }
+  },
+  required: [
+    'kind',
+    'producingFeatureId',
+    'lineageName',
+    'currentHash',
+    'witnessVersion',
+    'witness'
+  ]
+} as const;
+
+const sketchFrameSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    origin: numberVectorSchema,
+    xAxis: numberVectorSchema,
+    yAxis: numberVectorSchema,
+    zAxis: numberVectorSchema
+  },
+  required: ['origin', 'xAxis', 'yAxis', 'zAxis']
+} as const;
+
+const facePlaneRefSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'Copy bodyId, faceHash, faceReference, source geometry, and frame from one referenced planar face in the current digest.',
+  properties: {
+    type: { type: 'string', const: 'face' },
+    bodyId: existingBodyRefSchema,
+    faceHash: { type: 'integer', minimum: 1 },
+    faceReference: faceReferenceSchema,
+    sourceArea: { type: 'number', minimum: 0 },
+    sourceCenter: numberVectorSchema,
+    sourceNormal: numberVectorSchema,
+    frame: sketchFrameSchema
+  },
+  required: [
+    'type',
+    'bodyId',
+    'faceHash',
+    'faceReference',
+    'sourceArea',
+    'sourceCenter',
+    'sourceNormal',
+    'frame'
+  ]
+} as const;
+
+const parametricPlaneSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { origin: vectorSchema, normal: vectorSchema },
+  required: ['origin', 'normal']
+} as const;
+
+const directEditOperationSchema = {
+  anyOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'resize-through-hole' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceAxisStart: numberVectorSchema,
+        sourceAxisEnd: numberVectorSchema,
+        diameter: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceDiameter',
+        'sourceAxisStart',
+        'sourceAxisEnd',
+        'diameter'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'remove-face-feature' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceSurfaceType: { type: 'string' },
+        sourceArea: { type: 'number', exclusiveMinimum: 0 },
+        sourceCenter: numberVectorSchema,
+        sourceDiameter: { type: 'number', exclusiveMinimum: 0 },
+        sourceAxisStart: numberVectorSchema,
+        sourceAxisEnd: numberVectorSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceSurfaceType',
+        'sourceArea',
+        'sourceCenter'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'offset-face' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceSurfaceType: { type: 'string', const: 'plane' },
+        sourceArea: { type: 'number', exclusiveMinimum: 0 },
+        sourceCenter: numberVectorSchema,
+        sourceNormal: numberVectorSchema,
+        offset: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceSurfaceType',
+        'sourceArea',
+        'sourceCenter',
+        'sourceNormal',
+        'offset'
+      ]
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'resize-cylindrical-face' },
+        faceHash: { type: 'integer', minimum: 1 },
+        faceReference: faceReferenceSchema,
+        sourceRadius: { type: 'number', exclusiveMinimum: 0 },
+        sourceAxisStart: numberVectorSchema,
+        sourceAxisEnd: numberVectorSchema,
+        concavity: { type: 'string', enum: ['hole', 'boss'] },
+        radius: scalarSchema
+      },
+      required: [
+        'kind',
+        'faceHash',
+        'faceReference',
+        'sourceRadius',
+        'sourceAxisStart',
+        'sourceAxisEnd',
+        'concavity',
+        'radius'
+      ]
+    }
+  ]
+} as const;
+
+export const AI_CAD_OPERATION_CAPABILITIES = {
+  set_feature_dimension: { enabled: true, reason: null },
+  add_transform: { enabled: true, reason: null },
+  add_direct_edit: { enabled: true, reason: null },
+  add_face_sketch: { enabled: true, reason: null },
+  add_multi_profile_extrude: { enabled: true, reason: null },
+  add_mirror: { enabled: true, reason: null },
+  add_shell: { enabled: true, reason: null },
+  add_solid_offset: { enabled: true, reason: null },
+  recognized_imported_feature: {
+    enabled: false,
+    reason:
+      'Recognition diagnostics do not yet expose a stable command contract and exact editable topology inventory.'
+  }
 } as const;
 
 /**
@@ -839,6 +1414,8 @@ export const CAD_PATCH_JSON_SCHEMA = {
       type: 'array',
       minItems: 1,
       maxItems: MAX_PATCH_OPERATIONS,
+      description:
+        'Enabled deterministic operations only. Recognized imported-feature editing is intentionally omitted until recognition diagnostics expose an exact stable command contract.',
       items: {
         anyOf: [
           {
@@ -978,9 +1555,19 @@ export const CAD_PATCH_JSON_SCHEMA = {
               name: { type: 'string' },
               localId: localIdSchema,
               sketchId: { type: 'string' },
-              axis: { type: 'string', enum: ['horizontal', 'vertical'] }
+              axis: { type: 'string', enum: ['horizontal', 'vertical'] },
+              // Null is a full turn. Pruned from this schema entirely while
+              // AI_PATCH_PARTIAL_REVOLVE_ENABLED is off.
+              angleDeg: nullableScalarSchema
             },
-            required: ['kind', 'name', 'localId', 'sketchId', 'axis']
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'sketchId',
+              'axis',
+              'angleDeg'
+            ]
           },
           {
             type: 'object',
@@ -1019,6 +1606,126 @@ export const CAD_PATCH_JSON_SCHEMA = {
               'translation',
               'rotationDeg'
             ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_direct_edit' },
+              name: { type: 'string' },
+              targetBodyId: existingBodyRefSchema,
+              operation: directEditOperationSchema
+            },
+            required: ['kind', 'name', 'targetBodyId', 'operation']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_face_sketch' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              planeRef: facePlaneRefSchema,
+              objects: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 24,
+                items: sketchObjectSchema
+              }
+            },
+            required: ['kind', 'name', 'localId', 'planeRef', 'objects']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: {
+                type: 'string',
+                const: 'add_multi_profile_extrude'
+              },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              sketchId: { type: 'string' },
+              distance: scalarSchema,
+              samplePoints: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 24,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    x: { type: 'number' },
+                    y: { type: 'number' }
+                  },
+                  required: ['x', 'y']
+                }
+              }
+            },
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'sketchId',
+              'distance',
+              'samplePoints'
+            ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_mirror' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: bodyRefSchema,
+              plane: parametricPlaneSchema
+            },
+            required: ['kind', 'name', 'localId', 'targetBodyId', 'plane']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_shell' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: existingBodyRefSchema,
+              openingFaceHashes: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 64,
+                items: { type: 'integer', minimum: 1 }
+              },
+              openingFaceReferences: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 64,
+                items: faceReferenceSchema
+              },
+              thickness: scalarSchema
+            },
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'targetBodyId',
+              'openingFaceHashes',
+              'openingFaceReferences',
+              'thickness'
+            ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_solid_offset' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: bodyRefSchema,
+              distance: scalarSchema
+            },
+            required: ['kind', 'name', 'localId', 'targetBodyId', 'distance']
           },
           {
             type: 'object',
@@ -1401,13 +2108,16 @@ function parseAssistantReadings(value: unknown): AssistantDrawingReading[] {
  * `parseCadPatchProposal`, so a patch is held to exactly the same standard it
  * was before replies could be anything else.
  */
-export function parseAssistantReply(value: unknown): AssistantReply {
+export function parseAssistantReply(
+  value: unknown,
+  digest?: CadDocumentDigest
+): AssistantReply {
   const candidate = record(value);
   switch (candidate.replyKind) {
     case 'patch':
       return {
         kind: 'patch',
-        proposal: parseCadPatchProposal(candidate.proposal),
+        proposal: parseCadPatchProposal(candidate.proposal, digest),
         readings: parseAssistantReadings(candidate.readings)
       };
     case 'questions':
@@ -1436,6 +2146,174 @@ function isScalar(value: unknown): value is ParamValue {
 function isVector(value: unknown): boolean {
   const vector = record(value);
   return isScalar(vector.x) && isScalar(vector.y) && isScalar(vector.z);
+}
+
+function isNumberVector(value: unknown): value is Vector3 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const vector = value as Record<string, unknown>;
+  return [vector.x, vector.y, vector.z].every(
+    (component) => typeof component === 'number' && Number.isFinite(component)
+  );
+}
+
+function isQuantizedPoint(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((component) => Number.isSafeInteger(component))
+  );
+}
+
+function isFaceReference(value: unknown): value is FaceTopologyReferenceV5 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const reference = value as Record<string, unknown>;
+  if (
+    reference.kind !== 'face' ||
+    typeof reference.producingFeatureId !== 'string' ||
+    !reference.producingFeatureId.trim() ||
+    typeof reference.lineageName !== 'string' ||
+    !reference.lineageName.trim() ||
+    !Number.isSafeInteger(reference.currentHash) ||
+    Number(reference.currentHash) <= 0 ||
+    reference.witnessVersion !== 1 ||
+    !reference.witness ||
+    typeof reference.witness !== 'object' ||
+    Array.isArray(reference.witness)
+  ) {
+    return false;
+  }
+  const witness = reference.witness as Record<string, unknown>;
+  if (
+    typeof witness.surfaceType !== 'string' ||
+    !Number.isSafeInteger(witness.perimeter) ||
+    Number(witness.perimeter) < 0 ||
+    (witness.centroid !== null && !isQuantizedPoint(witness.centroid)) ||
+    !witness.closure ||
+    typeof witness.closure !== 'object'
+  ) {
+    return false;
+  }
+  const closure = witness.closure as Record<string, unknown>;
+  if (
+    !['open', 'closed', 'unknown'].includes(String(closure.u)) ||
+    !['open', 'closed', 'unknown'].includes(String(closure.v)) ||
+    !witness.analytic ||
+    typeof witness.analytic !== 'object' ||
+    Array.isArray(witness.analytic)
+  ) {
+    return false;
+  }
+  const analytic = witness.analytic as Record<string, unknown>;
+  switch (analytic.kind) {
+    case 'plane':
+      return (
+        isQuantizedPoint(analytic.normal) &&
+        Number.isSafeInteger(analytic.offset)
+      );
+    case 'cylinder':
+      return (
+        isQuantizedPoint(analytic.axis) &&
+        isQuantizedPoint(analytic.axisFoot) &&
+        Number.isSafeInteger(analytic.radius) &&
+        Number(analytic.radius) >= 0
+      );
+    case 'none':
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isSketchFrame(value: unknown): value is SketchPlaneFrame {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const frame = value as Record<string, unknown>;
+  return (
+    isNumberVector(frame.origin) &&
+    isNumberVector(frame.xAxis) &&
+    isNumberVector(frame.yAxis) &&
+    isNumberVector(frame.zAxis)
+  );
+}
+
+function isSketchObjects(value: unknown): value is SketchObjectData[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((candidate: unknown) => {
+      if (!candidate || typeof candidate !== 'object') {
+        return false;
+      }
+      const object = candidate as Record<string, unknown> & {
+        objectKind?: unknown;
+      };
+      const fields = Object.entries(object).filter(
+        (entry) => entry[0] !== 'objectKind'
+      );
+      switch (object.objectKind) {
+        case 'rectangle':
+          return (
+            fields.length === 4 &&
+            ['width', 'height', 'centerX', 'centerY'].every((key) =>
+              isScalar(object[key])
+            )
+          );
+        case 'circle':
+          return ['radius', 'centerX', 'centerY'].every((key) =>
+            isScalar(object[key])
+          );
+        case 'polygon':
+          return ['sides', 'radius', 'centerX', 'centerY'].every((key) =>
+            isScalar(object[key])
+          );
+        case 'line':
+          return ['x1', 'y1', 'x2', 'y2'].every((key) => isScalar(object[key]));
+        case 'arc':
+          return [
+            'centerX',
+            'centerY',
+            'radius',
+            'startAngleDeg',
+            'endAngleDeg'
+          ].every((key) => isScalar(object[key]));
+        case 'text':
+          // The optional fields are checked when present rather than merely
+          // tolerated: a null `rotation` would reach the document as a
+          // ParamValue that cannot resolve and would fail at rebuild instead
+          // of here.
+          return (
+            typeof object.text === 'string' &&
+            object.text.length > 0 &&
+            TEXT_FONT_FAMILY_IDS.includes(
+              object.fontFamily as (typeof TEXT_FONT_FAMILY_IDS)[number]
+            ) &&
+            TEXT_FONT_STYLES.includes(object.fontStyle as TextFontStyle) &&
+            ['size', 'x', 'y'].every((key) => isScalar(object[key])) &&
+            (object.rotation === undefined || isScalar(object.rotation)) &&
+            (object.align === undefined ||
+              TEXT_ALIGNMENTS.includes(object.align as TextAlign))
+          );
+        default:
+          return false;
+      }
+    })
+  );
+}
+
+function assertExistingTopologyBody(
+  reference: string,
+  operation: string
+): void {
+  if (isLocalBodyRef(reference)) {
+    throw new Error(
+      `${operation} cannot target a body created in the same proposal, because its referenced topology does not exist yet.`
+    );
+  }
 }
 
 /**
@@ -1473,6 +2351,17 @@ function declareLocalId(
   declared.add(alias);
 }
 
+function declareBodyLocalId(
+  operation: Record<string, unknown>,
+  declared: Set<string>,
+  declaredBodies: Set<string>
+): void {
+  declareLocalId(operation, declared);
+  if (typeof operation.localId === 'string') {
+    declaredBodies.add(normalizeLocalId(operation.localId));
+  }
+}
+
 function requireBodyRef(
   value: unknown,
   declared: Set<string>,
@@ -1492,7 +2381,10 @@ function requireBodyRef(
   }
 }
 
-export function parseCadPatchProposal(value: unknown): CadPatchProposal {
+export function parseCadPatchProposal(
+  value: unknown,
+  digest?: CadDocumentDigest
+): CadPatchProposal {
   const candidate = record(value);
   if (
     typeof candidate.proposalId !== 'string' ||
@@ -1507,6 +2399,8 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
   }
 
   const declared = new Set<string>();
+  const declaredBodies = new Set<string>();
+  const declaredSketches = new Set<string>();
 
   for (const rawOperation of candidate.operations) {
     const operation = record(rawOperation);
@@ -1540,7 +2434,7 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_primitive operation.');
         }
-        declareLocalId(operation, declared);
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'delete_feature':
         if (typeof operation.featureId !== 'string') {
@@ -1556,62 +2450,18 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         }
         break;
       case 'add_sketch': {
-        const validObjects =
-          Array.isArray(operation.objects) &&
-          operation.objects.length > 0 &&
-          operation.objects.every((candidate: unknown) => {
-            if (!candidate || typeof candidate !== 'object') {
-              return false;
-            }
-            const object = candidate as Record<string, unknown> & {
-              objectKind?: unknown;
-            };
-            const fields = Object.entries(object).filter(
-              (entry) => entry[0] !== 'objectKind'
-            );
-            switch (object.objectKind) {
-              case 'rectangle':
-                return (
-                  fields.length === 4 &&
-                  ['width', 'height', 'centerX', 'centerY'].every((key) =>
-                    isScalar(object[key])
-                  )
-                );
-              case 'circle':
-                return ['radius', 'centerX', 'centerY'].every((key) =>
-                  isScalar(object[key])
-                );
-              case 'polygon':
-                return ['sides', 'radius', 'centerX', 'centerY'].every((key) =>
-                  isScalar(object[key])
-                );
-              case 'line':
-                return ['x1', 'y1', 'x2', 'y2'].every((key) =>
-                  isScalar(object[key])
-                );
-              case 'arc':
-                return [
-                  'centerX',
-                  'centerY',
-                  'radius',
-                  'startAngleDeg',
-                  'endAngleDeg'
-                ].every((key) =>
-                  isScalar(object[key])
-                );
-              default:
-                return false;
-            }
-          });
         if (
           typeof operation.name !== 'string' ||
           !['XY', 'XZ', 'YZ'].includes(String(operation.plane)) ||
           !isScalar(operation.offset) ||
-          !validObjects
+          !isSketchObjects(operation.objects)
         ) {
           throw new Error('Invalid add_sketch operation.');
         }
         declareLocalId(operation, declared);
+        if (typeof operation.localId === 'string') {
+          declaredSketches.add(normalizeLocalId(operation.localId));
+        }
         break;
       }
       case 'add_extrude':
@@ -1624,22 +2474,42 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
             (typeof operation.samplePoint !== 'object' ||
               typeof (operation.samplePoint as { x?: unknown }).x !==
                 'number' ||
-              typeof (operation.samplePoint as { y?: unknown }).y !==
-                'number'))
+              typeof (operation.samplePoint as { y?: unknown }).y !== 'number'))
         ) {
           throw new Error('Invalid add_extrude operation.');
         }
-        declareLocalId(operation, declared);
+        if (
+          isLocalBodyRef(String(operation.sketchId)) &&
+          !declaredSketches.has(normalizeLocalId(String(operation.sketchId)))
+        ) {
+          throw new Error(
+            `add_extrude sketchId references "${String(operation.sketchId)}" before an earlier sketch declares that localId.`
+          );
+        }
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'add_revolve':
         if (
           typeof operation.name !== 'string' ||
           typeof operation.sketchId !== 'string' ||
-          !['horizontal', 'vertical'].includes(String(operation.axis))
+          !['horizontal', 'vertical'].includes(String(operation.axis)) ||
+          (operation.angleDeg !== undefined &&
+            operation.angleDeg !== null &&
+            !isScalar(operation.angleDeg))
         ) {
           throw new Error('Invalid add_revolve operation.');
         }
-        declareLocalId(operation, declared);
+        // A literal out of `(0, 360]` is refused here rather than at rebuild:
+        // an expression still resolves later against the parameter scope.
+        if (
+          typeof operation.angleDeg === 'number' &&
+          !(operation.angleDeg > 0 && operation.angleDeg <= 360)
+        ) {
+          throw new Error(
+            'add_revolve angleDeg must be greater than 0 and at most 360.'
+          );
+        }
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'add_boolean':
         if (
@@ -1656,18 +2526,23 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         // Operands resolve against aliases declared *before* this operation, so
         // a boolean can never reference its own result.
         operation.targetBodyIds.forEach((id, index) =>
-          requireBodyRef(id, declared, `add_boolean targetBodyIds[${index}]`)
+          requireBodyRef(
+            id,
+            declaredBodies,
+            `add_boolean targetBodyIds[${index}]`
+          )
         );
         // A repeated operand is degenerate: subtracting a body from itself
         // leaves nothing, and the emptiness would persist silently.
         if (
-          new Set(operation.targetBodyIds).size !== operation.targetBodyIds.length
+          new Set(operation.targetBodyIds).size !==
+          operation.targetBodyIds.length
         ) {
           throw new Error(
             'add_boolean lists the same body more than once in targetBodyIds.'
           );
         }
-        declareLocalId(operation, declared);
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'add_transform':
         if (
@@ -1680,9 +2555,193 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         }
         requireBodyRef(
           operation.targetBodyId,
-          declared,
+          declaredBodies,
           'add_transform targetBodyId'
         );
+        break;
+      case 'add_direct_edit': {
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !operation.operation ||
+          typeof operation.operation !== 'object' ||
+          Array.isArray(operation.operation)
+        ) {
+          throw new Error('Invalid add_direct_edit operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_direct_edit targetBodyId'
+        );
+        assertExistingTopologyBody(operation.targetBodyId, 'add_direct_edit');
+        const edit = operation.operation as Record<string, unknown>;
+        if (
+          !Number.isSafeInteger(edit.faceHash) ||
+          Number(edit.faceHash) <= 0 ||
+          !isFaceReference(edit.faceReference) ||
+          edit.faceReference.currentHash !== edit.faceHash
+        ) {
+          throw new Error(
+            'add_direct_edit requires a matching faceHash and exact schema-v5 faceReference from the digest.'
+          );
+        }
+        const commonAxis =
+          isNumberVector(edit.sourceAxisStart) &&
+          isNumberVector(edit.sourceAxisEnd);
+        const valid =
+          (edit.kind === 'resize-through-hole' &&
+            typeof edit.sourceDiameter === 'number' &&
+            edit.sourceDiameter > 0 &&
+            commonAxis &&
+            isScalar(edit.diameter)) ||
+          (edit.kind === 'remove-face-feature' &&
+            typeof edit.sourceSurfaceType === 'string' &&
+            typeof edit.sourceArea === 'number' &&
+            edit.sourceArea > 0 &&
+            isNumberVector(edit.sourceCenter) &&
+            (edit.sourceDiameter === undefined ||
+              (typeof edit.sourceDiameter === 'number' &&
+                edit.sourceDiameter > 0)) &&
+            ((edit.sourceAxisStart === undefined &&
+              edit.sourceAxisEnd === undefined) ||
+              commonAxis)) ||
+          (edit.kind === 'offset-face' &&
+            edit.sourceSurfaceType === 'plane' &&
+            typeof edit.sourceArea === 'number' &&
+            edit.sourceArea > 0 &&
+            isNumberVector(edit.sourceCenter) &&
+            isNumberVector(edit.sourceNormal) &&
+            isScalar(edit.offset)) ||
+          (edit.kind === 'resize-cylindrical-face' &&
+            typeof edit.sourceRadius === 'number' &&
+            edit.sourceRadius > 0 &&
+            commonAxis &&
+            ['hole', 'boss'].includes(String(edit.concavity)) &&
+            isScalar(edit.radius));
+        if (!valid) {
+          throw new Error('Invalid add_direct_edit operation payload.');
+        }
+        break;
+      }
+      case 'add_face_sketch': {
+        const planeRef = operation.planeRef as Record<string, unknown> | null;
+        if (
+          typeof operation.name !== 'string' ||
+          !planeRef ||
+          planeRef.type !== 'face' ||
+          typeof planeRef.bodyId !== 'string' ||
+          !Number.isSafeInteger(planeRef.faceHash) ||
+          Number(planeRef.faceHash) <= 0 ||
+          !isFaceReference(planeRef.faceReference) ||
+          planeRef.faceReference.currentHash !== planeRef.faceHash ||
+          typeof planeRef.sourceArea !== 'number' ||
+          planeRef.sourceArea <= 0 ||
+          !isNumberVector(planeRef.sourceCenter) ||
+          !isNumberVector(planeRef.sourceNormal) ||
+          !isSketchFrame(planeRef.frame) ||
+          !isSketchObjects(operation.objects)
+        ) {
+          throw new Error('Invalid add_face_sketch operation.');
+        }
+        assertExistingTopologyBody(planeRef.bodyId, 'add_face_sketch');
+        declareLocalId(operation, declared);
+        if (typeof operation.localId === 'string') {
+          declaredSketches.add(normalizeLocalId(operation.localId));
+        }
+        break;
+      }
+      case 'add_multi_profile_extrude':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.sketchId !== 'string' ||
+          !isScalar(operation.distance) ||
+          !Array.isArray(operation.samplePoints) ||
+          operation.samplePoints.length < 2 ||
+          !operation.samplePoints.every(
+            (point) =>
+              point &&
+              typeof point === 'object' &&
+              Number.isFinite((point as { x?: unknown }).x) &&
+              Number.isFinite((point as { y?: unknown }).y)
+          )
+        ) {
+          throw new Error('Invalid add_multi_profile_extrude operation.');
+        }
+        if (
+          isLocalBodyRef(operation.sketchId) &&
+          !declaredSketches.has(normalizeLocalId(operation.sketchId))
+        ) {
+          throw new Error(
+            `add_multi_profile_extrude sketchId references "${operation.sketchId}" before an earlier sketch declares that localId.`
+          );
+        }
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      case 'add_mirror':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !operation.plane ||
+          typeof operation.plane !== 'object' ||
+          !isVector((operation.plane as Record<string, unknown>).origin) ||
+          !isVector((operation.plane as Record<string, unknown>).normal)
+        ) {
+          throw new Error('Invalid add_mirror operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_mirror targetBodyId'
+        );
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      case 'add_shell': {
+        const openingFaceHashes = operation.openingFaceHashes;
+        const openingFaceReferences = operation.openingFaceReferences;
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !Array.isArray(openingFaceHashes) ||
+          openingFaceHashes.length === 0 ||
+          !openingFaceHashes.every(
+            (hash) => Number.isSafeInteger(hash) && Number(hash) > 0
+          ) ||
+          new Set(openingFaceHashes).size !== openingFaceHashes.length ||
+          !Array.isArray(openingFaceReferences) ||
+          openingFaceReferences.length !== openingFaceHashes.length ||
+          !openingFaceReferences.every(
+            (reference, index) =>
+              isFaceReference(reference) &&
+              reference.currentHash === openingFaceHashes[index]
+          ) ||
+          !isScalar(operation.thickness)
+        ) {
+          throw new Error('Invalid add_shell operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_shell targetBodyId'
+        );
+        assertExistingTopologyBody(operation.targetBodyId, 'add_shell');
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      }
+      case 'add_solid_offset':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !isScalar(operation.distance)
+        ) {
+          throw new Error('Invalid add_solid_offset operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_solid_offset targetBodyId'
+        );
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'add_edge_modifier':
         if (
@@ -1700,7 +2759,7 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         }
         requireBodyRef(
           operation.targetBodyId,
-          declared,
+          declaredBodies,
           'add_edge_modifier targetBodyId'
         );
         // Edge ordinals come from the derived topology of a body that already
@@ -1712,7 +2771,7 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
             'add_edge_modifier cannot target a body created in the same proposal, because its edges do not exist yet. Create the body first, then finish its edges in a later request.'
           );
         }
-        declareLocalId(operation, declared);
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
       case 'add_pattern':
         if (
@@ -1726,9 +2785,18 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
         ) {
           throw new Error('Invalid add_pattern operation.');
         }
-        requireBodyRef(operation.targetBodyId, declared, 'add_pattern targetBodyId');
-        declareLocalId(operation, declared);
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_pattern targetBodyId'
+        );
+        declareBodyLocalId(operation, declared, declaredBodies);
         break;
+      case 'recognized_imported_feature':
+      case 'add_recognized_imported_feature':
+        throw new Error(
+          `Recognized imported-feature AI edits are disabled: ${AI_CAD_OPERATION_CAPABILITIES.recognized_imported_feature.reason}`
+        );
       default:
         throw new Error(
           `Unsupported CAD patch operation: ${String(operation.kind)}.`
@@ -1736,5 +2804,246 @@ export function parseCadPatchProposal(value: unknown): CadPatchProposal {
     }
   }
 
-  return candidate as unknown as CadPatchProposal;
+  const proposal = candidate as unknown as CadPatchProposal;
+  return digest
+    ? validateCadPatchProposalAgainstDigest(proposal, digest)
+    : proposal;
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (candidate: unknown): unknown => {
+    if (Array.isArray(candidate)) {
+      return candidate.map(normalize);
+    }
+    if (candidate && typeof candidate === 'object') {
+      return Object.fromEntries(
+        Object.entries(candidate as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, child]) => [key, normalize(child)])
+      );
+    }
+    return candidate;
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function exactDigestFace(
+  digest: CadDocumentDigest,
+  bodyId: string,
+  faceHash: number,
+  reference: FaceTopologyReferenceV5,
+  operation: string
+): CadDigestBodyTopology['faces'][number] {
+  const body = digest.bodies?.find(
+    (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+  );
+  const face = body?.topology?.faces.find(
+    (candidate) =>
+      candidate.hash === faceHash &&
+      candidate.reference !== undefined &&
+      canonicalJson(candidate.reference) === canonicalJson(reference)
+  );
+  if (!face) {
+    throw new Error(
+      `${operation} contains a stale or unavailable face reference for body ${bodyId}. Refresh the proposal from the current document digest.`
+    );
+  }
+  return face;
+}
+
+/**
+ * Binds topology-dependent operations to the exact digest that prompted the
+ * assistant. Structural parsing alone cannot distinguish a copied lineage
+ * reference from a well-formed but stale or invented one.
+ */
+export function validateCadPatchProposalAgainstDigest(
+  proposal: CadPatchProposal,
+  digest: CadDocumentDigest
+): CadPatchProposal {
+  for (const operation of proposal.operations) {
+    switch (operation.kind) {
+      case 'add_direct_edit': {
+        const edit = operation.operation;
+        const face = exactDigestFace(
+          digest,
+          operation.targetBodyId,
+          edit.faceHash,
+          edit.faceReference,
+          operation.kind
+        );
+        const snapshot = face.snapshot;
+        if (!snapshot) {
+          throw new Error(
+            'add_direct_edit requires an exact, unrounded geometry snapshot from the current digest.'
+          );
+        }
+        const expected: unknown[] = [];
+        const received: unknown[] = [];
+        switch (edit.kind) {
+          case 'resize-through-hole':
+            expected.push(
+              snapshot.diameter,
+              snapshot.axisStart,
+              snapshot.axisEnd
+            );
+            received.push(
+              edit.sourceDiameter,
+              edit.sourceAxisStart,
+              edit.sourceAxisEnd
+            );
+            break;
+          case 'remove-face-feature':
+            expected.push(
+              snapshot.surfaceType,
+              snapshot.area,
+              snapshot.center,
+              snapshot.diameter,
+              snapshot.axisStart,
+              snapshot.axisEnd
+            );
+            received.push(
+              edit.sourceSurfaceType,
+              edit.sourceArea,
+              edit.sourceCenter,
+              edit.sourceDiameter,
+              edit.sourceAxisStart,
+              edit.sourceAxisEnd
+            );
+            break;
+          case 'offset-face':
+            expected.push(
+              snapshot.surfaceType,
+              snapshot.area,
+              snapshot.center,
+              snapshot.normal
+            );
+            received.push(
+              edit.sourceSurfaceType,
+              edit.sourceArea,
+              edit.sourceCenter,
+              edit.sourceNormal
+            );
+            break;
+          case 'resize-cylindrical-face':
+            if (
+              snapshot.featureType !== 'through-hole' ||
+              edit.concavity !== 'hole'
+            ) {
+              throw new Error(
+                'AI cylindrical resize is enabled only for kernel-recognized through-holes; boss concavity is not authoritative in the digest.'
+              );
+            }
+            expected.push(
+              snapshot.radius,
+              snapshot.axisStart,
+              snapshot.axisEnd
+            );
+            received.push(
+              edit.sourceRadius,
+              edit.sourceAxisStart,
+              edit.sourceAxisEnd
+            );
+            break;
+        }
+        if (canonicalJson(expected) !== canonicalJson(received)) {
+          throw new Error(
+            'add_direct_edit source geometry does not exactly match the current digest snapshot.'
+          );
+        }
+        break;
+      }
+      case 'add_face_sketch': {
+        const plane = operation.planeRef;
+        const face = exactDigestFace(
+          digest,
+          plane.bodyId,
+          plane.faceHash,
+          plane.faceReference,
+          operation.kind
+        );
+        const snapshot = face.snapshot;
+        if (
+          !snapshot?.normal ||
+          !face.attachmentFrame ||
+          canonicalJson([
+            plane.sourceArea,
+            plane.sourceCenter,
+            plane.sourceNormal,
+            plane.frame
+          ]) !==
+            canonicalJson([
+              snapshot.area,
+              snapshot.center,
+              snapshot.normal,
+              face.attachmentFrame
+            ])
+        ) {
+          throw new Error(
+            'add_face_sketch must copy the exact source geometry and deterministic attachmentFrame from one current planar digest face.'
+          );
+        }
+        break;
+      }
+      case 'add_shell':
+        operation.openingFaceReferences.forEach((reference, index) =>
+          exactDigestFace(
+            digest,
+            operation.targetBodyId,
+            operation.openingFaceHashes[index]!,
+            reference,
+            operation.kind
+          )
+        );
+        break;
+      default:
+        break;
+    }
+  }
+  return proposal;
+}
+
+/** Human-readable, deterministic text for proposal review UI and audit logs. */
+export function describeCadPatchOperation(
+  operation: CadPatchOperation
+): string {
+  switch (operation.kind) {
+    case 'set_parameter':
+      return `Set parameter ${operation.name} to ${operation.expression}`;
+    case 'set_feature_dimension':
+      return `Set ${operation.field} on ${operation.featureId} to ${String(operation.value)}`;
+    case 'add_primitive':
+      return `Create ${operation.primitiveKind} ${operation.name}`;
+    case 'delete_feature':
+      return `Delete feature ${operation.featureId}`;
+    case 'rename_feature':
+      return `Rename feature ${operation.featureId} to ${operation.name}`;
+    case 'add_sketch':
+      return `Create sketch ${operation.name} on ${operation.plane}`;
+    case 'add_extrude':
+      return `Extrude ${operation.sketchId} by ${String(operation.distance)}`;
+    case 'add_revolve':
+      return operation.angleDeg === undefined || operation.angleDeg === null
+        ? `Revolve ${operation.sketchId} around its ${operation.axis} axis`
+        : `Revolve ${operation.sketchId} ${String(operation.angleDeg)}° around its ${operation.axis} axis`;
+    case 'add_boolean':
+      return `${operation.operation} ${operation.targetBodyIds.length} bodies as ${operation.name}`;
+    case 'add_transform':
+      return `Transform body ${operation.targetBodyId} as ${operation.name}`;
+    case 'add_direct_edit':
+      return `${operation.name}: ${operation.operation.kind} on ${operation.operation.faceReference.lineageName}`;
+    case 'add_face_sketch':
+      return `Create sketch ${operation.name} on ${operation.planeRef.faceReference.lineageName}`;
+    case 'add_multi_profile_extrude':
+      return `Extrude ${operation.samplePoints.length} profiles from ${operation.sketchId} by ${String(operation.distance)}`;
+    case 'add_mirror':
+      return `Mirror body ${operation.targetBodyId} as ${operation.name}`;
+    case 'add_shell':
+      return `Shell body ${operation.targetBodyId} through ${operation.openingFaceHashes.length} face${operation.openingFaceHashes.length === 1 ? '' : 's'} at ${String(operation.thickness)}`;
+    case 'add_solid_offset':
+      return `Offset body ${operation.targetBodyId} outward by ${String(operation.distance)}`;
+    case 'add_edge_modifier':
+      return `${operation.modifier} ${operation.edgeHashes.length} edges on ${operation.targetBodyId}`;
+    case 'add_pattern':
+      return `Create ${operation.patternKind} pattern of ${operation.targetBodyId}`;
+  }
 }

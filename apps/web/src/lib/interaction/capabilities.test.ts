@@ -1,17 +1,51 @@
 import { describe, expect, it } from 'vitest';
+import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
 import { preferredCapability, selectionCapabilities } from './capabilities';
+
+const reference = (currentHash: number): FaceTopologyReferenceV5 => ({
+  kind: 'face',
+  producingFeatureId: 'feature_box' as FeatureId,
+  lineageName: 'primitive.box.face.z-max',
+  currentHash,
+  witnessVersion: 1,
+  witness: {
+    surfaceType: 'plane',
+    perimeter: 40,
+    centroid: [0, 0, 5],
+    analytic: { kind: 'plane', normal: [0, 0, 1], offset: 5 },
+    closure: { u: 'open', v: 'open' }
+  }
+});
 
 describe('selectionCapabilities', () => {
   it('offers offset and sketch for a fingerprinted planar face', () => {
     const capabilities = selectionCapabilities({
       kind: 'face',
-      target: { surfaceType: 'planar', hash: 12 }
+      target: { surfaceType: 'planar', hash: 12, reference: reference(12) }
     });
     expect(capabilities.map((capability) => capability.action)).toEqual([
       'offset-face',
       'sketch-on-face'
     ]);
     expect(preferredCapability(capabilities)?.action).toBe('offset-face');
+  });
+
+  it('keeps offset available but disables sketch for a hash-only planar face', () => {
+    const capabilities = selectionCapabilities({
+      kind: 'face',
+      target: { surfaceType: 'planar', hash: 12 }
+    });
+    expect(capabilities[0]).toMatchObject({
+      action: 'offset-face',
+      enabled: true
+    });
+    expect(capabilities[1]).toMatchObject({
+      action: 'sketch-on-face',
+      enabled: false
+    });
+    expect(capabilities[1]?.disabledReason).toContain(
+      'no stable topology reference'
+    );
   });
 
   it('offers radial resize only for a measurable cylindrical face', () => {
@@ -33,7 +67,7 @@ describe('selectionCapabilities', () => {
     const capability = preferredCapability(
       selectionCapabilities({
         kind: 'face',
-        target: { surfaceType: 'planar', hash: 3 }
+        target: { surfaceType: 'planar', hash: 3, reference: reference(3) }
       })
     );
     expect(capability?.action).toBe('offset-face');

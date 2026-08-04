@@ -16,11 +16,17 @@ describe('a tool narrows picking to what it consumes', () => {
       'subtract',
       'intersect',
       'transform',
+      'mirror',
+      'solid-offset',
       'linear-pattern',
       'circular-pattern'
     ] as const) {
       expect(inferredSelectionFilter(tool)).toBe('body');
     }
+  });
+
+  it('sends Shell to opening faces', () => {
+    expect(inferredSelectionFilter('shell')).toBe('face');
   });
 
   it('sends Sketch to faces, since it attaches to one', () => {

@@ -219,6 +219,10 @@
   margin: 0 auto;
 }
 
+.settings-section.settings-section-wide {
+  width: min(1180px, 100%);
+}
+
 .settings-section > header {
   margin-bottom: var(--sp-4);
 }
@@ -522,23 +526,170 @@
   background: var(--color-accent-dim);
 }
 
-.settings-shortcuts {
+.settings-controls-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text-muted);
+  background: var(--color-accent-dim);
+  border-bottom: var(--border-thin);
+}
+
+.settings-controls-note > svg {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+}
+
+.settings-controls-note > span {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+}
+
+.settings-controls-note strong {
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
+.settings-controls-note small {
+  color: var(--color-text-muted);
+}
+
+.settings-control-collection + .settings-control-collection {
+  border-top: var(--border-thin);
+}
+
+.settings-control-collection > header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--color-surface-2);
+  border-bottom: var(--border-thin);
+}
+
+.settings-control-collection-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+}
+
+.settings-control-collection > header > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-control-collection h3,
+.settings-control-group h4 {
+  margin: 0;
+  font-weight: var(--fw-medium);
+}
+
+.settings-control-collection h3 {
+  font-size: var(--fs-md);
+}
+
+.settings-control-collection > header p,
+.settings-control-group > p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.settings-control-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1px;
   background: var(--color-border);
 }
 
-.settings-shortcuts > div {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+.settings-control-group {
+  min-width: 0;
+  padding: var(--sp-4);
   background: var(--color-surface);
 }
 
-.settings-shortcuts kbd {
-  min-width: 104px;
+.settings-control-group > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.settings-control-group h4 {
+  color: var(--color-text);
+  font-size: var(--fs-base);
+}
+
+.settings-control-group > header > span {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.settings-control-group > p {
+  min-height: 34px;
+  margin-top: var(--sp-1);
+}
+
+.settings-control-group dl {
+  display: grid;
+  gap: 0;
+  margin: var(--sp-3) 0 0;
+}
+
+.settings-control-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(112px, 0.42fr) minmax(0, 1fr);
+  gap: var(--sp-3);
+  padding: 9px 0;
+  border-top: var(--border-thin);
+}
+
+.settings-control-row dt,
+.settings-control-row dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.settings-control-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.settings-control-keys kbd {
+  width: max-content;
+  max-width: 100%;
+  min-width: 30px;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.settings-control-row dd {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-control-row dd strong {
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.settings-control-row dd small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
 }
 
 @media (max-width: 860px) {
@@ -584,7 +735,6 @@
   }
 
   .settings-card-action.split,
-  .settings-shortcuts,
   .settings-auth-form {
     grid-template-columns: 1fr;
   }
@@ -617,6 +767,19 @@
 
   .settings-content {
     padding: var(--sp-3);
+  }
+
+  .settings-control-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-control-group {
+    padding: var(--sp-3);
+  }
+
+  .settings-control-row {
+    grid-template-columns: minmax(96px, 0.38fr) minmax(0, 1fr);
+    gap: var(--sp-2);
   }
 
   .settings-section h2 {
