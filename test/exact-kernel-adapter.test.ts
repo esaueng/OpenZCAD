@@ -4775,6 +4775,54 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
   });
 
+  it('surfaces a refused shell on a filleted body as a feature warning', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shell refusal', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const source = await adapter.syncDocument(base);
+    const edges = source.bodyRepresentations[sourceBodyId]!.topology!.edges;
+    const filleted = filletEdges(base, {
+      name: 'Rounded block',
+      targetBodyId: sourceBodyId,
+      edgeHashes: edges.map((edge) => edge.hash),
+      size: 1
+    }).document;
+    const filletedBodyId = filleted.bodyOrder.at(-1)!;
+    const rounded = await adapter.syncDocument(filleted);
+    expect(rounded.warnings).toEqual([]);
+    const opening = rounded.bodyRepresentations[
+      filletedBodyId
+    ]!.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 30) < 1e-7
+    );
+    expect(opening).toBeTruthy();
+
+    const refused = shellBody(filleted, {
+      name: 'Impossible shell',
+      targetBodyId: filletedBodyId,
+      openingFaceHashes: [opening!.hash],
+      ...(opening!.reference
+        ? { openingFaceReferences: [opening!.reference] }
+        : {}),
+      thickness: 100
+    }).document;
+    const shellBodyId = refused.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(refused);
+
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toMatch(/^Feature "Impossible shell":/);
+    expect(derived.bodyRepresentations[shellBodyId]).toBeUndefined();
+    expect(derived.bodyRepresentations[filletedBodyId]?.consumed).toBe(false);
+  });
+
   it.each([
     ['mm', 1],
     ['cm', 10],

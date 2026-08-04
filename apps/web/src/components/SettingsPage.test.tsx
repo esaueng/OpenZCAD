@@ -66,7 +66,7 @@ describe('settings advanced section', () => {
     expect(screen.getByText('Kernel version')).toBeInTheDocument();
   });
 
-  it('reports migration 0010 as not ready when the health check fails closed', async () => {
+  it('reports cloud project storage as not ready when health fails closed', async () => {
     const user = userEvent.setup();
     renderSettings({
       status: 'ok',
@@ -77,10 +77,8 @@ describe('settings advanced section', () => {
 
     await user.click(screen.getByRole('button', { name: 'Advanced' }));
 
-    expect(screen.getByText('D1 storage migration')).toBeInTheDocument();
-    expect(
-      screen.getByText(/0010_document_storage_accounting/)
-    ).toBeInTheDocument();
+    expect(screen.getByText('Cloud project storage')).toBeInTheDocument();
+    expect(screen.getByText(/Migrations 0010 and 0011/)).toBeInTheDocument();
     expect(screen.getByText('Not ready')).toHaveClass(
       'settings-state',
       'warning'
