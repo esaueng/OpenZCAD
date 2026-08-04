@@ -26,7 +26,7 @@ describe('stepZoomDynamics', () => {
 
   it('accelerates a rapid spin and caps the multiplier', () => {
     let state = initialZoomDynamics();
-    let speed = ZOOM_BASE_SPEED;
+    let speed: number;
     const speeds: number[] = [];
     for (let i = 0; i < 40; i++) {
       ({ state, speed } = stepZoomDynamics(state, i * 10, 1));
