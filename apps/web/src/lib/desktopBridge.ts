@@ -22,6 +22,9 @@ interface NativeApiResponse {
   body: number[];
 }
 
+const CLOUD_API_ORIGIN = 'https://zcad.esau.app';
+const CLOUD_SOCKET_ORIGIN = 'wss://zcad.esau.app';
+
 export interface DesktopAuthPollResult {
   status: 'pending' | 'authorized';
   session?: {
@@ -69,13 +72,42 @@ function apiPath(input: RequestInfo | URL): string {
     return value;
   }
   const url = new URL(value);
-  if (
-    url.origin !== 'https://zcad.esau.app' ||
-    !url.pathname.startsWith('/api/')
-  ) {
+  if (url.origin !== CLOUD_API_ORIGIN || !url.pathname.startsWith('/api/')) {
     throw new Error('The desktop API destination is not allowed.');
   }
   return `${url.pathname}${url.search}`;
+}
+
+/**
+ * Asks Rust to exchange its in-memory bearer credential for a one-use room
+ * ticket. Only the fixed-origin WebSocket URL crosses back into the WebView.
+ */
+export async function desktopCollaborationUrl(
+  projectId: string
+): Promise<string> {
+  if (!isDesktopApp()) {
+    throw new Error(
+      'Desktop collaboration is only available in the macOS app.'
+    );
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  const value = await invoke<string>('desktop_collaboration_url', {
+    projectId
+  });
+  const url = new URL(value);
+  const expectedPath = `/api/projects/${encodeURIComponent(projectId)}/collaboration`;
+  const tickets = url.searchParams.getAll('ticket');
+  if (
+    url.origin !== CLOUD_SOCKET_ORIGIN ||
+    url.pathname !== expectedPath ||
+    url.hash !== '' ||
+    Array.from(url.searchParams.keys()).some((key) => key !== 'ticket') ||
+    tickets.length !== 1 ||
+    !/^[A-Za-z0-9_-]{43}$/.test(tickets[0]!)
+  ) {
+    throw new Error('The native collaboration URL is not allowed.');
+  }
+  return url.toString();
 }
 
 /**
