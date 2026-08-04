@@ -2079,7 +2079,7 @@ export function ModelViewer({
         const units = document.createElement('small');
         units.textContent = unitsRef.current;
         chip.replaceChildren(
-          `R ${formatNumber(rig.value())} `,
+          `R ${formatNumber(rig.value())}\u00a0`,
           units
         );
       } else {

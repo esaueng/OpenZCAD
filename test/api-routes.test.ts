@@ -540,7 +540,7 @@ describe('worker api routes', () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
       withEnabledDeploymentAssistant({
-        AI_API_KEY: 'secret-test-value',
+        OPENROUTER_API_KEY: 'secret-test-value',
         AI_MODEL: 'model-test'
       })
     );
@@ -880,6 +880,7 @@ describe('worker api routes', () => {
     );
     vi.stubGlobal('fetch', providerFetch);
     const publicEnv = withEnabledDeploymentAssistant({
+      AI_PROVIDER: 'responses-compatible',
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
       AI_IDENTITY_PEPPER: 'route-test-pepper',
@@ -931,6 +932,7 @@ describe('worker api routes', () => {
       );
     vi.stubGlobal('fetch', providerFetch);
     const publicEnv = withEnabledDeploymentAssistant({
+      AI_PROVIDER: 'responses-compatible',
       AI_API_KEY: 'test-key',
       AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
