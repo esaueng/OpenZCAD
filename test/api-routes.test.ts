@@ -1654,6 +1654,37 @@ describe('worker api routes', () => {
     expect(health.projectEditLeasesEnforced).toBe(false);
   });
 
+  it('fails project routes closed when the R2 schema is not ready', async () => {
+    const { db } = storageAccountingDb(
+      READY_STORAGE_ACCOUNTING_SCHEMA,
+      undefined,
+      {
+        project_columns: 0,
+        revision_pointer: 0,
+        document_objects_table: 0,
+        storage_assets_table: 0,
+        document_objects_index: 0,
+        storage_assets_index: 0,
+        pointer_indexes: 0
+      }
+    );
+    const response = await worker.fetch(
+      new Request('https://example.com/api/projects'),
+      {
+        ...env,
+        DB: db,
+        ARTIFACTS: readyProjectStorageBucket
+      }
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error:
+        'Cloud project storage is temporarily unavailable. Projects remain saved on this device.',
+      code: 'PROJECT_STORAGE_UNAVAILABLE'
+    });
+  });
+
   it('keeps sharing routes closed while personal sync is on', async () => {
     const created = await createProject('Still Private');
     const response = await worker.fetch(
@@ -1689,6 +1720,7 @@ describe('worker api routes', () => {
         new Request('https://example.com/api/projects?status=active'),
         {
           ...env,
+          ARTIFACTS: undefined,
           DB: {
             prepare() {
               throw failure;
