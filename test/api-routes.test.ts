@@ -707,6 +707,98 @@ describe('worker api routes', () => {
     expect(roomFetch).toHaveBeenCalledOnce();
   });
 
+  it('mints a native collaboration ticket only after project authorization', async () => {
+    const created = await createProject('Native live project');
+    const ticket = 'n'.repeat(43);
+    const roomFetch = vi.fn(async (request: Request) => {
+      expect(request.method).toBe('PUT');
+      expect(request.headers.get('x-openzcad-internal-ticket-request')).toBe(
+        'v1'
+      );
+      expect(request.headers.get('x-openzcad-user-id')).toBe('user_beta_dev');
+      expect(request.headers.get('x-openzcad-display-name')).toBe(
+        'Beta developer'
+      );
+      expect(request.headers.get('x-openzcad-project-role')).toBe('owner');
+      expect(new URL(request.url).searchParams.get('projectId')).toBe(
+        created.project.projectId
+      );
+      return Response.json(
+        { ticket, expiresAt: Date.now() + 30_000 },
+        { headers: { 'cache-control': 'no-store' } }
+      );
+    });
+    env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
+
+    const response = await worker.fetch(
+      post(
+        `/api/projects/${created.project.projectId}/collaboration/ticket`,
+        undefined
+      ),
+      env
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    const issued: unknown = await response.json();
+    expect(issued).toMatchObject({ ticket });
+    expect(
+      typeof issued === 'object' && issued !== null && 'expiresAt' in issued
+        ? typeof issued.expiresAt
+        : null
+    ).toBe('number');
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
+  it('forwards a ticketed native upgrade without browser credentials or forged identity', async () => {
+    const projectId = 'proj_native_ticket';
+    const ticket = 't'.repeat(43);
+    const roomFetch = vi.fn(async (request: Request) =>
+      Response.json({
+        projectId: new URL(request.url).searchParams.get('projectId'),
+        ticket: new URL(request.url).searchParams.get('ticket'),
+        authorization: request.headers.get('authorization'),
+        cookie: request.headers.get('cookie'),
+        userId: request.headers.get('x-openzcad-user-id'),
+        role: request.headers.get('x-openzcad-project-role')
+      })
+    );
+    const getByName = vi.fn(() => ({ fetch: roomFetch }));
+
+    const response = await worker.fetch(
+      new Request(
+        `https://zcad.esau.app/api/projects/${projectId}/collaboration?ticket=${ticket}`,
+        {
+          headers: {
+            origin: 'tauri://localhost',
+            upgrade: 'websocket',
+            authorization: `Bearer ${'b'.repeat(43)}`,
+            cookie: '__Host-openzcad_session=forged',
+            'x-openzcad-user-id': 'user_forged',
+            'x-openzcad-project-role': 'owner'
+          }
+        }
+      ),
+      {
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        PROJECT_ROOM: { getByName }
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      projectId,
+      ticket,
+      authorization: null,
+      cookie: null,
+      userId: null,
+      role: null
+    });
+    expect(getByName).toHaveBeenCalledWith(projectId);
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
   it('streams collaboration snapshots to the room without buffering them', async () => {
     const created = await createProject('Streamed collaboration project');
     const roomFetch = vi.fn(async (request: Request) => {
