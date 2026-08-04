@@ -94,6 +94,10 @@ import {
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  isFeatureRollbackSuppressed,
+  isFeatureSuppressed,
   projectOrganization,
   toProjectId,
   TRASH_RETENTION_DAYS
@@ -241,6 +245,7 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
 }
 import {
   chooseProjectDocument,
+  clearAllLastSyncedVersions,
   deleteLocalProject,
   listLocalProjectOrganizations,
   listLocalProjects,
@@ -258,6 +263,7 @@ import {
 } from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
 import { errorMessage } from './lib/errors';
+import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
@@ -648,6 +654,14 @@ export function App() {
   const extrudePreviewRef = useRef(extrudePreview);
   extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
+  /**
+   * A committed Move whose exact rebuild is still in flight. The viewer keeps
+   * the body posed at the applied transform until the recomputed meshes land,
+   * so the old geometry never flashes at its resting position.
+   */
+  const [moveCommitHold, setMoveCommitHold] = useState<MovePreview | null>(
+    null
+  );
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [modelingTargetBodyId, setModelingTargetBodyId] =
@@ -770,9 +784,17 @@ export function App() {
       const manager = managerRef.current;
       if (manager) {
         setDoc(manager.commitDerivedState(derived));
+        // Fresh meshes now reflect the document (worker results are dropped
+        // unless their version matches), so any held Move pose must release
+        // in this same batch — one render later would double-transform.
+        setMoveCommitHold(null);
       }
     },
-    onError: setStatus
+    onError: (message) => {
+      // No rebuild is coming; render the stored geometry truthfully.
+      setMoveCommitHold(null);
+      setStatus(message);
+    }
   });
   const exactGeometryReady = geometry.isReadyFor(doc);
   function requireExactGeometryReady(): boolean {
@@ -801,6 +823,13 @@ export function App() {
    */
   const [accountConflict, setAccountConflict] =
     useState<ProjectConflict | null>(null);
+  /**
+   * The save-to-account run currently on screen, one entry per project in
+   * attempt order. Deliberately not cleared when the loop finishes: the
+   * failures and their reasons are the whole point, and they stay up until
+   * the user dismisses them or starts another run.
+   */
+  const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
@@ -2070,6 +2099,7 @@ export function App() {
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
   }
 
@@ -2151,10 +2181,12 @@ export function App() {
     setExtrudePreview(null);
   }
 
-  function createFeature(command: AnyCommand): void {
+  function createFeature(command: AnyCommand): boolean {
     if (executeCommand(command)) {
       finishFeatureCreation();
+      return true;
     }
+    return false;
   }
 
   const extrudeSketchReturnRef = useRef<{
@@ -2506,7 +2538,7 @@ export function App() {
     );
     const round = (value: number) => Math.round(value * 1000) / 1000;
     setMovePreview(null);
-    createFeature(
+    const created = createFeature(
       commandFactories.transformBody({
         name: 'Move',
         targetBodyId: preview.bodyId as BodyId,
@@ -2522,6 +2554,11 @@ export function App() {
         }
       })
     );
+    if (created) {
+      // Hold the gizmo pose on screen until the exact rebuild replaces the
+      // meshes; cleared by onDerived in the same batch as the new geometry.
+      setMoveCommitHold(preview);
+    }
   }
 
   function clearSelection() {
@@ -2628,6 +2665,9 @@ export function App() {
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
     }
+    // The next session on this device may be a different account; it must not
+    // reconcile against this account's sync baselines.
+    void clearAllLastSyncedVersions();
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
@@ -2867,6 +2907,8 @@ export function App() {
       remoteVersionsRef.current.clear();
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
+      // The next sign-in on this device may be a different account.
+      void clearAllLastSyncedVersions();
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
@@ -3074,10 +3116,63 @@ export function App() {
     }
   }
 
+  function patchSyncEntry(projectId: string, patch: Partial<SyncEntry>) {
+    setSyncRun((current) =>
+      current
+        ? current.map((entry) =>
+            entry.projectId === projectId ? { ...entry, ...patch } : entry
+          )
+        : current
+    );
+  }
+
   /**
-   * Uploads every project this device holds alone. Failures are counted rather
-   * than thrown: one document the account refuses — too large, say — must not
-   * strand the rest, and the user needs to know how many made it either way.
+   * Runs one project's adoption and records the outcome on its sync entry.
+   * Returns whether the attempt should stop the run: an expired session fails
+   * every later project identically, so retrying N more times is just noise.
+   */
+  async function syncOneToAccount(candidate: {
+    projectId: string;
+    name: string;
+  }): Promise<{ adopted: boolean; failed: boolean; halt: boolean }> {
+    patchSyncEntry(candidate.projectId, {
+      state: 'syncing',
+      detail: undefined
+    });
+    try {
+      const outcome = await adoptLocalProject(candidate.projectId);
+      if (outcome === 'missing') {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail: 'No copy of this project exists on this device.'
+        });
+        return { adopted: false, failed: true, halt: false };
+      }
+      patchSyncEntry(candidate.projectId, {
+        state: 'synced',
+        detail:
+          outcome === 'already-adopted'
+            ? 'Was already in your account.'
+            : undefined
+      });
+      return { adopted: outcome === 'adopted', failed: false, halt: false };
+    } catch (error) {
+      const { detail, auth } = describeSyncFailure(error);
+      patchSyncEntry(candidate.projectId, { state: 'failed', detail });
+      if (auth) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      return { adopted: false, failed: true, halt: auth };
+    }
+  }
+
+  /**
+   * Uploads every project this device holds alone. Failures are recorded
+   * rather than thrown: one document the account refuses — too large, say —
+   * must not strand the rest. Progress is published per project through
+   * `syncRun` so the shelf can show each upload as it happens and keep the
+   * failures, with reasons, on screen afterwards.
    */
   async function handleSaveAllToAccount(candidates: ProjectSummary[]) {
     if (!session || candidates.length === 0) {
@@ -3085,24 +3180,64 @@ export function App() {
     }
     setBusy(true);
     setStatus(`Saving ${candidates.length} project(s) to your account…`);
+    setSyncRun(
+      candidates.map((candidate) => ({
+        projectId: candidate.projectId,
+        name: candidate.name,
+        state: 'pending'
+      }))
+    );
     try {
       await flushPendingLocalSave();
       let saved = 0;
-      const failures: string[] = [];
+      let failed = 0;
+      let halted = false;
       for (const candidate of candidates) {
-        try {
-          if ((await adoptLocalProject(candidate.projectId)) === 'adopted') {
-            saved += 1;
-          }
-        } catch {
-          failures.push(candidate.name);
+        if (halted) {
+          failed += 1;
+          patchSyncEntry(candidate.projectId, {
+            state: 'failed',
+            detail: 'Not attempted — sign in again first.'
+          });
+          continue;
         }
+        const result = await syncOneToAccount(candidate);
+        if (result.adopted) {
+          saved += 1;
+        }
+        if (result.failed) {
+          failed += 1;
+        }
+        halted = result.halt;
       }
+      // The names and reasons live in the sync panel; repeating them here
+      // would overflow the status line with the very names that failed.
       setStatus(
-        failures.length === 0
+        failed === 0
           ? `Saved ${saved} project(s) to your account.`
-          : `Saved ${saved} project(s) · ${failures.length} could not be saved: ${failures.join(', ')}.`
+          : `Saved ${saved} project(s) · ${failed} could not be saved. See the list above for why.`
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Re-attempts a single failed entry from the sync panel. */
+  async function handleRetrySync(projectId: string) {
+    if (!session) {
+      setStatus('Sign in to retry saving this project.');
+      return;
+    }
+    const entry = syncRun?.find(
+      (candidate) => candidate.projectId === projectId
+    );
+    if (!entry) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      await syncOneToAccount(entry);
     } finally {
       setBusy(false);
     }
@@ -3494,6 +3629,7 @@ export function App() {
     }
     setDoc(managerRef.current.undo());
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
     clearSelection();
     setStatus('Undo');
@@ -3505,6 +3641,7 @@ export function App() {
     }
     setDoc(managerRef.current.redo());
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
     clearSelection();
     setStatus('Redo');
@@ -5553,6 +5690,60 @@ export function App() {
     }
   }
 
+  function handleToggleFeatureSuppression(feature: FeatureNode) {
+    const resume = isFeatureSuppressed(feature);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        {
+          nodeId: feature.id,
+          metadata: resume
+            ? {
+                [FEATURE_SUPPRESSED_METADATA_KEY]: null,
+                [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
+              }
+            : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        },
+        resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+      )
+    );
+  }
+
+  function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
+    const markerIndex = features.findIndex(
+      (feature) => feature.featureId === featureId
+    );
+    if (markerIndex < 0) {
+      setStatus('The rollback feature is no longer in this document.');
+      return;
+    }
+    const commands = features.flatMap((feature, index) => {
+      const rollbackSuppressed = index > markerIndex;
+      if (isFeatureRollbackSuppressed(feature) === rollbackSuppressed) {
+        return [];
+      }
+      return [
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: feature.id,
+            metadata: {
+              [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: rollbackSuppressed
+                ? true
+                : null
+            }
+          },
+          rollbackSuppressed
+            ? `Roll back ${feature.name}`
+            : `Resume ${feature.name}`
+        )
+      ];
+    });
+    if (commands.length === 0) {
+      setStatus(`History is already rolled back after ${name}.`);
+      return;
+    }
+    executeTransaction(`Roll back after ${name}`, commands);
+  }
+
   function openContextMenu(
     x: number,
     y: number,
@@ -6104,6 +6295,9 @@ export function App() {
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
           }
+          syncRun={syncRun}
+          onRetrySync={(projectId) => void handleRetrySync(projectId)}
+          onDismissSyncRun={() => setSyncRun(null)}
           onMoveToShelf={(project, shelf) =>
             void handleMoveProjectToShelf(project, shelf)
           }
@@ -6573,6 +6767,8 @@ export function App() {
           selectedBodyIds={selectedBodyIds}
           onToggleBodyVisibility={toggleBodyVisibility}
           onFeatureContextMenu={handleFeatureContextMenu}
+          onToggleFeatureSuppression={handleToggleFeatureSuppression}
+          onRollbackAfterFeature={handleRollbackAfterFeature}
           onSetParameter={(name, expression) =>
             executeCommand(commandFactories.setParameter({ name, expression }))
           }
@@ -6610,6 +6806,7 @@ export function App() {
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
+            moveCommitHold={moveCommitHold}
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
