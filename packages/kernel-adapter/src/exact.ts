@@ -25,6 +25,7 @@ import {
   FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
   featureColor,
+  isFeatureSuppressed,
   nowIso,
   type BodyId,
   type BodyRepresentation,
@@ -3908,6 +3909,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     };
 
     for (const feature of listFeaturesInOrder(document)) {
+      if (isFeatureSuppressed(feature)) {
+        result.warnings.push(
+          `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`
+        );
+        continue;
+      }
       try {
         switch (feature.data.featureKind) {
           case 'sketch': {
