@@ -477,6 +477,52 @@ interface DimensionLabelBinding {
   angleDeg?: number;
 }
 
+/**
+ * Keeps name callouts readable when their anchor sits at the viewport's
+ * edge. CSS2DRenderer centres each label on its projected point and rewrites
+ * the transform every frame, so the correction rides on the margins instead:
+ * the label's unmargined box is recovered from the current margin, and a new
+ * margin is computed from scratch — no feedback across frames. Dimension and
+ * drag-value callouts are excluded; they have their own placement scheme.
+ */
+function clampNameCallouts(container: HTMLElement) {
+  const labels = container.querySelectorAll<HTMLElement>(
+    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+  );
+  if (labels.length === 0) {
+    return;
+  }
+  const bounds = container.getBoundingClientRect();
+  const pad = 4;
+  for (const label of labels) {
+    const currentLeft = parseFloat(label.style.marginLeft) || 0;
+    const currentTop = parseFloat(label.style.marginTop) || 0;
+    const rect = label.getBoundingClientRect();
+    const baseLeft = rect.left - currentLeft;
+    const baseRight = rect.right - currentLeft;
+    const baseTop = rect.top - currentTop;
+    const baseBottom = rect.bottom - currentTop;
+    let marginLeft = 0;
+    if (baseLeft < bounds.left + pad) {
+      marginLeft = bounds.left + pad - baseLeft;
+    } else if (baseRight > bounds.right - pad) {
+      marginLeft = bounds.right - pad - baseRight;
+    }
+    let marginTop = 0;
+    if (baseTop < bounds.top + pad) {
+      marginTop = bounds.top + pad - baseTop;
+    } else if (baseBottom > bounds.bottom - pad) {
+      marginTop = bounds.bottom - pad - baseBottom;
+    }
+    if (marginLeft !== currentLeft) {
+      label.style.marginLeft = marginLeft ? `${marginLeft}px` : '';
+    }
+    if (marginTop !== currentTop) {
+      label.style.marginTop = marginTop ? `${marginTop}px` : '';
+    }
+  }
+}
+
 function updateDimensionLabels(
   context: SceneContext,
   viewportWidth: number,
@@ -3524,6 +3570,7 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
+      clampNameCallouts(labelRenderer.domElement);
 
       // Push camera orientation to the view widget only when it changes.
       const orientationCamera = context.activeCamera;
