@@ -43,6 +43,32 @@ export function sectorPosition(
 }
 
 /**
+ * Moves a slot out of the hub pill's horizontal band.
+ *
+ * The pill grows sideways with its label, so a slot sharing its horizontal
+ * line is always one long name away from being collided with or crowded.
+ * Rather than racing the pill outward, any slot whose disc would enter the
+ * band (`halfHeight` already includes the slot's radius and a margin) keeps
+ * its x and settles just above or below the band, on whichever side it was
+ * already leaning. Slots dead on the horizontal all go above, so the pair
+ * of them frames the pill symmetrically instead of one dangling on each
+ * side. The flick never reads these positions; it commits by direction
+ * alone, so the sector under a practised gesture is unchanged.
+ */
+export function slotPositionClearOfHub(
+  at: { x: number; y: number },
+  halfHeight: number
+): { x: number; y: number } {
+  if (Math.abs(at.y) >= halfHeight) {
+    return at;
+  }
+  // sectorPosition's sin() leaves ±1e-16 noise on horizontal slots; treat
+  // anything sub-pixel as "no lean" so mirrored slots resolve identically.
+  const lean = Math.abs(at.y) < 1 ? 0 : Math.sign(at.y);
+  return { x: at.x, y: (lean !== 0 ? lean : -1) * halfHeight };
+}
+
+/**
  * The sector a drag is aiming at, or null while it is still in the dead zone.
  *
  * `dx`/`dy` are in screen pixels, so `dy` grows downward.
@@ -81,6 +107,8 @@ export function clampMenuOrigin(
   reach: number
 ): { x: number; y: number } {
   const clamp = (value: number, extent: number) =>
-    extent < reach * 2 ? extent / 2 : Math.min(Math.max(value, reach), extent - reach);
+    extent < reach * 2
+      ? extent / 2
+      : Math.min(Math.max(value, reach), extent - reach);
   return { x: clamp(x, viewportWidth), y: clamp(y, viewportHeight) };
 }
