@@ -51,8 +51,11 @@ jobs:
         run: |
           APP='apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/OpenZCAD.app'
           BIN="$APP/Contents/MacOS/openzcad-desktop"
+          ICON="$APP/Contents/Resources/icon.icns"
           DMG=(apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/OpenZCAD_*_aarch64.dmg)
           test "$(lipo -archs "$BIN")" = 'arm64'
+          test "$(plutil -extract CFBundleIconFile raw "$APP/Contents/Info.plist")" = 'icon.icns'
+          cmp "$ICON" apps/desktop/src-tauri/icons/icon.icns
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -d --entitlements - "$APP"
           test "${#DMG[@]}" -eq 1
