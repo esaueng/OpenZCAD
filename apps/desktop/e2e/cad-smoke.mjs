@@ -129,6 +129,36 @@ function vectorDistance(left, right) {
   return Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2]);
 }
 
+async function readDisplayState(sessionId) {
+  return execute(
+    sessionId,
+    `var canvas = document.querySelector('.viewer-host canvas');
+    var rect = canvas.getBoundingClientRect();
+    return {
+      devicePixelRatio: window.devicePixelRatio,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      cssWidth: rect.width,
+      cssHeight: rect.height,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height
+    };`
+  );
+}
+
+async function setE2EPixelRatio(sessionId, value) {
+  await execute(
+    sessionId,
+    `var canvas = document.querySelector('.viewer-host canvas');
+    canvas.dispatchEvent(new CustomEvent('openzcad:e2e-pixel-ratio', {
+      detail: { value: arguments[0] }
+    }));
+    return true;`,
+    [value]
+  );
+  return readDisplayState(sessionId);
+}
+
 async function readCameraPose(sessionId) {
   return execute(
     sessionId,
@@ -291,34 +321,46 @@ try {
     /Mounting Bracket/
   );
 
-  const display = await execute(
-    sessionId,
-    `var canvas = document.querySelector('.viewer-host canvas');
-    var rect = canvas.getBoundingClientRect();
-    return {
-      devicePixelRatio: window.devicePixelRatio,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      cssWidth: rect.width,
-      cssHeight: rect.height,
-      backingWidth: canvas.width,
-      backingHeight: canvas.height
-    };`
+  const nativeDisplay = await readDisplayState(sessionId);
+  const nativeBackingScale = nativeDisplay.backingWidth / nativeDisplay.cssWidth;
+  const expectedNativeScale = Math.min(nativeDisplay.devicePixelRatio, 2);
+  assert.ok(
+    Math.abs(nativeBackingScale - expectedNativeScale) < 0.02,
+    'The WebGL backing width does not match the WKWebView device scale.'
   );
   assert.ok(
-    display.devicePixelRatio > 1,
-    `The WKWebView is not using a high-DPI backing scale: ${display.devicePixelRatio}`
+    Math.abs(
+      nativeDisplay.backingHeight / nativeDisplay.cssHeight -
+        expectedNativeScale
+    ) < 0.02,
+    'The WebGL backing height does not match the WKWebView device scale.'
   );
-  const expectedBackingScale = Math.min(display.devicePixelRatio, 2);
+
+  // Let a Retina workstation exercise the hosted-runner fallback explicitly.
+  if (process.env.OPENZCAD_E2E_FORCE_1X === '1') {
+    await setE2EPixelRatio(sessionId, 1);
+  }
+
+  // Some hosted macOS runners expose only a 1x virtual display. Keep the
+  // native scale assertion, then raise only the E2E renderer backing store so
+  // CSS-coordinate hit testing is still exercised against a 2x WebGL canvas.
+  let display = await readDisplayState(sessionId);
+  if (display.backingWidth / display.cssWidth < 1.98) {
+    await setE2EPixelRatio(sessionId, 2);
+    await waitForScript(
+      sessionId,
+      'The 2x WebGL backing scale',
+      `var canvas = document.querySelector('.viewer-host canvas');
+      var rect = canvas.getBoundingClientRect();
+      return Math.abs(canvas.width / rect.width - 2) < 0.02 &&
+        Math.abs(canvas.height / rect.height - 2) < 0.02;`
+    );
+    display = await readDisplayState(sessionId);
+  }
   assert.ok(
-    Math.abs(display.backingWidth / display.cssWidth - expectedBackingScale) <
-      0.02,
-    'The WebGL backing width does not match its Retina CSS coordinate scale.'
-  );
-  assert.ok(
-    Math.abs(display.backingHeight / display.cssHeight - expectedBackingScale) <
-      0.02,
-    'The WebGL backing height does not match its Retina CSS coordinate scale.'
+    Math.abs(display.backingWidth / display.cssWidth - 2) < 0.02 &&
+      Math.abs(display.backingHeight / display.cssHeight - 2) < 0.02,
+    'The smoke test did not establish a 2x CSS-to-backing-pixel scale.'
   );
 
   // The embedded driver currently translates W3C pointer actions into
@@ -601,16 +643,16 @@ try {
     Math.abs(
       screenshot.width - display.viewportWidth * display.devicePixelRatio
     ) <= 2,
-    'The native screenshot width does not preserve the WKWebView Retina scale.'
+    'The native screenshot width does not preserve the WKWebView device scale.'
   );
   assert.ok(
     Math.abs(
       screenshot.height - display.viewportHeight * display.devicePixelRatio
     ) <= 2,
-    'The native screenshot height does not preserve the WKWebView Retina scale.'
+    'The native screenshot height does not preserve the WKWebView device scale.'
   );
   console.log(
-    'WKWebView CAD smoke passed: exact kernel, Retina selection, capture-requested box selection, orbit, pan, and trackpad zoom.'
+    'WKWebView CAD smoke passed: exact kernel, 2x selection, capture-requested box selection, orbit, pan, and trackpad zoom.'
   );
 } finally {
   if (sessionId) {
