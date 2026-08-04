@@ -12,43 +12,50 @@ the cookie into JavaScript, storing it in localStorage, weakening SameSite/CORS,
 or embedding a production URL would all cross the security boundary. None of
 those shortcuts is implemented.
 
-## Required desktop design
+## Implemented desktop design
 
 1. Rust generates a high-entropy state value, PKCE verifier/challenge, and a
    short-lived login attempt identifier.
 2. The app opens an approved HTTPS OpenZCAD login URL in the system browser.
 3. The hosted page completes the existing Turnstile and email-code flow.
-4. The Worker binds a one-time authorization code to the attempt, state,
-   challenge, account, expiry, and desktop client identifier.
-5. The browser redirects to the registered
-   `openzcad://auth/callback` application URL.
-6. The native layer rejects callbacks with the wrong scheme, host, path, state,
-   shape, size, expiry, or already-consumed code.
-7. Rust exchanges the code and PKCE verifier directly with the Worker over TLS.
-8. The Worker returns a short-lived access token and rotatable refresh token.
-9. Rust stores only the refresh credential in macOS Keychain. Access tokens stay
+4. The signed-in browser explicitly approves the one-time attempt. The Worker
+   binds it to the state hash, PKCE challenge, account, expiry, and fixed macOS
+   client identifier.
+5. Rust polls the exchange route over TLS. Until browser approval, the route
+   returns only `pending`; no account identity or credential is exposed.
+6. Rust presents the state and PKCE verifier. The Worker consumes the attempt
+   once and returns a short-lived access token plus a rotatable refresh token.
+7. Rust stores only the refresh credential in macOS Keychain. Access tokens stay
    in memory and are never exposed through localStorage.
-10. Desktop API and WebSocket requests use scoped bearer authorization. Logout
-    revokes the server session, deletes the Keychain item, clears in-memory
-    access, and leaves unsaved local documents intact.
+8. Desktop HTTP API requests pass through a fixed-origin Rust proxy that adds
+   the scoped bearer credential outside the WebView. Logout
+   revokes the server session, deletes the Keychain item, clears in-memory
+   access, and leaves unsaved local documents intact.
 
 No client secret belongs in the app. Callback input is untrusted. Tokens must be
 audience-bound, revocable, rate-limited, and excluded from URLs, logs, crash
 reports, frontend bundles, and GitHub Actions output.
 
-## Backend work required
+## Implemented backend boundary
 
-- Add one-time desktop authorization attempt and exchange records/routes.
-- Add narrowly scoped CORS for the desktop transport where WebView fetch is
-  used; prefer native Rust HTTP for token exchange and refresh.
-- Allow authenticated API and collaboration requests to resolve the new bearer
-  session without weakening existing cookie authentication.
-- Add revocation, refresh rotation/reuse detection, expiry, and account-device
-  inventory.
-- Register and validate the custom URL scheme and single-instance behavior.
-- Add Keychain, deep-link, system-browser, and redacted logging integrations to
-  the Tauri host with least-privilege capabilities.
+- Migration `0012_desktop_auth.sql` adds attempt, access-token, and rotating
+  refresh-token records. Only SHA-256 token/state hashes are stored.
+- `/api/auth/desktop/config` fails closed unless the migration and
+  `DESKTOP_AUTH_ENABLED` rollout gate are both present.
+- Start, approve, exchange, refresh, and logout routes enforce the fixed
+  `openzcad-macos` client, ten-minute attempts, PKCE, one-time consumption,
+  refresh reuse revocation, expiry, and an IP start-rate limit.
+- Existing authenticated HTTP routes accept the opaque desktop bearer without
+  weakening the hosted cookie flow or adding cross-origin browser access.
+- The native proxy is pinned to `https://zcad.esau.app`; it validates every API
+  path and system-browser handoff before making a request or opening a URL.
 
-This work changes the hosted authentication schema and API contract. It requires
-its own security review, migration plan, beta deployment approval, and end-to-end
-tests before cloud features can be declared working in the desktop app.
+## Remaining release gates
+
+- Apply migration 0012 and deploy the gated Worker only with explicit beta
+  rollout approval; source and local tests do not prove the hosted environment.
+- Add a ticketed native collaboration WebSocket handshake. Browser WebSockets
+  cannot attach the in-memory bearer header, so desktop currently uses HTTP
+  project synchronization and keeps live rooms disabled.
+- Validate Keychain save/relaunch/rotation/logout and a real email-code round
+  trip on macOS 14, 15, and the current release host.

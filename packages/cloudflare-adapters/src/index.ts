@@ -123,6 +123,8 @@ export interface CloudflareEnv {
   AUTH_OTP_PEPPER?: string;
   AUTH_EMAIL_FROM?: string;
   AUTH_SESSION_DAYS?: string;
+  /** Fail-closed rollout gate for the native PKCE/device authorization flow. */
+  DESKTOP_AUTH_ENABLED?: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
   EMAIL?: SendEmail;
@@ -169,6 +171,7 @@ export interface CloudflareEnv {
 }
 
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
+  'DESKTOP_AUTH_ENABLED',
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',
   'PROJECT_PERSONAL_SYNC_ENABLED',
