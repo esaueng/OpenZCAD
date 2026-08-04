@@ -205,6 +205,11 @@
   background: #ffffff;
 }
 
+.handle-value-chip[data-variant='dimension'] small {
+  font-size: 0.78em;
+  vertical-align: 0.08em;
+}
+
 /* "Radius" name tag sitting flush against the dimension value pill. */
 .handle-label-chip {
   position: absolute;

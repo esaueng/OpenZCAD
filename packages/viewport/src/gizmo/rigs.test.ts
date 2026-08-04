@@ -132,7 +132,7 @@ describe('the cylinder-radius rig', () => {
     expect(rig.origin).toMatchObject({ x: 14, y: 0, z: 8 });
   });
 
-  it('carries a diameter dimension line with two arrowheads, no face ghost', () => {
+  it('carries a radius dimension line with two arrowheads, no face ghost', () => {
     const rig = buildCylinderRadiusHandle({
       origin: { x: 0, y: 5, z: 0 },
       direction: { x: 0, y: 1, z: 0 },
