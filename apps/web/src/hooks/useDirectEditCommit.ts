@@ -8,8 +8,13 @@ export interface DirectEditCommitOptions {
   manager(): CommandManager | null;
   /** Rebuilds a candidate document against the exact kernel. */
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
-  /** Applies the command for real. False means it was refused. */
-  commit(command: AnyCommand): boolean;
+  /**
+   * Applies the command for real. False means it was refused. `derived` is
+   * the exact rebuild the validation already produced for this command;
+   * attaching it at commit time renders the new geometry immediately instead
+   * of flashing the stale meshes until the broadcast rebuild echoes back.
+   */
+  commit(command: AnyCommand, derived: ProjectDocument['derived']): boolean;
   onValidationStart(value: number): void;
   onValidationFailed(message: string, value: number): void;
   /** The edit landed; the target body is the new selection. */
@@ -87,7 +92,7 @@ export function useDirectEditCommit(
         if (rejection) {
           throw new Error(rejection);
         }
-        if (!host.commit(command)) {
+        if (!host.commit(command, derived)) {
           throw new Error('The validated edit could not be committed.');
         }
         host.onCommitted(targetBodyId);
