@@ -213,6 +213,28 @@ export interface BaseNode {
   metadata?: Record<string, string | number | boolean>;
 }
 
+/** Replay-compatible metadata keys used by feature suppression. */
+export const FEATURE_SUPPRESSED_METADATA_KEY = 'suppressed' as const;
+export const FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY =
+  'rollbackSuppressed' as const;
+
+export function isFeatureManuallySuppressed(
+  node: Pick<BaseNode, 'metadata'>
+): boolean {
+  return node.metadata?.[FEATURE_SUPPRESSED_METADATA_KEY] === true;
+}
+
+export function isFeatureRollbackSuppressed(
+  node: Pick<BaseNode, 'metadata'>
+): boolean {
+  return node.metadata?.[FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY] === true;
+}
+
+/** Effective build state: either an individual toggle or the rollback marker. */
+export function isFeatureSuppressed(node: Pick<BaseNode, 'metadata'>): boolean {
+  return isFeatureManuallySuppressed(node) || isFeatureRollbackSuppressed(node);
+}
+
 export interface ProjectNode extends BaseNode {
   kind: 'project';
   projectId: ProjectId;

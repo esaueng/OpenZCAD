@@ -94,6 +94,10 @@ import {
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  isFeatureRollbackSuppressed,
+  isFeatureSuppressed,
   projectOrganization,
   toProjectId,
   TRASH_RETENTION_DAYS
@@ -5553,6 +5557,60 @@ export function App() {
     }
   }
 
+  function handleToggleFeatureSuppression(feature: FeatureNode) {
+    const resume = isFeatureSuppressed(feature);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        {
+          nodeId: feature.id,
+          metadata: resume
+            ? {
+                [FEATURE_SUPPRESSED_METADATA_KEY]: null,
+                [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
+              }
+            : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        },
+        resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+      )
+    );
+  }
+
+  function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
+    const markerIndex = features.findIndex(
+      (feature) => feature.featureId === featureId
+    );
+    if (markerIndex < 0) {
+      setStatus('The rollback feature is no longer in this document.');
+      return;
+    }
+    const commands = features.flatMap((feature, index) => {
+      const rollbackSuppressed = index > markerIndex;
+      if (isFeatureRollbackSuppressed(feature) === rollbackSuppressed) {
+        return [];
+      }
+      return [
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: feature.id,
+            metadata: {
+              [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: rollbackSuppressed
+                ? true
+                : null
+            }
+          },
+          rollbackSuppressed
+            ? `Roll back ${feature.name}`
+            : `Resume ${feature.name}`
+        )
+      ];
+    });
+    if (commands.length === 0) {
+      setStatus(`History is already rolled back after ${name}.`);
+      return;
+    }
+    executeTransaction(`Roll back after ${name}`, commands);
+  }
+
   function openContextMenu(
     x: number,
     y: number,
@@ -6573,6 +6631,8 @@ export function App() {
           selectedBodyIds={selectedBodyIds}
           onToggleBodyVisibility={toggleBodyVisibility}
           onFeatureContextMenu={handleFeatureContextMenu}
+          onToggleFeatureSuppression={handleToggleFeatureSuppression}
+          onRollbackAfterFeature={handleRollbackAfterFeature}
           onSetParameter={(name, expression) =>
             executeCommand(commandFactories.setParameter({ name, expression }))
           }

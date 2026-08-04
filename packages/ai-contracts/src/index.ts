@@ -1,4 +1,5 @@
 import { listFeaturesInOrder, listParameters } from '@openzcad/document-core';
+import { isFeatureSuppressed } from '@openzcad/shared';
 import type {
   SketchObjectData,
   AxisId,
@@ -369,6 +370,7 @@ export interface CadDocumentDigest {
     name: string;
     featureKind: string;
     bodyId: string | null;
+    suppressed: boolean;
     data: unknown;
   }>;
   /**
@@ -758,6 +760,7 @@ export function createCadDocumentDigest(
       name: feature.name,
       featureKind: feature.featureKind,
       bodyId: feature.bodyId ?? null,
+      suppressed: isFeatureSuppressed(feature),
       data: compactFeatureData(feature.data)
     })),
     // Meshes are deliberately dropped here: the model needs each body's
