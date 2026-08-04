@@ -113,10 +113,14 @@ import type {
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
 import {
+  cancelDesktopSignIn,
+  isDesktopApp,
   listenForDesktopMenu,
   openDesktopCadFile,
+  pollDesktopSignIn,
   protectDesktopClose,
   saveCadTextFile,
+  startDesktopSignIn,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
 import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
@@ -358,6 +362,16 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'wireframe'
 ];
 
+function desktopAuthorizationAttemptFromLocation(): string | null {
+  if (typeof globalThis.location === 'undefined' || isDesktopApp()) {
+    return null;
+  }
+  const attempt = new URLSearchParams(globalThis.location.search).get(
+    'desktopAuth'
+  );
+  return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
+}
+
 /** Start-screen summary of a document held on this device. */
 function summarizeLocalDocument(
   document: ProjectDocument,
@@ -563,6 +577,9 @@ function resolvedSketchPlaneBasis(
 }
 
 export function App() {
+  const [desktopAuthorizationAttempt] = useState(
+    desktopAuthorizationAttemptFromLocation
+  );
   /**
    * What was on this device at mount, read once. The account fetch resolves
    * long after the settings-persistence effect has already written to storage,
@@ -646,7 +663,9 @@ export function App() {
     },
     []
   );
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(
+    desktopAuthorizationAttempt !== null
+  );
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
     enabled: settingsOpen,
@@ -655,8 +674,12 @@ export function App() {
   const [sharingOpen, setSharingOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
-    'Changes save on this device immediately.'
+    desktopAuthorizationAttempt
+      ? 'Sign in, then approve OpenZCAD for macOS.'
+      : 'Changes save on this device immediately.'
   );
+  const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
+    useState(false);
   const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
   const cloudProjectAutosaveRef = useRef<CloudProjectAutosave | null>(null);
   const cloudSettingsSessionUserRef = useRef<string | null>(null);
@@ -1015,8 +1038,11 @@ export function App() {
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
     // account cookies to a collaboration room after this exact project has
-    // been resolved as a cloud-backed document.
+    // been resolved as a cloud-backed document. Native WebSockets cannot add
+    // the in-memory bearer header, so desktop stays on the HTTP sync path until
+    // a ticketed socket handshake is implemented.
     session:
+      !isDesktopApp() &&
       cloudAvailable &&
       (collaborationRollout.sharingEnabled ||
         collaborationRollout.personalSyncEnabled)
@@ -2993,6 +3019,53 @@ export function App() {
     }
   }
 
+  async function activateCloudSession(activeSession: AuthSession) {
+    const [remoteSettings, listed] = await Promise.all([
+      api.getSettings(),
+      loadProjectSummaries(true)
+    ]);
+    sessionRef.current = activeSession;
+    setSession(activeSession);
+    accountSettingsRef.current = remoteSettings;
+    setAccountSettings(remoteSettings);
+    if (
+      remoteSettings.synced &&
+      shouldAdoptAccountSettings({
+        settings: appSettingsRef.current,
+        syncedRevision: syncedRevisionRef.current
+      })
+    ) {
+      appSettingsRef.current = remoteSettings.settings;
+      setAppSettings(remoteSettings.settings);
+      cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
+        remoteSettings.settings,
+        remoteSettings
+      );
+    } else {
+      cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
+    }
+    setProjects(listed.projects);
+    setCloudProjectIds(listed.cloudProjectIds);
+    const activeProjectIsCloud = Boolean(
+      doc && remoteVersionsRef.current.has(doc.projectId)
+    );
+    setCloudAvailable(activeProjectIsCloud);
+    if (doc) {
+      setSaveState(activeProjectIsCloud ? 'synced' : 'local');
+    }
+    // Signing in does not upload anything on its own. Projects made while
+    // signed out are still the user's to keep on one device if they want, so
+    // the count is an offer the start screen makes, not an action taken here.
+    const localOnly = listed.projects.filter(
+      (project) => !listed.cloudProjectIds.has(project.projectId)
+    ).length;
+    setSettingsMessage(
+      localOnly === 0
+        ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+        : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
+    );
+  }
+
   async function handleVerifyLoginCode(challengeId: string, code: string) {
     setSettingsBusy(true);
     setSettingsMessage('Verifying sign-in code…');
@@ -3001,52 +3074,62 @@ export function App() {
         challengeId,
         code
       });
-      const [remoteSettings, listed] = await Promise.all([
-        api.getSettings(),
-        loadProjectSummaries(true)
-      ]);
-      sessionRef.current = activeSession;
-      setSession(activeSession);
-      accountSettingsRef.current = remoteSettings;
-      setAccountSettings(remoteSettings);
-      if (
-        remoteSettings.synced &&
-        shouldAdoptAccountSettings({
-          settings: appSettingsRef.current,
-          syncedRevision: syncedRevisionRef.current
-        })
-      ) {
-        appSettingsRef.current = remoteSettings.settings;
-        setAppSettings(remoteSettings.settings);
-        cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
-          remoteSettings.settings,
-          remoteSettings
-        );
-      } else {
-        cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current, 0);
-      }
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
-      const activeProjectIsCloud = Boolean(
-        doc && remoteVersionsRef.current.has(doc.projectId)
-      );
-      setCloudAvailable(activeProjectIsCloud);
-      if (doc) {
-        setSaveState(activeProjectIsCloud ? 'synced' : 'local');
-      }
-      // Signing in does not upload anything on its own. Projects made while
-      // signed out are still the user's to keep on one device if they want, so
-      // the count is an offer the start screen makes, not an action taken here.
-      const localOnly = listed.projects.filter(
-        (project) => !listed.cloudProjectIds.has(project.projectId)
-      ).length;
-      setSettingsMessage(
-        localOnly === 0
-          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
-          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
-      );
+      await activateCloudSession(activeSession);
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-in failed.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleStartDesktopLogin() {
+    setSettingsBusy(true);
+    setSettingsMessage('Opening secure sign-in in your browser…');
+    let authorized = false;
+    try {
+      const started = await startDesktopSignIn();
+      const deadline = Date.now() + started.expiresInSeconds * 1_000;
+      setSettingsMessage(
+        'Finish the email sign-in in your browser. OpenZCAD will reconnect automatically.'
+      );
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
+        const result = await pollDesktopSignIn();
+        if (result.status === 'authorized' && result.session) {
+          await activateCloudSession(result.session as AuthSession);
+          authorized = true;
+          return;
+        }
+      }
+      throw new Error('The desktop sign-in attempt expired. Start again.');
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Desktop sign-in failed.'));
+      throw error;
+    } finally {
+      if (!authorized) {
+        await cancelDesktopSignIn().catch(() => undefined);
+      }
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleApproveDesktopLogin() {
+    if (!desktopAuthorizationAttempt) {
+      throw new Error('The desktop sign-in attempt is missing.');
+    }
+    setSettingsBusy(true);
+    setSettingsMessage('Connecting OpenZCAD for macOS…');
+    try {
+      await api.approveDesktopLogin(desktopAuthorizationAttempt);
+      setDesktopAuthorizationApproved(true);
+      setSettingsMessage(
+        'OpenZCAD for macOS is connected. You can return to the app.'
+      );
+    } catch (error) {
+      setSettingsMessage(
+        errorMessage(error, 'Could not connect OpenZCAD for macOS.')
+      );
       throw error;
     } finally {
       setSettingsBusy(false);
@@ -6481,6 +6564,9 @@ export function App() {
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
+        initialSection={desktopAuthorizationAttempt ? 'account' : 'general'}
+        desktopAuthorizationAttempt={desktopAuthorizationAttempt}
+        desktopAuthorizationApproved={desktopAuthorizationApproved}
         onChange={handleAppSettingsChange}
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
@@ -6488,6 +6574,8 @@ export function App() {
         onRequestLoginCode={handleRequestLoginCode}
         onVerifyLoginCode={handleVerifyLoginCode}
         onRefreshAuthConfig={handleRefreshAuthConfig}
+        onStartDesktopLogin={handleStartDesktopLogin}
+        onApproveDesktopLogin={handleApproveDesktopLogin}
         onLogout={handleLogout}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}

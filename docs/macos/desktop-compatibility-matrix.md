@@ -7,25 +7,26 @@ The automated native smoke test starts the debug Tauri binary, connects to its
 embedded WebDriver endpoint, opens or restores the Mounting Bracket demo, checks
 the real WKWebView DOM, and captures a full-resolution screenshot.
 
-| Area                          | State                    | Evidence / remaining gate                                                                                       |
-| ----------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| Bundled startup               | Verified                 | App launches without the Vite server or hosted website.                                                         |
-| WKWebView 3D rendering        | Verified                 | Shaded Mounting Bracket, edges, axes, and grid rendered in the native window.                                   |
-| Exact kernel                  | Verified                 | Workspace reported `Exact B-rep`, one body, revision 32, and zero warnings.                                     |
-| Retina scaling                | Verified                 | Native capture was 3024 x 1898 with a correctly scaled viewport and controls.                                   |
-| Worker/WASM loading           | Verified                 | Bundled BrepKit completed the demo evaluation in WKWebView.                                                     |
-| Persisted desktop state       | Verified                 | Relaunch restored the previous workspace and window state.                                                      |
-| Native menus                  | Verified                 | macOS application, File, Edit, View, and Window menus were present.                                             |
-| STEP/STL picker/export        | Unit/build verified      | Native commands validate extensions and a 50 MB boundary; interactive cancel/write paths still need release QA. |
-| Command shortcuts             | Inherited                | The web app already treats Control and Command as equivalent; native menu events route undo/redo/settings.      |
-| Selection/hit testing         | Automated at 2x backing scale  | Native smoke selects exact geometry in CSS coordinates at 2x scale and box-selects after a capture request.     |
-| Orbit/pan/trackpad zoom       | Automated; hardware QA remains | Smoke covers Shift orbit, secondary pan, and pixel-delta zoom; minimum-OS physical trackpad QA remains.         |
-| Right-click/context menus     | Not yet release-verified | Test native and application menu interaction together.                                                          |
-| STEP/STL round trip           | Not yet release-verified | Validate exported geometry with the existing parity/corpus rules.                                               |
-| Large models/long sessions    | Not yet release-verified | Measure memory growth, worker recovery, and the current 50 MB IPC import ceiling.                               |
-| Full screen/multiple displays | Not yet release-verified | Exercise monitor changes, sleep/wake, and window restoration.                                                   |
-| macOS 14 and 15               | Not yet tested           | Required before declaring the configured minimum supported.                                                     |
-| Cloud sync/collaboration      | Blocked                  | Requires the dedicated desktop authentication and API transport.                                                |
+| Area                          | State                          | Evidence / remaining gate                                                                                                                                         |
+| ----------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bundled startup               | Verified                       | App launches without the Vite server or hosted website.                                                                                                           |
+| WKWebView 3D rendering        | Verified                       | Shaded Mounting Bracket, edges, axes, and grid rendered in the native window.                                                                                     |
+| Exact kernel                  | Verified                       | Workspace reported `Exact B-rep`, one body, revision 32, and zero warnings.                                                                                       |
+| Retina scaling                | Verified                       | Native capture was 3024 x 1898 with a correctly scaled viewport and controls.                                                                                     |
+| Worker/WASM loading           | Verified                       | Bundled BrepKit completed the demo evaluation in WKWebView.                                                                                                       |
+| Persisted desktop state       | Verified                       | Relaunch restored the previous workspace and window state.                                                                                                        |
+| Native menus                  | Verified                       | macOS application, File, Edit, View, and Window menus were present.                                                                                               |
+| STEP/STL picker/export        | Unit/build verified            | Native commands validate extensions and a 50 MB boundary; interactive cancel/write paths still need release QA.                                                   |
+| Command shortcuts             | Inherited                      | The web app already treats Control and Command as equivalent; native menu events route undo/redo/settings.                                                        |
+| Selection/hit testing         | Automated at 2x backing scale  | Native smoke selects exact geometry in CSS coordinates at 2x scale and box-selects after a capture request.                                                       |
+| Orbit/pan/trackpad zoom       | Automated; hardware QA remains | Smoke covers Shift orbit, secondary pan, and pixel-delta zoom; minimum-OS physical trackpad QA remains.                                                           |
+| Right-click/context menus     | Not yet release-verified       | Test native and application menu interaction together.                                                                                                            |
+| STEP/STL round trip           | Not yet release-verified       | Validate exported geometry with the existing parity/corpus rules.                                                                                                 |
+| Large models/long sessions    | Not yet release-verified       | Measure memory growth, worker recovery, and the current 50 MB IPC import ceiling.                                                                                 |
+| Full screen/multiple displays | Not yet release-verified       | Exercise monitor changes, sleep/wake, and window restoration.                                                                                                     |
+| macOS 14 and 15               | Not yet tested                 | Required before declaring the configured minimum supported.                                                                                                       |
+| Cloud sign-in/HTTP sync       | Unit/build verified            | PKCE browser approval, bearer refresh/reuse revocation, native proxy, and Keychain integration are implemented; hosted migration/deploy and real-email QA remain. |
+| Live collaboration WebSocket  | Blocked                        | Requires a ticketed socket handshake because browser WebSockets cannot attach the native in-memory bearer.                                                        |
 
 Run the native gate with:
 

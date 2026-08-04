@@ -38,11 +38,17 @@ import {
 } from './assistantRateLimit';
 import {
   authenticateRequest,
+  approveDesktopAuthorization,
   AuthFlowError,
   AuthenticationError,
+  destroyDesktopAuthorization,
   destroyEmailSession,
+  exchangeDesktopAuthorization,
   getAuthConfig,
+  getDesktopAuthConfig,
   identifyAssistantIdentity,
+  refreshDesktopAuthorization,
+  startDesktopAuthorization,
   startEmailLogin,
   verifyEmailLogin
 } from './auth';
@@ -224,6 +230,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(getAuthConfig(env));
   }
 
+  if (request.method === 'GET' && pathname === '/api/auth/desktop/config') {
+    return json(await getDesktopAuthConfig(env));
+  }
+
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
   const sharingMatch = PROJECT_SHARING_ROUTE.exec(pathname);
   const invitationsMatch = PROJECT_INVITATIONS_ROUTE.exec(pathname);
@@ -304,6 +314,82 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       ),
       202
     );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/desktop/start') {
+    const payload = await readJsonBody(request);
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    return json(
+      await startDesktopAuthorization(
+        request,
+        {
+          clientId: input.clientId,
+          state: input.state,
+          codeChallenge: input.codeChallenge
+        },
+        env
+      ),
+      201
+    );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/desktop/approve') {
+    const payload = await readJsonBody(request);
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    const session = await authenticateRequest(request, env);
+    return json(
+      await approveDesktopAuthorization(
+        { attemptId: input.attemptId },
+        session,
+        env
+      )
+    );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/desktop/exchange') {
+    const payload = await readJsonBody(request);
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    const exchanged = await exchangeDesktopAuthorization(
+      {
+        attemptId: input.attemptId,
+        clientId: input.clientId,
+        state: input.state,
+        verifier: input.verifier
+      },
+      env
+    );
+    return json(exchanged, exchanged.status === 'pending' ? 202 : 200);
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/desktop/refresh') {
+    const payload = await readJsonBody(request);
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    return json(
+      await refreshDesktopAuthorization(
+        {
+          clientId: input.clientId,
+          refreshToken: input.refreshToken
+        },
+        env
+      )
+    );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/desktop/logout') {
+    await destroyDesktopAuthorization(request, env);
+    return json({ ok: true });
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/verify') {
