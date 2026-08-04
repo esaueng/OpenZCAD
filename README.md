@@ -155,7 +155,7 @@ AI_MODEL=openai/gpt-5.6-terra
 Runtime bindings are configured as Wrangler vars or secrets:
 
 - `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
-- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret; never shipped to the browser or committed.
+- `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret for the configured provider; `AI_API_KEY` is never sent to OpenRouter (see below). Never shipped to the browser or committed.
 - `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
 - `AI_MODEL` — defaults to `openai/gpt-5.6-terra` (balanced). Use `openai/gpt-5.6-sol` when quality matters more than cost/latency, `openai/gpt-5.6-luna` for cheap latency-sensitive edits.
 - `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
@@ -175,7 +175,7 @@ Current assistant limitations and gates:
 
 ## Known limitations
 
-- Editable STEP sources are embedded in the canonical document (capped at 12 MB) for deterministic offline replay; large documents get expensive to save, sync, and undo (history snapshots clone the full document).
+- Editable STEP sources remain embedded in the browser/IndexedDB document (capped at 12 MB) for deterministic offline replay. Cloud saves project them into checksum-verified, content-addressed R2 assets and keep only metadata/pointers in D1; local undo and collaboration frames still clone the self-contained document.
 - Imported STL builds on the exact kernel through its STL importer, sewn into a shell so it can be mirrored, shelled, and offset. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
 - Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented, but both checked-in sharing flags remain `false` pending controlled beta rollout.
 - BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.

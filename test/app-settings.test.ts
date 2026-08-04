@@ -110,6 +110,15 @@ describe('application settings', () => {
     expect(() =>
       validateAssistantBaseUrl('https://[::1]/v1/responses', 'beta')
     ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://[::]/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://[::ffff:7f00:1]/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://[64:ff9b::7f00:1]/v1/responses', 'beta')
+    ).toThrow('Private-network');
     expect(
       validateAssistantBaseUrl(
         'http://localhost:11434/v1/responses',

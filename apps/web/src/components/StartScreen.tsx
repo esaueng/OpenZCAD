@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
   ArchiveRestore,
+  Check,
   ChevronDown,
   CloudOff,
   CloudUpload,
   Copy,
   GraduationCap,
   GripVertical,
+  LoaderCircle,
   MoreHorizontal,
   Pin,
   PinOff,
@@ -30,6 +32,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
+import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demos';
 import { BrandMark } from './BrandMark';
 import { PartThumbnail } from './PartThumbnail';
@@ -60,6 +63,14 @@ interface StartScreenProps {
   signedIn: boolean;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
+  /**
+   * The save-to-account run in progress or most recently finished, in attempt
+   * order. Null when no run has happened; entries persist after the run so
+   * failures stay explorable until dismissed.
+   */
+  syncRun: ReadonlyArray<SyncEntry> | null;
+  onRetrySync(projectId: string): void;
+  onDismissSyncRun(): void;
   onMoveToShelf(project: ProjectSummary, status: ProjectStatus): void;
   onTogglePin(project: ProjectSummary): void;
   /** The shelf's projects in their new order, front to back. */
@@ -104,6 +115,9 @@ export function StartScreen({
   signedIn,
   onSaveToAccount,
   onSaveAllToAccount,
+  syncRun,
+  onRetrySync,
+  onDismissSyncRun,
   onMoveToShelf,
   onTogglePin,
   onReorder,
@@ -201,6 +215,22 @@ export function StartScreen({
       )
     : [];
 
+  const syncEntryById = new Map(
+    (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
+  );
+  const syncTotals = syncRun ? syncRunTotals(syncRun) : null;
+  const syncFailures = (syncRun ?? []).filter(
+    (entry) => entry.state === 'failed'
+  );
+  // Retrying re-enters the bulk path with just the failed projects, so the
+  // panel restarts scoped to what actually needs another attempt.
+  const failedSummaries = syncFailures.flatMap((entry) => {
+    const summary = userProjects.find(
+      (project) => project.projectId === entry.projectId
+    );
+    return summary ? [summary] : [];
+  });
+
   function moveProject(projectId: string, toIndex: number) {
     const from = shelfProjects.findIndex(
       (project) => project.projectId === projectId
@@ -231,12 +261,50 @@ export function StartScreen({
       : TRASH_RETENTION_DAYS;
     const localOnly = signedIn && !cloudProjectIds.has(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
+    const syncEntry = syncEntryById.get(project.projectId);
 
     const preview = (
       <>
         <span className="start-tile-thumb">
           <PartThumbnail project={project} loadBodies={loadThumbnailBodies} />
-          {conflicted && !trashed ? (
+          {syncEntry && !trashed ? (
+            <span
+              className={`start-tile-badge is-sync-${syncEntry.state}`}
+              role="img"
+              aria-label={
+                syncEntry.state === 'pending'
+                  ? 'Waiting to save to your account'
+                  : syncEntry.state === 'syncing'
+                    ? 'Saving to your account'
+                    : syncEntry.state === 'synced'
+                      ? 'Saved to your account'
+                      : 'Could not be saved to your account'
+              }
+              title={
+                syncEntry.state === 'failed'
+                  ? (syncEntry.detail ?? 'Could not be saved to your account.')
+                  : syncEntry.state === 'synced'
+                    ? (syncEntry.detail ?? 'Saved to your account.')
+                    : syncEntry.state === 'syncing'
+                      ? 'Saving to your account…'
+                      : 'Waiting to save to your account.'
+              }
+            >
+              {syncEntry.state === 'pending' ? (
+                <CloudUpload size={12} aria-hidden="true" />
+              ) : syncEntry.state === 'syncing' ? (
+                <LoaderCircle
+                  size={12}
+                  className="start-sync-spin"
+                  aria-hidden="true"
+                />
+              ) : syncEntry.state === 'synced' ? (
+                <Check size={12} aria-hidden="true" />
+              ) : (
+                <TriangleAlert size={12} aria-hidden="true" />
+              )}
+            </span>
+          ) : conflicted && !trashed ? (
             <span
               className="start-tile-badge is-conflict"
               role="img"
@@ -633,25 +701,117 @@ export function StartScreen({
             )}
           </div>
 
-          {localOnlyProjects.length > 0 && (
-            <div className="start-adopt-bar" role="status">
-              <CloudOff size={14} aria-hidden="true" />
-              <span>
-                {localOnlyProjects.length}{' '}
-                {localOnlyProjects.length === 1 ? 'project is' : 'projects are'}{' '}
-                on this device only.
-              </span>
-              <button
-                type="button"
-                className="start-shelf-action"
-                disabled={busy}
-                onClick={() => onSaveAllToAccount(localOnlyProjects)}
-              >
-                <CloudUpload size={13} aria-hidden="true" />
-                Save {localOnlyProjects.length === 1 ? 'it' : 'them all'} to my
-                account
-              </button>
+          {syncRun && syncTotals ? (
+            <div className="start-sync-panel" role="status" aria-live="polite">
+              <div className="start-sync-head">
+                {syncTotals.active ? (
+                  <LoaderCircle
+                    size={14}
+                    className="start-sync-spin"
+                    aria-hidden="true"
+                  />
+                ) : syncTotals.failed > 0 ? (
+                  <TriangleAlert
+                    size={14}
+                    className="is-failed"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Check size={14} className="is-synced" aria-hidden="true" />
+                )}
+                <span className="start-sync-title">
+                  {syncTotals.active
+                    ? `Saving to your account · ${syncTotals.settled} of ${syncTotals.total} done`
+                    : syncTotals.failed > 0
+                      ? `Saved ${syncTotals.synced} of ${syncTotals.total} · ${syncTotals.failed} could not be saved`
+                      : `All ${syncTotals.total} ${
+                          syncTotals.total === 1 ? 'project' : 'projects'
+                        } saved to your account`}
+                </span>
+                {!syncTotals.active && failedSummaries.length > 0 && (
+                  <button
+                    type="button"
+                    className="start-shelf-action"
+                    disabled={busy}
+                    onClick={() => onSaveAllToAccount(failedSummaries)}
+                  >
+                    <RotateCcw size={13} aria-hidden="true" />
+                    Retry {failedSummaries.length === 1 ? 'it' : 'all'}
+                  </button>
+                )}
+                {!syncTotals.active && (
+                  <button
+                    type="button"
+                    className="start-sync-dismiss"
+                    aria-label="Dismiss sync results"
+                    onClick={onDismissSyncRun}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              <div className="start-sync-track" aria-hidden="true">
+                <span
+                  className="start-sync-fill"
+                  style={{
+                    width: `${(syncTotals.synced / syncTotals.total) * 100}%`
+                  }}
+                />
+                <span
+                  className="start-sync-fill is-failed"
+                  style={{
+                    width: `${(syncTotals.failed / syncTotals.total) * 100}%`
+                  }}
+                />
+              </div>
+              {syncFailures.length > 0 && (
+                <ul className="start-sync-failures">
+                  {syncFailures.map((entry) => (
+                    <li key={entry.projectId} className="start-sync-failure">
+                      <TriangleAlert size={12} aria-hidden="true" />
+                      <span className="start-sync-failure-name">
+                        {entry.name}
+                      </span>
+                      <span className="start-sync-failure-detail">
+                        {entry.detail ?? 'Could not be saved.'}
+                      </span>
+                      <button
+                        type="button"
+                        className="start-shelf-action"
+                        disabled={busy}
+                        onClick={() => onRetrySync(entry.projectId)}
+                      >
+                        <RotateCcw size={12} aria-hidden="true" />
+                        Retry
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
+          ) : (
+            localOnlyProjects.length > 0 && (
+              <div className="start-adopt-bar" role="status">
+                <CloudOff size={14} aria-hidden="true" />
+                <span>
+                  {localOnlyProjects.length}{' '}
+                  {localOnlyProjects.length === 1
+                    ? 'project is'
+                    : 'projects are'}{' '}
+                  on this device only.
+                </span>
+                <button
+                  type="button"
+                  className="start-shelf-action"
+                  disabled={busy}
+                  onClick={() => onSaveAllToAccount(localOnlyProjects)}
+                >
+                  <CloudUpload size={13} aria-hidden="true" />
+                  Save {localOnlyProjects.length === 1 ? 'it' : 'them all'} to
+                  my account
+                </button>
+              </div>
+            )
           )}
 
           <div className="start-tile-grid">
