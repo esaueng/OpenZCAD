@@ -829,6 +829,7 @@ export function ModelViewer({
     if (!host) {
       return;
     }
+    const viewerHost = host;
     const e2eCanvasHooksEnabled =
       (
         import.meta.env as unknown as {
@@ -1043,6 +1044,7 @@ export function ModelViewer({
 
     let animationFrame: number | null = null;
     let pendingHoverEvent: PointerEvent | null = null;
+    let resizePending = false;
 
     function requestRender() {
       if (animationFrame === null) {
@@ -1121,13 +1123,10 @@ export function ModelViewer({
     }
 
     const observer = new ResizeObserver(() => {
-      cameraRig.handleResize();
-      renderer.setSize(host.clientWidth, host.clientHeight);
-      labelRenderer.setSize(host.clientWidth, host.clientHeight);
-      // Screen-space fat lines rasterize against the viewport size. Walking the
-      // scene covers body edges, sketches, previews and handle rigs alike, so
-      // no creation site has to remember to register its material.
-      syncFatLineResolution(scene, host.clientWidth, host.clientHeight);
+      // setSize clears the WebGL drawing buffer. Keep that clear in the same
+      // animation frame as the next scene draw so continuous panel resizing
+      // cannot present an empty buffer between two frames.
+      resizePending = true;
       requestRender();
     });
     observer.observe(host);
@@ -3474,6 +3473,18 @@ export function ModelViewer({
     const lastQuaternion = new THREE.Quaternion();
     function animate(now: number) {
       animationFrame = null;
+      if (resizePending) {
+        resizePending = false;
+        const width = viewerHost.clientWidth;
+        const height = viewerHost.clientHeight;
+        cameraRig.handleResize();
+        renderer.setSize(width, height);
+        labelRenderer.setSize(width, height);
+        // Screen-space fat lines rasterize against the viewport size. Walking
+        // the scene covers body edges, sketches, previews and handle rigs
+        // alike, so no creation site has to remember to register its material.
+        syncFatLineResolution(scene, width, height);
+      }
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const controlsChanged = cameraRig.stepOrbit(now);
