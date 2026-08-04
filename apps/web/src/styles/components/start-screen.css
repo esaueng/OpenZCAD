@@ -528,6 +528,139 @@
   border-color: currentcolor;
 }
 
+.start-tile-badge.is-sync-syncing {
+  color: var(--color-accent);
+}
+
+.start-tile-badge.is-sync-synced {
+  color: var(--color-success);
+}
+
+.start-tile-badge.is-sync-failed {
+  color: var(--color-error);
+  border-color: currentcolor;
+}
+
+/*
+ * The adopt bar's live sibling: while a save-all run is on screen it takes the
+ * bar's slot, and it keeps the failures readable after the run finishes.
+ */
+.start-sync-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-surface-1);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
+.start-sync-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.start-sync-head svg.is-synced {
+  color: var(--color-success);
+}
+
+.start-sync-head svg.is-failed {
+  color: var(--color-error);
+}
+
+.start-sync-title {
+  flex: 1;
+  color: var(--color-text);
+}
+
+.start-sync-dismiss {
+  display: inline-flex;
+  padding: 3px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+}
+
+.start-sync-dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+/* Two segments share one track: what made it, then what did not. */
+.start-sync-track {
+  display: flex;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  overflow: hidden;
+}
+
+.start-sync-fill {
+  height: 100%;
+  background: var(--color-success);
+  transition: width 240ms ease;
+}
+
+.start-sync-fill.is-failed {
+  background: var(--color-error);
+}
+
+.start-sync-failures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-sync-failure {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-top: var(--border-thin);
+}
+
+.start-sync-failure > svg {
+  flex-shrink: 0;
+  color: var(--color-error);
+}
+
+.start-sync-failure-name {
+  flex-shrink: 0;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.start-sync-failure-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-sync-spin {
+  animation: start-sync-spin 900ms linear infinite;
+}
+
+@keyframes start-sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .start-tile-thumb svg {
   width: 100%;
   height: 100%;

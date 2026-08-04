@@ -276,7 +276,7 @@ function apiKeyFor(env: CloudflareEnv, provider: string) {
       ? env.OPENROUTER_API_KEY?.trim()
       : env.OPENAI_API_KEY?.trim();
   return provider === 'openrouter'
-    ? providerKey || genericKey || undefined
+    ? providerKey || undefined
     : genericKey || providerKey || undefined;
 }
 
