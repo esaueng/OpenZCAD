@@ -178,6 +178,18 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
     .catch(() => undefined);
 }
 
+/**
+ * Forgets every sync baseline. Used when the account session ends, so the next
+ * account on this device never reconciles against the previous one's history:
+ * an unknown baseline is safe (reconciliation reports instead of assuming
+ * agreement), a stale one can silently overwrite the newer side.
+ */
+export function clearAllLastSyncedVersions(): Promise<void> {
+  return transaction('readwrite', (store) => store.clear(), SYNC_STORE_NAME)
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
 /** Destroys a project's document, its shelf state, and its sync baseline. */
 export function deleteLocalProject(projectId: string): Promise<void> {
   return transaction('readwrite', (store) => store.delete(projectId))

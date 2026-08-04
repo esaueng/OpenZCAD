@@ -241,6 +241,7 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
 }
 import {
   chooseProjectDocument,
+  clearAllLastSyncedVersions,
   deleteLocalProject,
   listLocalProjectOrganizations,
   listLocalProjects,
@@ -2636,6 +2637,9 @@ export function App() {
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
     }
+    // The next session on this device may be a different account; it must not
+    // reconcile against this account's sync baselines.
+    void clearAllLastSyncedVersions();
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
@@ -2875,6 +2879,8 @@ export function App() {
       remoteVersionsRef.current.clear();
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
+      // The next sign-in on this device may be a different account.
+      void clearAllLastSyncedVersions();
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
