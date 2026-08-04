@@ -1,15 +1,24 @@
 import {
+  MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
+  persistedDocumentBytes,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  PROJECT_STATUSES,
   toArtifactId,
   toProjectId,
   toUploadSessionId,
   type ArtifactKind,
   type CreateProjectRequest,
   type CreateUploadSessionRequest,
+  type DuplicateProjectRequest,
   type FinalizeImportRequest,
   type ProjectDocument,
+  type ProjectStatus,
+  type ReorderProjectsRequest,
+  type SaveProjectDocumentRequest,
   type SaveRevisionRequest,
-  type UnitSystem
+  type UnitSystem,
+  type UpdateProjectRequest
 } from '@openzcad/shared';
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TYPES,
@@ -47,6 +56,8 @@ const MAX_NAME_LENGTH = MAX_PROJECT_NAME_LENGTH;
 const MAX_FILE_NAME_LENGTH = 255;
 const MAX_CONTENT_TYPE_LENGTH = 100;
 const MAX_REASON_LENGTH = 500;
+/** Bound on one reorder: a shelf that large is not being dragged by hand. */
+const MAX_REORDERED_PROJECTS = 1_000;
 const MAX_AI_PROMPT_LENGTH = 4_000;
 const MAX_AI_DIGEST_BYTES = 128_000;
 const MAX_AI_DIGEST_ITEMS = 1_000;
@@ -99,20 +110,124 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     }
     request.units = record.units as UnitSystem;
   }
+  if (record.document !== undefined) {
+    // Adoption. The id comes from the document rather than the URL, which is
+    // the point — the device is asking to keep the id it already filed this
+    // project under.
+    const document = parseProjectDocument(record.document);
+    assertDocumentWithinCeiling(document);
+    request.document = document;
+  }
   return request;
+}
+
+export function parseUpdateProjectRequest(
+  body: unknown,
+  projectIdFromPath: string
+): UpdateProjectRequest {
+  const record = asRecord(body, 'Request body');
+  const request: UpdateProjectRequest = {
+    projectId: toProjectId(projectIdFromPath)
+  };
+  if (record.status !== undefined) {
+    if (!PROJECT_STATUSES.includes(record.status as ProjectStatus)) {
+      throw badRequest(
+        `"status" must be one of: ${PROJECT_STATUSES.join(', ')}.`
+      );
+    }
+    request.status = record.status as ProjectStatus;
+  }
+  if (record.pinned !== undefined) {
+    if (typeof record.pinned !== 'boolean') {
+      throw badRequest('"pinned" must be a boolean.');
+    }
+    request.pinned = record.pinned;
+  }
+  if (record.sortOrder !== undefined) {
+    if (
+      typeof record.sortOrder !== 'number' ||
+      !Number.isFinite(record.sortOrder)
+    ) {
+      throw badRequest('"sortOrder" must be a finite number.');
+    }
+    request.sortOrder = record.sortOrder;
+  }
+  if (
+    request.status === undefined &&
+    request.pinned === undefined &&
+    request.sortOrder === undefined
+  ) {
+    throw badRequest(
+      'Provide at least one of "status", "pinned", or "sortOrder".'
+    );
+  }
+  return request;
+}
+
+export function parseDuplicateProjectRequest(
+  body: unknown,
+  projectIdFromPath: string
+): DuplicateProjectRequest {
+  // An empty body is the common case — the server picks a "(copy)" name.
+  const record =
+    body === undefined || body === null ? {} : asRecord(body, 'Request body');
+  return {
+    projectId: toProjectId(projectIdFromPath),
+    ...(record.name === undefined
+      ? {}
+      : { name: requireString(record, 'name', MAX_NAME_LENGTH) })
+  };
+}
+
+export function parseReorderProjectsRequest(
+  body: unknown
+): ReorderProjectsRequest {
+  const record = asRecord(body, 'Request body');
+  if (!Array.isArray(record.projectIds)) {
+    throw badRequest('"projectIds" must be an array.');
+  }
+  if (record.projectIds.length > MAX_REORDERED_PROJECTS) {
+    throw badRequest(
+      `"projectIds" must contain at most ${MAX_REORDERED_PROJECTS} ids.`
+    );
+  }
+  const seen = new Set<string>();
+  return {
+    projectIds: record.projectIds.map((value, index) => {
+      if (typeof value !== 'string' || value.trim().length === 0) {
+        throw badRequest(`"projectIds[${index}]" must be a non-empty string.`);
+      }
+      const projectId = value.trim();
+      if (seen.has(projectId)) {
+        throw badRequest('"projectIds" must not repeat a project.');
+      }
+      seen.add(projectId);
+      return toProjectId(projectId);
+    })
+  };
 }
 
 /**
  * Structural sanity check of the posted document, not a full schema
  * validation: the document blob is round-tripped as-is, so this guards the
  * fields the server itself reads plus path/payload consistency.
+ *
+ * `projectIdFromPath` is omitted on adoption, where the document supplies the
+ * id instead of the URL; the id is still required to be a usable string.
  */
 function parseProjectDocument(
   value: unknown,
-  projectIdFromPath: string
+  projectIdFromPath?: string
 ): ProjectDocument {
   const record = asRecord(value, '"document"');
-  if (record.projectId !== projectIdFromPath) {
+  if (projectIdFromPath === undefined) {
+    if (
+      typeof record.projectId !== 'string' ||
+      record.projectId.trim().length === 0
+    ) {
+      throw badRequest('"document.projectId" must be a non-empty string.');
+    }
+  } else if (record.projectId !== projectIdFromPath) {
     throw badRequest(
       '"document.projectId" must match the project id in the URL.'
     );
@@ -128,7 +243,35 @@ function parseProjectDocument(
   ) {
     throw badRequest('"document" is missing required collections.');
   }
+  // A document written by a newer client can carry node kinds and references
+  // this deployment does not understand. Normalization migrates forward, never
+  // back, so storing one would hand the account a document it cannot rebuild.
+  if (
+    record.schemaVersion !== undefined &&
+    (typeof record.schemaVersion !== 'number' ||
+      record.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION)
+  ) {
+    throw badRequest(
+      `"document.schemaVersion" is newer than this deployment supports (${PROJECT_DOCUMENT_SCHEMA_VERSION}). Reload to update.`
+    );
+  }
   return value as ProjectDocument;
+}
+
+/**
+ * Refuses an oversize document at the edge. The persistence layer checks this
+ * again — it is the layer that owns the invariant — but doing it here keeps a
+ * document that can never be stored from being parsed, normalized, and
+ * serialized first.
+ */
+function assertDocumentWithinCeiling(document: ProjectDocument): void {
+  const bytes = persistedDocumentBytes(document);
+  if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
+    throw new HttpError(
+      413,
+      `Document is ${bytes} bytes; the account stores at most ${MAX_PERSISTED_DOCUMENT_BYTES}.`
+    );
+  }
 }
 
 export function parseSaveRevisionRequest(
@@ -148,9 +291,34 @@ export function parseSaveRevisionRequest(
     throw badRequest('"expectedVersion" must be a non-negative integer.');
   }
   const document = parseProjectDocument(record.document, projectIdFromPath);
+  assertDocumentWithinCeiling(document);
   return {
     projectId: toProjectId(projectIdFromPath),
     reason,
+    expectedVersion: record.expectedVersion,
+    document
+  };
+}
+
+export function parseSaveProjectDocumentRequest(
+  body: unknown,
+  projectIdFromPath: string
+): SaveProjectDocumentRequest {
+  const record = asRecord(body, 'Request body');
+  if (record.projectId !== projectIdFromPath) {
+    throw badRequest('"projectId" must match the project id in the URL.');
+  }
+  if (
+    typeof record.expectedVersion !== 'number' ||
+    !Number.isInteger(record.expectedVersion) ||
+    record.expectedVersion < 0
+  ) {
+    throw badRequest('"expectedVersion" must be a non-negative integer.');
+  }
+  const document = parseProjectDocument(record.document, projectIdFromPath);
+  assertDocumentWithinCeiling(document);
+  return {
+    projectId: toProjectId(projectIdFromPath),
     expectedVersion: record.expectedVersion,
     document
   };
@@ -164,7 +332,9 @@ export function parseCreateUploadSessionRequest(
     throw badRequest(`"kind" must be one of: ${ARTIFACT_KINDS.join(', ')}.`);
   }
   const metadata =
-    record.metadata === undefined ? {} : asRecord(record.metadata, '"metadata"');
+    record.metadata === undefined
+      ? {}
+      : asRecord(record.metadata, '"metadata"');
   if (JSON.stringify(metadata).length > 4_000) {
     throw badRequest('"metadata" is too large.');
   }
@@ -176,7 +346,9 @@ export function parseCreateUploadSessionRequest(
         typeof value !== 'boolean'
     )
   ) {
-    throw badRequest('"metadata" values must be strings, numbers, or booleans.');
+    throw badRequest(
+      '"metadata" values must be strings, numbers, or booleans.'
+    );
   }
   return {
     projectId: toProjectId(requireString(record, 'projectId', MAX_NAME_LENGTH)),

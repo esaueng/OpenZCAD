@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APP_SETTINGS, deepClone, toUserId } from '@openzcad/shared';
+import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  DEFAULT_APP_SETTINGS,
+  deepClone,
+  PANEL_WIDTH_LIMITS,
+  toUserId
+} from '@openzcad/shared';
 import {
   APP_SETTINGS_STORAGE_KEY,
   defaultAppSettings,
@@ -78,9 +84,22 @@ describe('application settings', () => {
     settings.assistant.baseUrl = 'https://models.example.test/v1/responses';
 
     expect(
-      parseUpdateAppSettingsRequest({ expectedRevision: 0, settings }, 'beta')
-        .settings.assistant.baseUrl
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings },
+        'beta',
+        'models.example.test'
+      ).settings.assistant.baseUrl
     ).toBe('https://models.example.test/v1/responses');
+    expect(() =>
+      parseUpdateAppSettingsRequest({ expectedRevision: 0, settings }, 'beta')
+    ).toThrow('not approved');
+    expect(() =>
+      validateAssistantBaseUrl(
+        'https://other.example.test/v1/responses',
+        'beta',
+        'models.example.test'
+      )
+    ).toThrow('not approved');
 
     expect(() =>
       validateAssistantBaseUrl('http://169.254.169.254/latest', 'beta')
@@ -91,12 +110,89 @@ describe('application settings', () => {
     expect(() =>
       validateAssistantBaseUrl('https://[::1]/v1/responses', 'beta')
     ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://[::]/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://[::ffff:7f00:1]/v1/responses', 'beta')
+    ).toThrow('Private-network');
+    expect(() =>
+      validateAssistantBaseUrl('https://[64:ff9b::7f00:1]/v1/responses', 'beta')
+    ).toThrow('Private-network');
     expect(
       validateAssistantBaseUrl(
         'http://localhost:11434/v1/responses',
         'development'
       )
     ).toBe('http://localhost:11434/v1/responses');
+  });
+
+  it('carries resized panel widths to the account, in range', () => {
+    // Layout widths ride the settings sync so a resized sidebar follows the
+    // account to the next browser, rather than being stranded on one device.
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.layout = { sidebarWidth: 318, assistantWidth: 505 };
+
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings },
+        'development'
+      ).settings.layout
+    ).toEqual({ sidebarWidth: 318, assistantWidth: 505 });
+
+    // A width from a client with different limits is brought into range, not
+    // treated as a reason to reject everything else in the payload.
+    const extreme = deepClone(DEFAULT_APP_SETTINGS);
+    extreme.layout = { sidebarWidth: 4_000, assistantWidth: 12 };
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: extreme },
+        'development'
+      ).settings.layout
+    ).toEqual({
+      sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.max,
+      assistantWidth: PANEL_WIDTH_LIMITS.assistant.min
+    });
+  });
+
+  it('accepts an account payload from a client that predates the layout', () => {
+    const { layout: _layout, ...legacy } = deepClone(DEFAULT_APP_SETTINGS);
+
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: legacy },
+        'development'
+      ).settings.layout
+    ).toEqual({
+      sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.default,
+      assistantWidth: PANEL_WIDTH_LIMITS.assistant.default
+    });
+  });
+
+  it('normalizes stored panel widths without discarding the settings', () => {
+    const normalized = normalizeAppSettings({
+      layout: { sidebarWidth: '340', assistantWidth: 1_200 }
+    });
+    expect(normalized.layout.sidebarWidth).toBe(
+      PANEL_WIDTH_LIMITS.sidebar.default
+    );
+    expect(normalized.layout.assistantWidth).toBe(
+      PANEL_WIDTH_LIMITS.assistant.max
+    );
+    expect(
+      normalizeAppSettings({ layout: { sidebarWidth: 301.6 } }).layout
+    ).toEqual({
+      sidebarWidth: 302,
+      assistantWidth: PANEL_WIDTH_LIMITS.assistant.default
+    });
+  });
+
+  it('round-trips a resized panel through device storage', () => {
+    const resized = defaultAppSettings();
+    resized.layout.sidebarWidth = 288;
+
+    expect(saveLocalAppSettings(resized, null)).toBe(true);
+    expect(loadLocalAppSettings().layout.sidebarWidth).toBe(288);
   });
 
   it('keeps an unsaved device change from being reverted by the account copy', () => {
@@ -187,5 +283,69 @@ describe('application settings', () => {
         secret
       )
     ).rejects.toThrow('could not be decrypted');
+  });
+
+  it('reads settings written before cloud autosave as the defaults, not as off', () => {
+    // Turning autosave off is a choice. Absence is not that choice, and reading
+    // it as one would quietly stop syncing for every existing account.
+    const normalized = normalizeAppSettings({
+      general: { defaultUnits: 'mm' }
+    });
+    expect(normalized.files.cloudAutosave).toBe(true);
+    expect(normalized.files.cloudAutosaveDelaySeconds).toBe(
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.default
+    );
+  });
+
+  it('keeps the autosave delay inside the bounds every layer agrees on', () => {
+    expect(
+      normalizeAppSettings({ files: { cloudAutosaveDelaySeconds: 0 } }).files
+        .cloudAutosaveDelaySeconds
+    ).toBe(CLOUD_AUTOSAVE_DELAY_BOUNDS.min);
+    expect(
+      normalizeAppSettings({ files: { cloudAutosaveDelaySeconds: 9_000 } })
+        .files.cloudAutosaveDelaySeconds
+    ).toBe(CLOUD_AUTOSAVE_DELAY_BOUNDS.max);
+    expect(
+      normalizeAppSettings({ files: { cloudAutosaveDelaySeconds: 7.6 } }).files
+        .cloudAutosaveDelaySeconds
+    ).toBe(8);
+  });
+
+  it('carries the autosave preference through the account round trip', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.files = { cloudAutosave: false, cloudAutosaveDelaySeconds: 30 };
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files).toEqual({
+      cloudAutosave: false,
+      cloudAutosaveDelaySeconds: 30
+    });
+  });
+
+  it('accepts a payload from a client that predates the preference', () => {
+    const { files: _omitted, ...settings } = deepClone(DEFAULT_APP_SETTINGS);
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files.cloudAutosave).toBe(true);
+  });
+
+  it('clamps an out-of-range delay at the account boundary too', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.files = {
+      cloudAutosave: true,
+      cloudAutosaveDelaySeconds: 100_000
+    };
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files.cloudAutosaveDelaySeconds).toBe(
+      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
+    );
   });
 });

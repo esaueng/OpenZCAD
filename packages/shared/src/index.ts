@@ -12,7 +12,7 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 4 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 7 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -26,6 +26,9 @@ export type FeatureKind =
   | 'revolve'
   | 'boolean'
   | 'transform'
+  | 'mirror'
+  | 'shell'
+  | 'solid-offset'
   | 'fillet'
   | 'chamfer'
   | 'pattern'
@@ -33,7 +36,14 @@ export type FeatureKind =
   | 'imported-step'
   | 'imported-mesh';
 export type SketchObjectKind =
-  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc';
+  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc' | 'text';
+/**
+ * Font style of a text sketch object. Each style is a distinct bundled font
+ * file — never a synthetic shear or emboldening — so the letterforms are the
+ * ones the type designer drew.
+ */
+export type TextFontStyle = 'regular' | 'bold' | 'italic' | 'boldItalic';
+export type TextAlign = 'left' | 'center' | 'right';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
 export type PatternKind = 'linear' | 'circular';
 export type AxisId = 'x' | 'y' | 'z';
@@ -52,6 +62,75 @@ export interface Vector3 {
   z: number;
 }
 
+/** Integer coordinates measured in the frozen ADR-011 1e-6 document-unit quantum. */
+export type QuantizedTopologyPoint = [number, number, number];
+
+export type ParametricClosure = 'open' | 'closed' | 'unknown';
+
+/** Exact, phase-independent inputs used to fingerprint one edge. */
+export type EdgeWitnessV1 = {
+  curveType: string;
+  length: number;
+} & (
+  | {
+      closed: false;
+      endpoints: [QuantizedTopologyPoint, QuantizedTopologyPoint];
+      midpoint: QuantizedTopologyPoint;
+    }
+  | {
+      closed: true;
+      center: QuantizedTopologyPoint;
+      /** Canonical direction in the ADR-011 direction quantum, or null when degenerate. */
+      axis: QuantizedTopologyPoint | null;
+    }
+);
+
+/** Exact analytic carrier term used by a face witness. */
+export type FaceAnalyticWitnessV1 =
+  | {
+      kind: 'plane';
+      normal: QuantizedTopologyPoint;
+      offset: number;
+    }
+  | {
+      kind: 'cylinder';
+      axis: QuantizedTopologyPoint;
+      axisFoot: QuantizedTopologyPoint;
+      radius: number;
+    }
+  | { kind: 'none' };
+
+/** Exact, kernel-neutral inputs used to fingerprint one face. */
+export interface FaceWitnessV1 {
+  surfaceType: string;
+  perimeter: number;
+  centroid: QuantizedTopologyPoint | null;
+  analytic: FaceAnalyticWitnessV1;
+  closure: { u: ParametricClosure; v: ParametricClosure };
+}
+
+interface TopologyReferenceBaseV5 {
+  producingFeatureId: FeatureId;
+  /** Stable semantic/evolution name scoped by producingFeatureId. */
+  lineageName: string;
+  /** ADR-011 fingerprint at the time this reference was written. */
+  currentHash: number;
+  witnessVersion: 1;
+}
+
+export interface EdgeTopologyReferenceV5 extends TopologyReferenceBaseV5 {
+  kind: 'edge';
+  witness: EdgeWitnessV1;
+}
+
+export interface FaceTopologyReferenceV5 extends TopologyReferenceBaseV5 {
+  kind: 'face';
+  witness: FaceWitnessV1;
+}
+
+export type TopologyReferenceV5 =
+  EdgeTopologyReferenceV5 | FaceTopologyReferenceV5;
+
 export interface ParametricVector3 {
   x: ParamValue;
   y: ParamValue;
@@ -68,6 +147,13 @@ export interface ParametricTransform3D {
   rotationDeg: ParametricVector3;
 }
 
+/** Parametric plane used by exact mirror features. */
+export interface ParametricPlane {
+  origin: ParametricVector3;
+  /** Resolved and normalized during exact preflight; zero vectors are invalid. */
+  normal: ParametricVector3;
+}
+
 /**
  * History-backed edits applied directly to exact B-Rep topology. The source
  * dimension is a geometric fingerprint: rebuilding fails closed if the face
@@ -78,6 +164,7 @@ export type DirectEditOperation =
   | {
       kind: 'resize-through-hole';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceDiameter: number;
       sourceAxisStart: Vector3;
       sourceAxisEnd: Vector3;
@@ -86,6 +173,7 @@ export type DirectEditOperation =
   | {
       kind: 'remove-face-feature';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceSurfaceType: string;
       sourceArea: number;
       sourceCenter: Vector3;
@@ -96,6 +184,7 @@ export type DirectEditOperation =
   | {
       kind: 'offset-face';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceSurfaceType: 'plane';
       sourceArea: number;
       sourceCenter: Vector3;
@@ -107,6 +196,7 @@ export type DirectEditOperation =
   | {
       kind: 'resize-cylindrical-face';
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceRadius: number;
       sourceAxisStart: Vector3;
       sourceAxisEnd: Vector3;
@@ -121,6 +211,28 @@ export interface BaseNode {
   revisionId: RevisionId | null;
   name: string;
   metadata?: Record<string, string | number | boolean>;
+}
+
+/** Replay-compatible metadata keys used by feature suppression. */
+export const FEATURE_SUPPRESSED_METADATA_KEY = 'suppressed' as const;
+export const FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY =
+  'rollbackSuppressed' as const;
+
+export function isFeatureManuallySuppressed(
+  node: Pick<BaseNode, 'metadata'>
+): boolean {
+  return node.metadata?.[FEATURE_SUPPRESSED_METADATA_KEY] === true;
+}
+
+export function isFeatureRollbackSuppressed(
+  node: Pick<BaseNode, 'metadata'>
+): boolean {
+  return node.metadata?.[FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY] === true;
+}
+
+/** Effective build state: either an individual toggle or the rollback marker. */
+export function isFeatureSuppressed(node: Pick<BaseNode, 'metadata'>): boolean {
+  return isFeatureManuallySuppressed(node) || isFeatureRollbackSuppressed(node);
 }
 
 export interface ProjectNode extends BaseNode {
@@ -167,10 +279,11 @@ export interface SketchPlaneFrame {
 /**
  * Where a sketch plane lives. `canonical` is the classic principal plane +
  * normal offset. `frame` is an arbitrary placed plane. `face` records that the
- * plane was taken from a body face: the embedded `frame` snapshot is
- * authoritative for rebuilds (sketch geometry stays well-defined even if the
- * source face is later edited away), while the fingerprint fields let the app
- * re-derive the frame — and warn — when the face still resolves.
+ * plane was taken from a body face. Schema-v5 `faceReference` lineage is
+ * authoritative for exact rebuilds: the frame is re-derived from the evolved
+ * planar face at the sketch's history position and fails closed if that face
+ * is deleted, ambiguous, or non-planar. The embedded frame remains only for
+ * schema-v4 migration and diagnostics; it is never a fallback for a v5 ref.
  */
 export type SketchPlaneRef =
   | { type: 'canonical'; plane: PlaneId; offset: ParamValue }
@@ -179,6 +292,7 @@ export type SketchPlaneRef =
       type: 'face';
       bodyId: BodyId;
       faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
       sourceArea: number;
       sourceCenter: Vector3;
       sourceNormal: Vector3;
@@ -233,6 +347,27 @@ export type SketchObjectData = (
       startAngleDeg: ParamValue;
       endAngleDeg: ParamValue;
     }
+  | {
+      objectKind: 'text';
+      /**
+       * The string to render. Glyph outlines are never persisted — they are
+       * re-derived from these parameters on every rebuild, so editing the
+       * string regenerates every downstream feature.
+       */
+      text: string;
+      /** Registry family id, e.g. `'open-sans'`. */
+      fontFamily: string;
+      fontStyle: TextFontStyle;
+      /** Em size in model units. Parametric like every other dimension. */
+      size: ParamValue;
+      /** Sketch-plane origin of the first baseline. */
+      x: ParamValue;
+      y: ParamValue;
+      /** Rotation about (`x`, `y`) in degrees. */
+      rotation?: ParamValue;
+      /** Horizontal alignment of each line about `x`. Defaults to `'left'`. */
+      align?: TextAlign;
+    }
 ) & {
   /**
    * Reference-only geometry. Construction entities remain visible and
@@ -251,19 +386,51 @@ export interface SketchObjectNode extends BaseNode {
 export type RevolveAxis = 'horizontal' | 'vertical';
 
 /**
+ * A complete turn. The kernel accepts `(0, 360]` degrees; 360 is both the
+ * maximum and the value an absent `angleDeg` means, so documents written
+ * before partial revolve existed keep building exactly as they did.
+ */
+export const FULL_REVOLVE_ANGLE_DEG = 360;
+
+/**
  * Persistent reference to one derived bounded sketch cell.
  *
  * `profileId` is the preferred stable identity for newly created references.
  * The fingerprint/sample/area fields retain fail-closed compatibility with
  * profile references written before first-class profile ids were introduced.
  */
-export interface SketchProfileReference {
+export interface SketchRegionProfileReference {
   profileId?: string;
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   sourceArea: number;
   sourceEntityIds?: string[];
+  /** Discriminator; a region reference never carries the entity-wide mode. */
+  all?: false;
 }
+
+/**
+ * Reference to *every* profile bounded solely by the named sketch entities,
+ * however many there are and whatever their geometry.
+ *
+ * Geometry-derived identity (fingerprint, area, sample point) cannot survive an
+ * edit that changes how many regions an entity produces — changing a text
+ * object from "HI" to "HELLO" changes the region count, every fingerprint, and
+ * every area at once. Entity identity does survive: the sketch object's
+ * `EntityId` is stable across every edit to its parameters. This mode exists so
+ * a text extrude keeps working after the exact edit the text feature is for.
+ *
+ * Resolution is still fail-closed: an entity that currently bounds no profile
+ * is an error, not an empty extrude.
+ */
+export interface SketchEntityProfileReference {
+  all: true;
+  /** Profiles qualify when their source entities are a subset of these ids. */
+  sourceEntityIds: string[];
+}
+
+export type SketchProfileReference =
+  SketchRegionProfileReference | SketchEntityProfileReference;
 
 export type FeatureData =
   | {
@@ -297,6 +464,15 @@ export type FeatureData =
       featureKind: 'revolve';
       sketchId: SketchId;
       axis: RevolveAxis;
+      /**
+       * Sweep angle in degrees, in `(0, 360]`. Absent means a full turn, so
+       * every document written before this field existed keeps its exact
+       * previous geometry and its ADR-013 semantic lineage.
+       *
+       * A value below 360 is a deliberate ADR-011 hash-only body — see
+       * `PARTIAL_REVOLVE_HASH_ONLY_REASON` in the kernel adapter.
+       */
+      angleDeg?: ParamValue;
     }
   | {
       featureKind: 'boolean';
@@ -309,15 +485,37 @@ export type FeatureData =
       transform: ParametricTransform3D;
     }
   | {
+      featureKind: 'mirror';
+      targetBodyId: BodyId;
+      /** The original remains live; this feature owns only the mirrored copy. */
+      plane: ParametricPlane;
+    }
+  | {
+      featureKind: 'shell';
+      targetBodyId: BodyId;
+      openingFaceHashes: number[];
+      openingFaceReferences?: FaceTopologyReferenceV5[];
+      /** Positive inward wall thickness; the source outer envelope is retained. */
+      thickness: ParamValue;
+    }
+  | {
+      featureKind: 'solid-offset';
+      targetBodyId: BodyId;
+      /** Positive values offset every face outward. */
+      distance: ParamValue;
+    }
+  | {
       featureKind: 'fillet';
       targetBodyId: BodyId;
       edgeHashes: number[];
+      edgeReferences?: EdgeTopologyReferenceV5[];
       radius: ParamValue;
     }
   | {
       featureKind: 'chamfer';
       targetBodyId: BodyId;
       edgeHashes: number[];
+      edgeReferences?: EdgeTopologyReferenceV5[];
       distance: ParamValue;
     }
   | {
@@ -393,6 +591,7 @@ export interface BoundingBox {
 export interface FaceTopology {
   topologyId: string;
   hash: number;
+  reference?: FaceTopologyReferenceV5;
   triangleStart: number;
   triangleCount: number;
   /** Exact surface measurements supplied by the browser geometry kernel. */
@@ -400,7 +599,7 @@ export interface FaceTopology {
 }
 
 export interface FaceGeometry {
-  /** Underlying OCCT surface class (plane, cylinder, cone, B-spline, ...). */
+  /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
   area: number;
   /** Exact surface center of mass, used as a topology fingerprint. */
@@ -423,12 +622,86 @@ export interface FaceGeometry {
 export interface EdgeTopology {
   topologyId: string;
   hash: number;
+  reference?: EdgeTopologyReferenceV5;
   /**
    * Periodic B-Rep faces need topological seam edges to close their UV
    * parameterization. They remain available to the kernel for stable topology
    * identity, but are not physical feature edges and stay out of the viewport.
    */
   displayRole?: 'feature' | 'seam';
+  /**
+   * Hashes of the faces this edge bounds, sorted ascending.
+   *
+   * This is the kernel's own edge-to-face map translated from face handles to
+   * the ADR-011 hashes `FaceTopology.hash` publishes, so a consumer can ask
+   * which faces meet at an edge without a second kernel round trip. It exists
+   * for topological edge-run walking and measure tools, which currently infer
+   * adjacency from geometry.
+   *
+   * Three things it is NOT:
+   *
+   * - **Not a pair.** A seam edge lists its one face twice, and a non-manifold
+   *   edge on a flagged STEP import lists three or more. Multiplicity is kept
+   *   rather than deduplicated, because it is the raw fact and a consumer can
+   *   always narrow it.
+   * - **Not unique per face.** BrepKit builds a sphere from two same-surface
+   *   hemispheres that share one exact witness, so both patches hash
+   *   identically. Two edges reporting a common hash therefore do not
+   *   necessarily touch the same face. This is the identity scheme failing
+   *   closed as designed, and it is a live product limit — face picks on
+   *   spheres are unavailable for the same reason.
+   * - **Not sufficient for an edge run on its own.** Two edges on opposite
+   *   sides of a box's top face share that face. A run also needs vertex
+   *   incidence, which `vertexIds` publishes.
+   */
+  adjacentFaceHashes?: number[];
+  /**
+   * The exact curve underlying this edge, so a consumer can draw and measure
+   * true geometry instead of the chords `points` samples.
+   *
+   * Absent when the kernel refuses the edge. Absent rather than approximate is
+   * the rule for every part of this record: it is either exactly right or it
+   * is not there.
+   */
+  curve?: EdgeCurve;
+  /**
+   * The two vertices this edge runs between, as `[start, end]` in the edge's
+   * own direction — the same direction `points` is sampled in.
+   *
+   * These are the kernel's own vertex handles renumbered, not positions
+   * matched to a tolerance. Two edges belong to the same run only if they
+   * share a vertex, and `adjacentFaceHashes` cannot answer that: opposite
+   * sides of a box's top face bound the same face and meet nowhere.
+   *
+   * Deriving this from geometry was measured and rejected — see
+   * `test/vertex-identity.test.ts`. Quantizing display-polyline endpoints at
+   * the ADR-011 1e-6 quantum produced 73 false splits across the parity
+   * corpus, all on closed edges, because a closed edge's polyline is a loop
+   * that begins a quarter turn away from its own vertex.
+   *
+   * Four things it is NOT:
+   *
+   * - **Not two distinct vertices.** A closed edge names one vertex twice: a
+   *   cylinder's rim, a bore rim, and a torus's two zero-length degenerate
+   *   edges all report `[v, v]`. The pair is kept rather than deduplicated
+   *   because it is the kernel's own shape, it keeps start and end
+   *   distinguishable, and `new Set(ids).size === 1` is how the fillet
+   *   dispatcher already recognises a closed rim.
+   * - **Not a persistent identity.** Unlike `hash`, these are dense integers
+   *   assigned while walking one body's solids. They are comparable only
+   *   within the same `BodyTopology`, and a rebuild may renumber them. Do not
+   *   store them, key a document off them, or compare them across bodies.
+   * - **Not shared between solids.** Numbering is body-wide but the handle
+   *   map is rebuilt per solid, so two solids in one body — a linear pattern
+   *   whose spacing equals its extent, say — never share a vertex id even
+   *   where they touch exactly. That is deliberate: they are distinct
+   *   topology that happens to be coincident, and a run must not walk across.
+   * - **Not sufficient for an edge run on its own either.** Twelve box edges
+   *   meet in pairs at eight vertices and are not one run. Shared vertex and
+   *   shared face are both necessary; what makes a run is a product question
+   *   about tangency on top of them.
+   */
+  vertexIds?: [number, number];
   /**
    * XYZ-interleaved display polyline sampled from the exact edge curve.
    * Closed feature edges repeat their first point so the viewport draws the
@@ -437,9 +710,74 @@ export interface EdgeTopology {
   points: number[];
 }
 
+/**
+ * Exact geometry for one edge's underlying curve.
+ *
+ * Only `type` is always present. Analytic data is published for circles alone,
+ * and only after it has been checked against the edge's own sampled polyline,
+ * so a consumer that finds `circle` may use it without further validation.
+ *
+ * Four things this record is NOT:
+ *
+ * - **Not a parameter range.** No `t` domain is published, and none should be
+ *   added without re-measuring. The kernel's `getEdgeCurveParameters` reports
+ *   the domain of the UNDERLYING curve, not the edge's trim of it: a quarter
+ *   fillet arc of length 3pi/2 reports `[0, 2pi]`, and evaluating at that
+ *   range's midpoint lands on the edge's own end vertex rather than its
+ *   middle. A consumer handed that range would mis-draw every fillet and
+ *   chamfer arc in the product. `circle` describes the full circle the edge
+ *   lies on; where the edge starts and stops on it is recoverable only from
+ *   `points` or the edge's vertices.
+ * - **Not a swept direction.** `circle.axis` is the unoriented normal of the
+ *   arc's plane, canonically signed so it does not flip between rebuilds. It
+ *   says nothing about which way the edge runs, and crossing it with anything
+ *   to recover a winding is meaningless.
+ * - **Not a claim about the surfaces meeting at the edge.** A circular edge
+ *   bounds whatever `adjacentFaceHashes` names; the curve is the intersection
+ *   geometry, not either face's own axis or radius, and a fillet arc's radius
+ *   is the fillet's only where the blend is tangent to both walls.
+ * - **Not a completeness guarantee.** An edge with no `curve` means the kernel
+ *   would not answer, not that the edge is degenerate; an edge whose `curve`
+ *   has no `circle` means only that no analytic form is published for it.
+ */
+export interface EdgeCurve {
+  /**
+   * The kernel's curve-type vocabulary: `LINE`, `CIRCLE`, `ELLIPSE`,
+   * `BSPLINE_CURVE`. Left open rather than closed to a union because it is the
+   * kernel's word, matching `FaceGeometry.surfaceType`; a consumer should
+   * compare against the case it handles and treat anything else as unknown.
+   */
+  type: string;
+  /**
+   * The full circle this edge lies on — never a subtended arc, see above.
+   *
+   * Published only for `type === 'CIRCLE'`. That gate is load-bearing rather
+   * than cosmetic: the kernel's edge curvature measurement is silently wrong
+   * for ellipses by roughly twelve orders of magnitude, reporting a radius of
+   * 1.4999e12 for a true 1.5, and a record built without the gate would carry
+   * plausible-shaped garbage rather than fail.
+   */
+  circle?: {
+    center: Vector3;
+    /** Unit normal of the arc's plane; unoriented, see above. */
+    axis: Vector3;
+    radius: number;
+  };
+}
+
 export interface BodyTopology {
   faces: FaceTopology[];
   edges: EdgeTopology[];
+  lineageDiagnostics?: TopologyLineageDiagnostic[];
+}
+
+export interface TopologyLineageDiagnostic {
+  kind: 'edge' | 'face' | 'body';
+  status:
+    'hash-only' | 'deleted' | 'split' | 'merged' | 'ambiguous' | 'unsupported';
+  featureId?: FeatureId;
+  topologyId?: string;
+  message: string;
 }
 
 export interface TopologySelection {
@@ -447,6 +785,8 @@ export interface TopologySelection {
   kind: 'body' | 'face' | 'edge';
   topologyId?: string;
   hash?: number;
+  /** Present when the kernel can prove a schema-v5 persistent reference. */
+  reference?: TopologyReferenceV5;
 }
 
 /**
@@ -572,17 +912,189 @@ export interface ArtifactRecord {
 
 export type ArtifactKind = ArtifactRecord['kind'];
 
+/**
+ * Which shelf a project sits on. `deleted` is the recycle bin: the project is
+ * hidden from the parts grid but still fully restorable until it is purged.
+ */
+export type ProjectStatus = 'active' | 'archived' | 'deleted';
+
+export const PROJECT_STATUSES: readonly ProjectStatus[] = [
+  'active',
+  'archived',
+  'deleted'
+];
+
+/**
+ * Shelf state for a project: where it lives and in what order it is shown.
+ * Kept apart from the project itself because it describes the owner's desk,
+ * not the part — nothing here changes the geometry or the revision history.
+ */
+export interface ProjectOrganization {
+  status: ProjectStatus;
+  /** Pinned projects lead their shelf regardless of manual order. */
+  pinned: boolean;
+  /** Manual drag order within a shelf; lower sorts first. */
+  sortOrder: number;
+  /** When the project entered the recycle bin, if it is in there. */
+  deletedAt?: string;
+  /** When the project was archived, if it is archived. */
+  archivedAt?: string;
+}
+
+export const DEFAULT_PROJECT_ORGANIZATION: ProjectOrganization = {
+  status: 'active',
+  pinned: false,
+  sortOrder: 0
+};
+
 export interface ProjectSummary {
   projectId: ProjectId;
   name: string;
   lastRevisionId?: RevisionId;
   revisionCount: number;
   updatedAt: string;
+  /**
+   * The document version this store holds. Present so a device can ask "am I
+   * behind?" from the project listing it already fetches, instead of pulling
+   * whole documents to find out. Absent on summaries built by stores that
+   * predate it, where the answer is simply unknown.
+   */
+  documentVersion?: number;
+  /**
+   * Absent when the store holding this summary has no shelf state for the
+   * project — an older row, or a device that has never organised it. Read it
+   * through {@link projectOrganization} so a missing record reads as defaults
+   * instead of silently overwriting one that does exist elsewhere.
+   */
+  organization?: ProjectOrganization;
+}
+
+/**
+ * Folds a partial shelf edit into the current state. The archived/deleted
+ * timestamps are owned by this function rather than by callers so that they
+ * always mean "when it entered this shelf": moving straight from the archive
+ * to the bin restamps `deletedAt`, restoring clears both, and the retention
+ * countdown always measures from the move that put the project there.
+ */
+export function applyOrganizationUpdate(
+  current: ProjectOrganization,
+  update: Pick<UpdateProjectRequest, 'status' | 'pinned' | 'sortOrder'>,
+  now = nowIso()
+): ProjectOrganization {
+  const status = update.status ?? current.status;
+  const next: ProjectOrganization = {
+    status,
+    pinned: update.pinned ?? current.pinned,
+    sortOrder: update.sortOrder ?? current.sortOrder
+  };
+  if (status === 'deleted') {
+    next.deletedAt =
+      current.status === 'deleted' ? (current.deletedAt ?? now) : now;
+  }
+  if (status === 'archived') {
+    next.archivedAt =
+      current.status === 'archived' ? (current.archivedAt ?? now) : now;
+  }
+  return next;
+}
+
+/** Shelf state of a summary, with the defaults applied. */
+export function projectOrganization(
+  summary: Pick<ProjectSummary, 'organization'>
+): ProjectOrganization {
+  return summary.organization ?? DEFAULT_PROJECT_ORGANIZATION;
+}
+
+/** How long a deleted project stays restorable before it is purged. */
+export const TRASH_RETENTION_DAYS = 30;
+export const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+/** When a project deleted at `deletedAt` becomes eligible for purging. */
+export function trashPurgeAt(deletedAt: string): string {
+  return new Date(Date.parse(deletedAt) + TRASH_RETENTION_MS).toISOString();
+}
+
+/** Whole days left before a deleted project is purged; 0 once it is due. */
+export function daysUntilPurge(deletedAt: string, now = Date.now()): number {
+  const remaining = Date.parse(deletedAt) + TRASH_RETENTION_MS - now;
+  return remaining <= 0 ? 0 : Math.ceil(remaining / (24 * 60 * 60 * 1000));
+}
+
+/**
+ * True once a deleted project has outlived the retention window. An unparsable
+ * timestamp is treated as *not* due: a purge is irreversible, so a corrupt
+ * record has to be looked at rather than quietly destroyed.
+ */
+export function isPurgeDue(deletedAt: string | undefined, now = Date.now()) {
+  if (!deletedAt) {
+    return false;
+  }
+  const parsed = Date.parse(deletedAt);
+  return Number.isFinite(parsed) && parsed + TRASH_RETENTION_MS <= now;
+}
+
+/**
+ * Shelf order: pinned first, then the manual drag order, then most recently
+ * touched. The project id breaks the final tie so the sort is total — without
+ * it two projects saved in the same millisecond could swap places per render.
+ */
+export function compareProjectSummaries(
+  left: ProjectSummary,
+  right: ProjectSummary
+): number {
+  const a = projectOrganization(left);
+  const b = projectOrganization(right);
+  if (a.pinned !== b.pinned) {
+    return a.pinned ? -1 : 1;
+  }
+  if (a.sortOrder !== b.sortOrder) {
+    return a.sortOrder - b.sortOrder;
+  }
+  const byUpdated = right.updatedAt.localeCompare(left.updatedAt);
+  return byUpdated !== 0
+    ? byUpdated
+    : left.projectId.localeCompare(right.projectId);
+}
+
+const COPY_SUFFIX_PATTERN = /\s*\(copy(?: (\d+))?\)$/i;
+
+/**
+ * Name for a copy of `baseName` that does not collide with `existingNames`.
+ * Duplicating a duplicate extends the existing counter rather than nesting
+ * another "(copy)", so a part copied five times is not called
+ * "Bracket (copy) (copy) (copy) (copy) (copy)".
+ */
+export function duplicateProjectName(
+  baseName: string,
+  existingNames: Iterable<string>
+): string {
+  const taken = new Set(
+    [...existingNames].map((name) => name.trim().toLowerCase())
+  );
+  const root = baseName.trim().replace(COPY_SUFFIX_PATTERN, '') || 'Untitled';
+  for (let index = 1; ; index += 1) {
+    const suffix = index === 1 ? ' (copy)' : ` (copy ${index})`;
+    // The suffix is what makes the name unique, so the root is what gives way
+    // when the pair would exceed the limit.
+    const candidate =
+      `${root.slice(0, MAX_PROJECT_NAME_LENGTH - suffix.length)}${suffix}`.trim();
+    if (!taken.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
 }
 
 export interface CreateProjectRequest {
   name: string;
   units?: UnitSystem;
+  /**
+   * An existing device-local document to adopt into the account rather than a
+   * fresh project to mint. The document keeps its `projectId`, so the device's
+   * local copy and the shelf metadata it has already accumulated stay pointed
+   * at the same project once it has an account record. `units` is ignored when
+   * this is present — the document already has them.
+   */
+  document?: ProjectDocument;
 }
 
 export interface CreateProjectResponse {
@@ -594,11 +1106,69 @@ export interface ListProjectsResponse {
   projects: ProjectSummary[];
 }
 
+/** Partial shelf-state edit; omitted fields are left as they are. */
+export interface UpdateProjectRequest {
+  projectId: ProjectId;
+  status?: ProjectStatus;
+  pinned?: boolean;
+  sortOrder?: number;
+}
+
+export interface UpdateProjectResponse {
+  project: ProjectSummary;
+}
+
+export interface DuplicateProjectRequest {
+  projectId: ProjectId;
+  /** Defaults to a non-colliding "(copy)" of the source name. */
+  name?: string;
+}
+
+export type DuplicateProjectResponse = CreateProjectResponse;
+
+/**
+ * The projects to renumber, in their new order. Ids the caller leaves out keep
+ * whatever position they had, so one shelf can be reordered without disturbing
+ * the others.
+ */
+export interface ReorderProjectsRequest {
+  projectIds: ProjectId[];
+}
+
+export type ReorderProjectsResponse = ListProjectsResponse;
+
+export interface PurgeProjectsResponse {
+  /** Projects destroyed because their retention window ran out. */
+  purgedProjectIds: ProjectId[];
+}
+
 export interface SaveRevisionRequest {
   projectId: ProjectId;
   reason: string;
   expectedVersion: number;
   document: ProjectDocument;
+}
+
+/**
+ * A continuous-sync write: the same fenced update as a revision save, without
+ * the history entry. Autosave uses this so a long editing session costs a
+ * bounded number of row updates rather than one full document snapshot per
+ * save; explicit checkpoints still go through {@link SaveRevisionRequest}.
+ */
+export interface SaveProjectDocumentRequest {
+  projectId: ProjectId;
+  expectedVersion: number;
+  document: ProjectDocument;
+}
+
+/**
+ * Acknowledgement only. The whole document does not come back — the client
+ * already has it, and returning it would double the cost of every autosave.
+ */
+export interface SaveProjectDocumentResponse {
+  projectId: ProjectId;
+  version: number;
+  updatedAt: string;
 }
 
 export interface CreateUploadSessionRequest {
@@ -634,6 +1204,20 @@ export interface HealthResponse {
   status: 'ok';
   environment: 'development' | 'beta';
   time: string;
+  /**
+   * Whether D1 has every schema object installed by
+   * 0010_document_storage_accounting. Absent older Workers are not ready.
+   */
+  documentStorageAccountingReady?: boolean;
+  /** Public rollout capability; absent older Workers are treated as disabled. */
+  projectSharingEnabled?: boolean;
+  /** Public rollout capability; absent older Workers are treated as disabled. */
+  projectEditLeasesEnforced?: boolean;
+  /**
+   * Whether the owner's own devices may join a live room. Independent of
+   * sharing: this being on says nothing about invitations, roles, or leases.
+   */
+  projectPersonalSyncEnabled?: boolean;
 }
 
 export interface AuthSession {
@@ -694,6 +1278,17 @@ export interface AppSettings {
     density: AppDensity;
     reducedMotion: boolean;
   };
+  /**
+   * Workspace chrome widths in CSS pixels. Panel *collapse* is a per-device
+   * habit and stays in local panel state, but a width someone dialled in is a
+   * preference worth carrying: it rides the settings sync, so it follows an
+   * account between browsers and still falls back to device storage for anyone
+   * who is not signed in.
+   */
+  layout: {
+    sidebarWidth: number;
+    assistantWidth: number;
+  };
   viewport: {
     defaultProjection: SettingsProjectionMode;
     showGrid: boolean;
@@ -707,6 +1302,16 @@ export interface AppSettings {
     snapEnabled: boolean;
     linearSnap: number;
     angleSnap: number;
+  };
+  /**
+   * How work reaches the account. There is no toggle for the device write —
+   * that is what protects the work, and it is not a preference.
+   */
+  files: {
+    /** Copy the open project to the account as you work. */
+    cloudAutosave: boolean;
+    /** Quiet time before a copy is written, in seconds. */
+    cloudAutosaveDelaySeconds: number;
   };
   assistant: {
     enabled: boolean;
@@ -725,6 +1330,39 @@ export interface AppSettings {
   };
 }
 
+export interface PanelWidthLimits {
+  min: number;
+  max: number;
+  default: number;
+}
+
+/**
+ * What a resized panel is allowed to be, in CSS pixels. Shared so the browser,
+ * the Worker's parser and the stylesheet caps agree on one set of numbers: the
+ * minimums keep a panel usable rather than a sliver, and the maximums stop a
+ * stored width from crowding out the viewport on the next device that reads it.
+ */
+export const PANEL_WIDTH_LIMITS: {
+  sidebar: PanelWidthLimits;
+  assistant: PanelWidthLimits;
+} = {
+  sidebar: { min: 180, max: 720, default: 252 },
+  // The assistant needs room for a question card's chips and an audit table.
+  assistant: { min: 300, max: 900, default: 360 }
+};
+
+/**
+ * Bounds on the cloud-autosave quiet time, in seconds. Shared so the browser,
+ * the Worker's parser, and the settings control agree. The floor is not zero:
+ * a write on every keystroke would spend the account's write budget on
+ * intermediate states nobody asked to keep.
+ */
+export const CLOUD_AUTOSAVE_DELAY_BOUNDS = {
+  min: 1,
+  max: 60,
+  default: 3
+} as const;
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
   general: {
@@ -737,6 +1375,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     density: 'compact',
     reducedMotion: false
   },
+  layout: {
+    sidebarWidth: PANEL_WIDTH_LIMITS.sidebar.default,
+    assistantWidth: PANEL_WIDTH_LIMITS.assistant.default
+  },
   viewport: {
     defaultProjection: 'perspective',
     showGrid: true,
@@ -748,6 +1390,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     snapEnabled: true,
     linearSnap: 1,
     angleSnap: 15
+  },
+  files: {
+    cloudAutosave: true,
+    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default
   },
   assistant: {
     enabled: false,
@@ -805,6 +1451,61 @@ export interface CollaborationMember {
   status: 'active' | 'idle';
 }
 
+export type ProjectAccessRole = 'owner' | 'editor' | 'viewer';
+export type ProjectMemberRole = Exclude<ProjectAccessRole, 'owner'>;
+
+export interface ProjectSharingMember {
+  userId: UserId;
+  email: string | null;
+  role: ProjectMemberRole;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectInvitationSummary {
+  invitationId: string;
+  projectId: string;
+  email: string;
+  role: ProjectMemberRole;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ProjectSharingResponse {
+  projectId: string;
+  ownerUserId: UserId;
+  members: ProjectSharingMember[];
+  invitations: ProjectInvitationSummary[];
+}
+
+export interface CreateProjectInvitationRequest {
+  email: string;
+  role: ProjectMemberRole;
+}
+
+export interface CreateProjectInvitationResponse {
+  invitation: ProjectInvitationSummary;
+  /** Returned only once. Persistence stores only its SHA-256 hash. */
+  token: string;
+}
+
+export interface AcceptProjectInvitationRequest {
+  token: string;
+}
+
+export interface AcceptProjectInvitationResponse {
+  projectId: string;
+  role: ProjectMemberRole;
+}
+
+export interface ProjectEditLease {
+  leaseId: string;
+  projectId: string;
+  clientId: string;
+  userId: UserId;
+  expiresAt: number;
+}
+
 export type CollaborationClientMessage =
   | {
       type: 'hello';
@@ -812,20 +1513,27 @@ export type CollaborationClientMessage =
       displayName: string;
       baseVersion: number | null;
       document: ProjectDocument | null;
+      leaseId?: string;
     }
   | {
       type: 'document';
       clientId: string;
       baseVersion: number | null;
       document: ProjectDocument;
+      leaseId?: string;
     }
-  | { type: 'presence'; clientId: string; status: 'active' | 'idle' };
+  | { type: 'presence'; clientId: string; status: 'active' | 'idle' }
+  | { type: 'lease-acquire'; clientId: string }
+  | { type: 'lease-renew'; clientId: string; leaseId: string }
+  | { type: 'lease-release'; clientId: string; leaseId: string };
 
 export type CollaborationServerMessage =
   | {
       type: 'state';
       members: CollaborationMember[];
       document: ProjectDocument | null;
+      role: ProjectAccessRole;
+      lease: ProjectEditLease | null;
     }
   | { type: 'presence'; members: CollaborationMember[] }
   | { type: 'document'; clientId: string; document: ProjectDocument }
@@ -837,6 +1545,16 @@ export type CollaborationServerMessage =
    */
   | { type: 'ack'; version: number; document?: ProjectDocument }
   | { type: 'conflict'; document: ProjectDocument }
+  | { type: 'lease-granted'; lease: ProjectEditLease }
+  | {
+      type: 'lease-denied';
+      reason: 'held' | 'read-only';
+      expiresAt?: number;
+    }
+  | {
+      type: 'lease-lost';
+      reason: 'expired' | 'released' | 'role-changed' | 'invalid';
+    }
   /**
    * A submission the room refused outright. Room state is unchanged, so the
    * sender keeps its own document rather than reporting itself synced against
@@ -851,6 +1569,10 @@ export type CollaborationErrorCode =
   | 'document-too-complex'
   /** Not a document-shaped payload at all. */
   | 'document-invalid'
+  /** The authenticated project role cannot author room state. */
+  | 'permission-denied'
+  /** Lease enforcement is enabled and no matching live lease was supplied. */
+  | 'lease-required'
   /** The room failed while handling an otherwise well-formed message. */
   | 'internal';
 
@@ -860,6 +1582,50 @@ export type CollaborationErrorCode =
  * limit from a rejected request.
  */
 export const MAX_PROJECT_NAME_LENGTH = 200;
+
+/**
+ * Largest document the account will store, as serialized JSON bytes. D1 keeps
+ * each document as one blob, so this is a row ceiling rather than a quota.
+ * Shared because three layers have to agree on it: the collaboration room
+ * refuses oversize frames, the persistence layer refuses oversize writes, and
+ * the client needs to name the limit instead of reporting a generic failure.
+ */
+export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
+
+/** Serialized size of `document`, measured the way the store measures it. */
+export function persistedDocumentBytes(document: ProjectDocument): number {
+  return new TextEncoder().encode(JSON.stringify(document)).byteLength;
+}
+
+/**
+ * How many revisions a project keeps before the oldest are dropped.
+ *
+ * Each revision is a whole copy of the document, so an unbounded history is an
+ * unbounded multiple of the project itself. Fifty explicit saves is far more
+ * history than the UI exposes any way to reach, and continuous sync no longer
+ * adds to this count — every remaining revision is a save somebody chose to
+ * make.
+ */
+export const MAX_PROJECT_REVISIONS = 50;
+
+/** What an account is currently storing, for the settings panel. */
+export interface AccountStorageUsage {
+  projectCount: number;
+  /** Bytes held by the current copy of each project. */
+  documentBytes: number;
+  /** Bytes held by saved revisions, across every project. */
+  revisionBytes: number;
+  /**
+   * How many revisions are retained in total. Reported separately from the
+   * bytes because retention bounds the count, not the size — later revisions of
+   * a project are larger than earlier ones, so a flat byte total cannot show
+   * that pruning is working.
+   */
+  revisionCount: number;
+  /** The per-document ceiling, so the client can name it without hardcoding. */
+  documentLimitBytes: number;
+  maxRevisionsPerProject: number;
+}
 
 export const identityTransform = (): Transform3D => ({
   translation: { x: 0, y: 0, z: 0 },
@@ -899,6 +1665,9 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   revolve: '#5fb3e8',
   boolean: '#ff7452',
   transform: '#8b80f9',
+  mirror: '#a78bfa',
+  shell: '#14b8a6',
+  'solid-offset': '#06b6d4',
   fillet: '#f59e0b',
   chamfer: '#fb7185',
   pattern: '#38bdf8',

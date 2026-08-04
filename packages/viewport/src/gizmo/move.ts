@@ -19,7 +19,14 @@ export interface MoveGizmoFocus {
 
 /** Pending Move/Rotate values, previewed live and committed as one feature. */
 export interface MovePreview {
+  /** Body id — or, when `target` is `'sketch'`, the sketch id being moved. */
   bodyId: string;
+  /**
+   * What the gizmo is attached to. Bodies translate and rotate; sketches
+   * translate only (a rectangle has no angle to store), so the rings are
+   * omitted from the gizmo and rotation stays zero.
+   */
+  target?: 'body' | 'sketch';
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }
@@ -95,26 +102,9 @@ export function chooseRotateSnapStep(pixelsPerDegree: number): number {
 }
 
 /**
- * The Move feature rotates about the world origin (X, then Y, then Z — the
- * exact kernel applies the axes in that order, i.e. Euler 'ZYX'), then
- * translates. To make the gizmo rotate the body about its own center, fold
- * the difference into the committed translation: T = t + c − R·c.
+ * Three.js Euler matching the exact kernel's world-axis X, then Y, then Z
+ * application order (represented as Euler order 'ZYX').
  */
-export function composeMoveTransform(
-  center: { x: number; y: number; z: number },
-  translation: { x: number; y: number; z: number },
-  rotationDeg: { x: number; y: number; z: number }
-): { x: number; y: number; z: number } {
-  const rotated = new THREE.Vector3(center.x, center.y, center.z).applyEuler(
-    moveEuler(rotationDeg)
-  );
-  return {
-    x: translation.x + center.x - rotated.x,
-    y: translation.y + center.y - rotated.y,
-    z: translation.z + center.z - rotated.z
-  };
-}
-
 export function moveEuler(rotationDeg: {
   x: number;
   y: number;

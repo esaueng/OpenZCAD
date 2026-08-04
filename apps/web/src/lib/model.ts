@@ -17,6 +17,8 @@ export function paramValueText(value: ParamValue | undefined): string {
 export interface EvalPreview {
   ok: boolean;
   text: string;
+  /** The evaluated number, present exactly when `ok`. */
+  value?: number;
 }
 
 /** Live evaluation preview for expression inputs ("= 42" or the error). */
@@ -29,9 +31,11 @@ export function previewExpression(
     return { ok: false, text: 'required' };
   }
   try {
+    const value = evaluateExpression(trimmed, scope);
     return {
       ok: true,
-      text: `= ${formatNumber(evaluateExpression(trimmed, scope))}`
+      text: `= ${formatNumber(value)}`,
+      value
     };
   } catch (error) {
     return {
@@ -75,6 +79,9 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   revolve: 'Revolve',
   boolean: 'Boolean',
   transform: 'Move / Rotate',
+  mirror: 'Mirror',
+  shell: 'Shell',
+  'solid-offset': 'Solid offset',
   fillet: 'Fillet',
   chamfer: 'Chamfer',
   pattern: 'Pattern',
@@ -105,8 +112,12 @@ export function inferContentType(fileName: string): string {
   return 'application/octet-stream';
 }
 
-export function downloadText(name: string, value: string): void {
-  const blob = new Blob([value], { type: 'text/plain' });
+export function downloadText(
+  name: string,
+  value: string,
+  contentType = 'text/plain'
+): void {
+  const blob = new Blob([value], { type: contentType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

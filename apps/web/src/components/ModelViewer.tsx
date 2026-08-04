@@ -1,23 +1,19 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
-import { mark, timed } from '../lib/perf';
+import { mark, measure, timed } from '../lib/perf';
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import {
   CSS2DObject,
   CSS2DRenderer
 } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import {
-  EDGE_IDLE_COLOR,
-  EDGE_IDLE_OPACITY,
-  EDGE_IDLE_WIDTH,
-  EDGE_SELECTED_COLOR,
-  EDGE_SELECTED_WIDTH,
   MOVE_AXIS_COLORS,
   MOVE_AXIS_VECTORS,
   RightClickGestureTracker,
-  VIEW_DIRECTIONS,
+  viewDirectionFor,
   applyDisplayMode,
   CameraController,
   buildCylinderRadiusHandle,
@@ -48,6 +44,7 @@ import {
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
+  createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
   createFatLine,
@@ -73,10 +70,11 @@ import {
   projectToScreen,
   projectedWorldSizePx,
   shouldShowGroundShadow,
-  shouldRenderTopologyEdge,
   sketchCentroid,
   snapTo,
   syncFatLineResolution,
+  updateAxesGizmo,
+  updateStudioGrid,
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
   type AxisProjection,
@@ -84,6 +82,7 @@ import {
   type DirectEditAxis,
   type MoveAxis,
   type MoveGizmoFocus,
+  type MoveGizmoVisualData,
   type MoveHandleKind,
   type MovePreview,
   type DepthCycle,
@@ -94,12 +93,17 @@ import {
   type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
+  alignTranslationToCenters,
+  centerAlignLabel,
+  type CenterAlignMatch,
+  type CenterAlignTarget,
   type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
-  type StandardView,
+  type ViewTarget,
   type ViewerSettings,
-  type FatLineResolution
+  type FatLineResolution,
+  type BodyEdgeOverlay
 } from '@openzcad/viewport';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -133,6 +137,7 @@ import {
   sketchObjectFromDrag,
   snapSketchPoint,
   snapTargetsForObject,
+  textObjectFromPoint,
   type SketchPoint,
   type SnapTarget,
   type SnapTargetKind
@@ -172,7 +177,7 @@ export interface CylinderRadiusHandleTarget {
 /** Active in-viewport sketch session, derived from the interaction machine. */
 export interface SketchModeState {
   basis: PlaneBasis;
-  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
   snapStep: number | null;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
@@ -185,6 +190,37 @@ export interface SketchModeState {
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
+/**
+ * In-plane bounding-box center of a sketch's curves, lifted to world space.
+ * This is where the move gizmo sits when a sketch is the target. Null when
+ * the sketch has nothing drawable yet (e.g. its font has not loaded).
+ */
+function sketchViewCenter(view: SketchViewData): THREE.Vector3 | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const curve of view.curves) {
+    for (const point of curve.points) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+    return null;
+  }
+  const x = (minX + maxX) / 2;
+  const y = (minY + maxY) / 2;
+  const basis = view.basis;
+  return new THREE.Vector3(
+    basis.origin.x + basis.u.x * x + basis.v.x * y,
+    basis.origin.y + basis.u.y * x + basis.v.y * y,
+    basis.origin.z + basis.u.z * x + basis.v.z * y
+  );
+}
+
 export interface SketchViewData {
   sketchId: string;
   basis: PlaneBasis;
@@ -231,6 +267,12 @@ export interface EdgeHandleTarget {
   initialValue?: number;
 }
 
+export interface OrientationDragControls {
+  begin(): void;
+  move(deltaX: number, deltaY: number): void;
+  end(): void;
+}
+
 export interface ExtrudePreview {
   sketchId: string;
   distance: number;
@@ -247,8 +289,13 @@ interface ModelViewerProps {
   settings: ViewerSettings;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
-  /** Set to move the camera to a standard view; nonce forces re-runs. */
-  viewRequest: { view: StandardView; nonce: number } | null;
+  /** Set to move the camera to a view target; nonce forces re-runs. */
+  viewRequest: { view: ViewTarget; nonce: number } | null;
+  /**
+   * Set to spin the view a quarter turn about the world up axis; direction is
+   * how the model appears to turn on screen. Nonce forces re-runs.
+   */
+  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
@@ -267,6 +314,8 @@ interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  /** Imperative bridge from the SVG view cube into the live camera rig. */
+  orientationDragRef: MutableRefObject<OrientationDragControls | null>;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -274,7 +323,7 @@ interface ModelViewerProps {
   ): void;
   /** What the pointer is allowed to select. */
   selectionFilter: SelectionFilter;
-  /** Bodies swept by a shift-drag rectangle; empty clears the selection. */
+  /** Bodies swept by a drag rectangle; empty clears the selection. */
   onBoxSelect(bodyIds: string[]): void;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
@@ -402,6 +451,7 @@ export interface SceneContext {
   keyLight: THREE.DirectionalLight;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
+  edgeOverlaysByBodyId: Map<string, BodyEdgeOverlay>;
   hasFitCamera: boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
@@ -431,6 +481,52 @@ interface DimensionLabelBinding {
   modelCenter: THREE.Vector3;
   modelWorldSize: number;
   angleDeg?: number;
+}
+
+/**
+ * Keeps name callouts readable when their anchor sits at the viewport's
+ * edge. CSS2DRenderer centres each label on its projected point and rewrites
+ * the transform every frame, so the correction rides on the margins instead:
+ * the label's unmargined box is recovered from the current margin, and a new
+ * margin is computed from scratch — no feedback across frames. Dimension and
+ * drag-value callouts are excluded; they have their own placement scheme.
+ */
+function clampNameCallouts(container: HTMLElement) {
+  const labels = container.querySelectorAll<HTMLElement>(
+    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+  );
+  if (labels.length === 0) {
+    return;
+  }
+  const bounds = container.getBoundingClientRect();
+  const pad = 4;
+  for (const label of labels) {
+    const currentLeft = parseFloat(label.style.marginLeft) || 0;
+    const currentTop = parseFloat(label.style.marginTop) || 0;
+    const rect = label.getBoundingClientRect();
+    const baseLeft = rect.left - currentLeft;
+    const baseRight = rect.right - currentLeft;
+    const baseTop = rect.top - currentTop;
+    const baseBottom = rect.bottom - currentTop;
+    let marginLeft = 0;
+    if (baseLeft < bounds.left + pad) {
+      marginLeft = bounds.left + pad - baseLeft;
+    } else if (baseRight > bounds.right - pad) {
+      marginLeft = bounds.right - pad - baseRight;
+    }
+    let marginTop = 0;
+    if (baseTop < bounds.top + pad) {
+      marginTop = bounds.top + pad - baseTop;
+    } else if (baseBottom > bounds.bottom - pad) {
+      marginTop = bounds.bottom - pad - baseBottom;
+    }
+    if (marginLeft !== currentLeft) {
+      label.style.marginLeft = marginLeft ? `${marginLeft}px` : '';
+    }
+    if (marginTop !== currentTop) {
+      label.style.marginTop = marginTop ? `${marginTop}px` : '';
+    }
+  }
 }
 
 function updateDimensionLabels(
@@ -517,6 +613,8 @@ interface MoveDragState {
   worldPerPixel: number;
   startTranslation: MovePreview['translation'];
   startRotation: MovePreview['rotationDeg'];
+  /** Moving thing's center with zero translation; snap math needs where it rests. */
+  restingCenter: THREE.Vector3;
   snapMove: number;
   snapRotate: number;
 }
@@ -535,10 +633,6 @@ const SKETCH_CURVE_WIDTH = 1.4;
 const PREVIEW_EDGE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
-interface EdgeVisualState {
-  selected: boolean;
-}
-
 export function ModelViewer({
   bodies,
   sketches,
@@ -548,6 +642,7 @@ export function ModelViewer({
   settings,
   fitSignal,
   viewRequest,
+  rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
@@ -557,6 +652,7 @@ export function ModelViewer({
   initialView,
   onViewChange,
   orientationRef,
+  orientationDragRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -627,6 +723,8 @@ export function ModelViewer({
   sketchesRef.current = sketches;
   const bodiesRef = useRef(bodies);
   bodiesRef.current = bodies;
+  /** Last body projection installed in Three.js; selection-only renders reuse it. */
+  const renderedBodiesRef = useRef<readonly BodyRepresentation[] | null>(null);
   const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const onContextMenuRef = useRef(onContextMenu);
@@ -801,6 +899,12 @@ export function ModelViewer({
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
+    const orientationDragControls: OrientationDragControls = {
+      begin: () => cameraRig.beginOrbitDrag(),
+      move: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
+      end: () => cameraRig.endOrbitDrag()
+    };
+    orientationDragRef.current = orientationDragControls;
 
     // Z-up sky plus cool floor bounce keeps undersides readable without
     // weakening the directional key that defines face orientation.
@@ -826,7 +930,11 @@ export function ModelViewer({
     const shadowCatcher = createShadowCatcher();
     scene.add(shadowCatcher);
 
-    const axes = createAxesGizmo(16, {
+    // Stretched per frame by updateAxesGizmo so each axis runs past the
+    // viewport edge — on screen they read as infinite. Fat lines keep a
+    // constant screen-space width, so the triad stays one crisp stroke at
+    // any zoom.
+    const axes = createAxesGizmo({
       width: renderer.domElement.clientWidth || 1,
       height: renderer.domElement.clientHeight || 1
     });
@@ -859,6 +967,7 @@ export function ModelViewer({
     // Raycasting and topology resolution. The active camera is read per call
     // because the projection toggle swaps it.
     const objectsByBodyId = new Map<string, THREE.Object3D>();
+    const edgeOverlaysByBodyId = new Map<string, BodyEdgeOverlay>();
 
     const selection = new SelectionManager({
       bodyGroup,
@@ -905,11 +1014,25 @@ export function ModelViewer({
         return;
       }
       const center = moveCenterRef.current;
-      const object = context.objectsByBodyId.get(preview.bodyId);
-      if (object) {
-        const final = composeMoveTransform(center, translation, rotationDeg);
-        object.rotation.copy(moveEuler(rotationDeg));
-        object.position.set(final.x, final.y, final.z);
+      if (preview.target === 'sketch') {
+        // A sketch preview shifts its overlay children — curves, region
+        // fills, boundaries, markers — as a rigid translation. No rotation:
+        // the document cannot store one for most sketch object kinds.
+        const overlay = regionGroupRef.current;
+        if (overlay) {
+          for (const child of overlay.children) {
+            if (child.userData.sketchViewId === preview.bodyId) {
+              child.position.set(translation.x, translation.y, translation.z);
+            }
+          }
+        }
+      } else {
+        const object = context.objectsByBodyId.get(preview.bodyId);
+        if (object) {
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          object.rotation.copy(moveEuler(rotationDeg));
+          object.position.set(final.x, final.y, final.z);
+        }
       }
       moveGizmoGroup.position.set(
         center.x + translation.x,
@@ -967,6 +1090,7 @@ export function ModelViewer({
       keyLight,
       raycaster: picker.raycaster,
       objectsByBodyId,
+      edgeOverlaysByBodyId,
       hasFitCamera: false,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
@@ -1012,12 +1136,14 @@ export function ModelViewer({
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
-    /** Shift-drag rubber band over empty space, for selecting several bodies. */
+    /** Unmodified drag rubber band for selecting several bodies. */
     let boxSelect: {
       pointerId: number;
       startX: number;
       startY: number;
     } | null = null;
+    /** Pointer whose Shift+left-drag is currently routed to camera orbit. */
+    let shiftOrbitPointerId: number | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
@@ -1028,6 +1154,8 @@ export function ModelViewer({
      * every edge of the model on every pointer move.
      */
     let moveSnaps: SnapCandidate[] = [];
+    /** Face centers of the other bodies, for center-alignment snapping. */
+    let moveCenterTargets: CenterAlignTarget[] = [];
     /** Screen-projected drag along the offset handle's normal. */
     let offsetDrag: {
       pointerId: number;
@@ -1146,6 +1274,49 @@ export function ModelViewer({
     }
 
     /**
+     * Centers to align the moving thing with: every face center of every
+     * other body. Point snapping answers "is the handle on that corner";
+     * these answer "is what I am moving centred on that face" — per axis,
+     * so latching one axis or both are the same rule.
+     */
+    function collectCenterAlignTargets(
+      movingBodyId: string | null
+    ): CenterAlignTarget[] {
+      return bodiesRef.current
+        .filter((body) => !body.consumed && body.bodyId !== movingBodyId)
+        .flatMap((body) =>
+          (body.topology?.faces ?? []).flatMap((face) =>
+            face.geometry?.center
+              ? [{ point: face.geometry.center, label: body.name }]
+              : []
+          )
+        );
+    }
+
+    /** Glyph + readout for a latched center alignment. */
+    function showCenterAlignGlyph(matches: CenterAlignMatch[]): void {
+      const target = matches[0]?.target;
+      if (!target) {
+        hud.hide(snapGlyph);
+        return;
+      }
+      const host = renderer.domElement;
+      const screen = projectToScreen(
+        new THREE.Vector3(target.point.x, target.point.y, target.point.z),
+        context.activeCamera,
+        host.clientWidth,
+        host.clientHeight
+      );
+      if (!screen) {
+        hud.hide(snapGlyph);
+        return;
+      }
+      snapGlyph.textContent = `◎ ${centerAlignLabel(matches)}`;
+      snapGlyph.dataset.kind = 'center';
+      hud.showAt(snapGlyph, screen.x, screen.y);
+    }
+
+    /**
      * Draws the rubber band, and dresses it by drag direction so the rule in
      * force is visible while it is still being chosen rather than explained
      * afterwards by what got selected.
@@ -1168,6 +1339,15 @@ export function ModelViewer({
       selectionBand.style.width = `${rect.right - rect.left}px`;
       selectionBand.style.height = `${rect.bottom - rect.top}px`;
       hud.showAt(selectionBand, rect.left, rect.top);
+    }
+
+    function beginBoxSelect(event: PointerEvent) {
+      boxSelect = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY
+      };
+      gestures.capture(event, 'crosshair');
     }
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
@@ -1335,6 +1515,97 @@ export function ModelViewer({
       );
     };
     /**
+     * Where on screen a pickable exact edge currently is.
+     *
+     * Browser regressions that click an edge have to aim at a line a couple of
+     * pixels wide, and scanning a lattice of screen points hoping to land on
+     * one is both slow and dependent on the fit pose. This projects the exact
+     * display polyline through the active camera and then confirms the
+     * candidate with the real PickService, so the reported point is one the
+     * application itself resolves to that edge. Occluded samples fail that
+     * confirmation, so only a visible edge is ever reported.
+     */
+    const handleE2ELocateEdge = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          bodyId?: string;
+          resolve?: (
+            value: { x: number; y: number; topologyId: string } | null
+          ) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const body = bodiesRef.current.find(
+        (candidate) =>
+          !candidate.consumed &&
+          (!detail.bodyId || candidate.bodyId === detail.bodyId)
+      );
+      const edges = (body?.topology?.edges ?? []).filter(
+        (edge) => edge.displayRole !== 'seam'
+      );
+      const rect = renderer.domElement.getBoundingClientRect();
+      const sample = new THREE.Vector3();
+      for (const edge of edges) {
+        for (let index = 0; index + 5 < edge.points.length; index += 3) {
+          // Segment midpoints, not vertices: a vertex sits on two edges at
+          // once, so which one a click there takes is an arbitrary tie-break.
+          sample
+            .set(
+              (edge.points[index]! + edge.points[index + 3]!) / 2,
+              (edge.points[index + 1]! + edge.points[index + 4]!) / 2,
+              (edge.points[index + 2]! + edge.points[index + 5]!) / 2
+            )
+            .project(context.activeCamera);
+          // Client coordinates are integers, so round before confirming: the
+          // caller must click the exact point that was proven pickable.
+          const clientX = Math.round(
+            rect.left + ((sample.x + 1) / 2) * rect.width
+          );
+          const clientY = Math.round(
+            rect.top + ((1 - sample.y) / 2) * rect.height
+          );
+          if (
+            sample.z > 1 ||
+            clientX <= rect.left ||
+            clientX >= rect.right ||
+            clientY <= rect.top ||
+            clientY >= rect.bottom
+          ) {
+            continue;
+          }
+          // Selection chips, callouts, and the floating inspector are DOM
+          // overlays on top of the canvas. A point one of them covers is
+          // pickable in the scene but unreachable by a pointer, so it is not
+          // an answer to "where can this edge be clicked".
+          if (
+            document.elementFromPoint(clientX, clientY) !== renderer.domElement
+          ) {
+            continue;
+          }
+          const picked = picker.pick(
+            new MouseEvent('mousemove', { clientX, clientY })
+          );
+          if (
+            picked?.selection?.kind === 'edge' &&
+            picked.selection.topologyId === edge.topologyId
+          ) {
+            detail.resolve({
+              x: clientX,
+              y: clientY,
+              topologyId: edge.topologyId
+            });
+            return;
+          }
+        }
+      }
+      detail.resolve(null);
+    };
+    /**
      * Select a detected profile by stable index in browser regressions. The
      * picker itself has focused unit coverage; this avoids racing the camera
      * tween while exercising the full application selection lifecycle.
@@ -1427,7 +1698,7 @@ export function ModelViewer({
           visible: boolean;
         }[] = [];
         root.traverse((child) => {
-          if (child instanceof Line2) {
+          if (child instanceof LineSegments2) {
             states.push({
               depthTest: child.material.depthTest,
               depthWrite: child.material.depthWrite,
@@ -1457,6 +1728,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-profile',
         handleE2EProfileSelection
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-locate-edge',
+        handleE2ELocateEdge
       );
     }
 
@@ -2047,6 +2322,28 @@ export function ModelViewer({
               drag.snapMove,
               fine
             );
+            // Center alignment outranks the step grid on the driven axis: a
+            // face's center is a place someone meant, a grid line is not.
+            // Shift frees both together, as it already means.
+            const aligned = fine
+              ? null
+              : alignTranslationToCenters(
+                  drag.restingCenter,
+                  {
+                    ...translation,
+                    [drag.axis]:
+                      drag.startTranslation[drag.axis] + (t - drag.startT)
+                  },
+                  moveCenterTargets,
+                  [drag.axis],
+                  drag.worldPerPixel * SNAP_RADIUS_PX
+                );
+            if (aligned && aligned.matches.length > 0) {
+              translation[drag.axis] = aligned.translation[drag.axis];
+              showCenterAlignGlyph(aligned.matches);
+            } else {
+              hud.hide(snapGlyph);
+            }
           }
         } else if (drag.kind === 'ring') {
           const angle = ringAngleAt(
@@ -2107,7 +2404,6 @@ export function ModelViewer({
             translation.z = landed.z;
             showSnapGlyph(snapped);
           } else {
-            hud.hide(snapGlyph);
             translation.x = snapTo(
               drag.startTranslation.x + world.x,
               drag.snapMove,
@@ -2123,6 +2419,31 @@ export function ModelViewer({
               drag.snapMove,
               fine
             );
+            // No corner under the pointer: try lining centers up instead.
+            // Raw (pre-grid) deltas feed the test so the grid cannot round
+            // the drag out of the alignment window; each axis latches
+            // independently, so centering on one axis or both just falls out.
+            const aligned = fine
+              ? null
+              : alignTranslationToCenters(
+                  drag.restingCenter,
+                  {
+                    x: drag.startTranslation.x + world.x,
+                    y: drag.startTranslation.y + world.y,
+                    z: drag.startTranslation.z + world.z
+                  },
+                  moveCenterTargets,
+                  ['x', 'y', 'z'],
+                  drag.worldPerPixel * SNAP_RADIUS_PX
+                );
+            if (aligned && aligned.matches.length > 0) {
+              for (const match of aligned.matches) {
+                translation[match.axis] = aligned.translation[match.axis];
+              }
+              showCenterAlignGlyph(aligned.matches);
+            } else {
+              hud.hide(snapGlyph);
+            }
           }
         }
         context.applyMovePreview(translation, rotation);
@@ -2294,17 +2615,13 @@ export function ModelViewer({
         return;
       }
       gestures.begin(event);
-      // Shift-drag sweeps a rectangle over the model. It takes precedence over
-      // every handle below because no handle uses Shift, and a shift-click
-      // that never becomes a drag still falls through to additive selection
-      // on release.
+      // The viewport owns unmodified drag for box selection. Shift hands the
+      // same left-button gesture to OrbitControls, whose modifier swap is
+      // armed so it rotates rather than pans. A stationary Shift+click still
+      // falls through to additive selection on release.
       if (event.shiftKey && !sketchModeRef.current) {
-        boxSelect = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY
-        };
-        gestures.capture(event, 'crosshair');
+        shiftOrbitPointerId = event.pointerId;
+        cameraRig.setShiftOrbitActive(true);
         return;
       }
       const moveHit = pickMoveGizmo(event);
@@ -2315,7 +2632,12 @@ export function ModelViewer({
           axis?: MoveAxis;
         };
         const axis = data.axis ?? 'x';
-        moveSnaps = collectMoveSnaps(activeMove.bodyId);
+        // A sketch is not a body, so every body contributes snap points and
+        // alignment centers when one is being moved.
+        const movingBodyId =
+          activeMove.target === 'sketch' ? null : activeMove.bodyId;
+        moveSnaps = collectMoveSnaps(movingBodyId);
+        moveCenterTargets = collectCenterAlignTargets(movingBodyId);
         const pivot = moveGizmoGroup.position.clone();
         const worldPerPixel = worldPerPixelAt(pivot);
         const gizmoScale =
@@ -2343,6 +2665,7 @@ export function ModelViewer({
           worldPerPixel,
           startTranslation: { ...activeMove.translation },
           startRotation: { ...activeMove.rotationDeg },
+          restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
           snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180)
         };
@@ -2354,6 +2677,7 @@ export function ModelViewer({
             drag.axisDirection
           );
           if (t === null) {
+            beginBoxSelect(event);
             return;
           }
           drag.startT = t;
@@ -2363,6 +2687,7 @@ export function ModelViewer({
           drag.ringV = basis.v;
           const angle = ringAngleAt(pivot, axis, basis.u, basis.v);
           if (angle === null) {
+            beginBoxSelect(event);
             return;
           }
           drag.startAngle = angle;
@@ -2572,6 +2897,7 @@ export function ModelViewer({
         offsetRigRef.current ||
         edgeRigRef.current
       ) {
+        beginBoxSelect(event);
         return;
       }
       const result = pick(event);
@@ -2580,10 +2906,12 @@ export function ModelViewer({
         result.selection?.kind !== 'face' ||
         !editableBodyIdsRef.current.has(result.selection.bodyId)
       ) {
+        beginBoxSelect(event);
         return;
       }
       const object = context.objectsByBodyId.get(result.selection.bodyId);
       if (!object) {
+        beginBoxSelect(event);
         return;
       }
       const direction = directEditDirectionFromNormal(result.faceNormal);
@@ -2592,6 +2920,7 @@ export function ModelViewer({
         .getSize(new THREE.Vector3());
       const initialValue = size[direction.axis];
       if (!Number.isFinite(initialValue) || initialValue <= 0) {
+        beginBoxSelect(event);
         return;
       }
 
@@ -2658,6 +2987,10 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (event.pointerId === shiftOrbitPointerId) {
+        shiftOrbitPointerId = null;
+        cameraRig.setShiftOrbitActive(false);
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         const started = boxSelect;
         boxSelect = null;
@@ -2668,7 +3001,7 @@ export function ModelViewer({
         const rect =
           from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
         if (!rect || !isBoxSelectDrag(rect)) {
-          // A shift-click that never travelled is still a shift-click.
+          // A press that never travelled is still an ordinary selection click.
           selectAtPointer(event);
           return;
         }
@@ -2784,6 +3117,13 @@ export function ModelViewer({
           rig?.setInProgress(null, false);
           hideSketchDimLabel();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'text' && point && !moved) {
+          // One click places the baseline origin; everything else about a text
+          // object is a parameter, so there is no drag and no second click.
+          onSketchCommitRef.current(textObjectFromPoint(point));
           requestRender();
           return;
         }
@@ -2977,6 +3317,10 @@ export function ModelViewer({
     };
     const handlePointerCancel = (event: PointerEvent) => {
       pendingHoverEvent = null;
+      if (event.pointerId === shiftOrbitPointerId) {
+        shiftOrbitPointerId = null;
+        cameraRig.setShiftOrbitActive(false);
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         boxSelect = null;
         hud.hide(selectionBand);
@@ -3196,6 +3540,8 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       updateOffsetChip();
+      updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
+      updateAxesGizmo(axes, context.activeCamera);
       shadowCatcher.visible = shouldShowGroundShadow(
         context.activeCamera,
         showGridRef.current
@@ -3206,6 +3552,12 @@ export function ModelViewer({
         firstFrame = false;
         timed('viewer.firstFrame', () =>
           renderer.render(scene, context.activeCamera)
+        );
+        mark('viewer.firstFrame.ready');
+        measure(
+          'viewer.interactive',
+          'viewer.init:begin',
+          'viewer.firstFrame.ready'
         );
       } else {
         renderer.render(scene, context.activeCamera);
@@ -3227,16 +3579,18 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
+      clampNameCallouts(labelRenderer.domElement);
 
       // Push camera orientation to the view widget only when it changes.
-      if (!camera.quaternion.equals(lastQuaternion)) {
-        lastQuaternion.copy(camera.quaternion);
+      const orientationCamera = context.activeCamera;
+      if (!orientationCamera.quaternion.equals(lastQuaternion)) {
+        lastQuaternion.copy(orientationCamera.quaternion);
         const sink = orientationRef.current;
         if (sink) {
-          const inverse = camera.quaternion.clone().invert();
+          const inverse = orientationCamera.quaternion.clone().invert();
           const project = (axis: THREE.Vector3) => {
             const view = axis.clone().applyQuaternion(inverse);
-            return { x: view.x, y: -view.y };
+            return { x: view.x, y: -view.y, z: view.z };
           };
           sink({
             x: project(new THREE.Vector3(1, 0, 0)),
@@ -3299,6 +3653,10 @@ export function ModelViewer({
         'openzcad:e2e-select-profile',
         handleE2EProfileSelection
       );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-locate-edge',
+        handleE2ELocateEdge
+      );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
@@ -3328,75 +3686,75 @@ export function ModelViewer({
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
       moveGizmoHudRef.current = null;
+      if (orientationDragRef.current === orientationDragControls) {
+        orientationDragRef.current = null;
+      }
       contextRef.current = null;
     };
   }, []);
 
-  // Rebuild bodies + selection callout when derived geometry changes.
+  // Body geometry is rebuilt only when the derived body projection changes.
+  // Selection-only renders reuse the installed meshes, materials, edge
+  // batches, and frozen shadow map while refreshing lightweight overlays.
   useEffect(() => {
     const context = contextRef.current;
     if (!context) {
       return;
     }
 
-    mark('viewer.bodies:begin');
-    clearGroup(context.bodyGroup);
+    const bodiesChanged = renderedBodiesRef.current !== bodies;
+    if (bodiesChanged) {
+      mark('viewer.bodies:begin');
+      clearGroup(context.bodyGroup);
+      context.selection.resetForRebuild();
+      context.objectsByBodyId.clear();
+      context.edgeOverlaysByBodyId.clear();
+    }
     clearGroup(context.overlayGroup);
     context.dimensionLabels.clear();
-    context.selection.resetForRebuild();
-    context.objectsByBodyId.clear();
     const edgeResolution = context.fatLineResolution();
-    const selectedEdgeKeys = new Set(
-      selectedEdges.map((edge) => `${edge.bodyId}:${edge.topologyId ?? ''}`)
-    );
 
     for (const body of bodies) {
-      const object = createObjectForBody(body, edgeResolution);
-      object.userData.bodyId = body.bodyId;
+      const object = bodiesChanged
+        ? createObjectForBody(body, edgeResolution)
+        : context.objectsByBodyId.get(body.bodyId);
+      if (!object) {
+        continue;
+      }
+      if (bodiesChanged) {
+        object.userData.bodyId = body.bodyId;
+      }
+      const previousSelectionOverlay = object.getObjectByName(
+        'body-selection-overlay'
+      );
+      if (previousSelectionOverlay instanceof THREE.Group) {
+        const selectionGroup =
+          previousSelectionOverlay as unknown as THREE.Group;
+        clearGroup(selectionGroup);
+        object.remove(selectionGroup);
+      }
       const isSelected = selectedBodyIds.includes(body.bodyId);
 
       forEachMesh(object, (mesh) => {
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
-        mesh.userData.bodyId = body.bodyId;
-        mesh.userData.topology = body.topology;
-        mesh.castShadow = true;
-        mesh.receiveShadow = false;
+        if (bodiesChanged) {
+          mesh.userData.bodyId = body.bodyId;
+          mesh.userData.topology = body.topology;
+          mesh.castShadow = true;
+          mesh.receiveShadow = false;
+        }
       });
 
-      for (const edge of body.topology?.edges ?? []) {
-        if (!shouldRenderTopologyEdge(edge)) {
-          continue;
-        }
-        const active = selectedEdgeKeys.has(
-          `${body.bodyId}:${edge.topologyId}`
-        );
-
-        // Visible fat line: WebGL ignores LineBasicMaterial linewidth, so
-        // edges render via Line2 with a real screen-space width.
-        const fatGeometry = new LineGeometry();
-        fatGeometry.setPositions(edge.points);
-        const fatMaterial = createFatLineMaterial({
-          color: active ? EDGE_SELECTED_COLOR : EDGE_IDLE_COLOR,
-          linewidth: active ? EDGE_SELECTED_WIDTH : EDGE_IDLE_WIDTH,
-          opacity: active ? 1 : EDGE_IDLE_OPACITY,
-          resolution: edgeResolution
-        });
-        const visual = new Line2(fatGeometry, fatMaterial);
-        visual.name = 'body-edge';
-        visual.computeLineDistances();
-        visual.userData.bodyId = body.bodyId;
-        visual.userData.topologyKind = 'edge';
-        visual.userData.topologyId = edge.topologyId;
-        visual.userData.topologyHash = edge.hash;
-        visual.userData.visual = visual;
-        (visual.userData as EdgeVisualState).selected = active;
-        visual.renderOrder = active
-          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
-          : VIEWPORT_RENDER_ORDER.BODY_EDGE;
-        object.add(visual);
+      let edgeOverlay = context.edgeOverlaysByBodyId.get(body.bodyId);
+      if (bodiesChanged) {
+        edgeOverlay = createBodyEdgeOverlay(body, edgeResolution);
+        edgeOverlay.setDisplayMode(displayModeRef.current);
+        object.add(edgeOverlay);
+        context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
+      edgeOverlay?.setSelected(selectedEdges);
 
       const selectedFace =
         selectedTopology?.kind === 'face' &&
@@ -3406,6 +3764,9 @@ export function ModelViewer({
             )
           : undefined;
       if (selectedFace) {
+        const selectionOverlay = new THREE.Group();
+        selectionOverlay.name = 'body-selection-overlay';
+        object.add(selectionOverlay);
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute(
           'position',
@@ -3432,7 +3793,7 @@ export function ModelViewer({
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
         highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
         highlight.raycast = () => undefined;
-        object.add(highlight);
+        selectionOverlay.add(highlight);
         context.fadeIns.add(highlightMaterial);
 
         if (editableBodyIds.includes(body.bodyId)) {
@@ -3574,36 +3935,43 @@ export function ModelViewer({
         }
       }
 
-      context.bodyGroup.add(object);
-      context.objectsByBodyId.set(body.bodyId, object);
+      if (bodiesChanged) {
+        context.bodyGroup.add(object);
+        context.objectsByBodyId.set(body.bodyId, object);
+      }
     }
 
-    applyDisplayMode(context.bodyGroup, displayModeRef.current);
+    if (bodiesChanged) {
+      applyDisplayMode(context.bodyGroup, displayModeRef.current);
+    }
 
     // Retune the key light's shadow frustum around the current model so the
     // grounding shadow stays crisp instead of being clipped or pixelated.
-    const sceneBox = new THREE.Box3();
-    for (const child of context.bodyGroup.children) {
-      sceneBox.expandByObject(child);
+    if (bodiesChanged) {
+      const sceneBox = new THREE.Box3();
+      for (const child of context.bodyGroup.children) {
+        sceneBox.expandByObject(child);
+      }
+      if (!sceneBox.isEmpty()) {
+        const sceneSize = sceneBox.getSize(new THREE.Vector3());
+        const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
+        tuneShadowFrustum(
+          context.keyLight,
+          Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
+        );
+        context.keyLight.position.set(
+          sceneCenter.x + 90,
+          sceneCenter.y - 100,
+          sceneCenter.z + 140
+        );
+        context.keyLight.target.position.copy(sceneCenter);
+        context.keyLight.target.updateMatrixWorld();
+      }
+      // Bodies are the only dynamic shadow casters; camera and selection-only
+      // frames reuse this map until geometry or the light rig changes again.
+      context.renderer.shadowMap.needsUpdate = true;
+      renderedBodiesRef.current = bodies;
     }
-    if (!sceneBox.isEmpty()) {
-      const sceneSize = sceneBox.getSize(new THREE.Vector3());
-      const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
-      tuneShadowFrustum(
-        context.keyLight,
-        Math.max(sceneSize.x, sceneSize.y, sceneSize.z) / 2
-      );
-      context.keyLight.position.set(
-        sceneCenter.x + 90,
-        sceneCenter.y - 100,
-        sceneCenter.z + 140
-      );
-      context.keyLight.target.position.copy(sceneCenter);
-      context.keyLight.target.updateMatrixWorld();
-    }
-    // Bodies are the only dynamic shadow casters; camera-only frames reuse
-    // this map until geometry or the fitted key-light rig changes again.
-    context.renderer.shadowMap.needsUpdate = true;
 
     // Name callout on the primary (last picked) selected body.
     const primaryId = selectedBodyIds.at(-1);
@@ -3659,7 +4027,9 @@ export function ModelViewer({
       onViewChangeRef.current(context.captureView());
     }
     context.requestRender();
-    performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+    if (bodiesChanged) {
+      performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+    }
   }, [
     bodies,
     editableBodyIds,
@@ -3708,19 +4078,39 @@ export function ModelViewer({
         object.position.set(0, 0, 0);
         object.rotation.set(0, 0, 0);
       }
+      const overlay = regionGroupRef.current;
+      if (overlay) {
+        for (const child of overlay.children) {
+          if (child.userData.sketchViewId) {
+            child.position.set(0, 0, 0);
+          }
+        }
+      }
       return;
     }
-    const body = bodies.find(
-      (candidate) => candidate.bodyId === movePreview.bodyId
-    );
-    if (!body) {
-      return;
+    let center: THREE.Vector3;
+    if (movePreview.target === 'sketch') {
+      const view = sketchViews.find(
+        (candidate) => candidate.sketchId === movePreview.bodyId
+      );
+      const lifted = view ? sketchViewCenter(view) : null;
+      if (!lifted) {
+        return;
+      }
+      center = lifted;
+    } else {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === movePreview.bodyId
+      );
+      if (!body) {
+        return;
+      }
+      center = new THREE.Vector3(
+        (body.bbox.min.x + body.bbox.max.x) / 2,
+        (body.bbox.min.y + body.bbox.max.y) / 2,
+        (body.bbox.min.z + body.bbox.max.z) / 2
+      );
     }
-    const center = new THREE.Vector3(
-      (body.bbox.min.x + body.bbox.max.x) / 2,
-      (body.bbox.min.y + body.bbox.max.y) / 2,
-      (body.bbox.min.z + body.bbox.max.z) / 2
-    );
     moveCenterRef.current.copy(center);
     const projectedUnitSizePx = projectedWorldSizePx(
       context.activeCamera,
@@ -3734,6 +4124,14 @@ export function ModelViewer({
     context.moveGizmoGroup.userData.gizmoScale = scale;
 
     for (const part of buildMoveGizmoParts(scale)) {
+      // A sketch translates only — a rectangle has no angle to store — so the
+      // rotation rings are omitted rather than offered and ignored.
+      if (
+        movePreview.target === 'sketch' &&
+        (part.userData as MoveGizmoVisualData).kind === 'ring'
+      ) {
+        continue;
+      }
       context.moveGizmoGroup.add(part);
     }
 
@@ -3743,7 +4141,7 @@ export function ModelViewer({
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
         null
     );
-  }, [movePreview, moveCommitHold, bodies]);
+  }, [movePreview, moveCommitHold, bodies, sketchViews]);
 
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
@@ -3945,6 +4343,7 @@ export function ModelViewer({
           resolution: context.fatLineResolution()
         });
         line.name = 'sketch-curve';
+        line.userData.sketchViewId = view.sketchId;
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
@@ -3994,6 +4393,7 @@ export function ModelViewer({
           boundary.visible = false;
           boundary.renderOrder = VIEWPORT_RENDER_ORDER.HOVER_HIGHLIGHT;
           boundary.raycast = () => undefined;
+          boundary.userData.sketchViewId = view.sketchId;
           group.add(boundary);
           return boundary;
         });
@@ -4023,6 +4423,8 @@ export function ModelViewer({
         group.add(mesh, marker);
         mesh.userData.regionBoundaries = boundaries;
         mesh.userData.regionMarker = marker;
+        mesh.userData.sketchViewId = view.sketchId;
+        marker.userData.sketchViewId = view.sketchId;
         profilePickTargetsRef.current.push({
           pick,
           object: mesh,
@@ -4575,6 +4977,9 @@ export function ModelViewer({
         settings.showGrid
       );
       applyDisplayMode(context.bodyGroup, settings.displayMode);
+      for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
+        edgeOverlay.setDisplayMode(settings.displayMode);
+      }
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode]);
@@ -4596,7 +5001,8 @@ export function ModelViewer({
     });
   }, [fitSignal]);
 
-  // Standard views keep the current zoom and glide the camera to the axis.
+  // View requests keep the current zoom and glide the camera to the axis —
+  // named standard views and the cube's corner diagonals alike.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !viewRequest) {
@@ -4604,7 +5010,7 @@ export function ModelViewer({
     }
     const { camera, controls } = context;
     const distance = Math.max(camera.position.distanceTo(controls.target), 1);
-    const direction = VIEW_DIRECTIONS[viewRequest.view];
+    const direction = viewDirectionFor(viewRequest.view);
     context.startCameraTween({
       position: controls.target.clone().addScaledVector(direction, distance),
       target: controls.target.clone(),
@@ -4612,6 +5018,32 @@ export function ModelViewer({
       far: camera.far
     });
   }, [viewRequest]);
+
+  // The view-cube arrows swing the camera a quarter turn around the world up
+  // axis. In a head-on top or bottom view the orbit offset is only the tiny
+  // nudge VIEW_DIRECTIONS keeps off the pole, so the same quarter turn reads
+  // as the drawing spinning in place — which is what the arrows should do
+  // there.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !rotateRequest) {
+      return;
+    }
+    const { camera, controls } = context;
+    // `direction` names the way the model appears to turn on screen, so the
+    // camera swings the opposite way: model clockwise = camera counterclockwise.
+    const angle = rotateRequest.direction === 'cw' ? Math.PI / 2 : -Math.PI / 2;
+    const offset = camera.position
+      .clone()
+      .sub(controls.target)
+      .applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+    context.startCameraTween({
+      position: controls.target.clone().add(offset),
+      target: controls.target.clone(),
+      near: camera.near,
+      far: camera.far
+    });
+  }, [rotateRequest]);
 
   return <div className="viewer-host" ref={hostRef} />;
 }

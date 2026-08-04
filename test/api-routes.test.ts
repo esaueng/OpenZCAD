@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
+import { getInMemoryPersistence } from '@openzcad/persistence';
+import { createProjectDocument } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
   MAX_PROJECT_NAME_LENGTH,
+  projectOrganization,
+  toUserId,
   type CreateProjectResponse,
-  type ProjectDocument
+  type ProjectDocument,
+  type ProjectSummary
 } from '@openzcad/shared';
 
 const env = {
@@ -15,6 +20,36 @@ const env = {
     getByName: vi.fn()
   }
 };
+
+interface StorageAccountingReadinessRow {
+  projects_document_bytes: number;
+  revisions_document_bytes: number;
+  revisions_bytes_index: number;
+}
+
+const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
+  projects_document_bytes: 1,
+  revisions_document_bytes: 1,
+  revisions_bytes_index: 1
+};
+
+function storageAccountingDb(
+  row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
+  failure?: Error
+) {
+  const first = vi.fn(async () => {
+    if (failure) {
+      throw failure;
+    }
+    return row;
+  });
+  const prepare = vi.fn((_query: string) => ({ first }));
+  return {
+    db: { prepare } as unknown as D1Database,
+    first,
+    prepare
+  };
+}
 
 function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
   overrides: T
@@ -27,6 +62,13 @@ function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
         bind() {
           return {
             async first() {
+              if (query.includes('FROM auth_sessions')) {
+                return {
+                  user_id: 'user_allowed_test',
+                  email: 'allowed@example.com',
+                  expires_at: 4_000_000_000
+                };
+              }
               return query.includes('FROM user_settings')
                 ? {
                     settings_json: JSON.stringify(settings),
@@ -53,6 +95,45 @@ function post(path: string, body: unknown): Request {
   });
 }
 
+function patch(path: string, body: unknown): Request {
+  return new Request(`https://example.com${path}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body)
+  });
+}
+
+function put(path: string, body: unknown): Request {
+  return new Request(`https://example.com${path}`, {
+    method: 'PUT',
+    body: JSON.stringify(body)
+  });
+}
+
+function settingsConflictEnv(options: {
+  storedRevision: number;
+  changes: number;
+}) {
+  const run = vi.fn(async () => ({ meta: { changes: options.changes } }));
+  const prepare = vi.fn((query: string) => ({
+    bind: vi.fn(() => ({
+      first: vi.fn(async () =>
+        query.includes('FROM user_settings')
+          ? {
+              settings_json: JSON.stringify(DEFAULT_APP_SETTINGS),
+              revision: options.storedRevision
+            }
+          : null
+      ),
+      run
+    }))
+  }));
+  return {
+    workerEnv: { ...env, DB: { prepare } } as never,
+    prepare,
+    run
+  };
+}
+
 async function createProject(name: string): Promise<CreateProjectResponse> {
   const response = await worker.fetch(post('/api/projects', { name }), env);
   expect(response.status).toBe(201);
@@ -77,12 +158,219 @@ describe('worker api routes', () => {
     ).toBe(true);
   });
 
+  it('duplicates, archives, bins, restores, and destroys a project', async () => {
+    const created = await createProject('Shelf Test');
+    const projectId = created.project.projectId;
+
+    const duplicated = await worker.fetch(
+      post(`/api/projects/${projectId}/duplicate`, {}),
+      env
+    );
+    expect(duplicated.status).toBe(201);
+    const copy = (await duplicated.json()) as CreateProjectResponse;
+    expect(copy.project.projectId).not.toBe(projectId);
+    expect(copy.project.name).toBe('Shelf Test (copy)');
+
+    const archived = await worker.fetch(
+      patch(`/api/projects/${projectId}`, { status: 'archived' }),
+      env
+    );
+    expect(archived.status).toBe(200);
+    const { project: archivedProject } = (await archived.json()) as {
+      project: ProjectSummary;
+    };
+    expect(projectOrganization(archivedProject).status).toBe('archived');
+    expect(projectOrganization(archivedProject).archivedAt).toBeTruthy();
+
+    const binned = await worker.fetch(
+      patch(`/api/projects/${projectId}`, { status: 'deleted', pinned: true }),
+      env
+    );
+    const { project: binnedProject } = (await binned.json()) as {
+      project: ProjectSummary;
+    };
+    expect(projectOrganization(binnedProject).status).toBe('deleted');
+    expect(projectOrganization(binnedProject).pinned).toBe(true);
+    // Binning hides a project; it must still load until it is purged.
+    expect(
+      (
+        await worker.fetch(
+          new Request(`https://example.com/api/projects/${projectId}`),
+          env
+        )
+      ).status
+    ).toBe(200);
+
+    const destroyed = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${copy.project.projectId}`,
+        {
+          method: 'DELETE'
+        }
+      ),
+      env
+    );
+    expect(destroyed.status).toBe(204);
+    expect(
+      (
+        await worker.fetch(
+          new Request(
+            `https://example.com/api/projects/${copy.project.projectId}`
+          ),
+          env
+        )
+      ).status
+    ).toBe(404);
+  });
+
+  it('reorders projects and reads "reorder" as a route rather than a project id', async () => {
+    const first = await createProject('Order A');
+    const second = await createProject('Order B');
+
+    const response = await worker.fetch(
+      post('/api/projects/reorder', {
+        projectIds: [second.project.projectId, first.project.projectId]
+      }),
+      env
+    );
+    expect(response.status).toBe(200);
+    const { projects } = (await response.json()) as {
+      projects: ProjectSummary[];
+    };
+    const ordered = projects
+      .filter((project) =>
+        [first.project.projectId, second.project.projectId].includes(
+          project.projectId
+        )
+      )
+      .map((project) => project.projectId);
+    expect(ordered).toEqual([
+      second.project.projectId,
+      first.project.projectId
+    ]);
+  });
+
+  it('rejects shelf edits that say nothing or say something invalid', async () => {
+    const created = await createProject('Validation');
+    const projectId = created.project.projectId;
+
+    for (const [body, message] of [
+      [{}, 'Provide at least one of "status", "pinned", or "sortOrder".'],
+      [{ status: 'shredded' }, /"status" must be one of/],
+      [{ pinned: 'yes' }, '"pinned" must be a boolean.'],
+      [{ sortOrder: Number.NaN }, '"sortOrder" must be a finite number.']
+    ] as const) {
+      const response = await worker.fetch(
+        patch(`/api/projects/${projectId}`, body),
+        env
+      );
+      expect(response.status).toBe(400);
+      const { error } = (await response.json()) as { error: string };
+      expect(error).toMatch(message);
+    }
+
+    const repeated = await worker.fetch(
+      post('/api/projects/reorder', { projectIds: [projectId, projectId] }),
+      env
+    );
+    expect(repeated.status).toBe(400);
+  });
+
+  it('reports a shelf edit to a project that does not exist as a 404', async () => {
+    const response = await worker.fetch(
+      patch('/api/projects/proj_missing', { pinned: true }),
+      env
+    );
+    expect(response.status).toBe(404);
+  });
+
   it('allows development authentication only in an unguarded development environment', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/health'),
       env
     );
     expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: false,
+      projectSharingEnabled: false,
+      projectEditLeasesEnforced: false,
+      projectPersonalSyncEnabled: false
+    });
+  });
+
+  it('publishes collaboration rollout capabilities without exposing secrets', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        ...env,
+        PROJECT_SHARING_ENABLED: 'true',
+        PROJECT_EDIT_LEASES_ENFORCED: '1'
+      }
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'ok',
+      projectSharingEnabled: true,
+      projectEditLeasesEnforced: true
+    });
+  });
+
+  it('reports migration 0010 ready only when all required D1 schema objects exist', async () => {
+    const { db, prepare } = storageAccountingDb();
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      { ...env, DB: db }
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: true,
+      projectPersonalSyncEnabled: false
+    });
+    expect(prepare).toHaveBeenCalledOnce();
+    const query = prepare.mock.calls[0]![0];
+    expect(query).toContain("pragma_table_info('projects')");
+    expect(query).toContain("pragma_table_info('revisions')");
+    expect(query).toContain('idx_revisions_project_bytes');
+  });
+
+  it('keeps personal device sync closed when migration 0010 is incomplete', async () => {
+    const { db } = storageAccountingDb({
+      ...READY_STORAGE_ACCOUNTING_SCHEMA,
+      revisions_bytes_index: 0
+    });
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        ...env,
+        DB: db,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: false,
+      projectPersonalSyncEnabled: false
+    });
+  });
+
+  it('fails migration readiness closed when the D1 probe errors', async () => {
+    const { db } = storageAccountingDb(
+      READY_STORAGE_ACCOUNTING_SCHEMA,
+      new Error('D1 unavailable')
+    );
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        ...env,
+        DB: db,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: false,
+      projectPersonalSyncEnabled: false
+    });
   });
 
   it('refuses development authentication in guarded or non-development environments', async () => {
@@ -201,6 +489,53 @@ describe('worker api routes', () => {
     expect(response.status).toBe(403);
   });
 
+  it('returns 409 before writing when the settings revision is already stale', async () => {
+    const conflictEnv = settingsConflictEnv({
+      storedRevision: 4,
+      changes: 1
+    });
+
+    const response = await worker.fetch(
+      patch('/api/settings', {
+        settings: DEFAULT_APP_SETTINGS,
+        expectedRevision: 3
+      }),
+      conflictEnv.workerEnv
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Settings changed elsewhere. Reload and try again.'
+    });
+    expect(conflictEnv.run).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when a concurrent settings write wins the conditional update', async () => {
+    const conflictEnv = settingsConflictEnv({
+      storedRevision: 4,
+      changes: 0
+    });
+
+    const response = await worker.fetch(
+      patch('/api/settings', {
+        settings: DEFAULT_APP_SETTINGS,
+        expectedRevision: 4
+      }),
+      conflictEnv.workerEnv
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Settings changed elsewhere. Reload and try again.'
+    });
+    expect(conflictEnv.run).toHaveBeenCalledOnce();
+    expect(
+      conflictEnv.prepare.mock.calls.some(([query]) =>
+        query.includes('UPDATE user_settings')
+      )
+    ).toBe(true);
+  });
+
   it('reports assistant configuration without exposing secrets', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
@@ -225,7 +560,7 @@ describe('worker api routes', () => {
     expect(JSON.stringify(status)).not.toContain('secret-test-value');
   });
 
-  it('exposes assistant status without an email-code session', async () => {
+  it('does not expose deployment assistant availability without an allowlisted session', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
       {
@@ -237,9 +572,50 @@ describe('worker api routes', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      configured: true,
+      configured: false,
       provider: 'openrouter'
     });
+  });
+
+  it('reports deployment assistant availability to an allowlisted session', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { cookie: '__Host-openzcad_session=test-session' }
+      }),
+      withEnabledDeploymentAssistant({
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        AI_DEPLOYMENT_ALLOWED_EMAILS: 'allowed@example.com',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: true,
+      provider: 'openrouter',
+      source: 'deployment'
+    });
+  });
+
+  // wrangler.jsonc deliberately leaves AI_DEPLOYMENT_ALLOWED_EMAILS out of
+  // secrets.required, which is only safe because an unset allowlist denies
+  // every account rather than admitting them. A regression here would hand the
+  // deployment's provider key to any authenticated session.
+  it('denies deployment assistant funding when no allowlist is configured', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { cookie: '__Host-openzcad_session=test-session' }
+      }),
+      withEnabledDeploymentAssistant({
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ configured: false });
   });
 
   it('requires an email-code identity for cloud routes', async () => {
@@ -274,7 +650,8 @@ describe('worker api routes', () => {
     const roomFetch = vi.fn(async (request: Request) =>
       Response.json({
         userId: request.headers.get('x-openzcad-user-id'),
-        displayName: request.headers.get('x-openzcad-display-name')
+        displayName: request.headers.get('x-openzcad-display-name'),
+        role: request.headers.get('x-openzcad-project-role')
       })
     );
     env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
@@ -282,16 +659,173 @@ describe('worker api routes', () => {
     const response = await worker.fetch(
       new Request(
         `https://example.com/api/projects/${created.project.projectId}/collaboration`,
-        { headers: { upgrade: 'websocket' } }
+        {
+          headers: {
+            upgrade: 'websocket',
+            // The Worker must replace, never trust, a client-forged role.
+            'x-openzcad-project-role': 'viewer'
+          }
+        }
       ),
       env
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
       userId: 'user_beta_dev',
-      displayName: 'Beta developer'
+      displayName: 'Beta developer',
+      role: 'owner'
     });
     expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
+  it('streams collaboration snapshots to the room without buffering them', async () => {
+    const created = await createProject('Streamed collaboration project');
+    const roomFetch = vi.fn(async (request: Request) => {
+      expect(request.body).not.toBeNull();
+      return Response.json({ forwarded: true });
+    });
+    env.PROJECT_ROOM.getByName.mockReturnValueOnce({ fetch: roomFetch });
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"clientId":"streamed"'));
+      },
+      pull() {
+        throw new Error('The outer Worker consumed the collaboration body.');
+      }
+    });
+
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/collaboration`,
+        {
+          method: 'POST',
+          headers: { origin: 'https://example.com' },
+          body,
+          duplex: 'half'
+        } as RequestInit & { duplex: 'half' }
+      ),
+      env
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ forwarded: true });
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
+  it('creates, lists, and revokes viewer invitations behind the sharing flag', async () => {
+    const owner = toUserId('user_sharing_route_owner');
+    const sharingEnv = {
+      ...env,
+      PROJECT_SHARING_ENABLED: 'true'
+    };
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'Sharing routes' })
+      }),
+      sharingEnv
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    const projectId = created.document.projectId;
+
+    const invited = await worker.fetch(
+      new Request(`https://example.com/api/projects/${projectId}/invitations`, {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({
+          email: ' Viewer@Example.com ',
+          role: 'viewer'
+        })
+      }),
+      sharingEnv
+    );
+    expect(invited.status).toBe(201);
+    const invitation = (await invited.json()) as {
+      invitation: { invitationId: string; email: string };
+      token: string;
+    };
+    expect(invitation.invitation.email).toBe('viewer@example.com');
+    expect(invitation.token).toHaveLength(43);
+
+    const listed = await worker.fetch(
+      new Request(`https://example.com/api/projects/${projectId}/sharing`, {
+        headers: { 'x-openzcad-development-user': owner }
+      }),
+      sharingEnv
+    );
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({
+      projectId,
+      ownerUserId: owner,
+      invitations: [
+        {
+          invitationId: invitation.invitation.invitationId,
+          email: 'viewer@example.com',
+          role: 'viewer'
+        }
+      ]
+    });
+
+    const revoked = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${projectId}/invitations/${invitation.invitation.invitationId}`,
+        {
+          method: 'DELETE',
+          headers: { 'x-openzcad-development-user': owner }
+        }
+      ),
+      sharingEnv
+    );
+    expect(revoked.status).toBe(204);
+  });
+
+  it('lets viewers read shared projects but rejects every revision mutation', async () => {
+    const owner = toUserId('user_route_owner');
+    const viewer = toUserId('user_route_viewer');
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'Read-only shared project' })
+      }),
+      env
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    await getInMemoryPersistence().setProjectMemberRole(
+      owner,
+      created.document.projectId,
+      viewer,
+      'viewer'
+    );
+
+    const viewed = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.document.projectId}`,
+        { headers: { 'x-openzcad-development-user': viewer } }
+      ),
+      env
+    );
+    expect(viewed.status).toBe(200);
+
+    const mutated = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.document.projectId}/revisions`,
+        {
+          method: 'POST',
+          headers: { 'x-openzcad-development-user': viewer },
+          body: JSON.stringify({
+            projectId: created.document.projectId,
+            reason: 'Viewer bypass attempt',
+            expectedVersion: created.document.version,
+            document: created.document
+          })
+        }
+      ),
+      env
+    );
+    expect(mutated.status).toBe(404);
   });
 
   it('rejects cross-origin collaboration WebSocket upgrades', async () => {
@@ -348,13 +882,18 @@ describe('worker api routes', () => {
     const publicEnv = withEnabledDeploymentAssistant({
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
+      AI_IDENTITY_PEPPER: 'route-test-pepper',
+      AI_DEPLOYMENT_ALLOWED_EMAILS: 'allowed@example.com',
       AI_API_KEY: 'test-key',
       AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/proposals', {
         method: 'POST',
-        headers: { 'cf-connecting-ip': '203.0.113.42' },
+        headers: {
+          cookie: '__Host-openzcad_session=test-session',
+          'cf-connecting-ip': '203.0.113.42'
+        },
         body: JSON.stringify({
           prompt: 'Make it wider',
           digest: {
@@ -678,6 +1217,28 @@ describe('worker api routes', () => {
     );
     expect(downloaded.status).toBe(200);
     expect(await downloaded.text()).toBe('STEP DATA');
+
+    const metadata = await worker.fetch(
+      new Request(`https://example.com/api/artifacts/${session.artifactId}`),
+      env
+    );
+    expect(metadata.status).toBe(200);
+    const hidden = await worker.fetch(
+      new Request(`https://example.com/api/artifacts/${session.artifactId}`, {
+        headers: { 'x-openzcad-development-user': 'user_artifact_intruder' }
+      }),
+      env
+    );
+    expect(hidden.status).toBe(404);
+  });
+
+  it('returns 404 rather than a null metadata envelope for unknown artifacts', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/artifacts/artifact_missing'),
+      env
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Artifact not found.' });
   });
 
   it('rejects oversized request bodies with 413', async () => {
@@ -748,4 +1309,155 @@ describe('worker api routes', () => {
       });
     }
   );
+
+  it('adopts a device-local document under its own project id', async () => {
+    const local = createProjectDocument('Adopted', toUserId('user_local'));
+    const response = await worker.fetch(
+      post('/api/projects', { name: local.name, document: local }),
+      env
+    );
+    expect(response.status).toBe(201);
+    const created = (await response.json()) as CreateProjectResponse;
+    expect(created.document.projectId).toBe(local.projectId);
+
+    const loaded = await worker.fetch(
+      new Request(`https://example.com/api/projects/${local.projectId}`),
+      env
+    );
+    expect(loaded.status).toBe(200);
+    expect(((await loaded.json()) as ProjectDocument).name).toBe('Adopted');
+  });
+
+  it('answers a second adoption of the same project with 409 ALREADY_ADOPTED', async () => {
+    const local = createProjectDocument('Twice', toUserId('user_local'));
+    await worker.fetch(
+      post('/api/projects', { name: local.name, document: local }),
+      env
+    );
+    const again = await worker.fetch(
+      post('/api/projects', { name: local.name, document: local }),
+      env
+    );
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ code: 'ALREADY_ADOPTED' });
+  });
+
+  it('saves a document without adding a revision', async () => {
+    const created = await createProject('Autosaved');
+    const projectId = created.document.projectId;
+
+    const response = await worker.fetch(
+      put(`/api/projects/${projectId}/document`, {
+        projectId,
+        expectedVersion: created.document.version,
+        document: created.document
+      }),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      projectId,
+      version: created.document.version
+    });
+
+    // The whole point of the split: continuous sync must not grow history.
+    const loaded = (await (
+      await worker.fetch(
+        new Request(`https://example.com/api/projects/${projectId}`),
+        env
+      )
+    ).json()) as ProjectDocument;
+    expect(loaded.checkpoints).toHaveLength(
+      created.document.checkpoints.length
+    );
+  });
+
+  it('fences a document save against the version the account holds', async () => {
+    const created = await createProject('Fenced');
+    const projectId = created.document.projectId;
+
+    const stale = await worker.fetch(
+      put(`/api/projects/${projectId}/document`, {
+        projectId,
+        expectedVersion: created.document.version + 5,
+        document: created.document
+      }),
+      env
+    );
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      code: 'REVISION_CONFLICT',
+      currentVersion: created.document.version
+    });
+  });
+
+  it('reports each project’s document version in the listing', async () => {
+    // The pull side asks "am I behind?" from the listing it already fetches,
+    // rather than pulling whole documents to find out.
+    const created = await createProject('Versioned');
+    await worker.fetch(
+      post(`/api/projects/${created.document.projectId}/revisions`, {
+        projectId: created.document.projectId,
+        reason: 'Manual save',
+        expectedVersion: created.document.version,
+        document: created.document
+      }),
+      env
+    );
+
+    const listed = (await (
+      await worker.fetch(new Request('https://example.com/api/projects'), env)
+    ).json()) as { projects: ProjectSummary[] };
+    const summary = listed.projects.find(
+      (project) => project.projectId === created.document.projectId
+    );
+    expect(summary?.documentVersion).toBe(created.document.version);
+  });
+
+  it('reports personal device sync separately from sharing', async () => {
+    // Turning on device sync must never read as permission to invite anyone.
+    const { db } = storageAccountingDb();
+    const health = (await (
+      await worker.fetch(new Request('https://example.com/api/health'), {
+        ...env,
+        DB: db,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      })
+    ).json()) as {
+      documentStorageAccountingReady: boolean;
+      projectPersonalSyncEnabled: boolean;
+      projectSharingEnabled: boolean;
+      projectEditLeasesEnforced: boolean;
+    };
+    expect(health.documentStorageAccountingReady).toBe(true);
+    expect(health.projectPersonalSyncEnabled).toBe(true);
+    expect(health.projectSharingEnabled).toBe(false);
+    expect(health.projectEditLeasesEnforced).toBe(false);
+  });
+
+  it('keeps sharing routes closed while personal sync is on', async () => {
+    const created = await createProject('Still Private');
+    const response = await worker.fetch(
+      new Request(
+        `https://example.com/api/projects/${created.project.projectId}/sharing`
+      ),
+      { ...env, PROJECT_PERSONAL_SYNC_ENABLED: 'true' }
+    );
+    expect(response.status).toBe(501);
+    expect(await response.json()).toMatchObject({ code: 'FEATURE_DISABLED' });
+  });
+
+  it('refuses a document save whose body disagrees with the url', async () => {
+    const created = await createProject('Mismatched');
+    const other = await createProject('Other');
+    const response = await worker.fetch(
+      put(`/api/projects/${created.document.projectId}/document`, {
+        projectId: other.document.projectId,
+        expectedVersion: created.document.version,
+        document: other.document
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+  });
 });
