@@ -50,9 +50,15 @@
   fill: #37527a;
 }
 
+/* Clicking a facet leaves it focused; never let the browser draw its native
+   focus ring around the cube. Keyboard focus keeps the accent stroke below. */
+.cube-face:focus,
+.cube-corner:focus {
+  outline: none;
+}
+
 .cube-face:focus-visible,
 .cube-corner:focus-visible {
-  outline: none;
   stroke: var(--color-accent);
   stroke-width: 1.5;
 }
