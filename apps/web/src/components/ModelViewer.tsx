@@ -1372,6 +1372,13 @@ export function ModelViewer({
     offsetChip.addEventListener('click', handleChipClick);
     offsetChipRef.current = offsetChip;
 
+    // Companion "Radius" label pill for the cylinder dimension line, sitting
+    // just ahead of the value chip like a drawing callout's name tag. Tapping
+    // either pill opens the same exact-entry keypad.
+    const radiusLabelChip = hud.create('handle-label-chip');
+    radiusLabelChip.textContent = 'Radius';
+    radiusLabelChip.addEventListener('click', handleChipClick);
+
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
@@ -2013,6 +2020,7 @@ export function ModelViewer({
       }
       if (!anchor) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         if (e2eCanvasHooksEnabled) {
           delete renderer.domElement.dataset.e2eHandleX;
@@ -2031,6 +2039,7 @@ export function ModelViewer({
       );
       if (!screen) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
@@ -2064,8 +2073,27 @@ export function ModelViewer({
           );
         }
       }
-      chip.textContent = text;
+      if (rig?.kind === 'cylinder-radius') {
+        // Drawing-annotation typography: the units render small after the
+        // number, so the chip reads "R 35ₘₘ" rather than uniform text.
+        const units = document.createElement('small');
+        units.textContent = unitsRef.current;
+        chip.replaceChildren(
+          `R ${formatNumber(rig.value())}\u00a0`,
+          units
+        );
+      } else {
+        chip.textContent = text;
+      }
+      chip.dataset.variant =
+        rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       hud.showAt(chip, screen.x, screen.y);
+      if (rig?.kind === 'cylinder-radius') {
+        // Same anchor; CSS shifts it to sit flush against the value pill.
+        hud.showAt(radiusLabelChip, screen.x, screen.y);
+      } else {
+        radiusLabelChip.hidden = true;
+      }
       keypadAnchorRef.current?.(screen);
     }
 
@@ -3442,6 +3470,11 @@ export function ModelViewer({
       // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
     };
+    // The canvas listener alone is not enough: HUD chips and the CSS2D label
+    // layer sit above the canvas, and a right-click landing on them surfaces
+    // the browser's own menu (Safari offers "Save Image As…" for the canvas
+    // beneath). The host wrapper sees the event whichever layer was hit.
+    host.addEventListener('contextmenu', handleContextMenu);
 
     const handleWheel = () => {
       cameraRig.cancelTween();
@@ -3542,6 +3575,9 @@ export function ModelViewer({
           0.55;
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
+        // Re-run the rig's layout so its dimension-line arrowheads track the
+        // freshly stamped screen-constant scale.
+        cylinderRig.setValue(cylinderRig.value());
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
@@ -3671,6 +3707,7 @@ export function ModelViewer({
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
+      host.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
@@ -3690,6 +3727,7 @@ export function ModelViewer({
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
+      radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;

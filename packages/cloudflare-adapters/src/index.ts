@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactStorageError,
   assertPersistableDocument,
+  DocumentTooLargeError,
   getInMemoryPersistence,
   ProjectAdoptionError,
   PROJECT_ACTIVE_INVITATION_CAP,
@@ -21,6 +22,7 @@ import {
   applyOrganizationUpdate,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   nowIso,
@@ -30,6 +32,7 @@ import {
   sanitizeFileName,
   toArtifactId,
   toProjectId,
+  toRevisionId,
   toUploadSessionId,
   TRASH_RETENTION_MS,
   type AccountStorageUsage,
@@ -72,6 +75,29 @@ import {
   normalizeDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
+import {
+  decodeProjectStorageBody,
+  hydrateProjectStorageSnapshot,
+  prepareProjectStorageSnapshot,
+  PROJECT_OBJECT_STORAGE_PREFIX,
+  ProjectObjectStorageError,
+  sha256Hex,
+  type PreparedProjectStorageSnapshot,
+  type ProjectStorageAssetObject,
+  type ProjectStorageAssetReference,
+  type ProjectStorageSnapshot
+} from './project-object-storage';
+
+export {
+  decodeProjectStorageBody,
+  hydrateProjectStorageSnapshot,
+  prepareProjectStorageSnapshot,
+  PROJECT_OBJECT_STORAGE_FORMAT,
+  PROJECT_OBJECT_STORAGE_PREFIX,
+  PROJECT_OBJECT_STORAGE_VERSION,
+  ProjectObjectStorageError,
+  sha256Hex
+} from './project-object-storage';
 
 export interface CloudflareEnv {
   ENVIRONMENT?: 'development' | 'beta';
@@ -137,6 +163,8 @@ export interface CloudflareEnv {
   /** Base64-encoded 32-byte AES key for owner-scoped AI credentials. */
   SETTINGS_ENCRYPTION_KEY?: string;
   DB?: D1Database;
+  /** Optional dedicated bucket; ARTIFACTS remains the rollout fallback. */
+  PROJECT_STORAGE?: R2Bucket;
   ARTIFACTS?: R2Bucket;
 }
 
@@ -622,6 +650,7 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       ? this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
+                  p.document_version, p.last_revision_id, p.revision_count,
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
            FROM projects p
            LEFT JOIN project_members pm
@@ -633,6 +662,7 @@ export class D1R2PersistenceService implements PersistenceService {
         ).bind(userId, userId)
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
+                  p.document_version, p.last_revision_id, p.revision_count,
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
            FROM projects p
            WHERE p.user_id = ?
@@ -696,7 +726,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const document = withoutDerivedProjection(
       adoptProjectDocument(source, userId, name)
     );
-    assertPersistableDocument(document);
+    this.assertDocumentCanBeStored(document);
     return document;
   }
 
@@ -828,13 +858,16 @@ export class D1R2PersistenceService implements PersistenceService {
       throw error;
     }
     const row = await this.env.DB.prepare(
-      `SELECT document_json FROM projects WHERE id = ?`
+      `SELECT document_json, document_object_id FROM projects WHERE id = ?`
     )
       .bind(projectId)
-      .first<{ document_json: string }>();
-    return row
-      ? normalizeDocument(JSON.parse(row.document_json) as ProjectDocument)
-      : null;
+      .first<{ document_json: string; document_object_id: string | null }>();
+    if (!row) {
+      return null;
+    }
+    return row.document_object_id
+      ? this.loadProjectObject(projectId, row.document_object_id)
+      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
   }
 
   async saveRevision(
@@ -855,12 +888,99 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(request.projectId);
     }
     const document = createCheckpoint(normalized, request.reason);
-    assertPersistableDocument(document);
+    this.assertDocumentCanBeStored(document);
     const documentJson = JSON.stringify(document);
     const documentBytes = persistedDocumentBytes(document);
     const latestRevision = document.revisions.at(-1);
     if (!latestRevision) {
       throw new Error('Checkpoint creation did not produce a revision.');
+    }
+    if (this.projectStorageBucket()) {
+      const write = await this.putProjectStorageObjects(document);
+      const updatedAt = nowIso();
+      const envelope = projectObjectEnvelope(document, write.objectId);
+      const assetStatements = this.projectAssetStatements(
+        request.projectId,
+        write
+      );
+      const statements = [
+        ...assetStatements,
+        this.documentObjectInsert(request.projectId, write, 'pending'),
+        this.env.DB.prepare(
+          `UPDATE projects
+           SET document_json = ?, document_object_id = ?, document_version = ?,
+               document_bytes = ?, updated_at = ?, name = ?,
+               last_revision_id = ?, revision_count = ?
+           WHERE id = ? AND user_id = ? AND document_version = ?`
+        ).bind(
+          envelope,
+          write.objectId,
+          document.version,
+          documentBytes,
+          updatedAt,
+          document.name,
+          latestRevision.revisionId,
+          document.revisions.length,
+          request.projectId,
+          access.ownerUserId,
+          request.expectedVersion
+        ),
+        this.env.DB.prepare(
+          `UPDATE project_document_objects
+           SET state = 'committed'
+           WHERE id = ? AND EXISTS (
+             SELECT 1 FROM projects
+             WHERE id = ? AND document_object_id = ?
+           )`
+        ).bind(write.objectId, request.projectId, write.objectId),
+        this.env.DB.prepare(
+          `INSERT OR REPLACE INTO revisions
+             (id, project_id, reason, document_json, document_object_id,
+              document_bytes, created_at, author_user_id)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM projects
+             WHERE id = ? AND document_object_id = ?
+           )`
+        ).bind(
+          latestRevision.revisionId,
+          request.projectId,
+          request.reason,
+          envelope,
+          write.objectId,
+          documentBytes,
+          latestRevision.createdAt,
+          userId,
+          request.projectId,
+          write.objectId
+        )
+      ];
+      let results: Array<{ meta?: { changes?: number } }>;
+      try {
+        results = await this.env.DB.batch(statements);
+      } catch (error) {
+        await this.discardProjectStorageWrite(write);
+        throw error;
+      }
+      const projectUpdate = results[assetStatements.length + 1];
+      if (projectUpdate?.meta?.changes !== 1) {
+        await this.discardProjectStorageWrite(write);
+        const current = await this.env.DB.prepare(
+          `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
+        )
+          .bind(request.projectId, access.ownerUserId)
+          .first<{ document_version: number }>();
+        if (!current) {
+          throw new ProjectNotFoundError(request.projectId);
+        }
+        throw new RevisionConflictError(
+          request.projectId,
+          current.document_version
+        );
+      }
+      await this.pruneRevisions(request.projectId);
+      await this.pruneUnreferencedProjectObjects(request.projectId);
+      return document;
     }
     const results = await this.env.DB.batch([
       this.env.DB.prepare(
@@ -953,7 +1073,9 @@ export class D1R2PersistenceService implements PersistenceService {
       documentBytes: totals?.document_bytes ?? 0,
       revisionBytes: revisions?.revision_bytes ?? 0,
       revisionCount: revisions?.revision_count ?? 0,
-      documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
+      documentLimitBytes: this.projectStorageBucket()
+        ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+        : MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS
     };
   }
@@ -982,8 +1104,76 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    assertPersistableDocument(normalized);
+    this.assertDocumentCanBeStored(normalized);
     const updatedAt = nowIso();
+    if (this.projectStorageBucket()) {
+      const write = await this.putProjectStorageObjects(normalized);
+      const envelope = projectObjectEnvelope(normalized, write.objectId);
+      const assetStatements = this.projectAssetStatements(
+        request.projectId,
+        write
+      );
+      const statements = [
+        ...assetStatements,
+        this.documentObjectInsert(request.projectId, write, 'pending'),
+        this.env.DB.prepare(
+          `UPDATE projects
+           SET document_json = ?, document_object_id = ?, document_version = ?,
+               document_bytes = ?, updated_at = ?, name = ?,
+               last_revision_id = ?, revision_count = ?
+           WHERE id = ? AND user_id = ? AND document_version = ?`
+        ).bind(
+          envelope,
+          write.objectId,
+          normalized.version,
+          persistedDocumentBytes(normalized),
+          updatedAt,
+          normalized.name,
+          normalized.revisions.at(-1)?.revisionId ?? null,
+          normalized.revisions.length,
+          request.projectId,
+          access.ownerUserId,
+          request.expectedVersion
+        ),
+        this.env.DB.prepare(
+          `UPDATE project_document_objects
+           SET state = 'committed'
+           WHERE id = ? AND EXISTS (
+             SELECT 1 FROM projects
+             WHERE id = ? AND document_object_id = ?
+           )`
+        ).bind(write.objectId, request.projectId, write.objectId)
+      ];
+      let results: Array<{ meta?: { changes?: number } }>;
+      try {
+        results = await this.env.DB.batch(statements);
+      } catch (error) {
+        await this.discardProjectStorageWrite(write);
+        throw error;
+      }
+      const projectUpdate = results[assetStatements.length + 1];
+      if (projectUpdate?.meta?.changes !== 1) {
+        await this.discardProjectStorageWrite(write);
+        const current = await this.env.DB.prepare(
+          `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
+        )
+          .bind(request.projectId, access.ownerUserId)
+          .first<{ document_version: number }>();
+        if (!current) {
+          throw new ProjectNotFoundError(request.projectId);
+        }
+        throw new RevisionConflictError(
+          request.projectId,
+          current.document_version
+        );
+      }
+      await this.pruneUnreferencedProjectObjects(request.projectId);
+      return {
+        projectId: request.projectId,
+        version: normalized.version,
+        updatedAt
+      };
+    }
     const result = await this.env.DB.prepare(
       `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
     )
@@ -1212,13 +1402,326 @@ export class D1R2PersistenceService implements PersistenceService {
     return stored ? { artifact, body: await stored.arrayBuffer() } : null;
   }
 
+  /**
+   * A dedicated project bucket can be introduced later without a flag day.
+   * Until then the existing private artifacts bucket is safely namespaced by
+   * PROJECT_OBJECT_STORAGE_PREFIX.
+   */
+  private projectStorageBucket(): R2Bucket | undefined {
+    const bucket = this.env.PROJECT_STORAGE ?? this.env.ARTIFACTS;
+    return bucket &&
+      typeof bucket.put === 'function' &&
+      typeof bucket.get === 'function' &&
+      typeof bucket.delete === 'function'
+      ? bucket
+      : undefined;
+  }
+
+  private assertCloudDocumentWithinCeiling(document: ProjectDocument): void {
+    const bytes = persistedDocumentBytes(document);
+    if (bytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
+      throw new DocumentTooLargeError(bytes, MAX_CLOUD_PROJECT_DOCUMENT_BYTES);
+    }
+  }
+
+  private assertDocumentCanBeStored(document: ProjectDocument): void {
+    if (this.projectStorageBucket()) {
+      this.assertCloudDocumentWithinCeiling(document);
+    } else {
+      assertPersistableDocument(document);
+    }
+  }
+
+  private async putProjectStorageObjects(
+    document: ProjectDocument
+  ): Promise<ProjectStorageWrite> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket) {
+      throw new ProjectObjectStorageError(
+        'Project object storage is not configured.'
+      );
+    }
+    this.assertCloudDocumentWithinCeiling(document);
+    const prepared = await prepareProjectStorageSnapshot(document);
+    const createdAt = nowIso();
+    const objectId = `project_object_${crypto.randomUUID()}`;
+    const objectKey = `${PROJECT_OBJECT_STORAGE_PREFIX}/${document.projectId}/documents/${crypto.randomUUID()}.json.gz`;
+
+    // Content-addressed imports are stable across autosaves. Consult D1 before
+    // issuing a new Class A R2 write; the metadata row is also what makes
+    // project deletion able to sweep every object deterministically.
+    const missingAssets: ProjectStorageAssetObject[] = [];
+    for (const asset of prepared.assets) {
+      const existing = await this.env
+        .DB!.prepare(
+          `SELECT stored_bytes FROM project_storage_assets WHERE project_id = ? AND checksum_sha256 = ? AND kind = ?`
+        )
+        .bind(document.projectId, asset.checksumSha256, asset.kind)
+        .first<{ stored_bytes: number }>();
+      const stored =
+        existing && typeof bucket.head === 'function'
+          ? await bucket.head(asset.objectKey)
+          : null;
+      if (!existing || !stored || stored.size !== existing.stored_bytes) {
+        missingAssets.push(asset);
+      }
+    }
+
+    await Promise.all(
+      missingAssets.map((asset) =>
+        bucket.put(asset.objectKey, Uint8Array.from(asset.storedBody).buffer, {
+          httpMetadata: {
+            contentType: asset.contentType
+          }
+        })
+      )
+    );
+    await bucket.put(objectKey, Uint8Array.from(prepared.storedBody).buffer, {
+      httpMetadata: {
+        contentType: 'application/json'
+      }
+    });
+
+    return {
+      objectId,
+      objectKey,
+      createdAt,
+      prepared,
+      missingAssets
+    };
+  }
+
+  private projectAssetStatements(
+    projectId: string,
+    write: ProjectStorageWrite
+  ): D1PreparedStatement[] {
+    return write.prepared.assets.map((asset) =>
+      this.env
+        .DB!.prepare(
+          `INSERT OR IGNORE INTO project_storage_assets
+             (id, project_id, kind, object_key, checksum_sha256, logical_bytes,
+              stored_bytes, content_encoding, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          `project_asset_${crypto.randomUUID()}`,
+          projectId,
+          asset.kind,
+          asset.objectKey,
+          asset.checksumSha256,
+          asset.logicalBytes,
+          asset.storedBytes,
+          asset.contentEncoding,
+          write.createdAt
+        )
+    );
+  }
+
+  private documentObjectInsert(
+    projectId: string,
+    write: ProjectStorageWrite,
+    state: 'pending' | 'committed'
+  ): D1PreparedStatement {
+    return this.env
+      .DB!.prepare(
+        `INSERT INTO project_document_objects
+           (id, project_id, object_key, checksum_sha256, logical_bytes,
+            stored_bytes, content_encoding, state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        write.objectId,
+        projectId,
+        write.objectKey,
+        write.prepared.checksumSha256,
+        write.prepared.logicalBytes,
+        write.prepared.storedBytes,
+        write.prepared.contentEncoding,
+        state,
+        write.createdAt
+      );
+  }
+
+  private async loadProjectObject(
+    projectId: string,
+    objectId: string
+  ): Promise<ProjectDocument> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket) {
+      throw new ProjectObjectStorageError(
+        'Project object storage is not configured.'
+      );
+    }
+    const object = await this.env
+      .DB!.prepare(
+        `SELECT object_key, checksum_sha256, logical_bytes, content_encoding
+         FROM project_document_objects
+         WHERE id = ? AND project_id = ? AND state = 'committed'`
+      )
+      .bind(objectId, projectId)
+      .first<ProjectDocumentObjectRow>();
+    if (!object || object.content_encoding !== 'gzip') {
+      throw new ProjectObjectStorageError(
+        'Project document object metadata is missing or invalid.'
+      );
+    }
+    const stored = await bucket.get(object.object_key);
+    if (!stored) {
+      throw new ProjectObjectStorageError(
+        'Project document object is missing from storage.'
+      );
+    }
+    const logicalBody = await decodeProjectStorageBody(
+      await stored.arrayBuffer(),
+      'gzip'
+    );
+    if (
+      logicalBody.byteLength !== object.logical_bytes ||
+      (await sha256Hex(logicalBody)) !== object.checksum_sha256
+    ) {
+      throw new ProjectObjectStorageError(
+        'Project document object failed its integrity check.'
+      );
+    }
+    const snapshot = JSON.parse(
+      new TextDecoder().decode(logicalBody)
+    ) as ProjectStorageSnapshot;
+    const hydrated = await hydrateProjectStorageSnapshot(
+      snapshot,
+      projectId,
+      async (reference: ProjectStorageAssetReference) => {
+        const asset = await bucket.get(reference.objectKey);
+        if (!asset) {
+          throw new ProjectObjectStorageError(
+            `Project asset ${reference.objectKey} is missing from storage.`
+          );
+        }
+        return decodeProjectStorageBody(
+          await asset.arrayBuffer(),
+          reference.contentEncoding
+        );
+      }
+    );
+    return normalizeDocument(hydrated);
+  }
+
+  private async discardProjectStorageWrite(
+    write: ProjectStorageWrite,
+    includeAssets = false
+  ): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (bucket) {
+      const keys = [
+        write.objectKey,
+        ...(includeAssets
+          ? write.missingAssets.map((asset) => asset.objectKey)
+          : [])
+      ];
+      await Promise.allSettled(keys.map((key) => bucket.delete(key)));
+    }
+    try {
+      await this.env
+        .DB!.prepare(
+          `DELETE FROM project_document_objects WHERE id = ? AND state = 'pending'`
+        )
+        .bind(write.objectId)
+        .run();
+    } catch {
+      // The D1 batch may have rolled back before the pending row was visible.
+    }
+  }
+
+  private async pruneUnreferencedProjectObjects(
+    projectId: string
+  ): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket) {
+      return;
+    }
+    try {
+      const objects = await this.env
+        .DB!.prepare(
+          `SELECT id, object_key
+           FROM project_document_objects AS object
+           WHERE object.project_id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM projects WHERE document_object_id = object.id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM revisions WHERE document_object_id = object.id
+             )`
+        )
+        .bind(projectId)
+        .all<{ id: string; object_key: string }>();
+      const rows = objects.results ?? [];
+      await Promise.all(rows.map((row) => bucket.delete(row.object_key)));
+      if (rows.length > 0) {
+        await this.env.DB!.batch(
+          rows.map((row) =>
+            this.env
+              .DB!.prepare(`DELETE FROM project_document_objects WHERE id = ?`)
+              .bind(row.id)
+          )
+        );
+      }
+    } catch {
+      // Object cleanup is retryable housekeeping; the committed save wins.
+    }
+  }
+
   /** Writes a freshly built document into `projects` and summarizes the row. */
   private async insertProject(
     userId: UserId,
     document: ProjectDocument,
     organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION
   ): Promise<ProjectSummary> {
+    this.assertDocumentCanBeStored(document);
     const updatedAt = nowIso();
+    if (this.projectStorageBucket()) {
+      const write = await this.putProjectStorageObjects(document);
+      const envelope = projectObjectEnvelope(document, write.objectId);
+      try {
+        await this.env.DB!.batch([
+          this.env
+            .DB!.prepare(
+              `INSERT INTO projects
+               (id, user_id, name, document_json, document_object_id,
+                document_version, document_bytes, updated_at, status, pinned,
+                sort_order, last_revision_id, revision_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(
+              document.projectId,
+              userId,
+              document.name,
+              envelope,
+              write.objectId,
+              document.version,
+              persistedDocumentBytes(document),
+              updatedAt,
+              organization.status,
+              organization.pinned ? 1 : 0,
+              organization.sortOrder,
+              document.revisions.at(-1)?.revisionId ?? null,
+              document.revisions.length
+            ),
+          this.documentObjectInsert(document.projectId, write, 'committed'),
+          ...this.projectAssetStatements(document.projectId, write)
+        ]);
+      } catch (error) {
+        await this.discardProjectStorageWrite(write);
+        throw error;
+      }
+      return {
+        projectId: document.projectId,
+        name: document.name,
+        lastRevisionId: document.revisions.at(-1)?.revisionId,
+        revisionCount: document.revisions.length,
+        updatedAt,
+        documentVersion: document.version,
+        organization
+      };
+    }
     await this.env
       .DB!.prepare(
         `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -1285,6 +1788,22 @@ export class D1R2PersistenceService implements PersistenceService {
         )
       );
     }
+    const projectBucket = this.projectStorageBucket();
+    if (projectBucket) {
+      const objects = await this.env
+        .DB!.prepare(
+          `SELECT object_key FROM project_document_objects WHERE project_id IN (${placeholders})
+           UNION
+           SELECT object_key FROM project_storage_assets WHERE project_id IN (${placeholders})`
+        )
+        .bind(...projectIds, ...projectIds)
+        .all<{ object_key: string }>();
+      await Promise.all(
+        (objects.results ?? []).map((row) =>
+          projectBucket.delete(row.object_key)
+        )
+      );
+    }
     // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
     // a per-connection pragma; deleting them explicitly means a purge cannot
     // leave orphaned revisions behind if it is ever off.
@@ -1292,7 +1811,9 @@ export class D1R2PersistenceService implements PersistenceService {
       [
         'DELETE FROM upload_sessions WHERE project_id IN',
         'DELETE FROM artifacts WHERE project_id IN',
-        'DELETE FROM revisions WHERE project_id IN'
+        'DELETE FROM revisions WHERE project_id IN',
+        'DELETE FROM project_document_objects WHERE project_id IN',
+        'DELETE FROM project_storage_assets WHERE project_id IN'
       ]
         .map((statement) =>
           this.env
@@ -1409,23 +1930,55 @@ function createUploadSessionRecord(
   return session;
 }
 
+/** Small, non-document fallback kept in the legacy NOT NULL D1 column. */
+function projectObjectEnvelope(
+  document: ProjectDocument,
+  objectId: string
+): string {
+  return JSON.stringify({
+    format: 'openzcad-project-pointer',
+    version: 1,
+    projectId: document.projectId,
+    documentVersion: document.version,
+    objectId
+  });
+}
+
 /**
  * Columns every project summary is built from. Kept as one string so the list
  * and single-row reads cannot drift apart and hand `summaryFromRow` a shape it
  * does not expect.
  */
-const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, status, pinned, sort_order, deleted_at, archived_at`;
+const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at`;
 
 interface ProjectRow {
   id: string;
   name: string;
   updated_at: string;
   document_json: string;
+  document_version?: number | null;
+  last_revision_id?: string | null;
+  revision_count?: number | null;
   status: string | null;
   pinned: number | null;
   sort_order: number | null;
   deleted_at: string | null;
   archived_at: string | null;
+}
+
+interface ProjectDocumentObjectRow {
+  object_key: string;
+  checksum_sha256: string;
+  logical_bytes: number;
+  content_encoding: string;
+}
+
+interface ProjectStorageWrite {
+  objectId: string;
+  objectKey: string;
+  createdAt: string;
+  prepared: PreparedProjectStorageSnapshot;
+  missingAssets: ProjectStorageAssetObject[];
 }
 
 function organizationFromRow(row: ProjectRow): ProjectOrganization {
@@ -1447,6 +2000,22 @@ function organizationFromRow(row: ProjectRow): ProjectOrganization {
 
 /** Null when the stored document is unreadable, so the caller can skip it. */
 function summaryFromRow(row: ProjectRow): ProjectSummary | null {
+  if (
+    typeof row.document_version === 'number' &&
+    typeof row.revision_count === 'number'
+  ) {
+    return {
+      projectId: toProjectId(row.id),
+      name: row.name,
+      ...(row.last_revision_id
+        ? { lastRevisionId: toRevisionId(row.last_revision_id) }
+        : {}),
+      revisionCount: row.revision_count,
+      updatedAt: row.updated_at,
+      documentVersion: row.document_version,
+      organization: organizationFromRow(row)
+    };
+  }
   try {
     const document = normalizeDocument(
       JSON.parse(row.document_json) as ProjectDocument

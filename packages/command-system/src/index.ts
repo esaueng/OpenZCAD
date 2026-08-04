@@ -193,6 +193,29 @@ function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
   }
 }
 
+function validateExtrudeInput(
+  document: ProjectDocument,
+  input: ExtrudeInput
+): void {
+  if (!findSketch(document, input.sketchId)) {
+    throw new Error('Extrude requires an existing sketch.');
+  }
+  const operation = input.operation ?? 'new-body';
+  if (operation === 'new-body') {
+    if (input.targetBodyId !== undefined) {
+      throw new Error('A new-body extrusion cannot store a target body.');
+    }
+    return;
+  }
+  if (input.targetBodyId === undefined) {
+    throw new Error(`Extrude ${operation} requires a stored target body.`);
+  }
+  validateBodyTarget(document, input.targetBodyId);
+  if (input.ids?.bodyId === input.targetBodyId) {
+    throw new Error('An extrusion cannot target its own result body.');
+  }
+}
+
 function validateDirectEditReference(input: DirectEditInput): void {
   const reference = input.operation.faceReference;
   if (!reference) {
@@ -307,6 +330,17 @@ function validateModelingFeatureUpdate(
   const preview = updateFeature(document, input);
   const feature = findFeature(preview, input.featureId)!;
   switch (feature.data.featureKind) {
+    case 'extrude':
+      validateExtrudeInput(preview, {
+        name: feature.name,
+        sketchId: feature.data.sketchId,
+        distance: feature.data.distance,
+        operation: feature.data.operation,
+        targetBodyId: feature.data.targetBodyId,
+        profile: feature.data.profile,
+        profiles: feature.data.profiles
+      });
+      break;
     case 'mirror':
       validateMirrorInput(preview, {
         name: feature.name,
@@ -445,9 +479,7 @@ export const commandFactories = {
       payload,
       (document) => translateSketch(document, payload),
       (document) => {
-        if (
-          ![payload.du, payload.dv, payload.dn ?? 0].every(Number.isFinite)
-        ) {
+        if (![payload.du, payload.dv, payload.dn ?? 0].every(Number.isFinite)) {
           throw new Error('Sketch translation must be finite.');
         }
         const sketch = findSketch(document, payload.sketchId);
@@ -469,11 +501,7 @@ export const commandFactories = {
       'Extrude sketch',
       withIds,
       (document) => extrudeSketch(document, withIds).document,
-      (document) => {
-        if (!findSketch(document, payload.sketchId)) {
-          throw new Error('Extrude requires an existing sketch.');
-        }
-      }
+      (document) => validateExtrudeInput(document, withIds)
     );
   },
   revolveSketch(payload: RevolveInput): CommandDefinition<RevolveInput> {

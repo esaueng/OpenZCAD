@@ -6,6 +6,7 @@ import {
   Move3d,
   X
 } from 'lucide-react';
+import type { ExtrudeOperation } from '@openzcad/shared';
 
 interface ProfileQuickActionProps {
   profileName: string;
@@ -58,6 +59,9 @@ interface ExtrudeOverlayProps {
   availableProfileCount: number;
   distance: number;
   units: string;
+  operation: ExtrudeOperation | 'inferring';
+  operationDetail: string;
+  canConfirm: boolean;
   onDistanceChange(value: number): void;
   onClearProfiles(): void;
   onSelectAllProfiles(): void;
@@ -72,6 +76,9 @@ export function ExtrudeOverlay({
   availableProfileCount,
   distance,
   units,
+  operation,
+  operationDetail,
+  canConfirm,
   onDistanceChange,
   onClearProfiles,
   onSelectAllProfiles,
@@ -104,7 +111,7 @@ export function ExtrudeOverlay({
         aria-label="Extrude controls"
         onSubmit={(event) => {
           event.preventDefault();
-          if (Math.abs(distance) >= 0.1) {
+          if (canConfirm && Math.abs(distance) >= 0.1) {
             onConfirm();
           }
         }}
@@ -135,9 +142,13 @@ export function ExtrudeOverlay({
         </div>
         <label>
           <span>Operation</span>
-          <select aria-label="Extrude operation" value="new-body" disabled>
+          <select aria-label="Extrude operation" value={operation} disabled>
+            <option value="inferring">Inferring…</option>
             <option value="new-body">New Body</option>
+            <option value="add">Add</option>
+            <option value="cut">Cut</option>
           </select>
+          <small>{operationDetail}</small>
         </label>
         <label>
           <span>Distance</span>
@@ -177,7 +188,11 @@ export function ExtrudeOverlay({
           <button
             type="submit"
             className="primary"
-            disabled={!Number.isFinite(distance) || Math.abs(distance) < 0.1}
+            disabled={
+              !canConfirm ||
+              !Number.isFinite(distance) ||
+              Math.abs(distance) < 0.1
+            }
           >
             <Check size={15} aria-hidden="true" />
             Apply Extrude
