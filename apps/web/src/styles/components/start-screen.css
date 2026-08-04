@@ -486,6 +486,10 @@
   font-size: var(--fs-sm);
 }
 
+.start-adopt-bar.is-unavailable {
+  color: var(--color-warning);
+}
+
 .start-tile-thumb {
   position: relative;
   display: grid;

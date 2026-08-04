@@ -883,6 +883,13 @@ export function App() {
     new Set()
   );
   /**
+   * Whether the last account project listing actually reached the server.
+   * An empty successful list means every local project is device-only; a
+   * failed list means their cloud status is unknown and must not be relabelled.
+   */
+  const [accountProjectListReached, setAccountProjectListReached] =
+    useState(false);
+  /**
    * A divergence against the account, as opposed to against a live room. Held
    * here rather than in the collaboration hook because it can happen with no
    * room in the picture at all — which, with sharing off, is every time.
@@ -1591,6 +1598,7 @@ export function App() {
         }
         setProjects(merged);
         setCloudProjectIds(listed.cloudProjectIds);
+        setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
         sessionRef.current = activeSession;
         setSession(activeSession);
@@ -3046,6 +3054,7 @@ export function App() {
     }
     setProjects(listed.projects);
     setCloudProjectIds(listed.cloudProjectIds);
+    setAccountProjectListReached(listed.remoteReached);
     const activeProjectIsCloud = Boolean(
       doc && remoteVersionsRef.current.has(doc.projectId)
     );
@@ -3056,13 +3065,17 @@ export function App() {
     // Signing in does not upload anything on its own. Projects made while
     // signed out are still the user's to keep on one device if they want, so
     // the count is an offer the start screen makes, not an action taken here.
-    const localOnly = listed.projects.filter(
-      (project) => !listed.cloudProjectIds.has(project.projectId)
-    ).length;
+    const localOnly = listed.remoteReached
+      ? listed.projects.filter(
+          (project) => !listed.cloudProjectIds.has(project.projectId)
+        ).length
+      : 0;
     setSettingsMessage(
-      localOnly === 0
-        ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
-        : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
+      !listed.remoteReached
+        ? `Signed in as ${activeSession.email ?? activeSession.displayName} · cloud projects are temporarily unavailable.`
+        : localOnly === 0
+          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
+          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
     );
   }
 
@@ -3161,6 +3174,7 @@ export function App() {
       // Nothing is in "the account" once there is no account in session, so the
       // shelf must stop claiming otherwise.
       setCloudProjectIds(new Set());
+      setAccountProjectListReached(false);
       setSaveState('local');
       setSettingsMessage('Signed out · device settings remain active.');
     } catch (error) {
@@ -3603,8 +3617,13 @@ export function App() {
       const listed = await loadProjectSummaries(Boolean(session));
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
       setCloudAvailable(listed.remoteReached);
-      setStatus(`${listed.projects.length} project(s) available.`);
+      setStatus(
+        session && !listed.remoteReached
+          ? `Cloud projects are temporarily unavailable · ${listed.projects.length} project(s) remain on this device.`
+          : `${listed.projects.length} project(s) available.`
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
@@ -6599,6 +6618,7 @@ export function App() {
           onOpenSettings={openSettings}
           onDuplicate={(project) => void handleDuplicateProject(project)}
           cloudProjectIds={cloudProjectIds}
+          accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
