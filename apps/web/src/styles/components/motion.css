@@ -24,6 +24,8 @@
 .context-menu-item,
 .assistant-card-actions button,
 .row-delete,
+.row-suppression,
+.row-rollback,
 .row-visibility,
 .selection-chip-clear,
 .save-state {
@@ -76,6 +78,8 @@ textarea {
 }
 
 .row-delete,
+.row-suppression,
+.row-rollback,
 .row-visibility {
   transition:
     opacity var(--dur-fast) var(--ease-out),

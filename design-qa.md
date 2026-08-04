@@ -50,3 +50,17 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
 - Open endpoints, near-closure gaps, and invalid profile diagnostics stop the proposal before document mutation or worker geometry.
 - The assistant digest now includes each sketch's canonical or face attachment plane plus its full object data, so later requests can inspect the geometry the assistant created.
 - Playwright verifies a rectangular `add_sketch` followed by an aliased `add_extrude`, including the final exact body, applied review state, zero warnings, and an empty console-error log.
+
+## Feature suppression and rollback addendum
+
+- Each history row exposes semantic pause/resume and rollback controls on
+  hover or keyboard focus; an active pause remains visible without hover.
+- Suppressed rows use muted italic text, a warning-colored strike, and an
+  explicit `suppressed` label. They are not styled as failed geometry.
+- The active rollback boundary is a persistent accent rule after the selected
+  row, while every later row shows its suppressed state.
+- Pause and rollback buttons expose accessible names and `aria-pressed` state.
+  Undo/redo moves the rendered boundary and exact body count with the canonical
+  document rather than keeping local UI state.
+- Compact-width acceptance must confirm the two new 20 px controls do not hide
+  the feature name, visibility control, or delete action.
