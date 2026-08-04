@@ -127,6 +127,7 @@ GET  /api/projects/:id                POST      /api/artifacts/finalize
 POST /api/projects/:id/revisions      GET       /api/projects/:id/artifacts
 GET  /api/projects/:id/collaboration  (WebSocket upgrade)
 POST /api/projects/:id/collaboration  (oversize snapshot recovery)
+POST /api/projects/:id/collaboration/ticket
 GET  /api/projects/:id/sharing       POST /api/projects/:id/invitations
 PATCH|DELETE /api/projects/:id/members/:userId
 DELETE /api/projects/:id/invitations/:invitationId
@@ -134,7 +135,7 @@ POST /api/project-invitations/accept
 GET  /api/artifacts/:id               GET       /api/artifacts/:id/download
 ```
 
-Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users. Artifacts require an uploaded R2 object before finalization.
+Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users. The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization.
 
 ## AI assistant (experimental)
 

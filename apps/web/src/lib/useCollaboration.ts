@@ -14,6 +14,11 @@ import {
   readUnresolvedConflict,
   type ProjectConflict
 } from './conflictRecovery';
+import {
+  desktopCollaborationUrl,
+  desktopFetch,
+  isDesktopApp
+} from './desktopBridge';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -147,17 +152,14 @@ export function parseServerMessage(
         ? message
         : null;
     case 'lease-lost':
-      return (
-        parsed.reason === 'expired' ||
+      return parsed.reason === 'expired' ||
         parsed.reason === 'released' ||
         parsed.reason === 'role-changed' ||
         parsed.reason === 'invalid'
-      )
         ? message
         : null;
     case 'error':
-      return typeof parsed.message === 'string' &&
-        parsed.message.length <= 1000
+      return typeof parsed.message === 'string' && parsed.message.length <= 1000
         ? message
         : null;
     default:
@@ -322,7 +324,7 @@ export function useCollaboration({
       }
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
-        void fetch(`/api/projects/${projectId}/collaboration`, {
+        void desktopFetch(`/api/projects/${projectId}/collaboration`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -374,17 +376,29 @@ export function useCollaboration({
       return true;
     };
 
-    const connect = () => {
+    const scheduleReconnect = () => {
       if (disposed) {
         return;
       }
-      setStatus('connecting');
-      const url = new URL(
-        `/api/projects/${projectId}/collaboration`,
-        window.location.href
+      setStatus('offline');
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(
+        connect,
+        Math.min(10_000, 750 * 2 ** reconnectAttempt)
       );
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(url);
+    };
+
+    const connectToUrl = (url: string | URL) => {
+      if (disposed) {
+        return;
+      }
+      let socket: WebSocket;
+      try {
+        socket = new WebSocket(url);
+      } catch {
+        scheduleReconnect();
+        return;
+      }
       socketRef.current = socket;
       socket.addEventListener('open', () => {
         reconnectAttempt = 0;
@@ -565,15 +579,29 @@ export function useCollaboration({
         if (disposed) {
           return;
         }
-        setStatus('offline');
-        reconnectAttempt += 1;
-        reconnectTimer = window.setTimeout(
-          connect,
-          Math.min(10_000, 750 * 2 ** reconnectAttempt)
-        );
+        scheduleReconnect();
       });
       socket.addEventListener('error', () => socket.close());
     };
+
+    function connect() {
+      if (disposed) {
+        return;
+      }
+      setStatus('connecting');
+      if (isDesktopApp()) {
+        void desktopCollaborationUrl(projectId!)
+          .then(connectToUrl)
+          .catch(scheduleReconnect);
+        return;
+      }
+      const url = new URL(
+        `/api/projects/${projectId}/collaboration`,
+        window.location.href
+      );
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      connectToUrl(url);
+    }
 
     connect();
     const leaseRenewTimer = window.setInterval(() => {
@@ -647,7 +675,7 @@ export function useCollaboration({
       });
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
-        void fetch(`/api/projects/${document.projectId}/collaboration`, {
+        void desktopFetch(`/api/projects/${document.projectId}/collaboration`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -677,10 +705,7 @@ export function useCollaboration({
                 setRoomVersion(message.document.version);
                 let pending: ProjectConflict;
                 try {
-                  pending = conflictFromDocuments(
-                    document,
-                    message.document
-                  );
+                  pending = conflictFromDocuments(document, message.document);
                 } catch {
                   return;
                 }
@@ -789,7 +814,7 @@ export function useCollaboration({
       }
 
       try {
-        const response = await fetch(
+        const response = await desktopFetch(
           `/api/projects/${projectId}/collaboration`,
           {
             method: 'POST',
@@ -802,10 +827,7 @@ export function useCollaboration({
             })
           }
         );
-        const message = parseServerMessage(
-          await response.text(),
-          projectId
-        );
+        const message = parseServerMessage(await response.text(), projectId);
         if (!message) {
           throw new Error('The room returned an unreadable response.');
         }
@@ -816,9 +838,7 @@ export function useCollaboration({
           try {
             next = conflictFromDocuments(current, message.document);
           } catch {
-            throw new Error(
-              'The room answered for a different project.'
-            );
+            throw new Error('The room answered for a different project.');
           }
           conflictRef.current = next;
           setConflict(next);

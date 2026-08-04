@@ -2122,10 +2122,13 @@ const ROOM_META_KEY = 'room:meta';
 const ROOM_LATEST_KEY = 'room:latest';
 const ROOM_HISTORY_PREFIX = 'room:history:';
 const ROOM_EDIT_LEASE_KEY = 'room:edit-lease';
+const ROOM_SOCKET_TICKETS_KEY = 'room:socket-tickets';
 /** Pre-split layout: the whole room under one value. Migrated away on load. */
 const LEGACY_ROOM_STATE_KEY = 'room-state';
 const ROOM_STORAGE_SCHEMA = 1;
 const MAX_ROOM_HISTORY = 20;
+const MAX_PENDING_SOCKET_TICKETS = 32;
+const SOCKET_TICKET_TTL_MS = 30_000;
 
 /**
  * The room reuses the account's document ceiling
@@ -2148,6 +2151,37 @@ const MAX_CLIENT_DOCUMENT_VALUES = 500_000;
 /** Largest HTTP snapshot body accepted, sized to fit one storable document. */
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
 const PROJECT_EDIT_LEASE_TTL_MS = 30_000;
+
+interface CollaborationSocketTicket {
+  projectId: string;
+  userId: UserId;
+  displayName: string;
+  role: SharedProjectAccessRole;
+  expiresAt: number;
+}
+
+type CollaborationSocketTickets = Record<string, CollaborationSocketTicket>;
+
+function randomSocketTicket(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function validSocketTicket(value: string): boolean {
+  return /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+async function socketTicketHash(ticket: string): Promise<string> {
+  return sha256Hex(new TextEncoder().encode(ticket));
+}
 
 /**
  * Reads a bounded request body without trusting Content-Length or decoding
@@ -2237,6 +2271,7 @@ export class ProjectCollaborationRoom extends DurableObject {
   >();
   private editLease: ProjectEditLease | null = null;
   private leaseQueue: Promise<void> = Promise.resolve();
+  private ticketQueue: Promise<void> = Promise.resolve();
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
   private projectId: string | null = null;
@@ -2323,16 +2358,35 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (request.method === 'PATCH') {
       return this.acceptInternalRoleUpdate(request);
     }
+    if (request.method === 'PUT') {
+      return this.issueSocketTicket(request);
+    }
     if (request.method === 'POST') {
       return this.acceptHttpSnapshot(request);
     }
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('WebSocket upgrade required.', { status: 426 });
     }
-    const userId = request.headers.get('x-openzcad-user-id');
-    const displayName = request.headers.get('x-openzcad-display-name');
-    const role = trustedProjectRole(request.headers);
-    const projectId = new URL(request.url).searchParams.get('projectId');
+    const url = new URL(request.url);
+    const projectId = url.searchParams.get('projectId');
+    const ticketValues = url.searchParams.getAll('ticket');
+    let userId = request.headers.get('x-openzcad-user-id') as UserId | null;
+    let displayName = request.headers.get('x-openzcad-display-name');
+    let role = trustedProjectRole(request.headers);
+    if (ticketValues.length > 0) {
+      const claim =
+        projectId && ticketValues.length === 1
+          ? await this.consumeSocketTicket(ticketValues[0]!, projectId)
+          : null;
+      if (!claim) {
+        return new Response('Collaboration ticket is invalid or expired.', {
+          status: 401
+        });
+      }
+      userId = claim.userId;
+      displayName = claim.displayName;
+      role = claim.role;
+    }
     if (!userId || !displayName || !projectId || !role) {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
@@ -2356,9 +2410,9 @@ export class ProjectCollaborationRoom extends DurableObject {
         void this.handleSocketMessage(
           server,
           event.data,
-          userId as UserId,
+          userId,
           displayName,
-          role ?? 'owner'
+          role
         ).catch(() => {
           console.error('Collaboration message handling failed.');
           this.send(server, {
@@ -2373,6 +2427,136 @@ export class ProjectCollaborationRoom extends DurableObject {
     server.addEventListener('close', close);
     server.addEventListener('error', close);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private enqueueTicketOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.ticketQueue.then(operation, operation);
+    this.ticketQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async issueSocketTicket(request: Request): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    const userId = request.headers.get('x-openzcad-user-id');
+    const displayName = request.headers.get('x-openzcad-display-name');
+    const role = trustedProjectRole(request.headers);
+    if (
+      request.headers.get('x-openzcad-internal-ticket-request') !== 'v1' ||
+      !projectId ||
+      !userId ||
+      !displayName ||
+      !role ||
+      projectId.length > 256 ||
+      userId.length > 256 ||
+      displayName.length > 256
+    ) {
+      return new Response('Invalid collaboration ticket request.', {
+        status: 400
+      });
+    }
+    if (this.projectId && this.projectId !== projectId) {
+      return new Response('Room project mismatch.', { status: 409 });
+    }
+    if (this.projectId !== projectId) {
+      this.projectId = projectId;
+      await this.persistRoomState();
+    }
+
+    return this.enqueueTicketOperation(async () => {
+      const now = Date.now();
+      const ticket = randomSocketTicket();
+      const ticketHash = await socketTicketHash(ticket);
+      const stored =
+        (await this.roomContext.storage.get<CollaborationSocketTickets>(
+          ROOM_SOCKET_TICKETS_KEY
+        )) ?? {};
+      const pending = Object.fromEntries(
+        Object.entries(stored)
+          .filter(([, claim]) => claim.expiresAt > now)
+          .sort((left, right) => right[1].expiresAt - left[1].expiresAt)
+          .slice(0, MAX_PENDING_SOCKET_TICKETS - 1)
+      );
+      const expiresAt = now + SOCKET_TICKET_TTL_MS;
+      pending[ticketHash] = {
+        projectId,
+        userId: userId as UserId,
+        displayName,
+        role,
+        expiresAt
+      };
+      await this.roomContext.storage.put(ROOM_SOCKET_TICKETS_KEY, pending);
+      return Response.json(
+        { ticket, expiresAt },
+        { headers: { 'cache-control': 'no-store' } }
+      );
+    });
+  }
+
+  private async consumeSocketTicket(
+    ticket: string,
+    projectId: string
+  ): Promise<CollaborationSocketTicket | null> {
+    if (!validSocketTicket(ticket)) {
+      return null;
+    }
+    const ticketHash = await socketTicketHash(ticket);
+    const claim = await this.enqueueTicketOperation(async () => {
+      const now = Date.now();
+      const stored =
+        (await this.roomContext.storage.get<CollaborationSocketTickets>(
+          ROOM_SOCKET_TICKETS_KEY
+        )) ?? {};
+      const found = stored[ticketHash];
+      const pending = Object.fromEntries(
+        Object.entries(stored).filter(
+          ([hash, candidate]) =>
+            hash !== ticketHash && candidate.expiresAt > now
+        )
+      );
+      if (Object.keys(pending).length === 0) {
+        await this.roomContext.storage.delete(ROOM_SOCKET_TICKETS_KEY);
+      } else {
+        await this.roomContext.storage.put(ROOM_SOCKET_TICKETS_KEY, pending);
+      }
+      return found && found.expiresAt > now && found.projectId === projectId
+        ? found
+        : null;
+    });
+    return claim ? this.refreshTicketAccess(claim) : null;
+  }
+
+  /** Re-check D1 after ticket issuance so a just-revoked member cannot connect. */
+  private async refreshTicketAccess(
+    claim: CollaborationSocketTicket
+  ): Promise<CollaborationSocketTicket | null> {
+    if (!this.roomEnv.DB) {
+      return this.roomEnv.ENVIRONMENT === 'development' &&
+        this.roomEnv.AUTH_MODE === 'development'
+        ? claim
+        : null;
+    }
+    const owner = await this.roomEnv.DB.prepare(
+      `SELECT user_id FROM projects WHERE id = ? AND user_id = ?`
+    )
+      .bind(claim.projectId, claim.userId)
+      .first<{ user_id: string }>();
+    if (owner) {
+      return { ...claim, role: 'owner' };
+    }
+    if (!isCloudflareFeatureEnabled(this.roomEnv, 'PROJECT_SHARING_ENABLED')) {
+      return null;
+    }
+    const member = await this.roomEnv.DB.prepare(
+      `SELECT role FROM project_members WHERE project_id = ? AND user_id = ?`
+    )
+      .bind(claim.projectId, claim.userId)
+      .first<{ role: string }>();
+    return member?.role === 'editor' || member?.role === 'viewer'
+      ? { ...claim, role: member.role }
+      : null;
   }
 
   private async handleSocketMessage(

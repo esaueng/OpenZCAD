@@ -9,8 +9,8 @@ use tauri::{
 mod desktop_auth;
 
 use desktop_auth::{
-    cancel_desktop_sign_in, desktop_api_request, poll_desktop_sign_in, start_desktop_sign_in,
-    DesktopAuthState,
+    cancel_desktop_sign_in, desktop_api_request, desktop_collaboration_url, poll_desktop_sign_in,
+    start_desktop_sign_in, DesktopAuthState,
 };
 
 const MAX_NATIVE_FILE_BYTES: u64 = 50 * 1024 * 1024;
@@ -232,7 +232,8 @@ pub fn run() {
             start_desktop_sign_in,
             poll_desktop_sign_in,
             cancel_desktop_sign_in,
-            desktop_api_request
+            desktop_api_request,
+            desktop_collaboration_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenZCAD");
