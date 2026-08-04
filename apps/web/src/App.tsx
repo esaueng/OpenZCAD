@@ -918,7 +918,7 @@ export function App() {
   const { run: executeValidatedDirectEdit } = useDirectEditCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
-    commit: (command) => executeCommand(command),
+    commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) =>
       dispatchInteraction({ type: 'validation-start', value }),
     onValidationFailed: (message, value) => {
@@ -940,8 +940,9 @@ export function App() {
   const { run: executeValidatedFeature } = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
-    commit: (command) => executeCommand(command),
-    commitTransaction: (label, commands) => executeTransaction(label, commands),
+    commit: (command, derived) => executeCommand(command, derived),
+    commitTransaction: (label, commands, derived) =>
+      executeTransaction(label, commands, derived),
     onBusy: setBusy,
     onStatus: setStatus
   });
@@ -2135,13 +2136,24 @@ export function App() {
     reportCameraPose(doc?.projectId ?? null, camera);
   }
 
-  function executeCommand(command: AnyCommand): boolean {
+  function executeCommand(
+    command: AnyCommand,
+    derived?: ProjectDocument['derived']
+  ): boolean {
     if (!managerRef.current || !ensureCanEdit('run this command')) {
       return false;
     }
     try {
       setPreviewDoc(null);
-      setDoc(managerRef.current.execute(command));
+      let next = managerRef.current.execute(command);
+      if (derived) {
+        // Validation already rebuilt this exact result; attaching it now
+        // renders the new geometry in the same batch instead of flashing the
+        // stale meshes until the broadcast rebuild echoes back.
+        next = managerRef.current.commitDerivedState(derived);
+        setMoveCommitHold(null);
+      }
+      setDoc(next);
       setStatus(command.label);
       return true;
     } catch (error) {
@@ -2150,7 +2162,11 @@ export function App() {
     }
   }
 
-  function executeTransaction(label: string, commands: AnyCommand[]): boolean {
+  function executeTransaction(
+    label: string,
+    commands: AnyCommand[],
+    derived?: ProjectDocument['derived']
+  ): boolean {
     if (
       !managerRef.current ||
       commands.length === 0 ||
@@ -2160,7 +2176,12 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
-      setDoc(managerRef.current.runTransaction(label, commands));
+      let next = managerRef.current.runTransaction(label, commands);
+      if (derived) {
+        next = managerRef.current.commitDerivedState(derived);
+        setMoveCommitHold(null);
+      }
+      setDoc(next);
       setStatus(label);
       return true;
     } catch (error) {
