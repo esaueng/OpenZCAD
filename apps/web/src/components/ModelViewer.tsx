@@ -2073,7 +2073,18 @@ export function ModelViewer({
           );
         }
       }
-      chip.textContent = text;
+      if (rig?.kind === 'cylinder-radius') {
+        // Drawing-annotation typography: the units render small after the
+        // number, so the chip reads "R 35ₘₘ" rather than uniform text.
+        const units = document.createElement('small');
+        units.textContent = unitsRef.current;
+        chip.replaceChildren(
+          `R ${formatNumber(rig.value())} `,
+          units
+        );
+      } else {
+        chip.textContent = text;
+      }
       chip.dataset.variant =
         rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       hud.showAt(chip, screen.x, screen.y);
@@ -3459,6 +3470,11 @@ export function ModelViewer({
       // Suppress the native menu here; pointerup decides whether to open ours.
       event.preventDefault();
     };
+    // The canvas listener alone is not enough: HUD chips and the CSS2D label
+    // layer sit above the canvas, and a right-click landing on them surfaces
+    // the browser's own menu (Safari offers "Save Image As…" for the canvas
+    // beneath). The host wrapper sees the event whichever layer was hit.
+    host.addEventListener('contextmenu', handleContextMenu);
 
     const handleWheel = () => {
       cameraRig.cancelTween();
@@ -3691,6 +3707,7 @@ export function ModelViewer({
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
+      host.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
