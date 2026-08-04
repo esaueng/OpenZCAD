@@ -190,6 +190,44 @@
   background: rgba(14, 30, 48, 0.98);
 }
 
+/* Dimension-line variant: a light pill centred on the radius callout line,
+   styled like a drawing annotation rather than a dark tooltip. */
+.handle-value-chip[data-variant='dimension'] {
+  color: #14202e;
+  background: rgba(250, 252, 255, 0.97);
+  border: 1.5px solid var(--color-accent-hi);
+  border-radius: 999px;
+  font-weight: 600;
+  transform: translate(4px, -50%);
+}
+
+.handle-value-chip[data-variant='dimension']:hover {
+  background: #ffffff;
+}
+
+/* "Radius" name tag sitting flush against the dimension value pill. */
+.handle-label-chip {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  padding: 4px 10px;
+  color: #14202e;
+  background: rgba(250, 252, 255, 0.97);
+  border: 1px solid rgba(20, 32, 46, 0.25);
+  border-radius: 999px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translate(calc(-100% - 4px), -50%);
+  cursor: pointer;
+  user-select: none;
+}
+
+.handle-label-chip:hover {
+  background: #ffffff;
+}
+
 /* Floating exact-value keypad anchored at the point of action. */
 .numeric-keypad {
   position: absolute;
