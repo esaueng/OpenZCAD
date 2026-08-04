@@ -50,7 +50,8 @@ import {
   listParameters,
   normalizeDocument,
   resolveParamValue,
-  withoutDerivedProjection
+  withoutDerivedProjection,
+  type ExtrudeInput
 } from '@openzcad/document-core';
 import {
   circleProfile,
@@ -210,6 +211,10 @@ import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import { MarkingMenu } from './components/MarkingMenu';
+import {
+  resolveExtrudeOperation,
+  type ResolvedExtrude
+} from './lib/extrudeInference';
 import type {
   ExtrudePreview,
   FaceResizeCommit
@@ -242,6 +247,29 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
       <LazyViewerShell {...props} />
     </Suspense>
   );
+}
+
+function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
+  if (!resolved) {
+    return 'Measuring positive-volume overlap in the exact kernel…';
+  }
+  const inference = resolved.inference;
+  switch (inference.reason) {
+    case 'enclosed':
+      return `Enclosed by ${inference.targetBodyName}; Cut is stored.`;
+    case 'partial-overlap':
+      return `Partially overlaps ${inference.targetBodyName}; Add is stored.`;
+    case 'multiple-overlap':
+      return 'Several bodies overlap; New Body avoids implicit consumption.';
+    case 'coincident':
+      return 'Coincident volume is ambiguous; New Body is stored.';
+    case 'exact-measurement-refused':
+      return 'Exact overlap was inconclusive; New Body is stored.';
+    case 'no-live-body':
+      return 'No live body can be targeted; New Body is stored.';
+    case 'no-overlap':
+      return 'No positive-volume overlap; New Body is stored.';
+  }
 }
 import {
   chooseProjectDocument,
@@ -651,6 +679,8 @@ export function App() {
   const [extrudePreview, setExtrudePreview] = useState<ExtrudePreview | null>(
     null
   );
+  const [resolvedExtrudePreview, setResolvedExtrudePreview] =
+    useState<ResolvedExtrude | null>(null);
   const extrudePreviewRef = useRef(extrudePreview);
   extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
@@ -858,7 +888,10 @@ export function App() {
    * or profile selection.
    */
   const profileExtrudePreview = useRef(
-    new LivePreview<ProjectDocument, ProjectDocument['derived']>({
+    new LivePreview<
+      { base: ProjectDocument; input: ExtrudeInput },
+      ResolvedExtrude
+    >({
       build: (distance) => {
         const draft = extrudePreviewRef.current;
         const profiles = selectedProfilesRef.current;
@@ -872,30 +905,47 @@ export function App() {
         ) {
           return null;
         }
-        return commandFactories
-          .extrudeSketch({
-            name: 'Extrude preview',
-            sketchId: draft.sketchId as SketchId,
-            distance,
-            profiles: profiles.map((profile) => ({
-              profileId: profile.profileId,
-              regionFingerprint: profile.regionFingerprint,
-              samplePoint: profile.samplePoint,
-              sourceArea: profile.area,
-              sourceEntityIds: profile.sourceEntityIds
-            }))
-          })
-          .apply(base);
+        const command = commandFactories.extrudeSketch({
+          name: 'Extrude preview',
+          sketchId: draft.sketchId as SketchId,
+          distance,
+          profiles: profiles.map((profile) => ({
+            profileId: profile.profileId,
+            regionFingerprint: profile.regionFingerprint,
+            samplePoint: profile.samplePoint,
+            sourceArea: profile.area,
+            sourceEntityIds: profile.sourceEntityIds
+          }))
+        });
+        return { base, input: command.payload };
       },
-      derive: (document) => geometry.syncOnce(document),
+      derive: ({ base, input }) =>
+        resolveExtrudeOperation({
+          base,
+          input,
+          derive: (document) => geometry.syncOnce(document)
+        }),
       publish: (preview) => {
         setPreviewDoc(
-          preview ? { ...preview.document, derived: preview.derived } : null
+          preview
+            ? {
+                ...preview.derived.document,
+                derived: preview.derived.derived
+              }
+            : null
         );
+        setResolvedExtrudePreview(preview?.derived ?? null);
         if (preview) {
           const count = selectedProfilesRef.current.length;
+          const inference = preview.derived.inference;
+          const operation =
+            inference.operation === 'new-body'
+              ? 'New Body'
+              : inference.operation === 'add'
+                ? `Add to ${inference.targetBodyName}`
+                : `Cut ${inference.targetBodyName}`;
           setStatus(
-            `${count} profile${count === 1 ? '' : 's'} selected · exact preview ready.`
+            `${count} profile${count === 1 ? '' : 's'} selected · exact preview ready · ${operation}.`
           );
         }
       },
@@ -912,6 +962,7 @@ export function App() {
       profileExtrudePreview.clear();
       return;
     }
+    setResolvedExtrudePreview(null);
     profileExtrudePreview.request(extrudePreview.distance);
   }, [extrudePreview, profileExtrudePreview, selectedProfiles]);
 
@@ -2215,6 +2266,16 @@ export function App() {
     [doc]
   );
 
+  function updateExtrudeDistance(distance: number) {
+    if (!Number.isFinite(distance)) {
+      return;
+    }
+    setResolvedExtrudePreview(null);
+    setExtrudePreview((current) =>
+      current ? { ...current, distance } : current
+    );
+  }
+
   function startExtrude(sketchId: SketchId) {
     if (tool !== 'extrude') {
       extrudeSelectionReturnRef.current = {
@@ -2259,6 +2320,7 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
     setSelectedProfiles(initialProfiles);
+    setResolvedExtrudePreview(null);
     setExtrudePreview(
       initialProfiles.length > 0 ? { sketchId, distance: 24 } : null
     );
@@ -2275,7 +2337,7 @@ export function App() {
     requestView('iso');
     setStatus(
       initialProfiles.length > 0
-        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview ready.`
+        ? `${initialProfiles.length} profile${initialProfiles.length === 1 ? '' : 's'} selected · exact preview updating.`
         : `Select one or more closed profiles · ${available.length} valid profiles available.`
     );
   }
@@ -2283,16 +2345,33 @@ export function App() {
   async function confirmExtrude() {
     if (
       !extrudePreview ||
+      !resolvedExtrudePreview ||
       selectedProfiles.length === 0 ||
       Math.abs(extrudePreview.distance) < 0.1
     ) {
-      setStatus('Drag the extrusion arrow away from the sketch plane first.');
+      setStatus(
+        resolvedExtrudePreview
+          ? 'Drag the extrusion arrow away from the sketch plane first.'
+          : 'Wait for exact overlap inference to finish.'
+      );
       return;
     }
+    const manager = managerRef.current;
+    if (
+      !manager ||
+      manager.document.version !== resolvedExtrudePreview.baseVersion
+    ) {
+      setResolvedExtrudePreview(null);
+      profileExtrudePreview.request(extrudePreview.distance);
+      setStatus(
+        'The document changed; refreshing exact extrusion inference before applying.'
+      );
+      return;
+    }
+    const resolvedInput = resolvedExtrudePreview.command.payload;
     const command = commandFactories.extrudeSketch({
+      ...resolvedInput,
       name: `Extrude ${features.filter((feature) => feature.featureKind === 'extrude').length + 1}`,
-      sketchId: extrudePreview.sketchId as SketchId,
-      distance: extrudePreview.distance,
       profiles: profileReferencesForSelection(
         selectedProfiles,
         entityWideProfileSource
@@ -2303,7 +2382,7 @@ export function App() {
     const created = await executeValidatedDirectEdit(
       command,
       createdBodyId,
-      `Created extrusion ${extrudePreview.distance > 0 ? 'above' : 'below'} the sketch plane.`,
+      `Created ${resolvedExtrudePreview.inference.operation} extrusion ${extrudePreview.distance > 0 ? 'above' : 'below'} the sketch plane.`,
       extrudePreview.distance
     );
     if (!created) {
@@ -2314,6 +2393,7 @@ export function App() {
       -1
     );
     setExtrudePreview(null);
+    setResolvedExtrudePreview(null);
     setPreviewDoc(null);
     setSelectedProfiles([]);
     setSelectedSketchProfileId(null);
@@ -2323,6 +2403,52 @@ export function App() {
     setSelectedFeatureNodeId(createdFeature?.id ?? null);
     setSelectedBodyIds(createdFeature?.bodyId ? [createdFeature.bodyId] : []);
     setStatus(`Created ${createdFeature?.name ?? 'extrusion'}.`);
+  }
+
+  async function createInferredExtrude(input: ExtrudeInput) {
+    const manager = managerRef.current;
+    if (!manager) {
+      return;
+    }
+    const base = manager.document;
+    setBusy(true);
+    setStatus('Inferring the extrusion operation with the exact kernel…');
+    let resolved: ResolvedExtrude;
+    try {
+      resolved = await resolveExtrudeOperation({
+        base,
+        input,
+        derive: (document) => geometry.syncOnce(document)
+      });
+    } catch (error) {
+      setStatus(errorMessage(error, 'Extrusion inference failed.'));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    if (
+      managerRef.current !== manager ||
+      manager.document.version !== base.version
+    ) {
+      setStatus('The document changed while extrusion inference was running.');
+      return;
+    }
+    const command = commandFactories.extrudeSketch({
+      ...resolved.command.payload,
+      name: input.name
+    });
+    const bodyId = command.payload.ids?.bodyId;
+    if (!bodyId) {
+      setStatus('Extrude could not reserve a result body.');
+      return;
+    }
+    await executeValidatedDirectEdit(
+      command,
+      bodyId,
+      `Created ${resolved.inference.operation} extrusion.`,
+      typeof input.distance === 'number' ? input.distance : 0,
+      finishFeatureCreation
+    );
   }
 
   function launchTool(nextTool: ToolId) {
@@ -4836,6 +4962,7 @@ export function App() {
       return;
     }
     setSelectedProfiles(availableExtrudeProfiles);
+    setResolvedExtrudePreview(null);
     setExtrudePreview((current) => ({
       sketchId: extrudeSketchId,
       distance: current?.distance ?? 24
@@ -4874,6 +5001,7 @@ export function App() {
       modifiers
     );
     setSelectedProfiles(nextProfiles);
+    setResolvedExtrudePreview(null);
     setSelectedSketchProfileId(region.sketchId as SketchId);
     setSelectedFeatureNodeId(null);
     setSelectedTopology(null);
@@ -7063,12 +7191,17 @@ export function App() {
                   availableProfileCount={availableExtrudeProfiles.length}
                   distance={extrudePreview.distance}
                   units={doc.units}
-                  onDistanceChange={(distance) =>
-                    Number.isFinite(distance) &&
-                    setExtrudePreview((current) =>
-                      current ? { ...current, distance } : current
-                    )
+                  operation={
+                    resolvedExtrudePreview?.inference.operation ?? 'inferring'
                   }
+                  operationDetail={extrudeInferenceDescription(
+                    resolvedExtrudePreview
+                  )}
+                  canConfirm={
+                    resolvedExtrudePreview !== null &&
+                    resolvedExtrudePreview.baseVersion === doc.version
+                  }
+                  onDistanceChange={updateExtrudeDistance}
                   onClearProfiles={clearExtrudeProfiles}
                   onSelectAllProfiles={selectAllValidExtrudeProfiles}
                   onBackToSketch={
@@ -7109,11 +7242,7 @@ export function App() {
             onBoxSelect={handleBoxSelectFromViewer}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
-            onExtrudeDistanceChange={(distance) =>
-              setExtrudePreview((current) =>
-                current ? { ...current, distance } : current
-              )
-            }
+            onExtrudeDistanceChange={updateExtrudeDistance}
             onContextMenu={handleViewportContextMenu}
             onToggleGrid={() =>
               setViewerSettings((current) => ({
@@ -7211,9 +7340,7 @@ export function App() {
                 onCreateSketch={(value) =>
                   createFeature(commandFactories.addSketch(value))
                 }
-                onCreateExtrude={(value) =>
-                  createFeature(commandFactories.extrudeSketch(value))
-                }
+                onCreateExtrude={(value) => void createInferredExtrude(value)}
                 onCreateRevolve={(value) =>
                   createFeature(commandFactories.revolveSketch(value))
                 }
