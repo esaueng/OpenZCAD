@@ -3,5 +3,9 @@
   "identifier": "main-window",
   "description": "Minimum permissions for the bundled OpenZCAD workspace.",
   "windows": ["main"],
-  "permissions": ["core:default", "window-state:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy",
+    "window-state:default"
+  ]
 }
