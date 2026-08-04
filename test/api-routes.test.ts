@@ -21,6 +21,36 @@ const env = {
   }
 };
 
+interface StorageAccountingReadinessRow {
+  projects_document_bytes: number;
+  revisions_document_bytes: number;
+  revisions_bytes_index: number;
+}
+
+const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
+  projects_document_bytes: 1,
+  revisions_document_bytes: 1,
+  revisions_bytes_index: 1
+};
+
+function storageAccountingDb(
+  row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
+  failure?: Error
+) {
+  const first = vi.fn(async () => {
+    if (failure) {
+      throw failure;
+    }
+    return row;
+  });
+  const prepare = vi.fn((_query: string) => ({ first }));
+  return {
+    db: { prepare } as unknown as D1Database,
+    first,
+    prepare
+  };
+}
+
 function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
   overrides: T
 ) {
@@ -261,8 +291,10 @@ describe('worker api routes', () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: false,
       projectSharingEnabled: false,
-      projectEditLeasesEnforced: false
+      projectEditLeasesEnforced: false,
+      projectPersonalSyncEnabled: false
     });
   });
 
@@ -279,6 +311,65 @@ describe('worker api routes', () => {
       status: 'ok',
       projectSharingEnabled: true,
       projectEditLeasesEnforced: true
+    });
+  });
+
+  it('reports migration 0010 ready only when all required D1 schema objects exist', async () => {
+    const { db, prepare } = storageAccountingDb();
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      { ...env, DB: db }
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: true,
+      projectPersonalSyncEnabled: false
+    });
+    expect(prepare).toHaveBeenCalledOnce();
+    const query = prepare.mock.calls[0]![0];
+    expect(query).toContain("pragma_table_info('projects')");
+    expect(query).toContain("pragma_table_info('revisions')");
+    expect(query).toContain('idx_revisions_project_bytes');
+  });
+
+  it('keeps personal device sync closed when migration 0010 is incomplete', async () => {
+    const { db } = storageAccountingDb({
+      ...READY_STORAGE_ACCOUNTING_SCHEMA,
+      revisions_bytes_index: 0
+    });
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        ...env,
+        DB: db,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: false,
+      projectPersonalSyncEnabled: false
+    });
+  });
+
+  it('fails migration readiness closed when the D1 probe errors', async () => {
+    const { db } = storageAccountingDb(
+      READY_STORAGE_ACCOUNTING_SCHEMA,
+      new Error('D1 unavailable')
+    );
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        ...env,
+        DB: db,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      documentStorageAccountingReady: false,
+      projectPersonalSyncEnabled: false
     });
   });
 
@@ -1325,16 +1416,20 @@ describe('worker api routes', () => {
 
   it('reports personal device sync separately from sharing', async () => {
     // Turning on device sync must never read as permission to invite anyone.
+    const { db } = storageAccountingDb();
     const health = (await (
       await worker.fetch(new Request('https://example.com/api/health'), {
         ...env,
+        DB: db,
         PROJECT_PERSONAL_SYNC_ENABLED: 'true'
       })
     ).json()) as {
+      documentStorageAccountingReady: boolean;
       projectPersonalSyncEnabled: boolean;
       projectSharingEnabled: boolean;
       projectEditLeasesEnforced: boolean;
     };
+    expect(health.documentStorageAccountingReady).toBe(true);
     expect(health.projectPersonalSyncEnabled).toBe(true);
     expect(health.projectSharingEnabled).toBe(false);
     expect(health.projectEditLeasesEnforced).toBe(false);
