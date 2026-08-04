@@ -1,4 +1,4 @@
-# ADR-017: Client-generated artifact storage
+# ADR-018: Client-generated artifact storage
 
 ## Status
 
