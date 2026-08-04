@@ -9,7 +9,7 @@
     "build": "tauri build --target aarch64-apple-darwin --bundles app,dmg",
     "build:app": "tauri build --target aarch64-apple-darwin --bundles app",
     "build:debug": "tauri build --debug --target aarch64-apple-darwin --bundles app",
-    "build:e2e": "tauri build --debug --target aarch64-apple-darwin --bundles app --features webdriver --config src-tauri/tauri.e2e.conf.json",
+    "build:e2e": "VITE_E2E=1 tauri build --debug --target aarch64-apple-darwin --bundles app --features webdriver --config src-tauri/tauri.e2e.conf.json",
     "test:e2e": "pnpm build:e2e && node e2e/cad-smoke.mjs",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml"
   },

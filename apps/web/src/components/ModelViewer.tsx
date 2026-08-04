@@ -1722,6 +1722,74 @@ export function ModelViewer({
         sketchLines: lineStates(regionGroup)
       });
     };
+    /** Live camera state for bundled-WKWebView input smoke tests. */
+    const handleE2EInputState = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          resolve?: (value: ViewportCameraState) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      detail.resolve(cameraRig.capture());
+    };
+    /**
+     * Route a synthetic macOS pointer packet through OrbitControls itself.
+     * The embedded WebDriver's W3C action endpoint emits MouseEvents, so it
+     * cannot reach Three's PointerEvent-only control listener on WKWebView.
+     */
+    const handleE2EControlPointer = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          type?: 'pointerdown' | 'pointermove' | 'pointerup';
+          init?: PointerEventInit;
+          resolve?: (value: ViewportCameraState) => void;
+        }>
+      ).detail;
+      if (!detail?.type || !detail.resolve) {
+        return;
+      }
+      const pointerEvent = new PointerEvent(detail.type, {
+        bubbles: true,
+        cancelable: true,
+        pointerType: 'mouse',
+        isPrimary: true,
+        ...detail.init
+      });
+      const controls = cameraRig.controls as OrbitControls<THREE.Camera> & {
+        _onMouseDown(event: PointerEvent): void;
+        _onMouseMove(event: PointerEvent): void;
+        _onPointerUp(event: PointerEvent): void;
+      };
+      if (detail.type === 'pointerdown' && pointerEvent.shiftKey) {
+        cameraRig.setShiftOrbitActive(true);
+      }
+      if (detail.type === 'pointerdown') {
+        controls._onMouseDown(pointerEvent);
+      } else if (detail.type === 'pointermove') {
+        controls._onMouseMove(pointerEvent);
+      } else {
+        // No native pointer owns capture for this synthetic packet. Suppress
+        // only that release call so OrbitControls can run its normal end/state
+        // cleanup; the real canvas method is restored immediately afterward.
+        const releasePointerCapture = renderer.domElement.releasePointerCapture;
+        renderer.domElement.releasePointerCapture = () => undefined;
+        try {
+          controls._onPointerUp(pointerEvent);
+        } finally {
+          renderer.domElement.releasePointerCapture = releasePointerCapture;
+          cameraRig.setShiftOrbitActive(false);
+        }
+      }
+      detail.resolve(cameraRig.capture());
+    };
     if (e2eCanvasHooksEnabled) {
       renderer.domElement.addEventListener(
         'openzcad:e2e-select-cylinder',
@@ -1738,6 +1806,14 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-locate-edge',
         handleE2ELocateEdge
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-input-state',
+        handleE2EInputState
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-control-pointer',
+        handleE2EControlPointer
       );
     }
 
@@ -3724,6 +3800,14 @@ export function ModelViewer({
       renderer.domElement.removeEventListener(
         'openzcad:e2e-locate-edge',
         handleE2ELocateEdge
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-input-state',
+        handleE2EInputState
+      );
+      renderer.domElement.removeEventListener(
+        'openzcad:e2e-control-pointer',
+        handleE2EControlPointer
       );
       document.removeEventListener('keydown', handleCapturedEscape, true);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
