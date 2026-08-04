@@ -1184,6 +1184,13 @@ export function ModelViewer({
     offsetChip.addEventListener('click', handleChipClick);
     offsetChipRef.current = offsetChip;
 
+    // Companion "Radius" label pill for the cylinder dimension line, sitting
+    // just ahead of the value chip like a drawing callout's name tag. Tapping
+    // either pill opens the same exact-entry keypad.
+    const radiusLabelChip = hud.create('handle-label-chip');
+    radiusLabelChip.textContent = 'Radius';
+    radiusLabelChip.addEventListener('click', handleChipClick);
+
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
@@ -1730,6 +1737,7 @@ export function ModelViewer({
       }
       if (!anchor) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         if (e2eCanvasHooksEnabled) {
           delete renderer.domElement.dataset.e2eHandleX;
@@ -1748,6 +1756,7 @@ export function ModelViewer({
       );
       if (!screen) {
         chip.hidden = true;
+        radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
         return;
       }
@@ -1782,7 +1791,15 @@ export function ModelViewer({
         }
       }
       chip.textContent = text;
+      chip.dataset.variant =
+        rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
       hud.showAt(chip, screen.x, screen.y);
+      if (rig?.kind === 'cylinder-radius') {
+        // Same anchor; CSS shifts it to sit flush against the value pill.
+        hud.showAt(radiusLabelChip, screen.x, screen.y);
+      } else {
+        radiusLabelChip.hidden = true;
+      }
       keypadAnchorRef.current?.(screen);
     }
 
@@ -3178,6 +3195,9 @@ export function ModelViewer({
           0.55;
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
+        // Re-run the rig's layout so its dimension-line arrowheads track the
+        // freshly stamped screen-constant scale.
+        cylinderRig.setValue(cylinderRig.value());
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig) {
@@ -3312,6 +3332,7 @@ export function ModelViewer({
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
+      radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
