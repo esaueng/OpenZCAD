@@ -29,6 +29,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyRepresentation,
   type DerivedState,
@@ -332,7 +333,8 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const primitive = listFeaturesInOrder(attached).find(
       (feature) => feature.data.featureKind === 'primitive'
     )!;
-    const evolved = new CommandManager(attached).execute(
+    const manager = new CommandManager(attached);
+    const evolved = manager.execute(
       commandFactories.updateFeature(
         {
           featureId: primitive.featureId,
@@ -349,6 +351,24 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       expect(
         derived.bodyRepresentations[extrusionBodyId]!.bbox.min.z
       ).toBeCloseTo(42, 5);
+
+      manager.execute(
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: primitive.id,
+            metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+          },
+          'Suppress attachment source'
+        )
+      );
+      const stale = await brepKit.syncDocument(manager.document);
+      expect(stale.bodyRepresentations[extrusionBodyId]).toBeUndefined();
+      expect(stale.warnings).toContain(
+        'Feature "Attachment box": Suppressed; skipped during exact rebuild.'
+      );
+      expect(stale.warnings).toContain(
+        `Feature "Top attachment": Sketch "Top attachment" cannot attach because source body ${sourceBodyId} is unavailable at the sketch's history position.`
+      );
     } finally {
       brepKit.dispose();
     }
@@ -4773,6 +4793,54 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         valid: true
       });
     }
+  });
+
+  it('surfaces a refused shell on a filleted body as a feature warning', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shell refusal', toUserId('user_exact')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    const sourceBodyId = base.bodyOrder[0]!;
+    const source = await adapter.syncDocument(base);
+    const edges = source.bodyRepresentations[sourceBodyId]!.topology!.edges;
+    const filleted = filletEdges(base, {
+      name: 'Rounded block',
+      targetBodyId: sourceBodyId,
+      edgeHashes: edges.map((edge) => edge.hash),
+      size: 1
+    }).document;
+    const filletedBodyId = filleted.bodyOrder.at(-1)!;
+    const rounded = await adapter.syncDocument(filleted);
+    expect(rounded.warnings).toEqual([]);
+    const opening = rounded.bodyRepresentations[
+      filletedBodyId
+    ]!.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        Math.abs(face.geometry.center.z - 30) < 1e-7
+    );
+    expect(opening).toBeTruthy();
+
+    const refused = shellBody(filleted, {
+      name: 'Impossible shell',
+      targetBodyId: filletedBodyId,
+      openingFaceHashes: [opening!.hash],
+      ...(opening!.reference
+        ? { openingFaceReferences: [opening!.reference] }
+        : {}),
+      thickness: 100
+    }).document;
+    const shellBodyId = refused.bodyOrder.at(-1)!;
+    const derived = await adapter.syncDocument(refused);
+
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toMatch(/^Feature "Impossible shell":/);
+    expect(derived.bodyRepresentations[shellBodyId]).toBeUndefined();
+    expect(derived.bodyRepresentations[filletedBodyId]?.consumed).toBe(false);
   });
 
   it.each([

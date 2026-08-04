@@ -10,7 +10,11 @@ import {
   TEXT_FONT_FAMILY_IDS
 } from '@openzcad/ai-contracts';
 import { FONT_FAMILIES } from '@openzcad/geometry';
-import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import {
+  addSketchFeature,
+  createProjectDocument,
+  importStepBody
+} from '@openzcad/document-core';
 import { toBodyId, toFeatureId, toUserId } from '@openzcad/shared';
 
 describe('AI patch contracts', () => {
@@ -97,6 +101,42 @@ describe('AI patch contracts', () => {
         parseCadPatchProposal(textPatch({ ...valid, fontFamily }))
       ).toThrow(/add_sketch/);
     }
+  });
+
+  it('includes sketch plane and object geometry in the CAD digest', () => {
+    const created = addSketchFeature(
+      createProjectDocument('Digest sketch', toUserId('user_digest_sketch')),
+      {
+        name: 'Profile',
+        plane: 'XZ',
+        offset: 7,
+        object: {
+          objectKind: 'rectangle',
+          width: 12,
+          height: 8,
+          centerX: 3,
+          centerY: -2
+        }
+      }
+    );
+    const feature = createCadDocumentDigest(created.document).features.find(
+      (candidate) => candidate.featureKind === 'sketch'
+    );
+
+    expect(feature?.data).toEqual({
+      featureKind: 'sketch',
+      sketchId: created.sketchId,
+      planeRef: { type: 'canonical', plane: 'XZ', offset: 7 },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 12,
+          height: 8,
+          centerX: 3,
+          centerY: -2
+        }
+      ]
+    });
   });
 
   it('offers the AI exactly the font families the geometry package bundles', () => {
