@@ -52,6 +52,7 @@ function clampAutosaveDelay(seconds: number): number {
   );
 }
 import { api } from '../lib/api';
+import { isDesktopApp } from '../lib/desktopBridge';
 import {
   KERNEL_BUILD,
   kernelBuildDetail,
@@ -101,6 +102,9 @@ interface SettingsPageProps {
   session: AuthSession | null;
   busy: boolean;
   message: string;
+  initialSection?: SectionId;
+  desktopAuthorizationAttempt?: string | null;
+  desktopAuthorizationApproved?: boolean;
   onChange(settings: AppSettings): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
@@ -111,6 +115,8 @@ interface SettingsPageProps {
   ): Promise<{ challengeId: string; expiresInSeconds: number }>;
   onVerifyLoginCode(challengeId: string, code: string): Promise<void>;
   onRefreshAuthConfig(): Promise<void>;
+  onStartDesktopLogin(): Promise<void>;
+  onApproveDesktopLogin(): Promise<void>;
   onLogout(): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
@@ -448,6 +454,9 @@ export function SettingsPage({
   session,
   busy,
   message,
+  initialSection = 'general',
+  desktopAuthorizationAttempt = null,
+  desktopAuthorizationApproved = false,
   onChange,
   onSaveCredential,
   onDeleteCredential,
@@ -455,12 +464,15 @@ export function SettingsPage({
   onRequestLoginCode,
   onVerifyLoginCode,
   onRefreshAuthConfig,
+  onStartDesktopLogin,
+  onApproveDesktopLogin,
   onLogout,
   onReset,
   onApplyViewportDefaults,
   onClose
 }: SettingsPageProps) {
-  const [active, setActive] = useState<SectionId>('general');
+  const [active, setActive] = useState<SectionId>(initialSection);
+  const desktopApp = isDesktopApp();
   const [query, setQuery] = useState('');
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -1374,25 +1386,56 @@ export function SettingsPage({
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
               {session ? (
-                <SettingRow
-                  title={session.displayName}
-                  description={session.email ?? session.userId}
-                  scope={
-                    session.mode === 'email-code'
-                      ? 'Email profile'
-                      : 'Development'
-                  }
-                >
-                  <button
-                    className="secondary"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onLogout().catch(() => undefined)}
+                <>
+                  <SettingRow
+                    title={session.displayName}
+                    description={session.email ?? session.userId}
+                    scope={
+                      session.mode === 'email-code'
+                        ? 'Email profile'
+                        : 'Development'
+                    }
                   >
-                    <LogOut size={14} aria-hidden="true" />
-                    Sign out
-                  </button>
-                </SettingRow>
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onLogout().catch(() => undefined)}
+                    >
+                      <LogOut size={14} aria-hidden="true" />
+                      Sign out
+                    </button>
+                  </SettingRow>
+                  {desktopAuthorizationAttempt ? (
+                    <div
+                      className={
+                        desktopAuthorizationApproved
+                          ? 'settings-state good'
+                          : 'settings-warning settings-sign-in-warning'
+                      }
+                      role="status"
+                    >
+                      <span>
+                        {desktopAuthorizationApproved
+                          ? 'OpenZCAD for macOS is connected. You can return to the app.'
+                          : 'Continue to connect this cloud profile to OpenZCAD for macOS.'}
+                      </span>
+                      {!desktopAuthorizationApproved ? (
+                        <button
+                          className="primary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void onApproveDesktopLogin().catch(() => undefined)
+                          }
+                        >
+                          <LogIn size={14} aria-hidden="true" />
+                          Continue in OpenZCAD
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <>
                   <SettingRow
@@ -1426,6 +1469,37 @@ export function SettingsPage({
                         Retry
                       </button>
                     </div>
+                  ) : desktopApp ? (
+                    authConfig?.desktopAuthEnabled ? (
+                      <div className="settings-auth-form">
+                        <span>
+                          <strong>Sign in with your browser</strong>
+                          <small>
+                            Turnstile and the email code stay in your browser.
+                            macOS stores only the rotating refresh credential in
+                            Keychain.
+                          </small>
+                        </span>
+                        <div className="settings-auth-controls">
+                          <button
+                            className="primary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void onStartDesktopLogin().catch(() => undefined)
+                            }
+                          >
+                            <LogIn size={14} aria-hidden="true" />
+                            Continue in browser
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="settings-warning" role="status">
+                        Desktop sign-in is not ready on this beta Worker. Device
+                        settings and local CAD projects remain available.
+                      </div>
+                    )
                   ) : authConfig?.emailCodeEnabled &&
                     authConfig.turnstileSiteKey ? (
                     loginChallengeId ? (

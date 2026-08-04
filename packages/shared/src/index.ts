@@ -1243,6 +1243,8 @@ export interface AuthConfigResponse {
   mode: 'development' | 'email-code' | 'unconfigured';
   emailCodeEnabled: boolean;
   turnstileSiteKey?: string;
+  /** Present only on the native readiness endpoint. Older Workers fail closed. */
+  desktopAuthEnabled?: boolean;
 }
 
 export interface StartEmailLoginRequest {
