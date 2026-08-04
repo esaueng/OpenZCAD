@@ -29,6 +29,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyRepresentation,
   type DerivedState,
@@ -332,7 +333,8 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const primitive = listFeaturesInOrder(attached).find(
       (feature) => feature.data.featureKind === 'primitive'
     )!;
-    const evolved = new CommandManager(attached).execute(
+    const manager = new CommandManager(attached);
+    const evolved = manager.execute(
       commandFactories.updateFeature(
         {
           featureId: primitive.featureId,
@@ -349,6 +351,24 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       expect(
         derived.bodyRepresentations[extrusionBodyId]!.bbox.min.z
       ).toBeCloseTo(42, 5);
+
+      manager.execute(
+        commandFactories.setNodeMetadata(
+          {
+            nodeId: primitive.id,
+            metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+          },
+          'Suppress attachment source'
+        )
+      );
+      const stale = await brepKit.syncDocument(manager.document);
+      expect(stale.bodyRepresentations[extrusionBodyId]).toBeUndefined();
+      expect(stale.warnings).toContain(
+        'Feature "Attachment box": Suppressed; skipped during exact rebuild.'
+      );
+      expect(stale.warnings).toContain(
+        `Feature "Top attachment": Sketch "Top attachment" cannot attach because source body ${sourceBodyId} is unavailable at the sketch's history position.`
+      );
     } finally {
       brepKit.dispose();
     }

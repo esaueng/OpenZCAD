@@ -361,6 +361,90 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('shows and recovers a stale face-attached sketch when its source is suppressed', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Stale Face Attachment');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: bounds!.x + bounds!.width * xRatio,
+        y: bounds!.y + bounds!.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
+  await page
+    .getByRole('region', { name: 'Offset Face operation' })
+    .getByRole('tab', { name: 'Sketch' })
+    .click();
+
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  const sketchBounds = await canvas.boundingBox();
+  expect(sketchBounds).not.toBeNull();
+  const center = {
+    x: sketchBounds!.x + sketchBounds!.width / 2,
+    y: sketchBounds!.y + sketchBounds!.height / 2
+  };
+  await page.mouse.move(center.x - 45, center.y - 35);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 45, center.y + 35, { steps: 4 });
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row', { hasText: /^Sketch/ })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Finish Sketch' }).click();
+
+  const box = page.locator('.feature-row', { hasText: /^Box/ });
+  await box.getByRole('button', { name: 'Suppress Box' }).click();
+  await expect(box).toContainText('suppressed');
+  const diagnostic = page.locator('.diagnostic-row', {
+    hasText: /cannot attach because source body/
+  });
+  await expect(diagnostic).toContainText(
+    "is unavailable at the sketch's history position"
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText('warnings0');
+
+  await box.getByRole('button', { name: 'Resume Box' }).click();
+  await expect(box).not.toContainText('suppressed');
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('refuses a new face sketch after a hash-only direct edit', async ({
   page
 }) => {
