@@ -36,7 +36,7 @@ function desktopAuthD1(user: AuthSession) {
   const access = new Map<string, TokenRow>();
   const refresh = new Map<string, TokenRow>();
   const rates = new Map<string, number>();
-  const users = new Map([[user.userId, user.email!]]);
+  const users = new Map<string, string>([[user.userId, user.email!]]);
 
   function prepare(query: string): D1PreparedStatement {
     let values: unknown[] = [];
