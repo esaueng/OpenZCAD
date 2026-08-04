@@ -55,6 +55,11 @@ interface StartScreenProps {
    */
   cloudProjectIds: ReadonlySet<string>;
   /**
+   * False when the account listing failed. In that state an absent id is
+   * unknown, not proof that a project exists only on this device.
+   */
+  accountProjectListReached: boolean;
+  /**
    * Projects whose two copies diverged and were never reconciled. Surfaced on
    * the shelf because the divergence outlives the session that found it, and a
    * user who closed the dialog needs a way back to it.
@@ -111,6 +116,7 @@ export function StartScreen({
   onOpenSettings,
   onDuplicate,
   cloudProjectIds,
+  accountProjectListReached,
   conflictedProjectIds,
   signedIn,
   onSaveToAccount,
@@ -207,13 +213,14 @@ export function StartScreen({
   // work to rescue and would only pad the offer. Trashed projects are excluded
   // for the same reason in reverse: uploading something on its way out is not
   // what "save my work" means.
-  const localOnlyProjects = signedIn
-    ? userProjects.filter(
-        (project) =>
-          !cloudProjectIds.has(project.projectId) &&
-          projectOrganization(project).status !== 'deleted'
-      )
-    : [];
+  const localOnlyProjects =
+    signedIn && accountProjectListReached
+      ? userProjects.filter(
+          (project) =>
+            !cloudProjectIds.has(project.projectId) &&
+            projectOrganization(project).status !== 'deleted'
+        )
+      : [];
 
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
@@ -259,7 +266,10 @@ export function StartScreen({
     const daysLeft = organization.deletedAt
       ? daysUntilPurge(organization.deletedAt)
       : TRASH_RETENTION_DAYS;
-    const localOnly = signedIn && !cloudProjectIds.has(project.projectId);
+    const localOnly =
+      signedIn &&
+      accountProjectListReached &&
+      !cloudProjectIds.has(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
     const syncEntry = syncEntryById.get(project.projectId);
 
@@ -788,6 +798,14 @@ export function StartScreen({
                   ))}
                 </ul>
               )}
+            </div>
+          ) : signedIn && !accountProjectListReached ? (
+            <div className="start-adopt-bar is-unavailable" role="status">
+              <TriangleAlert size={14} aria-hidden="true" />
+              <span>
+                Cloud project status is temporarily unavailable. Your projects
+                remain saved on this device.
+              </span>
             </div>
           ) : (
             localOnlyProjects.length > 0 && (
