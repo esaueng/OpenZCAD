@@ -1729,13 +1729,26 @@ export function ModelViewer({
       }
       const detail = (
         event as CustomEvent<{
-          resolve?: (value: ViewportCameraState) => void;
+          resolve?: (value: {
+            camera: ViewportCameraState;
+            controlsEnabled: boolean;
+            controlState: number | null;
+            mouseButtons: OrbitControls<THREE.Camera>['mouseButtons'];
+          }) => void;
         }>
       ).detail;
       if (!detail?.resolve) {
         return;
       }
-      detail.resolve(cameraRig.capture());
+      const controls = cameraRig.controls as OrbitControls<THREE.Camera> & {
+        state?: number;
+      };
+      detail.resolve({
+        camera: cameraRig.capture(),
+        controlsEnabled: controls.enabled,
+        controlState: controls.state ?? null,
+        mouseButtons: { ...controls.mouseButtons }
+      });
     };
     /** Force a high-DPI backing store when a hosted Mac exposes a 1x display. */
     const handleE2EPixelRatio = (event: Event) => {
@@ -1762,7 +1775,18 @@ export function ModelViewer({
         event as CustomEvent<{
           type?: 'pointerdown' | 'pointermove' | 'pointerup';
           init?: PointerEventInit;
-          resolve?: (value: ViewportCameraState) => void;
+          resolve?: (value: {
+            camera: ViewportCameraState;
+            controlsEnabled: boolean;
+            controlState: number | null;
+            mouseButtons: OrbitControls<THREE.Camera>['mouseButtons'];
+            pointer: {
+              button: number;
+              clientX: number;
+              clientY: number;
+              shiftKey: boolean;
+            };
+          }) => void;
         }>
       ).detail;
       if (!detail?.type || !detail.resolve) {
@@ -1780,8 +1804,13 @@ export function ModelViewer({
         _onMouseMove(event: PointerEvent): void;
         _onPointerUp(event: PointerEvent): void;
       };
-      if (detail.type === 'pointerdown' && pointerEvent.shiftKey) {
-        cameraRig.setShiftOrbitActive(true);
+      if (detail.type === 'pointerdown') {
+        // Match the production viewport pointerdown path so a startup/fit
+        // tween cannot overwrite the synthetic gesture on fast cached builds.
+        cameraRig.cancelTween();
+        if (pointerEvent.shiftKey) {
+          cameraRig.setShiftOrbitActive(true);
+        }
       }
       if (detail.type === 'pointerdown') {
         controls._onMouseDown(pointerEvent);
@@ -1800,7 +1829,20 @@ export function ModelViewer({
           cameraRig.setShiftOrbitActive(false);
         }
       }
-      detail.resolve(cameraRig.capture());
+      detail.resolve({
+        camera: cameraRig.capture(),
+        controlsEnabled: controls.enabled,
+        controlState:
+          (controls as OrbitControls<THREE.Camera> & { state?: number }).state ??
+          null,
+        mouseButtons: { ...controls.mouseButtons },
+        pointer: {
+          button: pointerEvent.button,
+          clientX: pointerEvent.clientX,
+          clientY: pointerEvent.clientY,
+          shiftKey: pointerEvent.shiftKey
+        }
+      });
     };
     if (e2eCanvasHooksEnabled) {
       renderer.domElement.addEventListener(

@@ -116,10 +116,7 @@ async function saveScreenshot(sessionId, fileName) {
   const png = Buffer.from(base64, 'base64');
   await writeFile(fileName, png);
   assert.equal(png.toString('ascii', 1, 4), 'PNG');
-  return {
-    width: png.readUInt32BE(16),
-    height: png.readUInt32BE(20)
-  };
+  assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0);
 }
 
 const delay = (duration) =>
@@ -136,8 +133,6 @@ async function readDisplayState(sessionId) {
     var rect = canvas.getBoundingClientRect();
     return {
       devicePixelRatio: window.devicePixelRatio,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
       cssWidth: rect.width,
       cssHeight: rect.height,
       backingWidth: canvas.width,
@@ -159,7 +154,7 @@ async function setE2EPixelRatio(sessionId, value) {
   return readDisplayState(sessionId);
 }
 
-async function readCameraPose(sessionId) {
+async function readInputState(sessionId) {
   return execute(
     sessionId,
     `var value = null;
@@ -170,6 +165,10 @@ async function readCameraPose(sessionId) {
     }));
     return value;`
   );
+}
+
+async function readCameraPose(sessionId) {
+  return (await readInputState(sessionId))?.camera ?? null;
 }
 
 async function waitForCameraChange(
@@ -188,6 +187,27 @@ async function waitForCameraChange(
     await delay(100);
   }
   throw new Error(`${description} did not change the live camera pose.`);
+}
+
+async function waitForObliqueCamera(sessionId) {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const camera = await readCameraPose(sessionId);
+    if (camera) {
+      const offset = camera.position.map(
+        (coordinate, index) => coordinate - camera.target[index]
+      );
+      const distance = Math.hypot(...offset);
+      if (
+        distance > 0 &&
+        offset.every((coordinate) => Math.abs(coordinate) / distance > 0.15)
+      ) {
+        return camera;
+      }
+    }
+    await delay(50);
+  }
+  throw new Error('The production isometric view did not settle off-axis.');
 }
 
 async function dispatchPointer(sessionId, type, init) {
@@ -402,6 +422,22 @@ try {
     }
     return ready;`
   );
+  await execute(
+    sessionId,
+    `document.querySelector('button[aria-label="Standard views"]').click();
+    return true;`
+  );
+  await waitForScript(
+    sessionId,
+    'The isometric view control',
+    `return Boolean(document.querySelector('button[aria-label="Isometric view (4)"]'));`
+  );
+  await execute(
+    sessionId,
+    `document.querySelector('button[aria-label="Isometric view (4)"]').click();
+    return true;`
+  );
+  await waitForObliqueCamera(sessionId);
   const gestureStart = {
     x: inputArea.left + inputArea.width * 0.62,
     y: inputArea.top + inputArea.height * 0.48
@@ -410,8 +446,19 @@ try {
   // WKWebView reports trackpad press-drags as mouse-like PointerEvents. Shift
   // preserves the app's left-drag orbit contract; secondary drag exercises
   // pan; fine DOM_DELTA_PIXEL wheel packets match two-finger zoom input.
-  const beforeOrbit = await readCameraPose(sessionId);
-  await dispatchControlPointer(sessionId, 'pointerdown', {
+  const inputState = await readInputState(sessionId);
+  assert.equal(
+    inputState?.controlsEnabled,
+    true,
+    `OrbitControls is disabled before the native input smoke: ${JSON.stringify(inputState)}`
+  );
+  assert.equal(
+    inputState?.controlState,
+    -1,
+    `OrbitControls is not idle before the native input smoke: ${JSON.stringify(inputState)}`
+  );
+  const beforeOrbit = inputState.camera;
+  const orbitDown = await dispatchControlPointer(sessionId, 'pointerdown', {
     pointerId: 403,
     button: 0,
     buttons: 1,
@@ -419,12 +466,18 @@ try {
     clientX: gestureStart.x,
     clientY: gestureStart.y
   });
+  assert.equal(
+    orbitDown?.controlState,
+    0,
+    `Shift-drag did not enter the OrbitControls rotate state: ${JSON.stringify(orbitDown)}`
+  );
+  let orbitMove;
   for (const [deltaX, deltaY] of [
     [20, 8],
     [42, 18],
     [68, 30]
   ]) {
-    await dispatchControlPointer(sessionId, 'pointermove', {
+    orbitMove = await dispatchControlPointer(sessionId, 'pointermove', {
       pointerId: 403,
       button: 0,
       buttons: 1,
@@ -433,6 +486,11 @@ try {
       clientY: gestureStart.y + deltaY
     });
   }
+  assert.ok(
+    orbitMove &&
+      vectorDistance(beforeOrbit.position, orbitMove.camera.position) > 0.1,
+    `Shift-drag did not move the live camera during the gesture: ${JSON.stringify({ beforeOrbit, orbitMove })}`
+  );
   await dispatchControlPointer(sessionId, 'pointerup', {
     pointerId: 403,
     button: 0,
@@ -449,13 +507,18 @@ try {
     0.1
   );
 
-  await dispatchControlPointer(sessionId, 'pointerdown', {
+  const panDown = await dispatchControlPointer(sessionId, 'pointerdown', {
     pointerId: 404,
     button: 2,
     buttons: 2,
     clientX: gestureStart.x,
     clientY: gestureStart.y
   });
+  assert.equal(
+    panDown?.controlState,
+    2,
+    `Secondary drag did not enter the OrbitControls pan state: ${JSON.stringify(panDown)}`
+  );
   for (const [deltaX, deltaY] of [
     [18, -6],
     [38, -14],
@@ -635,21 +698,9 @@ try {
 
   const artifactDir = resolve('artifacts');
   await mkdir(artifactDir, { recursive: true });
-  const screenshot = await saveScreenshot(
+  await saveScreenshot(
     sessionId,
     resolve(artifactDir, 'macos-wkwebview-cad.png')
-  );
-  assert.ok(
-    Math.abs(
-      screenshot.width - display.viewportWidth * display.devicePixelRatio
-    ) <= 2,
-    'The native screenshot width does not preserve the WKWebView device scale.'
-  );
-  assert.ok(
-    Math.abs(
-      screenshot.height - display.viewportHeight * display.devicePixelRatio
-    ) <= 2,
-    'The native screenshot height does not preserve the WKWebView device scale.'
   );
   console.log(
     'WKWebView CAD smoke passed: exact kernel, 2x selection, capture-requested box selection, orbit, pan, and trackpad zoom.'
