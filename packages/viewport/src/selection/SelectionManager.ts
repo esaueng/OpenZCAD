@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import type { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import type { PickCandidate } from '../pick/PickService';
+import {
+  batchedEdgeTarget,
+  isSameBatchedEdge,
+  type BatchedEdgeTarget
+} from '../render/edgeOverlay';
 import { findBodyId, forEachMesh } from '../pick/meshes';
 import {
   EDGE_HOVER_COLOR,
@@ -32,6 +37,23 @@ const FADE_EPSILON = 0.004;
 /** Whether an edge is part of the committed selection, not just hovered. */
 export interface EdgeVisualState {
   selected: boolean;
+}
+
+type EdgeHoverTarget = Line2 | BatchedEdgeTarget;
+
+function isBatchedEdgeTarget(
+  target: EdgeHoverTarget
+): target is BatchedEdgeTarget {
+  return 'batch' in target;
+}
+
+function isSameEdgeTarget(left: EdgeHoverTarget, right: EdgeHoverTarget) {
+  return (
+    left === right ||
+    (isBatchedEdgeTarget(left) &&
+      isBatchedEdgeTarget(right) &&
+      isSameBatchedEdge(left, right))
+  );
 }
 
 export interface SelectionManagerOptions {
@@ -67,9 +89,11 @@ export class SelectionManager {
   readonly fadeIns = new Set<THREE.MeshBasicMaterial>();
 
   hoveredBodyId: string | null = null;
+  /** Legacy per-edge visual, retained while ModelViewer adopts edge batches. */
   hoveredEdge: Line2 | null = null;
 
   private options: SelectionManagerOptions;
+  private hoveredEdgeTarget: EdgeHoverTarget | null = null;
   private hoverFaceTarget = 0;
   private hoverFaceKey: string | null = null;
   private hoveredRegionMesh: THREE.Mesh<
@@ -107,27 +131,39 @@ export class SelectionManager {
     );
   }
 
-  setEdgeHover(next: Line2 | null) {
-    if (this.hoveredEdge === next) {
+  setEdgeHover(next: EdgeHoverTarget | null) {
+    if (
+      this.hoveredEdgeTarget === next ||
+      (this.hoveredEdgeTarget &&
+        next &&
+        isSameEdgeTarget(this.hoveredEdgeTarget, next))
+    ) {
       return;
     }
-    const restore = this.hoveredEdge;
+    const restore = this.hoveredEdgeTarget;
     if (restore) {
-      const material = restore.material;
-      const state = restore.userData as EdgeVisualState;
-      material.color.setHex(
-        state.selected ? EDGE_SELECTED_COLOR : idleEdgeColor(restore)
-      );
-      material.linewidth = state.selected
-        ? EDGE_SELECTED_WIDTH
-        : EDGE_IDLE_WIDTH;
-      material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
-      restore.renderOrder = state.selected
-        ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
-        : VIEWPORT_RENDER_ORDER.BODY_EDGE;
+      if (isBatchedEdgeTarget(restore)) {
+        restore.batch.setHovered(null);
+      } else {
+        const material = restore.material;
+        const state = restore.userData as EdgeVisualState;
+        material.color.setHex(
+          state.selected ? EDGE_SELECTED_COLOR : idleEdgeColor(restore)
+        );
+        material.linewidth = state.selected
+          ? EDGE_SELECTED_WIDTH
+          : EDGE_IDLE_WIDTH;
+        material.opacity = state.selected ? 1 : EDGE_IDLE_OPACITY;
+        restore.renderOrder = state.selected
+          ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
+          : VIEWPORT_RENDER_ORDER.BODY_EDGE;
+      }
     }
-    this.hoveredEdge = next;
-    if (next && !(next.userData as EdgeVisualState).selected) {
+    this.hoveredEdgeTarget = next;
+    this.hoveredEdge = next && !isBatchedEdgeTarget(next) ? next : null;
+    if (next && isBatchedEdgeTarget(next)) {
+      next.batch.setHovered(next.owner);
+    } else if (next && !(next.userData as EdgeVisualState).selected) {
       const material = next.material;
       material.color.setHex(EDGE_HOVER_COLOR);
       material.linewidth = EDGE_HOVER_WIDTH;
@@ -285,7 +321,9 @@ export class SelectionManager {
       this.options.isEditableBody(candidate.selection.bodyId);
     const hoveredEdge =
       candidate?.selection?.kind === 'edge'
-        ? ((candidate.hit.object.userData as { visual?: Line2 }).visual ?? null)
+        ? (batchedEdgeTarget(candidate.hit.object, candidate.hit.faceIndex) ??
+          (candidate.hit.object.userData as { visual?: Line2 }).visual ??
+          null)
         : null;
     this.setEdgeHover(hoveredEdge);
     this.setHoverFace(candidate?.selection ?? null);
@@ -352,7 +390,11 @@ export class SelectionManager {
    * group with its own rebuild.
    */
   resetForRebuild() {
+    if (this.hoveredEdgeTarget && isBatchedEdgeTarget(this.hoveredEdgeTarget)) {
+      this.hoveredEdgeTarget.batch.setHovered(null);
+    }
     this.hoveredBodyId = null;
+    this.hoveredEdgeTarget = null;
     this.hoveredEdge = null;
     this.hoverFaceKey = null;
     this.hoverFaceTarget = 0;

@@ -34,9 +34,22 @@ export interface RegionTarget {
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
+  /**
+   * Entities whose curves bound this region. Carried so the drag-to-extrude
+   * path can store an entity-wide reference for text regions — a fingerprint
+   * reference to a glyph breaks the moment the string is edited, which is
+   * exactly the edit text exists to support.
+   */
+  sourceEntityIds: string[];
 }
 
-export type SketchToolId = 'select' | 'line' | 'arc' | 'circle' | 'rectangle';
+export type SketchToolId =
+  | 'select'
+  | 'line'
+  | 'arc'
+  | 'circle'
+  | 'rectangle'
+  | 'text';
 
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */
@@ -382,6 +395,8 @@ export interface ToolCardAction {
   id: SelectionActionId;
   label: string;
   active: boolean;
+  enabled: boolean;
+  disabledReason?: string;
 }
 
 export interface ToolCardModel {
@@ -425,6 +440,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       const actions = capabilities.map((capability) => ({
         id: capability.action,
         label: capability.label,
+        enabled: capability.enabled,
+        ...(capability.disabledReason
+          ? { disabledReason: capability.disabledReason }
+          : {}),
         active:
           (state.op === 'offset-face' && capability.action === 'offset-face') ||
           (state.op === 'resize-cylinder-radius' &&
@@ -460,6 +479,10 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       }).map((capability) => ({
         id: capability.action,
         label: capability.label,
+        enabled: capability.enabled,
+        ...(capability.disabledReason
+          ? { disabledReason: capability.disabledReason }
+          : {}),
         active: capability.action === state.op
       }));
       return {

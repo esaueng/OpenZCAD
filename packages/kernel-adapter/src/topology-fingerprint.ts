@@ -24,7 +24,8 @@ const FNV_PRIME = 16777619;
 const AXIS_SCALE = 1000;
 
 export function quantizeCoordinate(value: number): number {
-  return Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
+  const quantized = Math.round(value / GEOMETRY_LINEAR_TOLERANCE);
+  return Object.is(quantized, -0) ? 0 : quantized;
 }
 
 export function fingerprintOfSignature(signature: string): number {
@@ -37,18 +38,47 @@ export function fingerprintOfSignature(signature: string): number {
   return unsigned === 0 ? 1 : unsigned;
 }
 
+function quantizedDirectionComponents(
+  direction: Vec3
+): [number, number, number] {
+  return [
+    quantizeCoordinate(direction.x * AXIS_SCALE),
+    quantizeCoordinate(direction.y * AXIS_SCALE),
+    quantizeCoordinate(direction.z * AXIS_SCALE)
+  ];
+}
+
+function shouldFlipDirection(direction: Vec3): boolean {
+  for (const component of quantizedDirectionComponents(direction)) {
+    if (component < 0) {
+      return true;
+    }
+    if (component > 0) {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function canonicalizeDirection(direction: Vec3): {
+  direction: Vec3;
+  flipped: boolean;
+} {
+  const flipped = shouldFlipDirection(direction);
+  return {
+    direction: flipped
+      ? { x: -direction.x, y: -direction.y, z: -direction.z }
+      : direction,
+    flipped
+  };
+}
+
 /**
  * A direction's sign is not stable across rebuilds or kernels; pick the
  * lexicographically positive representative.
  */
 export function canonicalDirection(direction: Vec3): Vec3 {
-  const flip =
-    direction.x < 0 ||
-    (direction.x === 0 &&
-      (direction.y < 0 || (direction.y === 0 && direction.z < 0)));
-  return flip
-    ? { x: -direction.x, y: -direction.y, z: -direction.z }
-    : direction;
+  return canonicalizeDirection(direction).direction;
 }
 
 function quantizedPoint(point: Vec3): string {
@@ -56,11 +86,7 @@ function quantizedPoint(point: Vec3): string {
 }
 
 function quantizedDirection(direction: Vec3): string {
-  return (
-    `${quantizeCoordinate(direction.x * AXIS_SCALE)}` +
-    `,${quantizeCoordinate(direction.y * AXIS_SCALE)}` +
-    `,${quantizeCoordinate(direction.z * AXIS_SCALE)}`
-  );
+  return quantizedDirectionComponents(direction).join(',');
 }
 
 export interface OpenEdgeSample {
@@ -159,15 +185,12 @@ export function faceFingerprintOf(sample: FaceSample): number {
 }
 
 /** Plane as canonical (normal, signed offset); sign-flips cancel jointly. */
-export function planeAnalyticSignature(unitNormal: Vec3, offset: number): string {
-  const flip =
-    unitNormal.x < 0 ||
-    (unitNormal.x === 0 &&
-      (unitNormal.y < 0 || (unitNormal.y === 0 && unitNormal.z < 0)));
-  const normal = flip
-    ? { x: -unitNormal.x, y: -unitNormal.y, z: -unitNormal.z }
-    : unitNormal;
-  return `pl${quantizedDirection(normal)};d${quantizeCoordinate(flip ? -offset : offset)}`;
+export function planeAnalyticSignature(
+  unitNormal: Vec3,
+  offset: number
+): string {
+  const { direction: normal, flipped } = canonicalizeDirection(unitNormal);
+  return `pl${quantizedDirection(normal)};d${quantizeCoordinate(flipped ? -offset : offset)}`;
 }
 
 /**

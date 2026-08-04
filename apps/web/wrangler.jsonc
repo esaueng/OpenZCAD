@@ -4,6 +4,8 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
+  // Cloudflare does not generate Preview URLs for Workers that implement a DO.
+  "preview_urls": false,
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -19,11 +21,14 @@
     "AUTH_MODE": "development",
     "AI_PROVIDER": "openrouter",
     "AI_MODEL": "openai/gpt-5.6-terra",
-    "AI_REASONING_EFFORT": "high"
+    "AI_REASONING_EFFORT": "high",
+    "PROJECT_SHARING_ENABLED": "false",
+    "PROJECT_EDIT_LEASES_ENFORCED": "false"
   },
-  "secrets": {
-    "required": ["OPENROUTER_API_KEY"]
-  },
+  // Local dev secrets live in .dev.vars (gitignored; see .dev.vars.example):
+  // a provider key such as OPENROUTER_API_KEY is needed only for the assistant.
+  // wrangler has no schema key to declare required secrets — this is
+  // documentation only, not enforcement.
   "d1_databases": [
     {
       "binding": "DB",
