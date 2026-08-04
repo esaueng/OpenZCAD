@@ -298,6 +298,14 @@ export function App() {
   const extrudePreviewRef = useRef(extrudePreview);
   extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
+  /**
+   * A committed Move whose exact rebuild is still in flight. The viewer keeps
+   * the body posed at the applied transform until the recomputed meshes land,
+   * so the old geometry never flashes at its resting position.
+   */
+  const [moveCommitHold, setMoveCommitHold] = useState<MovePreview | null>(
+    null
+  );
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
@@ -371,9 +379,17 @@ export function App() {
       const manager = managerRef.current;
       if (manager) {
         setDoc(manager.commitDerivedState(derived));
+        // Fresh meshes now reflect the document (worker results are dropped
+        // unless their version matches), so any held Move pose must release
+        // in this same batch — one render later would double-transform.
+        setMoveCommitHold(null);
       }
     },
-    onError: setStatus
+    onError: (message) => {
+      // No rebuild is coming; render the stored geometry truthfully.
+      setMoveCommitHold(null);
+      setStatus(message);
+    }
   });
   const remoteVersionsRef = useRef(new Map<string, number>());
   const viewNonceRef = useRef(0);
@@ -1136,6 +1152,7 @@ export function App() {
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
   }
 
@@ -1192,7 +1209,7 @@ export function App() {
     }
   }
 
-  function createFeature(command: AnyCommand): void {
+  function createFeature(command: AnyCommand): boolean {
     if (executeCommand(command)) {
       // Back to an idle viewport so sequential adds stay one key away; the
       // new feature is selectable from the history or the viewport.
@@ -1203,7 +1220,9 @@ export function App() {
       setSelectedBodyIds([]);
       setSelectedSketchProfileId(null);
       setExtrudePreview(null);
+      return true;
     }
+    return false;
   }
 
   const extrudeSketchReturnRef = useRef<{
@@ -1457,7 +1476,7 @@ export function App() {
     );
     const round = (value: number) => Math.round(value * 1000) / 1000;
     setMovePreview(null);
-    createFeature(
+    const created = createFeature(
       commandFactories.transformBody({
         name: 'Move',
         targetBodyId: preview.bodyId as BodyId,
@@ -1473,6 +1492,11 @@ export function App() {
         }
       })
     );
+    if (created) {
+      // Hold the gizmo pose on screen until the exact rebuild replaces the
+      // meshes; cleared by onDerived in the same batch as the new geometry.
+      setMoveCommitHold(preview);
+    }
   }
 
   function clearSelection() {
@@ -1981,6 +2005,7 @@ export function App() {
     }
     setDoc(managerRef.current.undo());
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
     clearSelection();
     setStatus('Undo');
@@ -1992,6 +2017,7 @@ export function App() {
     }
     setDoc(managerRef.current.redo());
     setExtrudePreview(null);
+    setMoveCommitHold(null);
     setTool(null);
     clearSelection();
     setStatus('Redo');
@@ -4704,6 +4730,7 @@ export function App() {
             editableBodyIds={directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
+            moveCommitHold={moveCommitHold}
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
