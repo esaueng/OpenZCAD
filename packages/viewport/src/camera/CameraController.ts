@@ -432,6 +432,13 @@ export class CameraController {
     this.settleDamping();
   }
 
+  /** Keeps screen-space projections in lockstep with OrbitControls' pose. */
+  private updateOrbitForFrame(): boolean {
+    const changed = this.orbit.update();
+    this.active.updateMatrixWorld(true);
+    return changed;
+  }
+
   /**
    * Advances pointer-driven orbit damping with a real-time upper bound.
    *
@@ -446,13 +453,13 @@ export class CameraController {
     if (this.orbitGlideEndsAt !== null && now >= this.orbitGlideEndsAt) {
       this.orbitGlideEndsAt = null;
       this.orbit.enableDamping = false;
-      const changed = this.orbit.update();
+      const changed = this.updateOrbitForFrame();
       this.orbit.enableDamping = true;
       this.orbit.dampingFactor = DRAG_DAMPING;
       this.emitViewChange();
       return changed;
     }
-    const changed = this.orbit.update();
+    const changed = this.updateOrbitForFrame();
     if (this.orbitGlideEndsAt !== null && !changed) {
       this.orbitGlideEndsAt = null;
       this.orbit.dampingFactor = DRAG_DAMPING;
