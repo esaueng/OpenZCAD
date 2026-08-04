@@ -13,6 +13,13 @@ import {
   type MiddleDragAction
 } from '../input/bindings';
 import type { ProjectionMode } from '../types';
+import {
+  initialZoomDynamics,
+  stepZoomDynamics,
+  wheelNotches,
+  ZOOM_BASE_SPEED,
+  type ZoomDynamicsState
+} from './zoomDynamics';
 
 /** A durable camera pose: what a reload restores. */
 export interface ViewportCameraState {
@@ -110,6 +117,7 @@ export class CameraController {
   private gestureActive = false;
   private externalOrbitActive = false;
   private disposed = false;
+  private zoomDynamics: ZoomDynamicsState = initialZoomDynamics();
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -151,7 +159,29 @@ export class CameraController {
       this.applyRightButtonModifier,
       true
     );
+    // Capture phase, so the speed is in place before OrbitControls' own
+    // wheel handler reads it for the same event.
+    this.options.domElement.addEventListener(
+      'wheel',
+      this.applyDynamicZoomSpeed,
+      true
+    );
   }
+
+  /**
+   * Velocity-adaptive zoom: OrbitControls re-reads `zoomSpeed` on every
+   * wheel event, so modulating it here makes fast wheel spins compound
+   * while a lone deliberate notch keeps its stock fine step.
+   */
+  private applyDynamicZoomSpeed = (event: WheelEvent) => {
+    const { state, speed } = stepZoomDynamics(
+      this.zoomDynamics,
+      performance.now(),
+      wheelNotches(event.deltaY, event.deltaMode)
+    );
+    this.zoomDynamics = state;
+    this.orbit.zoomSpeed = speed;
+  };
 
   /**
    * Ctrl (or ⌘) + right-drag orbits; a plain right-drag pans. Shift must NOT
@@ -165,6 +195,12 @@ export class CameraController {
    * → present rotate so the flip lands back on pan.
    */
   private applyRightButtonModifier = (event: PointerEvent) => {
+    // A touch pinch reads `zoomSpeed` too, and every pinch begins with a
+    // pointerdown; don't let it inherit the multiplier left behind by the
+    // last wheel spin. (This must NOT live on the orbit 'start' event —
+    // OrbitControls fires 'start' between our wheel listener and its own
+    // dolly, which would erase the per-event speed before it is used.)
+    this.orbit.zoomSpeed = ZOOM_BASE_SPEED;
     if (event.button !== 2) {
       return;
     }
@@ -675,6 +711,11 @@ export class CameraController {
     this.options.domElement.removeEventListener(
       'pointerdown',
       this.applyRightButtonModifier,
+      true
+    );
+    this.options.domElement.removeEventListener(
+      'wheel',
+      this.applyDynamicZoomSpeed,
       true
     );
     this.gestureActive = false;
