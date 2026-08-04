@@ -211,8 +211,15 @@ describe('cloudflare adapters', () => {
             if (query.includes('SELECT user_id AS owner_user_id')) {
               return { owner_user_id: userId };
             }
-            if (query.includes('SELECT document_json FROM projects')) {
-              return { document_json: JSON.stringify(source) };
+            if (
+              query.includes(
+                'SELECT document_json, document_object_id FROM projects'
+              )
+            ) {
+              return {
+                document_json: JSON.stringify(source),
+                document_object_id: null
+              };
             }
             if (query.includes('SELECT sort_order FROM projects')) {
               return { sort_order: 7 };
