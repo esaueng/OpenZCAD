@@ -878,6 +878,103 @@ for (const modifier of [
   });
 }
 
+test('applies an assistant-created sketch and same-proposal extrude', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'sketch-alias-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    const proposal = {
+      proposalId: 'proposal_ai_sketch_e2e',
+      summary: 'Create a closed rectangular sketch and extrude it.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'AI profile',
+          localId: '$profile',
+          plane: 'XY',
+          offset: 0,
+          objects: [
+            {
+              objectKind: 'rectangle',
+              width: 36,
+              height: 24,
+              centerX: 18,
+              centerY: 12
+            }
+          ]
+        },
+        {
+          kind: 'add_extrude',
+          name: 'AI plate',
+          localId: '$plate',
+          sketchId: '$profile',
+          distance: 6,
+          samplePoint: null
+        }
+      ]
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal,
+          questions: null,
+          message: null,
+          readings: null
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Sketch Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Create a 36 by 24 by 6 millimetre plate from a sketch');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText(
+    'Create a closed rectangular sketch and extrude it.'
+  );
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'AI profile' })
+  ).toBeVisible();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'AI plate' })
+  ).toBeVisible();
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Applied'
+  );
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('grounds an AI fillet request onto every selected edge', async ({
   page
 }) => {
