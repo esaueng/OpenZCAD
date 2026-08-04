@@ -301,6 +301,12 @@ interface ModelViewerProps {
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
   movePreview: MovePreview | null;
+  /**
+   * A committed Move whose rebuild is still in flight. The body stays posed
+   * at this transform (no gizmo) until new meshes arrive and the hold clears
+   * in the same commit.
+   */
+  moveCommitHold: MovePreview | null;
   projection: ProjectionMode;
   /** Per-project camera pose restored before the first automatic fit. */
   initialView: ViewportCameraState | null;
@@ -477,6 +483,52 @@ interface DimensionLabelBinding {
   angleDeg?: number;
 }
 
+/**
+ * Keeps name callouts readable when their anchor sits at the viewport's
+ * edge. CSS2DRenderer centres each label on its projected point and rewrites
+ * the transform every frame, so the correction rides on the margins instead:
+ * the label's unmargined box is recovered from the current margin, and a new
+ * margin is computed from scratch — no feedback across frames. Dimension and
+ * drag-value callouts are excluded; they have their own placement scheme.
+ */
+function clampNameCallouts(container: HTMLElement) {
+  const labels = container.querySelectorAll<HTMLElement>(
+    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+  );
+  if (labels.length === 0) {
+    return;
+  }
+  const bounds = container.getBoundingClientRect();
+  const pad = 4;
+  for (const label of labels) {
+    const currentLeft = parseFloat(label.style.marginLeft) || 0;
+    const currentTop = parseFloat(label.style.marginTop) || 0;
+    const rect = label.getBoundingClientRect();
+    const baseLeft = rect.left - currentLeft;
+    const baseRight = rect.right - currentLeft;
+    const baseTop = rect.top - currentTop;
+    const baseBottom = rect.bottom - currentTop;
+    let marginLeft = 0;
+    if (baseLeft < bounds.left + pad) {
+      marginLeft = bounds.left + pad - baseLeft;
+    } else if (baseRight > bounds.right - pad) {
+      marginLeft = bounds.right - pad - baseRight;
+    }
+    let marginTop = 0;
+    if (baseTop < bounds.top + pad) {
+      marginTop = bounds.top + pad - baseTop;
+    } else if (baseBottom > bounds.bottom - pad) {
+      marginTop = bounds.bottom - pad - baseBottom;
+    }
+    if (marginLeft !== currentLeft) {
+      label.style.marginLeft = marginLeft ? `${marginLeft}px` : '';
+    }
+    if (marginTop !== currentTop) {
+      label.style.marginTop = marginTop ? `${marginTop}px` : '';
+    }
+  }
+}
+
 function updateDimensionLabels(
   context: SceneContext,
   viewportWidth: number,
@@ -595,6 +647,7 @@ export function ModelViewer({
   editableBodyIds,
   extrudePreview,
   movePreview,
+  moveCommitHold,
   projection,
   initialView,
   onViewChange,
@@ -658,6 +711,8 @@ export function ModelViewer({
   extrudePreviewRef.current = extrudePreview;
   const movePreviewRef = useRef(movePreview);
   movePreviewRef.current = movePreview;
+  const moveCommitHoldRef = useRef(moveCommitHold);
+  moveCommitHoldRef.current = moveCommitHold;
   const onMovePreviewChangeRef = useRef(onMovePreviewChange);
   onMovePreviewChangeRef.current = onMovePreviewChange;
   /** Base (untranslated) gizmo pivot: the target body's bbox center. */
@@ -774,6 +829,7 @@ export function ModelViewer({
     if (!host) {
       return;
     }
+    const viewerHost = host;
     const e2eCanvasHooksEnabled =
       (
         import.meta.env as unknown as {
@@ -954,7 +1010,7 @@ export function ModelViewer({
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
     ) {
-      const preview = movePreviewRef.current;
+      const preview = movePreviewRef.current ?? moveCommitHoldRef.current;
       if (!preview) {
         return;
       }
@@ -988,6 +1044,7 @@ export function ModelViewer({
 
     let animationFrame: number | null = null;
     let pendingHoverEvent: PointerEvent | null = null;
+    let resizePending = false;
 
     function requestRender() {
       if (animationFrame === null) {
@@ -1066,13 +1123,10 @@ export function ModelViewer({
     }
 
     const observer = new ResizeObserver(() => {
-      cameraRig.handleResize();
-      renderer.setSize(host.clientWidth, host.clientHeight);
-      labelRenderer.setSize(host.clientWidth, host.clientHeight);
-      // Screen-space fat lines rasterize against the viewport size. Walking the
-      // scene covers body edges, sketches, previews and handle rigs alike, so
-      // no creation site has to remember to register its material.
-      syncFatLineResolution(scene, host.clientWidth, host.clientHeight);
+      // setSize clears the WebGL drawing buffer. Keep that clear in the same
+      // animation frame as the next scene draw so continuous panel resizing
+      // cannot present an empty buffer between two frames.
+      resizePending = true;
       requestRender();
     });
     observer.observe(host);
@@ -3419,6 +3473,18 @@ export function ModelViewer({
     const lastQuaternion = new THREE.Quaternion();
     function animate(now: number) {
       animationFrame = null;
+      if (resizePending) {
+        resizePending = false;
+        const width = viewerHost.clientWidth;
+        const height = viewerHost.clientHeight;
+        cameraRig.handleResize();
+        renderer.setSize(width, height);
+        labelRenderer.setSize(width, height);
+        // Screen-space fat lines rasterize against the viewport size. Walking
+        // the scene covers body edges, sketches, previews and handle rigs
+        // alike, so no creation site has to remember to register its material.
+        syncFatLineResolution(scene, width, height);
+      }
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const controlsChanged = cameraRig.stepOrbit(now);
@@ -3524,6 +3590,7 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
+      clampNameCallouts(labelRenderer.domElement);
 
       // Push camera orientation to the view widget only when it changes.
       const orientationCamera = context.activeCamera;
@@ -3998,6 +4065,25 @@ export function ModelViewer({
       if (moveGizmoHudRef.current) {
         moveGizmoHudRef.current.hidden = true;
       }
+      if (moveCommitHold) {
+        // Committed move, rebuild in flight: keep the (still old) mesh posed
+        // at the applied transform so it never flashes at the resting pose.
+        const held = bodies.find(
+          (candidate) => candidate.bodyId === moveCommitHold.bodyId
+        );
+        if (held) {
+          moveCenterRef.current.set(
+            (held.bbox.min.x + held.bbox.max.x) / 2,
+            (held.bbox.min.y + held.bbox.max.y) / 2,
+            (held.bbox.min.z + held.bbox.max.z) / 2
+          );
+          context.applyMovePreview(
+            moveCommitHold.translation,
+            moveCommitHold.rotationDeg
+          );
+        }
+        return;
+      }
       // Cancel without a document change must restore the resting pose.
       for (const object of context.objectsByBodyId.values()) {
         object.position.set(0, 0, 0);
@@ -4066,7 +4152,7 @@ export function ModelViewer({
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
         null
     );
-  }, [movePreview, bodies, sketchViews]);
+  }, [movePreview, moveCommitHold, bodies, sketchViews]);
 
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
