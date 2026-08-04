@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimum permissions for the bundled OpenZCAD workspace.",
+  "windows": ["main"],
+  "permissions": ["core:default", "window-state:default"]
+}

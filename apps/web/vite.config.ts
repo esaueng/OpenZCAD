@@ -234,9 +234,10 @@ function pdfjsAssets(): PluginOption {
   };
 }
 
-export default defineConfig(async ({ command, isPreview }) => {
+export default defineConfig(async ({ command, isPreview, mode }) => {
   const brepkit = await brepkitBuildInfo();
   const commit = sourceCommit();
+  const isDesktop = mode === 'desktop';
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
   plugins.push(
@@ -253,7 +254,10 @@ export default defineConfig(async ({ command, isPreview }) => {
   );
   // `vite preview` also reports command === 'serve', but the Cloudflare
   // plugin expects build output it did not produce; load it for dev only.
-  const isDevServer = command === 'serve' && !isPreview;
+  // The bundled desktop app talks to native commands and its configured
+  // hosted API, not an embedded Workers runtime. Keeping Miniflare out of this
+  // mode also makes the Tauri dev server deterministic and self-contained.
+  const isDevServer = command === 'serve' && !isPreview && !isDesktop;
   if (isDevServer && nodeMajor >= 20) {
     const { cloudflare } = await import('@cloudflare/vite-plugin');
     plugins.push(cloudflare());
@@ -264,8 +268,12 @@ export default defineConfig(async ({ command, isPreview }) => {
   }
 
   return {
+    // Tauri serves the production bundle from its own asset protocol. Relative
+    // URLs keep workers, WASM, fonts, and pdf.js data inside that bundle.
+    base: isDesktop ? './' : '/',
     plugins,
     define: {
+      'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
       'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),
       'import.meta.env.OZ_BREPKIT_VERSION': JSON.stringify(brepkit.version),
@@ -320,7 +328,8 @@ export default defineConfig(async ({ command, isPreview }) => {
       }
     },
     build: {
-      target: 'esnext',
+      outDir: isDesktop ? 'dist-desktop' : 'dist',
+      target: isDesktop ? 'safari17' : 'esnext',
       rollupOptions: {
         output: {
           // Rolldown accepts functional chunk routing. three.js dominates the
