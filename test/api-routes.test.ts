@@ -27,26 +27,55 @@ interface StorageAccountingReadinessRow {
   revisions_bytes_index: number;
 }
 
+interface ProjectObjectStorageReadinessRow {
+  project_columns: number;
+  revision_pointer: number;
+  document_objects_table: number;
+  storage_assets_table: number;
+  document_objects_index: number;
+  storage_assets_index: number;
+  pointer_indexes: number;
+}
+
 const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
   projects_document_bytes: 1,
   revisions_document_bytes: 1,
   revisions_bytes_index: 1
 };
 
+const READY_PROJECT_OBJECT_STORAGE_SCHEMA: ProjectObjectStorageReadinessRow = {
+  project_columns: 3,
+  revision_pointer: 1,
+  document_objects_table: 1,
+  storage_assets_table: 1,
+  document_objects_index: 1,
+  storage_assets_index: 1,
+  pointer_indexes: 2
+};
+
+const readyProjectStorageBucket = {
+  put: vi.fn(),
+  get: vi.fn(),
+  delete: vi.fn()
+} as unknown as R2Bucket;
+
 function storageAccountingDb(
   row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
-  failure?: Error
+  failure?: Error,
+  projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA
 ) {
-  const first = vi.fn(async () => {
-    if (failure) {
-      throw failure;
-    }
-    return row;
-  });
-  const prepare = vi.fn((_query: string) => ({ first }));
+  const prepare = vi.fn((query: string) => ({
+    first: vi.fn(async () => {
+      if (failure) {
+        throw failure;
+      }
+      return query.includes('idx_project_document_objects_project_state')
+        ? projectObjectRow
+        : row;
+    })
+  }));
   return {
     db: { prepare } as unknown as D1Database,
-    first,
     prepare
   };
 }
@@ -540,7 +569,7 @@ describe('worker api routes', () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status'),
       withEnabledDeploymentAssistant({
-        AI_API_KEY: 'secret-test-value',
+        OPENROUTER_API_KEY: 'secret-test-value',
         AI_MODEL: 'model-test'
       })
     );
@@ -1065,6 +1094,7 @@ describe('worker api routes', () => {
     );
     vi.stubGlobal('fetch', providerFetch);
     const publicEnv = withEnabledDeploymentAssistant({
+      AI_PROVIDER: 'responses-compatible',
       ENVIRONMENT: 'beta',
       AUTH_MODE: 'email-code',
       AI_IDENTITY_PEPPER: 'route-test-pepper',
@@ -1116,6 +1146,7 @@ describe('worker api routes', () => {
       );
     vi.stubGlobal('fetch', providerFetch);
     const publicEnv = withEnabledDeploymentAssistant({
+      AI_PROVIDER: 'responses-compatible',
       AI_API_KEY: 'test-key',
       AI_BASE_URL: 'https://models.example.test/v1/responses'
     });
@@ -1606,15 +1637,18 @@ describe('worker api routes', () => {
       await worker.fetch(new Request('https://example.com/api/health'), {
         ...env,
         DB: db,
+        ARTIFACTS: readyProjectStorageBucket,
         PROJECT_PERSONAL_SYNC_ENABLED: 'true'
       })
     ).json()) as {
       documentStorageAccountingReady: boolean;
+      projectObjectStorageReady: boolean;
       projectPersonalSyncEnabled: boolean;
       projectSharingEnabled: boolean;
       projectEditLeasesEnforced: boolean;
     };
     expect(health.documentStorageAccountingReady).toBe(true);
+    expect(health.projectObjectStorageReady).toBe(true);
     expect(health.projectPersonalSyncEnabled).toBe(true);
     expect(health.projectSharingEnabled).toBe(false);
     expect(health.projectEditLeasesEnforced).toBe(false);
@@ -1644,5 +1678,35 @@ describe('worker api routes', () => {
       env
     );
     expect(response.status).toBe(400);
+  });
+
+  it('logs route context for unhandled API errors without exposing internals', async () => {
+    const failure = new Error('D1 schema mismatch');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await worker.fetch(
+        new Request('https://example.com/api/projects?status=active'),
+        {
+          ...env,
+          DB: {
+            prepare() {
+              throw failure;
+            }
+          }
+        } as never
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Internal error' });
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Unhandled API error.',
+        'GET',
+        '/api/projects',
+        failure
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

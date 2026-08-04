@@ -299,6 +299,7 @@ describe('assistant provider usage guard', () => {
     );
     vi.stubGlobal('fetch', providerFetch);
     const env = {
+      AI_PROVIDER: 'responses-compatible' as const,
       ENVIRONMENT: 'beta' as const,
       AUTH_MODE: 'email-code' as const,
       DB: fixture.db,

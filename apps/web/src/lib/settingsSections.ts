@@ -132,7 +132,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Kernel version',
       'Document authority',
       'Settings schema',
-      'D1 storage migration'
+      'Cloud project storage'
     ]
   }
 ];
