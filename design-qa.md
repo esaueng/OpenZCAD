@@ -42,3 +42,11 @@ The implementation intentionally preserves the OpenZCAD application chrome and v
 ## Final result
 
 Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, visually verified against the supplied references, and functional in the real application flow.
+
+## E3 assistant-created sketch acceptance addendum
+
+- The assistant review card describes the sketch and extrusion as separate proposed operations; Apply commits both in one undoable transaction.
+- Same-proposal sketch aliases resolve to preassigned canonical sketch IDs before command serialization, so replay never depends on a local alias.
+- Open endpoints, near-closure gaps, and invalid profile diagnostics stop the proposal before document mutation or worker geometry.
+- The assistant digest now includes each sketch's canonical or face attachment plane plus its full object data, so later requests can inspect the geometry the assistant created.
+- Playwright verifies a rectangular `add_sketch` followed by an aliased `add_extrude`, including the final exact body, applied review state, zero warnings, and an empty console-error log.
