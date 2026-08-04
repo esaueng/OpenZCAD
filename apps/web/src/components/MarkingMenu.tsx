@@ -2,7 +2,6 @@ import { useLayoutEffect, useEffect, useRef, useState } from 'react';
 import type { ContextMenuItem } from './ContextMenu';
 import {
   clampMenuOrigin,
-  MARKING_DEAD_ZONE_PX,
   sectorForVector,
   sectorPosition,
   slotPositionClearOfHub
@@ -163,17 +162,6 @@ export function MarkingMenu({
       aria-label="Selection actions"
       style={{ left: origin.x, top: origin.y }}
     >
-      {/* The dead zone is drawn by its own ring now that the hub sizes to
-          its text: the rule it stands for — no travel, no choice — is about
-          distance, so the thing that shows it has to keep the radius. */}
-      <span
-        className="marking-menu-deadzone"
-        style={{
-          width: MARKING_DEAD_ZONE_PX * 2,
-          height: MARKING_DEAD_ZONE_PX * 2
-        }}
-        aria-hidden="true"
-      />
       <span
         className={`marking-menu-hub${readItem ? ' armed' : ''}${
           readItem?.danger ? ' danger' : ''
@@ -182,6 +170,12 @@ export function MarkingMenu({
       >
         {readItem ? (
           <>
+            {/* The aimed slot's own icon rides along, so the readout
+                confirms which button the flick is on without the eye
+                leaving the centre. */}
+            <span className="marking-menu-hub-icon">
+              {readItem.icon ?? readItem.label.slice(0, 1)}
+            </span>
             {/* The ellipsis promises a dialog, which the hub has no room to
                 keep saying — the slot's own name still carries it. */}
             <span className="marking-menu-read">
@@ -202,6 +196,9 @@ export function MarkingMenu({
       <div ref={measureRef} className="marking-menu-measure" aria-hidden="true">
         {items.map((item) => (
           <span key={item.id} className="marking-menu-hub">
+            <span className="marking-menu-hub-icon">
+              {item.icon ?? item.label.slice(0, 1)}
+            </span>
             <span className="marking-menu-read">
               {item.label.replace(/…$/, '')}
             </span>
