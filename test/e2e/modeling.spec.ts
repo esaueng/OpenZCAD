@@ -669,6 +669,42 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('preflights and creates an exact open-top shell', async ({ page }) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Open Top Shell');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  const openings = page.getByRole('group', { name: 'Opening faces' });
+  await openings.getByRole('button', { name: /Plane face box.*z max/ }).click();
+  await page.getByRole('button', { name: 'Check exact result' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Create shell' }).click();
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Shell' })
+  ).toBeVisible();
+  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 for (const modifier of [
   {
     label: 'fillet',
