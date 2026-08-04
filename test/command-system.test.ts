@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
@@ -9,17 +9,69 @@ import {
   createProjectDocument,
   getLatestBodyId,
   getLatestSketchId,
-  getParameterScope
+  getParameterScope,
+  normalizeDocument
 } from '@openzcad/document-core';
-import { createKernelAdapter } from '@openzcad/kernel-adapter';
 import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
+import {
+  toFeatureId,
   toUserId,
   type FeatureNode,
   type ProjectDocument
 } from '@openzcad/shared';
 
 describe('command-system', () => {
-  it('supports execute and undo/redo around replayable commands', () => {
+  let kernel: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    kernel = await createExactKernelAdapter();
+  });
+
+  afterAll(() => {
+    kernel.dispose();
+  });
+
+  const edgeReference = {
+    kind: 'edge' as const,
+    producingFeatureId: toFeatureId('feat_box'),
+    lineageName: 'box.edge.front-top',
+    currentHash: 42,
+    witnessVersion: 1 as const,
+    witness: {
+      curveType: 'LINE',
+      length: 10_000_000,
+      closed: false as const,
+      endpoints: [
+        [0, 0, 0],
+        [10_000_000, 0, 0]
+      ] as [[number, number, number], [number, number, number]],
+      midpoint: [5_000_000, 0, 0] as [number, number, number]
+    }
+  };
+
+  const faceReference = {
+    kind: 'face' as const,
+    producingFeatureId: toFeatureId('feat_box'),
+    lineageName: 'primitive.box.face.z-max',
+    currentHash: 84,
+    witnessVersion: 1 as const,
+    witness: {
+      surfaceType: 'plane',
+      perimeter: 40_000_000,
+      centroid: [0, 0, 10_000_000] as [number, number, number],
+      analytic: {
+        kind: 'plane' as const,
+        normal: [0, 0, 1_000_000_000] as [number, number, number],
+        offset: 10_000_000
+      },
+      closure: { u: 'open' as const, v: 'open' as const }
+    }
+  };
+
+  it('supports execute and undo/redo around replayable commands', async () => {
     const manager = new CommandManager(
       createProjectDocument('Command Test', toUserId('user_test'))
     );
@@ -49,9 +101,263 @@ describe('command-system', () => {
     expect(manager.document.revisions).toHaveLength(executedRevisionCount + 2);
     expect(manager.document.revisions.at(-1)?.reason).toBe('Redo Add box');
 
-    const kernel = createKernelAdapter();
-    const derived = kernel.syncDocument(manager.document);
+    const derived = await kernel.syncDocument(manager.document);
     expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
+  });
+
+  it('serializes, replays, undoes, and redoes schema-v5 topology references', () => {
+    const base = createProjectDocument('Lineage', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    manager.execute(
+      commandFactories.filletEdges({
+        name: 'Fillet',
+        targetBodyId: manager.document.bodyOrder[0]!,
+        edgeHashes: [42],
+        edgeReferences: [edgeReference],
+        size: 1
+      })
+    );
+
+    const feature = Object.values(manager.document.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'fillet'
+    );
+    expect(
+      feature?.data.featureKind === 'fillet'
+        ? feature.data.edgeReferences
+        : undefined
+    ).toEqual([edgeReference]);
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    const replayedFeature = Object.values(replayed.nodes).find(
+      (node): node is FeatureNode =>
+        node.kind === 'feature' && node.featureKind === 'fillet'
+    );
+    expect(
+      replayedFeature?.data.featureKind === 'fillet'
+        ? replayedFeature.data.edgeReferences
+        : undefined
+    ).toEqual([edgeReference]);
+    manager.undo();
+    expect(
+      Object.values(manager.document.nodes).some(
+        (node) => node.kind === 'feature' && node.featureKind === 'fillet'
+      )
+    ).toBe(false);
+    manager.redo();
+    expect(
+      Object.values(manager.document.nodes).some(
+        (node) => node.kind === 'feature' && node.featureKind === 'fillet'
+      )
+    ).toBe(true);
+  });
+
+  it('serializes and replays mirror, shell, and solid-offset features', () => {
+    const base = createProjectDocument('Modeling v6', toUserId('user_test'));
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Source',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      })
+    );
+    const sourceBodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.mirrorBody({
+        name: 'Mirrored copy',
+        targetBodyId: sourceBodyId,
+        plane: {
+          origin: { x: 15, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        }
+      })
+    );
+    const mirroredBodyId = manager.document.bodyOrder.at(-1)!;
+    manager.execute(
+      commandFactories.shellBody({
+        name: 'Open shell',
+        targetBodyId: mirroredBodyId,
+        openingFaceHashes: [faceReference.currentHash],
+        openingFaceReferences: [faceReference],
+        thickness: 1.5
+      })
+    );
+    const shellBodyId = manager.document.bodyOrder.at(-1)!;
+    manager.execute(
+      commandFactories.offsetSolidBody({
+        name: 'Outward offset',
+        targetBodyId: shellBodyId,
+        distance: '1 / 2'
+      })
+    );
+
+    const replayed = replayCommands(base, manager.document.commandLog);
+    expect(replayed.featureOrder).toEqual(manager.document.featureOrder);
+    expect(replayed.bodyOrder).toEqual(manager.document.bodyOrder);
+    expect(
+      Object.values(replayed.nodes)
+        .filter((node): node is FeatureNode => node.kind === 'feature')
+        .map((node) => node.data.featureKind)
+    ).toEqual(['primitive', 'mirror', 'shell', 'solid-offset']);
+    expect(replayed.bodyOrder).toContain(sourceBodyId);
+
+    manager.undo();
+    expect(
+      Object.values(manager.document.nodes).some(
+        (node) =>
+          node.kind === 'feature' && node.data.featureKind === 'solid-offset'
+      )
+    ).toBe(false);
+    manager.redo();
+    expect(manager.document.bodyOrder).toHaveLength(4);
+
+    const featureByKind = (featureKind: FeatureNode['featureKind']) =>
+      Object.values(manager.document.nodes).find(
+        (node): node is FeatureNode =>
+          node.kind === 'feature' && node.featureKind === featureKind
+      )!;
+    const mirror = featureByKind('mirror');
+    const shell = featureByKind('shell');
+    const offset = featureByKind('solid-offset');
+    const beforeInvalidEdit = structuredClone(manager.document);
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: offset.featureId,
+          data: { featureKind: 'solid-offset', distance: 0 }
+        })
+      )
+    ).toThrow(/greater than zero/);
+    expect(manager.document).toEqual(beforeInvalidEdit);
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: mirror.featureId,
+        data: {
+          featureKind: 'mirror',
+          plane: {
+            origin: { x: 20, y: 0, z: 0 },
+            normal: { x: 0, y: 1, z: 0 }
+          }
+        }
+      })
+    );
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: shell.featureId,
+        data: { featureKind: 'shell', thickness: 2 }
+      })
+    );
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: offset.featureId,
+        data: { featureKind: 'solid-offset', distance: 2 }
+      })
+    );
+
+    const reloaded = normalizeDocument(
+      JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
+    );
+    expect(reloaded).toEqual(manager.document);
+    const replayedEdits = replayCommands(base, manager.document.commandLog);
+    expect(replayedEdits.nodes).toEqual(manager.document.nodes);
+    expect(replayedEdits.featureOrder).toEqual(manager.document.featureOrder);
+    expect(replayedEdits.bodyOrder).toEqual(manager.document.bodyOrder);
+    expect(replayedEdits.commandLog).toEqual(manager.document.commandLog);
+
+    for (const featureId of [
+      offset.featureId,
+      shell.featureId,
+      mirror.featureId
+    ]) {
+      manager.execute(commandFactories.deleteFeature({ featureId }));
+    }
+    expect(
+      Object.values(manager.document.nodes)
+        .filter((node): node is FeatureNode => node.kind === 'feature')
+        .map((node) => node.featureKind)
+    ).toEqual(['primitive']);
+  });
+
+  it('rejects invalid modeling preflight without changing history', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Invalid modeling', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Source',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const bodyId = manager.document.bodyOrder[0]!;
+    const before = structuredClone(manager.document);
+
+    expect(() =>
+      manager.execute(
+        commandFactories.mirrorBody({
+          name: 'Invalid mirror',
+          targetBodyId: bodyId,
+          plane: {
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 0, y: 0, z: 0 }
+          }
+        })
+      )
+    ).toThrow(/normal/);
+    expect(() =>
+      manager.execute(
+        commandFactories.shellBody({
+          name: 'Invalid shell',
+          targetBodyId: bodyId,
+          openingFaceHashes: [],
+          thickness: 1
+        })
+      )
+    ).toThrow(/opening faces/);
+    expect(() =>
+      manager.execute(
+        commandFactories.offsetSolidBody({
+          name: 'Invalid offset',
+          targetBodyId: bodyId,
+          distance: 0
+        })
+      )
+    ).toThrow(/greater than zero/);
+    expect(manager.document).toEqual(before);
+  });
+
+  it('rejects topology references that disagree with their legacy hashes', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Malformed lineage', toUserId('user_test'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const commandCount = manager.document.commandLog.length;
+    expect(() =>
+      manager.execute(
+        commandFactories.filletEdges({
+          name: 'Fillet',
+          targetBodyId: manager.document.bodyOrder[0]!,
+          edgeHashes: [7],
+          edgeReferences: [edgeReference],
+          size: 1
+        })
+      )
+    ).toThrow('must uniquely match');
+    expect(manager.document.commandLog).toHaveLength(commandCount);
   });
 
   it('renames the project through replayable undoable document history', () => {
@@ -77,7 +383,7 @@ describe('command-system', () => {
     expect(manager.document.name).toBe('Renamed Part');
   });
 
-  it('replays a full parametric command log into an identical entity graph', () => {
+  it('replays a full parametric command log into an identical entity graph', async () => {
     const base = createProjectDocument('Replay Test', toUserId('user_test'));
     const manager = new CommandManager(base);
 
@@ -141,9 +447,8 @@ describe('command-system', () => {
     );
     expect(getParameterScope(replayed).scope).toEqual({ depth: 24 });
 
-    const kernel = createKernelAdapter();
-    const fromLive = kernel.syncDocument(manager.document);
-    const fromReplay = kernel.syncDocument(replayed);
+    const fromLive = await kernel.syncDocument(manager.document);
+    const fromReplay = await kernel.syncDocument(replayed);
     expect(fromReplay.warnings).toEqual([]);
     const live = fromLive.bodyRepresentations[bodyId]!;
     const replay = fromReplay.bodyRepresentations[bodyId]!;

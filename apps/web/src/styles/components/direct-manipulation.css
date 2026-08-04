@@ -144,6 +144,12 @@
   background: var(--color-accent-dim);
 }
 
+.tool-card-submode button:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .tool-card-close {
   display: grid;
   place-items: center;
@@ -492,6 +498,64 @@
 .sketch-entity-editor .form-error {
   margin: 0 0 10px;
   color: var(--color-error);
+  font-size: var(--fs-mini);
+}
+
+/* Text sketch objects: the string, family and style live above the numeric
+   grid, because they are what the user came to change. */
+.text-object-fields .field input[type='text'],
+.text-object-fields .field select {
+  width: 100%;
+  min-width: 0;
+}
+
+/* The picker renders each option in the face it selects, so the option list
+   needs room to breathe more than the numeric inputs do. */
+.text-object-fields .field select {
+  font-size: var(--fs-sm);
+  padding: 4px 6px;
+}
+
+.text-style-toggles {
+  display: flex;
+  gap: 6px;
+}
+
+.text-style-toggles .toggle {
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  line-height: 1;
+}
+
+.text-style-toggles .toggle:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong, var(--color-border));
+}
+
+.text-style-toggles .toggle.active {
+  background: var(--color-accent-soft, var(--color-surface-raised));
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.text-style-toggles .toggle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* A style that fell back to a real face is information, not an error: the
+   registry ships no synthetic bold or italic, so this is the honest outcome. */
+.field-hint {
+  margin: 0 0 10px;
+  color: var(--color-text-dim);
   font-size: var(--fs-mini);
 }
 

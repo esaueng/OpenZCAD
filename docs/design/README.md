@@ -1,6 +1,6 @@
 # OpenZCAD Workspace Design Specification
 
-The accepted workspace concept is [`openzcad-workspace-concept.png`](./openzcad-workspace-concept.png).
+The accepted workspace concept is [`openzcad-workspace-concept.png`](./openzcad-workspace-concept.png). The concept was generated with OpenAI's image tooling and intentionally retains its C2PA Content Credentials; it is a design reference, not an application asset.
 
 ## Product hierarchy
 
@@ -76,3 +76,7 @@ All visible controls and text are code-native. The concept image is a visual spe
 - Selection-order adaptation: fillet and chamfer accept either edge-first or tool-first workflows while still storing stable exact edge hashes in the canonical feature.
 - QA result: the implemented layout, rail hierarchy, control density, typography, graphite/blue visual system, and core viewport-first workflow remain faithful to the concept. The live QA capture uses actual exact fillet and pattern geometry rather than concept-only sample content.
 - Compact breakpoints preserve the model and viewport first; the inspector hides only below 820 px, where full CAD editing is not the primary target.
+
+## Viewport chrome studies
+
+- [`viewer-rail-options.html`](./viewer-rail-options.html) — five redesigns of the right-hand viewer rail (`ViewerToolbar`), each rendered live at 1:1 against a mock viewport, with measured footprints and the trade-offs behind each. Open it in a browser; no build step or network access is required. Option C shipped; the page records the alternatives and the reasoning.

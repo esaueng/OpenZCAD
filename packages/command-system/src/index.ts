@@ -4,11 +4,13 @@ import {
   nowIso,
   toEntityId,
   type BodyId,
+  type EntityId,
   type ParamValue,
   type ProjectDocument,
   type SerializedCommand,
   type SketchId,
-  type SketchObjectData
+  type SketchObjectData,
+  type SketchProfileReference
 } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
@@ -37,15 +39,19 @@ import {
   isValidParameterName,
   importMeshBody,
   importStepBody,
+  mirrorBody,
+  offsetSolidBody,
   patternBody,
   renameNode,
   resolveParamValue,
   revolveSketch,
   setNodeMetadata,
   setParameter,
+  shellBody,
   transformBody,
   updateFeature,
   updateSketch,
+  translateSketch,
   type BooleanInput,
   type DirectEditInput,
   type ExtrudeInput,
@@ -54,6 +60,7 @@ import {
   type FeatureUpdateInput,
   type ImportedMeshInput,
   type ImportedStepInput,
+  type MirrorInput,
   type NodeMetadataInput,
   type NodeRenameInput,
   type ParameterDeleteInput,
@@ -65,7 +72,10 @@ import {
   type SketchObjectAddInput,
   type SketchObjectDeleteInput,
   type SketchObjectUpdateInput,
+  type SketchTranslateInput,
   type SketchUpdateInput,
+  type ShellInput,
+  type SolidOffsetInput,
   type TransformInput
 } from '@openzcad/document-core';
 import {
@@ -73,12 +83,17 @@ import {
   normalizeLocalId,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
-import { computeSketchRegions, regionAtPoint } from '@openzcad/geometry';
+import {
+  computeSketchRegions,
+  regionAtPoint,
+  type SketchRegion
+} from '@openzcad/geometry';
 
 export type CommandKind =
   | 'primitive.add'
   | 'sketch.add'
   | 'sketch.update'
+  | 'sketch.translate'
   | 'sketch.object.add'
   | 'sketch.object.update'
   | 'sketch.object.delete'
@@ -86,6 +101,9 @@ export type CommandKind =
   | 'feature.revolve'
   | 'feature.boolean'
   | 'feature.transform'
+  | 'feature.mirror'
+  | 'feature.shell'
+  | 'feature.solid-offset'
   | 'feature.direct-edit'
   | 'feature.fillet'
   | 'feature.chamfer'
@@ -119,6 +137,7 @@ export type AnyCommand =
   | CommandDefinition<PrimitiveInput>
   | CommandDefinition<SketchInput>
   | CommandDefinition<SketchUpdateInput>
+  | CommandDefinition<SketchTranslateInput>
   | CommandDefinition<SketchObjectAddInput>
   | CommandDefinition<SketchObjectUpdateInput>
   | CommandDefinition<SketchObjectDeleteInput>
@@ -126,6 +145,9 @@ export type AnyCommand =
   | CommandDefinition<RevolveInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
+  | CommandDefinition<MirrorInput>
+  | CommandDefinition<ShellInput>
+  | CommandDefinition<SolidOffsetInput>
   | CommandDefinition<DirectEditInput>
   | CommandDefinition<EdgeModifierInput>
   | CommandDefinition<PatternInput>
@@ -167,6 +189,147 @@ function makeCommand<TPayload>(
 function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
   if (!document.bodyOrder.includes(bodyId)) {
     throw new Error(`Target body ${bodyId} not found.`);
+  }
+}
+
+function validateDirectEditReference(input: DirectEditInput): void {
+  const reference = input.operation.faceReference;
+  if (!reference) {
+    return;
+  }
+  if (
+    reference.kind !== 'face' ||
+    reference.currentHash !== input.operation.faceHash
+  ) {
+    throw new Error(
+      'The direct-edit face reference does not match its legacy face hash.'
+    );
+  }
+}
+
+function validateEdgeReferences(input: EdgeModifierInput): void {
+  if (!input.edgeReferences) {
+    return;
+  }
+  const referenceHashes = new Set(
+    input.edgeReferences.map((reference) => reference.currentHash)
+  );
+  const legacyHashes = new Set(input.edgeHashes);
+  if (
+    input.edgeReferences.some((reference) => reference.kind !== 'edge') ||
+    referenceHashes.size !== input.edgeReferences.length ||
+    referenceHashes.size !== legacyHashes.size ||
+    [...referenceHashes].some((hash) => !legacyHashes.has(hash))
+  ) {
+    throw new Error(
+      'The edge lineage references must uniquely match the legacy edge hashes.'
+    );
+  }
+}
+
+function resolvedModelingValue(
+  document: ProjectDocument,
+  label: string,
+  value: ParamValue
+): number {
+  return resolveParamValue(value, getParameterScope(document).scope, label);
+}
+
+function validateMirrorInput(
+  document: ProjectDocument,
+  input: MirrorInput
+): void {
+  validateBodyTarget(document, input.targetBodyId);
+  const origin = input.plane.origin;
+  const normal = input.plane.normal;
+  for (const [label, value] of Object.entries({
+    'mirror origin X': origin.x,
+    'mirror origin Y': origin.y,
+    'mirror origin Z': origin.z,
+    'mirror normal X': normal.x,
+    'mirror normal Y': normal.y,
+    'mirror normal Z': normal.z
+  })) {
+    resolvedModelingValue(document, label, value);
+  }
+  const length = Math.hypot(
+    resolvedModelingValue(document, 'mirror normal X', normal.x),
+    resolvedModelingValue(document, 'mirror normal Y', normal.y),
+    resolvedModelingValue(document, 'mirror normal Z', normal.z)
+  );
+  if (!Number.isFinite(length) || length <= 1e-12) {
+    throw new Error('Mirror plane normal must be finite and non-zero.');
+  }
+}
+
+function validatePositiveModelingValue(
+  document: ProjectDocument,
+  label: string,
+  value: ParamValue
+): void {
+  if (resolvedModelingValue(document, label, value) <= 0) {
+    throw new Error(`${label} must be greater than zero.`);
+  }
+}
+
+function validateShellInput(
+  document: ProjectDocument,
+  input: ShellInput
+): void {
+  validateBodyTarget(document, input.targetBodyId);
+  validatePositiveModelingValue(document, 'Shell thickness', input.thickness);
+  const hashes = new Set(input.openingFaceHashes);
+  if (hashes.size === 0 || hashes.size !== input.openingFaceHashes.length) {
+    throw new Error('Shell opening faces must be a nonempty unique set.');
+  }
+  if (!input.openingFaceReferences) {
+    return;
+  }
+  const referenceHashes = new Set(
+    input.openingFaceReferences.map((reference) => reference.currentHash)
+  );
+  if (
+    referenceHashes.size !== input.openingFaceReferences.length ||
+    referenceHashes.size !== hashes.size ||
+    [...referenceHashes].some((hash) => !hashes.has(hash))
+  ) {
+    throw new Error(
+      'Shell opening-face references must uniquely match their legacy hashes.'
+    );
+  }
+}
+
+function validateModelingFeatureUpdate(
+  document: ProjectDocument,
+  input: FeatureUpdateInput
+): void {
+  const preview = updateFeature(document, input);
+  const feature = findFeature(preview, input.featureId)!;
+  switch (feature.data.featureKind) {
+    case 'mirror':
+      validateMirrorInput(preview, {
+        name: feature.name,
+        targetBodyId: feature.data.targetBodyId,
+        plane: feature.data.plane
+      });
+      break;
+    case 'shell':
+      validateShellInput(preview, {
+        name: feature.name,
+        targetBodyId: feature.data.targetBodyId,
+        openingFaceHashes: feature.data.openingFaceHashes,
+        openingFaceReferences: feature.data.openingFaceReferences,
+        thickness: feature.data.thickness
+      });
+      break;
+    case 'solid-offset':
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      validatePositiveModelingValue(
+        preview,
+        'Solid offset distance',
+        feature.data.distance
+      );
+      break;
   }
 }
 
@@ -271,6 +434,33 @@ export const commandFactories = {
       }
     );
   },
+  translateSketch(
+    payload: SketchTranslateInput,
+    label = 'Move sketch'
+  ): CommandDefinition<SketchTranslateInput> {
+    return makeCommand(
+      'sketch.translate',
+      label,
+      payload,
+      (document) => translateSketch(document, payload),
+      (document) => {
+        if (
+          ![payload.du, payload.dv, payload.dn ?? 0].every(Number.isFinite)
+        ) {
+          throw new Error('Sketch translation must be finite.');
+        }
+        const sketch = findSketch(document, payload.sketchId);
+        if (!sketch) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+        if ((payload.dn ?? 0) !== 0 && sketch.planeRef.type !== 'canonical') {
+          throw new Error(
+            'A face-attached sketch cannot move along its normal.'
+          );
+        }
+      }
+    );
+  },
   extrudeSketch(payload: ExtrudeInput): CommandDefinition<ExtrudeInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
@@ -332,6 +522,45 @@ export const commandFactories = {
       }
     );
   },
+  mirrorBody(payload: MirrorInput): CommandDefinition<MirrorInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.mirror',
+      'Mirror body',
+      withIds,
+      (document) => mirrorBody(document, withIds).document,
+      (document) => validateMirrorInput(document, withIds)
+    );
+  },
+  shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.shell',
+      'Shell body',
+      withIds,
+      (document) => shellBody(document, withIds).document,
+      (document) => validateShellInput(document, withIds)
+    );
+  },
+  offsetSolidBody(
+    payload: SolidOffsetInput
+  ): CommandDefinition<SolidOffsetInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.solid-offset',
+      'Offset solid',
+      withIds,
+      (document) => offsetSolidBody(document, withIds).document,
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        validatePositiveModelingValue(
+          document,
+          'Solid offset distance',
+          payload.distance
+        );
+      }
+    );
+  },
   directEditBody(payload: DirectEditInput): CommandDefinition<DirectEditInput> {
     const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
     return makeCommand(
@@ -339,7 +568,10 @@ export const commandFactories = {
       payload.name,
       withIds,
       (document) => directEditBody(document, withIds).document,
-      (document) => validateBodyTarget(document, payload.targetBodyId)
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        validateDirectEditReference(payload);
+      }
     );
   },
   filletEdges(
@@ -351,7 +583,10 @@ export const commandFactories = {
       'Fillet edges',
       withIds,
       (document) => filletEdges(document, withIds).document,
-      (document) => validateBodyTarget(document, payload.targetBodyId)
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        validateEdgeReferences(payload);
+      }
     );
   },
   chamferEdges(
@@ -363,7 +598,10 @@ export const commandFactories = {
       'Chamfer edges',
       withIds,
       (document) => chamferEdges(document, withIds).document,
-      (document) => validateBodyTarget(document, payload.targetBodyId)
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        validateEdgeReferences(payload);
+      }
     );
   },
   patternBody(payload: PatternInput): CommandDefinition<PatternInput> {
@@ -385,11 +623,7 @@ export const commandFactories = {
       label,
       payload,
       (document) => updateFeature(document, payload),
-      (document) => {
-        if (!findFeature(document, payload.featureId)) {
-          throw new Error(`Feature ${payload.featureId} not found.`);
-        }
-      }
+      (document) => validateModelingFeatureUpdate(document, payload)
     );
   },
   deleteFeature(
@@ -579,6 +813,31 @@ function assertOperationExpressions(
     assertEvaluableExpression(scope, `${label}.y`, value.y);
     assertEvaluableExpression(scope, `${label}.z`, value.z);
   };
+  // Text carries fields that are text, not dimensions — the string itself, a
+  // font family id, a style, an alignment. Feeding those to the expression
+  // evaluator would reject every valid text object, so they are named here
+  // rather than guessed at from their runtime type.
+  const nonDimensionKeys = new Set([
+    'objectKind',
+    'construction',
+    'text',
+    'fontFamily',
+    'fontStyle',
+    'align'
+  ]);
+  const sketchObjects = (name: string, objects: SketchObjectData[]) => {
+    objects.forEach((object, index) => {
+      Object.entries(object).forEach(([key, value]) => {
+        if (!nonDimensionKeys.has(key) && typeof value !== 'boolean') {
+          assertEvaluableExpression(
+            scope,
+            `${name} objects[${index}].${key}`,
+            value
+          );
+        }
+      });
+    });
+  };
 
   switch (operation.kind) {
     // set_parameter is already resolved and checked by projectedParameterScope.
@@ -602,21 +861,7 @@ function assertOperationExpressions(
         `${operation.name} offset`,
         operation.offset
       );
-      operation.objects.forEach((object, index) => {
-        Object.entries(object).forEach(([key, value]) => {
-          if (
-            key !== 'objectKind' &&
-            key !== 'construction' &&
-            typeof value !== 'boolean'
-          ) {
-            assertEvaluableExpression(
-              scope,
-              `${operation.name} objects[${index}].${key}`,
-              value
-            );
-          }
-        });
-      });
+      sketchObjects(operation.name, operation.objects);
       break;
     case 'add_extrude':
       assertEvaluableExpression(
@@ -625,9 +870,68 @@ function assertOperationExpressions(
         operation.distance
       );
       break;
+    case 'add_revolve':
+      // Optional: an omitted (or explicitly null) angle is a full turn.
+      if (operation.angleDeg !== undefined && operation.angleDeg !== null) {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} angleDeg`,
+          operation.angleDeg
+        );
+      }
+      break;
     case 'add_transform':
       vector(`${operation.name} translation`, operation.translation);
       vector(`${operation.name} rotationDeg`, operation.rotationDeg);
+      break;
+    case 'add_direct_edit':
+      if (operation.operation.kind === 'resize-through-hole') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} diameter`,
+          operation.operation.diameter
+        );
+      } else if (operation.operation.kind === 'offset-face') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} offset`,
+          operation.operation.offset
+        );
+      } else if (operation.operation.kind === 'resize-cylindrical-face') {
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} radius`,
+          operation.operation.radius
+        );
+      }
+      break;
+    case 'add_face_sketch':
+      sketchObjects(operation.name, operation.objects);
+      break;
+    case 'add_multi_profile_extrude':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} distance`,
+        operation.distance
+      );
+      break;
+    case 'add_mirror':
+      vector(`${operation.name} plane.origin`, operation.plane.origin);
+      vector(`${operation.name} plane.normal`, operation.plane.normal);
+      break;
+    case 'add_shell':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} thickness`,
+        operation.thickness
+      );
+      break;
+    case 'add_solid_offset':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} distance`,
+        operation.distance
+      );
       break;
     case 'add_edge_modifier':
       assertEvaluableExpression(
@@ -742,6 +1046,32 @@ class LocalBodyScope {
   }
 }
 
+/**
+ * Collapses repeated entity-wide references.
+ *
+ * Two sample points inside two glyphs of the same text object name the same
+ * entity, and resolving that entity twice hands the extrude the same profiles
+ * twice — which `resolveRegionProfiles` rejects as a duplicate. The
+ * same-region guard upstream cannot see this: those are genuinely different
+ * regions, they simply resolve through one reference.
+ */
+function dedupeProfileReferences(
+  references: SketchProfileReference[]
+): SketchProfileReference[] {
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    if (reference.all !== true) {
+      return true;
+    }
+    const key = [...reference.sourceEntityIds].sort().join('|');
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Converts a reviewed AI proposal into normal undoable document commands. */
 export function commandsForCadPatch(
   document: ProjectDocument,
@@ -760,14 +1090,26 @@ export function commandsForCadPatch(
     return bodyId;
   };
 
-  /** Sketches created earlier in this proposal, addressable by $alias. */
+  /**
+   * Sketches created earlier in this proposal, addressable by $alias.
+   *
+   * The object *ids* are carried alongside the data because a profile
+   * reference may have to name them: a text object's regions are referenced by
+   * entity id, not by geometry (see `SketchEntityProfileReference`). For a
+   * sketch this proposal creates, the ids are the ones the `add_sketch`
+   * command was minted with, so they are known before it executes.
+   */
   const localSketches = new Map<
     string,
-    { sketchId: SketchId; objects: SketchObjectData[] }
+    { sketchId: SketchId; objects: SketchObjectData[]; objectIds: EntityId[] }
   >();
   const resolveSketch = (
     reference: string
-  ): { sketchId: SketchId; objects: SketchObjectData[] } => {
+  ): {
+    sketchId: SketchId;
+    objects: SketchObjectData[];
+    objectIds: EntityId[];
+  } => {
     if (isLocalBodyRef(reference)) {
       const local = localSketches.get(normalizeLocalId(reference));
       if (!local) {
@@ -781,11 +1123,52 @@ export function commandsForCadPatch(
     if (!sketch) {
       throw new Error(`Sketch ${reference} not found in the document.`);
     }
-    const objects = sketch.objectIds.flatMap((objectId) => {
+    const objects: SketchObjectData[] = [];
+    const objectIds: EntityId[] = [];
+    for (const objectId of sketch.objectIds) {
       const node = document.nodes[objectId];
-      return node?.kind === 'sketch-object' ? [node.data] : [];
-    });
-    return { sketchId: sketch.sketchId, objects };
+      if (node?.kind === 'sketch-object') {
+        objects.push(node.data);
+        objectIds.push(objectId);
+      }
+    }
+    return { sketchId: sketch.sketchId, objects, objectIds };
+  };
+
+  /**
+   * The profile reference to persist for one resolved region.
+   *
+   * A region bounded solely by objects that carry their own outlines — today
+   * text — is referenced by entity id. Every geometry-derived field changes at
+   * once when the string does, and partially: a letter that did not move keeps
+   * resolving while one that vanished does not, which half-updates the model.
+   * Everything else keeps the geometry reference it has always had, byte for
+   * byte.
+   */
+  const profileReferenceFor = (
+    region: SketchRegion,
+    samplePoint: { x: number; y: number },
+    objects: SketchObjectData[],
+    objectIds: EntityId[]
+  ): SketchProfileReference => {
+    const kindOf = (entityId: string): SketchObjectData | undefined =>
+      objects[objectIds.indexOf(entityId as EntityId)];
+    const entityWide =
+      region.sourceEntityIds.length > 0 &&
+      region.sourceEntityIds.every(
+        (entityId) => kindOf(entityId)?.objectKind === 'text'
+      );
+    if (entityWide) {
+      return {
+        all: true,
+        sourceEntityIds: [...region.sourceEntityIds].sort()
+      };
+    }
+    return {
+      regionFingerprint: region.regionFingerprint,
+      samplePoint,
+      sourceArea: region.area
+    };
   };
 
   return proposal.operations.map((operation) => {
@@ -829,7 +1212,8 @@ export function commandsForCadPatch(
         if (operation.localId) {
           localSketches.set(normalizeLocalId(operation.localId), {
             sketchId: ids.sketchId,
-            objects: operation.objects
+            objects: operation.objects,
+            objectIds: [...ids.objectNodeIds]
           });
         }
         return commandFactories.addSketch({
@@ -851,7 +1235,7 @@ export function commandsForCadPatch(
           // AI paths store byte-identical features.
           const regions = computeSketchRegions(
             sketch.objects.map((data, index) => ({
-              id: `object_${index}`,
+              id: sketch.objectIds[index] ?? `object_${index}`,
               data
             })),
             (value) =>
@@ -863,11 +1247,12 @@ export function commandsForCadPatch(
               `add_extrude samplePoint (${operation.samplePoint.x}, ${operation.samplePoint.y}) is not inside any closed region of the sketch.`
             );
           }
-          profile = {
-            regionFingerprint: region.regionFingerprint,
-            samplePoint: operation.samplePoint,
-            sourceArea: region.area
-          };
+          profile = profileReferenceFor(
+            region,
+            operation.samplePoint,
+            sketch.objects,
+            sketch.objectIds
+          );
         }
         const ids = createBodyFeatureIds();
         scope.declare(operation.localId, ids.bodyId);
@@ -886,6 +1271,8 @@ export function commandsForCadPatch(
           name: operation.name,
           sketchId: resolveSketch(operation.sketchId).sketchId,
           axis: operation.axis,
+          // Null is the schema's way of saying "omitted"; a full turn.
+          angleDeg: operation.angleDeg ?? undefined,
           ids
         });
       }
@@ -912,6 +1299,130 @@ export function commandsForCadPatch(
           translation: operation.translation,
           rotationDeg: operation.rotationDeg
         });
+      case 'add_direct_edit': {
+        if (isLocalBodyRef(operation.targetBodyId)) {
+          throw new Error(
+            'add_direct_edit cannot target same-proposal topology.'
+          );
+        }
+        return commandFactories.directEditBody({
+          name: operation.name,
+          targetBodyId: resolveBody(operation.targetBodyId),
+          operation: operation.operation,
+          ids: createFeatureOnlyIds()
+        });
+      }
+      case 'add_face_sketch': {
+        if (isLocalBodyRef(operation.planeRef.bodyId)) {
+          throw new Error(
+            'add_face_sketch cannot target same-proposal topology.'
+          );
+        }
+        const ids = createSketchFeatureIds(operation.objects.length);
+        const planeRef = {
+          ...operation.planeRef,
+          bodyId: resolveBody(operation.planeRef.bodyId)
+        };
+        if (operation.localId) {
+          localSketches.set(normalizeLocalId(operation.localId), {
+            sketchId: ids.sketchId,
+            objects: operation.objects,
+            objectIds: [...ids.objectNodeIds]
+          });
+        }
+        return commandFactories.addSketch({
+          name: operation.name,
+          planeRef,
+          objects: operation.objects,
+          ids
+        });
+      }
+      case 'add_multi_profile_extrude': {
+        const sketch = resolveSketch(operation.sketchId);
+        const regions = computeSketchRegions(
+          sketch.objects.map((data, index) => ({
+            id: sketch.objectIds[index] ?? `object_${index}`,
+            data
+          })),
+          (value) =>
+            resolveParamValue(value, parameterScope, 'sketch dimension')
+        );
+        const selected = operation.samplePoints.map((samplePoint) => {
+          const region = regionAtPoint(regions, samplePoint);
+          if (!region) {
+            throw new Error(
+              `add_multi_profile_extrude samplePoint (${samplePoint.x}, ${samplePoint.y}) is not inside any closed region of the sketch.`
+            );
+          }
+          return { region, samplePoint };
+        });
+        if (
+          new Set(selected.map(({ region }) => region.profileId)).size !==
+          selected.length
+        ) {
+          throw new Error(
+            'add_multi_profile_extrude selects the same closed region more than once.'
+          );
+        }
+        const ids = createBodyFeatureIds();
+        scope.declare(operation.localId, ids.bodyId);
+        return commandFactories.extrudeSketch({
+          name: operation.name,
+          sketchId: sketch.sketchId,
+          distance: operation.distance,
+          profiles: dedupeProfileReferences(
+            selected.map(({ region, samplePoint }) =>
+              profileReferenceFor(
+                region,
+                samplePoint,
+                sketch.objects,
+                sketch.objectIds
+              )
+            )
+          ),
+          ids
+        });
+      }
+      case 'add_mirror': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        return commandFactories.mirrorBody({
+          name: operation.name,
+          targetBodyId,
+          plane: operation.plane,
+          ids
+        });
+      }
+      case 'add_shell': {
+        if (isLocalBodyRef(operation.targetBodyId)) {
+          throw new Error('add_shell cannot target same-proposal topology.');
+        }
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'shell');
+        return commandFactories.shellBody({
+          name: operation.name,
+          targetBodyId,
+          openingFaceHashes: operation.openingFaceHashes,
+          openingFaceReferences: operation.openingFaceReferences,
+          thickness: operation.thickness,
+          ids
+        });
+      }
+      case 'add_solid_offset': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'solid-offset');
+        return commandFactories.offsetSolidBody({
+          name: operation.name,
+          targetBodyId,
+          distance: operation.distance,
+          ids
+        });
+      }
       case 'add_edge_modifier': {
         const ids = createBodyFeatureIds();
         const targetBodyId = resolveBody(operation.targetBodyId);
@@ -1164,6 +1675,9 @@ export function replayCommands(
       case 'sketch.add':
         next = addSketchFeature(next, command.payload as SketchInput).document;
         break;
+      case 'sketch.translate':
+        next = translateSketch(next, command.payload as SketchTranslateInput);
+        break;
       case 'sketch.update':
         next = updateSketch(next, command.payload as SketchUpdateInput);
         break;
@@ -1196,6 +1710,18 @@ export function replayCommands(
         break;
       case 'feature.transform':
         next = transformBody(next, command.payload as TransformInput).document;
+        break;
+      case 'feature.mirror':
+        next = mirrorBody(next, command.payload as MirrorInput).document;
+        break;
+      case 'feature.shell':
+        next = shellBody(next, command.payload as ShellInput).document;
+        break;
+      case 'feature.solid-offset':
+        next = offsetSolidBody(
+          next,
+          command.payload as SolidOffsetInput
+        ).document;
         break;
       case 'feature.direct-edit':
         next = directEditBody(

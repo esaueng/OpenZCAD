@@ -1,6 +1,9 @@
 import {
+  CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
+  PANEL_WIDTH_LIMITS,
   type AppSettings,
+  type PanelWidthLimits,
   type UnitSystem
 } from '@openzcad/shared';
 
@@ -73,6 +76,33 @@ function boundedNumber(
     : fallback;
 }
 
+/**
+ * A stored panel width, brought back into range rather than rejected. A width
+ * outside the limits is a stale or hand-edited value, not a reason to throw the
+ * rest of the settings away — the closest usable width is what the user meant.
+ */
+function panelWidth(value: unknown, limits: PanelWidthLimits): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return limits.default;
+  }
+  return Math.round(Math.min(limits.max, Math.max(limits.min, value)));
+}
+
+/**
+ * A bounded preference whose out-of-range values are pulled to the nearest
+ * bound rather than replaced with the default. The Worker normalizes the same
+ * fields the same way, so a value cannot mean one thing here and another there.
+ */
+function clampedNumber(
+  value: unknown,
+  bounds: { min: number; max: number; default: number }
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return bounds.default;
+  }
+  return Math.round(Math.min(bounds.max, Math.max(bounds.min, value)));
+}
+
 function member<T extends string>(
   value: unknown,
   allowed: readonly T[],
@@ -88,8 +118,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   const root = record(value);
   const general = record(root.general);
   const appearance = record(root.appearance);
+  const layout = record(root.layout);
   const viewport = record(root.viewport);
   const sketching = record(root.sketching);
+  // Absent from settings written before cloud autosave was configurable, which
+  // reads as the defaults rather than as "off".
+  const files = record(root.files);
   const assistant = record(root.assistant);
   const experiments = record(root.experiments);
   return {
@@ -119,6 +153,13 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       reducedMotion: boolean(
         appearance.reducedMotion,
         defaults.appearance.reducedMotion
+      )
+    },
+    layout: {
+      sidebarWidth: panelWidth(layout.sidebarWidth, PANEL_WIDTH_LIMITS.sidebar),
+      assistantWidth: panelWidth(
+        layout.assistantWidth,
+        PANEL_WIDTH_LIMITS.assistant
       )
     },
     viewport: {
@@ -159,6 +200,13 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         defaults.sketching.angleSnap,
         1,
         90
+      )
+    },
+    files: {
+      cloudAutosave: boolean(files.cloudAutosave, defaults.files.cloudAutosave),
+      cloudAutosaveDelaySeconds: clampedNumber(
+        files.cloudAutosaveDelaySeconds,
+        CLOUD_AUTOSAVE_DELAY_BOUNDS
       )
     },
     assistant: {
