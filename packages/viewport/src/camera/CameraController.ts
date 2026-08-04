@@ -115,7 +115,28 @@ export class CameraController {
     this.active = this.perspective;
     this.orbit = this.createOrbit(this.perspective);
     this.orbit.target.set(0, 0, 0);
+    // Capture phase so this runs before OrbitControls' own pointerdown
+    // handler snapshots the button mapping for the gesture.
+    this.options.domElement.addEventListener(
+      'pointerdown',
+      this.applyRightButtonModifier,
+      true
+    );
   }
+
+  /**
+   * OrbitControls maps actions per button with no modifier dimension, so the
+   * shift+right orbit is done by rewriting the RIGHT binding just before
+   * OrbitControls reads it: shift held → orbit, otherwise the configured pan.
+   */
+  private applyRightButtonModifier = (event: PointerEvent) => {
+    if (event.button !== 2) {
+      return;
+    }
+    this.orbit.mouseButtons.RIGHT = event.shiftKey
+      ? THREE.MOUSE.ROTATE
+      : THREE.MOUSE.PAN;
+  };
 
   get controls(): OrbitControls<THREE.Camera> {
     return this.orbit;
@@ -482,6 +503,11 @@ export class CameraController {
   }
 
   dispose() {
+    this.options.domElement.removeEventListener(
+      'pointerdown',
+      this.applyRightButtonModifier,
+      true
+    );
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
