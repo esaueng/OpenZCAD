@@ -35,6 +35,15 @@ pnpm --filter @openzcad/desktop test:e2e
 produces a DMG. Local and CI artifacts are ad-hoc signed for validation only;
 they are not approved distribution builds.
 
+The native smoke gate runs against the bundled WKWebView rather than a Vite or
+hosted page. On the Retina runner it checks the CSS-to-backing-pixel scale,
+exact-body click selection, capture-requested box selection, Shift-drag orbit,
+secondary-drag pan, and fine pixel-delta wheel zoom. Because the embedded driver
+turns W3C pointer actions into MouseEvents, a debug-only bridge feeds equivalent
+PointerEvent packets into OrbitControls; WheelEvents use the live canvas route.
+Physical two-finger hardware testing on the minimum supported macOS version
+remains a signed-beta release gate.
+
 ## Release boundary
 
 The current target is a working local-first desktop MVP. Cloud account features
