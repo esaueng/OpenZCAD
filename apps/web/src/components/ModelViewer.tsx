@@ -2630,12 +2630,32 @@ export function ModelViewer({
       pendingHoverEvent = event;
       requestRender();
     };
+    /**
+     * Orbit turns about the geometry under the cursor at gesture start, so a
+     * detail being pointed at stays put while the view swings around it.
+     * `pivotOn` keeps the camera still, so nothing shifts on screen; over
+     * empty space the current pivot is kept.
+     */
+    function pivotOrbitOnCursor(event: PointerEvent) {
+      const result = pick(event);
+      if (result) {
+        cameraRig.pivotOn(result.hit.point);
+      }
+    }
+
     const handlePointerDown = (event: PointerEvent) => {
       pendingHoverEvent = null;
       cameraRig.cancelTween();
       if (event.button === 2) {
         rightClickGesture.begin(event.pointerId, event.clientX, event.clientY);
+        if (event.ctrlKey || event.metaKey) {
+          pivotOrbitOnCursor(event);
+        }
         rightPanStartTarget = cameraRig.controls.target.clone();
+        return;
+      }
+      if (event.button === 1 && middleDragRef.current === 'orbit') {
+        pivotOrbitOnCursor(event);
         return;
       }
       if (event.button !== 0) {
@@ -2649,6 +2669,7 @@ export function ModelViewer({
       if (event.shiftKey && !sketchModeRef.current) {
         shiftOrbitPointerId = event.pointerId;
         cameraRig.setShiftOrbitActive(true);
+        pivotOrbitOnCursor(event);
         return;
       }
       const moveHit = pickMoveGizmo(event);
