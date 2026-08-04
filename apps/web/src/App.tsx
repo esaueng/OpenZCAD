@@ -258,6 +258,7 @@ import {
 } from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
 import { errorMessage } from './lib/errors';
+import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
@@ -801,6 +802,13 @@ export function App() {
    */
   const [accountConflict, setAccountConflict] =
     useState<ProjectConflict | null>(null);
+  /**
+   * The save-to-account run currently on screen, one entry per project in
+   * attempt order. Deliberately not cleared when the loop finishes: the
+   * failures and their reasons are the whole point, and they stay up until
+   * the user dismisses them or starts another run.
+   */
+  const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
@@ -3074,10 +3082,63 @@ export function App() {
     }
   }
 
+  function patchSyncEntry(projectId: string, patch: Partial<SyncEntry>) {
+    setSyncRun((current) =>
+      current
+        ? current.map((entry) =>
+            entry.projectId === projectId ? { ...entry, ...patch } : entry
+          )
+        : current
+    );
+  }
+
   /**
-   * Uploads every project this device holds alone. Failures are counted rather
-   * than thrown: one document the account refuses — too large, say — must not
-   * strand the rest, and the user needs to know how many made it either way.
+   * Runs one project's adoption and records the outcome on its sync entry.
+   * Returns whether the attempt should stop the run: an expired session fails
+   * every later project identically, so retrying N more times is just noise.
+   */
+  async function syncOneToAccount(candidate: {
+    projectId: string;
+    name: string;
+  }): Promise<{ adopted: boolean; failed: boolean; halt: boolean }> {
+    patchSyncEntry(candidate.projectId, {
+      state: 'syncing',
+      detail: undefined
+    });
+    try {
+      const outcome = await adoptLocalProject(candidate.projectId);
+      if (outcome === 'missing') {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail: 'No copy of this project exists on this device.'
+        });
+        return { adopted: false, failed: true, halt: false };
+      }
+      patchSyncEntry(candidate.projectId, {
+        state: 'synced',
+        detail:
+          outcome === 'already-adopted'
+            ? 'Was already in your account.'
+            : undefined
+      });
+      return { adopted: outcome === 'adopted', failed: false, halt: false };
+    } catch (error) {
+      const { detail, auth } = describeSyncFailure(error);
+      patchSyncEntry(candidate.projectId, { state: 'failed', detail });
+      if (auth) {
+        remoteVersionsRef.current.clear();
+        endCloudSettingsSession();
+      }
+      return { adopted: false, failed: true, halt: auth };
+    }
+  }
+
+  /**
+   * Uploads every project this device holds alone. Failures are recorded
+   * rather than thrown: one document the account refuses — too large, say —
+   * must not strand the rest. Progress is published per project through
+   * `syncRun` so the shelf can show each upload as it happens and keep the
+   * failures, with reasons, on screen afterwards.
    */
   async function handleSaveAllToAccount(candidates: ProjectSummary[]) {
     if (!session || candidates.length === 0) {
@@ -3085,24 +3146,64 @@ export function App() {
     }
     setBusy(true);
     setStatus(`Saving ${candidates.length} project(s) to your account…`);
+    setSyncRun(
+      candidates.map((candidate) => ({
+        projectId: candidate.projectId,
+        name: candidate.name,
+        state: 'pending'
+      }))
+    );
     try {
       await flushPendingLocalSave();
       let saved = 0;
-      const failures: string[] = [];
+      let failed = 0;
+      let halted = false;
       for (const candidate of candidates) {
-        try {
-          if ((await adoptLocalProject(candidate.projectId)) === 'adopted') {
-            saved += 1;
-          }
-        } catch {
-          failures.push(candidate.name);
+        if (halted) {
+          failed += 1;
+          patchSyncEntry(candidate.projectId, {
+            state: 'failed',
+            detail: 'Not attempted — sign in again first.'
+          });
+          continue;
         }
+        const result = await syncOneToAccount(candidate);
+        if (result.adopted) {
+          saved += 1;
+        }
+        if (result.failed) {
+          failed += 1;
+        }
+        halted = result.halt;
       }
+      // The names and reasons live in the sync panel; repeating them here
+      // would overflow the status line with the very names that failed.
       setStatus(
-        failures.length === 0
+        failed === 0
           ? `Saved ${saved} project(s) to your account.`
-          : `Saved ${saved} project(s) · ${failures.length} could not be saved: ${failures.join(', ')}.`
+          : `Saved ${saved} project(s) · ${failed} could not be saved. See the list above for why.`
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Re-attempts a single failed entry from the sync panel. */
+  async function handleRetrySync(projectId: string) {
+    if (!session) {
+      setStatus('Sign in to retry saving this project.');
+      return;
+    }
+    const entry = syncRun?.find(
+      (candidate) => candidate.projectId === projectId
+    );
+    if (!entry) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await flushPendingLocalSave();
+      await syncOneToAccount(entry);
     } finally {
       setBusy(false);
     }
@@ -6104,6 +6205,9 @@ export function App() {
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
           }
+          syncRun={syncRun}
+          onRetrySync={(projectId) => void handleRetrySync(projectId)}
+          onDismissSyncRun={() => setSyncRun(null)}
           onMoveToShelf={(project, shelf) =>
             void handleMoveProjectToShelf(project, shelf)
           }
