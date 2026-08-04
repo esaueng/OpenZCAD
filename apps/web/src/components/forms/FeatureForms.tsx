@@ -5,6 +5,7 @@ import {
   type AxisId,
   type BodyId,
   type BooleanOperation,
+  type EdgeTopologyReferenceV5,
   type ExtrudeOperation,
   type ParamValue,
   type PatternKind,
@@ -1087,6 +1088,7 @@ export interface EdgeModifierFormValue {
   name: string;
   targetBodyId: BodyId;
   edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
   size: ParamValue;
 }
 
@@ -1095,6 +1097,7 @@ interface EdgeModifierFormProps {
   scope: Record<string, number>;
   targetBodyId: BodyId | null;
   edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
   availableEdgeCount?: number;
   onSelectAllEdges?: () => void;
   onClearEdges?: () => void;
@@ -1109,6 +1112,7 @@ export function EdgeModifierForm({
   scope,
   targetBodyId,
   edgeHashes,
+  edgeReferences,
   availableEdgeCount,
   onSelectAllEdges,
   onClearEdges,
@@ -1138,6 +1142,7 @@ export function EdgeModifierForm({
           name: name.trim(),
           targetBodyId: targetBodyId!,
           edgeHashes,
+          ...(edgeReferences ? { edgeReferences } : {}),
           size: coerceParamValue(size)
         })
       }

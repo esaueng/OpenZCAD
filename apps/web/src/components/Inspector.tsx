@@ -393,6 +393,9 @@ export function Inspector(props: InspectorProps) {
   const [liveCylinderRadius, setLiveCylinderRadius] = useState<number | null>(
     cylinderRadiusEdit?.initialRadius ?? null
   );
+  const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
+    edge.reference?.kind === 'edge' ? [edge.reference] : []
+  );
 
   useEffect(() => {
     if (!cylinderRadiusEdit) {
@@ -502,6 +505,12 @@ export function Inspector(props: InspectorProps) {
           edgeHashes={selectedEdges.flatMap((edge) =>
             edge.hash === undefined ? [] : [edge.hash]
           )}
+          edgeReferences={
+            selectedEdges.length > 0 &&
+            selectedEdgeReferences.length === selectedEdges.length
+              ? selectedEdgeReferences
+              : undefined
+          }
           availableEdgeCount={
             edgeModifierBody?.topology?.edges.filter(
               (edge) => edge.displayRole !== 'seam'
@@ -702,6 +711,7 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           targetBodyId={data.targetBodyId}
           edgeHashes={data.edgeHashes}
+          edgeReferences={data.edgeReferences}
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance
