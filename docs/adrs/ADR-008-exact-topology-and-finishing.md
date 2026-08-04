@@ -9,7 +9,7 @@ persist geometric fingerprints instead of sub-shape ordinals.
 
 Expose face and edge selections as one-based exact-kernel sub-shape ordinals generated during each exact rebuild. The viewport receives those IDs with the disposable mesh/wire projection. When a finishing command is created, it captures the selected edge ordinals in the canonical document; the exact adapter resolves them against the rebuilt target shape before applying fillet or chamfer.
 
-Store editable STEP source text in the import feature command, with an artifact reference for archival. This makes STEP replay deterministic and offline while keeping all geometry work inside the browser worker. Patterns likewise remain ordinary replayable document features and produce exact multi-solid bodies.
+Store editable STEP source text in the browser document's import feature command, with an artifact reference for archival. This makes STEP replay deterministic and offline while keeping all geometry work inside the browser worker. The private R2 persistence projection may replace that text with a checksum-verified object reference at rest, but it must rehydrate the original document before replay. Patterns likewise remain ordinary replayable document features and produce exact multi-solid bodies.
 
 ## Consequences
 

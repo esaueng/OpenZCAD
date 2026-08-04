@@ -43,6 +43,22 @@ The implementation intentionally preserves the OpenZCAD application chrome and v
 
 Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, visually verified against the supplied references, and functional in the real application flow.
 
+## E3 assistant-created sketch acceptance addendum
+
+- The assistant review card describes the sketch and extrusion as separate proposed operations; Apply commits both in one undoable transaction.
+- Same-proposal sketch aliases resolve to preassigned canonical sketch IDs before command serialization, so replay never depends on a local alias.
+- Open endpoints, near-closure gaps, and invalid profile diagnostics stop the proposal before document mutation or worker geometry.
+- The assistant digest now includes each sketch's canonical or face attachment plane plus its full object data, so later requests can inspect the geometry the assistant created.
+- Playwright verifies a rectangular `add_sketch` followed by an aliased `add_extrude`, including the final exact body, applied review state, zero warnings, and an empty console-error log.
+
+## E1 mirror, shell, and solid-offset acceptance addendum
+
+- Mirror, Shell, and Solid offset share the existing feature-tool rail and inspector hierarchy; all require an exact preflight before their create action is available.
+- Shell face choices use human-readable exact-face labels and pressed states. The browser acceptance path selected the box `z max` face, passed preflight, and produced a visibly open 2 mm shell with one live body and zero warnings.
+- A kernel regression builds a filleted solid, requests an impossible 100 mm shell, and verifies that the feature warning path receives the refusal while the source remains live and no result body is published.
+- The implementation now runs on the pinned BrepKit browser kernel rather than the brief's older `occt-wasm` API. BrepKit does not expose the proposed `*WithHistory` calls, so these operations retain their documented hash-only lineage instead of claiming unverified topology evolution.
+- Press-pull remains explicitly out of scope; Solid offset is whole-body only.
+
 ## Feature suppression and rollback addendum
 
 - Each history row exposes semantic pause/resume and rollback controls on
@@ -69,3 +85,17 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
 - Kernel acceptance separately proves that benign upstream dimension changes
   move the attached extrusion to the evolved exact face before the stale-state
   case is exercised.
+
+## Extrude inference addendum
+
+- The direct extrude controller keeps Operation visible throughout the drag.
+  It reads `Inferring…` while the worker measures and then `New Body`, `Add`,
+  or `Cut` with a short explanation naming the target where applicable.
+- Apply stays disabled until the exact preview matches the current document
+  version, distance, and profile selection.
+- Operation is feedback rather than an editable guess. The feature inspector
+  shows the stored value and explains that later distance edits preserve it.
+- Tangency, multiple overlaps, coincident material, and refused measurements
+  use explicit New Body explanations instead of silently consuming a target.
+- Desktop and compact-width acceptance must verify the operation detail wraps
+  inside the controller without covering Distance or Apply Extrude.

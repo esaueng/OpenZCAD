@@ -1,5 +1,5 @@
 import {
-  MAX_PERSISTED_DOCUMENT_BYTES,
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -266,10 +266,10 @@ function parseProjectDocument(
  */
 function assertDocumentWithinCeiling(document: ProjectDocument): void {
   const bytes = persistedDocumentBytes(document);
-  if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
+  if (bytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
     throw new HttpError(
       413,
-      `Document is ${bytes} bytes; the account stores at most ${MAX_PERSISTED_DOCUMENT_BYTES}.`
+      `Document is ${bytes} bytes; cloud storage accepts at most ${MAX_CLOUD_PROJECT_DOCUMENT_BYTES}.`
     );
   }
 }
