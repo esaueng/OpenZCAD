@@ -5,6 +5,7 @@ import {
   type AxisId,
   type BodyId,
   type BooleanOperation,
+  type ExtrudeOperation,
   type ParamValue,
   type PatternKind,
   type PlaneId,
@@ -610,7 +611,12 @@ function SketchPicker({
 interface ExtrudeFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
-  initial?: { name: string; sketchId: SketchId; distance: ParamValue };
+  initial?: {
+    name: string;
+    sketchId: SketchId;
+    distance: ParamValue;
+    operation?: ExtrudeOperation;
+  };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
   initialSketchId?: SketchId;
   submitLabel: string;
@@ -661,6 +667,19 @@ export function ExtrudeForm({
         value={sketchId}
         onChange={setSketchId}
       />
+      <label className="field">
+        <span>Operation</span>
+        <select
+          aria-label="Stored extrude operation"
+          value={initial ? (initial.operation ?? 'new-body') : 'automatic'}
+          disabled
+        >
+          <option value="automatic">Automatic from exact overlap</option>
+          <option value="new-body">New Body</option>
+          <option value="add">Add</option>
+          <option value="cut">Cut</option>
+        </select>
+      </label>
       <ExprInput
         label="Distance"
         value={distance}
@@ -669,7 +688,8 @@ export function ExtrudeForm({
         onChange={setDistance}
       />
       <p className="muted">
-        Negative distances extrude below the sketch plane.
+        Negative distances extrude below the sketch plane. The operation is
+        resolved when the feature is created and is not re-inferred by edits.
       </p>
     </FormShell>
   );

@@ -392,6 +392,9 @@ export type RevolveAxis = 'horizontal' | 'vertical';
  */
 export const FULL_REVOLVE_ANGLE_DEG = 360;
 
+/** Persistent result mode chosen when an extrusion is first created. */
+export type ExtrudeOperation = 'new-body' | 'add' | 'cut';
+
 /**
  * Persistent reference to one derived bounded sketch cell.
  *
@@ -446,6 +449,13 @@ export type FeatureData =
       featureKind: 'extrude';
       sketchId: SketchId;
       distance: ParamValue;
+      /**
+       * Resolved once at creation time. Absent preserves the legacy new-body
+       * behavior; rebuilds never infer a different operation.
+       */
+      operation?: ExtrudeOperation;
+      /** Required for stored add/cut operations and absent for new-body. */
+      targetBodyId?: BodyId;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the
@@ -1209,6 +1219,8 @@ export interface HealthResponse {
    * 0010_document_storage_accounting. Absent older Workers are not ready.
    */
   documentStorageAccountingReady?: boolean;
+  /** Whether migration 0011 and private R2 project storage are available. */
+  projectObjectStorageReady?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
   projectSharingEnabled?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
@@ -1584,13 +1596,20 @@ export type CollaborationErrorCode =
 export const MAX_PROJECT_NAME_LENGTH = 200;
 
 /**
- * Largest document the account will store, as serialized JSON bytes. D1 keeps
- * each document as one blob, so this is a row ceiling rather than a quota.
- * Shared because three layers have to agree on it: the collaboration room
- * refuses oversize frames, the persistence layer refuses oversize writes, and
- * the client needs to name the limit instead of reporting a generic failure.
+ * Largest self-contained document stored in one legacy D1 or Durable Object
+ * value. R2-backed account persistence has a separate request ceiling, but
+ * collaboration rooms intentionally retain this value until their snapshots
+ * also move to object storage.
  */
 export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
+
+/**
+ * Largest self-contained document accepted by cloud project persistence.
+ * Imported source payloads are removed from the private R2 projection before
+ * storage; this ceiling bounds request parsing and serialization work rather
+ * than an R2 object-size limit.
+ */
+export const MAX_CLOUD_PROJECT_DOCUMENT_BYTES = 24 * 1024 * 1024;
 
 /** Serialized size of `document`, measured the way the store measures it. */
 export function persistedDocumentBytes(document: ProjectDocument): number {
