@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenZCAD",
+  "version": "0.1.0",
+  "identifier": "app.esau.openzcad",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../web dev:desktop",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm --dir ../web build:desktop",
+    "frontendDist": "../../web/dist-desktop"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenZCAD",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main-window"],
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420 https://challenges.cloudflare.com; font-src 'self' data:; frame-src https://challenges.cloudflare.com; img-src 'self' asset: http://asset.localhost blob: data:; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "GraphicsAndDesign",
+    "shortDescription": "Browser-kernel parametric CAD for macOS",
+    "longDescription": "OpenZCAD is a local-first parametric CAD workspace with exact browser-worker geometry kernels.",
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "hardenedRuntime": true,
+      "signingIdentity": "-"
+    }
+  }
+}

@@ -112,6 +112,13 @@ import type {
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
+import {
+  listenForDesktopMenu,
+  openDesktopCadFile,
+  protectDesktopClose,
+  saveCadTextFile,
+  type DesktopMenuCommand
+} from './lib/desktopBridge';
 import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
 import {
   CloudProjectAutosave,
@@ -728,6 +735,11 @@ export function App() {
   } = useProjectView(doc?.projectId ?? null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
+  const saveStateRef = useRef(saveState);
+  saveStateRef.current = saveState;
+  const desktopMenuHandlerRef = useRef<(command: DesktopMenuCommand) => void>(
+    () => undefined
+  );
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [deploymentHealth, setDeploymentHealth] =
     useState<HealthResponse | null>(null);
@@ -4097,7 +4109,11 @@ export function App() {
       const result = await geometry.exportModel(format, doc, exportBodyIds);
       const fileName = `${stem}.${format}`;
       const contentType = format === 'step' ? 'model/step' : 'model/stl';
-      downloadText(fileName, result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
+      if (!saved) {
+        setStatus(`${format.toUpperCase()} export cancelled.`);
+        return;
+      }
       let archived = false;
       try {
         await archiveArtifact({
@@ -4152,6 +4168,61 @@ export function App() {
       setStatus(errorMessage(error, 'Diagnostic export failed.'));
     }
   }
+
+  desktopMenuHandlerRef.current = (command) => {
+    switch (command) {
+      case 'open-model':
+        void openDesktopCadFile()
+          .then((file) => (file ? handleImportFile(file) : undefined))
+          .catch((error) => {
+            setStatus(errorMessage(error, 'Could not open the CAD model.'));
+          });
+        break;
+      case 'save-project':
+        void handleSave();
+        break;
+      case 'export-step':
+        void handleExport('step');
+        break;
+      case 'export-stl':
+        void handleExport('stl');
+        break;
+      case 'undo':
+        handleUndo();
+        break;
+      case 'redo':
+        handleRedo();
+        break;
+      case 'settings':
+        openSettings();
+        break;
+    }
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    const cleanups: Array<() => void> = [];
+    const register = async () => {
+      const next = await Promise.all([
+        listenForDesktopMenu((command) => {
+          desktopMenuHandlerRef.current(command);
+        }),
+        protectDesktopClose(() => saveStateRef.current === 'saving')
+      ]);
+      if (disposed) {
+        next.forEach((cleanup) => cleanup());
+      } else {
+        cleanups.push(...next);
+      }
+    };
+    void register().catch((error) => {
+      console.error('Desktop integration setup failed.', error);
+    });
+    return () => {
+      disposed = true;
+      cleanups.forEach((cleanup) => cleanup());
+    };
+  }, []);
 
   function featureNodeIdForBody(bodyId: BodyId): string | null {
     if (!doc) {
