@@ -100,6 +100,89 @@ describe('project sharing invitations', () => {
     ).toBe(owner);
   });
 
+  it('rejects expired and revoked invitations', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_expiring_owner');
+    const invited = toUserId('user_expiring_member');
+    const project = await service.createProject(owner, {
+      name: 'Expiring invitations'
+    });
+    const now = 2_000_000_000;
+
+    for (const state of ['expired', 'revoked'] as const) {
+      const token = createProjectInvitationToken();
+      const tokenHash = await hashProjectInvitationToken(token);
+      const invitationId = `invite_${state}`;
+      await service.createProjectInvitation(owner, project.document.projectId, {
+        invitationId,
+        email: `${state}@example.com`,
+        role: 'viewer',
+        tokenHash,
+        createdAt: now,
+        expiresAt: now + 10
+      });
+      if (state === 'revoked') {
+        await service.revokeProjectInvitation(
+          owner,
+          project.document.projectId,
+          invitationId,
+          now + 1
+        );
+      }
+      await expect(
+        service.acceptProjectInvitation(
+          invited,
+          `${state}@example.com`,
+          tokenHash,
+          state === 'expired' ? now + 11 : now + 2
+        )
+      ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+    }
+  });
+
+  it('removes members and invitation tokens when a project is destroyed', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_destroy_owner');
+    const member = toUserId('user_destroy_member');
+    const invited = toUserId('user_destroy_invited');
+    const created = await service.createProject(owner, {
+      name: 'Destroyed sharing state'
+    });
+    const source = created.document;
+    const now = 2_000_000_000;
+    await service.setProjectMemberRole(
+      owner,
+      source.projectId,
+      member,
+      'viewer'
+    );
+    const token = createProjectInvitationToken();
+    const tokenHash = await hashProjectInvitationToken(token);
+    await service.createProjectInvitation(owner, source.projectId, {
+      invitationId: 'invite_destroyed_project',
+      email: 'destroyed@example.com',
+      role: 'viewer',
+      tokenHash,
+      createdAt: now,
+      expiresAt: now + PROJECT_INVITATION_TTL_SECONDS
+    });
+
+    await service.deleteProject(owner, source.projectId);
+    await service.createProject(owner, { name: source.name, document: source });
+
+    await expect(
+      service.requireProjectRead(member, source.projectId)
+    ).rejects.toThrow();
+    await expect(
+      service.acceptProjectInvitation(
+        invited,
+        'destroyed@example.com',
+        tokenHash,
+        now + 1
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+  });
+
   it('rate-limits invitation creation per owner and project', async () => {
     const service = new InMemoryPersistenceService();
     const owner = toUserId('user_rate_owner');
