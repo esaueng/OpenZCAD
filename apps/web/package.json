@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:desktop": "vite --mode desktop --host 127.0.0.1 --port 1420 --strictPort",
     "build": "vite build",
+    "build:desktop": "vite build --mode desktop",
     "preview": "vite preview",
     "deploy:beta": "wrangler d1 migrations apply openzcad-beta --remote --config ../../wrangler.jsonc && wrangler deploy --config ../../wrangler.jsonc",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -28,6 +30,7 @@
     "@openzcad/persistence": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
+    "@tauri-apps/api": "^2.11.1",
     "@vitejs/plugin-react": "^6.0.4",
     "lucide-react": "^1.27.0",
     "pdfjs-dist": "^6.2.108",
