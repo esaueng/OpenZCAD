@@ -42,6 +42,7 @@ function roomRequest(
 describe('cloudflare adapters', () => {
   it('keeps typed feature flags off unless explicitly enabled', () => {
     expect(CLOUDFLARE_BOOLEAN_FLAGS).toEqual([
+      'DESKTOP_AUTH_ENABLED',
       'PROJECT_SHARING_ENABLED',
       'PROJECT_EDIT_LEASES_ENFORCED',
       'PROJECT_PERSONAL_SYNC_ENABLED',

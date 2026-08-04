@@ -29,6 +29,7 @@ import type {
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
 import { withoutDerivedProjection } from '@openzcad/document-core';
+import { desktopFetch } from './desktopBridge';
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -67,7 +68,7 @@ async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit
 ): Promise<T> {
-  const response = await fetch(input, {
+  const response = await desktopFetch(input, {
     ...init,
     credentials: 'same-origin',
     headers: {
@@ -117,6 +118,11 @@ export const api = {
     requestJson<AuthSession>('/api/auth/email/verify', {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  approveDesktopLogin: (attemptId: string) =>
+    requestJson<{ ok: true }>('/api/auth/desktop/approve', {
+      method: 'POST',
+      body: JSON.stringify({ attemptId })
     }),
   logout: () =>
     requestJson<{ ok: true }>('/api/auth/logout', {
@@ -185,7 +191,7 @@ export const api = {
     }),
   /** Irreversible. Use `updateProject` with status 'deleted' for the bin. */
   deleteProject: async (projectId: string) => {
-    const response = await fetch(`/api/projects/${projectId}`, {
+    const response = await desktopFetch(`/api/projects/${projectId}`, {
       method: 'DELETE',
       credentials: 'same-origin'
     });
@@ -227,7 +233,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   uploadArtifact: async (uploadUrl: string, body: Blob) => {
-    const response = await fetch(uploadUrl, {
+    const response = await desktopFetch(uploadUrl, {
       method: 'PUT',
       headers: { 'content-type': body.type || 'application/octet-stream' },
       body

@@ -48,12 +48,12 @@ on the minimum supported macOS version remains a signed-beta release gate.
 
 ## Release boundary
 
-The current target is a working local-first desktop MVP. Cloud account features
-are intentionally unavailable from the bundled origin until the dedicated
-desktop authentication transport described in
-[authentication-flow.md](authentication-flow.md) is implemented. Developer ID
-signing, Apple notarization, stapling, and signed automatic updates are also
-release gates, not hidden assumptions.
+The current target is a working local-first desktop MVP. The dedicated native
+authentication and HTTP API transport is implemented as described in
+[authentication-flow.md](authentication-flow.md), but it remains gated on beta
+D1 migration 0012 and an approved Worker rollout. Live collaboration WebSockets,
+Developer ID signing, Apple notarization, stapling, and signed automatic updates
+remain release gates, not hidden assumptions.
 
 The remaining audit and release evidence lives in this directory:
 

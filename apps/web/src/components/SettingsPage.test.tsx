@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { defaultAppSettings } from '../lib/appSettings';
 import {
@@ -7,10 +8,13 @@ import {
   kernelBuildDetail,
   kernelBuildLabel
 } from '../lib/kernelBuild';
-import type { HealthResponse } from '@openzcad/shared';
+import { toUserId, type HealthResponse } from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
 
-function renderSettings(health: HealthResponse | null = null) {
+function renderSettings(
+  health: HealthResponse | null = null,
+  overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
+) {
   return render(
     <SettingsPage
       settings={defaultAppSettings()}
@@ -28,10 +32,13 @@ function renderSettings(health: HealthResponse | null = null) {
       onRequestLoginCode={vi.fn()}
       onVerifyLoginCode={vi.fn()}
       onRefreshAuthConfig={vi.fn()}
+      onStartDesktopLogin={vi.fn()}
+      onApproveDesktopLogin={vi.fn()}
       onLogout={vi.fn()}
       onReset={vi.fn()}
       onApplyViewportDefaults={vi.fn()}
       onClose={vi.fn()}
+      {...overrides}
     />
   );
 }
@@ -83,5 +90,61 @@ describe('settings advanced section', () => {
       'settings-state',
       'warning'
     );
+  });
+});
+
+describe('settings desktop account section', () => {
+  it('offers the secure browser handoff when native auth is ready', async () => {
+    const user = userEvent.setup();
+    const onStartDesktopLogin = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {}
+    });
+
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          desktopAuthEnabled: true
+        },
+        authConfigStatus: 'ready',
+        onStartDesktopLogin
+      });
+
+      expect(screen.getByText('Sign in with your browser')).toBeInTheDocument();
+      expect(screen.getByText(/macOS stores only/)).toBeInTheDocument();
+      await user.click(
+        screen.getByRole('button', { name: 'Continue in browser' })
+      );
+      expect(onStartDesktopLogin).toHaveBeenCalledOnce();
+    } finally {
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+    }
+  });
+
+  it('requires an explicit approval before connecting the desktop app', async () => {
+    const user = userEvent.setup();
+    const onApproveDesktopLogin = vi.fn().mockResolvedValue(undefined);
+
+    renderSettings(null, {
+      initialSection: 'account',
+      session: {
+        userId: toUserId('user_desktop'),
+        displayName: 'person',
+        email: 'person@example.com',
+        mode: 'email-code'
+      },
+      desktopAuthorizationAttempt: 'attempt-1234567890',
+      onApproveDesktopLogin
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: 'Continue in OpenZCAD' })
+    );
+    expect(onApproveDesktopLogin).toHaveBeenCalledOnce();
   });
 });
