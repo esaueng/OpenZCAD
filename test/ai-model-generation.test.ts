@@ -384,6 +384,36 @@ describe('AI-generated sketch regions', () => {
       /not declared by an earlier add_sketch/
     );
   });
+
+  it('rejects an open AI sketch before commands reach the kernel', () => {
+    const proposal = parseCadPatchProposal({
+      proposalId: 'open-sketch-test',
+      summary: 'An unfinished three-sided profile',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'Open profile',
+          localId: '$open_sketch',
+          plane: 'XY',
+          offset: 0,
+          objects: [
+            { objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 0 },
+            { objectKind: 'line', x1: 20, y1: 0, x2: 20, y2: 10 },
+            { objectKind: 'line', x1: 20, y1: 10, x2: 0, y2: 10 }
+          ]
+        }
+      ]
+    });
+    const manager = new CommandManager(
+      createProjectDocument('AI open sketch', toUserId('user_ai'))
+    );
+
+    expect(() => commandsForCadPatch(manager.document, proposal)).toThrow(
+      /add_sketch requires closed, valid profile paths: Open endpoint/
+    );
+    expect(manager.document.featureOrder).toHaveLength(0);
+  });
 });
 
 /**
