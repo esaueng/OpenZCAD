@@ -22,8 +22,8 @@ const GHOST_OPACITY = 0.28;
 
 /** Neutral drawing-callout white, distinct from the accent-blue handles. */
 const DIMENSION_LINE_COLOR = 0xf4f7fb;
-const DIMENSION_ARROW_RADIUS = 0.09;
-const DIMENSION_ARROW_LENGTH = 0.32;
+const DIMENSION_ARROW_RADIUS = 0.055;
+const DIMENSION_ARROW_LENGTH = 0.22;
 
 const EDGE_HANDLE_RADIUS = 0.16;
 const EDGE_HIT_RADIUS = 0.65;
@@ -282,10 +282,10 @@ export function buildCylinderRadiusHandle(
   hit.position.y = 0.7;
   addHandleParts(group, [shaft, head, hit]);
 
-  // The measurement graphic spans the full diameter, like a drawing callout:
-  // a dashed line from the opposite wall through the axis to the handle, with
-  // an arrowhead at each end. It is visible for the whole gesture — the line
-  // is what says "this drag edits a radius", not just where the delta went.
+  // The measurement graphic is a radius callout: a dashed line from the axis
+  // out to the handle on the wall, with a small arrowhead at each end. It is
+  // visible for the whole gesture — the line is what says "this drag edits a
+  // radius", not just where the delta went.
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
   const axisCenter = origin.clone().addScaledVector(direction, -originalRadius);
@@ -352,7 +352,7 @@ export function buildCylinderRadiusHandle(
     const radialDelta = currentRadius - originalRadius;
     const tip = origin.clone().addScaledVector(direction, radialDelta);
     group.position.copy(tip);
-    const far = axisCenter.clone().addScaledVector(direction, -currentRadius);
+    const far = axisCenter;
     leaderGeometry.setPositions([far.x, far.y, far.z, tip.x, tip.y, tip.z]);
     leader.computeLineDistances();
     // Match the screen-space sizing of the handle, whose scale the viewer
