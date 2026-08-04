@@ -3,16 +3,12 @@
   "configurations": [
     {
       "name": "openzcad-web",
-      "runtimeExecutable": "pnpm",
+      "runtimeExecutable": "sh",
       "runtimeArgs": [
-        "--filter",
-        "@openzcad/web",
-        "exec",
-        "vite",
-        "--port",
-        "5199",
-        "--strictPort"
+        "-c",
+        "pnpm --filter @openzcad/web exec vite --port ${PORT:-5199} --strictPort"
       ],
+      "autoPort": true,
       "port": 5199
     }
   ]

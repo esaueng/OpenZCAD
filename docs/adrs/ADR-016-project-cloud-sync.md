@@ -24,10 +24,11 @@ how these compose for a single user with several browsers, and that decision
 has to be made once rather than per call site, because the failure mode is
 silent data loss.
 
-Two constraints shape everything below. The canonical document is a replayable
-command history whose exact rebuild is the product; and D1 stores each document
-as one JSON blob, currently capped at 1.5 MB, with each revision storing a whole
-additional copy.
+Two constraints shape everything below. The canonical browser document is a
+replayable command history whose exact rebuild is the product; and cloud
+persistence must not make relational row size or autosave frequency a data-loss
+risk. ADR-003 now projects cloud documents into immutable R2 objects while D1
+keeps compare-and-set metadata and revision pointers.
 
 ## Decision
 
@@ -112,10 +113,10 @@ device has never organised. It describes a desk, not a part.
   created offline can be adopted into the account later while keeping its
   `projectId`, so the device's local copy and shelf metadata stay linked.
 - Stored bytes scale with the number of projects and explicit checkpoints, not
-  with the edit rate. Revision retention still needs its own pruning policy,
-  and the 1.5 MB per-document ceiling still binds — a dense STEP import plus
-  history can approach it. Retention and quota must land before autosave is
-  enabled broadly, or the ceiling arrives as an unexplained sync failure.
+  with the edit rate. Retention is bounded and R2 project objects remove the
+  former 1.5 MB D1 row ceiling. Request parsing remains bounded, and live
+  collaboration retains its smaller Durable Object/frame limit until that
+  transport receives the same projection.
 - Conflicts become visible and recoverable rather than resolved by a clock, at
   the cost of interrupting a user who edited on two devices. That interruption
   is the intended behaviour.

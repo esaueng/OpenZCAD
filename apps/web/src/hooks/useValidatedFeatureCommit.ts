@@ -7,8 +7,18 @@ import { validatedFeatureRejection } from '../lib/featureValidation';
 export interface ValidatedFeatureCommitOptions {
   manager(): CommandManager | null;
   derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
-  commit(command: AnyCommand): boolean;
-  commitTransaction(label: string, commands: AnyCommand[]): boolean;
+  /**
+   * `derived` is the exact rebuild validation already produced for this
+   * candidate; committing it alongside the command lets the caller render
+   * the new geometry immediately instead of waiting for the broadcast
+   * rebuild (which briefly shows the stale meshes).
+   */
+  commit(command: AnyCommand, derived: ProjectDocument['derived']): boolean;
+  commitTransaction(
+    label: string,
+    commands: AnyCommand[],
+    derived: ProjectDocument['derived']
+  ): boolean;
   onBusy(busy: boolean): void;
   onStatus(message: string): void;
 }
@@ -46,7 +56,10 @@ export function useValidatedFeatureCommit(
     successMessage: string;
     onSuccess?(): void;
     preview(current: ProjectDocument): ProjectDocument;
-    commit(host: ValidatedFeatureCommitOptions): boolean;
+    commit(
+      host: ValidatedFeatureCommitOptions,
+      derived: ProjectDocument['derived']
+    ): boolean;
     commitFailure: string;
   }): Promise<boolean> {
     const host = optionsRef.current;
@@ -80,7 +93,7 @@ export function useValidatedFeatureCommit(
           throw new Error(rejection);
         }
       }
-      if (!input.commit(host)) {
+      if (!input.commit(host, derived)) {
         throw new Error(input.commitFailure);
       }
 
@@ -109,7 +122,7 @@ export function useValidatedFeatureCommit(
           command.validate(current);
           return command.apply(current);
         },
-        commit: (host) => host.commit(command),
+        commit: (host, derived) => host.commit(command, derived),
         commitFailure: 'The validated operation could not be committed.'
       });
     },
@@ -127,7 +140,8 @@ export function useValidatedFeatureCommit(
             runOptions.label,
             commands
           ),
-        commit: (host) => host.commitTransaction(runOptions.label, commands),
+        commit: (host, derived) =>
+          host.commitTransaction(runOptions.label, commands, derived),
         commitFailure: 'The validated patch could not be committed.'
       });
     }
