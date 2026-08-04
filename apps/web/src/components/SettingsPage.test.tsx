@@ -7,15 +7,17 @@ import {
   kernelBuildDetail,
   kernelBuildLabel
 } from '../lib/kernelBuild';
+import type { HealthResponse } from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
 
-function renderSettings() {
+function renderSettings(health: HealthResponse | null = null) {
   return render(
     <SettingsPage
       settings={defaultAppSettings()}
       accountState={null}
       authConfig={null}
       authConfigStatus="unavailable"
+      health={health}
       session={null}
       busy={false}
       message=""
@@ -62,5 +64,26 @@ describe('settings advanced section', () => {
       'page'
     );
     expect(screen.getByText('Kernel version')).toBeInTheDocument();
+  });
+
+  it('reports migration 0010 as not ready when the health check fails closed', async () => {
+    const user = userEvent.setup();
+    renderSettings({
+      status: 'ok',
+      environment: 'beta',
+      time: '2026-08-03T12:00:00.000Z',
+      documentStorageAccountingReady: false
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(screen.getByText('D1 storage migration')).toBeInTheDocument();
+    expect(
+      screen.getByText(/0010_document_storage_accounting/)
+    ).toBeInTheDocument();
+    expect(screen.getByText('Not ready')).toHaveClass(
+      'settings-state',
+      'warning'
+    );
   });
 });
