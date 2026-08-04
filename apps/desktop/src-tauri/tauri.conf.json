@@ -31,6 +31,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
     "category": "GraphicsAndDesign",
     "shortDescription": "Browser-kernel parametric CAD for macOS",
     "longDescription": "OpenZCAD is a local-first parametric CAD workspace with exact browser-worker geometry kernels.",
