@@ -18,6 +18,8 @@ import {
   type BooleanOperation,
   type DocumentNode,
   type DirectEditOperation,
+  type EdgeTopologyReferenceV5,
+  type FaceTopologyReferenceV5,
   type EntityId,
   type FeatureData,
   type FeatureId,
@@ -25,6 +27,7 @@ import {
   type ParameterId,
   type ParameterNode,
   type ParametricVector3,
+  type ParametricPlane,
   type ParamValue,
   type PatternKind,
   type PlaneId,
@@ -203,6 +206,8 @@ export interface RevolveInput {
   name: string;
   sketchId: SketchId;
   axis: RevolveAxis;
+  /** Sweep angle in degrees, `(0, 360]`. Omitted means a full turn. */
+  angleDeg?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -221,6 +226,29 @@ export interface TransformInput {
   ids?: FeatureOnlyIds;
 }
 
+export interface MirrorInput {
+  name: string;
+  targetBodyId: BodyId;
+  plane: ParametricPlane;
+  ids?: BodyFeatureIds;
+}
+
+export interface ShellInput {
+  name: string;
+  targetBodyId: BodyId;
+  openingFaceHashes: number[];
+  openingFaceReferences?: FaceTopologyReferenceV5[];
+  thickness: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+export interface SolidOffsetInput {
+  name: string;
+  targetBodyId: BodyId;
+  distance: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
 export interface DirectEditInput {
   name: string;
   targetBodyId: BodyId;
@@ -232,6 +260,7 @@ export interface EdgeModifierInput {
   name: string;
   targetBodyId: BodyId;
   edgeHashes: number[];
+  edgeReferences?: EdgeTopologyReferenceV5[];
   size: ParamValue;
   ids?: BodyFeatureIds;
 }
@@ -416,6 +445,11 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
       }
     } satisfies SketchNode;
   }
+  // Schema v4 -> v5 topology references, v5 -> v6 modeling feature kinds, and
+  // v6 -> v7 text sketch objects plus entity-wide profile references are all
+  // additive. Existing hashes and exact source geometry remain the fail-closed
+  // fallback until a feature writes a lineage reference; a v6 document has no
+  // text objects and no `all: true` reference, so nothing needs rewriting.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -432,6 +466,92 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
 
 export function cloneDocument(document: ProjectDocument): ProjectDocument {
   return deepClone(document);
+}
+
+/**
+ * An independent copy of `source` under a new project id. The feature tree,
+ * parameters, and command log all come across intact — a duplicate is meant to
+ * be a branching-off point for a variant, so it has to stay as editable and
+ * replayable as the original. Node ids are document-scoped and are therefore
+ * kept, which also keeps every intra-document reference valid.
+ */
+export function duplicateProjectDocument(
+  source: ProjectDocument,
+  name: string,
+  ownerUserId: UserId
+): ProjectDocument {
+  const copy = cloneDocument(normalizeDocument(source));
+  const projectId = toProjectId(createId('proj'));
+  const rootNode = copy.nodes[copy.rootNodeId];
+  if (rootNode?.kind === 'project') {
+    copy.nodes[copy.rootNodeId] = { ...rootNode, projectId, name };
+  }
+  return createCheckpoint(
+    {
+      ...copy,
+      projectId,
+      ownerUserId,
+      name,
+      derived: { ...copy.derived, updatedAt: nowIso() }
+    },
+    `Duplicated from ${source.name}`
+  );
+}
+
+/**
+ * `source` prepared to become an account record under `ownerUserId`, keeping
+ * its project id.
+ *
+ * This is deliberately not `duplicateProjectDocument`: a duplicate is a new
+ * project that happens to start from an old one, whereas adoption is the same
+ * project gaining an account home. Keeping the id is the whole point — the
+ * device already has this document in IndexedDB and shelf metadata filed under
+ * it, and minting a new id would strand both and leave the user looking at what
+ * appears to be a second copy of their part.
+ */
+export function adoptProjectDocument(
+  source: ProjectDocument,
+  ownerUserId: UserId,
+  name = source.name
+): ProjectDocument {
+  const copy = cloneDocument(normalizeDocument(source));
+  const rootNode = copy.nodes[copy.rootNodeId];
+  if (rootNode?.kind === 'project') {
+    copy.nodes[copy.rootNodeId] = { ...rootNode, name };
+  }
+  const adopted: ProjectDocument = {
+    ...copy,
+    ownerUserId,
+    name,
+    derived: { ...copy.derived, updatedAt: nowIso() }
+  };
+  // A document with no revision at all cannot carry a checkpoint. That should
+  // not happen, but adoption is a rescue path for documents this code has never
+  // seen, so it declines to be the thing that refuses them.
+  return adopted.revisions.length === 0
+    ? adopted
+    : createCheckpoint(adopted, 'Saved to account');
+}
+
+/**
+ * `document` without its derived projection. Meshes and exportable-body lists
+ * are rebuilt from canonical history on load, so storing or transmitting them
+ * costs bytes that buy nothing — and for a dense import they are most of the
+ * document. `updatedAt` and `warnings` stay: they are conclusions about the
+ * document rather than geometry, and the shelf reads `updatedAt`.
+ */
+export function withoutDerivedProjection(
+  document: ProjectDocument
+): ProjectDocument {
+  return {
+    ...document,
+    derived: {
+      bodyRepresentations: {},
+      exportableBodyIds: [],
+      warnings: document.derived.warnings,
+      updatedAt: document.derived.updatedAt
+    }
+  };
 }
 
 export function getNode<TNode extends DocumentNode>(
@@ -648,6 +768,109 @@ export function updateSketch(
   return next;
 }
 
+export interface SketchTranslateInput {
+  sketchId: SketchId;
+  /** In-plane translation along the sketch plane's U axis. */
+  du: number;
+  /** In-plane translation along the sketch plane's V axis. */
+  dv: number;
+  /**
+   * Translation along the plane normal. Only a canonical-plane sketch can
+   * carry it (as a plane offset change); a frame- or face-attached sketch is
+   * bound to its surface, so a non-zero `dn` on one is an error rather than
+   * a silently dropped component.
+   */
+  dn?: number;
+}
+
+/**
+ * Translates every object of a sketch in plane coordinates, as one edit.
+ *
+ * This is the document half of dragging a sketch with the move gizmo. Object
+ * coordinates may be parameter expressions; a translated axis bakes the
+ * resolved number (the same contract as every other direct manipulation),
+ * while a zero-delta axis leaves the stored value — expression or number —
+ * untouched, so dragging along X does not destroy a `w / 2` on Y.
+ *
+ * Downstream extrudes survive because profile resolution falls back to
+ * source-entity matching when fingerprints move, and text extrudes reference
+ * their entity directly.
+ */
+export function translateSketch(
+  document: ProjectDocument,
+  input: SketchTranslateInput
+): ProjectDocument {
+  const { du, dv } = input;
+  const dn = input.dn ?? 0;
+  if (![du, dv, dn].every(Number.isFinite)) {
+    throw new Error('Sketch translation must be finite.');
+  }
+  const next = cloneDocument(document);
+  const sketch = findSketch(next, input.sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${input.sketchId} not found.`);
+  }
+  if (dn !== 0) {
+    if (sketch.planeRef.type !== 'canonical') {
+      throw new Error(
+        'A face-attached sketch cannot move along its normal; it is bound to its surface.'
+      );
+    }
+    const { scope } = getParameterScope(next);
+    sketch.planeRef = {
+      ...sketch.planeRef,
+      offset:
+        resolveParamValue(sketch.planeRef.offset, scope, 'sketch offset') + dn
+    };
+  }
+  if (du !== 0 || dv !== 0) {
+    const { scope } = getParameterScope(next);
+    const shift = (
+      value: ParamValue,
+      delta: number,
+      label: string
+    ): ParamValue =>
+      delta === 0 ? value : resolveParamValue(value, scope, label) + delta;
+    for (const objectId of sketch.objectIds) {
+      const node = next.nodes[objectId];
+      if (node?.kind !== 'sketch-object') {
+        continue;
+      }
+      const data = node.data;
+      switch (data.objectKind) {
+        case 'line':
+          node.data = {
+            ...data,
+            x1: shift(data.x1, du, 'line x1'),
+            y1: shift(data.y1, dv, 'line y1'),
+            x2: shift(data.x2, du, 'line x2'),
+            y2: shift(data.y2, dv, 'line y2')
+          };
+          break;
+        case 'rectangle':
+        case 'circle':
+        case 'polygon':
+        case 'arc':
+          node.data = {
+            ...data,
+            centerX: shift(data.centerX, du, 'center X'),
+            centerY: shift(data.centerY, dv, 'center Y')
+          };
+          break;
+        case 'text':
+          node.data = {
+            ...data,
+            x: shift(data.x, du, 'text X'),
+            y: shift(data.y, dv, 'text Y')
+          };
+          break;
+      }
+    }
+  }
+  next.version += 1;
+  return next;
+}
+
 export function addSketchObjects(
   document: ProjectDocument,
   input: SketchObjectAddInput
@@ -793,7 +1016,11 @@ export function revolveSketch(
     data: {
       featureKind: 'revolve',
       sketchId: input.sketchId,
-      axis: input.axis
+      axis: input.axis,
+      // Written only when asked for. An absent field is a full turn, so a
+      // full revolve stays byte-identical to one authored before partial
+      // revolve existed — including its ADR-013 semantic lineage.
+      ...(input.angleDeg === undefined ? {} : { angleDeg: input.angleDeg })
     }
   };
 
@@ -933,8 +1160,15 @@ export function directEditBody(
 function addBodyResultFeature(
   document: ProjectDocument,
   name: string,
-  featureKind: 'fillet' | 'chamfer' | 'pattern',
-  data: Extract<FeatureData, { featureKind: 'fillet' | 'chamfer' | 'pattern' }>,
+  featureKind:
+    'fillet' | 'chamfer' | 'pattern' | 'mirror' | 'shell' | 'solid-offset',
+  data: Extract<
+    FeatureData,
+    {
+      featureKind:
+        'fillet' | 'chamfer' | 'pattern' | 'mirror' | 'shell' | 'solid-offset';
+    }
+  >,
   ids?: BodyFeatureIds
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
@@ -971,6 +1205,62 @@ function addBodyResultFeature(
   return { document: next, bodyId };
 }
 
+/** Adds an independent mirrored copy; the source body is not consumed. */
+export function mirrorBody(
+  document: ProjectDocument,
+  input: MirrorInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'mirror',
+    {
+      featureKind: 'mirror',
+      targetBodyId: input.targetBodyId,
+      plane: deepClone(input.plane)
+    },
+    input.ids
+  );
+}
+
+export function shellBody(
+  document: ProjectDocument,
+  input: ShellInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'shell',
+    {
+      featureKind: 'shell',
+      targetBodyId: input.targetBodyId,
+      openingFaceHashes: [...new Set(input.openingFaceHashes)],
+      ...(input.openingFaceReferences
+        ? { openingFaceReferences: deepClone(input.openingFaceReferences) }
+        : {}),
+      thickness: input.thickness
+    },
+    input.ids
+  );
+}
+
+export function offsetSolidBody(
+  document: ProjectDocument,
+  input: SolidOffsetInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'solid-offset',
+    {
+      featureKind: 'solid-offset',
+      targetBodyId: input.targetBodyId,
+      distance: input.distance
+    },
+    input.ids
+  );
+}
+
 export function filletEdges(
   document: ProjectDocument,
   input: EdgeModifierInput
@@ -983,6 +1273,9 @@ export function filletEdges(
       featureKind: 'fillet',
       targetBodyId: input.targetBodyId,
       edgeHashes: [...new Set(input.edgeHashes)],
+      ...(input.edgeReferences
+        ? { edgeReferences: deepClone(input.edgeReferences) }
+        : {}),
       radius: input.size
     },
     input.ids
@@ -1001,6 +1294,9 @@ export function chamferEdges(
       featureKind: 'chamfer',
       targetBodyId: input.targetBodyId,
       edgeHashes: [...new Set(input.edgeHashes)],
+      ...(input.edgeReferences
+        ? { edgeReferences: deepClone(input.edgeReferences) }
+        : {}),
       distance: input.size
     },
     input.ids

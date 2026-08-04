@@ -28,11 +28,13 @@ import {
   PrimitiveForm,
   RevolveForm,
   SketchForm,
+  TextSketchForm,
   TransformForm,
   type BodyOption,
   type EdgeModifierFormValue,
   type PatternFormValue,
   type SketchFormValue,
+  type TextSketchFormValue,
   type SketchOption,
   type TransformFormValue
 } from './forms/FeatureForms';
@@ -64,6 +66,7 @@ export interface InspectorCallbacks {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
+    angleDeg: ParamValue;
   }): void;
   onCreateBoolean(value: {
     name: string;
@@ -84,13 +87,22 @@ export interface InspectorCallbacks {
     dimensions: Record<string, ParamValue>
   ): void;
   onApplySketch(feature: FeatureNode, value: SketchFormValue): void;
+  onConvertSketchToFixedPlane(sketch: SketchNode): void;
+  onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
+  /** Re-enters viewport sketch mode for the feature's sketch. */
+  onEditSketchInViewport(feature: FeatureNode): void;
   onApplyExtrude(
     feature: FeatureNode,
     value: { name: string; sketchId: SketchId; distance: ParamValue }
   ): void;
   onApplyRevolve(
     feature: FeatureNode,
-    value: { name: string; sketchId: SketchId; axis: RevolveAxis }
+    value: {
+      name: string;
+      sketchId: SketchId;
+      axis: RevolveAxis;
+      angleDeg: ParamValue;
+    }
   ): void;
   onApplyBoolean(
     feature: FeatureNode,
@@ -142,6 +154,54 @@ interface InspectorProps extends InspectorCallbacks {
   cylinderRadiusSetterRef: MutableRefObject<
     ((radius: number | null) => void) | null
   >;
+}
+
+function SketchAttachmentSummary({
+  sketch,
+  onConvert
+}: {
+  sketch: SketchNode;
+  onConvert(sketch: SketchNode): void;
+}) {
+  if (sketch.planeRef.type === 'canonical') {
+    return null;
+  }
+  const legacyFaceAttachment =
+    sketch.planeRef.type === 'face' && !sketch.planeRef.faceReference;
+  const attachmentLabel =
+    sketch.planeRef.type === 'frame'
+      ? 'Fixed plane'
+      : legacyFaceAttachment
+        ? 'Legacy stored face frame'
+        : 'Associative face';
+  return (
+    <div className="sketch-attachment">
+      <div className="kv-grid">
+        <b>attachment</b>
+        <span>{attachmentLabel}</span>
+      </div>
+      <p className="muted">
+        Geometry for this sketch is edited in viewport sketch mode.
+      </p>
+      {legacyFaceAttachment ? (
+        <>
+          <p className="muted error">
+            This legacy sketch uses its stored migration frame and does not
+            follow later changes to the source face.
+          </p>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onConvert(sketch)}
+            >
+              Convert to fixed plane
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function BodyStats({
@@ -507,7 +567,39 @@ export function Inspector(props: InspectorProps) {
     } else if (
       data.featureKind === 'sketch' &&
       selectedSketch &&
-      selectedSketchObject
+      selectedSketchObject &&
+      selectedSketchObject.objectKind === 'text'
+    ) {
+      // Text sketches get their own form: the closed-shape form below would
+      // present them as a rectangle, and applying it would replace the text.
+      form = (
+        <>
+          <TextSketchForm
+            key={editKey}
+            scope={scope}
+            initial={{
+              name: selectedFeature.name,
+              object: selectedSketchObject
+            }}
+            onSubmit={(value) =>
+              props.onApplyTextSketch(selectedFeature, value)
+            }
+            onCancel={props.onCancel}
+            onEditInViewport={() =>
+              props.onEditSketchInViewport(selectedFeature)
+            }
+          />
+          <SketchAttachmentSummary
+            sketch={selectedSketch}
+            onConvert={props.onConvertSketchToFixedPlane}
+          />
+        </>
+      );
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketchObject &&
+      selectedSketch.planeRef.type === 'canonical'
     ) {
       form = (
         <SketchForm
@@ -515,21 +607,24 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initial={{
             name: selectedFeature.name,
-            // The legacy form only understands canonical planes; frame/face
-            // sketches are edited in the viewport sketch mode instead.
-            plane:
-              selectedSketch.planeRef.type === 'canonical'
-                ? selectedSketch.planeRef.plane
-                : 'XY',
-            offset:
-              selectedSketch.planeRef.type === 'canonical'
-                ? selectedSketch.planeRef.offset
-                : 0,
+            plane: selectedSketch.planeRef.plane,
+            offset: selectedSketch.planeRef.offset,
             object: selectedSketchObject
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplySketch(selectedFeature, value)}
           onCancel={props.onCancel}
+        />
+      );
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketch.planeRef.type !== 'canonical'
+    ) {
+      form = (
+        <SketchAttachmentSummary
+          sketch={selectedSketch}
+          onConvert={props.onConvertSketchToFixedPlane}
         />
       );
     } else if (data.featureKind === 'extrude') {
@@ -557,7 +652,8 @@ export function Inspector(props: InspectorProps) {
           initial={{
             name: selectedFeature.name,
             sketchId: data.sketchId,
-            axis: data.axis
+            axis: data.axis,
+            angleDeg: data.angleDeg
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyRevolve(selectedFeature, value)}

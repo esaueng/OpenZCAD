@@ -1,17 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useEffect, useRef, useState } from 'react';
 import type { ContextMenuItem } from './ContextMenu';
 import {
   clampMenuOrigin,
-  MARKING_DEAD_ZONE_PX,
   sectorForVector,
   sectorPosition,
-  splitRadial
+  slotPositionClearOfHub
 } from '../lib/markingMenu';
 
-/** How far from the centre the sector labels sit. */
-const RING_RADIUS = 78;
-/** Ring plus enough room for a label to sit at the end of it. */
-const RING_REACH = RING_RADIUS + 90;
+/** How far from the centre the slots sit. */
+const RING_RADIUS = 96;
+/** Half a slot plus breathing room; added to every clearance the ring keeps. */
+const SLOT_CLEARANCE = 27;
 
 interface MarkingMenuProps {
   x: number;
@@ -28,12 +27,16 @@ interface MarkingMenuProps {
  * button already means panning the view and that binding is worth more than
  * opening a frame earlier. So the flick is a second press: press anywhere and
  * drag outward, and the direction alone commits on release — the pointer
- * never has to reach the label. Clicking a label works too, and both paths
- * read the same ring, so the fast way is the slow way done confidently
- * rather than something separate to learn.
+ * never has to reach the slot. Clicking a slot works too, and both paths read
+ * the same ring, so the fast way is the slow way done confidently rather than
+ * something separate to learn.
  *
- * Actions past the ring appear as a list below it. They are the ones a hand
- * would never learn by direction anyway, so nothing is lost by naming them.
+ * The slots carry icons alone. Names would put eight labelled boxes over the
+ * model at the moment the model is what you are pointing at, so instead the
+ * hub names one thing: whatever a release would run. It sits dead centre,
+ * where the eye already is at the start of a flick, and it carries the
+ * action's shortcut with it so the ring teaches the faster path rather than
+ * only being it.
  */
 export function MarkingMenu({
   x,
@@ -43,8 +46,35 @@ export function MarkingMenu({
   onClose
 }: MarkingMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
   const [aimed, setAimed] = useState<number | null>(null);
-  const { radial, overflow } = splitRadial(items);
+  const [hovered, setHovered] = useState<number | null>(null);
+  // Half the widest pill this menu can show, plus half its height. The ring
+  // is laid out against the widest label rather than the hovered one, so the
+  // slots never move while the hand is mid-gesture.
+  const [pillHalf, setPillHalf] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const host = measureRef.current;
+    if (!host) {
+      return;
+    }
+    let width = 0;
+    let height = 0;
+    for (const child of host.children) {
+      const rect = child.getBoundingClientRect();
+      width = Math.max(width, rect.width);
+      height = Math.max(height, rect.height);
+    }
+    setPillHalf({ width: width / 2, height: height / 2 });
+  }, [items]);
+
+  // Slots never share the pill's horizontal band (they settle above or
+  // below it), but the pill itself still widens with its longest label, so
+  // the screen-edge clamp and the dismiss radius follow whichever is wider.
+  const clearWidth = pillHalf.width + SLOT_CLEARANCE;
+  const clearHeight = pillHalf.height + SLOT_CLEARANCE;
+  const reach = Math.max(RING_RADIUS, clearWidth) + 48;
   // Aiming is measured from where the menu actually is, so the clamped
   // centre has to be what both the layout and the flick use.
   const origin = clampMenuOrigin(
@@ -52,14 +82,18 @@ export function MarkingMenu({
     y,
     window.innerWidth,
     window.innerHeight,
-    RING_REACH
+    reach
   );
+  // A flick outranks the pointer resting somewhere: while one is in progress
+  // it is what a release would take.
+  const reading = aimed ?? hovered;
+  const readItem = reading === null ? null : items[reading];
 
   useEffect(() => {
     /**
      * A press with the menu already open is a flick: track where it points,
      * and commit on release. Releases with no travel fall in the dead zone
-     * and pick nothing, which is what leaves plain clicking a label intact.
+     * and pick nothing, which is what leaves plain clicking a slot intact.
      */
     function onPointerMove(event: PointerEvent) {
       if (event.buttons === 0) {
@@ -69,7 +103,7 @@ export function MarkingMenu({
         sectorForVector(
           event.clientX - origin.x,
           event.clientY - origin.y,
-          radial.length
+          items.length
         )
       );
     }
@@ -77,9 +111,9 @@ export function MarkingMenu({
       const sector = sectorForVector(
         event.clientX - origin.x,
         event.clientY - origin.y,
-        radial.length
+        items.length
       );
-      const item = sector === null ? null : radial[sector];
+      const item = sector === null ? null : items[sector];
       if (item && !item.disabled) {
         onSelect(item.id);
         onClose();
@@ -91,14 +125,14 @@ export function MarkingMenu({
         return;
       }
       // A press inside the ring is a flick starting, not a press elsewhere.
-      // The menu draws nothing between the labels, so that press lands on the
+      // The menu draws nothing between the slots, so that press lands on the
       // model behind it and would otherwise dismiss the menu before the
       // gesture it was beginning could finish.
-      const reach = Math.hypot(
+      const travel = Math.hypot(
         event.clientX - origin.x,
         event.clientY - origin.y
       );
-      if (reach > RING_REACH) {
+      if (travel > reach) {
         onClose();
       }
     }
@@ -118,7 +152,7 @@ export function MarkingMenu({
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [origin.x, origin.y, radial, onSelect, onClose]);
+  }, [origin.x, origin.y, items, onSelect, onClose, reach]);
 
   return (
     <div
@@ -129,55 +163,88 @@ export function MarkingMenu({
       style={{ left: origin.x, top: origin.y }}
     >
       <span
-        className="marking-menu-hub"
-        style={{ width: MARKING_DEAD_ZONE_PX * 2, height: MARKING_DEAD_ZONE_PX * 2 }}
+        className={`marking-menu-hub${readItem ? ' armed' : ''}${
+          readItem?.danger ? ' danger' : ''
+        }`}
         aria-hidden="true"
-      />
-      {radial.map((item, index) => {
-        const at = sectorPosition(index, radial.length, RING_RADIUS);
+      >
+        {readItem ? (
+          <>
+            {/* The aimed slot's own icon rides along, so the readout
+                confirms which button the flick is on without the eye
+                leaving the centre. */}
+            <span className="marking-menu-hub-icon">
+              {readItem.icon ?? readItem.label.slice(0, 1)}
+            </span>
+            {/* The ellipsis promises a dialog, which the hub has no room to
+                keep saying — the slot's own name still carries it. */}
+            <span className="marking-menu-read">
+              {readItem.label.replace(/…$/, '')}
+            </span>
+            <small>
+              {readItem.disabled
+                ? 'unavailable'
+                : (readItem.shortcut ?? 'release')}
+            </small>
+          </>
+        ) : (
+          <span className="marking-menu-rest">Aim</span>
+        )}
+      </span>
+      {/* One hidden pill per item, rendered with the hub's own classes so
+          the measurement is the truth rather than an estimate. */}
+      <div ref={measureRef} className="marking-menu-measure" aria-hidden="true">
+        {items.map((item) => (
+          <span key={item.id} className="marking-menu-hub">
+            <span className="marking-menu-hub-icon">
+              {item.icon ?? item.label.slice(0, 1)}
+            </span>
+            <span className="marking-menu-read">
+              {item.label.replace(/…$/, '')}
+            </span>
+            <small>
+              {item.disabled ? 'unavailable' : (item.shortcut ?? 'release')}
+            </small>
+          </span>
+        ))}
+      </div>
+      {items.map((item, index) => {
+        const at = slotPositionClearOfHub(
+          sectorPosition(index, items.length, RING_RADIUS),
+          clearHeight
+        );
         return (
           <button
             key={item.id}
             type="button"
             role="menuitem"
-            className={`marking-menu-sector${aimed === index ? ' aimed' : ''}${
+            // Icons alone leave nothing for a screen reader — or for a test —
+            // to go on, so the name the hub shows is the name the slot has.
+            aria-label={item.label}
+            className={`marking-menu-slot${aimed === index ? ' aimed' : ''}${
               item.danger ? ' danger' : ''
             }`}
             disabled={item.disabled}
             style={{ left: at.x, top: at.y }}
+            onPointerEnter={() => setHovered(index)}
+            onPointerLeave={() =>
+              setHovered((current) => (current === index ? null : current))
+            }
+            onFocus={() => setHovered(index)}
+            onBlur={() =>
+              setHovered((current) => (current === index ? null : current))
+            }
             onClick={() => {
               onSelect(item.id);
               onClose();
             }}
           >
-            {item.icon && <span className="marking-menu-icon">{item.icon}</span>}
-            <span className="marking-menu-label">{item.label}</span>
+            <span className="marking-menu-icon" aria-hidden="true">
+              {item.icon ?? item.label.slice(0, 1)}
+            </span>
           </button>
         );
       })}
-      {overflow.length > 0 && (
-        <div className="marking-menu-overflow">
-          {overflow.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="menuitem"
-              className={`marking-menu-more${item.danger ? ' danger' : ''}`}
-              disabled={item.disabled}
-              onClick={() => {
-                onSelect(item.id);
-                onClose();
-              }}
-            >
-              {item.icon && (
-                <span className="marking-menu-icon">{item.icon}</span>
-              )}
-              <span className="marking-menu-label">{item.label}</span>
-              {item.shortcut && <kbd>{item.shortcut}</kbd>}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

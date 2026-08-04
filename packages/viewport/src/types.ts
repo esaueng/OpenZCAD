@@ -11,6 +11,18 @@ export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 export type StandardView =
   'iso' | 'front' | 'back' | 'top' | 'bottom' | 'right' | 'left';
 
+/** A cube-corner diagonal: which side of each world axis the camera sits on. */
+export type CubeCorner = readonly [1 | -1, 1 | -1, 1 | -1];
+
+/**
+ * What a view request can aim the camera at: a named standard view, or one of
+ * the view cube's bevelled corner facets — the eight diagonal isometric
+ * directions, which are legion enough that naming each would bloat
+ * `StandardView` without any of them being a view the rest of the interface
+ * needs to refer to.
+ */
+export type ViewTarget = StandardView | { corner: CubeCorner };
+
 export type ProjectionMode = 'perspective' | 'orthographic';
 
 /**
@@ -39,11 +51,15 @@ export const SELECTION_FILTER_LABELS: Record<SelectionFilter, string> = {
   sketch: 'Sketch'
 };
 
-/** Screen-space projections of the world axes, for the orientation widget. */
+/**
+ * Screen-space projections of the world axes, for the orientation widget.
+ * `x`/`y` are screen direction (y already flipped for SVG); `z` is view-space
+ * depth toward the camera, which the view cube needs to cull its back faces.
+ */
 export interface AxisProjection {
-  x: { x: number; y: number };
-  y: { x: number; y: number };
-  z: { x: number; y: number };
+  x: { x: number; y: number; z: number };
+  y: { x: number; y: number; z: number };
+  z: { x: number; y: number; z: number };
 }
 
 export interface ViewerSettings {

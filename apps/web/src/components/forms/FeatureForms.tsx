@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
-import type {
-  AxisId,
-  BodyId,
-  BooleanOperation,
-  ParamValue,
-  PatternKind,
-  PlaneId,
-  PrimitiveKind,
-  RevolveAxis,
-  SketchId,
-  SketchObjectData,
-  SketchObjectKind
+import {
+  FULL_REVOLVE_ANGLE_DEG,
+  type AxisId,
+  type BodyId,
+  type BooleanOperation,
+  type ParamValue,
+  type PatternKind,
+  type PlaneId,
+  type PrimitiveKind,
+  type RevolveAxis,
+  type SketchId,
+  type SketchObjectData,
+  type SketchObjectKind
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
+import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
   REVOLVE_AXIS_LABELS,
@@ -67,7 +69,10 @@ function FormShell({
           onCancel();
         }
         // Enter submits from any field, including selects.
-        if (event.key === 'Enter' && !(event.target instanceof HTMLButtonElement)) {
+        if (
+          event.key === 'Enter' &&
+          !(event.target instanceof HTMLButtonElement)
+        ) {
           event.preventDefault();
           if (canSubmit) {
             onSubmit();
@@ -81,7 +86,12 @@ function FormShell({
       </label>
       {children}
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={!canSubmit} title="Enter">
+        <button
+          type="submit"
+          className="primary"
+          disabled={!canSubmit}
+          title="Enter"
+        >
           {submitLabel}
           <kbd className="kbd-inline">↵</kbd>
         </button>
@@ -167,7 +177,11 @@ export function PrimitiveForm({
     name.trim().length > 0 && fieldsValid(scope, Object.values(values));
 
   useEffect(() => {
-    if (kind !== 'cylinder' || liveRadius === undefined || liveRadius === null) {
+    if (
+      kind !== 'cylinder' ||
+      liveRadius === undefined ||
+      liveRadius === null
+    ) {
       return;
     }
     const text = String(Math.round(liveRadius * 1000) / 1000);
@@ -230,17 +244,148 @@ interface SketchFormProps {
   onCancel?: () => void;
 }
 
-/** The form only offers closed one-object profiles; open curves (line/arc) are drawn in the viewport sketch mode. */
+/**
+ * The form only offers closed one-object profiles. Open curves (line/arc) are
+ * drawn in the viewport sketch mode, and text is placed with the text tool.
+ */
 type ClosedShapeKind = Extract<
   SketchObjectKind,
   'rectangle' | 'circle' | 'polygon'
 >;
+
+const CLOSED_SHAPE_KINDS: readonly ClosedShapeKind[] = [
+  'rectangle',
+  'circle',
+  'polygon'
+];
+
+function isClosedShape(
+  data: SketchObjectData
+): data is Extract<SketchObjectData, { objectKind: ClosedShapeKind }> {
+  return CLOSED_SHAPE_KINDS.includes(data.objectKind as ClosedShapeKind);
+}
 
 const SHAPE_LABELS: Record<ClosedShapeKind, string> = {
   rectangle: 'Rectangle',
   circle: 'Circle',
   polygon: 'Polygon'
 };
+
+export interface TextSketchFormValue {
+  name: string;
+  data: Extract<SketchObjectData, { objectKind: 'text' }>;
+}
+
+interface TextSketchFormProps {
+  scope: Record<string, number>;
+  initial: {
+    name: string;
+    object: Extract<SketchObjectData, { objectKind: 'text' }>;
+  };
+  onSubmit(value: TextSketchFormValue): void;
+  onCancel?: () => void;
+  /** Opens the sketch in the viewport for spatial edits. */
+  onEditInViewport?: () => void;
+}
+
+/**
+ * The edit form for a sketch whose object is text.
+ *
+ * `SketchForm` below only understands closed one-object profiles, and its
+ * fallback for anything else was a rectangle — so selecting a finished text
+ * sketch in the history presented it as "Rectangle 32×18", and Apply would
+ * have replaced the text with that rectangle and re-planed a face-attached
+ * sketch onto a canonical plane. This form owns the text case instead: the
+ * same fields as the in-sketch entity editor, applied through
+ * `updateSketchObject`, which never touches the sketch's plane.
+ */
+export function TextSketchForm({
+  scope,
+  initial,
+  onSubmit,
+  onCancel,
+  onEditInViewport
+}: TextSketchFormProps) {
+  const [name, setName] = useState(initial.name);
+  const [text, setText] = useState<TextAttributes>({
+    text: initial.object.text,
+    fontFamily: initial.object.fontFamily,
+    fontStyle: initial.object.fontStyle
+  });
+  const [values, setValues] = useState<Record<string, string>>(() => ({
+    size: paramValueText(initial.object.size),
+    rotation: paramValueText(initial.object.rotation ?? 0),
+    x: paramValueText(initial.object.x),
+    y: paramValueText(initial.object.y)
+  }));
+  const canSubmit =
+    name.trim().length > 0 &&
+    text.text.length > 0 &&
+    fieldsValid(scope, Object.values(values));
+
+  const setValue = (key: string) => (value: string) =>
+    setValues((current) => ({ ...current, [key]: value }));
+
+  return (
+    <FormShell
+      name={name}
+      onName={setName}
+      submitLabel="Apply"
+      canSubmit={canSubmit}
+      onSubmit={() =>
+        onSubmit({
+          name,
+          data: {
+            // Spread first so fields this form does not own — alignment,
+            // construction — survive the edit.
+            ...initial.object,
+            ...text,
+            size: coerceParamValue(values.size ?? ''),
+            rotation: coerceParamValue(values.rotation ?? '0'),
+            x: coerceParamValue(values.x ?? '0'),
+            y: coerceParamValue(values.y ?? '0')
+          }
+        })
+      }
+      {...(onCancel ? { onCancel } : {})}
+    >
+      <TextObjectFields value={text} onChange={setText} />
+      <div className="field-pair">
+        <ExprInput
+          label="Size"
+          value={values.size ?? ''}
+          scope={scope}
+          onChange={setValue('size')}
+        />
+        <ExprInput
+          label="Rotation"
+          value={values.rotation ?? ''}
+          scope={scope}
+          onChange={setValue('rotation')}
+        />
+      </div>
+      <div className="field-pair">
+        <ExprInput
+          label="X"
+          value={values.x ?? ''}
+          scope={scope}
+          onChange={setValue('x')}
+        />
+        <ExprInput
+          label="Y"
+          value={values.y ?? ''}
+          scope={scope}
+          onChange={setValue('y')}
+        />
+      </div>
+      {onEditInViewport && (
+        <button type="button" className="secondary" onClick={onEditInViewport}>
+          Edit sketch in viewport
+        </button>
+      )}
+    </FormShell>
+  );
+}
 
 export function SketchForm({
   scope,
@@ -253,11 +398,7 @@ export function SketchForm({
   const [plane, setPlane] = useState<PlaneId>(initial?.plane ?? 'XZ');
   const [offset, setOffset] = useState(paramValueText(initial?.offset ?? 0));
   const initialObject =
-    initial &&
-    initial.object.objectKind !== 'line' &&
-    initial.object.objectKind !== 'arc'
-      ? initial.object
-      : undefined;
+    initial && isClosedShape(initial.object) ? initial.object : undefined;
   const [shape, setShape] = useState<ClosedShapeKind>(
     initialObject?.objectKind ?? 'rectangle'
   );
@@ -441,7 +582,12 @@ interface SketchPickerProps {
   autoFocus?: boolean;
 }
 
-function SketchPicker({ sketches, value, onChange, autoFocus }: SketchPickerProps) {
+function SketchPicker({
+  sketches,
+  value,
+  onChange,
+  autoFocus
+}: SketchPickerProps) {
   return (
     <label className="field">
       <span>Sketch</span>
@@ -532,7 +678,12 @@ export function ExtrudeForm({
 interface RevolveFormProps {
   scope: Record<string, number>;
   sketches: SketchOption[];
-  initial?: { name: string; sketchId: SketchId; axis: RevolveAxis };
+  initial?: {
+    name: string;
+    sketchId: SketchId;
+    axis: RevolveAxis;
+    angleDeg?: ParamValue;
+  };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
   initialSketchId?: SketchId;
   submitLabel: string;
@@ -540,6 +691,7 @@ interface RevolveFormProps {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
+    angleDeg: ParamValue;
   }): void;
   onCancel?: () => void;
 }
@@ -553,13 +705,31 @@ export function RevolveForm({
   onSubmit,
   onCancel
 }: RevolveFormProps) {
-  void scope;
   const [name, setName] = useState(initial?.name ?? 'Revolve');
   const [sketchId, setSketchId] = useState<SketchId | ''>(
     initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
   );
   const [axis, setAxis] = useState<RevolveAxis>(initial?.axis ?? 'vertical');
-  const canSubmit = name.trim().length > 0 && sketchId !== '';
+  const [angleDeg, setAngleDeg] = useState(
+    paramValueText(initial?.angleDeg ?? FULL_REVOLVE_ANGLE_DEG)
+  );
+  const anglePreview = previewExpression(angleDeg, scope);
+  const angleInRange =
+    anglePreview.ok &&
+    anglePreview.value !== undefined &&
+    anglePreview.value > 0 &&
+    anglePreview.value <= FULL_REVOLVE_ANGLE_DEG;
+  const canSubmit =
+    name.trim().length > 0 &&
+    sketchId !== '' &&
+    fieldsValid(scope, [angleDeg]) &&
+    angleInRange;
+  // Kept in sync with the kernel's own gate: a partial revolve is a
+  // hash-only body and none of its edges can be filleted or chamfered.
+  const isPartial =
+    anglePreview.ok &&
+    anglePreview.value !== undefined &&
+    anglePreview.value < FULL_REVOLVE_ANGLE_DEG;
 
   return (
     <FormShell
@@ -568,7 +738,12 @@ export function RevolveForm({
       submitLabel={submitLabel}
       canSubmit={canSubmit}
       onSubmit={() =>
-        onSubmit({ name: name.trim(), sketchId: sketchId as SketchId, axis })
+        onSubmit({
+          name: name.trim(),
+          sketchId: sketchId as SketchId,
+          axis,
+          angleDeg: coerceParamValue(angleDeg)
+        })
       }
       onCancel={onCancel}
     >
@@ -591,10 +766,28 @@ export function RevolveForm({
           ))}
         </select>
       </label>
+      <ExprInput
+        label="Angle (deg)"
+        value={angleDeg}
+        scope={scope}
+        onChange={setAngleDeg}
+      />
       <p className="muted">
-        Sweeps the profile a full turn. Offset the profile center so it clears
-        the axis.
+        Sweeps the profile through the angle, greater than 0 and up to 360.
+        Offset the profile center so it clears the axis.
       </p>
+      {isPartial && (
+        <p className="muted">
+          A partial revolve keeps hash-only face and edge references rather than
+          named ones, and its edges cannot be filleted or chamfered. Round the
+          full revolve first if the result needs blends.
+        </p>
+      )}
+      {!angleInRange && anglePreview.ok && (
+        <p className="muted error">
+          Angle must be greater than 0 and at most 360 degrees.
+        </p>
+      )}
     </FormShell>
   );
 }
@@ -718,6 +911,11 @@ export function BooleanForm({
       </div>
       {operation === 'subtract' && (
         <p className="muted">Bodies 2+ are subtracted from body 1.</p>
+      )}
+      {operation === 'union' && (
+        <p className="muted">
+          Union joins solids that touch or overlap. It does not fill empty gaps.
+        </p>
       )}
       <p className="muted">
         Input bodies are consumed; deleting the boolean restores them.
