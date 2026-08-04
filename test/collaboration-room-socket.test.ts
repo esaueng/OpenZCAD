@@ -26,7 +26,8 @@ function upgradeRequest(projectId: string): Request {
     headers: {
       upgrade: 'websocket',
       'x-openzcad-user-id': 'user_room',
-      'x-openzcad-display-name': 'Room user'
+      'x-openzcad-display-name': 'Room user',
+      'x-openzcad-project-role': 'owner'
     }
   });
 }

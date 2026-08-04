@@ -857,6 +857,191 @@ describe('worker api routes', () => {
     expect(mutated.status).toBe(404);
   });
 
+  it('enforces owner, editor, and viewer roles across project write routes', async () => {
+    const owner = toUserId('user_route_matrix_owner');
+    const editor = toUserId('user_route_matrix_editor');
+    const viewer = toUserId('user_route_matrix_viewer');
+    const roleEnv = {
+      ...env,
+      PROJECT_SHARING_ENABLED: 'true',
+      PROJECT_EDIT_LEASES_ENFORCED: 'true'
+    };
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'REST role matrix' })
+      }),
+      roleEnv
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    const projectId = created.document.projectId;
+    const persistence = getInMemoryPersistence();
+    await persistence.setProjectMemberRole(owner, projectId, editor, 'editor');
+    await persistence.setProjectMemberRole(owner, projectId, viewer, 'viewer');
+
+    const asUser = (userId: string, path: string, init: RequestInit) =>
+      worker.fetch(
+        new Request(`https://example.com${path}`, {
+          ...init,
+          headers: {
+            'content-type': 'application/json',
+            'x-openzcad-development-user': userId,
+            ...init.headers
+          }
+        }),
+        roleEnv
+      );
+    const ownerOnlyWrites: Array<[string, RequestInit]> = [
+      [
+        `/api/projects/${projectId}`,
+        { method: 'PATCH', body: '{"pinned":true}' }
+      ],
+      [`/api/projects/${projectId}`, { method: 'DELETE' }],
+      [
+        `/api/projects/${projectId}/invitations`,
+        {
+          method: 'POST',
+          body: '{"email":"matrix@example.com","role":"viewer"}'
+        }
+      ],
+      [
+        `/api/projects/${projectId}/invitations/invite_missing`,
+        { method: 'DELETE' }
+      ],
+      [
+        `/api/projects/${projectId}/members/user_missing`,
+        { method: 'PATCH', body: '{"role":"viewer"}' }
+      ],
+      [`/api/projects/${projectId}/members/user_missing`, { method: 'DELETE' }]
+    ];
+    for (const user of [editor, viewer]) {
+      for (const [path, init] of ownerOnlyWrites) {
+        expect((await asUser(user, path, init)).status).toBe(404);
+      }
+    }
+    for (const user of [editor, viewer]) {
+      const duplicated = await asUser(
+        user,
+        `/api/projects/${projectId}/duplicate`,
+        { method: 'POST', body: '{}' }
+      );
+      expect(duplicated.status).toBe(201);
+      await expect(duplicated.json()).resolves.toMatchObject({
+        document: { ownerUserId: user }
+      });
+    }
+
+    const revisionPayload = {
+      projectId,
+      reason: 'Editor checkpoint',
+      expectedVersion: created.document.version,
+      document: created.document
+    };
+    expect(
+      (
+        await asUser(viewer, `/api/projects/${projectId}/revisions`, {
+          method: 'POST',
+          body: JSON.stringify(revisionPayload)
+        })
+      ).status
+    ).toBe(404);
+    const editorRevision = await asUser(
+      editor,
+      `/api/projects/${projectId}/revisions`,
+      { method: 'POST', body: JSON.stringify(revisionPayload) }
+    );
+    expect(editorRevision.status).toBe(200);
+    const editorDocument = (await editorRevision.json()) as ProjectDocument;
+
+    expect(
+      (
+        await asUser(viewer, `/api/projects/${projectId}/document`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            projectId,
+            expectedVersion: editorDocument.version,
+            document: editorDocument
+          })
+        })
+      ).status
+    ).toBe(404);
+    expect(
+      (
+        await asUser(editor, `/api/projects/${projectId}/document`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            projectId,
+            expectedVersion: editorDocument.version,
+            document: editorDocument
+          })
+        })
+      ).status
+    ).toBe(200);
+
+    const uploadPayload = {
+      projectId,
+      fileName: 'editor.step',
+      contentType: 'model/step',
+      kind: 'step-export'
+    };
+    expect(
+      (
+        await asUser(viewer, '/api/uploads', {
+          method: 'POST',
+          body: JSON.stringify(uploadPayload)
+        })
+      ).status
+    ).toBe(404);
+    const uploadResponse = await asUser(editor, '/api/uploads', {
+      method: 'POST',
+      body: JSON.stringify(uploadPayload)
+    });
+    expect(uploadResponse.status).toBe(201);
+    const { session } = (await uploadResponse.json()) as {
+      session: { uploadSessionId: string; artifactId: string };
+    };
+    expect(
+      (
+        await asUser(
+          viewer,
+          `/api/uploads/${session.uploadSessionId}/content`,
+          { method: 'PUT', body: 'STEP DATA' }
+        )
+      ).status
+    ).toBe(404);
+    expect(
+      (
+        await asUser(
+          editor,
+          `/api/uploads/${session.uploadSessionId}/content`,
+          { method: 'PUT', body: 'STEP DATA' }
+        )
+      ).status
+    ).toBe(204);
+    const finalizePayload = {
+      projectId,
+      uploadSessionId: session.uploadSessionId,
+      artifactId: session.artifactId
+    };
+    expect(
+      (
+        await asUser(viewer, '/api/artifacts/finalize', {
+          method: 'POST',
+          body: JSON.stringify(finalizePayload)
+        })
+      ).status
+    ).toBe(404);
+    expect(
+      (
+        await asUser(editor, '/api/artifacts/finalize', {
+          method: 'POST',
+          body: JSON.stringify(finalizePayload)
+        })
+      ).status
+    ).toBe(200);
+  });
+
   it('rejects cross-origin collaboration WebSocket upgrades', async () => {
     const created = await createProject('Protected live project');
     const roomLookupsBefore = env.PROJECT_ROOM.getByName.mock.calls.length;
