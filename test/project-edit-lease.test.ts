@@ -319,4 +319,52 @@ describe('project edit lease', () => {
       version: document.version
     });
   });
+
+  it('re-checks D1 membership on every non-owner authored document', async () => {
+    const { context } = createRoomContext();
+    const document = createProjectDocument(
+      'Membership recheck',
+      toUserId('user_recheck_owner')
+    );
+    let memberRole: string | null = 'editor';
+    const env = {
+      PROJECT_EDIT_LEASES_ENFORCED: 'true',
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            first: async () => (memberRole ? { role: memberRole } : null)
+          })
+        })
+      }
+    };
+    const room = new ProjectCollaborationRoom(context, env);
+    const editor = await openSocket(
+      room,
+      document.projectId,
+      'user_recheck_editor',
+      'editor',
+      'client_recheck'
+    );
+    const lease = await acquire(editor, 'client_recheck');
+    const changed = addPrimitiveFeature(document, {
+      name: 'Edited box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+
+    editor.sent.length = 0;
+    await editor.receive(documentFrame(changed, 'client_recheck', lease.leaseId));
+    expect(editor.lastFrame()).toMatchObject({ type: 'ack' });
+
+    // The membership row is gone but the internal role PATCH never reached
+    // the room, so the open socket still holds its stale editor role. The D1
+    // re-check is what stops it from authoring.
+    memberRole = null;
+    editor.sent.length = 0;
+    await editor.receive(documentFrame(changed, 'client_recheck', lease.leaseId));
+    expect(editor.lastFrame()).toMatchObject({
+      type: 'error',
+      code: 'permission-denied'
+    });
+  });
 });
