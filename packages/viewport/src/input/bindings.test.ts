@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { MIDDLE_DRAG_LABELS, pointerBindingsFor } from './bindings';
+import {
+  MIDDLE_DRAG_LABELS,
+  pointerBindingsFor,
+  shiftOrbitBindingsFor
+} from './bindings';
 
 describe('pointer bindings', () => {
   it('puts the chosen action on the middle button', () => {
@@ -21,6 +25,15 @@ describe('pointer bindings', () => {
     // that pairing is load-bearing and no preference may disturb it.
     for (const action of ['pan', 'orbit', 'zoom'] as const) {
       expect(pointerBindingsFor(action).right).toBe('pan');
+    }
+  });
+
+  it('arms the OrbitControls modifier swap for Shift+left-drag orbiting', () => {
+    for (const action of ['pan', 'orbit', 'zoom'] as const) {
+      const bindings = shiftOrbitBindingsFor(action);
+      expect(bindings.left).toBe('pan');
+      expect(bindings.middle).toBe(action);
+      expect(bindings.right).toBe('pan');
     }
   });
 

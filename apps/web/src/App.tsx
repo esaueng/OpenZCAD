@@ -4176,12 +4176,12 @@ export function App() {
   }
 
   /**
-   * Bodies swept by a shift-drag rectangle.
+   * Bodies swept by an unmodified drag rectangle.
    *
-   * Replaces the selection rather than adding to it, even though the gesture
-   * is on Shift: the rectangle is the statement of what the user wants, and
-   * accumulating across sweeps would make a second attempt at aiming
-   * impossible to distinguish from a deliberate addition.
+   * Replaces the selection rather than adding to it: the rectangle is the
+   * statement of what the user wants, and accumulating across sweeps would
+   * make a second attempt at aiming impossible to distinguish from a
+   * deliberate addition.
    */
   function handleBoxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
