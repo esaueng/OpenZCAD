@@ -1669,16 +1669,17 @@ export function SettingsPage({
                 <span className="mono">v{settings.schemaVersion}</span>
               </SettingRow>
               <SettingRow
-                title="D1 storage migration"
-                description="Migration 0010_document_storage_accounting must be ready before personal device sync can be enabled."
+                title="Cloud project storage"
+                description="Migrations 0010 and 0011 plus private R2 project storage must be ready before personal device sync can be enabled."
                 scope="Diagnostics"
               >
                 <span
-                  className={`settings-state ${health?.documentStorageAccountingReady === true ? 'good' : 'warning'}`}
+                  className={`settings-state ${health?.documentStorageAccountingReady === true && health.projectObjectStorageReady === true ? 'good' : 'warning'}`}
                 >
                   {health === null
                     ? 'Unavailable'
-                    : health.documentStorageAccountingReady === true
+                    : health.documentStorageAccountingReady === true &&
+                        health.projectObjectStorageReady === true
                       ? 'Ready'
                       : 'Not ready'}
                 </span>
