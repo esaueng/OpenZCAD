@@ -47,6 +47,8 @@ interface ViewerShellProps {
   editableBodyIds: string[];
   extrudePreview: ExtrudePreview | null;
   movePreview: MovePreview | null;
+  /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
+  moveCommitHold: MovePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
@@ -133,6 +135,7 @@ export function ViewerShell({
   editableBodyIds,
   extrudePreview,
   movePreview,
+  moveCommitHold,
   modeOverlay,
   hideViewerToolbar = false,
   selectionChip,
@@ -200,6 +203,7 @@ export function ViewerShell({
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
         movePreview={movePreview}
+        moveCommitHold={moveCommitHold}
         projection={projection}
         initialView={initialView}
         onViewChange={onViewChange}
