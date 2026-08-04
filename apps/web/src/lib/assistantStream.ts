@@ -6,6 +6,7 @@ import {
   type AssistantReply,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
+import { desktopFetch } from './desktopBridge';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -31,7 +32,7 @@ export interface AssistantStatus {
 export async function loadAssistantStatus(
   signal?: AbortSignal
 ): Promise<AssistantStatus> {
-  const response = await fetch('/api/assistant/status', { signal });
+  const response = await desktopFetch('/api/assistant/status', { signal });
   if (!response.ok) {
     throw new Error(`Assistant status check failed (${response.status}).`);
   }
@@ -109,7 +110,7 @@ export async function streamAssistantReply(
   request: AssistantTurnRequest,
   options: AssistantStreamOptions = {}
 ): Promise<AssistantReply> {
-  const response = await fetch('/api/assistant/proposals', {
+  const response = await desktopFetch('/api/assistant/proposals', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
