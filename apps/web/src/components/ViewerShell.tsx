@@ -1,4 +1,4 @@
-import type { MutableRefObject } from 'react';
+import { useRef, type MutableRefObject } from 'react';
 import { Box, Cylinder, Globe, Sparkles } from 'lucide-react';
 import {
   ModelViewer,
@@ -25,6 +25,10 @@ import type {
 import type { ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
+import {
+  ViewportScaleIndicator,
+  type ViewportScaleSink
+} from './ViewportScaleIndicator';
 import type {
   BodyRepresentation,
   SketchObjectData,
@@ -184,6 +188,8 @@ export function ViewerShell({
   onCycleDisplayMode,
   onToggleProjection
 }: ViewerShellProps) {
+  const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
+
   return (
     <section className="viewer-shell" aria-label="3D viewport">
       <ModelViewer
@@ -204,6 +210,7 @@ export function ViewerShell({
         initialView={initialView}
         onViewChange={onViewChange}
         orientationRef={orientationRef}
+        scaleIndicatorRef={scaleIndicatorRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -320,6 +327,7 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
+      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       <div className="viewport-frame" aria-hidden="true">
         <div className="frame-corner tl" />
         <div className="frame-corner tr" />

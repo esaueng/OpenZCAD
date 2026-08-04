@@ -14,6 +14,7 @@ export * from './render/scene';
 // Camera: the controller that owns cameras/controls/projection/glides,
 // plus standard view poses and screen-space projection math.
 export * from './camera/CameraController';
+export * from './camera/scale';
 export * from './camera/views';
 
 // Picking: raycasting and topology resolution, mesh classification, body

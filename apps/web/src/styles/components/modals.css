@@ -166,9 +166,19 @@
   flex: 0 0 96px;
 }
 
+.shortcut-key-sequence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.shortcut-key-sequence kbd {
+  width: max-content;
+  max-width: 100%;
+}
+
 .shortcut-row dd {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
 }
-

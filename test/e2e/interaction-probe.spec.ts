@@ -90,6 +90,7 @@ test('interaction probe', async ({ page }) => {
     performance.clearMarks('oz:viewer.frame');
     return performance.now();
   });
+  await page.keyboard.down('Shift');
   await dragPath(
     page,
     'left',
@@ -97,6 +98,7 @@ test('interaction probe', async ({ page }) => {
     { x: bounds.width * 0.16, y: bounds.height * 0.12 },
     0
   );
+  await page.keyboard.up('Shift');
   await page.waitForTimeout(120);
   await dragPath(
     page,

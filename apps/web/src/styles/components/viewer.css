@@ -247,6 +247,42 @@
   left: 10px;
 }
 
+.viewport-scale-indicator {
+  position: absolute;
+  bottom: 38px;
+  left: 18px;
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--color-text);
+  pointer-events: none;
+  user-select: none;
+}
+
+.viewport-scale-indicator[hidden] {
+  display: none;
+}
+
+.viewer-shell canvas.viewport-scale-rule {
+  display: block;
+  flex: 0 0 auto;
+  width: var(--viewport-scale-width, 1px) !important;
+  height: 18px !important;
+}
+
+.viewport-scale-value {
+  min-width: max-content;
+  margin-top: 4px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: var(--fw-regular);
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 .vp-chip {
   display: inline-flex;
   align-items: center;
@@ -350,7 +386,7 @@
   border-radius: 999px;
 }
 
-/* Shift-drag rubber band. Solid for window select, dashed for crossing —
+/* Drag-selection rubber band. Solid for window select, dashed for crossing —
    the same shorthand mechanical CAD has used for decades, so the rule in
    force is readable while the drag is still happening. */
 .selection-band {
@@ -498,4 +534,3 @@
 .viewer-notice-actions kbd {
   color: var(--color-text-subtle);
 }
-

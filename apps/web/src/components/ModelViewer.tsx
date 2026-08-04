@@ -44,6 +44,7 @@ import {
   buildMoveGizmoParts,
   chooseMoveSnapStep,
   chooseRotateSnapStep,
+  chooseViewportScale,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -86,6 +87,7 @@ import {
   type DepthCycle,
   type DragRig,
   type MoveSnap,
+  type ViewportScale,
   type PickCandidate,
   type PickDetail,
   type ProfilePickTarget,
@@ -257,6 +259,10 @@ interface ModelViewerProps {
   onViewChange(view: ViewportCameraState): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
+  /** Imperative sink for the zoom-aware viewport scale (no React re-render). */
+  scaleIndicatorRef: MutableRefObject<
+    ((scale: ViewportScale | null) => void) | null
+  >;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -264,7 +270,7 @@ interface ModelViewerProps {
   ): void;
   /** What the pointer is allowed to select. */
   selectionFilter: SelectionFilter;
-  /** Bodies swept by a shift-drag rectangle; empty clears the selection. */
+  /** Bodies swept by a drag rectangle; empty clears the selection. */
   onBoxSelect(bodyIds: string[]): void;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
@@ -546,6 +552,7 @@ export function ModelViewer({
   initialView,
   onViewChange,
   orientationRef,
+  scaleIndicatorRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -997,12 +1004,14 @@ export function ModelViewer({
     /** Where "select other" has reached, for repeated clicks on one spot. */
     let depthCycle: DepthCycle | null = null;
     let rightPanStartTarget: THREE.Vector3 | null = null;
-    /** Shift-drag rubber band over empty space, for selecting several bodies. */
+    /** Unmodified drag rubber band for selecting several bodies. */
     let boxSelect: {
       pointerId: number;
       startX: number;
       startY: number;
     } | null = null;
+    /** Pointer whose Shift+left-drag is currently routed to camera orbit. */
+    let shiftOrbitPointerId: number | null = null;
     let faceDrag: FaceDragState | null = null;
     let extrudeDrag: ExtrudeDragState | null = null;
     let moveDrag: MoveDragState | null = null;
@@ -1153,6 +1162,15 @@ export function ModelViewer({
       selectionBand.style.width = `${rect.right - rect.left}px`;
       selectionBand.style.height = `${rect.bottom - rect.top}px`;
       hud.showAt(selectionBand, rect.left, rect.top);
+    }
+
+    function beginBoxSelect(event: PointerEvent) {
+      boxSelect = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY
+      };
+      gestures.capture(event, 'crosshair');
     }
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
@@ -1406,6 +1424,11 @@ export function ModelViewer({
         (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
         height
       );
+    }
+
+    function updateScaleIndicator() {
+      const worldUnitsPerPixel = worldPerPixelAt(cameraRig.controls.target);
+      scaleIndicatorRef.current?.(chooseViewportScale(worldUnitsPerPixel));
     }
 
     function pickMoveGizmo(event: PointerEvent) {
@@ -2160,17 +2183,13 @@ export function ModelViewer({
         return;
       }
       gestures.begin(event);
-      // Shift-drag sweeps a rectangle over the model. It takes precedence over
-      // every handle below because no handle uses Shift, and a shift-click
-      // that never becomes a drag still falls through to additive selection
-      // on release.
+      // The viewport owns unmodified drag for box selection. Shift hands the
+      // same left-button gesture to OrbitControls, whose modifier swap is
+      // armed so it rotates rather than pans. A stationary Shift+click still
+      // falls through to additive selection on release.
       if (event.shiftKey && !sketchModeRef.current) {
-        boxSelect = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY
-        };
-        gestures.capture(event, 'crosshair');
+        shiftOrbitPointerId = event.pointerId;
+        cameraRig.setShiftOrbitActive(true);
         return;
       }
       const moveHit = pickMoveGizmo(event);
@@ -2220,6 +2239,7 @@ export function ModelViewer({
             drag.axisDirection
           );
           if (t === null) {
+            beginBoxSelect(event);
             return;
           }
           drag.startT = t;
@@ -2229,6 +2249,7 @@ export function ModelViewer({
           drag.ringV = basis.v;
           const angle = ringAngleAt(pivot, axis, basis.u, basis.v);
           if (angle === null) {
+            beginBoxSelect(event);
             return;
           }
           drag.startAngle = angle;
@@ -2438,6 +2459,7 @@ export function ModelViewer({
         offsetRigRef.current ||
         edgeRigRef.current
       ) {
+        beginBoxSelect(event);
         return;
       }
       const result = pick(event);
@@ -2446,10 +2468,12 @@ export function ModelViewer({
         result.selection?.kind !== 'face' ||
         !editableBodyIdsRef.current.has(result.selection.bodyId)
       ) {
+        beginBoxSelect(event);
         return;
       }
       const object = context.objectsByBodyId.get(result.selection.bodyId);
       if (!object) {
+        beginBoxSelect(event);
         return;
       }
       const direction = directEditDirectionFromNormal(result.faceNormal);
@@ -2458,6 +2482,7 @@ export function ModelViewer({
         .getSize(new THREE.Vector3());
       const initialValue = size[direction.axis];
       if (!Number.isFinite(initialValue) || initialValue <= 0) {
+        beginBoxSelect(event);
         return;
       }
 
@@ -2524,6 +2549,10 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (event.pointerId === shiftOrbitPointerId) {
+        shiftOrbitPointerId = null;
+        cameraRig.setShiftOrbitActive(false);
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         const started = boxSelect;
         boxSelect = null;
@@ -2534,7 +2563,7 @@ export function ModelViewer({
         const rect =
           from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
         if (!rect || !isBoxSelectDrag(rect)) {
-          // A shift-click that never travelled is still a shift-click.
+          // A press that never travelled is still an ordinary selection click.
           selectAtPointer(event);
           return;
         }
@@ -2843,6 +2872,10 @@ export function ModelViewer({
     };
     const handlePointerCancel = (event: PointerEvent) => {
       pendingHoverEvent = null;
+      if (event.pointerId === shiftOrbitPointerId) {
+        shiftOrbitPointerId = null;
+        cameraRig.setShiftOrbitActive(false);
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         boxSelect = null;
         hud.hide(selectionBand);
@@ -3052,6 +3085,7 @@ export function ModelViewer({
         edgeRig.group.userData.gizmoScale = rigScale;
       }
       updateOffsetChip();
+      updateScaleIndicator();
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
@@ -3172,6 +3206,7 @@ export function ModelViewer({
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
       moveGizmoHudRef.current = null;
+      scaleIndicatorRef.current?.(null);
       contextRef.current = null;
     };
   }, []);

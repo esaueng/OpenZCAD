@@ -1,51 +1,86 @@
-# Direct sketch and extrusion design QA
+# Viewport scale indicator design QA
 
 ## Comparison setup
 
-- Source visuals:
-  - `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-8e2e9dd8-1c0b-4b1d-89f5-a28ff936fe9e.png` — focused sketch interaction reference.
-  - `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-c7bd1bf9-c27c-49b3-b017-f12d71165714.png` — arrow extrusion reference.
-  - `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-c953e1c3-672a-4bd1-8ae8-c485115aafe9.png` — existing OpenZCAD visual-language baseline.
-- Implementation evidence:
-  - `/private/tmp/openzcad-qa/openzcad-sketch.png`
-  - `/private/tmp/openzcad-qa/openzcad-extrude.png`
-  - `/private/tmp/openzcad-qa/openzcad-solid.png`
-- Side-by-side comparison input: `/private/tmp/openzcad-qa/comparison.png`
-- Primary viewport: 1440 × 900 at device pixel ratio 2.
-- Responsive checks: 1024 × 768 and 768 × 650.
+- Source visual truth:
+  `/Users/userzero/.codex/generated_images/019fb177-2439-7962-ad2d-76b01ebab6ac/call_EKZEzibQHOiTVPGbf6XreBU5.png`
+- Browser-rendered implementation:
+  `/private/tmp/openzcad-scale-qa/viewport-scale-demo-final.png`
+- Focused implementation crop:
+  `/private/tmp/openzcad-scale-qa/viewport-scale-demo-focused-final.png`
+- Full side-by-side comparison:
+  `/private/tmp/openzcad-scale-qa/viewport-scale-comparison-full-final.png`
+- Focused side-by-side comparison:
+  `/private/tmp/openzcad-scale-qa/viewport-scale-comparison-detail-final.png`
+- Browser viewport: 1440 × 1024 CSS px at device pixel ratio 2.
+- Source pixels: 1536 × 1024.
+- Implementation pixels: 1440 × 1024; the focused viewport crop is
+  768 × 512.
+- Density normalization: the 1536 × 1024 concept was downsampled to
+  768 × 512 before the full comparison. The concept intentionally enlarges
+  the instrument for inspection; the implementation follows the concept
+  brief's production size of roughly 80–200 CSS px as camera scale changes.
+- State: Mounting Bracket demo, perspective projection, grid visible, model
+  fitted, millimetre document units.
 
-The implementation intentionally preserves the OpenZCAD application chrome and visual tokens while adopting the reference interaction hierarchy: full-canvas sketching, a compact left tool palette, centered task guidance, plane controls on the right, selected closed profiles, and signed direct-manipulation extrusion.
+## Findings
 
-## Fidelity and behavior review
+- No actionable P0, P1, or P2 differences remain.
+- Fonts and typography: the value uses the bundled IBM Plex Mono at 16px,
+  regular weight, matching the concept's technical readout and the product's
+  established viewport typography.
+- Spacing and layout rhythm: the indicator sits 18px from the viewport's left
+  edge and 38px above its bottom edge. It remains separated from the existing
+  units/body HUD by 9px at 1024 × 768 and does not collide with the drafting
+  frame or model.
+- Colors and visual tokens: the baseline and end caps use
+  `--color-text`, minor divisions use `--color-text-muted`, and the single
+  center division uses `--color-accent`. The transparent background preserves
+  the selected concept's unboxed HUD treatment.
+- Image and asset fidelity: no raster asset substitution is used. The scale
+  rule is a functional high-density canvas tied to camera math, so it stays
+  sharp and physically meaningful instead of stretching a screenshot. The
+  final focused comparison confirms the selected end-cap, minor-tick, center
+  accent, and centered-label hierarchy.
+- Copy and content: the label displays the live 1/2/5 measurement step and the
+  document unit. The tested millimetre state rendered `50 mm`, then changed to
+  `20 mm` during wheel zoom. Inch documents use the conventional `in` label.
+- Accessibility: the visual canvas is hidden from assistive technology; the
+  component exposes a concise label such as
+  `Viewport scale at the camera focus plane: 50 mm`, avoiding the false claim
+  that perspective scale is constant at every scene depth.
 
-- Layout and spacing: the sketch canvas owns the central workspace, with the tool palette and setup panel clear of the drawing origin at desktop and tablet widths. The compact-width check keeps all primary sketch controls usable; secondary top-bar text truncates before modeling controls are lost.
-- Typography and color: existing OpenZCAD monospace/status typography and dark surfaces remain consistent. Amber marks active sketch geometry, red and blue identify axes, green communicates profile readiness, and blue identifies extrusion actions.
-- Icons and surfaces: controls use the existing Lucide icon family, matching stroke weight and avoiding custom SVG/CSS artwork. Borders, radii, and elevation follow the current OpenZCAD panels rather than copying the reference application's unrelated chrome.
-- Copy and hierarchy: the active tool, current gesture, plane, profile readiness, signed distance, side, and confirmation action are visible without opening the feature inspector.
-- Interaction states: rectangle, circle, and polygon modes have one active state; plane buttons and profile selection expose pressed/selected state; finish/create actions disable until valid; Escape and Enter are supported; profile deselection and cancel paths are present.
-- Accessibility: primary controls are semantic buttons/forms/toolbars with accessible names, pressed states, labels, and visible focus styles. Keyboard shortcuts remain available for profile tools and completion/cancellation.
-- Image fidelity: no product imagery was required or substituted. The functional Canvas and Three.js renderers draw the CAD grid, geometry, preview, and handles.
+## Interaction and responsive verification
 
-## Comparison history and fixes
+- Wheel zoom changed the live indicator from `50 mm` at 192.26px to
+  `20 mm` at 122.02px.
+- The indicator remained visible and correctly labeled after switching to
+  orthographic projection and back to perspective.
+- At 1024 × 768, the scale occupied 82.62px within an 804px-wide viewport and
+  remained clear of the bottom HUD.
+- Browser console warning/error log: empty.
+- The local Worker reported expected missing development D1 tables in the
+  terminal, but the offline CAD workspace and viewport remained functional;
+  this did not surface as a browser-console error or affect the indicator.
 
-1. P2 interaction-state mismatch: the first sketch pass visually marked both Select and Circle as active. The static Select styling was removed; the post-fix DOM and screenshot show exactly one active tool (`Circle`).
-2. P2 handle visibility: the extrusion arrow head initially ended flush with the translucent preview cap. The handle now renders without depth testing and extends 7 mm beyond the preview, keeping the drag target and signed value visible at non-zero distances.
-3. Post-fix evidence: the final desktop comparison shows the closed circle at Ø32 mm, an opposite-side preview at -34.5 mm, a visible outboard arrow head/value, and the exact confirmed solid. No P0, P1, or remaining P2 findings were observed.
+## Comparison history
 
-## Functional verification
+1. Initial browser comparison found a P2 sizing defect: the existing
+   `.viewer-shell canvas` rule forced every canvas to `width: 100%` and
+   `height: 100%`, doubling the indicator at device pixel ratio 2.
+2. The scale canvas now uses a component-specific, higher-specificity width
+   override while retaining a 2× backing store for sharp lines.
+3. Post-fix browser measurements showed a 140.87px CSS rule with a 282px
+   backing store, then the final live zoom check stayed inside the designed
+   80–200px range. The final full and focused comparison inputs show no
+   remaining P0/P1/P2 mismatch.
 
-- Drew a snapped closed circle on the Front (XY) plane and finished it into canonical document history.
-- Selected the filled profile directly and launched Extrude from the contextual action.
-- Dragged to -34.5 mm on the opposite side, crossed through the sketch plane, and reached +3 mm on the positive side.
-- Confirmed `Extrude 1`; the exact kernel returned one live body, 2412.743 mm³ volume, three faces, and zero workspace warnings.
-- Console warning/error log after confirmation: empty.
+## Follow-up polish
 
-## Remaining P3 scope differences
-
-- Advanced sketch entities and constraints from the reference product (line, arc, spline, trim, tangent, concentric, and dimensional constraints) are not part of this delivery.
-- The current document model stores one closed profile object per sketch. Multi-loop and multi-region sketches need a document-schema milestone rather than a UI-only change.
-- Extrusion creates a standalone body; automatic add/cut/intersect semantics against an existing body remain a future modeling-mode milestone.
+- P3: at extreme camera scales, the label intentionally switches to compact
+  scientific notation rather than allowing a long decimal to dominate the
+  HUD.
 
 ## Final result
 
-Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, visually verified against the supplied references, and functional in the real application flow.
+final result: passed
