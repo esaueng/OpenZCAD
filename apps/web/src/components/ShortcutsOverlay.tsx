@@ -30,6 +30,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
       ['F', 'Fit view'],
       ['G', 'Toggle grid'],
       ['W', 'Cycle display mode'],
+      ['Shift+Drag', 'Rotate view'],
       ['Double-click', 'Fit view']
     ]
   },
@@ -43,7 +44,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
       ['Esc', 'Cancel / close panel'],
       ['Shift+Click', 'Add or remove from selection'],
       ['Q', 'Cycle the selection filter'],
-      ['Shift+Drag', 'Box select — left to right encloses, right to left touches'],
+      ['Drag', 'Box select — left to right encloses, right to left touches'],
       ['Double-click edge', 'Select the whole run of edges']
     ]
   },
