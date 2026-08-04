@@ -191,6 +191,7 @@ import {
   isValidCylinderRadius,
   sameCylinderAxis
 } from './lib/interaction/cylinderRadius';
+import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderRadiusAncestry';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -903,9 +904,9 @@ export function App() {
   const cylinderRadiusPreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (radius) => {
-        const command = buildCylinderRadiusCommand(radius);
+        const plan = buildCylinderRadiusCommand(radius);
         const base = managerRef.current?.document;
-        return command && base ? command.apply(base) : null;
+        return plan && base ? plan.command.apply(base) : null;
       },
       derive: (document) => geometry.syncOnce(document),
       publish: (preview) =>
@@ -5417,7 +5418,9 @@ export function App() {
     [cylinderRadiusInspectorInitial]
   );
 
-  function buildCylinderRadiusCommand(radius: ParamValue): AnyCommand | null {
+  function buildCylinderRadiusCommand(
+    radius: ParamValue
+  ): { command: AnyCommand; sourceFeatureId?: FeatureId } | null {
     const current = interactionRef.current;
     const base = managerRef.current?.document;
     if (
@@ -5438,68 +5441,56 @@ export function App() {
       return null;
     }
 
-    // Keep native primitive cylinders parametric whenever no earlier
-    // topology-level edit depends on their old radius. Transform features keep
-    // BodyId stable, so editing the primitive still works after move/rotate.
-    const ordered = listFeaturesInOrder(base);
-    const bodyNode = listNodesByKind(base, 'body').find(
-      (body) => body.bodyId === (target.bodyId as BodyId)
+    // Preserve the parametric source edit through any uninterrupted chain of
+    // fillet/chamfer result bodies. Their stored lineage regenerates the exact
+    // downstream B-reps; arbitrary result features and direct edits remain on
+    // the strict generic cylindrical-face path.
+    const primitive = primitiveCylinderRadiusAncestor(
+      base,
+      target.bodyId as BodyId
     );
-    const primitive = bodyNode
-      ? ordered.find((feature) => feature.featureId === bodyNode.featureId)
-      : undefined;
-    const primitiveIndex = primitive ? ordered.indexOf(primitive) : -1;
-    const hasDependentDirectEdit =
-      primitiveIndex >= 0 &&
-      ordered
-        .slice(primitiveIndex + 1)
-        .some(
-          (feature) =>
-            feature.data.featureKind === 'direct-edit' &&
-            feature.data.targetBodyId === target.bodyId
-        );
-    if (
-      primitive?.data.featureKind === 'primitive' &&
-      primitive.data.primitiveKind === 'cylinder' &&
-      typeof primitive.data.dimensions.radius === 'number' &&
-      !hasDependentDirectEdit
-    ) {
-      return commandFactories.updateFeature(
-        {
-          featureId: primitive.featureId,
-          data: {
-            dimensions: {
-              ...primitive.data.dimensions,
-              radius
+    if (primitive?.data.featureKind === 'primitive') {
+      return {
+        command: commandFactories.updateFeature(
+          {
+            featureId: primitive.featureId,
+            data: {
+              dimensions: {
+                ...primitive.data.dimensions,
+                radius
+              }
             }
-          }
-        },
-        'Resize Cylinder Radius'
-      );
+          },
+          'Resize Cylinder Radius'
+        ),
+        sourceFeatureId: primitive.featureId
+      };
     }
 
-    return commandFactories.directEditBody({
-      name: 'Resize Cylinder Radius',
-      targetBodyId: target.bodyId as BodyId,
-      operation: {
-        kind: 'resize-cylindrical-face',
-        faceHash: target.hash,
-        ...(target.reference ? { faceReference: target.reference } : {}),
-        sourceRadius: target.radius,
-        sourceAxisStart: {
-          x: target.axisStart[0],
-          y: target.axisStart[1],
-          z: target.axisStart[2]
-        },
-        sourceAxisEnd: {
-          x: target.axisEnd[0],
-          y: target.axisEnd[1],
-          z: target.axisEnd[2]
-        },
-        concavity: target.concavity,
-        radius
-      }
-    });
+    return {
+      command: commandFactories.directEditBody({
+        name: 'Resize Cylinder Radius',
+        targetBodyId: target.bodyId as BodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: target.hash,
+          ...(target.reference ? { faceReference: target.reference } : {}),
+          sourceRadius: target.radius,
+          sourceAxisStart: {
+            x: target.axisStart[0],
+            y: target.axisStart[1],
+            z: target.axisStart[2]
+          },
+          sourceAxisEnd: {
+            x: target.axisEnd[0],
+            y: target.axisEnd[1],
+            z: target.axisEnd[2]
+          },
+          concavity: target.concavity,
+          radius
+        }
+      })
+    };
   }
 
   function handleCylinderRadiusPreview(radius: number) {
@@ -5530,21 +5521,28 @@ export function App() {
       return;
     }
     const sourceRadius = current.target.radius;
-    const command = buildCylinderRadiusCommand(exact ?? radius);
+    const plan = buildCylinderRadiusCommand(exact ?? radius);
     if (
       sourceRadius === undefined ||
       !isValidCylinderRadius(radius, sourceRadius) ||
-      !command
+      !plan
     ) {
       cylinderRadiusInspectorSetterRef.current?.(null);
       setStatus('Radius is too small to form valid geometry at this scale.');
       return;
     }
     void executeValidatedDirectEdit(
-      command,
+      plan.command,
       current.target.bodyId as BodyId,
       `Adjusted cylinder radius to R ${formatNumber(radius)} ${doc?.units ?? ''}.`,
-      radius
+      radius,
+      undefined,
+      plan.sourceFeatureId
+        ? affectedFeatureTargets(
+            managerRef.current!.document,
+            plan.sourceFeatureId
+          )
+        : undefined
     );
   }
 
