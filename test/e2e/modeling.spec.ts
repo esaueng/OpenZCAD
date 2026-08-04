@@ -678,6 +678,77 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('infers and stores an additive extrude from exact overlap', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Stored Extrude Operation');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    x: bounds!.x + bounds!.width * 0.5,
+    y: bounds!.y + bounds!.height * 0.5
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 50, center.y, { steps: 6 });
+  await page.mouse.up();
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  const extrude = page.getByRole('form', { name: 'Extrude controls' });
+  await expect(extrude.getByLabel('Extrude operation')).toHaveValue('add', {
+    timeout: 20_000
+  });
+  await expect(extrude).toContainText(/overlaps Box Body; Add is stored/);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'exact preview ready · Add to Box Body',
+    { timeout: 20_000 }
+  );
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
+
+  const extrudeFeature = page.getByRole('button', {
+    name: 'Extrude 1',
+    exact: true
+  });
+  await expect(extrudeFeature).toBeVisible();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
+    'add'
+  );
+  await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude 1');
+  await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
+    'add'
+  );
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('fillets all twelve edges of a box in one exact feature', async ({
   page
 }) => {
@@ -1173,7 +1244,9 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => {
+test('imports a STEP solid, fillets it, and re-exports it', async ({
+  page
+}) => {
   // Z3: imported STEP documents build on BrepKit like everything else. This
   // is the only e2e that drives a real imported B-rep through the product --
   // import, exact measurement, a blend on IMPORTED topology, and re-export --
@@ -1214,7 +1287,9 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => 
   await expect(page.getByRole('contentinfo')).toContainText(
     'cloud archive unavailable; source saved locally'
   );
-  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(
+    0
+  );
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
 
@@ -1267,9 +1342,9 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => 
   // Only the two artifact-archive uploads (import and export) may fail, and
   // only because the preview host has no /api/uploads. Anything else is a
   // real console error and this stays an equality assertion so it shows up.
-  expect(
-    consoleErrors.filter((message) => !message.includes('404'))
-  ).toEqual([]);
+  expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
+    []
+  );
   expect(consoleErrors).toHaveLength(2);
 });
 
