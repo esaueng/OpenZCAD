@@ -361,6 +361,90 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('shows and recovers a stale face-attached sketch when its source is suppressed', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Stale Face Attachment');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  let facePoint: { x: number; y: number } | null = null;
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: bounds!.x + bounds!.width * xRatio,
+        y: bounds!.y + bounds!.height * yRatio
+      };
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        facePoint = candidate;
+        break;
+      }
+    }
+    if (facePoint) {
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.click(facePoint!.x, facePoint!.y);
+  await page
+    .getByRole('region', { name: 'Offset Face operation' })
+    .getByRole('tab', { name: 'Sketch' })
+    .click();
+
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  const sketchBounds = await canvas.boundingBox();
+  expect(sketchBounds).not.toBeNull();
+  const center = {
+    x: sketchBounds!.x + sketchBounds!.width / 2,
+    y: sketchBounds!.y + sketchBounds!.height / 2
+  };
+  await page.mouse.move(center.x - 45, center.y - 35);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 45, center.y + 35, { steps: 4 });
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row', { hasText: /^Sketch/ })
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Finish Sketch' }).click();
+
+  const box = page.locator('.feature-row', { hasText: /^Box/ });
+  await box.getByRole('button', { name: 'Suppress Box' }).click();
+  await expect(box).toContainText('suppressed');
+  const diagnostic = page.locator('.diagnostic-row', {
+    hasText: /cannot attach because source body/
+  });
+  await expect(diagnostic).toContainText(
+    "is unavailable at the sketch's history position"
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText('warnings0');
+
+  await box.getByRole('button', { name: 'Resume Box' }).click();
+  await expect(box).not.toContainText('suppressed');
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('refuses a new face sketch after a hash-only direct edit', async ({
   page
 }) => {
@@ -678,6 +762,77 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('infers and stores an additive extrude from exact overlap', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Stored Extrude Operation');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    x: bounds!.x + bounds!.width * 0.5,
+    y: bounds!.y + bounds!.height * 0.5
+  };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 50, center.y, { steps: 6 });
+  await page.mouse.up();
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  const extrude = page.getByRole('form', { name: 'Extrude controls' });
+  await expect(extrude.getByLabel('Extrude operation')).toHaveValue('add', {
+    timeout: 20_000
+  });
+  await expect(extrude).toContainText(/overlaps Box Body; Add is stored/);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'exact preview ready · Add to Box Body',
+    { timeout: 20_000 }
+  );
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
+
+  const extrudeFeature = page.getByRole('button', {
+    name: 'Extrude 1',
+    exact: true
+  });
+  await expect(extrudeFeature).toBeVisible();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
+    'add'
+  );
+  await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
+  await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude 1');
+  await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
+    'add'
+  );
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('fillets all twelve edges of a box in one exact feature', async ({
   page
 }) => {
@@ -716,6 +871,42 @@ test('fillets all twelve edges of a box in one exact feature', async ({
     ignoreCase: true
   });
   await expect(page.locator('.panel-body')).toContainText('faces');
+  expect(consoleErrors).toEqual([]);
+});
+
+test('preflights and creates an exact open-top shell', async ({ page }) => {
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Open Top Shell');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  const openings = page.getByRole('group', { name: 'Opening faces' });
+  await openings.getByRole('button', { name: /Plane face box.*z max/ }).click();
+  await page.getByRole('button', { name: 'Check exact result' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
+  ).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Create shell' }).click();
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Shell' })
+  ).toBeVisible();
+  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
 
@@ -770,6 +961,103 @@ for (const modifier of [
     expect(consoleErrors).toEqual([]);
   });
 }
+
+test('applies an assistant-created sketch and same-proposal extrude', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'sketch-alias-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    const proposal = {
+      proposalId: 'proposal_ai_sketch_e2e',
+      summary: 'Create a closed rectangular sketch and extrude it.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_sketch',
+          name: 'AI profile',
+          localId: '$profile',
+          plane: 'XY',
+          offset: 0,
+          objects: [
+            {
+              objectKind: 'rectangle',
+              width: 36,
+              height: 24,
+              centerX: 18,
+              centerY: 12
+            }
+          ]
+        },
+        {
+          kind: 'add_extrude',
+          name: 'AI plate',
+          localId: '$plate',
+          sketchId: '$profile',
+          distance: 6,
+          samplePoint: null
+        }
+      ]
+    };
+    return route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          proposal,
+          questions: null,
+          message: null,
+          readings: null
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Sketch Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Create a 36 by 24 by 6 millimetre plate from a sketch');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText(
+    'Create a closed rectangular sketch and extrude it.'
+  );
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'AI profile' })
+  ).toBeVisible();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'AI plate' })
+  ).toBeVisible();
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Applied'
+  );
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
 
 test('grounds an AI fillet request onto every selected edge', async ({
   page
@@ -1137,7 +1425,9 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => {
+test('imports a STEP solid, fillets it, and re-exports it', async ({
+  page
+}) => {
   // Z3: imported STEP documents build on BrepKit like everything else. This
   // is the only e2e that drives a real imported B-rep through the product --
   // import, exact measurement, a blend on IMPORTED topology, and re-export --
@@ -1178,7 +1468,9 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => 
   await expect(page.getByRole('contentinfo')).toContainText(
     'cloud archive unavailable; source saved locally'
   );
-  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(importedRow.getByTitle('Feature failed to build')).toHaveCount(
+    0
+  );
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
 
@@ -1231,9 +1523,9 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({ page }) => 
   // Only the two artifact-archive uploads (import and export) may fail, and
   // only because the preview host has no /api/uploads. Anything else is a
   // real console error and this stays an equality assertion so it shows up.
-  expect(
-    consoleErrors.filter((message) => !message.includes('404'))
-  ).toEqual([]);
+  expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
+    []
+  );
   expect(consoleErrors).toHaveLength(2);
 });
 
