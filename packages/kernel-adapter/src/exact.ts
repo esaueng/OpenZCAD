@@ -33,6 +33,7 @@ import {
   type DerivedState,
   type DirectEditOperation,
   type EdgeCurve,
+  type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
@@ -2610,6 +2611,112 @@ function resolveShellOpeningFaces(
   return resolved;
 }
 
+function resolveEdgeModifierEdges(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  solid: number,
+  hashes: readonly number[],
+  references: readonly EdgeTopologyReferenceV5[] | undefined
+): number[] {
+  const handles = Array.from(kernel.getSolidEdges(solid));
+  const legacyHandles = edgeHandlesByFingerprint(kernel, solid);
+  const requested = [...new Set(hashes)];
+
+  // Collapsing a multi-solid body can fuse and post-process its topology. The
+  // source handles and semantic references no longer describe that result, so
+  // preserve the existing unique-hash resolver for this deliberately
+  // unsupported lineage boundary.
+  if (shape.solids.length !== 1) {
+    return requested.map((hash) => {
+      const matches = legacyHandles.get(hash) ?? [];
+      if (matches.length === 0) {
+        throw unresolvedReferenceError('edge', hash, handles.length);
+      }
+      if (matches.length > 1) {
+        throw ambiguousReferenceError('edge');
+      }
+      return matches[0]!;
+    });
+  }
+
+  const candidates: TopologyResolutionCandidate[] = handles.map((handle) => {
+    const witness = edgeWitnessOf(kernel, handle);
+    const lineageReference = shape.lineage?.edgeReferences.get(handle);
+    return {
+      kind: 'edge',
+      currentHash: topologyHashOfWitness('edge', witness),
+      witnessVersion: 1,
+      witness,
+      ...(lineageReference
+        ? {
+            lineage: {
+              source: 'semantic' as const,
+              identity: {
+                producingFeatureId: lineageReference.producingFeatureId,
+                lineageName: lineageReference.lineageName
+              }
+            }
+          }
+        : {}),
+      value: handle
+    };
+  });
+  const requestedSet = new Set(requested);
+  const referencesByHash = new Map<number, EdgeTopologyReferenceV5[]>();
+  for (const reference of references ?? []) {
+    if (!requestedSet.has(reference.currentHash)) {
+      throw new Error(
+        'Edge modifier references do not match the selected edge hashes.'
+      );
+    }
+    const matches = referencesByHash.get(reference.currentHash) ?? [];
+    matches.push(reference);
+    referencesByHash.set(reference.currentHash, matches);
+  }
+
+  const resolved = requested.map((hash) => {
+    const storedReferences = referencesByHash.get(hash) ?? [];
+    if (storedReferences.length > 1) {
+      throw new Error(
+        'Edge modifier lineage contains duplicate references for one selected edge.'
+      );
+    }
+    const reference = storedReferences[0];
+    if (reference) {
+      const resolution = resolveTopologyReference(reference, candidates);
+      if (resolution.status === 'failed') {
+        throw new Error(`Edge modifier edge is stale: ${resolution.message}`);
+      }
+      if (typeof resolution.candidate.value !== 'number') {
+        throw new Error('Edge modifier edge resolved without a kernel handle.');
+      }
+      return resolution.candidate.value;
+    }
+
+    if (references !== undefined) {
+      throw new Error(
+        'Edge modifier lineage is missing a reference for one selected edge.'
+      );
+    }
+
+    // A selected hash without a v5 reference is a legacy document edge. Keep
+    // its old resolver and diagnostics byte-for-byte; a v5 failure above is
+    // terminal and never reaches this fallback.
+    const matches = legacyHandles.get(hash) ?? [];
+    if (matches.length === 0) {
+      throw unresolvedReferenceError('edge', hash, handles.length);
+    }
+    if (matches.length > 1) {
+      throw ambiguousReferenceError('edge');
+    }
+    return matches[0]!;
+  });
+  if (new Set(resolved).size !== resolved.length) {
+    throw new Error('Edge modifier edges do not resolve to a unique set.');
+  }
+  return resolved;
+}
+
 /** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
 function measureFaceGeometry(
   kernel: BrepKernel,
@@ -4542,20 +4649,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               throw new Error('Edge modifier target is unavailable.');
             }
             const target = collapseShape(kernel, storedTarget);
-            const requested = new Set(feature.data.edgeHashes);
-            const edgeCount = kernel.getSolidEdges(target).length;
-            const edgesByHash = edgeHandlesByFingerprint(kernel, target);
-            const selected: number[] = [];
-            for (const hash of requested) {
-              const matches = edgesByHash.get(hash) ?? [];
-              if (matches.length === 0) {
-                throw unresolvedReferenceError('edge', hash, edgeCount);
-              }
-              if (matches.length > 1) {
-                throw ambiguousReferenceError('edge');
-              }
-              selected.push(matches[0]!);
-            }
+            const selected = resolveEdgeModifierEdges(
+              kernel,
+              storedTarget,
+              target,
+              feature.data.edgeHashes,
+              feature.data.edgeReferences
+            );
             const size = resolveParamValue(
               feature.data.featureKind === 'fillet'
                 ? feature.data.radius
