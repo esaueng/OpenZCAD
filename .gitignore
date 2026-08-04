@@ -15,6 +15,21 @@ test-results
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.crt
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*credentials*.json
+service-account*.json
+.npmrc
+.pypirc
+.netrc
 
 *.tsbuildinfo
 .worktrees/

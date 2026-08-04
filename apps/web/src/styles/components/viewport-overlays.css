@@ -50,9 +50,15 @@
   fill: #37527a;
 }
 
+/* Clicking a facet leaves it focused; never let the browser draw its native
+   focus ring around the cube. Keyboard focus keeps the accent stroke below. */
+.cube-face:focus,
+.cube-corner:focus {
+  outline: none;
+}
+
 .cube-face:focus-visible,
 .cube-corner:focus-visible {
-  outline: none;
   stroke: var(--color-accent);
   stroke-width: 1.5;
 }
@@ -181,35 +187,58 @@
   pointer-events: auto;
 }
 
-/* The hub is drawn at the dead zone's radius, so the rule it stands for is
-   visible: while the pointer is still on the readout, nothing is chosen. */
+/* Invisible copies of every pill the hub could show, so the ring can be
+   laid out against the widest one without guessing at text metrics. */
+.marking-menu-measure {
+  visibility: hidden;
+}
+
+/* The readout is a pill that hugs whatever it is naming: a fixed disc has
+   to choose between clipping long labels and hanging them over bare
+   geometry, and a pill never has to. */
 .marking-menu-hub {
   position: absolute;
   transform: translate(-50%, -50%);
-  display: grid;
-  place-items: center;
-  border: 1px dashed var(--color-border-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 5px 14px 5px 8px;
+  border: 1px solid var(--color-border-strong);
   border-radius: 999px;
-  background: radial-gradient(
-    circle,
-    rgba(11, 15, 20, 0.94) 55%,
-    rgba(11, 15, 20, 0) 100%
-  );
+  background: rgba(11, 15, 20, 0.94);
   color: var(--color-text);
-  text-align: center;
+  white-space: nowrap;
   line-height: var(--lh-tight);
-  /* The name is wider than the disc that backs it, so the part hanging over
-     bare geometry carries its own contrast — a pale body would swallow it. */
-  text-shadow:
-    0 1px 3px var(--color-bg),
-    0 0 6px var(--color-bg);
   pointer-events: none;
+}
+
+/* At rest there is no icon to lead with, so the padding evens out. */
+.marking-menu-hub:not(.armed) {
+  padding: 5px 14px;
+}
+
+/* The aimed slot's icon, echoed at the centre of the flick. */
+.marking-menu-hub-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+  font-size: var(--fs-mini);
+}
+
+.marking-menu-hub.armed.danger .marking-menu-hub-icon {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-error);
 }
 
 /* Naming what a release would run is the hub's whole job, so it says so as
    soon as there is something to name. */
 .marking-menu-hub.armed {
-  border-style: solid;
   border-color: var(--color-accent);
 }
 
@@ -226,21 +255,22 @@
   color: var(--color-text-subtle);
 }
 
-/* The name is allowed past the hub's edge: the ring is wide enough to clear
-   it, and shrinking every label to fit the widest one would cost more. */
+/* An extreme label still has a ceiling (the pill's max-width); it ends in
+   an ellipsis rather than pushing the shortcut out of the pill. */
 .marking-menu-read {
-  display: block;
-  width: 116px;
-  margin: 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: var(--fs-xs);
 }
 
 .marking-menu-hub small {
-  display: block;
-  margin-top: 2px;
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   color: var(--color-text-subtle);
+}
+
+.marking-menu-hub.armed.danger small {
+  color: inherit;
 }
 
 .marking-menu-slot {
@@ -277,7 +307,19 @@
   transform: translate(-50%, -50%) scale(1.12);
 }
 
+/* The disc stays opaque when disabled: fading the whole button lets the
+   model bleed through, and over a pale body the slot reads as a smudge of
+   whatever colour happens to be behind it. Only the icon dims. */
 .marking-menu-slot:disabled {
+  /* Overrides the global button:disabled fade, which would let the model
+     bleed through the disc. */
+  opacity: 1;
+  color: var(--color-text-subtle);
+  border-color: var(--color-border);
+  box-shadow: none;
+}
+
+.marking-menu-slot:disabled .marking-menu-icon {
   opacity: 0.45;
 }
 
