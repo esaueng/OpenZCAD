@@ -132,14 +132,29 @@ describe('the cylinder-radius rig', () => {
     expect(rig.origin).toMatchObject({ x: 14, y: 0, z: 8 });
   });
 
-  it('does not create a translated face ghost', () => {
+  it('carries a radius dimension line with two arrowheads, no face ghost', () => {
     const rig = buildCylinderRadiusHandle({
       origin: { x: 0, y: 5, z: 0 },
       direction: { x: 0, y: 1, z: 0 },
       originalRadius: 5
     });
-    expect(rig.worldGroup.children).toHaveLength(1);
+    expect(rig.worldGroup.children).toHaveLength(3);
     expect(rig.worldGroup.children[0]?.type).toBe('Line2');
+    expect(rig.worldGroup.children[1]?.type).toBe('Mesh');
+    expect(rig.worldGroup.children[2]?.type).toBe('Mesh');
+  });
+
+  it('anchors the value chip on the dimension line inside the cylinder', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 14, y: 0, z: 8 },
+      direction: { x: 1, y: 0, z: 0 },
+      originalRadius: 14
+    });
+    // Axis centre is at x = 0; the chip rides partway back out to the wall.
+    const anchor = rig.chipAnchor(1);
+    expect(anchor.x).toBeCloseTo(14 * 0.45, 6);
+    expect(anchor.y).toBeCloseTo(0, 6);
+    expect(anchor.z).toBeCloseTo(8, 6);
   });
 });
 
