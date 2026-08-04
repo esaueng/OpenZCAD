@@ -15,6 +15,7 @@ import {
   rememberUnresolvedConflict
 } from './conflictRecovery';
 import { useCollaboration } from './useCollaboration';
+import { parseServerMessage } from './useCollaboration';
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -58,6 +59,10 @@ class FakeWebSocket {
 
   receive(message: CollaborationServerMessage): void {
     this.emit('message', { data: JSON.stringify(message) });
+  }
+
+  receiveRaw(data: string): void {
+    this.emit('message', { data });
   }
 
   frames(): Array<Record<string, unknown>> {
@@ -325,5 +330,121 @@ describe('useCollaboration lease ordering', () => {
     expect(result.current.conflict).toBeNull();
     expect(readUnresolvedConflict(base.projectId)).toBeNull();
     unmount();
+  });
+});
+
+describe('inbound frame validation', () => {
+  it('drops oversized, malformed, and foreign-project frames', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_guard_owner');
+    const local = createProjectDocument('Guarded', owner);
+    const foreign = createProjectDocument('Foreign', toUserId('user_other'));
+    const onRemoteDocument = vi.fn();
+    const onConflict = vi.fn();
+    const { result, unmount } = renderHook(() =>
+      useCollaboration({
+        document: local,
+        session: session(owner),
+        onRemoteDocument,
+        onConflict
+      })
+    );
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => socket.open());
+
+    act(() => socket.receiveRaw('x'.repeat(2_000_001)));
+    act(() => socket.receiveRaw('{not json'));
+    act(() => socket.receiveRaw(JSON.stringify({ type: 'state' })));
+    act(() =>
+      socket.receiveRaw(
+        JSON.stringify({
+          type: 'document',
+          clientId: 'peer',
+          document: foreign
+        })
+      )
+    );
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    expect(onConflict).not.toHaveBeenCalled();
+
+    // The handler survived: a valid frame for this project is still adopted.
+    act(() =>
+      socket.receive({
+        type: 'state',
+        members: [],
+        document: local,
+        role: 'owner',
+        lease: null
+      })
+    );
+    expect(result.current.role).toBe('owner');
+    unmount();
+  });
+});
+
+describe('parseServerMessage', () => {
+  const owner = toUserId('user_parse_owner');
+  const document = createProjectDocument('Parsed', owner);
+
+  it('accepts well-formed frames for the project', () => {
+    expect(
+      parseServerMessage(
+        JSON.stringify({ type: 'document', clientId: 'p', document }),
+        document.projectId
+      )
+    ).toMatchObject({ type: 'document' });
+    expect(
+      parseServerMessage(
+        JSON.stringify({ type: 'ack', version: document.version }),
+        document.projectId
+      )
+    ).toMatchObject({ type: 'ack' });
+  });
+
+  it('rejects frames with invalid roles, members, and lease targets', () => {
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: 'state',
+          members: [],
+          document: null,
+          role: 'superuser'
+        }),
+        document.projectId
+      )
+    ).toBeNull();
+    expect(
+      parseServerMessage(
+        JSON.stringify({ type: 'presence', members: [{ nope: 1 }] }),
+        document.projectId
+      )
+    ).toBeNull();
+    expect(
+      parseServerMessage(
+        JSON.stringify({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'l',
+            projectId: 'project_other',
+            clientId: 'c',
+            userId: owner,
+            expiresAt: Date.now() + 1000
+          }
+        }),
+        document.projectId
+      )
+    ).toBeNull();
+  });
+
+  it('rejects documents from another project and oversize frames', () => {
+    expect(
+      parseServerMessage(
+        JSON.stringify({ type: 'conflict', document }),
+        'project_other'
+      )
+    ).toBeNull();
+    expect(
+      parseServerMessage(' '.repeat(2_000_001), document.projectId)
+    ).toBeNull();
   });
 });
