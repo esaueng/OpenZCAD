@@ -60,6 +60,11 @@ import {
 import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
 import {
+  extrudeBoundsCanShareVolume,
+  extrudeVolumeTolerance,
+  type ExtrudeInferenceBody
+} from './extrude-inference';
+import {
   basisMatchesLiftedFrame,
   bezierFallbackWarning,
   bezierNurbsParams,
@@ -3349,6 +3354,82 @@ function sharedSolidVolume(kernel: BrepKernel, solids: number[]): number {
   return total;
 }
 
+function inferenceBodyForShape(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  bodyId: BodyId,
+  name: string
+): ExtrudeInferenceBody {
+  if (shape.solids.length === 0) {
+    throw new Error(`Body "${name}" contains no exact solids.`);
+  }
+  const boxes = shape.solids.map((solid) => kernel.boundingBox(solid));
+  return {
+    bodyId,
+    name,
+    volume: shape.solids.reduce(
+      (total, solid) => total + kernel.volume(solid, MEASUREMENT_DEFLECTION),
+      0
+    ),
+    bbox: {
+      min: {
+        x: Math.min(...boxes.map((box) => box[0]!)),
+        y: Math.min(...boxes.map((box) => box[1]!)),
+        z: Math.min(...boxes.map((box) => box[2]!))
+      },
+      max: {
+        x: Math.max(...boxes.map((box) => box[3]!)),
+        y: Math.max(...boxes.map((box) => box[4]!)),
+        z: Math.max(...boxes.map((box) => box[5]!))
+      }
+    }
+  };
+}
+
+/** Exact common material between two body shapes; tangency returns zero. */
+function sharedShapeVolume(
+  kernel: BrepKernel,
+  left: ExactShape,
+  right: ExactShape,
+  leftBody: ExtrudeInferenceBody,
+  rightBody: ExtrudeInferenceBody
+): number {
+  if (!extrudeBoundsCanShareVolume(leftBody.bbox, rightBody.bbox)) {
+    return 0;
+  }
+  let total = 0;
+  for (const leftSolid of left.solids) {
+    const leftBox = kernel.boundingBox(leftSolid);
+    for (const rightSolid of right.solids) {
+      const rightBox = kernel.boundingBox(rightSolid);
+      const pairBounds = (box: Float64Array): ExtrudeInferenceBody['bbox'] => ({
+        min: { x: box[0]!, y: box[1]!, z: box[2]! },
+        max: { x: box[3]!, y: box[4]!, z: box[5]! }
+      });
+      if (
+        !extrudeBoundsCanShareVolume(pairBounds(leftBox), pairBounds(rightBox))
+      ) {
+        continue;
+      }
+      try {
+        total += Math.max(
+          0,
+          kernel.volume(
+            kernel.intersect(leftSolid, rightSolid),
+            MEASUREMENT_DEFLECTION
+          )
+        );
+      } catch (error) {
+        throw new Error(
+          'The exact kernel could not measure extrusion overlap; the stored operation was not changed.',
+          { cause: error }
+        );
+      }
+    }
+  }
+  return total > extrudeVolumeTolerance(leftBody, rightBody) ? total : 0;
+}
+
 /**
  * Face unification is allowed to replace the raw Union only when the copied
  * result remains a strict topological solid. The final Union acceptance gate
@@ -4030,6 +4111,121 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             }
             break;
           case 'extrude':
+            if (feature.bodyId) {
+              const extrusion = this.buildSweep(
+                kernel,
+                document,
+                feature,
+                scope,
+                result.sketchBases,
+                (message) =>
+                  result.warnings.push(`Feature "${feature.name}": ${message}`)
+              );
+              const operation = feature.data.operation ?? 'new-body';
+              if (operation === 'new-body') {
+                result.shapes.set(feature.bodyId, extrusion);
+                break;
+              }
+              const targetBodyId = feature.data.targetBodyId;
+              if (!targetBodyId) {
+                throw new Error(
+                  `Stored ${operation} extrusion has no target body.`
+                );
+              }
+              if (result.consumed.has(targetBodyId)) {
+                throw new Error(
+                  `Stored ${operation} target ${bodyName(document, targetBodyId)} was already consumed.`
+                );
+              }
+              if (result.meshBodies.has(targetBodyId)) {
+                throw meshBooleanUnsupportedError(
+                  bodyName(document, targetBodyId)
+                );
+              }
+              const target = result.shapes.get(targetBodyId);
+              if (!target) {
+                throw new Error(
+                  `Stored ${operation} target ${bodyName(document, targetBodyId)} is unavailable.`
+                );
+              }
+              const targetBody = inferenceBodyForShape(
+                kernel,
+                target,
+                targetBodyId,
+                bodyName(document, targetBodyId)
+              );
+              const extrusionBody = inferenceBodyForShape(
+                kernel,
+                extrusion,
+                feature.bodyId,
+                feature.name
+              );
+              if (
+                sharedShapeVolume(
+                  kernel,
+                  target,
+                  extrusion,
+                  targetBody,
+                  extrusionBody
+                ) <= 0
+              ) {
+                throw new Error(
+                  `Stored ${operation} extrusion no longer overlaps ${targetBody.name}; operation was not re-inferred.`
+                );
+              }
+              const targetSolid = collapseShape(kernel, target);
+              const extrusionSolid = collapseShape(kernel, extrusion);
+              const solid =
+                operation === 'add'
+                  ? fuseUniformSolid(kernel, [
+                      ...target.solids,
+                      ...extrusion.solids
+                    ])
+                  : unifyBooleanFaces(
+                      kernel,
+                      tryExactCoaxialCylinderCut(
+                        kernel,
+                        targetSolid,
+                        extrusionSolid
+                      ) ?? kernel.cut(targetSolid, extrusionSolid)
+                    );
+              const resultBounds = kernel.boundingBox(solid);
+              const resultBody: ExtrudeInferenceBody = {
+                bodyId: feature.bodyId,
+                name: feature.name,
+                volume: kernel.volume(solid, MEASUREMENT_DEFLECTION),
+                bbox: {
+                  min: {
+                    x: resultBounds[0]!,
+                    y: resultBounds[1]!,
+                    z: resultBounds[2]!
+                  },
+                  max: {
+                    x: resultBounds[3]!,
+                    y: resultBounds[4]!,
+                    z: resultBounds[5]!
+                  }
+                }
+              };
+              if (
+                operation === 'cut' &&
+                resultBody.volume <=
+                  extrudeVolumeTolerance(targetBody, extrusionBody)
+              ) {
+                throw new Error(
+                  `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
+                );
+              }
+              result.consumed.add(targetBodyId);
+              result.shapes.set(feature.bodyId, {
+                solids: [solid],
+                lineage: brepKitHashOnlyLineage(
+                  'boolean',
+                  `The stored extrusion ${operation} does not expose a verified output topology relation.`
+                )
+              });
+            }
+            break;
           case 'revolve':
             if (feature.bodyId) {
               result.shapes.set(
@@ -4047,9 +4243,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 )
               );
               if (
-                feature.data.featureKind === 'revolve' &&
                 resolveRevolveAngleDeg(feature.data.angleDeg, scope) <
-                  FULL_REVOLVE_ANGLE_DEG
+                FULL_REVOLVE_ANGLE_DEG
               ) {
                 result.partialRevolveBodies.add(feature.bodyId);
               }
