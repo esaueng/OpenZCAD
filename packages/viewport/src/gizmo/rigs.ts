@@ -20,6 +20,11 @@ const ARROW_HEAD_LENGTH = 0.3;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
 
+/** Neutral drawing-callout white, distinct from the accent-blue handles. */
+const DIMENSION_LINE_COLOR = 0xf4f7fb;
+const DIMENSION_ARROW_RADIUS = 0.055;
+const DIMENSION_ARROW_LENGTH = 0.22;
+
 const EDGE_HANDLE_RADIUS = 0.16;
 const EDGE_HIT_RADIUS = 0.65;
 
@@ -277,8 +282,13 @@ export function buildCylinderRadiusHandle(
   hit.position.y = 0.7;
   addHandleParts(group, [shaft, head, hit]);
 
+  // The measurement graphic is a radius callout: a dashed line from the axis
+  // out to the handle on the wall, with a small arrowhead at each end. It is
+  // visible for the whole gesture — the line is what says "this drag edits a
+  // radius", not just where the delta went.
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
+  const axisCenter = origin.clone().addScaledVector(direction, -originalRadius);
   const leaderGeometry = new LineGeometry();
   leaderGeometry.setPositions([
     origin.x,
@@ -291,22 +301,75 @@ export function buildCylinderRadiusHandle(
   const leader = new Line2(
     leaderGeometry,
     new LineMaterial({
-      color: HANDLE_COLOR,
+      color: DIMENSION_LINE_COLOR,
       linewidth: 1.5,
       dashed: true,
       dashSize: 2,
       gapSize: 1.5,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.9,
       depthTest: false
     })
   );
   leader.computeLineDistances();
   leader.renderOrder = 29;
-  leader.visible = false;
   worldGroup.add(leader);
 
+  const arrowheadMaterial = new THREE.MeshBasicMaterial({
+    color: DIMENSION_LINE_COLOR,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false
+  });
+  const makeArrowhead = () => {
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(
+        DIMENSION_ARROW_RADIUS,
+        DIMENSION_ARROW_LENGTH,
+        12
+      ),
+      arrowheadMaterial
+    );
+    head.renderOrder = 30;
+    worldGroup.add(head);
+    return head;
+  };
+  const tipArrowhead = makeArrowhead();
+  const farArrowhead = makeArrowhead();
+  const outward = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    direction
+  );
+  const inward = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    direction.clone().negate()
+  );
+  tipArrowhead.quaternion.copy(outward);
+  farArrowhead.quaternion.copy(inward);
+
   let currentRadius = originalRadius;
+  const updateGraphic = () => {
+    const radialDelta = currentRadius - originalRadius;
+    const tip = origin.clone().addScaledVector(direction, radialDelta);
+    group.position.copy(tip);
+    const far = axisCenter;
+    leaderGeometry.setPositions([far.x, far.y, far.z, tip.x, tip.y, tip.z]);
+    leader.computeLineDistances();
+    // Match the screen-space sizing of the handle, whose scale the viewer
+    // stamps on the group each frame.
+    const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+    tipArrowhead.scale.setScalar(scale);
+    farArrowhead.scale.setScalar(scale);
+    // Each cone's tip lands exactly on its end of the line.
+    tipArrowhead.position
+      .copy(tip)
+      .addScaledVector(direction, (-DIMENSION_ARROW_LENGTH / 2) * scale);
+    farArrowhead.position
+      .copy(far)
+      .addScaledVector(direction, (DIMENSION_ARROW_LENGTH / 2) * scale);
+  };
+  updateGraphic();
+
   return {
     kind,
     group,
@@ -315,34 +378,17 @@ export function buildCylinderRadiusHandle(
     direction,
     setValue(radius: number) {
       currentRadius = radius;
-      const radialDelta = radius - originalRadius;
-      const tip = origin.clone().addScaledVector(direction, radialDelta);
-      group.position.copy(tip);
-      leader.visible = Math.abs(radialDelta) > 1e-9;
-      if (leader.visible) {
-        leaderGeometry.setPositions([
-          origin.x,
-          origin.y,
-          origin.z,
-          tip.x,
-          tip.y,
-          tip.z
-        ]);
-        leader.computeLineDistances();
-      }
+      updateGraphic();
     },
     value() {
       return currentRadius;
     },
-    chipAnchor(gizmoScale: number) {
-      const radialDelta = currentRadius - originalRadius;
-      return origin
+    chipAnchor() {
+      // The chip rides the dimension line itself, partway between the axis
+      // and the wall, like a drawing's inline radius callout.
+      return axisCenter
         .clone()
-        .addScaledVector(
-          direction,
-          radialDelta +
-            CHIP_ANCHOR_LOCAL_DISTANCE * Math.max(gizmoScale, 0)
-        );
+        .addScaledVector(direction, currentRadius * 0.45);
     },
     dispose() {
       disposeRigGroups(group, worldGroup);
