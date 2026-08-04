@@ -946,6 +946,135 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   expect(consoleErrors).toEqual([]);
 });
 
+for (const modifier of [
+  { label: 'Fillet', sizeLabel: 'Radius' },
+  { label: 'Chamfer', sizeLabel: 'Distance' }
+] as const) {
+  test(`drags a cylinder radius through its two-rim ${modifier.label.toLowerCase()} ancestry`, async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    const consoleErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        consoleErrors.push(message.text());
+      }
+    });
+    await page.goto('/');
+    await page
+      .getByLabel('Project name')
+      .fill(`${modifier.label} Cylinder Radius Drag`);
+    await page.getByRole('button', { name: 'Create project' }).click();
+
+    await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+    const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    await inspector.getByLabel('Radius', { exact: true }).fill('4.6');
+    await inspector.getByLabel('Height', { exact: true }).fill('12');
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+
+    await page
+      .getByRole('button', { name: new RegExp(`^${modifier.label}`) })
+      .click();
+    await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
+    await inspector.getByLabel(modifier.sizeLabel, { exact: true }).fill('1');
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+
+    const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
+    const blend = page.locator('.feature-row', {
+      hasText: new RegExp(`^${modifier.label}`)
+    });
+    await expect(blend).toBeVisible();
+    await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
+    await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+    await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+
+    const canvas = page.locator('.viewer-host canvas');
+    await canvas.evaluate((element) => {
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-cylinder', {
+          detail: { surface: 'wall' }
+        })
+      );
+    });
+    await expect(
+      page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+    ).toBeVisible();
+    await expect(page.getByTestId('live-cylinder-radius')).toHaveText('4.6 mm');
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(Object.values(handle).every(Number.isFinite)).toBe(true);
+    const start = {
+      x: bounds!.x + handle.x,
+      y: bounds!.y + handle.y
+    };
+    const end = {
+      x: start.x + handle.dx * handle.pixelsPerUnit * 1.8,
+      y: start.y + handle.dy * handle.pixelsPerUnit * 1.8
+    };
+
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    // Shift disables radius snapping only after the handle owns the pointer;
+    // holding it on pointerdown intentionally routes the gesture to orbit.
+    await page.keyboard.down('Shift');
+    try {
+      await page.mouse.move(end.x, end.y, { steps: 8 });
+      await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
+        '6.4 mm'
+      );
+      await page.mouse.up();
+    } finally {
+      await page.keyboard.up('Shift');
+    }
+
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Adjusted cylinder radius to R 6.4 mm.'
+    );
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+    await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
+    await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+    await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+    await cylinder.locator('.feature-row-main').click();
+    await expect
+      .poll(async () =>
+        Number(
+          await inspector.getByLabel('Radius', { exact: true }).inputValue()
+        )
+      )
+      .toBeCloseTo(6.4, 5);
+
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await cylinder.locator('.feature-row-main').click();
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+      '4.6'
+    );
+    await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Redo' }).click();
+    await cylinder.locator('.feature-row-main').click();
+    await expect
+      .poll(async () =>
+        Number(
+          await inspector.getByLabel('Radius', { exact: true }).inputValue()
+        )
+      )
+      .toBeCloseTo(6.4, 5);
+    await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
+    await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+    expect(consoleErrors).toEqual([]);
+  });
+}
+
 test('preflights and creates an exact open-top shell', async ({ page }) => {
   await stubApi(page);
   const consoleErrors: string[] = [];
