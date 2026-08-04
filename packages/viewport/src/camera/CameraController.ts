@@ -7,7 +7,11 @@ import {
   tweenOrientationFor,
   VIEW_DIRECTIONS
 } from './views';
-import { pointerBindingsFor, type MiddleDragAction } from '../input/bindings';
+import {
+  pointerBindingsFor,
+  shiftOrbitBindingsFor,
+  type MiddleDragAction
+} from '../input/bindings';
 import type { ProjectionMode } from '../types';
 
 /** A durable camera pose: what a reload restores. */
@@ -486,8 +490,23 @@ export class CameraController {
     this.applyPointerBindings(this.orbit);
   }
 
-  private applyPointerBindings(orbit: OrbitControls<THREE.Camera>) {
-    const bindings = pointerBindingsFor(this.options.middleDrag());
+  /**
+   * OrbitControls normally turns Shift+left-drag into a pan. Temporarily
+   * presenting the left button as pan makes its built-in modifier swap choose
+   * rotate instead, without replacing or patching the third-party controls.
+   */
+  setShiftOrbitActive(active: boolean) {
+    this.applyPointerBindings(this.orbit, active);
+  }
+
+  private applyPointerBindings(
+    orbit: OrbitControls<THREE.Camera>,
+    shiftOrbit = false
+  ) {
+    const middleDrag = this.options.middleDrag();
+    const bindings = shiftOrbit
+      ? shiftOrbitBindingsFor(middleDrag)
+      : pointerBindingsFor(middleDrag);
     const toMouse = (action: string) =>
       action === 'orbit'
         ? THREE.MOUSE.ROTATE
