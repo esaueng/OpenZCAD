@@ -17,8 +17,7 @@ function faceState(
     mode: 'face',
     op,
     target: {
-      surfaceType:
-        op === 'resize-cylinder-radius' ? 'cylindrical' : 'planar',
+      surfaceType: op === 'resize-cylinder-radius' ? 'cylindrical' : 'planar',
       ...(op === 'resize-cylinder-radius' ? { radius: 4 } : {}),
       bodyId: 'body-1',
       topologyId: 'face-1',
@@ -77,6 +76,7 @@ function sketchState(
       sketchId: 'sketch-1',
       plane: { kind: 'canonical', plane: 'xy' } as never,
       tool,
+      circleMode: 'center-radius',
       drawing,
       selectedObjectId
     }
@@ -182,7 +182,11 @@ describe('the step describes the operation actually armed', () => {
   });
 
   it('surfaces the kernel own words when a value is refused', () => {
-    const refused = faceState('failed', 'offset-face', 'Offset removes the face.');
+    const refused = faceState(
+      'failed',
+      'offset-face',
+      'Offset removes the face.'
+    );
     expect(commandPrompt(refused)?.step).toContain('Offset removes the face.');
   });
 
