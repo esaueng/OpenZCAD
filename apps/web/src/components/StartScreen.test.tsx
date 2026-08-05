@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
@@ -68,5 +68,30 @@ describe('StartScreen cloud project status', () => {
     expect(
       screen.queryByRole('button', { name: 'Save it to my account' })
     ).toBeNull();
+  });
+});
+
+describe('StartScreen collapsed project grid', () => {
+  it('shows nine saved projects before moving the rest behind the expand control', () => {
+    const projects = Array.from({ length: 26 }, (_, index) => ({
+      projectId: toProjectId(`project_${index + 1}`),
+      name: `Part ${index + 1}`,
+      revisionCount: index + 1,
+      updatedAt: '2026-08-04T12:00:00.000Z'
+    }));
+
+    renderStartScreen({ projects, signedIn: false });
+
+    expect(screen.getByText('Part 9')).toBeInTheDocument();
+    expect(screen.queryByText('Part 10')).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Show 17 more parts' })
+    );
+
+    expect(screen.getByText('Part 26')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Show fewer parts' })
+    ).toBeInTheDocument();
   });
 });
