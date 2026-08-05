@@ -117,6 +117,7 @@ interface SettingsPageProps {
   initialSection?: SectionId;
   desktopAuthorizationAttempt?: string | null;
   desktopAuthorizationApproved?: boolean;
+  desktopAuthorizationCode?: string;
   onChange(settings: AppSettings): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
@@ -128,6 +129,7 @@ interface SettingsPageProps {
   onVerifyLoginCode(challengeId: string, code: string): Promise<void>;
   onRefreshAuthConfig(): Promise<void>;
   onStartDesktopLogin(): Promise<void>;
+  onDesktopAuthorizationCodeChange(code: string): void;
   onApproveDesktopLogin(): Promise<void>;
   onLogout(): Promise<void>;
   onReset(): void;
@@ -469,6 +471,7 @@ export function SettingsPage({
   initialSection,
   desktopAuthorizationAttempt = null,
   desktopAuthorizationApproved = false,
+  desktopAuthorizationCode = '',
   onChange,
   onSaveCredential,
   onDeleteCredential,
@@ -477,6 +480,7 @@ export function SettingsPage({
   onVerifyLoginCode,
   onRefreshAuthConfig,
   onStartDesktopLogin,
+  onDesktopAuthorizationCodeChange,
   onApproveDesktopLogin,
   onLogout,
   onReset,
@@ -1499,20 +1503,42 @@ export function SettingsPage({
                       <span>
                         {desktopAuthorizationApproved
                           ? 'OpenZCAD for macOS is connected. You can return to the app.'
-                          : 'Continue to connect this cloud profile to OpenZCAD for macOS.'}
+                          : 'Enter the 8-character code shown in your OpenZCAD for macOS window before connecting this cloud profile.'}
                       </span>
                       {!desktopAuthorizationApproved ? (
-                        <button
-                          className="primary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            void onApproveDesktopLogin().catch(() => undefined)
-                          }
-                        >
-                          <LogIn size={14} aria-hidden="true" />
-                          Continue in OpenZCAD
-                        </button>
+                        <>
+                          <label className="settings-field settings-field-inline">
+                            <span>Desktop code</span>
+                            <input
+                              type="text"
+                              value={desktopAuthorizationCode}
+                              inputMode="text"
+                              autoComplete="one-time-code"
+                              maxLength={11}
+                              placeholder="ABCD1234"
+                              onChange={(event) =>
+                                onDesktopAuthorizationCodeChange(
+                                  event.currentTarget.value.toUpperCase()
+                                )
+                              }
+                            />
+                          </label>
+                          <button
+                            className="primary"
+                            type="button"
+                            disabled={
+                              busy || desktopAuthorizationCode.trim().length < 8
+                            }
+                            onClick={() =>
+                              void onApproveDesktopLogin().catch(
+                                () => undefined
+                              )
+                            }
+                          >
+                            <LogIn size={14} aria-hidden="true" />
+                            Continue in OpenZCAD
+                          </button>
+                        </>
                       ) : null}
                     </div>
                   ) : null}
