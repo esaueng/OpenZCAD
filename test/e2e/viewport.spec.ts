@@ -11,6 +11,38 @@ async function selectRailView(page: Page, name: RegExp | string) {
   await page.getByRole('button', { name }).click();
 }
 
+test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('History Rail Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const topbar = page.locator('.topbar');
+  await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+  await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
+
+  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
+  const undo = rail.getByRole('button', { name: 'Undo' });
+  const redo = rail.getByRole('button', { name: 'Redo' });
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeDisabled();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(undo).toBeEnabled();
+
+  await undo.click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('0 bodies');
+  await expect(redo).toBeEnabled();
+
+  await redo.click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+});
+
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
   page
 }) => {
