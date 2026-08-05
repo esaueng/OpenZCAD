@@ -12,6 +12,7 @@ import {
 } from '../apps/web/worker/assistant';
 import { parseAssistantProposalRequest } from '../apps/web/worker/validation';
 import {
+  INVALID_STRUCTURED_OUTPUT_MESSAGE,
   parseAssistantEventData,
   readAssistantEvent,
   streamAssistantReply
@@ -47,9 +48,18 @@ describe('assistant integration', () => {
       first.text
     );
     expect(second.text).toBe('{"summary":"Wider"}');
+    expect(
+      readAssistantEvent(
+        { type: 'response.output_text.done', text: second.text },
+        second.text
+      ).done
+    ).toBe(false);
+    expect(
+      readAssistantEvent({ type: 'response.completed' }, second.text).done
+    ).toBe(true);
   });
 
-  it('ignores malformed SSE frames and rejects truncated streams', async () => {
+  it('rejects malformed SSE frames as a protocol failure', async () => {
     expect(parseAssistantEventData('{not-json')).toBeNull();
     vi.stubGlobal(
       'fetch',
@@ -64,7 +74,10 @@ describe('assistant integration', () => {
 
     await expect(
       streamAssistantReply({ prompt: input.prompt, digest: input.digest })
-    ).rejects.toThrow('stream ended before the proposal was complete');
+    ).rejects.toMatchObject({
+      code: 'AI_STREAM_PROTOCOL',
+      message: 'The modeling assistant returned an invalid stream event.'
+    });
   });
 
   it('reports a mid-stream provider disconnect', async () => {
@@ -92,6 +105,82 @@ describe('assistant integration', () => {
     await expect(
       streamAssistantReply({ prompt: input.prompt, digest: input.digest })
     ).rejects.toThrow('connection ended before the proposal was complete');
+  });
+
+  it('reports completed non-JSON output without exposing JSON.parse errors', async () => {
+    const requestId = '019fcf75-2cc4-7832-befc-50ae06c9e985';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: 'I could not produce the requested model.'
+            })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`,
+            {
+              headers: {
+                'content-type': 'text/event-stream',
+                'x-openzcad-request-id': requestId
+              }
+            }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({
+      code: 'AI_INVALID_JSON',
+      requestId,
+      message: `${INVALID_STRUCTURED_OUTPUT_MESSAGE} Reference: ${requestId}.`
+    });
+  });
+
+  it('classifies valid JSON that violates the assistant reply contract', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: JSON.stringify({ replyKind: 'message', message: '' })
+            })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({
+      code: 'AI_INVALID_REPLY',
+      message: INVALID_STRUCTURED_OUTPUT_MESSAGE
+    });
+  });
+
+  it('requires response.completed after final output text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              text: JSON.stringify({
+                replyKind: 'message',
+                message: 'Finished'
+              })
+            })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+
+    await expect(
+      streamAssistantReply({ prompt: input.prompt, digest: input.digest })
+    ).rejects.toMatchObject({ code: 'AI_STREAM_TRUNCATED' });
   });
 
   it('bounds conversation history and rejects unusable attachments', () => {
@@ -359,6 +448,7 @@ describe('assistant integration', () => {
         format: { type: 'json_schema', name: 'openzcad_reply', strict: true }
       }
     });
+    expect(request.provider).toBeUndefined();
   });
 
   it('uses one owner-scoped runtime configuration without leaking it into app defaults', async () => {
@@ -710,17 +800,71 @@ describe('assistant integration', () => {
     expect(headers.get('http-referer')).toBe('https://beta.openzcad.example');
     const request = JSON.parse(init?.body as string) as {
       model: string;
+      provider: { require_parameters: boolean };
       reasoning: { effort: string };
       stream: boolean;
     };
     expect(request).toMatchObject({
       model: 'openai/gpt-5.6-sol',
+      provider: { require_parameters: true },
       reasoning: { effort: 'high' },
       stream: true
     });
   });
 
-  it('does not log upstream provider details', async () => {
+  it('logs only bounded metadata for invalid streamed output', async () => {
+    const output = 'not-json';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            `data: ${JSON.stringify({
+              type: 'response.output_text.done',
+              response_id: 'resp_safe_123',
+              text: output
+            })}\n\ndata: ${JSON.stringify({
+              type: 'response.completed',
+              response: { id: 'resp_safe_123' }
+            })}\n\n`,
+            { headers: { 'content-type': 'text/event-stream' } }
+          )
+      )
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      AI_PROVIDER: 'openrouter',
+      OPENROUTER_API_KEY: 'secret-key'
+    });
+    const requestId = response.headers.get('x-openzcad-request-id');
+    await response.text();
+
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses stream failed:',
+      expect.objectContaining({
+        requestId,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        upstreamResponseId: 'resp_safe_123',
+        classification: 'invalid_json',
+        terminalEvent: 'response.completed',
+        outputBytes: output.length,
+        outputSha256:
+          '0c21a879c732a67910d80988df4919d794f6a070aab610ef865032a28046b021',
+        outputHashComplete: true
+      })
+    );
+    const logged = JSON.stringify(consoleError.mock.calls);
+    expect(logged).not.toContain(output);
+    expect(logged).not.toContain('secret-key');
+    expect(logged).not.toContain(input.prompt);
+  });
+
+  it('does not log raw upstream provider details', async () => {
     const longMessage = `Invalid response schema: ${'x'.repeat(600)}`;
     vi.stubGlobal(
       'fetch',
@@ -757,14 +901,21 @@ describe('assistant integration', () => {
     });
 
     expect(response.status).toBe(502);
+    const requestId = response.headers.get('x-openzcad-request-id');
+    expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     await expect(response.json()).resolves.toEqual({
       error: 'The modeling assistant could not generate a patch.',
       code: 'AI_UPSTREAM_ERROR'
     });
-    expect(consoleError).toHaveBeenCalledWith('AI Responses provider failed:', {
-      provider: 'openrouter',
-      status: 400
-    });
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses provider failed:',
+      expect.objectContaining({
+        requestId,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        status: 400
+      })
+    );
     const logged = JSON.stringify(consoleError.mock.calls);
     expect(logged).not.toContain('secret-key');
     expect(logged).not.toContain(longMessage);
