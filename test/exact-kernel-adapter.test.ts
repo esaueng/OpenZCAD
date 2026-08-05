@@ -2069,6 +2069,99 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
+  it('shrinks a coaxial through-hole without faceting the analytic shell', async () => {
+    const withCylinder = addPrimitiveFeature(
+      createProjectDocument('Coaxial bore resize', toUserId('user_exact')),
+      {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 14, height: 28 }
+      }
+    );
+    const cylinderId = withCylinder.bodyOrder.at(-1)!;
+    const { document: withSketch, sketchId } = addSketchFeature(withCylinder, {
+      name: 'Bore sketch',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'circle', radius: 6.083, centerX: 0, centerY: 0 }
+      ]
+    });
+    const { document: withExtrude, bodyId: boreToolId } = extrudeSketch(
+      withSketch,
+      {
+        name: 'Bore tool',
+        sketchId,
+        distance: 28
+      }
+    );
+    const document = new CommandManager(withExtrude).execute(
+      commandFactories.booleanBodies({
+        name: 'Through hole',
+        operation: 'subtract',
+        targetBodyIds: [cylinderId, boreToolId]
+      })
+    );
+    const resultId = document.bodyOrder.at(-1)!;
+
+    const source = await adapter.syncDocument(document);
+    expect(source.warnings).toEqual([]);
+    const sourceBody = source.bodyRepresentations[resultId];
+    expect(sourceBody?.faceCount).toBe(4);
+    const sourceCylinders = sourceBody?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(sourceCylinders).toHaveLength(2);
+    const bore = sourceCylinders?.find(
+      (face) => Math.abs(face.geometry!.radius! - 6.083) < 1e-6
+    );
+    expect(bore).toBeTruthy();
+
+    const edited = directEditBody(document, {
+      name: 'Resize Cylinder Radius',
+      targetBodyId: resultId,
+      operation: {
+        kind: 'resize-cylindrical-face',
+        faceHash: bore!.hash,
+        sourceRadius: bore!.geometry!.radius!,
+        sourceAxisStart: bore!.geometry!.axisStart!,
+        sourceAxisEnd: bore!.geometry!.axisEnd!,
+        concavity: 'hole',
+        radius: 5
+      }
+    }).document;
+    const resized = await adapter.syncDocument(edited);
+    expect(resized.warnings).toEqual([]);
+    const resizedBody = resized.bodyRepresentations[resultId];
+    expect(resizedBody?.faceCount).toBe(4);
+    const resizedCylinders = resizedBody?.topology?.faces.filter(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    );
+    expect(resizedCylinders).toHaveLength(2);
+    const resizedRadii = resizedCylinders!
+      .map((face) => face.geometry!.radius!)
+      .sort((left, right) => left - right);
+    expect(resizedRadii[0]).toBeCloseTo(5, 9);
+    expect(resizedRadii[1]).toBeCloseTo(14, 9);
+    expect(resizedBody?.volume).toBeCloseTo(
+      Math.PI * (14 ** 2 - 5 ** 2) * 28,
+      6
+    );
+
+    const rebuilt = await adapter.syncDocument(edited);
+    expect(rebuilt.warnings).toEqual([]);
+    expect(rebuilt.bodyRepresentations[resultId]?.volume).toBeCloseTo(
+      resizedBody!.volume,
+      9
+    );
+
+    const step = await adapter.exportStep(edited, [resultId]);
+    expect(step.match(/CYLINDRICAL_SURFACE/g)).toHaveLength(2);
+    await expect(adapter.inspectStep(step)).resolves.toMatchObject({
+      solid: true,
+      valid: true
+    });
+  });
+
   it('grows and shrinks a free-standing boss', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Boss resize', toUserId('user_exact')),
