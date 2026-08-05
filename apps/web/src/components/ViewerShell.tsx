@@ -55,6 +55,10 @@ interface ViewerShellProps {
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo(): void;
+  onRedo(): void;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -139,6 +143,10 @@ export function ViewerShell({
   hideViewerToolbar = false,
   selectionChip,
   onClearSelection,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   projection,
   initialView,
   onViewChange,
@@ -263,6 +271,10 @@ export function ViewerShell({
           <ViewerToolbar
             settings={settings}
             projection={projection}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
             onToggleGrid={onToggleGrid}
             onFit={onFit}
             onView={onView}
