@@ -437,6 +437,9 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
     timeout: 15_000
   });
   await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: 'Workspace status' })
+  ).toContainText('syncLocal only');
   expect(cloudProjectRequests).toBe(0);
 });
 
