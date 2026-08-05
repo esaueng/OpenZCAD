@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
-import { selectProjectDocument } from '../apps/web/src/lib/localProjectStore';
+import {
+  createProjectDocument,
+  duplicateProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { toBodyId, toUserId } from '@openzcad/shared';
+import {
+  restoreDuplicateDerivedProjection,
+  selectProjectDocument
+} from '../apps/web/src/lib/localProjectStore';
 
 describe('local-first project resolution', () => {
   it('keeps newer local edits when the cloud copy is stale', () => {
@@ -32,5 +39,44 @@ describe('local-first project resolution', () => {
     expect(selectProjectDocument(local, remote)).toBe(remote);
     expect(selectProjectDocument(local, null)).toBe(local);
     expect(selectProjectDocument(null, remote)).toBe(remote);
+  });
+});
+
+describe('duplicate project projections', () => {
+  it('reuses the matching local source projection for a cloud duplicate', () => {
+    const userId = toUserId('user_test');
+    const bodyId = toBodyId('body_preview');
+    const source = createProjectDocument('Bracket', userId);
+    const bodyRepresentations = {
+      [bodyId]: { name: 'Preview body' }
+    } as unknown as typeof source.derived.bodyRepresentations;
+    source.derived = {
+      ...source.derived,
+      bodyRepresentations,
+      exportableBodyIds: [bodyId]
+    };
+    const cloudDuplicate = withoutDerivedProjection(
+      duplicateProjectDocument(source, 'Bracket (copy)', userId)
+    );
+
+    const restored = restoreDuplicateDerivedProjection(cloudDuplicate, source);
+
+    expect(restored.derived.bodyRepresentations).toBe(bodyRepresentations);
+    expect(restored.derived.exportableBodyIds).toEqual([bodyId]);
+    expect(restored.derived.updatedAt).toBe(cloudDuplicate.derived.updatedAt);
+  });
+
+  it('refuses a projection from a different source revision', () => {
+    const userId = toUserId('user_test');
+    const source = createProjectDocument('Bracket', userId);
+    const cloudDuplicate = withoutDerivedProjection(
+      duplicateProjectDocument(source, 'Bracket (copy)', userId)
+    );
+    const staleSource = structuredClone(source);
+    staleSource.revisions = [];
+
+    expect(restoreDuplicateDerivedProjection(cloudDuplicate, staleSource)).toBe(
+      cloudDuplicate
+    );
   });
 });
