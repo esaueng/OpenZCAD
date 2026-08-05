@@ -1414,7 +1414,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     credentialSource: 'deployment',
     provider: 'openrouter',
     baseUrl: '',
-    model: 'openai/gpt-5.6-terra',
+    model: 'openai/gpt-5.6-sol',
     reasoningEffort: 'high',
     maxOutputTokens: 32_000,
     timeoutMs: 120_000,
