@@ -6,9 +6,21 @@ import { selectProjectDocument } from '../apps/web/src/lib/localProjectStore';
 describe('local-first project resolution', () => {
   it('keeps newer local edits when the cloud copy is stale', () => {
     const remote = createProjectDocument('Bracket', toUserId('user_test'));
+    const remoteRoot = remote.nodes[remote.rootNodeId];
     const local = {
       ...structuredClone(remote),
+      name: 'Bracket edited here',
       version: remote.version + 2,
+      nodes:
+        remoteRoot?.kind === 'project'
+          ? {
+              ...remote.nodes,
+              [remote.rootNodeId]: {
+                ...remoteRoot,
+                name: 'Bracket edited here'
+              }
+            }
+          : remote.nodes,
       derived: { ...remote.derived, updatedAt: '2026-07-12T20:00:00.000Z' }
     };
     expect(selectProjectDocument(local, remote)).toBe(local);
