@@ -245,8 +245,8 @@
   background: var(--color-surface-hover);
 }
 
-/* Viewport HUD: ghost stat chips bottom-left (the rail covers view/display
-   state top-right), plus the drafting-frame corner marks. */
+/* Viewport HUD: ghost stat chips bottom-left; the rail covers view/display
+   state top-right. */
 .vp-hud {
   position: absolute;
   z-index: var(--z-viewer-overlay);
@@ -281,49 +281,6 @@
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
-}
-
-.viewport-frame {
-  position: absolute;
-  inset: 10px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-.frame-corner {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  border: 0 solid var(--color-border-strong);
-  opacity: 0.55;
-}
-
-.frame-corner.tl {
-  top: 0;
-  left: 0;
-  border-top-width: 1px;
-  border-left-width: 1px;
-}
-
-.frame-corner.tr {
-  top: 0;
-  right: 0;
-  border-top-width: 1px;
-  border-right-width: 1px;
-}
-
-.frame-corner.bl {
-  bottom: 0;
-  left: 0;
-  border-bottom-width: 1px;
-  border-left-width: 1px;
-}
-
-.frame-corner.br {
-  bottom: 0;
-  right: 0;
-  border-bottom-width: 1px;
-  border-right-width: 1px;
 }
 
 /* Snap glyph: a marker on the point a drag locked onto, with the kind named
