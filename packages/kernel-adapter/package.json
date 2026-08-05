@@ -15,6 +15,6 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
-    "brepkit-wasm": "github:esaueng/brepkit#bbce6cff72c7f81319063326ce8bc1df273b2d64&path:/crates/wasm/pkg"
+    "brepkit-wasm": "github:esaueng/brepkit#dc11370bb89c3f5f1e353d074d0312fe257b5dd1&path:/crates/wasm/pkg"
   }
 }
