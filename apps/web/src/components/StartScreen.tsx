@@ -32,6 +32,7 @@ import {
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
+import { generateCutePartName } from '../lib/cutePartName';
 import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demos';
@@ -136,7 +137,7 @@ export function StartScreen({
   onEmptyTrash,
   loadThumbnailBodies
 }: StartScreenProps) {
-  const [name, setName] = useState('New Part');
+  const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
@@ -926,7 +927,6 @@ export function StartScreen({
                   aria-describedby={
                     nameTooLong ? 'project-name-error' : undefined
                   }
-                  onFocus={(event) => event.currentTarget.select()}
                   onChange={(event) => setName(event.target.value)}
                 />
                 {nameTooLong && (

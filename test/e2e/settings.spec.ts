@@ -8,6 +8,51 @@ import {
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
+test('suggests a fresh part name without selecting it', async ({ page }) => {
+  await page.addInitScript(() => {
+    const storageKey = '__openzcad_e2e_cute_name_seed';
+    const seed = Number(window.sessionStorage.getItem(storageKey) ?? '0') + 1;
+    window.sessionStorage.setItem(storageKey, String(seed));
+    const getRandomValues: Crypto['getRandomValues'] =
+      window.crypto.getRandomValues.bind(window.crypto);
+    Object.defineProperty(window.crypto, 'getRandomValues', {
+      configurable: true,
+      value: <T extends ArrayBufferView>(array: T): T => {
+        if (array instanceof Uint32Array && array.length === 1) {
+          array[0] = seed;
+          return array;
+        }
+        return getRandomValues(array);
+      }
+    });
+  });
+  await stubApi(page);
+  await page.goto('/');
+
+  const projectName = page.getByLabel('Project name');
+  await expect(projectName).toBeFocused();
+  await expect(projectName).not.toHaveValue('New Part');
+  const initialName = await projectName.inputValue();
+  const initialSelection = await projectName.evaluate(
+    (input: HTMLInputElement) => ({
+      start: input.selectionStart,
+      end: input.selectionEnd
+    })
+  );
+  expect(initialSelection.start).toBe(initialSelection.end);
+
+  await page.reload();
+  await expect(projectName).toBeFocused();
+  await expect(projectName).not.toHaveValue(initialName);
+  const reloadedSelection = await projectName.evaluate(
+    (input: HTMLInputElement) => ({
+      start: input.selectionStart,
+      end: input.selectionEnd
+    })
+  );
+  expect(reloadedSelection.start).toBe(reloadedSelection.end);
+});
+
 test('keeps command names visible at the compact desktop breakpoint', async ({
   page
 }) => {
