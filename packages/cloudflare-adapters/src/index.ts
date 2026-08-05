@@ -111,6 +111,11 @@ export interface CloudflareEnv {
    * those on with it.
    */
   PROJECT_PERSONAL_SYNC_ENABLED?: string;
+  /**
+   * Comma-separated authenticated email allowlist for the collaboration
+   * canary. Missing or empty stays closed; keep this in Worker secrets.
+   */
+  PROJECT_COLLABORATION_CANARY_EMAILS?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_FACE_SKETCH_ENABLED?: string;
   AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED?: string;
@@ -202,6 +207,42 @@ export function isCloudflareFeatureEnabled(
     typeof value === 'string' &&
     ENABLED_BOOLEAN_ENV_VALUES.has(value.trim().toLowerCase())
   );
+}
+
+export interface ProjectCollaborationRollout {
+  sharingEnabled: boolean;
+  editLeasesEnforced: boolean;
+  personalSyncEnabled: boolean;
+  canary: boolean;
+}
+
+/**
+ * Resolves the collaboration gates for one authenticated account. Global
+ * flags remain available for later rollout, while the secret email allowlist
+ * opens the complete viewer/editor/lease canary only for named accounts.
+ */
+export function projectCollaborationRollout(
+  env: CloudflareEnv,
+  email?: string
+): ProjectCollaborationRollout {
+  const normalizedEmail = email?.trim().toLowerCase();
+  const canary = Boolean(
+    normalizedEmail &&
+    env.PROJECT_COLLABORATION_CANARY_EMAILS?.split(',').some(
+      (candidate) => candidate.trim().toLowerCase() === normalizedEmail
+    )
+  );
+  const sharingEnabled =
+    isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED') || canary;
+  return {
+    sharingEnabled,
+    editLeasesEnforced:
+      isCloudflareFeatureEnabled(env, 'PROJECT_EDIT_LEASES_ENFORCED') || canary,
+    personalSyncEnabled:
+      isCloudflareFeatureEnabled(env, 'PROJECT_PERSONAL_SYNC_ENABLED') ||
+      canary,
+    canary
+  };
 }
 
 export class D1R2PersistenceService implements PersistenceService {
@@ -2156,6 +2197,7 @@ interface CollaborationSocketTicket {
   projectId: string;
   userId: UserId;
   displayName: string;
+  email?: string;
   role: SharedProjectAccessRole;
   expiresAt: number;
 }
@@ -2266,6 +2308,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       clientId: string;
       userId: UserId;
       displayName: string;
+      email?: string;
       role: SharedProjectAccessRole;
     }
   >();
@@ -2372,6 +2415,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     const ticketValues = url.searchParams.getAll('ticket');
     let userId = request.headers.get('x-openzcad-user-id') as UserId | null;
     let displayName = request.headers.get('x-openzcad-display-name');
+    let email = request.headers.get('x-openzcad-user-email') ?? undefined;
     let role = trustedProjectRole(request.headers);
     if (ticketValues.length > 0) {
       const claim =
@@ -2385,10 +2429,14 @@ export class ProjectCollaborationRoom extends DurableObject {
       }
       userId = claim.userId;
       displayName = claim.displayName;
+      email = claim.email;
       role = claim.role;
     }
     if (!userId || !displayName || !projectId || !role) {
       return new Response('Missing collaboration identity.', { status: 400 });
+    }
+    if (!this.collaborationAccessAllowed(role, email)) {
+      return new Response('Collaboration access is disabled.', { status: 403 });
     }
     if (this.projectId && this.projectId !== projectId) {
       return new Response('Room project mismatch.', { status: 409 });
@@ -2412,7 +2460,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           event.data,
           userId,
           displayName,
-          role
+          role,
+          email
         ).catch(() => {
           console.error('Collaboration message handling failed.');
           this.send(server, {
@@ -2442,6 +2491,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     const projectId = new URL(request.url).searchParams.get('projectId');
     const userId = request.headers.get('x-openzcad-user-id');
     const displayName = request.headers.get('x-openzcad-display-name');
+    const email = request.headers.get('x-openzcad-user-email') ?? undefined;
     const role = trustedProjectRole(request.headers);
     if (
       request.headers.get('x-openzcad-internal-ticket-request') !== 'v1' ||
@@ -2456,6 +2506,9 @@ export class ProjectCollaborationRoom extends DurableObject {
       return new Response('Invalid collaboration ticket request.', {
         status: 400
       });
+    }
+    if (!this.collaborationAccessAllowed(role, email)) {
+      return new Response('Collaboration access is disabled.', { status: 403 });
     }
     if (this.projectId && this.projectId !== projectId) {
       return new Response('Room project mismatch.', { status: 409 });
@@ -2484,6 +2537,7 @@ export class ProjectCollaborationRoom extends DurableObject {
         projectId,
         userId: userId as UserId,
         displayName,
+        email,
         role,
         expiresAt
       };
@@ -2538,15 +2592,18 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? claim
         : null;
     }
+    const rollout = projectCollaborationRollout(this.roomEnv, claim.email);
     const owner = await this.roomEnv.DB.prepare(
       `SELECT user_id FROM projects WHERE id = ? AND user_id = ?`
     )
       .bind(claim.projectId, claim.userId)
       .first<{ user_id: string }>();
     if (owner) {
-      return { ...claim, role: 'owner' };
+      return rollout.personalSyncEnabled || rollout.sharingEnabled
+        ? { ...claim, role: 'owner' }
+        : null;
     }
-    if (!isCloudflareFeatureEnabled(this.roomEnv, 'PROJECT_SHARING_ENABLED')) {
+    if (!rollout.sharingEnabled) {
       return null;
     }
     const member = await this.roomEnv.DB.prepare(
@@ -2564,7 +2621,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     raw: string | ArrayBuffer,
     userId: UserId,
     displayName: string,
-    role: SharedProjectAccessRole
+    role: SharedProjectAccessRole,
+    email?: string
   ): Promise<void> {
     if (typeof raw !== 'string' || raw.length > 950_000) {
       socket.close(1009, 'Collaboration message is too large.');
@@ -2581,12 +2639,19 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
 
+    if (!this.collaborationAccessAllowed(role, email)) {
+      socket.close(1008, 'Collaboration access is disabled.');
+      this.removeSocket(socket);
+      return;
+    }
+
     if (message.type === 'hello') {
       this.sockets.set(socket, {
         clientId: message.clientId,
         userId,
         displayName,
-        role
+        role,
+        email
       });
       this.presence.set(message.clientId, 'active');
       if (message.document) {
@@ -2719,11 +2784,26 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
-  private leaseEnforced(): boolean {
-    return isCloudflareFeatureEnabled(
-      this.roomEnv,
-      'PROJECT_EDIT_LEASES_ENFORCED'
-    );
+  private leaseEnforced(email?: string): boolean {
+    return projectCollaborationRollout(this.roomEnv, email).editLeasesEnforced;
+  }
+
+  private collaborationAccessAllowed(
+    role: SharedProjectAccessRole,
+    email?: string
+  ): boolean {
+    // Development rooms remain directly testable. Hosted beta always resolves
+    // against global flags or the authenticated account allowlist.
+    if (
+      this.roomEnv.ENVIRONMENT !== 'beta' &&
+      this.roomEnv.PRODUCTION_GUARD === undefined
+    ) {
+      return true;
+    }
+    const rollout = projectCollaborationRollout(this.roomEnv, email);
+    return role === 'owner'
+      ? rollout.personalSyncEnabled || rollout.sharingEnabled
+      : rollout.sharingEnabled;
   }
 
   private async enqueueLeaseOperation<T>(
@@ -2753,6 +2833,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       clientId: string;
       userId: UserId;
       role: SharedProjectAccessRole;
+      email?: string;
     }
   ): Promise<void> {
     if (
@@ -2801,6 +2882,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       clientId: string;
       userId: UserId;
       role: SharedProjectAccessRole;
+      email?: string;
     },
     leaseId: string
   ): Promise<void> {
@@ -2886,7 +2968,11 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async membershipStillAllowsAuthoring(connection: {
     userId: UserId;
     role: SharedProjectAccessRole;
+    email?: string;
   }): Promise<boolean> {
+    if (!this.collaborationAccessAllowed(connection.role, connection.email)) {
+      return false;
+    }
     if (connection.role === 'owner' || !this.projectId || !this.roomEnv.DB) {
       return true;
     }
@@ -2903,6 +2989,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       clientId: string;
       userId: UserId;
       role: SharedProjectAccessRole;
+      email?: string;
     },
     leaseId: string | undefined,
     socket: WebSocket
@@ -2923,7 +3010,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       });
       return false;
     }
-    if (!this.leaseEnforced()) {
+    if (!this.leaseEnforced(connection.email)) {
       return true;
     }
     await this.expireEditLease();
@@ -3025,10 +3112,14 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async acceptHttpSnapshot(request: Request): Promise<Response> {
     const userId = request.headers.get('x-openzcad-user-id');
     const displayName = request.headers.get('x-openzcad-display-name');
+    const email = request.headers.get('x-openzcad-user-email') ?? undefined;
     const role = trustedProjectRole(request.headers);
     const projectId = new URL(request.url).searchParams.get('projectId');
     if (!userId || !displayName || !projectId || !role) {
       return new Response('Missing collaboration identity.', { status: 400 });
+    }
+    if (!this.collaborationAccessAllowed(role, email)) {
+      return new Response('Collaboration access is disabled.', { status: 403 });
     }
     if (role === 'viewer') {
       return rejectionResponse({
@@ -3058,6 +3149,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.acceptHttpSnapshotPayload(
         userId as UserId,
         role,
+        email,
         projectId,
         payload as {
           clientId: string;
@@ -3072,6 +3164,7 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async acceptHttpSnapshotPayload(
     userId: UserId,
     role: SharedProjectAccessRole,
+    email: string | undefined,
     projectId: string,
     payload: {
       clientId: string;
@@ -3080,13 +3173,13 @@ export class ProjectCollaborationRoom extends DurableObject {
       leaseId?: string;
     }
   ): Promise<Response> {
-    if (!(await this.membershipStillAllowsAuthoring({ userId, role }))) {
+    if (!(await this.membershipStillAllowsAuthoring({ userId, role, email }))) {
       return rejectionResponse({
         code: 'permission-denied',
         message: 'Project membership no longer allows editing.'
       });
     }
-    if (this.leaseEnforced()) {
+    if (this.leaseEnforced(email)) {
       await this.expireEditLease();
       if (!this.matchesActiveLease(userId, payload.clientId, payload.leaseId)) {
         return rejectionResponse({

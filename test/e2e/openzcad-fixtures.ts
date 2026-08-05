@@ -92,6 +92,16 @@ export async function stubApi(
       }
     })
   );
+  await page.route('**/api/collaboration/config', (route) =>
+    route.fulfill({
+      json: {
+        sharingEnabled: Boolean(collaborationRole),
+        editLeasesEnforced: Boolean(collaborationRole),
+        personalSyncEnabled: false,
+        canary: Boolean(collaborationRole)
+      }
+    })
+  );
   await page.route('**/api/settings', (route) =>
     route.fulfill({
       json: {

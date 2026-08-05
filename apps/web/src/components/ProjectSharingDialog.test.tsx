@@ -151,6 +151,39 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByLabelText('Invitation token')).toHaveTextContent(
       'one-time-token'
     );
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true
+    });
+    await user.click(
+      screen.getByRole('button', { name: 'Copy invitation token' })
+    );
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith('one-time-token')
+    );
+    expect(screen.getByText('Invitation token copied.')).toBeVisible();
+  });
+
+  it('keeps editor assignment unavailable when lease enforcement is off', async () => {
+    const base = createProjectDocument('Viewer-only rollout', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        editorInvitationsEnabled={false}
+        client={client()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('Role', { selector: 'select' })).toHaveValue(
+      'viewer'
+    );
+    expect(screen.getByRole('option', { name: 'Editor' })).toBeDisabled();
   });
 
   it('keeps viewer recovery actions safe and never offers lease acquisition', async () => {

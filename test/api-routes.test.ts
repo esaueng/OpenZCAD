@@ -343,6 +343,57 @@ describe('worker api routes', () => {
     });
   });
 
+  it('keeps an account canary private and returns it only to that session', async () => {
+    const canaryEnv = {
+      ENVIRONMENT: 'beta' as const,
+      AUTH_MODE: 'email-code' as const,
+      PRODUCTION_GUARD: 'enabled',
+      PROJECT_COLLABORATION_CANARY_EMAILS: 'canary@example.com',
+      DB: {
+        prepare(query: string) {
+          return {
+            bind() {
+              return {
+                async first() {
+                  return query.includes('FROM auth_sessions')
+                    ? {
+                        user_id: 'user_canary',
+                        email: 'canary@example.com',
+                        expires_at: 4_000_000_000
+                      }
+                    : null;
+                }
+              };
+            }
+          };
+        }
+      } as unknown as D1Database
+    };
+    const publicHealth = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      canaryEnv
+    );
+    await expect(publicHealth.json()).resolves.toMatchObject({
+      projectSharingEnabled: false,
+      projectEditLeasesEnforced: false,
+      projectPersonalSyncEnabled: false
+    });
+
+    const authenticated = await worker.fetch(
+      new Request('https://example.com/api/collaboration/config', {
+        headers: { cookie: '__Host-openzcad_session=test-session' }
+      }),
+      canaryEnv
+    );
+    expect(authenticated.status).toBe(200);
+    await expect(authenticated.json()).resolves.toEqual({
+      sharingEnabled: true,
+      editLeasesEnforced: true,
+      personalSyncEnabled: true,
+      canary: true
+    });
+  });
+
   it('reports migration 0010 ready only when all required D1 schema objects exist', async () => {
     const { db, prepare } = storageAccountingDb();
     const response = await worker.fetch(
@@ -696,7 +747,7 @@ describe('worker api routes', () => {
           }
         }
       ),
-      env
+      { ...env, PROJECT_PERSONAL_SYNC_ENABLED: 'true' }
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
@@ -735,7 +786,7 @@ describe('worker api routes', () => {
         `/api/projects/${created.project.projectId}/collaboration/ticket`,
         undefined
       ),
-      env
+      { ...env, PROJECT_PERSONAL_SYNC_ENABLED: 'true' }
     );
 
     expect(response.status).toBe(200);
@@ -826,7 +877,7 @@ describe('worker api routes', () => {
           duplex: 'half'
         } as RequestInit & { duplex: 'half' }
       ),
-      env
+      { ...env, PROJECT_PERSONAL_SYNC_ENABLED: 'true' }
     );
 
     expect(response.status).toBe(200);
