@@ -12,6 +12,7 @@ const defaultProps = {
   featureCount: 2,
   warningCount: 0,
   documentVersion: 3,
+  saveState: 'synced' as const,
   units: 'mm',
   selectionFilter: 'any' as const,
   selectionFilterIsAutomatic: true,
@@ -19,6 +20,14 @@ const defaultProps = {
 };
 
 describe('StatusBar activity log', () => {
+  it('shows the same local-only state as the workspace top bar', () => {
+    render(<StatusBar {...defaultProps} saveState="local" />);
+
+    expect(
+      screen.getByRole('group', { name: 'Workspace status' })
+    ).toHaveTextContent('syncLocal only');
+  });
+
   it('opens from the current status and retains every displayed status', async () => {
     const user = userEvent.setup();
     const { rerender } = render(<StatusBar {...defaultProps} />);

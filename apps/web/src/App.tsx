@@ -362,6 +362,10 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'wireframe'
 ];
 
+type AdoptLocalProjectResult =
+  | { state: 'adopted' | 'already-adopted' | 'missing' }
+  | { state: 'conflict'; conflict: ProjectConflict };
+
 function desktopAuthorizationAttemptFromLocation(): string | null {
   if (typeof globalThis.location === 'undefined' || isDesktopApp()) {
     return null;
@@ -1072,6 +1076,20 @@ export function App() {
         remoteDocument.projectId,
         remoteDocument.version
       );
+      void (async () => {
+        try {
+          await saveLocalProject(remoteDocument);
+          await saveLastSyncedVersion(
+            remoteDocument.projectId,
+            remoteDocument.version
+          );
+        } catch {
+          setSaveState('offline');
+          setStatus(
+            'The incoming account update is open, but could not be saved on this device. Export it before closing.'
+          );
+        }
+      })();
       cloudProjectAutosaveRef.current?.adoptAccountVersion(
         remoteDocument.projectId,
         remoteDocument.version
@@ -1484,6 +1502,7 @@ export function App() {
         return;
       }
       await saveLocalProject(remote);
+      await saveLastSyncedVersion(remote.projectId, remote.version);
       remoteVersionsRef.current.set(remote.projectId, remote.version);
       controller.adoptAccountVersion(remote.projectId, remote.version);
       hydrateDocument(remote);
@@ -1576,12 +1595,29 @@ export function App() {
             ? await loadLastSyncedVersion(startupProjectId)
             : null
         );
-        const restoredDocument =
+        let restoredDocument =
           restoredOutcome.choice === 'none'
             ? null
             : restoredOutcome.choice === 'diverged'
               ? restoredOutcome.local
               : restoredOutcome.document;
+        if (
+          startupProjectId &&
+          restoredOutcome.choice === 'remote' &&
+          restoredDocument
+        ) {
+          restoredDocument = rememberedLocal
+            ? withLocalDerived(restoredDocument, rememberedLocal)
+            : restoredDocument;
+          await saveLocalProject(restoredDocument);
+          await saveLastSyncedVersion(
+            restoredDocument.projectId,
+            restoredDocument.version
+          );
+          if (cancelled) {
+            return;
+          }
+        }
         const canUseCloud = Boolean(activeSession && rememberedRemote);
         setCollaborationRollout({
           sharingEnabled: health?.projectSharingEnabled === true,
@@ -1636,7 +1672,15 @@ export function App() {
             cloudSettingsAutosaveRef.current?.schedule(appSettingsRef.current);
           }
         }
-        setSaveState(canUseCloud ? 'synced' : 'local');
+        setSaveState(
+          !canUseCloud
+            ? 'local'
+            : restoredOutcome.choice === 'diverged'
+              ? 'conflict'
+              : restoredOutcome.choice === 'local'
+                ? 'syncing'
+                : 'synced'
+        );
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument);
           if (restoredOutcome.choice === 'diverged') {
@@ -3234,11 +3278,19 @@ export function App() {
         return;
       }
       const response = await api.createProject({ name, units });
+      await saveLocalProject(response.document);
       remoteVersionsRef.current.set(
         response.document.projectId,
         response.document.version
       );
+      await saveLastSyncedVersion(
+        response.document.projectId,
+        response.document.version
+      );
       setCloudAvailable(true);
+      setCloudProjectIds((current) =>
+        new Set(current).add(response.document.projectId)
+      );
       hydrateDocument(response.document);
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
@@ -3302,6 +3354,35 @@ export function App() {
     };
   }
 
+  /** Stores a document that the account has acknowledged on every local path. */
+  async function acceptAccountDocument(
+    remote: ProjectDocument,
+    local: ProjectDocument,
+    summary: ProjectSummary = summarizeLocalDocument(remote)
+  ): Promise<ProjectDocument> {
+    const merged = withLocalDerived(remote, local);
+    // The baseline is only valid after the corresponding account document is
+    // durable locally. Keep this order so a partial IndexedDB failure can only
+    // lose the baseline (which forces conservative reconciliation), never put
+    // the baseline ahead of the device copy.
+    await saveLocalProject(merged);
+    await saveLastSyncedVersion(merged.projectId, merged.version);
+    remoteVersionsRef.current.set(merged.projectId, merged.version);
+    setCloudProjectIds((current) => new Set(current).add(merged.projectId));
+    setProjects((current) => mergeProjectSummaries([summary], current));
+    if (managerRef.current?.document.projectId === merged.projectId) {
+      managerRef.current.document = merged;
+      setDoc(merged);
+      setCloudAvailable(true);
+      setSaveState('synced');
+      cloudProjectAutosaveRef.current?.adoptAccountVersion(
+        merged.projectId,
+        merged.version
+      );
+    }
+    return merged;
+  }
+
   /**
    * Gives one device-local project an account record, keeping its id so the
    * device's own copy and shelf state stay pointed at the same project.
@@ -3312,37 +3393,69 @@ export function App() {
    */
   async function adoptLocalProject(
     projectId: string
-  ): Promise<'adopted' | 'already-adopted' | 'missing'> {
+  ): Promise<AdoptLocalProjectResult> {
     const local = await loadLocalProject(projectId);
     if (!local) {
-      return 'missing';
+      return { state: 'missing' };
     }
     try {
       const response = await api.adoptProject(local);
-      const merged = withLocalDerived(response.document, local);
-      await saveLocalProject(merged);
-      remoteVersionsRef.current.set(merged.projectId, merged.version);
-      setCloudProjectIds((current) => new Set(current).add(merged.projectId));
-      setProjects((current) =>
-        mergeProjectSummaries([response.project], current)
-      );
-      if (managerRef.current?.document.projectId === merged.projectId) {
-        managerRef.current.document = merged;
-        setDoc(merged);
-        setCloudAvailable(true);
-        setSaveState('synced');
-        cloudProjectAutosaveRef.current?.adoptAccountVersion(
-          merged.projectId,
-          merged.version
-        );
-      }
-      return 'adopted';
+      await acceptAccountDocument(response.document, local, response.project);
+      return { state: 'adopted' };
     } catch (error) {
-      // The account already has it — the device was simply out of date about
-      // that, which is not a failure and must not be reported as one.
       if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
+        // A lost adoption response and a genuinely pre-existing account copy
+        // produce the same 409. Fetch the actual document and reconcile it;
+        // merely painting the cloud badge here would claim agreement without
+        // ever comparing the work.
+        const [remote, lastSyncedVersion] = await Promise.all([
+          api.loadProject(projectId),
+          loadLastSyncedVersion(projectId)
+        ]);
+        remoteVersionsRef.current.set(projectId, remote.version);
         setCloudProjectIds((current) => new Set(current).add(projectId));
-        return 'already-adopted';
+        const outcome = chooseProjectDocument(local, remote, lastSyncedVersion);
+        if (outcome.choice === 'diverged') {
+          return {
+            state: 'conflict',
+            conflict: conflictFromDocuments(
+              outcome.local,
+              outcome.remote,
+              'account'
+            )
+          };
+        }
+        if (outcome.choice === 'remote') {
+          await acceptAccountDocument(outcome.document, local);
+          return { state: 'already-adopted' };
+        }
+        if (outcome.choice === 'local') {
+          // The baseline proves only this device moved. Complete the interrupted
+          // sync with a fenced document write rather than asking the user to
+          // resolve a conflict that does not exist.
+          const candidate = {
+            ...outcome.document,
+            ownerUserId: remote.ownerUserId
+          };
+          const saved = await api.saveProjectDocument({
+            projectId: candidate.projectId,
+            expectedVersion: remote.version,
+            document: withoutDerivedProjection(candidate)
+          });
+          await acceptAccountDocument(
+            {
+              ...candidate,
+              version: saved.version,
+              derived: {
+                ...candidate.derived,
+                updatedAt: saved.updatedAt
+              }
+            },
+            local
+          );
+          return { state: 'already-adopted' };
+        }
+        return { state: 'missing' };
       }
       throw error;
     }
@@ -3357,10 +3470,20 @@ export function App() {
     try {
       await flushPendingLocalSave();
       const outcome = await adoptLocalProject(project.projectId);
+      if (outcome.state === 'conflict') {
+        hydrateDocument(outcome.conflict.localDocument);
+        setAccountConflict(outcome.conflict);
+        setCloudAvailable(true);
+        setSaveState('conflict');
+        setStatus(
+          `${project.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+        );
+        return;
+      }
       setStatus(
-        outcome === 'adopted'
+        outcome.state === 'adopted'
           ? `Saved ${project.name} to your account.`
-          : outcome === 'already-adopted'
+          : outcome.state === 'already-adopted'
             ? `${project.name} was already in your account.`
             : `${project.name} has no copy on this device to save.`
       );
@@ -3398,21 +3521,33 @@ export function App() {
     });
     try {
       const outcome = await adoptLocalProject(candidate.projectId);
-      if (outcome === 'missing') {
+      if (outcome.state === 'missing') {
         patchSyncEntry(candidate.projectId, {
           state: 'failed',
           detail: 'No copy of this project exists on this device.'
         });
         return { adopted: false, failed: true, halt: false };
       }
+      if (outcome.state === 'conflict') {
+        patchSyncEntry(candidate.projectId, {
+          state: 'failed',
+          detail:
+            'Changed on this device and in your account. Open it to choose which to keep.'
+        });
+        return { adopted: false, failed: true, halt: false };
+      }
       patchSyncEntry(candidate.projectId, {
         state: 'synced',
         detail:
-          outcome === 'already-adopted'
+          outcome.state === 'already-adopted'
             ? 'Was already in your account.'
             : undefined
       });
-      return { adopted: outcome === 'adopted', failed: false, halt: false };
+      return {
+        adopted: outcome.state === 'adopted',
+        failed: false,
+        halt: false
+      };
     } catch (error) {
       const { detail, auth } = describeSyncFailure(error);
       patchSyncEntry(candidate.projectId, { state: 'failed', detail });
@@ -3580,15 +3715,19 @@ export function App() {
         );
         return;
       }
-      hydrateDocument(outcome.document);
+      const openedDocument =
+        outcome.choice === 'remote' && localDocument
+          ? withLocalDerived(outcome.document, localDocument)
+          : outcome.document;
+      hydrateDocument(openedDocument);
       if (outcome.choice === 'remote') {
-        await saveLocalProject(outcome.document);
-        await saveLastSyncedVersion(projectId, outcome.document.version);
+        await saveLocalProject(openedDocument);
+        await saveLastSyncedVersion(projectId, openedDocument.version);
       }
       setStatus(
         outcome.choice === 'local' && remoteDocument
-          ? `Opened newer local edits for ${outcome.document.name}.`
-          : `Opened ${outcome.document.name}.`
+          ? `Opened newer local edits for ${openedDocument.name}.`
+          : `Opened ${openedDocument.name}.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
@@ -3940,6 +4079,8 @@ export function App() {
       });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
       const restored = withLocalDerived(saved, doc);
+      await saveLocalProject(restored);
+      await saveLastSyncedVersion(restored.projectId, restored.version);
       if (managerRef.current) {
         managerRef.current.document = restored;
       }
@@ -6544,18 +6685,13 @@ export function App() {
    * wrote them, so reading them is the only way the shelf can be right after a
    * reload.
    *
-   * Must stay above the restore-screen return below — every hook does. Putting
-   * it after meant the hook count changed as the app left that screen, which
-   * React treats as a broken component rather than a late memo.
+   * Keep it above the restore-screen return so every rendered shelf reads the
+   * marker written by the latest reconciliation attempt.
    */
-  const conflictedProjectIds = useMemo(
-    () =>
-      new Set(
-        projects
-          .map((project) => project.projectId)
-          .filter((projectId) => readUnresolvedConflict(projectId) !== null)
-      ),
-    [projects]
+  const conflictedProjectIds = new Set(
+    projects
+      .map((project) => project.projectId)
+      .filter((projectId) => readUnresolvedConflict(projectId) !== null)
   );
 
   if (startupState === 'restoring') {
@@ -7879,6 +8015,7 @@ export function App() {
           featureCount={features.length}
           warningCount={warnings.length}
           documentVersion={doc.version}
+          saveState={saveState}
           units={doc.units}
           selectionFilter={selectionFilter}
           selectionFilterIsAutomatic={manualSelectionFilter === null}

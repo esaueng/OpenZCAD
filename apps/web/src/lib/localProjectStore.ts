@@ -275,6 +275,99 @@ export type ProjectOpenChoice =
       remote: ProjectDocument;
     };
 
+/**
+ * The part of a document whose equality means that the two copies contain the
+ * same user work. Account ownership and the monotonic version fence are sync
+ * metadata, while `derived` is rebuilt from canonical history on load; none of
+ * the three should turn an otherwise identical project into a conflict.
+ */
+function syncComparableDocument(document: ProjectDocument): unknown {
+  const {
+    ownerUserId: _ownerUserId,
+    version: _version,
+    derived: _derived,
+    ...canonical
+  } = document;
+  return canonical;
+}
+
+/** JSON-equivalent structural equality without depending on object key order. */
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (left === null || right === null) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) {
+      return false;
+    }
+    return (
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]))
+    );
+  }
+  if (typeof left !== 'object' || typeof right !== 'object') {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  // JSON drops undefined object properties. Treat an in-memory optional field
+  // and its round-tripped absence as the same persisted document.
+  const leftKeys = Object.keys(leftRecord).filter(
+    (key) => leftRecord[key] !== undefined
+  );
+  const rightKeys = Object.keys(rightRecord).filter(
+    (key) => rightRecord[key] !== undefined
+  );
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(rightRecord, key) &&
+        rightRecord[key] !== undefined &&
+        jsonValuesEqual(leftRecord[key], rightRecord[key])
+    )
+  );
+}
+
+export function projectsHaveSameCanonicalContent(
+  local: ProjectDocument,
+  remote: ProjectDocument
+): boolean {
+  return jsonValuesEqual(
+    syncComparableDocument(local),
+    syncComparableDocument(remote)
+  );
+}
+
+/**
+ * A retry can observe the server-side adoption checkpoint after the first
+ * response was lost. That one known metadata-only addition is not a divergent
+ * edit; accepting the account copy completes the interrupted adoption.
+ */
+export function projectMatchesInterruptedAdoption(
+  local: ProjectDocument,
+  remote: ProjectDocument
+): boolean {
+  if (projectsHaveSameCanonicalContent(local, remote)) {
+    return true;
+  }
+  const adoptionCheckpoint = remote.checkpoints.at(-1);
+  if (
+    adoptionCheckpoint?.reason !== 'Saved to account' ||
+    adoptionCheckpoint.documentVersion !== remote.version ||
+    remote.checkpoints.length !== local.checkpoints.length + 1
+  ) {
+    return false;
+  }
+  return projectsHaveSameCanonicalContent(local, {
+    ...remote,
+    checkpoints: remote.checkpoints.slice(0, -1)
+  });
+}
+
 export function chooseProjectDocument(
   local: ProjectDocument | null,
   remote: ProjectDocument | null,
@@ -286,8 +379,12 @@ export function chooseProjectDocument(
   if (!remote) {
     return { choice: 'local', document: local };
   }
-  if (local.version === remote.version) {
-    return { choice: 'local', document: local };
+  // Content equality (including the one known interrupted-adoption shape) is
+  // stronger evidence than a version number. Prefer the account copy so its
+  // ownership and version fence become this device's new baseline while the
+  // caller can keep the local derived projection.
+  if (projectMatchesInterruptedAdoption(local, remote)) {
+    return { choice: 'remote', document: remote };
   }
   if (lastSyncedVersion !== null) {
     const localMoved = local.version !== lastSyncedVersion;
@@ -295,16 +392,20 @@ export function chooseProjectDocument(
     if (localMoved && remoteMoved) {
       return { choice: 'diverged', local, remote };
     }
-    return localMoved
-      ? { choice: 'local', document: local }
-      : { choice: 'remote', document: remote };
+    if (localMoved) {
+      return { choice: 'local', document: local };
+    }
+    if (remoteMoved) {
+      return { choice: 'remote', document: remote };
+    }
+    // Both copies still claim the baseline version but their canonical content
+    // differs. Version equality is not agreement; neither side may be dropped.
+    return { choice: 'diverged', local, remote };
   }
-  // No baseline: fall back to the newer version, as before. It is a guess, but
-  // it is the guess that keeps the most work, and the caller still writes a
-  // recovery copy of the side it does not take.
-  return local.version > remote.version
-    ? { choice: 'local', document: local }
-    : { choice: 'remote', document: remote };
+  // Clearing browser storage loses the only proof of which copy moved. Treat
+  // different canonical documents as divergent regardless of their version
+  // numbers; guessing here is the silent-data-loss path ADR-016 forbids.
+  return { choice: 'diverged', local, remote };
 }
 
 /**
