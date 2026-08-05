@@ -33,6 +33,7 @@ function renderSettings(
       onVerifyLoginCode={vi.fn()}
       onRefreshAuthConfig={vi.fn()}
       onStartDesktopLogin={vi.fn()}
+      onDesktopAuthorizationCodeChange={vi.fn()}
       onApproveDesktopLogin={vi.fn()}
       onLogout={vi.fn()}
       onReset={vi.fn()}
@@ -139,12 +140,17 @@ describe('settings desktop account section', () => {
         mode: 'email-code'
       },
       desktopAuthorizationAttempt: 'attempt-1234567890',
+      desktopAuthorizationCode: '',
+      onDesktopAuthorizationCodeChange: vi.fn(),
       onApproveDesktopLogin
     });
 
-    await user.click(
+    expect(
+      screen.getByText(/Enter the 8-character code shown/)
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole('button', { name: 'Continue in OpenZCAD' })
-    );
-    expect(onApproveDesktopLogin).toHaveBeenCalledOnce();
+    ).toBeDisabled();
+    expect(onApproveDesktopLogin).not.toHaveBeenCalled();
   });
 });

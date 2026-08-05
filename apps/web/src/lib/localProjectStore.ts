@@ -105,6 +105,38 @@ export function loadLocalProject(
   ).then((document) => document ?? null);
 }
 
+/**
+ * Restores the cached geometry of a cloud-created duplicate from its source.
+ *
+ * Cloud documents intentionally omit derived meshes. A duplicate adds a
+ * checkpoint without changing geometry or the latest revision, so the source
+ * projection is reusable only when that revision still matches this device's
+ * source. The guard prevents a stale local cache from being shown for a copy
+ * the account made from newer canonical history.
+ */
+export function restoreDuplicateDerivedProjection(
+  duplicate: ProjectDocument,
+  localSource: ProjectDocument | null
+): ProjectDocument {
+  const copiedFromRevisionId = duplicate.revisions.at(-1)?.revisionId;
+  const localRevisionId = localSource?.revisions.at(-1)?.revisionId;
+  if (
+    !localSource ||
+    !copiedFromRevisionId ||
+    localRevisionId !== copiedFromRevisionId
+  ) {
+    return duplicate;
+  }
+  return {
+    ...duplicate,
+    derived: {
+      ...duplicate.derived,
+      bodyRepresentations: localSource.derived.bodyRepresentations,
+      exportableBodyIds: localSource.derived.exportableBodyIds
+    }
+  };
+}
+
 export function saveLocalProjectOrganization(
   projectId: string,
   organization: ProjectOrganization
