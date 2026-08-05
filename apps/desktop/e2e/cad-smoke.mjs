@@ -329,10 +329,17 @@ try {
     `var status = document.querySelector('[aria-label="Workspace status"]');
     return Boolean(status && status.textContent.includes('Exact B-rep'));`
   );
+  const documentStatusScript = `return Array.from(
+      document.querySelectorAll('[aria-label="Workspace status"] > span')
+    )
+      .filter(function (item) {
+        return item.querySelector('b')?.textContent !== 'sync';
+      })
+      .map(function (item) { return item.textContent; })
+      .join('');`;
   const statusText = await execute(
     sessionId,
-    `return document.querySelector('[aria-label="Workspace status"]')
-      .textContent;`
+    documentStatusScript
   );
   assert.match(statusText, /Exact B-rep/);
   assert.match(statusText, /warnings\s*0/i);
@@ -687,8 +694,7 @@ try {
 
   const statusAfterInputs = await execute(
     sessionId,
-    `return document.querySelector('[aria-label="Workspace status"]')
-      .textContent;`
+    documentStatusScript
   );
   assert.equal(
     statusAfterInputs,

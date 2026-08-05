@@ -561,13 +561,21 @@ export function SettingsPage({
       initialSection === undefined && stored.activeSection === active
         ? stored.scrollTop
         : 0;
-    content.scrollTop = scrollTop;
-    scrollTopRef.current = content.scrollTop;
+    const restoreScroll = () => {
+      content.scrollTop = scrollTop;
+      scrollTopRef.current = content.scrollTop;
+    };
+    restoreScroll();
+    // Font metrics can change the scroll range after the first layout. Keep the
+    // saved target intact and retry once that layout has settled instead of
+    // permanently accepting a temporarily clamped position.
+    void document.fonts?.ready.then(restoreScroll);
+    scrollTopRef.current = scrollTop;
     updateSettingsViewState({
       open: true,
       activeSection: active,
       query: queryRef.current,
-      scrollTop: content.scrollTop
+      scrollTop
     });
   }, [active, initialSection]);
 
