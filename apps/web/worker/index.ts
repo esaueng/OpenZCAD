@@ -2,6 +2,8 @@ import {
   ProjectCollaborationRoom,
   createPersistenceService,
   isCloudflareFeatureEnabled,
+  projectCollaborationRollout,
+  type ProjectCollaborationRollout,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -65,6 +67,7 @@ import {
 import {
   acceptInvitation,
   createInvitation,
+  parseCreateInvitation,
   parseProjectMemberRole,
   SharingRequestError
 } from './sharing';
@@ -83,6 +86,7 @@ const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
+const collaborationRolloutEnvironments = new WeakMap<Env, Map<string, Env>>();
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
@@ -114,6 +118,34 @@ async function projectStorageIsReady(
     projectStorageReadyEnvironments.add(env);
   }
   return ready;
+}
+
+function envForCollaborationRollout(
+  env: Env,
+  rollout: ProjectCollaborationRollout
+): Env {
+  const key = [
+    rollout.sharingEnabled,
+    rollout.editLeasesEnforced,
+    rollout.personalSyncEnabled
+  ].join(':');
+  let environments = collaborationRolloutEnvironments.get(env);
+  if (!environments) {
+    environments = new Map();
+    collaborationRolloutEnvironments.set(env, environments);
+  }
+  const cached = environments.get(key);
+  if (cached) {
+    return cached;
+  }
+  const derived = {
+    ...env,
+    PROJECT_SHARING_ENABLED: String(rollout.sharingEnabled),
+    PROJECT_EDIT_LEASES_ENFORCED: String(rollout.editLeasesEnforced),
+    PROJECT_PERSONAL_SYNC_ENABLED: String(rollout.personalSyncEnabled)
+  };
+  environments.set(key, derived);
+  return derived;
 }
 
 export function assertSafeRuntimeConfiguration(env: CloudflareEnv): void {
@@ -264,18 +296,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       sharingMatch || invitationsMatch || invitationMatch || memberMatch
     ) || pathname === INVITATION_ACCEPT_ROUTE;
   if (
-    isSharingRoute &&
-    !isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED')
-  ) {
-    return json(
-      {
-        error: 'Project sharing is disabled for this deployment.',
-        code: 'FEATURE_DISABLED'
-      },
-      501
-    );
-  }
-  if (
     (request.method === 'GET' || request.method === 'POST') &&
     (collaborationMatch || collaborationTicketMatch) &&
     !env.PROJECT_ROOM
@@ -313,6 +333,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     headers.delete('cookie');
     headers.delete('x-openzcad-user-id');
     headers.delete('x-openzcad-display-name');
+    headers.delete('x-openzcad-user-email');
     headers.delete('x-openzcad-project-role');
     headers.delete('x-openzcad-internal-ticket-request');
     return env
@@ -340,8 +361,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       501
     );
   }
-
-  const persistence = createPersistenceService(env);
 
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
     assertSameOrigin(request);
@@ -556,9 +575,47 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const session = await authenticateRequest(request, env);
   const userId = session.userId;
+  const collaborationRollout = projectCollaborationRollout(env, session.email);
+  const persistence = createPersistenceService(
+    envForCollaborationRollout(env, collaborationRollout)
+  );
+
+  if (
+    (request.method === 'GET' || request.method === 'POST') &&
+    collaborationMatch
+  ) {
+    assertSameOrigin(request);
+  }
 
   if (request.method === 'GET' && pathname === '/api/session') {
     return json(session);
+  }
+
+  if (request.method === 'GET' && pathname === '/api/collaboration/config') {
+    return json(collaborationRollout);
+  }
+
+  if (isSharingRoute && !collaborationRollout.sharingEnabled) {
+    return json(
+      {
+        error: 'Project sharing is disabled for this account.',
+        code: 'FEATURE_DISABLED'
+      },
+      501
+    );
+  }
+  if (
+    (collaborationMatch || collaborationTicketMatch) &&
+    !collaborationRollout.sharingEnabled &&
+    !collaborationRollout.personalSyncEnabled
+  ) {
+    return json(
+      {
+        error: 'Collaboration is disabled for this account.',
+        code: 'FEATURE_DISABLED'
+      },
+      501
+    );
   }
 
   if (request.method === 'GET' && pathname === '/api/settings') {
@@ -628,19 +685,24 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'POST' && invitationsMatch) {
     const payload = await readJsonBody(request);
-    const role = parseProjectMemberRole(
-      payload && typeof payload === 'object'
-        ? (payload as Record<string, unknown>).role
-        : undefined
-    );
-    if (
-      role === 'editor' &&
-      !isCloudflareFeatureEnabled(env, 'PROJECT_EDIT_LEASES_ENFORCED')
-    ) {
+    const invitation = parseCreateInvitation(payload);
+    const role = invitation.role;
+    if (role === 'editor' && !collaborationRollout.editLeasesEnforced) {
       throw new SharingRequestError(
         409,
         'EDIT_LEASE_REQUIRED',
         'Editor invitations require project edit lease enforcement.'
+      );
+    }
+    if (
+      collaborationRollout.canary &&
+      !isCloudflareFeatureEnabled(env, 'PROJECT_SHARING_ENABLED') &&
+      !projectCollaborationRollout(env, invitation.email).canary
+    ) {
+      throw new SharingRequestError(
+        403,
+        'CANARY_RECIPIENT_REQUIRED',
+        'During the collaboration canary, invitations can be sent only to allowlisted accounts.'
       );
     }
     return json(
@@ -672,10 +734,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         ? (payload as Record<string, unknown>).role
         : undefined
     );
-    if (
-      role === 'editor' &&
-      !isCloudflareFeatureEnabled(env, 'PROJECT_EDIT_LEASES_ENFORCED')
-    ) {
+    if (role === 'editor' && !collaborationRollout.editLeasesEnforced) {
       throw new SharingRequestError(
         409,
         'EDIT_LEASE_REQUIRED',
@@ -737,6 +796,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       'x-openzcad-display-name': session.displayName,
       'x-openzcad-project-role': access.role
     });
+    if (session.email) {
+      headers.set('x-openzcad-user-email', session.email);
+    }
     const roomUrl = new URL('https://project-room.internal/');
     roomUrl.searchParams.set('projectId', projectId);
     return env
@@ -767,6 +829,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     headers.set('x-openzcad-user-id', userId);
     headers.set('x-openzcad-display-name', session.displayName);
     headers.set('x-openzcad-project-role', access.role);
+    headers.delete('x-openzcad-user-email');
+    if (session.email) {
+      headers.set('x-openzcad-user-email', session.email);
+    }
     const roomUrl = new URL(request.url);
     roomUrl.searchParams.set('projectId', projectId);
     const roomRequest =

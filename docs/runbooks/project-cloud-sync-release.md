@@ -57,6 +57,18 @@ design:
 
 Delete or retain the canary only under the normal project-retention policy.
 
+### Collaboration account canary
+
+Keep the checked-in global collaboration flags off. With separate approval,
+set the `PROJECT_COLLABORATION_CANARY_EMAILS` Worker secret to the owner and
+every invited test account, then deploy through the normal release command.
+After sign-in, `GET /api/collaboration/config` must report `canary: true` for
+each listed account and remain false for an unlisted account. Verify invitation
+acceptance, viewer read-only behavior, one editor lease at a time, revocation,
+conflict recovery, reconnect, and two-device owner sync. Removing the secret is
+the rollback; confirm the authenticated capability response is closed before
+considering the rollback complete.
+
 ## 4. Optional follow-ups
 
 - Enabling `PROJECT_PERSONAL_SYNC_ENABLED` replaces the browser polling delay
