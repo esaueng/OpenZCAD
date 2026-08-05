@@ -4,6 +4,7 @@ import {
   CLOUDFLARE_BOOLEAN_FLAGS,
   D1R2PersistenceService,
   isCloudflareFeatureEnabled,
+  projectCollaborationRollout,
   ProjectCollaborationRoom,
   resolveCollaborationDocument
 } from '@openzcad/cloudflare-adapters';
@@ -79,6 +80,39 @@ describe('cloudflare adapters', () => {
         )
       ).toBe(false);
     }
+  });
+
+  it('resolves collaboration canaries by normalized authenticated email', () => {
+    const canaryEnv = {
+      PROJECT_SHARING_ENABLED: 'false',
+      PROJECT_EDIT_LEASES_ENFORCED: 'false',
+      PROJECT_PERSONAL_SYNC_ENABLED: 'false',
+      PROJECT_COLLABORATION_CANARY_EMAILS:
+        ' owner@example.com, Second@Example.com '
+    };
+
+    expect(projectCollaborationRollout(canaryEnv, 'OWNER@example.com')).toEqual(
+      {
+        sharingEnabled: true,
+        editLeasesEnforced: true,
+        personalSyncEnabled: true,
+        canary: true
+      }
+    );
+    expect(projectCollaborationRollout(canaryEnv, 'other@example.com')).toEqual(
+      {
+        sharingEnabled: false,
+        editLeasesEnforced: false,
+        personalSyncEnabled: false,
+        canary: false
+      }
+    );
+    expect(
+      projectCollaborationRollout(
+        { PROJECT_EDIT_LEASES_ENFORCED: 'true' },
+        'other@example.com'
+      ).editLeasesEnforced
+    ).toBe(true);
   });
 
   it('falls back to in-memory persistence when D1 is absent', async () => {

@@ -32,6 +32,8 @@
   },
   // Local dev secrets live in .dev.vars (gitignored; see .dev.vars.example):
   // a provider key such as OPENROUTER_API_KEY is needed only for the assistant.
+  // PROJECT_COLLABORATION_CANARY_EMAILS may list test participant emails for a
+  // hosted canary; leaving it absent keeps the account canary closed.
   // wrangler has no schema key to declare required secrets — this is
   // documentation only, not enforcement.
   "d1_databases": [

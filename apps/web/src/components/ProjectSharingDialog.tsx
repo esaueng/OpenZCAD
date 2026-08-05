@@ -30,6 +30,7 @@ export interface ProjectSharingDialogProps {
   conflict?: ProjectConflict | null;
   conflictHandlers?: ConflictResolutionHandlers;
   client?: ProjectSharingClient;
+  editorInvitationsEnabled?: boolean;
   onClose(): void;
 }
 
@@ -56,6 +57,7 @@ export function ProjectSharingDialog({
   conflict = null,
   conflictHandlers,
   client = defaultClient,
+  editorInvitationsEnabled = true,
   onClose
 }: ProjectSharingDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -63,6 +65,7 @@ export function ProjectSharingDialog({
   const [email, setEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
   const [invitationToken, setInvitationToken] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
@@ -238,6 +241,7 @@ export function ProjectSharingDialog({
                       inviteRole
                     );
                     setInvitationToken(created.token);
+                    setCopyStatus(null);
                     setEmail('');
                     await refresh();
                   });
@@ -261,7 +265,9 @@ export function ProjectSharingDialog({
                     }
                   >
                     <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
+                    <option value="editor" disabled={!editorInvitationsEnabled}>
+                      Editor
+                    </option>
                   </select>
                 </label>
                 <button type="submit" disabled={busy !== null}>
@@ -269,9 +275,35 @@ export function ProjectSharingDialog({
                 </button>
               </form>
               {invitationToken && (
-                <output aria-label="Invitation token">
-                  Copy this token now; it is shown once: {invitationToken}
-                </output>
+                <div className="sharing-token-row">
+                  <output aria-label="Invitation token">
+                    Copy this token now; it is shown once: {invitationToken}
+                  </output>
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setCopyStatus(null);
+                      if (!navigator.clipboard) {
+                        setCopyStatus(
+                          'Copy is unavailable. Select the token and copy it manually.'
+                        );
+                        return;
+                      }
+                      void navigator.clipboard
+                        .writeText(invitationToken)
+                        .then(() => setCopyStatus('Invitation token copied.'))
+                        .catch(() =>
+                          setCopyStatus(
+                            'Copy failed. Select the token and copy it manually.'
+                          )
+                        );
+                    }}
+                  >
+                    Copy invitation token
+                  </button>
+                  {copyStatus && <span role="status">{copyStatus}</span>}
+                </div>
               )}
             </section>
 
@@ -302,7 +334,12 @@ export function ProjectSharingDialog({
                           }
                         >
                           <option value="viewer">Viewer</option>
-                          <option value="editor">Editor</option>
+                          <option
+                            value="editor"
+                            disabled={!editorInvitationsEnabled}
+                          >
+                            Editor
+                          </option>
                         </select>
                       </label>{' '}
                       <button

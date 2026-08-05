@@ -91,6 +91,45 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('fails hosted room access closed outside the account canary', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Canary room', toUserId('user_room'));
+    const roomEnv = {
+      ENVIRONMENT: 'beta' as const,
+      PRODUCTION_GUARD: 'enabled',
+      PROJECT_COLLABORATION_CANARY_EMAILS: 'allowed@example.com'
+    };
+    const room = new ProjectCollaborationRoom(context, roomEnv);
+    const request = (email: string) =>
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        headers: {
+          upgrade: 'websocket',
+          'x-openzcad-user-id': 'user_room',
+          'x-openzcad-display-name': 'Room user',
+          'x-openzcad-user-email': email,
+          'x-openzcad-project-role': 'owner'
+        }
+      });
+
+    expect((await room.fetch(request('blocked@example.com'))).status).toBe(403);
+    expect((await room.fetch(request('ALLOWED@example.com'))).status).toBe(101);
+
+    const socket = globals.serverSockets.at(-1)!;
+    await socket.receive(hello(null));
+    roomEnv.PROJECT_COLLABORATION_CANARY_EMAILS = '';
+    await socket.receive(
+      JSON.stringify({
+        type: 'presence',
+        clientId: 'client_ws',
+        status: 'active'
+      })
+    );
+    expect(socket.closed).toEqual({
+      code: 1008,
+      reason: 'Collaboration access is disabled.'
+    });
+  });
+
   it('stores only a hash and consumes a native socket ticket once', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Ticket room', toUserId('user_room'));
