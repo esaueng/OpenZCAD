@@ -41,6 +41,26 @@ async function openSocket(
   return globals.serverSockets.at(-1)!;
 }
 
+async function issueSocketTicket(
+  room: ProjectCollaborationRoom,
+  projectId: string
+): Promise<{ ticket: string; expiresAt: number }> {
+  const response = await room.fetch(
+    new Request(`https://room.test/?projectId=${projectId}`, {
+      method: 'PUT',
+      headers: {
+        'x-openzcad-internal-ticket-request': 'v1',
+        'x-openzcad-user-id': 'user_room',
+        'x-openzcad-display-name': 'Room user',
+        'x-openzcad-project-role': 'owner'
+      }
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  return response.json() as Promise<{ ticket: string; expiresAt: number }>;
+}
+
 function hello(document: ProjectDocument | null, clientId = 'client_ws') {
   return JSON.stringify({
     type: 'hello',
@@ -71,6 +91,73 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('stores only a hash and consumes a native socket ticket once', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Ticket room', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const issued = await issueSocketTicket(room, base.projectId);
+
+    expect(issued.ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(issued.expiresAt).toBeGreaterThan(Date.now());
+    expect(JSON.stringify(values.get('room:socket-tickets'))).not.toContain(
+      issued.ticket
+    );
+
+    // Recreate the object to prove pending tickets survive normal DO eviction.
+    const restored = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const upgrade = () =>
+      restored.fetch(
+        new Request(
+          `https://room.test/?projectId=${base.projectId}&ticket=${issued.ticket}`,
+          { headers: { upgrade: 'websocket' } }
+        )
+      );
+    expect((await upgrade()).status).toBe(101);
+    expect((await upgrade()).status).toBe(401);
+    expect(values.has('room:socket-tickets')).toBe(false);
+  });
+
+  it('rejects expired and forged native socket tickets before opening a socket', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Expired ticket', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const issued = await issueSocketTicket(room, base.projectId);
+    const pending = structuredClone(
+      values.get('room:socket-tickets') as Record<string, { expiresAt: number }>
+    );
+    for (const claim of Object.values(pending)) {
+      claim.expiresAt = Date.now() - 1;
+    }
+    values.set('room:socket-tickets', pending);
+    const socketsBefore = globals.serverSockets.length;
+
+    const expired = await room.fetch(
+      new Request(
+        `https://room.test/?projectId=${base.projectId}&ticket=${issued.ticket}`,
+        { headers: { upgrade: 'websocket' } }
+      )
+    );
+    const forged = await room.fetch(
+      new Request(
+        `https://room.test/?projectId=${base.projectId}&ticket=${'f'.repeat(43)}`,
+        { headers: { upgrade: 'websocket' } }
+      )
+    );
+
+    expect(expired.status).toBe(401);
+    expect(forged.status).toBe(401);
+    expect(globals.serverSockets).toHaveLength(socketsBefore);
+  });
+
   it('serves room state over an accepted socket', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Socket Room', toUserId('user_room'));
