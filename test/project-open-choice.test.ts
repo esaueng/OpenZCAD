@@ -1,18 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  adoptProjectDocument,
+  createProjectDocument
+} from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   chooseProjectDocument,
+  projectMatchesInterruptedAdoption,
+  projectsHaveSameCanonicalContent,
   selectProjectDocument
 } from '../apps/web/src/lib/localProjectStore';
 
 const owner = toUserId('user_owner');
 const base = createProjectDocument('Bracket', owner);
 
-function at(version: number, updatedAt = '2026-01-01T00:00:00.000Z') {
+function at(
+  version: number,
+  {
+    name = `Bracket v${version}`,
+    updatedAt = '2026-01-01T00:00:00.000Z',
+    ownerUserId = owner
+  }: {
+    name?: string;
+    updatedAt?: string;
+    ownerUserId?: typeof owner;
+  } = {}
+) {
+  const root = base.nodes[base.rootNodeId];
   return {
     ...base,
+    name,
+    ownerUserId,
     version,
+    nodes:
+      root?.kind === 'project'
+        ? { ...base.nodes, [base.rootNodeId]: { ...root, name } }
+        : base.nodes,
     derived: { ...base.derived, updatedAt }
   } satisfies ProjectDocument;
 }
@@ -28,12 +51,48 @@ describe('choosing between the two copies of a project', () => {
     expect(chooseProjectDocument(null, null)).toEqual({ choice: 'none' });
   });
 
-  it('treats equal versions as agreement without consulting a clock', () => {
-    const local = at(4, '2026-01-01T00:00:00.000Z');
-    const remote = at(4, '2030-01-01T00:00:00.000Z');
-    expect(chooseProjectDocument(local, remote, 4)).toMatchObject({
-      choice: 'local'
+  it('treats equal canonical content as agreement without consulting a clock', () => {
+    const local = at(4, {
+      name: 'Same work',
+      updatedAt: '2026-01-01T00:00:00.000Z'
     });
+    const remote = at(4, {
+      name: 'Same work',
+      updatedAt: '2030-01-01T00:00:00.000Z'
+    });
+    expect(chooseProjectDocument(local, remote, 4)).toMatchObject({
+      choice: 'remote'
+    });
+  });
+
+  it('ignores account ownership, versions, and rebuilt derived geometry when comparing work', () => {
+    const local = at(4, { name: 'Same work' });
+    const remote = at(9, {
+      name: 'Same work',
+      ownerUserId: toUserId('user_account')
+    });
+    remote.derived.warnings = ['rebuilt elsewhere'];
+
+    expect(projectsHaveSameCanonicalContent(local, remote)).toBe(true);
+    expect(chooseProjectDocument(local, remote, null)).toMatchObject({
+      choice: 'remote'
+    });
+  });
+
+  it('recognizes the server checkpoint left by an interrupted adoption', () => {
+    const local = at(4, { name: 'Offline part' });
+    const remote = adoptProjectDocument(local, toUserId('user_account'));
+
+    expect(projectMatchesInterruptedAdoption(local, remote)).toBe(true);
+    expect(chooseProjectDocument(local, remote, null)).toMatchObject({
+      choice: 'remote'
+    });
+    expect(
+      projectMatchesInterruptedAdoption(
+        { ...local, name: 'Different device work' },
+        remote
+      )
+    ).toBe(false);
   });
 
   it('takes the account copy when only the account moved', () => {
@@ -65,13 +124,29 @@ describe('choosing between the two copies of a project', () => {
     expect(chooseProjectDocument(at(5), at(9), 4).choice).toBe('diverged');
   });
 
-  it('falls back to the newer version when no baseline is recorded', () => {
-    expect(chooseProjectDocument(at(4), at(9), null)).toMatchObject({
-      choice: 'remote'
-    });
-    expect(chooseProjectDocument(at(9), at(4), null)).toMatchObject({
-      choice: 'local'
-    });
+  it('reports divergence instead of guessing when no baseline is recorded', () => {
+    expect(chooseProjectDocument(at(4), at(9), null).choice).toBe('diverged');
+    expect(chooseProjectDocument(at(9), at(4), null).choice).toBe('diverged');
+  });
+
+  it('reports divergence when equal versions contain different work', () => {
+    expect(
+      chooseProjectDocument(
+        at(7, { name: 'Device edit' }),
+        at(7, { name: 'Account edit' }),
+        5
+      ).choice
+    ).toBe('diverged');
+  });
+
+  it('reports divergence when both copies claim the baseline but their work differs', () => {
+    expect(
+      chooseProjectDocument(
+        at(4, { name: 'Device edit' }),
+        at(4, { name: 'Account edit' }),
+        4
+      ).choice
+    ).toBe('diverged');
   });
 });
 
