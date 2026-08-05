@@ -16,6 +16,7 @@ const DEFAULT_SESSION_DAYS = 30;
 const TURNSTILE_ACTION = 'email-code';
 const DESKTOP_CLIENT_ID = 'openzcad-macos';
 const DESKTOP_AUTH_ATTEMPT_TTL_SECONDS = 10 * 60;
+const DESKTOP_AUTH_USER_CODE_LENGTH = 8;
 const DESKTOP_ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 const DESKTOP_AUTH_IP_RATE_LIMIT = 20;
 const encoder = new TextEncoder();
@@ -767,6 +768,36 @@ function parseDesktopAttemptId(value: unknown): string {
   return value;
 }
 
+function normalizeDesktopUserCode(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID_CODE',
+      'Enter the code shown in OpenZCAD for macOS.'
+    );
+  }
+  const normalized = value.replace(/[\s-]/g, '').toUpperCase();
+  if (!/^[A-Z0-9]{8}$/.test(normalized)) {
+    throw new AuthFlowError(
+      400,
+      'DESKTOP_AUTH_INVALID_CODE',
+      'Enter the 8-character code shown in OpenZCAD for macOS.'
+    );
+  }
+  return normalized;
+}
+
+function desktopUserCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(DESKTOP_AUTH_USER_CODE_LENGTH);
+  crypto.getRandomValues(bytes);
+  let code = '';
+  for (const byte of bytes) {
+    code += alphabet[byte % alphabet.length];
+  }
+  return code;
+}
+
 function desktopSession(row: { user_id: string; email: string }): AuthSession {
   return {
     userId: toUserId(row.user_id),
@@ -826,6 +857,7 @@ export async function startDesktopAuthorization(
   attemptId: string;
   browserUrl: string;
   expiresInSeconds: number;
+  userCode: string;
 }> {
   const db = await requireDesktopAuth(env);
   const clientId = parseDesktopClientId(input.clientId);
@@ -851,18 +883,20 @@ export async function startDesktopAuthorization(
   );
   await cleanExpiredDesktopAuthRows(db, timestamp);
   const attemptId = crypto.randomUUID();
+  const userCode = desktopUserCode();
   await db
     .prepare(
       `INSERT INTO desktop_auth_attempts
-         (id, state_hash, code_challenge, client_id, user_id,
+         (id, state_hash, code_challenge, client_id, user_id, user_code_hash,
           created_at, expires_at, approved_at, exchanged_at)
-       VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, NULL)`
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL)`
     )
     .bind(
       attemptId,
       await sha256(state),
       codeChallenge,
       clientId,
+      await sha256(userCode),
       timestamp,
       timestamp + DESKTOP_AUTH_ATTEMPT_TTL_SECONDS
     )
@@ -873,28 +907,38 @@ export async function startDesktopAuthorization(
   return {
     attemptId,
     browserUrl: browserUrl.toString(),
-    expiresInSeconds: DESKTOP_AUTH_ATTEMPT_TTL_SECONDS
+    expiresInSeconds: DESKTOP_AUTH_ATTEMPT_TTL_SECONDS,
+    userCode
   };
 }
 
 export async function approveDesktopAuthorization(
-  input: { attemptId: unknown },
+  input: { attemptId: unknown; userCode: unknown },
   session: AuthSession,
   env: CloudflareEnv
 ): Promise<{ ok: true }> {
   const db = await requireDesktopAuth(env);
   const attemptId = parseDesktopAttemptId(input.attemptId);
+  const userCode = normalizeDesktopUserCode(input.userCode);
   const timestamp = nowSeconds();
   const result = await db
     .prepare(
       `UPDATE desktop_auth_attempts
        SET user_id = ?, approved_at = ?
        WHERE id = ?
+         AND user_code_hash = ?
          AND expires_at >= ?
          AND exchanged_at IS NULL
          AND (user_id IS NULL OR user_id = ?)`
     )
-    .bind(session.userId, timestamp, attemptId, timestamp, session.userId)
+    .bind(
+      session.userId,
+      timestamp,
+      attemptId,
+      await sha256(userCode),
+      timestamp,
+      session.userId
+    )
     .run();
   if (result.meta?.changes !== 1) {
     throw new AuthFlowError(

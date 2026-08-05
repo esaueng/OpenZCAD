@@ -68,6 +68,7 @@ pub struct DesktopAuthSession {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopAuthStartResult {
     expires_in_seconds: u64,
+    user_code: String,
 }
 
 #[derive(Serialize)]
@@ -83,6 +84,7 @@ struct StartResponse {
     attempt_id: String,
     browser_url: String,
     expires_in_seconds: u64,
+    user_code: String,
 }
 
 #[derive(Deserialize)]
@@ -355,6 +357,7 @@ pub async fn start_desktop_sign_in(
         .map_err(|_| "OpenZCAD could not open the system browser.".to_string())?;
     Ok(DesktopAuthStartResult {
         expires_in_seconds: started.expires_in_seconds,
+        user_code: started.user_code,
     })
 }
 
