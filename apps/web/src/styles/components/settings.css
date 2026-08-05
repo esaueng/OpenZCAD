@@ -800,3 +800,15 @@
     font-size: 0;
   }
 }
+
+.settings-field-inline {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 12rem;
+}
+
+.settings-field-inline span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  font-weight: 600;
+}

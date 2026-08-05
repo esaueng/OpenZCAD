@@ -940,6 +940,11 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new Error('Checkpoint creation did not produce a revision.');
     }
     if (this.projectStorageBucket()) {
+      await this.assertProjectVersion(
+        request.projectId,
+        access.ownerUserId,
+        request.expectedVersion
+      );
       const write = await this.putProjectStorageObjects(document);
       const updatedAt = nowIso();
       const envelope = projectObjectEnvelope(document, write.objectId);
@@ -948,7 +953,6 @@ export class D1R2PersistenceService implements PersistenceService {
         write
       );
       const statements = [
-        ...assetStatements,
         this.documentObjectInsert(request.projectId, write, 'pending'),
         this.env.DB.prepare(
           `UPDATE projects
@@ -997,7 +1001,8 @@ export class D1R2PersistenceService implements PersistenceService {
           userId,
           request.projectId,
           write.objectId
-        )
+        ),
+        ...assetStatements
       ];
       let results: Array<{ meta?: { changes?: number } }>;
       try {
@@ -1006,9 +1011,9 @@ export class D1R2PersistenceService implements PersistenceService {
         await this.discardProjectStorageWrite(write);
         throw error;
       }
-      const projectUpdate = results[assetStatements.length + 1];
+      const projectUpdate = results[1];
       if (projectUpdate?.meta?.changes !== 1) {
-        await this.discardProjectStorageWrite(write);
+        await this.discardProjectStorageWrite(write, true);
         const current = await this.env.DB.prepare(
           `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
         )
@@ -1151,6 +1156,11 @@ export class D1R2PersistenceService implements PersistenceService {
     this.assertDocumentCanBeStored(normalized);
     const updatedAt = nowIso();
     if (this.projectStorageBucket()) {
+      await this.assertProjectVersion(
+        request.projectId,
+        access.ownerUserId,
+        request.expectedVersion
+      );
       const write = await this.putProjectStorageObjects(normalized);
       const envelope = projectObjectEnvelope(normalized, write.objectId);
       const assetStatements = this.projectAssetStatements(
@@ -1158,7 +1168,6 @@ export class D1R2PersistenceService implements PersistenceService {
         write
       );
       const statements = [
-        ...assetStatements,
         this.documentObjectInsert(request.projectId, write, 'pending'),
         this.env.DB.prepare(
           `UPDATE projects
@@ -1186,7 +1195,8 @@ export class D1R2PersistenceService implements PersistenceService {
              SELECT 1 FROM projects
              WHERE id = ? AND document_object_id = ?
            )`
-        ).bind(write.objectId, request.projectId, write.objectId)
+        ).bind(write.objectId, request.projectId, write.objectId),
+        ...assetStatements
       ];
       let results: Array<{ meta?: { changes?: number } }>;
       try {
@@ -1195,9 +1205,9 @@ export class D1R2PersistenceService implements PersistenceService {
         await this.discardProjectStorageWrite(write);
         throw error;
       }
-      const projectUpdate = results[assetStatements.length + 1];
+      const projectUpdate = results[1];
       if (projectUpdate?.meta?.changes !== 1) {
-        await this.discardProjectStorageWrite(write);
+        await this.discardProjectStorageWrite(write, true);
         const current = await this.env.DB.prepare(
           `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
         )
@@ -1545,7 +1555,11 @@ export class D1R2PersistenceService implements PersistenceService {
           `INSERT OR IGNORE INTO project_storage_assets
              (id, project_id, kind, object_key, checksum_sha256, logical_bytes,
               stored_bytes, content_encoding, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM projects
+             WHERE id = ? AND document_object_id = ?
+           )`
         )
         .bind(
           `project_asset_${crypto.randomUUID()}`,
@@ -1556,9 +1570,30 @@ export class D1R2PersistenceService implements PersistenceService {
           asset.logicalBytes,
           asset.storedBytes,
           asset.contentEncoding,
-          write.createdAt
+          write.createdAt,
+          projectId,
+          write.objectId
         )
     );
+  }
+
+  private async assertProjectVersion(
+    projectId: string,
+    ownerUserId: UserId,
+    expectedVersion: number
+  ): Promise<void> {
+    const current = await this.env
+      .DB!.prepare(
+        `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
+      )
+      .bind(projectId, ownerUserId)
+      .first<{ document_version: number }>();
+    if (!current) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    if (current.document_version !== expectedVersion) {
+      throw new RevisionConflictError(projectId, current.document_version);
+    }
   }
 
   private documentObjectInsert(
