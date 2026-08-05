@@ -67,7 +67,7 @@
   border-radius: var(--radius-sm);
 }
 
-.rail-button:hover,
+.rail-button:hover:not(:disabled),
 .rail-button.open {
   color: var(--color-text);
   background: var(--color-surface-2);
