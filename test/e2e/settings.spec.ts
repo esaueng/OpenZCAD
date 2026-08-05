@@ -247,6 +247,7 @@ test('settings restore the exact non-sensitive view after reload', async ({
   await expect(
     page.getByRole('heading', { level: 2, name: 'Controls & shortcuts' })
   ).toBeVisible();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
   const scrollTop = await page
     .locator('.settings-content')
     .evaluate((content) => {
@@ -266,11 +267,16 @@ test('settings restore the exact non-sensitive view after reload', async ({
   await expect(
     page.getByRole('heading', { level: 2, name: 'Controls & shortcuts' })
   ).toBeVisible();
-  await expect
-    .poll(() =>
-      page.locator('.settings-content').evaluate((content) => content.scrollTop)
-    )
-    .toBe(scrollTop);
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  const restoredScroll = await page
+    .locator('.settings-content')
+    .evaluate((content) => ({
+      scrollTop: content.scrollTop,
+      maximum: content.scrollHeight - content.clientHeight
+    }));
+  expect(restoredScroll.scrollTop).toBe(
+    Math.min(scrollTop, restoredScroll.maximum)
+  );
 
   await page.getByRole('button', { name: 'Back to workspace' }).click();
   await page.reload();

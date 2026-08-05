@@ -570,7 +570,9 @@ test('explains beta auth and Turnstile readiness failures', async ({
   await page.unrouteAll({ behavior: 'wait' });
   await stubTurnstileLoadFailureApi(page);
   await page.reload();
-  await page.getByRole('button', { name: 'Open settings' }).click();
+  // Settings now restores its open state across a reload, so this auth failure
+  // stays in the same dialog instead of returning to the workspace first.
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({
