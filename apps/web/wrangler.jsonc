@@ -25,7 +25,7 @@
     "AUTH_MODE": "development",
     "DESKTOP_AUTH_ENABLED": "true",
     "AI_PROVIDER": "openrouter",
-    "AI_MODEL": "openai/gpt-5.6-terra",
+    "AI_MODEL": "openai/gpt-5.6-sol",
     "AI_REASONING_EFFORT": "high",
     "PROJECT_SHARING_ENABLED": "false",
     "PROJECT_EDIT_LEASES_ENFORCED": "false"
