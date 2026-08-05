@@ -115,6 +115,24 @@ describe('cloudflare adapters', () => {
     ).toBe(true);
   });
 
+  it('opens collaboration globally without requiring an email allowlist', () => {
+    expect(
+      projectCollaborationRollout(
+        {
+          PROJECT_SHARING_ENABLED: 'true',
+          PROJECT_EDIT_LEASES_ENFORCED: 'true',
+          PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+        },
+        'anyone@example.com'
+      )
+    ).toEqual({
+      sharingEnabled: true,
+      editLeasesEnforced: true,
+      personalSyncEnabled: true,
+      canary: false
+    });
+  });
+
   it('falls back to in-memory persistence when D1 is absent', async () => {
     const service = createPersistenceService({ ENVIRONMENT: 'beta' });
     const created = await service.createProject(toUserId('user_test'), {
