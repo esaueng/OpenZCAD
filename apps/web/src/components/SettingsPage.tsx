@@ -975,19 +975,67 @@ export function SettingsPage({
           {active === 'sketching' && (
             <Section
               title="Sketching & snapping"
-              intro="Snapping affects pointer input only. Stored dimensions remain exact document values."
+              intro="Grid placement, geometry snapping, and temporary inferencing are independent. Stored dimensions remain exact document values."
             >
               <SettingRow
-                title="Snap sketch input"
-                description="Quantize sketch points to the configured linear increment."
+                title="Show sketch grid"
+                description="Display an adaptive grid on the active sketch plane."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.gridVisible}
+                  label="Show sketch grid"
+                  onChange={(gridVisible) =>
+                    patch({
+                      sketching: { ...settings.sketching, gridVisible }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Snap to sketch grid"
+                description="Quantize sketch points to the configured linear increment. Geometry snaps still take priority."
                 scope="This device"
               >
                 <Toggle
                   checked={settings.sketching.snapEnabled}
-                  label="Snap sketch input"
+                  label="Snap to sketch grid"
                   onChange={(snapEnabled) =>
                     patch({
                       sketching: { ...settings.sketching, snapEnabled }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Geometry snapping"
+                description="Snap to exact origins, endpoints, midpoints, centers, quadrants, and intersections."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.geometrySnapEnabled}
+                  label="Geometry snapping"
+                  onChange={(geometrySnapEnabled) =>
+                    patch({
+                      sketching: {
+                        ...settings.sketching,
+                        geometrySnapEnabled
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Automatic inferencing"
+                description="Offer horizontal and vertical alignment while drawing. Hold Shift to suppress it temporarily."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.inferenceEnabled}
+                  label="Automatic inferencing"
+                  onChange={(inferenceEnabled) =>
+                    patch({
+                      sketching: { ...settings.sketching, inferenceEnabled }
                     })
                   }
                 />
@@ -1021,6 +1069,35 @@ export function SettingsPage({
                     }
                   }}
                 />
+              </SettingRow>
+              <SettingRow
+                title="Snap tolerance"
+                description="Screen-space radius around exact sketch candidates."
+                scope="This device"
+              >
+                <div className="settings-unit-input">
+                  <input
+                    className="settings-number"
+                    type="number"
+                    min="4"
+                    max="24"
+                    step="1"
+                    value={settings.sketching.snapTolerancePx}
+                    aria-label="Sketch snap tolerance"
+                    onChange={(event) => {
+                      const value = event.currentTarget.valueAsNumber;
+                      if (Number.isFinite(value) && value >= 4 && value <= 24) {
+                        patch({
+                          sketching: {
+                            ...settings.sketching,
+                            snapTolerancePx: value
+                          }
+                        });
+                      }
+                    }}
+                  />
+                  <span>px</span>
+                </div>
               </SettingRow>
               <SettingRow
                 title="Angular snap"
