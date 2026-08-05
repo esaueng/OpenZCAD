@@ -18,6 +18,7 @@ import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 
 /**
  * What the save button says, per state. Every one of these except `saving`
@@ -25,42 +26,6 @@ import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
  * how far it has got beyond that, and never implies work is at risk when it is
  * not.
  */
-const SAVE_STATE_LABELS: Record<
-  WorkspaceSaveState,
-  { label: string; title: string }
-> = {
-  saving: { label: 'Saving', title: 'Saving to this device…' },
-  local: {
-    label: 'Local only',
-    title: 'Saved on this device. Not in your account.'
-  },
-  syncing: {
-    label: 'Syncing',
-    title: 'Saved on this device · copying to your account…'
-  },
-  synced: {
-    label: 'Saved',
-    title: 'Saved on this device and in your account.'
-  },
-  offline: {
-    label: 'Offline',
-    title: 'Saved on this device · your account is unreachable right now.'
-  },
-  conflict: {
-    label: 'Conflict',
-    title: 'This project changed elsewhere. Your work is safe on this device.'
-  },
-  refused: {
-    label: 'Too large',
-    title: 'Too large for your account. Saved on this device.'
-  },
-  paused: {
-    label: 'Autosave off',
-    title:
-      'Saved on this device · cloud autosave is off. Ctrl/Cmd+S updates your account.'
-  }
-};
-
 interface TopBarProps {
   projectName: string | null;
   units: UnitSystem | null;
@@ -333,7 +298,7 @@ export function TopBar({
         type="button"
         disabled={!projectName}
         onClick={onSave}
-        title={`${SAVE_STATE_LABELS[saveState].title} Click to save a revision (Ctrl+S).`}
+        title={`${WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S).`}
       >
         {saveState === 'saving' || saveState === 'syncing' ? (
           <LoaderCircle className="spin" size={14} aria-hidden="true" />
@@ -344,7 +309,7 @@ export function TopBar({
         ) : (
           <CloudOff size={14} aria-hidden="true" />
         )}
-        {SAVE_STATE_LABELS[saveState].label}
+        {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
       </button>
       {session && (
         <span className="session-user" title={session.email ?? session.userId}>
