@@ -5,6 +5,8 @@ import {
   type SelectionFilter
 } from '@openzcad/viewport/types';
 import { StatusActivityLog, type StatusTone } from './StatusActivityLog';
+import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 
 interface StatusBarProps {
   status: string;
@@ -16,6 +18,7 @@ interface StatusBarProps {
   featureCount: number;
   warningCount: number;
   documentVersion: number | null;
+  saveState: WorkspaceSaveState;
   units: string;
   /** What picking is currently narrowed to, however that was decided. */
   selectionFilter: SelectionFilter;
@@ -34,6 +37,7 @@ export function StatusBar({
   featureCount,
   warningCount,
   documentVersion,
+  saveState,
   units,
   selectionFilter,
   selectionFilterIsAutomatic,
@@ -106,7 +110,11 @@ export function StatusBar({
             );
           })}
         </div>
-        <div className="status-groups" aria-label="Workspace status">
+        <div
+          className="status-groups"
+          role="group"
+          aria-label="Workspace status"
+        >
           <span>
             <b>kernel</b>
             Exact B-rep
@@ -127,7 +135,7 @@ export function StatusBar({
             title={`${projectName ?? 'Project'} · ${featureCount} features · ${bodyCount} bodies`}
           >
             <b>sync</b>
-            Synced
+            {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel}
           </span>
         </div>
       </footer>

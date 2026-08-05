@@ -93,7 +93,7 @@ describe('a device with no recorded baseline', () => {
     ).toBe('unknown-baseline');
   });
 
-  it('accepts an exact clean match as agreement', () => {
+  it('refuses to infer content agreement from equal versions', () => {
     expect(
       decideProjectSync({
         localVersion: 5,
@@ -101,7 +101,7 @@ describe('a device with no recorded baseline', () => {
         lastSyncedVersion: null,
         hasUnsentChanges: false
       })
-    ).toBe('in-sync');
+    ).toBe('unknown-baseline');
   });
 });
 
