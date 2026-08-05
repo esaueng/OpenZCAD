@@ -107,15 +107,14 @@ Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a rea
 
 Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
-Project sharing is deliberately dark in both checked-in configurations:
-`PROJECT_SHARING_ENABLED=false` and
-`PROJECT_EDIT_LEASES_ENFORCED=false`. A controlled account canary can instead
-be opened with the secret `PROJECT_COLLABORATION_CANARY_EMAILS`, a
-comma-separated list of authenticated participant emails. The allowlist
-enables sharing, owner sync, and edit leases only for those accounts; canary
-invitations are also restricted to allowlisted recipients. Missing or empty
-stays closed. Changing either the secret or the global flags is a separate
-rollout action, not part of a normal application build.
+The checked-in beta configuration enables project sharing, owner-room sync,
+and edit leases for every authenticated account. Project ownership and
+membership still authorize room and document access, and editor writes require
+the persisted project-wide lease. The local development configuration remains
+closed by default. `PROJECT_COLLABORATION_CANARY_EMAILS` remains available only
+as a scoped fallback if the global beta flags are closed again. Changing these
+flags or deploying them remains a separate rollout action, not part of a normal
+application build.
 
 ## API surface
 
