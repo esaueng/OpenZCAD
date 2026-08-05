@@ -2,7 +2,7 @@
 # .env, or a populated .dev.vars file. Never commit a populated secret file.
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=
-AI_MODEL=openai/gpt-5.6-terra
+AI_MODEL=openai/gpt-5.6-sol
 
 # Required only for encrypted per-user API tokens in Settings. Generate a
 # base64-encoded 32-byte key, keep it secret, and use the same key after restarts.

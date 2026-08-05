@@ -294,7 +294,7 @@ function providerDefaults(provider: AppSettings['assistant']['provider']) {
     return { model: 'gpt-5.6-sol', baseUrl: '' };
   }
   if (provider === 'openrouter') {
-    return { model: 'openai/gpt-5.6-terra', baseUrl: '' };
+    return { model: 'openai/gpt-5.6-sol', baseUrl: '' };
   }
   return { model: '', baseUrl: '' };
 }
