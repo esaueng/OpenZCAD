@@ -94,6 +94,42 @@ describe('cloudflare adapters', () => {
     ).toBe(true);
   });
 
+  it('rejects stale R2 saves before writing project objects', async () => {
+    const userId = toUserId('user_stale_save');
+    const document = createProjectDocument('Stale save', userId);
+    const put = vi.fn();
+    const prepare = vi.fn((query: string) => ({
+      bind: () => ({
+        first: async () => {
+          if (query.includes('user_id AS owner_user_id')) {
+            return { owner_user_id: userId };
+          }
+          if (query.includes('SELECT document_version')) {
+            return { document_version: document.version + 1 };
+          }
+          return null;
+        }
+      })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_STORAGE: {
+        put,
+        get: vi.fn(),
+        delete: vi.fn()
+      } as unknown as R2Bucket
+    });
+
+    await expect(
+      service.saveDocument(userId, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document
+      })
+    ).rejects.toMatchObject({ currentVersion: document.version + 1 });
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it('skips a corrupt D1 project row without hiding valid projects', async () => {
     const document = createProjectDocument(
       'Valid D1 project',
