@@ -108,7 +108,8 @@ import type {
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
-  HealthResponse
+  HealthResponse,
+  ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import { toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
@@ -133,12 +134,6 @@ import {
   shouldPollForFreshness
 } from './lib/projectSyncDecision';
 
-/**
- * How often an open cloud project checks whether another device has moved it.
- * Focus and reconnect cover the cases that matter most; the interval is the
- * backstop for a tab left open and in front of somebody.
- */
-const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 import { mark, measure, timed, timedAsync } from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
 import {
@@ -176,6 +171,7 @@ import { buildDemoDocument, DEMO_DEFINITIONS } from './lib/demos';
 import type { DemoDefinition } from './lib/demos';
 import { AssistantPanel } from './components/assistant/AssistantPanel';
 import { ProjectSharingDialog } from './components/ProjectSharingDialog';
+import { createProjectSharingClient } from './lib/projectSharing';
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExtrudeOverlay,
@@ -360,6 +356,20 @@ import {
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
 
+/**
+ * How often an open cloud project checks whether another device has moved it.
+ * Focus and reconnect cover the cases that matter most; the interval is the
+ * backstop for a tab left open and in front of somebody.
+ */
+const FRESHNESS_POLL_INTERVAL_MS = 60_000;
+const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
+  {
+    sharingEnabled: false,
+    editLeasesEnforced: false,
+    personalSyncEnabled: false,
+    canary: false
+  };
+const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
@@ -778,16 +788,9 @@ export function App() {
   const [cloudAvailable, setCloudAvailable] = useState(false);
   const [deploymentHealth, setDeploymentHealth] =
     useState<HealthResponse | null>(null);
-  const [collaborationRollout, setCollaborationRollout] = useState({
-    sharingEnabled: false,
-    editLeasesEnforced: false,
-    /**
-     * The owner's own devices may join a room. Independent of `sharingEnabled`
-     * on purpose — it must never be read as permission to invite anyone, show
-     * sharing UI, or enforce a lease.
-     */
-    personalSyncEnabled: false
-  });
+  const [collaborationRollout, setCollaborationRollout] = useState(
+    DISABLED_COLLABORATION_ROLLOUT
+  );
   const [session, setSession] = useState<AuthSession | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -1579,14 +1582,24 @@ export function App() {
         const activeSession = await timedAsync('startup.session', () =>
           api.session().catch(() => null)
         );
-        const [listed, rememberedRemote, remoteSettings] = await Promise.all([
+        const [
+          listed,
+          rememberedRemote,
+          remoteSettings,
+          collaborationCapabilities
+        ] = await Promise.all([
           timedAsync('startup.projectList', () =>
             loadProjectSummaries(Boolean(activeSession))
           ),
           activeSession && startupProjectId
             ? api.loadProject(startupProjectId).catch(() => null)
             : Promise.resolve(null),
-          activeSession ? api.getSettings().catch(() => null) : null
+          activeSession ? api.getSettings().catch(() => null) : null,
+          activeSession
+            ? api
+                .collaborationCapabilities()
+                .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+            : DISABLED_COLLABORATION_ROLLOUT
         ]);
         if (cancelled) {
           return;
@@ -1624,13 +1637,7 @@ export function App() {
           }
         }
         const canUseCloud = Boolean(activeSession && rememberedRemote);
-        setCollaborationRollout({
-          sharingEnabled: health?.projectSharingEnabled === true,
-          editLeasesEnforced:
-            health?.projectSharingEnabled === true &&
-            health.projectEditLeasesEnforced === true,
-          personalSyncEnabled: health?.projectPersonalSyncEnabled === true
-        });
+        setCollaborationRollout(collaborationCapabilities);
         if (rememberedRemote) {
           remoteVersionsRef.current.set(
             rememberedRemote.projectId,
@@ -2915,6 +2922,7 @@ export function App() {
     accountSettingsRef.current = null;
     setSession(null);
     setAccountSettings(null);
+    setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
   }
 
   function openSettings() {
@@ -2947,10 +2955,17 @@ export function App() {
         );
         return;
       }
+      setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
       try {
-        const remoteSettings = await api.getSettings();
+        const [remoteSettings, collaborationCapabilities] = await Promise.all([
+          api.getSettings(),
+          api
+            .collaborationCapabilities()
+            .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+        ]);
         accountSettingsRef.current = remoteSettings;
         setAccountSettings(remoteSettings);
+        setCollaborationRollout(collaborationCapabilities);
         setSettingsMessage('Cloud profile connected.');
       } catch {
         setSettingsMessage(
@@ -3083,14 +3098,19 @@ export function App() {
   }
 
   async function activateCloudSession(activeSession: AuthSession) {
-    const [remoteSettings, listed] = await Promise.all([
-      api.getSettings(),
-      loadProjectSummaries(true)
-    ]);
+    const [remoteSettings, listed, collaborationCapabilities] =
+      await Promise.all([
+        api.getSettings(),
+        loadProjectSummaries(true),
+        api
+          .collaborationCapabilities()
+          .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+      ]);
     sessionRef.current = activeSession;
     setSession(activeSession);
     accountSettingsRef.current = remoteSettings;
     setAccountSettings(remoteSettings);
+    setCollaborationRollout(collaborationCapabilities);
     if (
       remoteSettings.synced &&
       shouldAdoptAccountSettings({
@@ -3227,6 +3247,7 @@ export function App() {
       setSession(null);
       accountSettingsRef.current = null;
       setAccountSettings(null);
+      setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
       setCloudAvailable(false);
       setProjects(listed.projects);
       // Nothing is in "the account" once there is no account in session, so the
@@ -3745,6 +3766,28 @@ export function App() {
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to open project.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleAcceptProjectInvitation(token: string) {
+    if (!session || !collaborationRollout.sharingEnabled) {
+      throw new Error('Project sharing is not enabled for this account.');
+    }
+    setBusy(true);
+    setStatus('Accepting project invitation…');
+    try {
+      const accepted = await projectSharingClient.acceptInvitation(token);
+      const listed = await loadProjectSummaries(true);
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      setStatus(`Invitation accepted with ${accepted.role} access.`);
+      await handleOpenProject(accepted.projectId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not accept the invitation.'));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -6788,6 +6831,8 @@ export function App() {
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          collaborationSharingEnabled={collaborationRollout.sharingEnabled}
+          onAcceptInvitation={handleAcceptProjectInvitation}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
@@ -8102,6 +8147,7 @@ export function App() {
               liveMembers={collaboration.members}
               conflict={collaboration.conflict}
               conflictHandlers={conflictHandlers}
+              editorInvitationsEnabled={collaborationRollout.editLeasesEnforced}
               onClose={() => setSharingOpen(false)}
             />
           )}
