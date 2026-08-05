@@ -12,6 +12,7 @@ import type {
   AssistantProvider,
   AssistantReasoningEffort
 } from '@openzcad/shared';
+import { observeAssistantResponse } from './assistantStreamDiagnostics';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-sol';
@@ -533,10 +534,18 @@ export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
   };
 }
 
-function jsonError(error: string, code: string, status: number): Response {
+function jsonError(
+  error: string,
+  code: string,
+  status: number,
+  requestId?: string
+): Response {
   return new Response(JSON.stringify({ error, code }), {
     status,
-    headers: { 'content-type': 'application/json' }
+    headers: {
+      'content-type': 'application/json',
+      ...(requestId ? { 'x-openzcad-request-id': requestId } : {})
+    }
   });
 }
 
@@ -547,12 +556,15 @@ export async function streamAssistantProposal(
   runtime?: AssistantRuntimeConfig
 ): Promise<Response> {
   const provider = runtime?.provider ?? providerFor(env);
+  const model = runtime?.model ?? modelFor(env, provider);
+  const requestId = crypto.randomUUID();
   const apiKey = runtime?.apiKey ?? apiKeyFor(env, provider);
   if (!apiKey) {
     return jsonError(
       'AI is not configured for this environment.',
       'AI_NOT_CONFIGURED',
-      503
+      503,
+      requestId
     );
   }
 
@@ -561,7 +573,8 @@ export async function streamAssistantProposal(
     return jsonError(
       'AI_BASE_URL is required for a Responses-compatible provider.',
       'AI_PROVIDER_NOT_CONFIGURED',
-      503
+      503,
+      requestId
     );
   }
 
@@ -584,7 +597,7 @@ export async function streamAssistantProposal(
       headers,
       signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
-        model: runtime?.model ?? modelFor(env, provider),
+        model,
         instructions: requestInstructions(
           env,
           runtime,
@@ -607,6 +620,11 @@ export async function streamAssistantProposal(
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
+        // OpenRouter otherwise permits routes that silently ignore unsupported
+        // parameters, including the strict response format this endpoint needs.
+        ...(provider === 'openrouter'
+          ? { provider: { require_parameters: true } }
+          : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
     });
@@ -615,7 +633,9 @@ export async function streamAssistantProposal(
       error instanceof DOMException &&
       (error.name === 'TimeoutError' || error.name === 'AbortError');
     console.error('AI Responses provider request failed:', {
+      requestId,
       provider,
+      model,
       reason: timedOut ? 'timeout' : 'network'
     });
     return jsonError(
@@ -623,31 +643,39 @@ export async function streamAssistantProposal(
         ? 'The modeling assistant timed out before producing a patch.'
         : 'The modeling assistant could not reach its provider.',
       timedOut ? 'AI_UPSTREAM_TIMEOUT' : 'AI_UPSTREAM_UNAVAILABLE',
-      timedOut ? 504 : 502
+      timedOut ? 504 : 502,
+      requestId
     );
   }
 
   if (!upstream.ok || !upstream.body) {
     await upstream.body?.cancel();
     console.error('AI Responses provider failed:', {
+      requestId,
       provider,
+      model,
       status: upstream.status
     });
     return jsonError(
       'The modeling assistant could not generate a patch.',
       'AI_UPSTREAM_ERROR',
-      502
+      502,
+      requestId
     );
   }
 
-  return new Response(upstream.body, {
-    status: 200,
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      'x-content-type-options': 'nosniff'
+  return new Response(
+    observeAssistantResponse(upstream.body, { requestId, provider, model }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        'x-content-type-options': 'nosniff',
+        'x-openzcad-request-id': requestId
+      }
     }
-  });
+  );
 }
 
 export async function testAssistantConnection(
