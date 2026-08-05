@@ -17,9 +17,9 @@ modules are called out explicitly.
 | Direct edits            | Planar offsets, cylindrical hole/boss radius edits, through-hole resize, and feature removal run on both kernels with analytic and volume validation                                                                                                   | Partial                          | Coordinated counterbore/countersink, pocket-depth, and taper-angle edits remain disabled; on BrepKit, hole closing refuses where the boolean falls back to a mesh and defeature refuses any body that is not all-planar     |
 | Imported-feature proof  | Bounded analytic adjacency proofs for blind holes, counterbores, countersinks, bosses, prismatic pockets, and conical tapers                                                                                                                           | Tested read-only module          | No tessellation/nearest guessing; blends, ribs, intersections, partial revolutions, ambiguous twins, and incomplete proofs are refused. No live product wiring yet                                                          |
 | Viewport edges          | One idle exact-edge batch per visible body with ownership, picking, hover, selection, seams, and wireframe                                                                                                                                             | Working                          | Continue measuring draw calls and consolidate further only against the committed probe                                                                                                                                      |
-| Local persistence       | IndexedDB autosave, offline reopen, and recovery-project writes before every destructive collaboration resolution                                                                                                                                      | Working                          | Reload-survival still needs a real-session E2E before collaboration flags change                                                                                                                                            |
+| Local persistence       | IndexedDB autosave, offline reopen, and recovery-project writes before every destructive collaboration resolution                                                                                                                                      | Working                          | Reload-survival remains a required real-session beta check during the collaboration rollout                                                                                                                                 |
 | Cloud settings          | Serialized/coalesced saves, revision chaining, bounded conflict retry, offline resume, session epochs, and logout flush                                                                                                                                | Working                          | Separate from project-conflict resolution by design                                                                                                                                                                         |
-| Collaboration           | Account-scoped canary, invitation acceptance UI, owner/editor/viewer APIs and dialog, one-time token copy, per-message authorization, one persisted project-wide edit lease, and explicit conflict actions                                               | Implemented behind closed rollout | Global flags remain false; `PROJECT_COLLABORATION_CANARY_EMAILS` is a secret fail-closed participant allowlist, and canary invitations cannot target accounts outside it                                                     |
+| Collaboration           | Invitation acceptance UI, owner/editor/viewer APIs and dialog, one-time token copy, per-message authorization, one persisted project-wide edit lease, and explicit conflict actions                                                                     | Working for authenticated beta accounts | The beta flags admit any authenticated email; project ownership/membership and edit leases still authorize access and writes. The secret account canary remains a scoped fallback if the global flags are closed again        |
 | Conflict recovery       | Use room version, Keep my version, and Save local as a copy all preserve the divergent local document first; unresolved divergence survives dialog close/reload                                                                                        | Working client flow              | Keep mine requires this client’s unexpired lease and the exact expected room version; release gate is the reload E2E                                                                                                        |
 | AI proposals            | Strict schema, deterministic digest-bound validation, exact preflight, review, and one undoable transaction; face sketch, multi-profile extrude, mirror, shell, solid offset, and validated direct edits are implemented behind independent dark flags | Working, rollout-gated allowlist | Recognized imported features, imports, and collaboration actions remain disabled; stale topology witnesses are rejected                                                                                                     |
 | Kernel delivery         | The exact adapter and BrepKit load lazily in the worker; jobs have tagged lifecycle state and stale-result gating                                                                                                                                     | Working                          | First-load latency remains hardware-dependent and must be measured separately from UI bundle startup                                                                                                                        |
@@ -49,7 +49,8 @@ modules are called out explicitly.
 - Geometry worker state is project/version/request tagged. Broadcast rebuilds
   coalesce; explicit export/preview work remains lossless.
 - Sharing storage, routes, role authorization, and the persisted project lease
-  are implemented but stay dark under both checked-in flags.
+  are enabled for authenticated beta accounts and remain closed in local Worker
+  development by default.
 
 ### Wave 3: modeling contracts
 
@@ -82,20 +83,22 @@ modules are called out explicitly.
 
 ## Feature flags and rollout order
 
-Both `wrangler.jsonc` and `apps/web/wrangler.jsonc` currently set:
+The root beta `wrangler.jsonc` currently sets:
 
 ```text
-PROJECT_SHARING_ENABLED=false
-PROJECT_EDIT_LEASES_ENFORCED=false
+PROJECT_SHARING_ENABLED=true
+PROJECT_EDIT_LEASES_ENFORCED=true
+PROJECT_PERSONAL_SYNC_ENABLED=true
 ```
 
-The intended non-production rollout is:
+`apps/web/wrangler.jsonc` remains closed for local Worker development. The beta
+rollout is now:
 
 1. Apply and verify the sharing migration and Durable Object binding.
-2. Set `PROJECT_COLLABORATION_CANARY_EMAILS` only for the approved owner and
-   invited test accounts; verify `/api/collaboration/config` for each session.
+2. Admit every authenticated account; continue enforcing project ownership,
+   membership, and same-origin checks server-side.
 3. Run authorization, revocation, lease-expiry, conflict recovery-copy, and
    reload-survival tests against the target beta environment.
-4. Enable project sharing globally for viewer invitations first.
-5. Enable editor invitations globally only with lease enforcement enabled.
-6. Keep production configuration absent until separately authorized.
+4. Roll back all three global flags together if live authorization or lease
+   behavior regresses; the secret allowlist may be used for a scoped retest.
+5. Keep production configuration absent until separately authorized.
