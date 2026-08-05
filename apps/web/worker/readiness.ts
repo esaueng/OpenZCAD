@@ -24,6 +24,7 @@ interface ProjectObjectStorageSchema {
 interface DesktopAuthSchema {
   tables: number;
   indexes: number;
+  user_code_hash: number;
 }
 
 /** Whether migration 0012 installed every native-auth table and lookup index. */
@@ -56,10 +57,18 @@ export async function isDesktopAuthReady(
               'idx_desktop_access_tokens_session',
               'idx_desktop_access_tokens_expires'
             )
-          ) AS indexes`
+          ) AS indexes,
+          EXISTS (
+            SELECT 1 FROM pragma_table_info('desktop_auth_attempts')
+            WHERE name = 'user_code_hash'
+          ) AS user_code_hash`
       )
       .first<DesktopAuthSchema>();
-    return schema?.tables === 3 && schema.indexes === 6;
+    return (
+      schema?.tables === 3 &&
+      schema.indexes === 6 &&
+      schema.user_code_hash === 1
+    );
   } catch {
     return false;
   }
