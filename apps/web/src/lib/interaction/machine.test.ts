@@ -195,6 +195,17 @@ describe('interactionReducer', () => {
     expect(state.mode === 'sketch' && state.session.sketchId).toBe('sketch_9');
     state = interactionReducer(state, { type: 'sketch-tool', tool: 'circle' });
     expect(state.mode === 'sketch' && state.session.tool).toBe('circle');
+    expect(state.mode === 'sketch' && state.session.circleMode).toBe(
+      'center-radius'
+    );
+    state = interactionReducer(state, {
+      type: 'sketch-circle-mode',
+      mode: 'three-point'
+    });
+    expect(state.mode === 'sketch' && state.session.circleMode).toBe(
+      'three-point'
+    );
+    expect(state.mode === 'sketch' && state.session.tool).toBe('circle');
     state = interactionReducer(state, { type: 'exit-sketch' });
     expect(state).toEqual(IDLE);
   });

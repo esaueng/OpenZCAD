@@ -1322,9 +1322,18 @@ export interface AppSettings {
     middleDrag: SettingsMiddleDrag;
   };
   sketching: {
+    /** Sketch-plane grid visibility is independent from grid snapping. */
+    gridVisible: boolean;
+    /** Quantize committed points to `linearSnap`; legacy name kept stable. */
     snapEnabled: boolean;
+    /** Prefer exact sketch entities over the grid when candidates overlap. */
+    geometrySnapEnabled: boolean;
+    /** Offer temporary horizontal/vertical relations while drawing. */
+    inferenceEnabled: boolean;
     linearSnap: number;
     angleSnap: number;
+    /** Screen-space radius used for sketch snap candidates. */
+    snapTolerancePx: number;
   };
   /**
    * How work reaches the account. There is no toggle for the device write —
@@ -1410,9 +1419,13 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     middleDrag: 'pan'
   },
   sketching: {
-    snapEnabled: true,
+    gridVisible: true,
+    snapEnabled: false,
+    geometrySnapEnabled: true,
+    inferenceEnabled: true,
     linearSnap: 1,
-    angleSnap: 15
+    angleSnap: 15,
+    snapTolerancePx: 10
   },
   files: {
     cloudAutosave: true,

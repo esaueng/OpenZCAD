@@ -207,8 +207,6 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
-import { SketchToolRail } from './components/SketchToolRail';
-import { SketchEntityEditor } from './components/SketchEntityEditor';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
@@ -242,6 +240,16 @@ const LazyViewerShell = lazy(() =>
     default: module.ViewerShell
   }))
 );
+const LazySketchToolRail = lazy(() =>
+  import('./components/SketchToolRail').then((module) => ({
+    default: module.SketchToolRail
+  }))
+);
+const LazySketchEntityEditor = lazy(() =>
+  import('./components/SketchEntityEditor').then((module) => ({
+    default: module.SketchEntityEditor
+  }))
+);
 
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
@@ -253,6 +261,24 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
       }
     >
       <LazyViewerShell {...props} />
+    </Suspense>
+  );
+}
+
+function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function SketchEntityEditor(
+  props: ComponentProps<typeof LazySketchEntityEditor>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchEntityEditor {...props} />
     </Suspense>
   );
 }
@@ -4970,14 +4996,34 @@ export function App() {
           ? [{ id: objectId, data: node.data }]
           : [];
       }) ?? [];
+    const resolve = (value: unknown): number =>
+      evalParamValue(value as ParamValue, parameterScope.scope) ?? 0;
+    let profiles: {
+      outer: { x: number; y: number }[];
+      holes: { x: number; y: number }[][];
+    }[] = [];
+    try {
+      profiles = computeSketchRegions(objects, resolve).map((profile) => ({
+        outer: profile.outer.polyline,
+        holes: profile.holes.map((hole) => hole.polyline)
+      }));
+    } catch {
+      // An unresolved parameter must not make the sketch session disappear.
+    }
     return {
       basis: sketchBasis,
       tool: session.tool,
+      circleMode: session.circleMode,
       snapStep: appSettings.sketching.snapEnabled
         ? appSettings.sketching.linearSnap
         : null,
+      gridVisible: appSettings.sketching.gridVisible,
+      geometrySnapEnabled: appSettings.sketching.geometrySnapEnabled,
+      inferenceEnabled: appSettings.sketching.inferenceEnabled,
+      snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
+      profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       diagnosticPoints: sketchDiagnosticPoints
@@ -7433,14 +7479,28 @@ export function App() {
                   {interaction.mode === 'sketch' && (
                     <SketchToolRail
                       tool={interaction.session.tool}
+                      circleMode={interaction.session.circleMode}
                       construction={sketchConstruction}
+                      settings={appSettings.sketching}
+                      units={doc.units}
+                      paletteVisible={selectedSketchEntity === null}
                       onTool={(sketchTool) =>
                         dispatchInteraction({
                           type: 'sketch-tool',
                           tool: sketchTool
                         })
                       }
+                      onCircleMode={(mode) =>
+                        dispatchInteraction({
+                          type: 'sketch-circle-mode',
+                          mode
+                        })
+                      }
                       onConstruction={setSketchConstruction}
+                      onSettings={(sketching) => {
+                        const current = appSettingsRef.current;
+                        handleAppSettingsChange({ ...current, sketching });
+                      }}
                       onDiagnostics={showProfileDiagnostics}
                       onExtrude={() => {
                         if (interaction.session.sketchId) {
