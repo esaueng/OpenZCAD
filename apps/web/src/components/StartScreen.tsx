@@ -87,12 +87,12 @@ interface StartScreenProps {
 }
 
 /**
- * How many saved parts a shelf shows before it has to be expanded. Seven parts
- * plus the create tile fills roughly two rows at the widths the grid actually
- * settles on, which is enough to recognise recent work without the demos below
- * being pushed off the screen. Shelves without a create tile get its slot back.
+ * How many saved parts a shelf shows before it has to be expanded. Nine parts
+ * plus the create tile fills two five-column rows at the wide desktop layout,
+ * which is enough to recognise recent work without the demos below being
+ * pushed too far down. Shelves without a create tile get its slot back.
  */
-const COLLAPSED_PROJECT_LIMIT = 7;
+const COLLAPSED_PROJECT_LIMIT = 9;
 
 const SHELVES: ReadonlyArray<{
   status: ProjectStatus;
