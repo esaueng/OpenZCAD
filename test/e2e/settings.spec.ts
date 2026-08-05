@@ -28,7 +28,7 @@ test('keeps command names visible at the compact desktop breakpoint', async ({
   ).toBeVisible();
 });
 
-test('keeps settings at the far right and dismisses the file menu outside', async ({
+test('keeps the top-bar order fixed and dismisses the file menu outside', async ({
   page
 }) => {
   await stubApi(page);
@@ -38,7 +38,21 @@ test('keeps settings at the far right and dismisses the file menu outside', asyn
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
   const topbar = page.locator('.topbar');
-  await expect(topbar.locator(':scope > :last-child')).toHaveAttribute(
+  const actions = topbar.getByRole('group', {
+    name: 'Workspace status and actions'
+  });
+  const actionSlots = actions.locator(':scope > *');
+  await expect(actionSlots).toHaveCount(5);
+  await expect(actionSlots.nth(0)).toHaveClass(/save-state/);
+  await expect(actionSlots.nth(1)).toHaveClass(/account-state/);
+  await expect(actionSlots.nth(1)).toHaveText('Signed in');
+  await expect(topbar).not.toContainText('E2E user');
+  await expect(actionSlots.nth(2)).toHaveAttribute(
+    'aria-label',
+    'Open project sharing'
+  );
+  await expect(actionSlots.nth(3)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(4)).toHaveAttribute(
     'aria-label',
     'Open settings'
   );
@@ -49,6 +63,25 @@ test('keeps settings at the far right and dismisses the file menu outside', asyn
 
   await topbar.locator('.topbar-divider').click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
+
+  const slotBounds = async () =>
+    actions.locator(':scope > *').evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { left: bounds.left, right: bounds.right };
+      })
+    );
+  const beforeStateChanges = await slotBounds();
+  await actions.locator('.save-state').evaluate((element) => {
+    element.lastChild!.textContent = 'Autosave off';
+  });
+  await actions.locator('.account-state').evaluate((element) => {
+    element.lastChild!.textContent = 'Unavailable';
+  });
+  await actions.locator('.collaboration-state').evaluate((element) => {
+    element.lastChild!.textContent = 'Update required';
+  });
+  expect(await slotBounds()).toEqual(beforeStateChanges);
 });
 
 test('opens new projects blank with the assistant collapsed', async ({

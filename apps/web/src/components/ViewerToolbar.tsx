@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2 } from 'lucide-react';
+import { Camera, Grid3x3, Maximize2, Redo2, Undo2 } from 'lucide-react';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
   ProjectionMode,
@@ -32,6 +32,10 @@ function viewTitle(view: { id: StandardView; shortcut?: string }): string {
 interface ViewerToolbarProps {
   settings: ViewerSettings;
   projection: ProjectionMode;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo(): void;
+  onRedo(): void;
   onToggleGrid(): void;
   onFit(): void;
   onView(view: StandardView): void;
@@ -49,6 +53,10 @@ interface ViewerToolbarProps {
 export function ViewerToolbar({
   settings,
   projection,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onToggleGrid,
   onFit,
   onView,
@@ -93,7 +101,28 @@ export function ViewerToolbar({
   }
 
   return (
-    <div className="viewer-rail" role="toolbar" aria-label="Viewer controls">
+    <div className="viewer-rail" role="toolbar" aria-label="Quick actions">
+      <button
+        type="button"
+        className="rail-button"
+        onClick={onUndo}
+        title="Undo (Ctrl+Z)"
+        aria-label="Undo"
+        disabled={!canUndo}
+      >
+        <Undo2 size={15} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="rail-button"
+        onClick={onRedo}
+        title="Redo (Ctrl+Shift+Z)"
+        aria-label="Redo"
+        disabled={!canRedo}
+      >
+        <Redo2 size={15} aria-hidden="true" />
+      </button>
+      <span className="rail-divider" aria-hidden="true" />
       <button
         type="button"
         className="rail-button"

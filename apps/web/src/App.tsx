@@ -7233,8 +7233,6 @@ export function App() {
         <TopBar
           projectName={doc.name}
           units={doc.units}
-          canUndo={managerRef.current?.canUndo ?? false}
-          canRedo={managerRef.current?.canRedo ?? false}
           canExport={exportBodyIds.length > 0}
           exportScope={
             selectedBody &&
@@ -7246,10 +7244,17 @@ export function App() {
           saveState={saveState}
           artifacts={artifacts}
           session={session}
+          accountState={
+            session
+              ? 'signed-in'
+              : authConfigStatus === 'loading'
+                ? 'checking'
+                : authConfigStatus === 'ready'
+                  ? 'signed-out'
+                  : 'unavailable'
+          }
           collaborationStatus={collaboration.status}
           collaboratorCount={collaboration.members.length}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
@@ -7352,6 +7357,10 @@ export function App() {
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
+            canUndo={managerRef.current?.canUndo ?? false}
+            canRedo={managerRef.current?.canRedo ?? false}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
             initialView={initialView}
             onViewChange={handleViewportChange}
             onMovePreviewChange={(translation, rotationDeg, snap) => {
