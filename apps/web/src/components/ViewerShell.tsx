@@ -291,12 +291,6 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <div className="viewport-frame" aria-hidden="true">
-        <div className="frame-corner tl" />
-        <div className="frame-corner tr" />
-        <div className="frame-corner bl" />
-        <div className="frame-corner br" />
-      </div>
       <div className="vp-hud vp-hud-bl" aria-hidden="true">
         <span className="vp-chip">{units}</span>
         <span className="vp-chip">
