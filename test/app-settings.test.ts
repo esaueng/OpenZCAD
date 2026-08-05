@@ -67,7 +67,7 @@ describe('application settings', () => {
     expect(normalized.viewport.displayMode).toBe('shaded-edges');
     expect(normalized.sketching.linearSnap).toBe(1);
     expect(normalized.assistant.enabled).toBe(false);
-    expect(normalized.assistant.model).toBe('openai/gpt-5.6-terra');
+    expect(normalized.assistant.model).toBe('openai/gpt-5.6-sol');
   });
 
   it('returns independent default objects', () => {

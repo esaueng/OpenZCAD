@@ -142,7 +142,7 @@ test('uses a one-use native ticket for desktop collaboration without exposing a 
                 configured: false,
                 source: 'deployment',
                 provider: 'openrouter',
-                model: 'openai/gpt-5.6-terra',
+                model: 'openai/gpt-5.6-sol',
                 reasoningEffort: 'high'
               }
             });
