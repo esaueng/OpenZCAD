@@ -9,11 +9,15 @@ import {
 } from '@openzcad/viewport';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
-import type { SketchPoint } from '../../lib/sketch/session';
+import {
+  adaptiveGridSpacing,
+  type SketchPoint
+} from '../../lib/sketch/session';
 import {
   objectPolylines,
   type SketchObjectPolyline
 } from '../../lib/objectPolyline';
+import { triangulateRegionGeometry } from './regionOverlay';
 
 /**
  * Scene-side rig for in-viewport sketching: a tinted plane quad with a
@@ -27,6 +31,7 @@ const TINT_COLOR = 0x0d1b2e;
 const COMMITTED_COLOR = 0x4da3ff;
 const SELECTED_COLOR = 0xf59e0b;
 const IN_PROGRESS_COLOR = 0xf59e0b;
+const INFERENCE_COLOR = 0x7dd3fc;
 /** Screen-space width in CSS pixels for the sketch polylines. */
 const SKETCH_LINE_WIDTH = 1.6;
 
@@ -38,10 +43,19 @@ export interface SketchModeRig {
     selectedObjectId: string | null,
     resolve: (value: unknown) => number
   ): void;
+  /** Updates the adaptive sketch-local grid and returns its minor spacing. */
+  setGrid(worldPerPixel: number, visible: boolean): number;
+  /** Closed profiles derived from the canonical sketch objects. */
+  setProfiles(
+    profiles: { outer: SketchPoint[]; holes: SketchPoint[][] }[],
+    visible: boolean
+  ): void;
   /** Returns the closest committed entity under the current ray. */
   pickObject(raycaster: THREE.Raycaster, threshold: number): string | null;
   /** Replaces the in-progress (orange) polyline; null hides it. */
   setInProgress(points: SketchPoint[] | null, closed: boolean): void;
+  /** Temporary horizontal/vertical inference guide. */
+  setInference(points: SketchPoint[] | null): void;
   /** Highlights open/gapped endpoints requested by profile diagnostics. */
   setDiagnostics(points: SketchPoint[]): void;
   dispose(): void;
@@ -98,18 +112,11 @@ export function buildSketchModeRig(
   tint.renderOrder = 5;
   group.add(tint);
 
-  // Grid oriented onto the plane. GridHelper spans XZ with +Y normal.
-  const grid = new THREE.GridHelper(
-    PLANE_EXTENT,
-    PLANE_EXTENT / 10,
-    0x64789c,
-    0x46587a
-  );
-  const gridMaterial = grid.material;
-  gridMaterial.transparent = true;
-  gridMaterial.opacity = 0.5;
-  gridMaterial.depthWrite = false;
-  grid.quaternion.copy(
+  // Grid oriented onto the plane. Two helpers separate major and minor lines;
+  // their geometry is rebuilt only when the adaptive 1-2-5 step changes.
+  const gridGroup = new THREE.Group();
+  gridGroup.name = 'sketch-grid';
+  gridGroup.quaternion.copy(
     quaternion
       .clone()
       .multiply(
@@ -119,9 +126,45 @@ export function buildSketchModeRig(
         )
       )
   );
-  grid.position.copy(origin);
-  grid.renderOrder = 6;
-  group.add(grid);
+  gridGroup.position.copy(origin);
+  gridGroup.renderOrder = 6;
+  group.add(gridGroup);
+  let activeGridSpacing = 0;
+
+  const disposeGrid = () => {
+    for (const child of [...gridGroup.children]) {
+      gridGroup.remove(child);
+      if (child instanceof THREE.LineSegments) {
+        (child.geometry as THREE.BufferGeometry).dispose();
+        const material = child.material as THREE.Material | THREE.Material[];
+        if (Array.isArray(material)) {
+          material.forEach((entry) => entry.dispose());
+        } else {
+          material.dispose();
+        }
+      }
+    }
+  };
+
+  const rebuildGrid = (spacing: number) => {
+    disposeGrid();
+    const extent = spacing * 100;
+    const minor = new THREE.GridHelper(extent, 100, 0x8aa4cf, 0x33415a);
+    const major = new THREE.GridHelper(extent, 20, 0x9db7df, 0x52698f);
+    for (const [helper, opacity] of [
+      [minor, 0.32],
+      [major, 0.44]
+    ] as const) {
+      const material = helper.material;
+      material.transparent = true;
+      material.opacity = opacity;
+      material.depthWrite = false;
+      helper.renderOrder = 6;
+      gridGroup.add(helper);
+    }
+    activeGridSpacing = spacing;
+  };
+  rebuildGrid(10);
 
   const originMaterial = new THREE.PointsMaterial({
     color: 0xffffff,
@@ -142,6 +185,10 @@ export function buildSketchModeRig(
   committedGroup.name = 'sketch-committed';
   group.add(committedGroup);
 
+  const profileGroup = new THREE.Group();
+  profileGroup.name = 'sketch-profiles';
+  group.add(profileGroup);
+
   const inProgressMaterial = createFatLineMaterial({
     color: IN_PROGRESS_COLOR,
     linewidth: SKETCH_LINE_WIDTH,
@@ -154,6 +201,23 @@ export function buildSketchModeRig(
   inProgress.visible = false;
   inProgress.frustumCulled = false;
   group.add(inProgress);
+
+  const inferenceMaterial = createFatLineMaterial({
+    color: INFERENCE_COLOR,
+    linewidth: 1,
+    opacity: 0.72,
+    depthTest: false,
+    resolution: resolution()
+  });
+  inferenceMaterial.dashed = true;
+  inferenceMaterial.dashSize = 1.2;
+  inferenceMaterial.gapSize = 0.8;
+  const inference = new Line2(new LineGeometry(), inferenceMaterial);
+  inference.name = 'sketch-inference';
+  inference.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+  inference.visible = false;
+  inference.frustumCulled = false;
+  group.add(inference);
 
   const diagnosticMaterial = new THREE.PointsMaterial({
     color: 0xff5d73,
@@ -241,6 +305,52 @@ export function buildSketchModeRig(
         }
       }
     },
+    setGrid(worldPerPixel, visible) {
+      const spacing = adaptiveGridSpacing(worldPerPixel);
+      if (Math.abs(spacing - activeGridSpacing) > activeGridSpacing * 1e-9) {
+        rebuildGrid(spacing);
+      }
+      gridGroup.visible = visible;
+      return spacing;
+    },
+    setProfiles(profiles, visible) {
+      disposeChildren(profileGroup);
+      profileGroup.visible = visible;
+      if (!visible) {
+        return;
+      }
+      for (const profile of profiles) {
+        if (profile.outer.length < 3) {
+          continue;
+        }
+        const { positions, indices } = triangulateRegionGeometry(
+          profile.outer,
+          profile.holes,
+          basis
+        );
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          'position',
+          new THREE.BufferAttribute(positions, 3)
+        );
+        geometry.setIndex(indices);
+        const material = new THREE.MeshBasicMaterial({
+          color: 0x2f7fbd,
+          toneMapped: false,
+          transparent: true,
+          opacity: 0.14,
+          depthTest: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
+        profileGroup.add(mesh);
+      }
+    },
     pickObject(raycaster, threshold) {
       const priorThreshold = raycaster.params.Line?.threshold;
       raycaster.params.Line = {
@@ -275,6 +385,24 @@ export function buildSketchModeRig(
       );
       inProgress.visible = true;
     },
+    setInference(points) {
+      if (!points || points.length < 2) {
+        inference.visible = false;
+        return;
+      }
+      const geometry = new LineGeometry();
+      geometry.setPositions(
+        points
+          .map((point) => liftPoint(basis, point))
+          .flatMap((point) => [point.x, point.y, point.z])
+      );
+      inference.geometry.dispose();
+      inference.geometry = geometry;
+      inference.computeLineDistances();
+      const { width, height } = resolution();
+      inferenceMaterial.resolution.set(Math.max(width, 1), Math.max(height, 1));
+      inference.visible = true;
+    },
     setDiagnostics(points) {
       diagnostics.geometry.dispose();
       diagnostics.geometry = new THREE.BufferGeometry().setFromPoints(
@@ -285,14 +413,16 @@ export function buildSketchModeRig(
     dispose() {
       group.removeFromParent();
       disposeChildren(committedGroup);
+      disposeChildren(profileGroup);
+      disposeGrid();
       tint.geometry.dispose();
       tint.material.dispose();
-      grid.geometry.dispose();
-      gridMaterial.dispose();
       originMarker.geometry.dispose();
       originMaterial.dispose();
       inProgress.geometry.dispose();
       inProgressMaterial.dispose();
+      inference.geometry.dispose();
+      inferenceMaterial.dispose();
       diagnostics.geometry.dispose();
       diagnosticMaterial.dispose();
     }

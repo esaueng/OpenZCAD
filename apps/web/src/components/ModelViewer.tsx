@@ -129,19 +129,26 @@ import {
   arcObjectFromPoints,
   arcPreviewPoints,
   axisLockPoint,
+  circleObjectFromDiameter,
+  circleObjectFromThreePoints,
+  circlePreviewPoints,
+  collectSketchSnapTargets,
   dimensionForInProgress,
   lineObjectFromPoints,
-  nearestSnapTarget,
+  pointAtDistanceAlongDirection,
+  resolveSketchSnap,
   screenRayToPlanePoint,
+  SKETCH_SNAP_GLYPHS,
+  SKETCH_SNAP_LABELS,
   sketchEntryPose,
   sketchObjectFromDrag,
   snapSketchPoint,
-  snapTargetsForObject,
   textObjectFromPoint,
   type SketchPoint,
   type SnapTarget,
   type SnapTargetKind
 } from '../lib/sketch/session';
+import type { SketchCircleMode } from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, SketchObjectData } from '@openzcad/shared';
 import { evalParamValue } from '../lib/model';
@@ -178,11 +185,17 @@ export interface CylinderRadiusHandleTarget {
 export interface SketchModeState {
   basis: PlaneBasis;
   tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
+  circleMode: SketchCircleMode;
   snapStep: number | null;
+  gridVisible: boolean;
+  geometrySnapEnabled: boolean;
+  inferenceEnabled: boolean;
+  snapTolerancePx: number;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
   /** Committed objects of the session's sketch, rendered in blue. */
   objects: { id: string; data: SketchObjectData }[];
+  profiles: { outer: SketchPoint[]; holes: SketchPoint[][] }[];
   selectedObjectId: string | null;
   parameterScope: Record<string, number>;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
@@ -794,6 +807,9 @@ export function ModelViewer({
     dragStart: SketchPoint | null;
     arcCenter: SketchPoint | null;
     arcStart: SketchPoint | null;
+    circleFirst: SketchPoint | null;
+    circleSecond: SketchPoint | null;
+    awaitingSecondPoint: boolean;
     pointerId: number | null;
     moved: boolean;
   }>({
@@ -801,6 +817,9 @@ export function ModelViewer({
     dragStart: null,
     arcCenter: null,
     arcStart: null,
+    circleFirst: null,
+    circleSecond: null,
+    awaitingSecondPoint: false,
     pointerId: null,
     moved: false
   });
@@ -1195,6 +1214,12 @@ export function ModelViewer({
     } | null = null;
     const hud = new HudLayer(host);
     const dragHud = hud.create('direct-edit-hud');
+    let activeSketchSnap: SnapTarget | null = null;
+    let sketchSnapCycle = 0;
+    let latestSketchPointerEvent: PointerEvent | null = null;
+    let latestSketchPoint: SketchPoint | null = null;
+    let sketchNumericRaw: string | null = null;
+    let sketchNumericKind: 'radius' | 'diameter' | 'length' = 'length';
     cancelDirectManipulationRef.current = () => {
       let cancelled = false;
       if (cylinderRadiusDrag) {
@@ -1231,6 +1256,21 @@ export function ModelViewer({
       return cancelled;
     };
     const handleCapturedEscape = (event: KeyboardEvent) => {
+      if (handleSketchNumericKey(event)) {
+        return;
+      }
+      if (
+        event.key === 'Tab' &&
+        sketchModeRef.current &&
+        latestSketchPointerEvent
+      ) {
+        activeSketchSnap = null;
+        sketchSnapCycle += 1;
+        updateSketchInProgress(latestSketchPointerEvent);
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (
         event.key === 'Escape' &&
         cancelDirectManipulationRef.current?.() === true
@@ -1382,6 +1422,10 @@ export function ModelViewer({
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
+
+    const sketchGridIndicator = hud.create('sketch-grid-indicator', {
+      ariaHidden: true
+    });
 
     // Entity-snap glyph pinned to the cursor: endpoint □, midpoint △, center ◎.
     const sketchSnapMarker = hud.create('sketch-snap-marker', {
@@ -1833,8 +1877,8 @@ export function ModelViewer({
         camera: cameraRig.capture(),
         controlsEnabled: controls.enabled,
         controlState:
-          (controls as OrbitControls<THREE.Camera> & { state?: number }).state ??
-          null,
+          (controls as OrbitControls<THREE.Camera> & { state?: number })
+            .state ?? null,
         mouseButtons: { ...controls.mouseButtons },
         pointer: {
           button: pointerEvent.button,
@@ -2212,10 +2256,7 @@ export function ModelViewer({
         // number, so the chip reads "R 35ₘₘ" rather than uniform text.
         const units = document.createElement('small');
         units.textContent = unitsRef.current;
-        chip.replaceChildren(
-          `R ${formatNumber(rig.value())}\u00a0`,
-          units
-        );
+        chip.replaceChildren(`R ${formatNumber(rig.value())}\u00a0`, units);
       } else {
         chip.textContent = text;
       }
@@ -2280,17 +2321,45 @@ export function ModelViewer({
       if (!point) {
         return null;
       }
-      const target = nearestSnapTarget(
-        point,
-        snapTargetsRef.current,
-        10 * sketchWorldPerPixel(mode.basis.origin)
-      );
-      if (target) {
-        positionSketchSnapMarker(event, target.kind);
-        return { x: target.x, y: target.y };
+      latestSketchPointerEvent = event;
+      if (event.shiftKey) {
+        activeSketchSnap = null;
+        sketchSnapCycle = 0;
+        hideSketchSnapMarker();
+        latestSketchPoint = point;
+        return point;
       }
+      if (mode.geometrySnapEnabled) {
+        const resolved = resolveSketchSnap(
+          point,
+          snapTargetsRef.current,
+          mode.snapTolerancePx * sketchWorldPerPixel(mode.basis.origin),
+          {
+            lockedId: activeSketchSnap?.id,
+            cycle: sketchSnapCycle
+          }
+        );
+        if (resolved) {
+          activeSketchSnap = resolved.target;
+          positionSketchSnapMarker(event, resolved.target.kind);
+          latestSketchPoint = {
+            x: resolved.target.x,
+            y: resolved.target.y
+          };
+          return latestSketchPoint;
+        }
+      }
+      activeSketchSnap = null;
+      sketchSnapCycle = 0;
       hideSketchSnapMarker();
-      return mode.snapStep ? snapSketchPoint(point, mode.snapStep) : point;
+      if (mode.snapStep) {
+        const snapped = snapSketchPoint(point, mode.snapStep);
+        positionSketchSnapMarker(event, 'grid');
+        latestSketchPoint = snapped;
+        return snapped;
+      }
+      latestSketchPoint = point;
+      return point;
     }
 
     /** Approximate world units per CSS pixel at the sketch plane. */
@@ -2325,7 +2394,9 @@ export function ModelViewer({
       kind: SnapTargetKind
     ) {
       sketchSnapMarker.dataset.kind = kind;
-      sketchSnapMarker.title = kind;
+      sketchSnapMarker.dataset.label = SKETCH_SNAP_LABELS[kind];
+      sketchSnapMarker.textContent = SKETCH_SNAP_GLYPHS[kind];
+      sketchSnapMarker.title = SKETCH_SNAP_LABELS[kind];
       hud.showAtPointer(sketchSnapMarker, event);
     }
 
@@ -2341,6 +2412,10 @@ export function ModelViewer({
       text: string,
       appendUnits = true
     ) {
+      if (sketchNumericRaw !== null) {
+        renderSketchNumericHud(event);
+        return;
+      }
       sketchDimLabel.textContent = appendUnits
         ? `${text} ${unitsRef.current}`
         : text;
@@ -2354,6 +2429,165 @@ export function ModelViewer({
       }
     }
 
+    function renderSketchNumericHud(event: PointerEvent) {
+      const label =
+        sketchNumericKind === 'radius'
+          ? 'Radius'
+          : sketchNumericKind === 'diameter'
+            ? 'Diameter'
+            : 'Length';
+      sketchDimLabel.textContent = `${label}: ${sketchNumericRaw || '…'} ${unitsRef.current} · Enter`;
+      sketchDimLabel.dataset.editing = 'true';
+      hud.showAtPointer(sketchDimLabel, event, 16, -28);
+    }
+
+    function finishSketchNumericEntry() {
+      sketchNumericRaw = null;
+      sketchDimLabel.dataset.editing = 'false';
+      hideSketchDimLabel();
+    }
+
+    function commitSketchNumericEntry(): boolean {
+      const mode = sketchModeRef.current;
+      const gesture = sketchGestureRef.current;
+      const value = Number(sketchNumericRaw);
+      if (!mode || !Number.isFinite(value) || value <= 0) {
+        return false;
+      }
+      if (
+        mode.tool === 'circle' &&
+        mode.circleMode !== 'three-point' &&
+        gesture.dragStart
+      ) {
+        const radius = sketchNumericKind === 'diameter' ? value / 2 : value;
+        const circle: SketchObjectData | null =
+          mode.circleMode === 'center-radius'
+            ? {
+                objectKind: 'circle',
+                centerX: gesture.dragStart.x,
+                centerY: gesture.dragStart.y,
+                radius
+              }
+            : (() => {
+                const direction = latestSketchPoint ?? {
+                  x: gesture.dragStart.x + 1,
+                  y: gesture.dragStart.y
+                };
+                const diameter = radius * 2;
+                const second = pointAtDistanceAlongDirection(
+                  gesture.dragStart,
+                  direction,
+                  diameter
+                );
+                return {
+                  objectKind: 'circle',
+                  centerX: (gesture.dragStart.x + second.x) / 2,
+                  centerY: (gesture.dragStart.y + second.y) / 2,
+                  radius
+                };
+              })();
+        if (!circle) {
+          return false;
+        }
+        onSketchCommitRef.current(circle);
+        gesture.dragStart = null;
+        gesture.awaitingSecondPoint = false;
+        sketchRigRef.current?.setInProgress(null, false);
+        onSketchDrawingChangeRef.current(false);
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
+      if (mode.tool === 'line' && gesture.chainAnchor) {
+        const end = pointAtDistanceAlongDirection(
+          gesture.chainAnchor,
+          latestSketchPoint ?? gesture.chainAnchor,
+          value
+        );
+        const line = lineObjectFromPoints(gesture.chainAnchor, end);
+        if (!line) {
+          return false;
+        }
+        onSketchCommitRef.current(line);
+        gesture.chainAnchor = end;
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
+      return false;
+    }
+
+    function handleSketchNumericKey(event: KeyboardEvent): boolean {
+      const mode = sketchModeRef.current;
+      const gesture = sketchGestureRef.current;
+      const supported =
+        mode &&
+        ((mode.tool === 'circle' &&
+          mode.circleMode !== 'three-point' &&
+          gesture.dragStart !== null) ||
+          (mode.tool === 'line' && gesture.chainAnchor !== null));
+      if (!supported) {
+        return false;
+      }
+      if (event.key === 'Escape' && sketchNumericRaw !== null) {
+        finishSketchNumericEntry();
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      if (event.key === 'Tab' && sketchNumericRaw !== null) {
+        if (mode.tool === 'circle') {
+          const numeric = Number(sketchNumericRaw);
+          sketchNumericKind =
+            sketchNumericKind === 'radius' ? 'diameter' : 'radius';
+          if (Number.isFinite(numeric)) {
+            sketchNumericRaw = String(
+              sketchNumericKind === 'diameter' ? numeric * 2 : numeric / 2
+            );
+          }
+          if (latestSketchPointerEvent) {
+            renderSketchNumericHud(latestSketchPointerEvent);
+          }
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      if (event.key === 'Enter' && sketchNumericRaw !== null) {
+        if (!commitSketchNumericEntry() && latestSketchPointerEvent) {
+          sketchDimLabel.textContent = 'Enter a positive exact value';
+          hud.showAtPointer(sketchDimLabel, latestSketchPointerEvent, 16, -28);
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+      if (event.key === 'Backspace' && sketchNumericRaw !== null) {
+        sketchNumericRaw = sketchNumericRaw.slice(0, -1);
+      } else if (/^[0-9.]$/.test(event.key)) {
+        if (sketchNumericRaw === null) {
+          sketchNumericKind =
+            mode.tool === 'circle'
+              ? mode.circleMode === 'two-point-diameter'
+                ? 'diameter'
+                : 'radius'
+              : 'length';
+          sketchNumericRaw = '';
+        }
+        if (event.key !== '.' || !sketchNumericRaw.includes('.')) {
+          sketchNumericRaw += event.key;
+        }
+      } else {
+        return false;
+      }
+      if (latestSketchPointerEvent) {
+        renderSketchNumericHud(latestSketchPointerEvent);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
     function updateSketchInProgress(event: PointerEvent) {
       const mode = sketchModeRef.current;
       const rig = sketchRigRef.current;
@@ -2365,24 +2599,55 @@ export function ModelViewer({
       if (!point) {
         return;
       }
+      rig.setInference(null);
+      if (
+        mode.tool === 'circle' &&
+        mode.circleMode === 'three-point' &&
+        gesture.circleFirst
+      ) {
+        if (!gesture.circleSecond) {
+          rig.setInProgress([gesture.circleFirst, point], false);
+          positionSketchDimLabel(event, 'Point 2 of 3', false);
+        } else {
+          const circle = circleObjectFromThreePoints(
+            gesture.circleFirst,
+            gesture.circleSecond,
+            point
+          );
+          if (circle && circle.objectKind === 'circle') {
+            rig.setInProgress(circlePreviewPoints(circle), true);
+            positionSketchDimLabel(
+              event,
+              `R ${Math.round(Number(circle.radius) * 1000) / 1000} ${unitsRef.current} · ⌀ ${Math.round(Number(circle.radius) * 2000) / 1000} ${unitsRef.current}`,
+              false
+            );
+          } else {
+            rig.setInProgress(
+              [gesture.circleFirst, gesture.circleSecond, point],
+              false
+            );
+            positionSketchDimLabel(
+              event,
+              'Points cannot define a stable circle',
+              false
+            );
+          }
+        }
+        requestRender();
+        return;
+      }
       if (
         gesture.dragStart &&
         (mode.tool === 'circle' || mode.tool === 'rectangle')
       ) {
         if (mode.tool === 'circle') {
-          const radius = Math.hypot(
-            point.x - gesture.dragStart.x,
-            point.y - gesture.dragStart.y
-          );
-          const samples: SketchPoint[] = [];
-          for (let index = 0; index < 64; index += 1) {
-            const angle = (index / 64) * Math.PI * 2;
-            samples.push({
-              x: gesture.dragStart.x + Math.cos(angle) * radius,
-              y: gesture.dragStart.y + Math.sin(angle) * radius
-            });
+          const circle =
+            mode.circleMode === 'two-point-diameter'
+              ? circleObjectFromDiameter(gesture.dragStart, point)
+              : sketchObjectFromDrag('circle', gesture.dragStart, point);
+          if (circle && circle.objectKind === 'circle') {
+            rig.setInProgress(circlePreviewPoints(circle), true);
           }
-          rig.setInProgress(samples, true);
         } else {
           rig.setInProgress(
             [
@@ -2394,16 +2659,39 @@ export function ModelViewer({
             true
           );
         }
-        positionSketchDimLabel(
-          event,
-          dimensionForInProgress(mode.tool, gesture.dragStart, point)
-        );
+        if (mode.tool === 'circle') {
+          const distance = Math.hypot(
+            point.x - gesture.dragStart.x,
+            point.y - gesture.dragStart.y
+          );
+          const radius =
+            mode.circleMode === 'two-point-diameter' ? distance / 2 : distance;
+          positionSketchDimLabel(
+            event,
+            `R ${Math.round(radius * 1000) / 1000} ${unitsRef.current} · ⌀ ${Math.round(radius * 2000) / 1000} ${unitsRef.current}`,
+            false
+          );
+        } else {
+          positionSketchDimLabel(
+            event,
+            dimensionForInProgress(mode.tool, gesture.dragStart, point)
+          );
+        }
         requestRender();
         return;
       }
       if (mode.tool === 'line' && gesture.chainAnchor) {
-        const locked = axisLockPoint(gesture.chainAnchor, point);
+        const locked =
+          mode.inferenceEnabled && !event.shiftKey
+            ? axisLockPoint(gesture.chainAnchor, point)
+            : { point, lockedAxis: null };
         rig.setInProgress([gesture.chainAnchor, locked.point], false);
+        if (locked.lockedAxis) {
+          rig.setInference([gesture.chainAnchor, locked.point]);
+          if (!activeSketchSnap) {
+            positionSketchSnapMarker(event, locked.lockedAxis);
+          }
+        }
         positionSketchDimLabel(
           event,
           dimensionForInProgress('line', gesture.chainAnchor, locked.point)
@@ -2887,14 +3175,27 @@ export function ModelViewer({
         const mode = sketchModeRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
-        if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
-          gesture.dragStart = point;
+        if (
+          point &&
+          (mode.tool === 'rectangle' ||
+            (mode.tool === 'circle' && mode.circleMode !== 'three-point'))
+        ) {
+          if (!gesture.dragStart) {
+            finishSketchNumericEntry();
+            gesture.dragStart = point;
+            gesture.awaitingSecondPoint = false;
+          }
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
           gestures.capture(event, null);
           onSketchDrawingChangeRef.current(true);
           event.preventDefault();
-        } else if (point && (mode.tool === 'line' || mode.tool === 'arc')) {
+        } else if (
+          point &&
+          (mode.tool === 'line' ||
+            mode.tool === 'arc' ||
+            (mode.tool === 'circle' && mode.circleMode === 'three-point'))
+        ) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
           event.preventDefault();
@@ -3285,20 +3586,68 @@ export function ModelViewer({
         }
         if (gesture.dragStart) {
           gestures.release(event, null);
+          if (!moved && !gesture.awaitingSecondPoint) {
+            gesture.awaitingSecondPoint = true;
+            onSketchDrawingChangeRef.current(true);
+            requestRender();
+            return;
+          }
           if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
-            const object = sketchObjectFromDrag(
-              mode.tool,
-              gesture.dragStart,
-              point
-            );
+            const object =
+              mode.tool === 'circle' && mode.circleMode === 'two-point-diameter'
+                ? circleObjectFromDiameter(gesture.dragStart, point)
+                : sketchObjectFromDrag(mode.tool, gesture.dragStart, point);
             if (object) {
               onSketchCommitRef.current(object);
             }
           }
           gesture.dragStart = null;
+          gesture.awaitingSecondPoint = false;
           rig?.setInProgress(null, false);
-          hideSketchDimLabel();
+          finishSketchNumericEntry();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (
+          mode.tool === 'circle' &&
+          mode.circleMode === 'three-point' &&
+          point &&
+          !moved
+        ) {
+          if (!gesture.circleFirst) {
+            gesture.circleFirst = point;
+            onSketchDrawingChangeRef.current(true);
+          } else if (!gesture.circleSecond) {
+            if (
+              Math.hypot(
+                point.x - gesture.circleFirst.x,
+                point.y - gesture.circleFirst.y
+              ) >= 0.5
+            ) {
+              gesture.circleSecond = point;
+            }
+          } else {
+            const circle = circleObjectFromThreePoints(
+              gesture.circleFirst,
+              gesture.circleSecond,
+              point
+            );
+            if (circle) {
+              onSketchCommitRef.current(circle);
+              gesture.circleFirst = null;
+              gesture.circleSecond = null;
+              rig?.setInProgress(null, false);
+              hideSketchDimLabel();
+              onSketchDrawingChangeRef.current(false);
+            } else {
+              positionSketchDimLabel(
+                event,
+                'Points cannot define a stable circle',
+                false
+              );
+            }
+          }
           requestRender();
           return;
         }
@@ -3311,10 +3660,14 @@ export function ModelViewer({
         }
         if (mode.tool === 'line' && point && !moved) {
           if (!gesture.chainAnchor) {
+            finishSketchNumericEntry();
             gesture.chainAnchor = point;
             onSketchDrawingChangeRef.current(true);
           } else {
-            const locked = axisLockPoint(gesture.chainAnchor, point);
+            const locked =
+              mode.inferenceEnabled && !event.shiftKey
+                ? axisLockPoint(gesture.chainAnchor, point)
+                : { point, lockedAxis: null };
             const object = lineObjectFromPoints(
               gesture.chainAnchor,
               locked.point
@@ -3686,6 +4039,28 @@ export function ModelViewer({
       if (context.projection === 'orthographic' && !tweening) {
         camera.position.copy(orthographic.position);
         camera.quaternion.copy(orthographic.quaternion);
+      }
+
+      const activeSketchMode = sketchModeRef.current;
+      const activeSketchRig = sketchRigRef.current;
+      if (activeSketchMode && activeSketchRig) {
+        const sketchOrigin = new THREE.Vector3(
+          activeSketchMode.basis.origin.x,
+          activeSketchMode.basis.origin.y,
+          activeSketchMode.basis.origin.z
+        );
+        const spacing = activeSketchRig.setGrid(
+          worldPerPixelAt(sketchOrigin),
+          activeSketchMode.gridVisible
+        );
+        if (activeSketchMode.gridVisible) {
+          sketchGridIndicator.textContent = `Grid ${formatNumber(spacing)} ${unitsRef.current} · adaptive`;
+          sketchGridIndicator.hidden = false;
+        } else {
+          sketchGridIndicator.hidden = true;
+        }
+      } else {
+        sketchGridIndicator.hidden = true;
       }
 
       // Preselection and selection overlays ease toward their targets.
@@ -4783,6 +5158,9 @@ export function ModelViewer({
       dragStart: null,
       arcCenter: null,
       arcStart: null,
+      circleFirst: null,
+      circleSecond: null,
+      awaitingSecondPoint: false,
       pointerId: null,
       moved: false
     };
@@ -4892,14 +5270,18 @@ export function ModelViewer({
     const resolve = (value: unknown) =>
       evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
     rig.setObjects(sketchMode.objects, sketchMode.selectedObjectId, resolve);
+    rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
-    snapTargetsRef.current = sketchMode.objects.flatMap((object) => {
-      try {
-        return snapTargetsForObject(object.data, resolve);
-      } catch {
-        return [];
-      }
-    });
+    try {
+      snapTargetsRef.current = collectSketchSnapTargets(
+        sketchMode.objects,
+        resolve
+      );
+    } catch {
+      snapTargetsRef.current = [
+        { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
+      ];
+    }
     context.requestRender();
   }, [sketchMode]);
 
@@ -4912,7 +5294,11 @@ export function ModelViewer({
       gesture.dragStart = null;
       gesture.arcCenter = null;
       gesture.arcStart = null;
+      gesture.circleFirst = null;
+      gesture.circleSecond = null;
+      gesture.awaitingSecondPoint = false;
       sketchRigRef.current?.setInProgress(null, false);
+      sketchRigRef.current?.setInference(null);
       const label = sketchDimLabelRef.current;
       if (label) {
         label.hidden = true;
