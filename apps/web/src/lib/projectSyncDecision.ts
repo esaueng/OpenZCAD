@@ -44,12 +44,11 @@ export function decideProjectSync({
   hasUnsentChanges
 }: ProjectSyncInputs): ProjectSyncAction {
   if (lastSyncedVersion === null) {
-    // Without a baseline, "the versions match" proves nothing: two devices can
-    // reach the same version through different edits. Only an exact match with
-    // nothing outstanding is safe to call agreement.
-    return localVersion === accountVersion && !hasUnsentChanges
-      ? 'in-sync'
-      : 'unknown-baseline';
+    // Without a baseline, version equality proves nothing: two devices can
+    // reach the same version through different edits. The open-time
+    // reconciler compares canonical document content and records a baseline;
+    // this version-only decision must refuse to guess until that happens.
+    return 'unknown-baseline';
   }
 
   const localMoved = hasUnsentChanges || localVersion !== lastSyncedVersion;
