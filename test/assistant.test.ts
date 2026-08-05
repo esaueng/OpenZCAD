@@ -624,7 +624,7 @@ describe('assistant integration', () => {
 
   it('uses one centralized frontier-model default', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openrouter');
-    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-5.6-terra');
+    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-5.6-sol');
     expect(DEFAULT_AI_MODEL).toBe('gpt-5.6-sol');
   });
 
@@ -638,7 +638,7 @@ describe('assistant integration', () => {
     ).toEqual({
       configured: true,
       provider: 'openrouter',
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai/gpt-5.6-sol',
       reasoningEffort: 'high'
     });
   });
@@ -676,7 +676,7 @@ describe('assistant integration', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('uses an OpenRouter key, endpoint, headers, and balanced model default', async () => {
+  it('uses an OpenRouter key, endpoint, headers, and frontier model default', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response('data: {"type":"response.completed"}\n\n', {
@@ -714,7 +714,7 @@ describe('assistant integration', () => {
       stream: boolean;
     };
     expect(request).toMatchObject({
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai/gpt-5.6-sol',
       reasoning: { effort: 'high' },
       stream: true
     });

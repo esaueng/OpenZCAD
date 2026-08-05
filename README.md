@@ -151,7 +151,7 @@ OpenRouter is the default provider. For local development, export the key in the
 ```dotenv
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your_key_here
-AI_MODEL=openai/gpt-5.6-terra
+AI_MODEL=openai/gpt-5.6-sol
 ```
 
 Runtime bindings are configured as Wrangler vars or secrets:
@@ -159,7 +159,7 @@ Runtime bindings are configured as Wrangler vars or secrets:
 - `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
 - `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret for the configured provider; `AI_API_KEY` is never sent to OpenRouter (see below). Never shipped to the browser or committed.
 - `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
-- `AI_MODEL` — defaults to `openai/gpt-5.6-terra` (balanced). Use `openai/gpt-5.6-sol` when quality matters more than cost/latency, `openai/gpt-5.6-luna` for cheap latency-sensitive edits.
+- `AI_MODEL` — defaults to `openai/gpt-5.6-sol` for frontier CAD reasoning. Use `openai/gpt-5.6-terra` to balance quality with cost/latency, or `openai/gpt-5.6-luna` for cheap latency-sensitive edits.
 - `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
 - `AI_MAX_OUTPUT_TOKENS` — default `32000`; reasoning shares the budget, and too low a ceiling truncates patches mid-stream as a normal incomplete response.
 - `AI_SITE_URL` / `AI_APP_NAME` — optional OpenRouter attribution.

@@ -106,7 +106,7 @@ export async function stubApi(
           configured: false,
           source: 'deployment',
           provider: 'openrouter',
-          model: 'openai/gpt-5.6-terra',
+          model: 'openai/gpt-5.6-sol',
           reasoningEffort: 'high'
         }
       }
@@ -314,7 +314,7 @@ export async function stubEmailLoginApi(page: Page) {
       configured: false,
       source: 'deployment',
       provider: 'openrouter',
-      model: 'openai/gpt-5.6-terra',
+      model: 'openai/gpt-5.6-sol',
       reasoningEffort: 'high'
     }
   };
