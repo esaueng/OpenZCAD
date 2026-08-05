@@ -27,6 +27,44 @@ export function snapSketchPoint(point: SketchPoint, step = 1): SketchPoint {
 }
 
 /**
+ * Adaptive display spacing from the conventional 1-2-5 engineering sequence.
+ * The returned model-unit step keeps minor lines near the requested pixel gap.
+ */
+export function adaptiveGridSpacing(
+  worldPerPixel: number,
+  targetPixels = 32
+): number {
+  const desired = Math.max(worldPerPixel, 1e-12) * Math.max(targetPixels, 1);
+  const exponent = Math.floor(Math.log10(desired));
+  const magnitude = 10 ** exponent;
+  const normalized = desired / magnitude;
+  const multiplier =
+    normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return multiplier * magnitude;
+}
+
+/**
+ * Places a point at an exact distance along the latest pointer direction.
+ * A stationary pointer uses +X so click-then-type remains deterministic.
+ */
+export function pointAtDistanceAlongDirection(
+  origin: SketchPoint,
+  direction: SketchPoint,
+  distance: number
+): SketchPoint {
+  const dx = direction.x - origin.x;
+  const dy = direction.y - origin.y;
+  const magnitude = Math.hypot(dx, dy);
+  if (magnitude <= 1e-12) {
+    return { x: origin.x + distance, y: origin.y };
+  }
+  return {
+    x: origin.x + (dx / magnitude) * distance,
+    y: origin.y + (dy / magnitude) * distance
+  };
+}
+
+/**
  * Builds a closed sketch object from a corner/center drag, or null while the
  * gesture is still too small to mean anything.
  */
@@ -71,6 +109,91 @@ export function sketchObjectFromDrag(
     centerX: start.x,
     centerY: start.y
   };
+}
+
+/** Circle whose two picked points are opposite endpoints of its diameter. */
+export function circleObjectFromDiameter(
+  first: SketchPoint,
+  second: SketchPoint
+): SketchObjectData | null {
+  const diameter = Math.hypot(second.x - first.x, second.y - first.y);
+  if (diameter < MIN_PROFILE_SIZE * 2) {
+    return null;
+  }
+  return {
+    objectKind: 'circle',
+    radius: diameter / 2,
+    centerX: (first.x + second.x) / 2,
+    centerY: (first.y + second.y) / 2
+  };
+}
+
+/**
+ * Unique circumcircle through three points. Nearly collinear input is rejected
+ * with a scale-aware determinant test instead of producing an unstable radius.
+ */
+export function circleObjectFromThreePoints(
+  first: SketchPoint,
+  second: SketchPoint,
+  third: SketchPoint
+): SketchObjectData | null {
+  const determinant =
+    2 *
+    (first.x * (second.y - third.y) +
+      second.x * (third.y - first.y) +
+      third.x * (first.y - second.y));
+  const span = Math.max(
+    Math.hypot(second.x - first.x, second.y - first.y),
+    Math.hypot(third.x - second.x, third.y - second.y),
+    Math.hypot(first.x - third.x, first.y - third.y),
+    1
+  );
+  if (Math.abs(determinant) <= span * span * 1e-9) {
+    return null;
+  }
+  const firstSquared = first.x * first.x + first.y * first.y;
+  const secondSquared = second.x * second.x + second.y * second.y;
+  const thirdSquared = third.x * third.x + third.y * third.y;
+  const centerX =
+    (firstSquared * (second.y - third.y) +
+      secondSquared * (third.y - first.y) +
+      thirdSquared * (first.y - second.y)) /
+    determinant;
+  const centerY =
+    (firstSquared * (third.x - second.x) +
+      secondSquared * (first.x - third.x) +
+      thirdSquared * (second.x - first.x)) /
+    determinant;
+  const radius = Math.hypot(first.x - centerX, first.y - centerY);
+  if (!Number.isFinite(radius) || radius < MIN_PROFILE_SIZE) {
+    return null;
+  }
+  return { objectKind: 'circle', radius, centerX, centerY };
+}
+
+/** Sampled preview shared by every circle construction mode. */
+export function circlePreviewPoints(
+  circle: Extract<SketchObjectData, { objectKind: 'circle' }>,
+  segments = 64
+): SketchPoint[] {
+  const radius = Number(circle.radius);
+  const centerX = Number(circle.centerX);
+  const centerY = Number(circle.centerY);
+  if (
+    !Number.isFinite(radius) ||
+    !Number.isFinite(centerX) ||
+    !Number.isFinite(centerY) ||
+    radius <= 0
+  ) {
+    return [];
+  }
+  return Array.from({ length: Math.max(16, segments) }, (_, index) => {
+    const angle = (index / Math.max(16, segments)) * Math.PI * 2;
+    return {
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius
+    };
+  });
 }
 
 /** A line segment object between two sketch points. */
@@ -329,11 +452,59 @@ export function dimensionForInProgress(
 // Entity snapping (endpoint / midpoint / center)
 // ---------------------------------------------------------------------------
 
-export type SnapTargetKind = 'endpoint' | 'midpoint' | 'center';
+export type SnapTargetKind =
+  | 'origin'
+  | 'endpoint'
+  | 'intersection'
+  | 'center'
+  | 'midpoint'
+  | 'quadrant'
+  | 'horizontal'
+  | 'vertical'
+  | 'grid';
 
 export interface SnapTarget extends SketchPoint {
   kind: SnapTargetKind;
+  /** Stable within one evaluated sketch; used by hysteresis and Tab cycling. */
+  id?: string;
+  sourceId?: string;
 }
+
+export const SKETCH_SNAP_PRIORITY: Record<SnapTargetKind, number> = {
+  origin: 0,
+  endpoint: 1,
+  intersection: 2,
+  center: 3,
+  midpoint: 4,
+  quadrant: 5,
+  horizontal: 6,
+  vertical: 6,
+  grid: 7
+};
+
+export const SKETCH_SNAP_LABELS: Record<SnapTargetKind, string> = {
+  origin: 'Origin',
+  endpoint: 'Endpoint',
+  intersection: 'Intersection',
+  center: 'Center',
+  midpoint: 'Midpoint',
+  quadrant: 'Quadrant',
+  horizontal: 'Horizontal',
+  vertical: 'Vertical',
+  grid: 'Grid'
+};
+
+export const SKETCH_SNAP_GLYPHS: Record<SnapTargetKind, string> = {
+  origin: '⊕',
+  endpoint: '□',
+  intersection: '×',
+  center: '○',
+  midpoint: '△',
+  quadrant: '◇',
+  horizontal: '—',
+  vertical: '│',
+  grid: '•'
+};
 
 /**
  * Snap candidates for one committed sketch object. Points resolve through the
@@ -342,8 +513,16 @@ export interface SnapTarget extends SketchPoint {
  */
 export function snapTargetsForObject(
   data: SketchObjectData,
-  resolve: (value: unknown) => number
+  resolve: (value: unknown) => number,
+  sourceId?: string
 ): SnapTarget[] {
+  let index = 0;
+  const target = (kind: SnapTargetKind, x: number, y: number): SnapTarget => ({
+    x,
+    y,
+    kind,
+    ...(sourceId ? { sourceId, id: `${sourceId}:${kind}:${index++}` } : {})
+  });
   switch (data.objectKind) {
     case 'line': {
       const x1 = resolve(data.x1);
@@ -351,9 +530,9 @@ export function snapTargetsForObject(
       const x2 = resolve(data.x2);
       const y2 = resolve(data.y2);
       return [
-        { x: x1, y: y1, kind: 'endpoint' },
-        { x: x2, y: y2, kind: 'endpoint' },
-        { x: (x1 + x2) / 2, y: (y1 + y2) / 2, kind: 'midpoint' }
+        target('endpoint', x1, y1),
+        target('endpoint', x2, y2),
+        target('midpoint', (x1 + x2) / 2, (y1 + y2) / 2)
       ];
     }
     case 'rectangle': {
@@ -362,26 +541,34 @@ export function snapTargetsForObject(
       const cx = resolve(data.centerX);
       const cy = resolve(data.centerY);
       const corners: SnapTarget[] = [
-        { x: cx - halfWidth, y: cy - halfHeight, kind: 'endpoint' },
-        { x: cx + halfWidth, y: cy - halfHeight, kind: 'endpoint' },
-        { x: cx + halfWidth, y: cy + halfHeight, kind: 'endpoint' },
-        { x: cx - halfWidth, y: cy + halfHeight, kind: 'endpoint' }
+        target('endpoint', cx - halfWidth, cy - halfHeight),
+        target('endpoint', cx + halfWidth, cy - halfHeight),
+        target('endpoint', cx + halfWidth, cy + halfHeight),
+        target('endpoint', cx - halfWidth, cy + halfHeight)
       ];
       return [
         ...corners,
-        { x: cx, y: cy, kind: 'center' },
-        { x: cx - halfWidth, y: cy, kind: 'midpoint' },
-        { x: cx + halfWidth, y: cy, kind: 'midpoint' },
-        { x: cx, y: cy - halfHeight, kind: 'midpoint' },
-        { x: cx, y: cy + halfHeight, kind: 'midpoint' }
+        target('center', cx, cy),
+        target('midpoint', cx - halfWidth, cy),
+        target('midpoint', cx + halfWidth, cy),
+        target('midpoint', cx, cy - halfHeight),
+        target('midpoint', cx, cy + halfHeight)
       ];
     }
-    case 'circle':
-    case 'polygon': {
+    case 'circle': {
+      const radius = resolve(data.radius);
+      const centerX = resolve(data.centerX);
+      const centerY = resolve(data.centerY);
       return [
-        { x: resolve(data.centerX), y: resolve(data.centerY), kind: 'center' }
+        target('center', centerX, centerY),
+        target('quadrant', centerX + radius, centerY),
+        target('quadrant', centerX, centerY + radius),
+        target('quadrant', centerX - radius, centerY),
+        target('quadrant', centerX, centerY - radius)
       ];
     }
+    case 'polygon':
+      return [target('center', resolve(data.centerX), resolve(data.centerY))];
     case 'arc': {
       const radius = resolve(data.radius);
       const cx = resolve(data.centerX);
@@ -400,17 +587,196 @@ export function snapTargetsForObject(
       const arcEnd = onArc(start + sweep);
       const arcMid = onArc(start + sweep / 2);
       return [
-        { ...arcStart, kind: 'endpoint' },
-        { ...arcEnd, kind: 'endpoint' },
-        { ...arcMid, kind: 'midpoint' },
-        { x: cx, y: cy, kind: 'center' }
+        target('endpoint', arcStart.x, arcStart.y),
+        target('endpoint', arcEnd.x, arcEnd.y),
+        target('midpoint', arcMid.x, arcMid.y),
+        target('center', cx, cy)
       ];
     }
     case 'text':
       // The baseline origin is the one point that exists without parsed font
       // data, and it is the handle a user drags, so it is the snap target.
-      return [{ x: resolve(data.x), y: resolve(data.y), kind: 'endpoint' }];
+      return [target('endpoint', resolve(data.x), resolve(data.y))];
   }
+}
+
+interface SnapSegment {
+  id: string;
+  a: SketchPoint;
+  b: SketchPoint;
+}
+
+function snapSegmentsForObject(
+  id: string,
+  data: SketchObjectData,
+  resolve: (value: unknown) => number
+): SnapSegment[] {
+  if (data.objectKind === 'line') {
+    return [
+      {
+        id,
+        a: { x: resolve(data.x1), y: resolve(data.y1) },
+        b: { x: resolve(data.x2), y: resolve(data.y2) }
+      }
+    ];
+  }
+  if (data.objectKind !== 'rectangle') {
+    return [];
+  }
+  const halfWidth = resolve(data.width) / 2;
+  const halfHeight = resolve(data.height) / 2;
+  const centerX = resolve(data.centerX);
+  const centerY = resolve(data.centerY);
+  const points = [
+    { x: centerX - halfWidth, y: centerY - halfHeight },
+    { x: centerX + halfWidth, y: centerY - halfHeight },
+    { x: centerX + halfWidth, y: centerY + halfHeight },
+    { x: centerX - halfWidth, y: centerY + halfHeight }
+  ];
+  return points.map((point, index) => ({
+    id: `${id}:${index}`,
+    a: point,
+    b: points[(index + 1) % points.length]!
+  }));
+}
+
+function segmentIntersection(
+  first: SnapSegment,
+  second: SnapSegment
+): SketchPoint | null {
+  const firstX = first.b.x - first.a.x;
+  const firstY = first.b.y - first.a.y;
+  const secondX = second.b.x - second.a.x;
+  const secondY = second.b.y - second.a.y;
+  const denominator = firstX * secondY - firstY * secondX;
+  const scale = Math.max(
+    Math.hypot(firstX, firstY),
+    Math.hypot(secondX, secondY),
+    1
+  );
+  if (Math.abs(denominator) <= scale * scale * 1e-12) {
+    return null;
+  }
+  const deltaX = second.a.x - first.a.x;
+  const deltaY = second.a.y - first.a.y;
+  const firstT = (deltaX * secondY - deltaY * secondX) / denominator;
+  const secondT = (deltaX * firstY - deltaY * firstX) / denominator;
+  const epsilon = 1e-9;
+  if (
+    firstT < -epsilon ||
+    firstT > 1 + epsilon ||
+    secondT < -epsilon ||
+    secondT > 1 + epsilon
+  ) {
+    return null;
+  }
+  return {
+    x: first.a.x + firstT * firstX,
+    y: first.a.y + firstT * firstY
+  };
+}
+
+/** Exact point candidates from the evaluated sketch, including line crossings. */
+export function collectSketchSnapTargets(
+  objects: readonly { id: string; data: SketchObjectData }[],
+  resolve: (value: unknown) => number
+): SnapTarget[] {
+  const targets: SnapTarget[] = [
+    { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
+  ];
+  const segments: SnapSegment[] = [];
+  for (const object of objects) {
+    targets.push(...snapTargetsForObject(object.data, resolve, object.id));
+    segments.push(...snapSegmentsForObject(object.id, object.data, resolve));
+  }
+  for (let first = 0; first < segments.length; first += 1) {
+    for (let second = first + 1; second < segments.length; second += 1) {
+      if (
+        segments[first]!.id.split(':')[0] === segments[second]!.id.split(':')[0]
+      ) {
+        continue;
+      }
+      const point = segmentIntersection(segments[first]!, segments[second]!);
+      if (point) {
+        targets.push({
+          id: `intersection:${segments[first]!.id}:${segments[second]!.id}`,
+          ...point,
+          kind: 'intersection'
+        });
+      }
+    }
+  }
+  return targets;
+}
+
+export interface RankedSnapTarget {
+  target: SnapTarget;
+  distance: number;
+}
+
+/** Deterministic candidate order: semantic priority, distance, then stable id. */
+export function rankSnapTargets(
+  point: SketchPoint,
+  targets: readonly SnapTarget[],
+  tolerance: number
+): RankedSnapTarget[] {
+  return targets
+    .map((target) => ({
+      target,
+      distance: Math.hypot(point.x - target.x, point.y - target.y)
+    }))
+    .filter((candidate) => candidate.distance <= tolerance)
+    .sort((first, second) => {
+      const priority =
+        SKETCH_SNAP_PRIORITY[first.target.kind] -
+        SKETCH_SNAP_PRIORITY[second.target.kind];
+      if (priority !== 0) {
+        return priority;
+      }
+      if (Math.abs(first.distance - second.distance) > 1e-12) {
+        return first.distance - second.distance;
+      }
+      return (first.target.id ?? '').localeCompare(second.target.id ?? '');
+    });
+}
+
+export interface SketchSnapResolution {
+  target: SnapTarget;
+  candidates: RankedSnapTarget[];
+}
+
+/** Candidate resolution with sticky hysteresis and explicit overlap cycling. */
+export function resolveSketchSnap(
+  point: SketchPoint,
+  targets: readonly SnapTarget[],
+  tolerance: number,
+  options: {
+    lockedId?: string | null;
+    cycle?: number;
+    hysteresis?: number;
+  } = {}
+): SketchSnapResolution | null {
+  const locked = options.lockedId
+    ? targets.find((target) => target.id === options.lockedId)
+    : undefined;
+  if (
+    locked &&
+    Math.hypot(point.x - locked.x, point.y - locked.y) <=
+      tolerance * (options.hysteresis ?? 1.5)
+  ) {
+    return {
+      target: locked,
+      candidates: rankSnapTargets(point, targets, tolerance)
+    };
+  }
+  const candidates = rankSnapTargets(point, targets, tolerance);
+  if (candidates.length === 0) {
+    return null;
+  }
+  const index =
+    (((options.cycle ?? 0) % candidates.length) + candidates.length) %
+    candidates.length;
+  return { target: candidates[index]!.target, candidates };
 }
 
 /**
@@ -423,14 +789,5 @@ export function nearestSnapTarget(
   targets: readonly SnapTarget[],
   tolerance: number
 ): SnapTarget | null {
-  let best: SnapTarget | null = null;
-  let bestDistance = tolerance;
-  for (const target of targets) {
-    const distance = Math.hypot(point.x - target.x, point.y - target.y);
-    if (distance <= bestDistance) {
-      best = target;
-      bestDistance = distance;
-    }
-  }
-  return best;
+  return resolveSketchSnap(point, targets, tolerance)?.target ?? null;
 }

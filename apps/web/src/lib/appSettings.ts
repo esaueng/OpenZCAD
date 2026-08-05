@@ -185,9 +185,21 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       )
     },
     sketching: {
+      gridVisible: boolean(
+        sketching.gridVisible,
+        defaults.sketching.gridVisible
+      ),
       snapEnabled: boolean(
         sketching.snapEnabled,
         defaults.sketching.snapEnabled
+      ),
+      geometrySnapEnabled: boolean(
+        sketching.geometrySnapEnabled,
+        defaults.sketching.geometrySnapEnabled
+      ),
+      inferenceEnabled: boolean(
+        sketching.inferenceEnabled,
+        defaults.sketching.inferenceEnabled
       ),
       linearSnap: boundedNumber(
         sketching.linearSnap,
@@ -200,6 +212,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         defaults.sketching.angleSnap,
         1,
         90
+      ),
+      snapTolerancePx: boundedNumber(
+        sketching.snapTolerancePx,
+        defaults.sketching.snapTolerancePx,
+        4,
+        24
       )
     },
     files: {
