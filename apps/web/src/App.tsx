@@ -346,6 +346,10 @@ import {
   type SidebarSectionId
 } from './lib/panelState';
 import {
+  loadSettingsViewState,
+  updateSettingsViewState
+} from './lib/settingsViewState';
+import {
   ASSISTANT_WIDTH_LIMITS,
   clampAssistantWidth,
   clampSidebarWidth,
@@ -665,7 +669,7 @@ export function App() {
     []
   );
   const [settingsOpen, setSettingsOpen] = useState(
-    desktopAuthorizationAttempt !== null
+    () => desktopAuthorizationAttempt !== null || loadSettingsViewState().open
   );
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
@@ -2868,6 +2872,7 @@ export function App() {
   }
 
   function openSettings() {
+    updateSettingsViewState({ open: true });
     setSettingsOpen(true);
     setPaletteOpen(false);
     setSettingsMessage('Changes save on this device immediately.');
@@ -2907,6 +2912,11 @@ export function App() {
         );
       }
     });
+  }
+
+  function closeSettings() {
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
   }
 
   async function handleRefreshAuthConfig() {
@@ -6579,7 +6589,7 @@ export function App() {
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
-        initialSection={desktopAuthorizationAttempt ? 'account' : 'general'}
+        initialSection={desktopAuthorizationAttempt ? 'account' : undefined}
         desktopAuthorizationAttempt={desktopAuthorizationAttempt}
         desktopAuthorizationApproved={desktopAuthorizationApproved}
         onChange={handleAppSettingsChange}
@@ -6594,7 +6604,7 @@ export function App() {
         onLogout={handleLogout}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}
-        onClose={() => setSettingsOpen(false)}
+        onClose={closeSettings}
       />
     </div>
   ) : null;
