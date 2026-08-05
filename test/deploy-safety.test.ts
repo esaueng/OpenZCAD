@@ -28,4 +28,12 @@ describe('beta deployment safety', () => {
       'pnpm --filter @openzcad/web deploy:beta'
     );
   });
+
+  it('opens all collaboration capabilities to authenticated beta accounts', () => {
+    const config = readFileSync('wrangler.jsonc', 'utf8');
+
+    expect(config).toContain('"PROJECT_SHARING_ENABLED": "true"');
+    expect(config).toContain('"PROJECT_EDIT_LEASES_ENFORCED": "true"');
+    expect(config).toContain('"PROJECT_PERSONAL_SYNC_ENABLED": "true"');
+  });
 });
