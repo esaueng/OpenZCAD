@@ -44,6 +44,9 @@
   // for spending the deployment's own provider key, and
   // `deploymentAssistantAllowed` fails closed when it is unset, so a
   // deployment without it simply offers no deployment-funded AI.
+  // PROJECT_COLLABORATION_CANARY_EMAILS is also deliberately absent. It is a
+  // secret account allowlist; missing or empty keeps collaboration closed while
+  // the checked-in global rollout flags above remain false.
   "d1_databases": [
     {
       "binding": "DB",
