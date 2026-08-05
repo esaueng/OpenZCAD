@@ -323,9 +323,25 @@ export function parseUpdateAppSettingsRequest(
         middleDrag: optionalMember(viewport, 'middleDrag', MIDDLE_DRAGS, 'pan')
       },
       sketching: {
+        gridVisible:
+          typeof sketching.gridVisible === 'boolean'
+            ? sketching.gridVisible
+            : DEFAULT_APP_SETTINGS.sketching.gridVisible,
         snapEnabled: requiredBoolean(sketching, 'snapEnabled'),
+        geometrySnapEnabled:
+          typeof sketching.geometrySnapEnabled === 'boolean'
+            ? sketching.geometrySnapEnabled
+            : DEFAULT_APP_SETTINGS.sketching.geometrySnapEnabled,
+        inferenceEnabled:
+          typeof sketching.inferenceEnabled === 'boolean'
+            ? sketching.inferenceEnabled
+            : DEFAULT_APP_SETTINGS.sketching.inferenceEnabled,
         linearSnap: requiredNumber(sketching, 'linearSnap', 0.001, 10_000),
-        angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90)
+        angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90),
+        snapTolerancePx:
+          typeof sketching.snapTolerancePx === 'number'
+            ? requiredNumber(sketching, 'snapTolerancePx', 4, 24)
+            : DEFAULT_APP_SETTINGS.sketching.snapTolerancePx
       },
       files: {
         cloudAutosave:

@@ -77,6 +77,45 @@ describe('application settings', () => {
     expect(second.general.defaultUnits).toBe('mm');
   });
 
+  it('keeps sketch display, geometry snapping, and grid snapping independent', () => {
+    const normalized = normalizeAppSettings({
+      sketching: {
+        gridVisible: false,
+        snapEnabled: true,
+        geometrySnapEnabled: false,
+        inferenceEnabled: false,
+        snapTolerancePx: 18
+      }
+    });
+    expect(normalized.sketching).toMatchObject({
+      gridVisible: false,
+      snapEnabled: true,
+      geometrySnapEnabled: false,
+      inferenceEnabled: false,
+      snapTolerancePx: 18
+    });
+  });
+
+  it('accepts account settings written before the richer sketch preferences', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    delete settings.sketching.gridVisible;
+    delete settings.sketching.geometrySnapEnabled;
+    delete settings.sketching.inferenceEnabled;
+    delete settings.sketching.snapTolerancePx;
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 0, settings },
+      'development'
+    );
+    expect(parsed.settings.sketching).toMatchObject({
+      gridVisible: true,
+      geometrySnapEnabled: true,
+      inferenceEnabled: true,
+      snapTolerancePx: 10
+    });
+  });
+
   it('strictly validates account settings and compatible endpoints', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.assistant.credentialSource = 'personal';
