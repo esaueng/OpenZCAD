@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
+  desktopCollaborationUrl,
   desktopFetch,
   isDesktopApp,
   nativeCadFile,
@@ -140,6 +141,31 @@ describe('desktop bridge', () => {
     });
     expect(JSON.stringify(vi.mocked(invoke).mock.calls)).not.toContain(
       'Bearer'
+    );
+  });
+
+  it('accepts only a ticketed fixed-origin collaboration URL from Rust', async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    vi.mocked(invoke).mockResolvedValue(
+      `wss://zcad.esau.app/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
+    );
+
+    await expect(desktopCollaborationUrl('proj_native')).resolves.toBe(
+      `wss://zcad.esau.app/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
+    );
+    expect(invoke).toHaveBeenCalledWith('desktop_collaboration_url', {
+      projectId: 'proj_native'
+    });
+    expect(JSON.stringify(vi.mocked(invoke).mock.calls)).not.toContain(
+      'Bearer'
+    );
+
+    vi.mocked(invoke).mockResolvedValue(
+      `wss://attacker.example/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
+    );
+    await expect(desktopCollaborationUrl('proj_native')).rejects.toThrow(
+      /not allowed/i
     );
   });
 });
