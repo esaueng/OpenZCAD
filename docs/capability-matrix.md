@@ -1,6 +1,6 @@
 # Capability and gap matrix
 
-Snapshot: 2026-07-31, schema v6. “Exact” means the browser geometry worker
+Snapshot: 2026-08-04, schema v6. “Exact” means the browser geometry worker
 evaluates the operation through a B-rep kernel. “Implemented behind flags” is
 not a production-availability claim. Approximate previews and isolated proof
 modules are called out explicitly.
@@ -19,7 +19,7 @@ modules are called out explicitly.
 | Viewport edges          | One idle exact-edge batch per visible body with ownership, picking, hover, selection, seams, and wireframe                                                                                                                                             | Working                          | Continue measuring draw calls and consolidate further only against the committed probe                                                                                                                                      |
 | Local persistence       | IndexedDB autosave, offline reopen, and recovery-project writes before every destructive collaboration resolution                                                                                                                                      | Working                          | Reload-survival still needs a real-session E2E before collaboration flags change                                                                                                                                            |
 | Cloud settings          | Serialized/coalesced saves, revision chaining, bounded conflict retry, offline resume, session epochs, and logout flush                                                                                                                                | Working                          | Separate from project-conflict resolution by design                                                                                                                                                                         |
-| Collaboration           | Owner/editor/viewer APIs and dialog, invitations and members, per-message authorization, one persisted project-wide edit lease, and explicit conflict actions                                                                                          | Implemented behind dark flags    | `PROJECT_SHARING_ENABLED=false` and `PROJECT_EDIT_LEASES_ENFORCED=false` in checked-in dev and beta config; viewer-first then editor rollout                                                                                |
+| Collaboration           | Account-scoped canary, invitation acceptance UI, owner/editor/viewer APIs and dialog, one-time token copy, per-message authorization, one persisted project-wide edit lease, and explicit conflict actions                                               | Implemented behind closed rollout | Global flags remain false; `PROJECT_COLLABORATION_CANARY_EMAILS` is a secret fail-closed participant allowlist, and canary invitations cannot target accounts outside it                                                     |
 | Conflict recovery       | Use room version, Keep my version, and Save local as a copy all preserve the divergent local document first; unresolved divergence survives dialog close/reload                                                                                        | Working client flow              | Keep mine requires this client’s unexpired lease and the exact expected room version; release gate is the reload E2E                                                                                                        |
 | AI proposals            | Strict schema, deterministic digest-bound validation, exact preflight, review, and one undoable transaction; face sketch, multi-profile extrude, mirror, shell, solid offset, and validated direct edits are implemented behind independent dark flags | Working, rollout-gated allowlist | Recognized imported features, imports, and collaboration actions remain disabled; stale topology witnesses are rejected                                                                                                     |
 | Kernel delivery         | The exact adapter and BrepKit load lazily in the worker; jobs have tagged lifecycle state and stale-result gating                                                                                                                                     | Working                          | First-load latency remains hardware-dependent and must be measured separately from UI bundle startup                                                                                                                        |
@@ -92,8 +92,10 @@ PROJECT_EDIT_LEASES_ENFORCED=false
 The intended non-production rollout is:
 
 1. Apply and verify the sharing migration and Durable Object binding.
-2. Run authorization, revocation, lease-expiry, conflict recovery-copy, and
+2. Set `PROJECT_COLLABORATION_CANARY_EMAILS` only for the approved owner and
+   invited test accounts; verify `/api/collaboration/config` for each session.
+3. Run authorization, revocation, lease-expiry, conflict recovery-copy, and
    reload-survival tests against the target beta environment.
-3. Enable project sharing for viewer invitations first.
-4. Enable editor invitations only with lease enforcement enabled.
-5. Keep production configuration absent until separately authorized.
+4. Enable project sharing globally for viewer invitations first.
+5. Enable editor invitations globally only with lease enforcement enabled.
+6. Keep production configuration absent until separately authorized.

@@ -193,6 +193,23 @@
   font-weight: var(--fw-medium);
 }
 
+.sharing-token-row {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.sharing-token-row output {
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.sharing-token-row button {
+  justify-self: start;
+}
+
 .shortcuts-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
