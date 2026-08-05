@@ -49,6 +49,39 @@ function renderStartScreen(
   );
 }
 
+describe('StartScreen new part suggestion', () => {
+  it('focuses the generated name without selecting its text', () => {
+    renderStartScreen();
+
+    const input = screen.getByLabelText<HTMLInputElement>('Project name');
+    expect(input).toHaveFocus();
+    expect(input).not.toHaveValue('New Part');
+    expect(input.selectionStart).toBe(input.selectionEnd);
+  });
+
+  it('generates a new suggestion for each fresh mount', () => {
+    let sample = 0;
+    const getRandomValues = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        if (array instanceof Uint32Array) {
+          array[0] = sample;
+          sample += 1;
+        }
+        return array;
+      });
+
+    const first = renderStartScreen();
+    const firstName =
+      screen.getByLabelText<HTMLInputElement>('Project name').value;
+    first.unmount();
+    renderStartScreen();
+
+    expect(screen.getByLabelText('Project name')).not.toHaveValue(firstName);
+    getRandomValues.mockRestore();
+  });
+});
+
 describe('StartScreen cloud project status', () => {
   it('offers a confirmed device-only project for account sync', () => {
     renderStartScreen();
@@ -108,9 +141,7 @@ describe('StartScreen collapsed project grid', () => {
     expect(screen.getByText('Part 9')).toBeInTheDocument();
     expect(screen.queryByText('Part 10')).toBeNull();
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Show 17 more parts' })
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Show 17 more parts' }));
 
     expect(screen.getByText('Part 26')).toBeInTheDocument();
     expect(
