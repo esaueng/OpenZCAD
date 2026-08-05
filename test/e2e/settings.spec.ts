@@ -235,6 +235,48 @@ test('settings name their sections and search individual settings', async ({
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
+test('settings restore the exact non-sensitive view after reload', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Shortcuts', exact: true }).click();
+  await page.getByLabel('Find a setting').fill('mouse');
+
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'Controls & shortcuts' })
+  ).toBeVisible();
+  const scrollTop = await page
+    .locator('.settings-content')
+    .evaluate((content) => {
+      content.scrollTop = 240;
+      content.dispatchEvent(new Event('scroll'));
+      return content.scrollTop;
+    });
+  expect(scrollTop).toBeGreaterThan(0);
+
+  await page.reload();
+
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  await expect(page.getByLabel('Find a setting')).toHaveValue('mouse');
+  await expect(
+    page.getByRole('button', { name: 'Shortcuts', exact: true })
+  ).toHaveAttribute('aria-current', 'page');
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'Controls & shortcuts' })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.locator('.settings-content').evaluate((content) => content.scrollTop)
+    )
+    .toBe(scrollTop);
+
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page.reload();
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+});
+
 test('command palette and shortcut overlay behave as modal dialogs', async ({
   page
 }) => {

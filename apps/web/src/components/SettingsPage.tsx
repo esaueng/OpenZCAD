@@ -1,5 +1,13 @@
 import { MIDDLE_DRAG_LABELS } from '@openzcad/viewport/input-bindings';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type UIEvent
+} from 'react';
 import {
   Accessibility,
   Bot,
@@ -62,6 +70,10 @@ import {
   visibleSettingsSections,
   type SettingsSectionId
 } from '../lib/settingsSections';
+import {
+  loadSettingsViewState,
+  updateSettingsViewState
+} from '../lib/settingsViewState';
 import {
   KEYBOARD_CONTROL_GROUPS,
   POINTER_CONTROL_GROUPS,
@@ -454,7 +466,7 @@ export function SettingsPage({
   session,
   busy,
   message,
-  initialSection = 'general',
+  initialSection,
   desktopAuthorizationAttempt = null,
   desktopAuthorizationApproved = false,
   onChange,
@@ -471,9 +483,16 @@ export function SettingsPage({
   onApplyViewportDefaults,
   onClose
 }: SettingsPageProps) {
-  const [active, setActive] = useState<SectionId>(initialSection);
+  const [initialViewState] = useState(loadSettingsViewState);
+  const [active, setActive] = useState<SectionId>(
+    initialSection ?? initialViewState.activeSection
+  );
   const desktopApp = isDesktopApp();
-  const [query, setQuery] = useState('');
+  // A caller-specified section is a task flow (currently desktop auth), so it
+  // must not be hidden by a search left over from ordinary Settings browsing.
+  const [query, setQuery] = useState(
+    initialSection === undefined ? initialViewState.query : ''
+  );
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
@@ -484,6 +503,22 @@ export function SettingsPage({
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
     null
   );
+  const contentRef = useRef<HTMLElement>(null);
+  const scrollTopRef = useRef(
+    initialSection === undefined ? initialViewState.scrollTop : 0
+  );
+  const activeRef = useRef(active);
+  const queryRef = useRef(query);
+
+  activeRef.current = active;
+  queryRef.current = query;
+
+  const persistCurrentView = () =>
+    updateSettingsViewState({
+      activeSection: activeRef.current,
+      query: queryRef.current,
+      scrollTop: scrollTopRef.current
+    });
 
   // Fetched only when the panel that shows it is open, and dropped on sign-out
   // so one account's totals never linger in front of another.
@@ -516,6 +551,35 @@ export function SettingsPage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content) {
+      return;
+    }
+    const stored = loadSettingsViewState();
+    const scrollTop =
+      initialSection === undefined && stored.activeSection === active
+        ? stored.scrollTop
+        : 0;
+    content.scrollTop = scrollTop;
+    scrollTopRef.current = content.scrollTop;
+    updateSettingsViewState({
+      open: true,
+      activeSection: active,
+      query: queryRef.current,
+      scrollTop: content.scrollTop
+    });
+  }, [active, initialSection]);
+
+  useEffect(() => {
+    const onPageHide = () => persistCurrentView();
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      persistCurrentView();
+    };
+  }, []);
+
   const assistantEnabled = settings.assistant.enabled;
   const visibleSections = useMemo(
     () => visibleSettingsSections({ assistantEnabled, query }),
@@ -529,12 +593,10 @@ export function SettingsPage({
     if (!first) {
       return;
     }
-    setActive((current) =>
-      visibleSections.some((section) => section.id === current)
-        ? current
-        : first.id
-    );
-  }, [visibleSections]);
+    if (!visibleSections.some((section) => section.id === active)) {
+      setActive(first.id);
+    }
+  }, [active, visibleSections]);
 
   useEffect(() => {
     if (session) {
@@ -580,7 +642,12 @@ export function SettingsPage({
               value={query}
               placeholder="Find a setting"
               aria-label="Find a setting"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                const nextQuery = event.target.value;
+                queryRef.current = nextQuery;
+                setQuery(nextQuery);
+                updateSettingsViewState({ query: nextQuery });
+              }}
             />
           </label>
           <nav>
@@ -619,7 +686,13 @@ export function SettingsPage({
           </div>
         </aside>
 
-        <main className="settings-content">
+        <main
+          className="settings-content"
+          ref={contentRef}
+          onScroll={(event: UIEvent<HTMLElement>) => {
+            scrollTopRef.current = event.currentTarget.scrollTop;
+          }}
+        >
           {active === 'general' && (
             <Section
               title="General"
