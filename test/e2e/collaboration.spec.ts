@@ -132,6 +132,14 @@ test('uses a one-use native ticket for desktop collaboration without exposing a 
               mode: 'email-code'
             });
           }
+          if (request.path === '/api/collaboration/config') {
+            return jsonResponse({
+              sharingEnabled: true,
+              editLeasesEnforced: true,
+              personalSyncEnabled: false,
+              canary: true
+            });
+          }
           if (request.path === '/api/settings') {
             return jsonResponse({
               settings,

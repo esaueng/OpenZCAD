@@ -1232,6 +1232,15 @@ export interface HealthResponse {
   projectPersonalSyncEnabled?: boolean;
 }
 
+/** Authenticated collaboration capabilities for the current account. */
+export interface ProjectCollaborationCapabilitiesResponse {
+  sharingEnabled: boolean;
+  editLeasesEnforced: boolean;
+  personalSyncEnabled: boolean;
+  /** True when access comes from the account allowlist rather than a global flag. */
+  canary: boolean;
+}
+
 export interface AuthSession {
   userId: UserId;
   displayName: string;
