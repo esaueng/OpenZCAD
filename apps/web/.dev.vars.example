@@ -16,6 +16,7 @@ AI_MODEL=openai/gpt-5.6-sol
 # Optional attribution: AI_SITE_URL=http://localhost:5173
 # Optional attribution: AI_APP_NAME=OpenZCAD
 # Hosted deployment-key access: AI_DEPLOYMENT_ALLOWED_EMAILS=owner@example.com
+# Collaboration canary: PROJECT_COLLABORATION_CANARY_EMAILS=owner@example.com,collaborator@example.com
 # Hosted custom endpoints: AI_ALLOWED_BASE_URL_HOSTS=models.example.com
 # Optional daily ceilings: AI_GLOBAL_DAILY_REQUEST_LIMIT=100
 # Optional weighted ceiling: AI_GLOBAL_DAILY_COST_LIMIT_UNITS=400

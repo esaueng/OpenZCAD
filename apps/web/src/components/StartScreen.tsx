@@ -19,6 +19,7 @@ import {
   Settings,
   Trash2,
   TriangleAlert,
+  UserPlus,
   X
 } from 'lucide-react';
 import {
@@ -66,6 +67,8 @@ interface StartScreenProps {
    */
   conflictedProjectIds: ReadonlySet<string>;
   signedIn: boolean;
+  collaborationSharingEnabled: boolean;
+  onAcceptInvitation(token: string): Promise<void>;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
   /**
@@ -119,6 +122,8 @@ export function StartScreen({
   accountProjectListReached,
   conflictedProjectIds,
   signedIn,
+  collaborationSharingEnabled,
+  onAcceptInvitation,
   onSaveToAccount,
   onSaveAllToAccount,
   syncRun,
@@ -139,6 +144,9 @@ export function StartScreen({
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
+  const [invitationToken, setInvitationToken] = useState('');
+  const [invitationBusy, setInvitationBusy] = useState(false);
+  const [invitationError, setInvitationError] = useState<string | null>(null);
   const tileRefs = useRef(new Map<string, HTMLDivElement>());
 
   // The server measures the trimmed name, so the form has to agree exactly or
@@ -830,6 +838,57 @@ export function StartScreen({
                 </button>
               </div>
             )
+          )}
+
+          {signedIn && collaborationSharingEnabled && (
+            <form
+              className="start-invitation-bar"
+              aria-label="Join a shared project"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const token = invitationToken.trim();
+                if (!token || invitationBusy) {
+                  return;
+                }
+                setInvitationBusy(true);
+                setInvitationError(null);
+                void onAcceptInvitation(token)
+                  .then(() => setInvitationToken(''))
+                  .catch((caught: unknown) =>
+                    setInvitationError(
+                      caught instanceof Error
+                        ? caught.message
+                        : 'The invitation could not be accepted.'
+                    )
+                  )
+                  .finally(() => setInvitationBusy(false));
+              }}
+            >
+              <UserPlus size={14} aria-hidden="true" />
+              <label htmlFor="project-invitation-token">
+                Join a shared project
+              </label>
+              <input
+                id="project-invitation-token"
+                aria-label="Invitation token"
+                autoComplete="off"
+                placeholder="Paste invitation token"
+                value={invitationToken}
+                onChange={(event) => setInvitationToken(event.target.value)}
+              />
+              <button
+                type="submit"
+                className="start-shelf-action"
+                disabled={invitationBusy || !invitationToken.trim()}
+              >
+                {invitationBusy ? 'Joining…' : 'Join project'}
+              </button>
+              {invitationError && (
+                <span className="start-invitation-error" role="alert">
+                  {invitationError}
+                </span>
+              )}
+            </form>
           )}
 
           <div className="start-tile-grid">

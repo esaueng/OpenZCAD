@@ -109,10 +109,13 @@ Login codes are single-use, expire after ten minutes, and sit behind per-email a
 
 Project sharing is deliberately dark in both checked-in configurations:
 `PROJECT_SHARING_ENABLED=false` and
-`PROJECT_EDIT_LEASES_ENFORCED=false`. Apply and verify the sharing migration,
-run role/revocation/lease/conflict recovery tests in beta, enable viewers first,
-and enable editors only together with lease enforcement. These flags are
-rollout controls; changing them is not part of a normal application build.
+`PROJECT_EDIT_LEASES_ENFORCED=false`. A controlled account canary can instead
+be opened with the secret `PROJECT_COLLABORATION_CANARY_EMAILS`, a
+comma-separated list of authenticated participant emails. The allowlist
+enables sharing, owner sync, and edit leases only for those accounts; canary
+invitations are also restricted to allowlisted recipients. Missing or empty
+stays closed. Changing either the secret or the global flags is a separate
+rollout action, not part of a normal application build.
 
 ## API surface
 
@@ -123,6 +126,7 @@ POST /api/auth/email/start            GET|PATCH /api/settings
 POST /api/auth/email/verify           PUT|DELETE /api/settings/assistant-credential
 POST /api/auth/logout                 POST      /api/settings/assistant/test
 GET  /api/session                     POST      /api/uploads
+GET  /api/collaboration/config       (authenticated account capabilities)
 GET|POST /api/projects                PUT       /api/uploads/:id/content
 GET  /api/projects/:id                POST      /api/artifacts/finalize
 POST /api/projects/:id/revisions      GET       /api/projects/:id/artifacts

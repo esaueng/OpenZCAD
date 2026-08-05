@@ -12,6 +12,7 @@ import type {
   FinalizeArtifactRequest,
   HealthResponse,
   ListProjectsResponse,
+  ProjectCollaborationCapabilitiesResponse,
   ProjectDocument,
   ListArtifactsResponse,
   PurgeProjectsResponse,
@@ -109,6 +110,10 @@ export const api = {
   health: () => requestJson<HealthResponse>('/api/health'),
   authConfig: () => requestJson<AuthConfigResponse>('/api/auth/config'),
   session: () => requestJson<AuthSession>('/api/session'),
+  collaborationCapabilities: () =>
+    requestJson<ProjectCollaborationCapabilitiesResponse>(
+      '/api/collaboration/config'
+    ),
   startEmailLogin: (payload: StartEmailLoginRequest) =>
     requestJson<StartEmailLoginResponse>('/api/auth/email/start', {
       method: 'POST',
