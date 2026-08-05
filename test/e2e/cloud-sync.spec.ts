@@ -53,7 +53,7 @@ class SharedCloudProjectApi {
             configured: false,
             source: 'deployment',
             provider: 'openrouter',
-            model: 'openai/gpt-5.6-terra',
+            model: 'openai/gpt-5.6-sol',
             reasoningEffort: 'high'
           }
         }
