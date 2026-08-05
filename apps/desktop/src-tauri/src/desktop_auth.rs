@@ -102,6 +102,13 @@ struct PendingResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CollaborationTicketResponse {
+    ticket: String,
+    expires_at: u64,
+}
+
+#[derive(Deserialize)]
 struct ErrorResponse {
     error: Option<String>,
 }
@@ -150,6 +157,36 @@ fn api_url(path: &str) -> Result<Url, String> {
     if url.origin().ascii_serialization() != API_ORIGIN || !url.path().starts_with("/api/") {
         return Err("The desktop API path is not allowed.".to_string());
     }
+    Ok(url)
+}
+
+fn collaboration_api_url(project_id: &str, ticket_endpoint: bool) -> Result<Url, String> {
+    if project_id.is_empty()
+        || project_id.len() > 256
+        || !project_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("The collaboration project id is not valid.".to_string());
+    }
+    api_url(&format!(
+        "/api/projects/{project_id}/collaboration{}",
+        if ticket_endpoint { "/ticket" } else { "" }
+    ))
+}
+
+fn collaboration_socket_url(project_id: &str, ticket: &str) -> Result<Url, String> {
+    if ticket.len() != 43
+        || !ticket
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("The collaboration ticket is invalid.".to_string());
+    }
+    let mut url = collaboration_api_url(project_id, false)?;
+    url.set_scheme("wss")
+        .map_err(|_| "The collaboration URL is invalid.".to_string())?;
+    url.query_pairs_mut().append_pair("ticket", ticket);
     Ok(url)
 }
 
@@ -565,9 +602,55 @@ pub async fn desktop_api_request(
     buffer_api_response(response).await
 }
 
+#[tauri::command]
+pub async fn desktop_collaboration_url(
+    state: State<'_, DesktopAuthState>,
+    project_id: String,
+) -> Result<String, String> {
+    let ticket_path = collaboration_api_url(&project_id, true)?;
+    let request = NativeApiRequest {
+        method: "POST".to_string(),
+        path: ticket_path.path().to_string(),
+        content_type: None,
+        body: None,
+    };
+    let mut access = current_access(&state)
+        .await?
+        .ok_or_else(|| "Sign in before starting live collaboration.".to_string())?;
+    let mut response =
+        send_api_request(&state, &request, request.path.as_str(), Some(&access)).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        *state
+            .access
+            .lock()
+            .map_err(|_| "Desktop auth state is unavailable.")? = None;
+        access = refresh_access(&state)
+            .await?
+            .ok_or_else(|| "Sign in before starting live collaboration.".to_string())?;
+        response = send_api_request(&state, &request, request.path.as_str(), Some(&access)).await?;
+    }
+    if !response.status().is_success() {
+        return Err(server_error(response, "Live collaboration is unavailable.").await);
+    }
+    let issued = response
+        .json::<CollaborationTicketResponse>()
+        .await
+        .map_err(|_| "The collaboration ticket response was invalid.".to_string())?;
+    let now_ms = now_seconds()?
+        .checked_mul(1_000)
+        .ok_or_else(|| "The system clock is not valid.".to_string())?;
+    if issued.expires_at <= now_ms || issued.expires_at > now_ms.saturating_add(120_000) {
+        return Err("The collaboration ticket response was invalid.".to_string());
+    }
+    Ok(collaboration_socket_url(&project_id, &issued.ticket)?.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{api_url, approved_browser_url, pkce_challenge};
+    use super::{
+        api_url, approved_browser_url, collaboration_api_url, collaboration_socket_url,
+        pkce_challenge,
+    };
 
     #[test]
     fn pins_native_requests_to_the_beta_api() {
@@ -599,5 +682,32 @@ mod tests {
             pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         );
+    }
+
+    #[test]
+    fn pins_ticket_exchange_and_socket_urls_to_the_beta_origin() {
+        assert_eq!(
+            collaboration_api_url("proj_desktop-1", true)
+                .unwrap()
+                .as_str(),
+            "https://zcad.esau.app/api/projects/proj_desktop-1/collaboration/ticket"
+        );
+        assert_eq!(
+            collaboration_socket_url("proj_desktop-1", &"t".repeat(43))
+                .unwrap()
+                .as_str(),
+            format!(
+                "wss://zcad.esau.app/api/projects/proj_desktop-1/collaboration?ticket={}",
+                "t".repeat(43)
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_project_and_ticket_values_that_could_escape_the_fixed_route() {
+        assert!(collaboration_api_url("../attacker", true).is_err());
+        assert!(collaboration_api_url("proj_ok?next=https://attacker.example", true).is_err());
+        assert!(collaboration_socket_url("proj_ok", "short").is_err());
+        assert!(collaboration_socket_url("proj_ok", &"!".repeat(43)).is_err());
     }
 }
