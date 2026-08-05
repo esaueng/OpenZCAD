@@ -57,23 +57,25 @@ design:
 
 Delete or retain the canary only under the normal project-retention policy.
 
-### Collaboration account canary
+### Global collaboration rollout
 
-Keep the checked-in global collaboration flags off. With separate approval,
-set the `PROJECT_COLLABORATION_CANARY_EMAILS` Worker secret to the owner and
-every invited test account, then deploy through the normal release command.
-After sign-in, `GET /api/collaboration/config` must report `canary: true` for
-each listed account and remain false for an unlisted account. Verify invitation
+The checked-in beta configuration enables sharing, personal sync, and edit
+lease enforcement for every authenticated account. After deployment, verify
+`GET /api/collaboration/config` reports all three capabilities enabled with
+`canary: false` for multiple unrelated signed-in emails. Verify invitation
 acceptance, viewer read-only behavior, one editor lease at a time, revocation,
-conflict recovery, reconnect, and two-device owner sync. Removing the secret is
-the rollback; confirm the authenticated capability response is closed before
-considering the rollback complete.
+conflict recovery, reconnect, and two-device owner sync.
+
+Rollback requires setting all three global flags to `false` and redeploying.
+Confirm the authenticated capability response is closed for an unlisted
+account. `PROJECT_COLLABORATION_CANARY_EMAILS` may then be used only as a scoped
+fallback for further testing.
 
 ## 4. Optional follow-ups
 
-- Enabling `PROJECT_PERSONAL_SYNC_ENABLED` replaces the browser polling delay
-  with owner-only Durable Object push. It does not enable sharing or leases and
-  requires its own rollout approval and two-device canary.
+- `PROJECT_PERSONAL_SYNC_ENABLED` replaces the browser polling delay with
+  owner-room Durable Object push. Keep its two-device coverage in the beta
+  rollout checks.
 - Desktop remains on HTTP polling until a ticketed WebSocket authentication
   handshake exists.
 - Backfilling legacy D1 documents into R2 is optional because reads retain the
