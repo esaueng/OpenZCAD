@@ -416,7 +416,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const session = await authenticateRequest(request, env);
     return json(
       await approveDesktopAuthorization(
-        { attemptId: input.attemptId },
+        { attemptId: input.attemptId, userCode: input.userCode },
         session,
         env
       )
