@@ -288,6 +288,7 @@ import {
   loadLastSyncedVersion,
   loadLocalProject,
   purgeExpiredLocalProjects,
+  restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
   selectProjectDocument,
@@ -697,6 +698,7 @@ export function App() {
       ? 'Sign in, then approve OpenZCAD for macOS.'
       : 'Changes save on this device immediately.'
   );
+  const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
   const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
     useState(false);
   const cloudSettingsAutosaveRef = useRef<CloudSettingsAutosave | null>(null);
@@ -3177,7 +3179,7 @@ export function App() {
       const started = await startDesktopSignIn();
       const deadline = Date.now() + started.expiresInSeconds * 1_000;
       setSettingsMessage(
-        'Finish the email sign-in in your browser. OpenZCAD will reconnect automatically.'
+        `Finish the email sign-in in your browser, then enter desktop code ${started.userCode}. OpenZCAD will reconnect automatically.`
       );
       while (Date.now() < deadline) {
         await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
@@ -3207,7 +3209,10 @@ export function App() {
     setSettingsBusy(true);
     setSettingsMessage('Connecting OpenZCAD for macOS…');
     try {
-      await api.approveDesktopLogin(desktopAuthorizationAttempt);
+      await api.approveDesktopLogin(
+        desktopAuthorizationAttempt,
+        desktopAuthorizationCode
+      );
       setDesktopAuthorizationApproved(true);
       setSettingsMessage(
         'OpenZCAD for macOS is connected. You can return to the app.'
@@ -3936,9 +3941,27 @@ export function App() {
       if (session) {
         try {
           const response = await api.duplicateProject(project.projectId);
+          const localSource = await loadLocalProject(project.projectId).catch(
+            () => null
+          );
+          let localCopy = restoreDuplicateDerivedProjection(
+            response.document,
+            localSource
+          );
+          if (localCopy === response.document) {
+            // This device may not have the exact source revision cached. The
+            // kernel stays in the browser, so rebuild the copy here rather
+            // than asking cloud persistence to store a derived projection.
+            const derived = await geometry
+              .syncOnce(response.document)
+              .catch(() => null);
+            if (derived) {
+              localCopy = { ...response.document, derived };
+            }
+          }
           // Kept on the device too, so the copy opens offline exactly like the
           // original it was made from.
-          await saveLocalProject(response.document).catch(() => undefined);
+          await saveLocalProject(localCopy).catch(() => undefined);
           if (response.project.organization) {
             await saveLocalProjectOrganization(
               response.project.projectId,
@@ -6771,6 +6794,8 @@ export function App() {
         initialSection={desktopAuthorizationAttempt ? 'account' : undefined}
         desktopAuthorizationAttempt={desktopAuthorizationAttempt}
         desktopAuthorizationApproved={desktopAuthorizationApproved}
+        desktopAuthorizationCode={desktopAuthorizationCode}
+        onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
         onChange={handleAppSettingsChange}
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
