@@ -44,18 +44,18 @@ export interface RegionTarget {
 }
 
 export type SketchToolId =
-  | 'select'
-  | 'line'
-  | 'arc'
-  | 'circle'
-  | 'rectangle'
-  | 'text';
+  'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
+
+/** Construction method used by the shared Circle tool. */
+export type SketchCircleMode =
+  'center-radius' | 'two-point-diameter' | 'three-point';
 
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */
   sketchId: string | null;
   plane: SketchPlaneRef;
   tool: SketchToolId;
+  circleMode: SketchCircleMode;
   /** True while a drawing gesture (drag or line/arc chain) is in flight. */
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
@@ -106,6 +106,7 @@ export type InteractionEvent =
   | { type: 'recover' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | { type: 'sketch-tool'; tool: SketchToolId }
+  | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
@@ -300,6 +301,21 @@ export function interactionReducer(
           sketchId: event.sketchId ?? null,
           plane: event.plane,
           tool: 'line',
+          circleMode: 'center-radius',
+          drawing: false,
+          selectedObjectId: null
+        }
+      };
+    case 'sketch-circle-mode':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          tool: 'circle',
+          circleMode: event.mode,
           drawing: false,
           selectedObjectId: null
         }
@@ -510,7 +526,13 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         hint:
           state.session.tool === 'select'
             ? 'Select an entity to edit its exact values.'
-            : 'Draw with Line, Arc, Circle, or Rectangle. Esc ends a chain.'
+            : state.session.tool === 'circle'
+              ? state.session.circleMode === 'center-radius'
+                ? 'Place a center, then set the radius. Hold Shift for free placement.'
+                : state.session.circleMode === 'two-point-diameter'
+                  ? 'Place opposite diameter endpoints. Tab cycles overlapping snaps.'
+                  : 'Place three circumference points. Collinear input is rejected.'
+              : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
   }
 }
