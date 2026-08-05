@@ -133,6 +133,7 @@ device has never organised. It describes a desk, not a part.
 Unit tests cover the truth table case by case, recovery-copy ordering before
 every resolution, autosave debounce and single-flight behaviour, fenced-write
 handling, adoption round trips including re-adoption and cross-owner refusal,
-and the size ceiling refusing before the D1 write. An end-to-end test covers
-two-device divergence: edit on both, reconcile, and confirm the losing side
-survives as a recovery copy.
+and the size ceiling refusing before the D1 write. The Playwright flow in
+`test/e2e/cloud-sync.spec.ts` covers create, autosave, reload, cross-device
+pull, two-device divergence, and confirmation that the losing side survives as
+a recovery copy.
