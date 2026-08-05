@@ -1260,6 +1260,63 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('shows a stable failure when the assistant completes with invalid structured output', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'invalid-output-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      headers: {
+        'x-openzcad-request-id': '019fcf75-2cc4-7832-befc-50ae06c9e985'
+      },
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: 'I could not return the requested JSON object.'
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    })
+  );
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Failure Handling');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Create a simple bottle bumper');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const failure = page.locator('.assistant-card.message.error');
+  await expect(failure).toContainText(
+    'The provider returned invalid structured output.'
+  );
+  await expect(failure).toContainText(
+    'Reference: 019fcf75-2cc4-7832-befc-50ae06c9e985.'
+  );
+  await expect(failure).not.toContainText('JSON.parse');
+  await expect(
+    failure.getByRole('button', { name: 'Try again' })
+  ).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+});
+
 test('grounds an AI fillet request onto every selected edge', async ({
   page
 }) => {
