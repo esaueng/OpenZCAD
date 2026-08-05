@@ -119,10 +119,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
-  approveDesktopLogin: (attemptId: string) =>
+  approveDesktopLogin: (attemptId: string, userCode: string) =>
     requestJson<{ ok: true }>('/api/auth/desktop/approve', {
       method: 'POST',
-      body: JSON.stringify({ attemptId })
+      body: JSON.stringify({ attemptId, userCode })
     }),
   logout: () =>
     requestJson<{ ok: true }>('/api/auth/logout', {
