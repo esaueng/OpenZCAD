@@ -18,6 +18,7 @@ interface AttemptRow {
   expires_at: number;
   approved_at: number | null;
   exchanged_at: number | null;
+  user_code_hash: string;
 }
 
 interface TokenRow {
@@ -54,7 +55,7 @@ function desktopAuthD1(user: AuthSession) {
         if (
           query.includes("name IN (\n              'desktop_auth_attempts'")
         ) {
-          return { tables: 3, indexes: 6 } as T;
+          return { tables: 3, indexes: 6, user_code_hash: 1 } as T;
         }
         if (query.includes('FROM desktop_auth_attempts a')) {
           const row = attempts.get(String(values[0]));
@@ -89,14 +90,22 @@ function desktopAuthD1(user: AuthSession) {
           rates.set(bucket, (rates.get(bucket) ?? 0) + 1);
           changes = 1;
         } else if (query.includes('INSERT INTO desktop_auth_attempts')) {
-          const [id, stateHash, challenge, clientId, createdAt, expiresAt] =
-            values;
+          const [
+            id,
+            stateHash,
+            challenge,
+            clientId,
+            userCodeHash,
+            createdAt,
+            expiresAt
+          ] = values;
           attempts.set(String(id), {
             id: String(id),
             state_hash: String(stateHash),
             code_challenge: String(challenge),
             client_id: String(clientId),
             user_id: null,
+            user_code_hash: String(userCodeHash),
             created_at: Number(createdAt),
             expires_at: Number(expiresAt),
             approved_at: null,
@@ -107,10 +116,18 @@ function desktopAuthD1(user: AuthSession) {
           query.includes('UPDATE desktop_auth_attempts') &&
           query.includes('SET user_id')
         ) {
-          const [userId, approvedAt, id, timestamp, expectedUserId] = values;
+          const [
+            userId,
+            approvedAt,
+            id,
+            userCodeHash,
+            timestamp,
+            expectedUserId
+          ] = values;
           const row = attempts.get(String(id));
           if (
             row &&
+            row.user_code_hash === String(userCodeHash) &&
             row.expires_at >= Number(timestamp) &&
             row.exchanged_at === null &&
             (row.user_id === null || row.user_id === String(expectedUserId))
@@ -255,6 +272,7 @@ describe('desktop authorization', () => {
     expect(started.browserUrl).toBe(
       `https://zcad.esau.app/?desktopAuth=${started.attemptId}`
     );
+    expect(started.userCode).toMatch(/^[A-Z0-9]{8}$/);
     await expect(
       exchangeDesktopAuthorization(
         {
@@ -266,9 +284,16 @@ describe('desktop authorization', () => {
         env
       )
     ).resolves.toEqual({ status: 'pending' });
+    await expect(
+      approveDesktopAuthorization(
+        { attemptId: started.attemptId, userCode: 'WRONG123' },
+        session,
+        env
+      )
+    ).rejects.toMatchObject({ code: 'DESKTOP_AUTH_INVALID' });
 
     await approveDesktopAuthorization(
-      { attemptId: started.attemptId },
+      { attemptId: started.attemptId, userCode: started.userCode },
       session,
       env
     );

@@ -115,6 +115,7 @@ export async function desktopFetch(
 
 export async function startDesktopSignIn(): Promise<{
   expiresInSeconds: number;
+  userCode: string;
 }> {
   if (!isDesktopApp()) {
     throw new Error('Desktop sign-in is only available in the macOS app.');
