@@ -1345,6 +1345,10 @@ export interface AppSettings {
     /** Quiet time before a copy is written, in seconds. */
     cloudAutosaveDelaySeconds: number;
   };
+  collaboration: {
+    /** Allow project invitations and live collaboration connections. */
+    enabled: boolean;
+  };
   assistant: {
     enabled: boolean;
     credentialSource: AssistantCredentialSource;
@@ -1430,6 +1434,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   files: {
     cloudAutosave: true,
     cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default
+  },
+  collaboration: {
+    enabled: true
   },
   assistant: {
     enabled: false,
