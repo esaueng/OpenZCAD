@@ -134,7 +134,7 @@ function roleOf(entry: AssistantEntry): TurnRole {
 }
 
 /**
- * A turn, with who said it and when, wrapped so every row reads the same way.
+ * A turn, with its role and time, wrapped so every row reads the same way.
  *
  * Two turns in a row from the same speaker are one block: the second drops the
  * "Assistant" heading and squares the corner facing the first, which is what
@@ -150,7 +150,7 @@ function Turn({
   children
 }: {
   role: TurnRole;
-  label: string;
+  label?: string;
   at: number | undefined;
   continues: boolean;
   children: ReactNode;
@@ -161,7 +161,9 @@ function Turn({
       className={`assistant-turn ${role}${continues ? ' continues' : ''}`}
       // A continued turn drops the heading that would have carried its time, so
       // the time stays reachable here rather than disappearing.
-      {...(continues && time ? { title: `${label} · ${time}` } : {})}
+      {...(continues && time
+        ? { title: label ? `${label} · ${time}` : time }
+        : {})}
     >
       {!continues && (
         <header className="assistant-turn-meta">
@@ -170,7 +172,7 @@ function Turn({
               <Sparkles size={11} />
             </span>
           )}
-          <span className="assistant-turn-who">{label}</span>
+          {label && <span className="assistant-turn-who">{label}</span>}
           {time && (
             <time className="assistant-turn-time" dateTime={String(at)}>
               {time}
@@ -621,13 +623,7 @@ export function AssistantPanel({
   function renderEntry(entry: AssistantEntry, continues: boolean) {
     if (entry.kind === 'user') {
       return (
-        <Turn
-          role="user"
-          label="You"
-          at={entry.at}
-          continues={continues}
-          key={entry.id}
-        >
+        <Turn role="user" at={entry.at} continues={continues} key={entry.id}>
           <div className="assistant-bubble">
             {entry.answers.length > 0 ? (
               <dl className="assistant-answer-list">
