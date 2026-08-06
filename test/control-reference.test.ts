@@ -75,9 +75,7 @@ describe('controls reference', () => {
       'rectangle'
     ]) {
       expect(
-        visibleSettingsSections({ assistantEnabled: true, query }).map(
-          (section) => section.id
-        )
+        visibleSettingsSections({ query }).map((section) => section.id)
       ).toContain('shortcuts');
     }
   });
