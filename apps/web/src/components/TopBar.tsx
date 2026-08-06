@@ -37,6 +37,7 @@ interface TopBarProps {
   accountState: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   collaborationStatus: CollaborationStatus;
   collaboratorCount: number;
+  projectSharingEnabled: boolean;
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
@@ -58,6 +59,7 @@ export function TopBar({
   accountState,
   collaborationStatus,
   collaboratorCount,
+  projectSharingEnabled,
   onSave,
   onImportFile,
   onExport,
@@ -219,27 +221,29 @@ export function TopBar({
           )}
           {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
         </button>
-        <button
-          type="button"
-          className={`collaboration-state ${collaborationStatus}`}
-          title={`Project sharing · collaboration: ${collaborationStatus}`}
-          aria-label="Open project sharing"
-          disabled={!projectName || !session}
-          onClick={onOpenSharing}
-        >
-          <Users size={13} aria-hidden="true" />
-          {collaborationStatus === 'live'
-            ? `${collaboratorCount} live`
-            : collaborationStatus === 'conflict'
-              ? 'Conflict'
-              : collaborationStatus === 'oversize'
-                ? 'Local only'
-                : collaborationStatus === 'rejected'
-                  ? 'Not shared'
-                  : collaborationStatus === 'update-required'
-                    ? 'Update required'
-                    : collaborationStatus}
-        </button>
+        {projectSharingEnabled ? (
+          <button
+            type="button"
+            className={`collaboration-state ${collaborationStatus}`}
+            title={`Project sharing · collaboration: ${collaborationStatus}`}
+            aria-label="Open project sharing"
+            disabled={!projectName || !session}
+            onClick={onOpenSharing}
+          >
+            <Users size={13} aria-hidden="true" />
+            {collaborationStatus === 'live'
+              ? `${collaboratorCount} live`
+              : collaborationStatus === 'conflict'
+                ? 'Conflict'
+                : collaborationStatus === 'oversize'
+                  ? 'Local only'
+                  : collaborationStatus === 'rejected'
+                    ? 'Not shared'
+                    : collaborationStatus === 'update-required'
+                      ? 'Update required'
+                      : collaborationStatus}
+          </button>
+        ) : null}
         <details ref={fileMenuRef} className="topbar-menu file-menu">
           <summary
             className="secondary topbar-action"
