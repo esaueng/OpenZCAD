@@ -4,10 +4,12 @@ import {
   computeFitPose,
   createAxesGizmo,
   createBodyMaterial,
+  createGradientBackdrop,
   createStudioGrid,
   shouldShowGroundShadow,
   updateAxesGizmo,
-  updateStudioGrid
+  updateStudioGrid,
+  VIEWPORT_RENDER_ORDER
 } from './scene';
 import { VIEW_DIRECTIONS } from '../camera/views';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
@@ -53,6 +55,40 @@ describe('createBodyMaterial', () => {
     expect(material.transparent).toBe(true);
     expect(material.opacity).toBe(0.45);
     expect(material.depthWrite).toBe(false);
+  });
+});
+
+describe('createGradientBackdrop', () => {
+  it('dithers the original studio gradient behind scene geometry', () => {
+    const backdrop = createGradientBackdrop();
+    const material = backdrop.material as THREE.ShaderMaterial;
+
+    expect(backdrop.name).toBe('gradient-backdrop');
+    expect(backdrop.renderOrder).toBeLessThan(VIEWPORT_RENDER_ORDER.BODY_FACE);
+    expect(backdrop.frustumCulled).toBe(false);
+    expect(material.depthTest).toBe(false);
+    expect(material.depthWrite).toBe(false);
+    expect(material.transparent).toBe(false);
+    expect(material.toneMapped).toBe(false);
+    expect(material.dithering).toBe(true);
+    expect(
+      (material.uniforms.topColor!.value as THREE.Color).getHexString()
+    ).toBe('131922');
+    expect(
+      (material.uniforms.middleColor!.value as THREE.Color).getHexString()
+    ).toBe('0b0f15');
+    expect(
+      (material.uniforms.bottomColor!.value as THREE.Color).getHexString()
+    ).toBe('05070a');
+    expect(material.uniforms.middleStop!.value).toBe(0.45);
+    expect(material.fragmentShader).toContain(
+      '#include <dithering_pars_fragment>'
+    );
+    expect(material.fragmentShader).toContain('#include <colorspace_fragment>');
+    expect(material.fragmentShader).toContain('#include <dithering_fragment>');
+
+    backdrop.geometry.dispose();
+    material.dispose();
   });
 });
 
