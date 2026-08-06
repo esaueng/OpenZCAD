@@ -3256,6 +3256,15 @@ export function App() {
       }
       // Prefer the gizmo flow when a target body is unambiguous; the classic
       // form remains for multi-body documents with nothing selected.
+      //
+      // WF-07 (open): these are two UIs for one command, and which one you get
+      // is decided by document state rather than by what you asked for — the
+      // gizmo has a live preview, the form has a Name field, and they commit
+      // through differently labelled buttons. Collapsing them onto the gizmo
+      // was tried and reverted: it silently removes naming a Move at creation,
+      // which is a capability trade that wants deciding rather than assuming.
+      // The half that needed no decision — navigation keys during a profile
+      // pick — is fixed separately.
       const targetBodyId =
         selectedBodyIds.at(-1) ??
         (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null);
@@ -5904,6 +5913,21 @@ export function App() {
     if (!doc) {
       return;
     }
+    // A move in flight owns the drag. The gizmo answers within about 15 px of
+    // its arrow, so a grab that slips a little further lands on empty space
+    // and used to arrive here as an empty box selection — which cleared the
+    // selection out from under the Move panel, leaving the panel and the
+    // gizmo on screen still naming a body that was no longer selected. The
+    // near miss should cost nothing, not the selection.
+    if (movePreview && bodyIds.length === 0) {
+      return;
+    }
+    // A sweep that does pick something is a change of intent, so the move goes
+    // rather than staying armed on a body the user has just selected away from.
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
     // A box selection replaces the active topology selection. Any direct-
     // manipulation target belongs to that old face or edge, so retaining it
     // would leave a handle capable of editing geometry that is no longer
@@ -7767,11 +7791,23 @@ export function App() {
         if (event.key === 'Escape') {
           event.preventDefault();
           cancelPanel();
-        } else if (event.key === 'Enter' && !typing) {
+          return;
+        }
+        if (event.key === 'Enter' && !typing) {
           event.preventDefault();
           void confirmExtrude();
+          return;
         }
-        return;
+        // Everything else used to stop here, which took the view keys with it.
+        // Profile picking asks the user to click a region it has not framed —
+        // the camera returns to the solid, and the profiles can be off-screen
+        // entirely — so F, the standard views, the grid and the display mode
+        // are exactly what someone reaches for, and exactly what did nothing.
+        // Only the letters that would launch another tool mid-pick stay
+        // reserved.
+        if (SHORTCUT_TO_TOOL[event.key.toLowerCase()]) {
+          return;
+        }
       }
       if (movePreview) {
         if (event.key === 'Escape') {

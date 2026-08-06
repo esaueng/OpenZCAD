@@ -5934,14 +5934,22 @@ export function ModelViewer({
 
   useEffect(() => {
     const context = contextRef.current;
-    if (
-      !context ||
-      fitSignal === 0 ||
-      context.bodyGroup.children.length === 0
-    ) {
+    // Fit has to include the sketch layer, not just the solids. While a
+    // profile pick is open the app asks the user to click a shaded region it
+    // has not framed — the camera sits on the model, and a sketch drawn away
+    // from it can be off-screen entirely — so fitting to bodies alone answers
+    // the wrong question at the one moment fit is most needed.
+    if (!context || fitSignal === 0) {
       return;
     }
-    const pose = computeFitPose(context.camera, context.bodyGroup.children);
+    const fitTargets = [
+      ...context.bodyGroup.children,
+      ...(regionGroupRef.current?.children ?? [])
+    ].filter((child) => child.visible);
+    if (fitTargets.length === 0) {
+      return;
+    }
+    const pose = computeFitPose(context.camera, fitTargets);
     context.startCameraTween(pose, () => {
       if (context.projection === 'orthographic') {
         context.syncOrthographic(true);
