@@ -3256,6 +3256,15 @@ export function App() {
       }
       // Prefer the gizmo flow when a target body is unambiguous; the classic
       // form remains for multi-body documents with nothing selected.
+      //
+      // WF-07 (open): these are two UIs for one command, and which one you get
+      // is decided by document state rather than by what you asked for — the
+      // gizmo has a live preview, the form has a Name field, and they commit
+      // through differently labelled buttons. Collapsing them onto the gizmo
+      // was tried and reverted: it silently removes naming a Move at creation,
+      // which is a capability trade that wants deciding rather than assuming.
+      // The half that needed no decision — navigation keys during a profile
+      // pick — is fixed separately.
       const targetBodyId =
         selectedBodyIds.at(-1) ??
         (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null);
