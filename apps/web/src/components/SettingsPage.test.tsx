@@ -46,6 +46,7 @@ function renderSettings(
       onDeleteCloudData={vi.fn()}
       onReset={vi.fn()}
       onApplyViewportDefaults={vi.fn()}
+      onDismissProjectInvitation={vi.fn()}
       onClose={vi.fn()}
       {...overrides}
     />
@@ -348,5 +349,19 @@ describe('settings privacy and data section', () => {
     expect(
       screen.getByText(/Profile-only deletion remains available/)
     ).toBeVisible();
+  });
+});
+
+describe('settings project invitation handoff', () => {
+  it('keeps the pending link focused on account sign-in without exposing it', () => {
+    renderSettings(null, {
+      initialSection: 'account',
+      projectInvitationPending: true,
+      authConfigStatus: 'unavailable'
+    });
+
+    expect(screen.getByText(/Project invitation ready/)).toBeInTheDocument();
+    expect(screen.queryByText(/invite=/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
   });
 });
