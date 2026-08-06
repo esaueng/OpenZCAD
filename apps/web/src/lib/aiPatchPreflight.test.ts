@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toFeatureId,
+  toUserId,
+  type EdgeTopologyReferenceV5,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { preflightCadPatch } from './aiPatchPreflight';
 
 const proposal = {
@@ -96,5 +101,159 @@ describe('AI exact patch preflight', () => {
         warnings: ['Existing legacy warning']
       }))
     ).resolves.toBeTruthy();
+  });
+
+  it('materializes a final same-proposal rim chamfer from exact topology', async () => {
+    const base = createProjectDocument('AI', toUserId('user_ai'));
+    const stagedProposal = {
+      proposalId: 'proposal_staged_chamfer',
+      summary: 'Create and chamfer a shaft.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_primitive' as const,
+          name: 'Shaft',
+          localId: 'shaft',
+          primitiveKind: 'cylinder' as const,
+          dimensions: {
+            width: null,
+            height: 60,
+            depth: null,
+            radius: 15,
+            bottomRadius: null,
+            topRadius: null,
+            majorRadius: null,
+            minorRadius: null
+          }
+        },
+        {
+          kind: 'add_edge_modifier' as const,
+          name: 'Chamfered Shaft',
+          localId: 'chamfered_shaft',
+          modifier: 'chamfer' as const,
+          targetBodyId: '$shaft',
+          edgeHashes: [],
+          edgeSelector: 'circular-rims' as const,
+          size: 1
+        }
+      ]
+    };
+    const reference = (
+      hash: number,
+      lineageName: string
+    ): EdgeTopologyReferenceV5 => ({
+      kind: 'edge',
+      producingFeatureId: toFeatureId('feature_shaft'),
+      lineageName,
+      currentHash: hash,
+      witnessVersion: 1,
+      witness: {
+        curveType: 'CIRCLE',
+        length: 2 * Math.PI * 15,
+        closed: true,
+        center: [0, 0, 0],
+        axis: [0, 0, 1]
+      }
+    });
+    const derive = vi.fn(async (candidate: ProjectDocument) => {
+      const sourceBodyId = candidate.bodyOrder[0]!;
+      const resultBodyId = candidate.bodyOrder[1];
+      const source = exactDerived(candidate).bodyRepresentations[sourceBodyId]!;
+      const sourceWithTopology = {
+        ...source,
+        consumed: Boolean(resultBodyId),
+        topology: {
+          faces: [],
+          edges: [
+            {
+              topologyId: 'edge_bottom',
+              hash: 11,
+              reference: reference(11, 'primitive.cylinder.edge.bottom'),
+              displayRole: 'feature' as const,
+              curve: {
+                type: 'CIRCLE',
+                circle: {
+                  center: { x: 0, y: 0, z: 0 },
+                  axis: { x: 0, y: 0, z: 1 },
+                  radius: 15
+                }
+              },
+              vertexIds: [1, 1] as [number, number],
+              points: []
+            },
+            {
+              topologyId: 'edge_top',
+              hash: 12,
+              reference: reference(12, 'primitive.cylinder.edge.top'),
+              displayRole: 'feature' as const,
+              curve: {
+                type: 'CIRCLE',
+                circle: {
+                  center: { x: 0, y: 0, z: 60 },
+                  axis: { x: 0, y: 0, z: 1 },
+                  radius: 15
+                }
+              },
+              vertexIds: [2, 2] as [number, number],
+              points: []
+            },
+            {
+              topologyId: 'edge_seam',
+              hash: 13,
+              displayRole: 'seam' as const,
+              curve: { type: 'LINE' },
+              vertexIds: [1, 2] as [number, number],
+              points: []
+            },
+            {
+              topologyId: 'edge_unbounded_circle',
+              hash: 14,
+              reference: reference(14, 'primitive.cylinder.edge.unbounded'),
+              displayRole: 'feature' as const,
+              curve: {
+                type: 'CIRCLE',
+                circle: {
+                  center: { x: 0, y: 0, z: 30 },
+                  axis: { x: 0, y: 0, z: 1 },
+                  radius: 15
+                }
+              },
+              points: []
+            }
+          ]
+        }
+      };
+      return {
+        ...exactDerived(candidate),
+        bodyRepresentations: {
+          [sourceBodyId]: sourceWithTopology,
+          ...(resultBodyId
+            ? {
+                [resultBodyId]: {
+                  ...sourceWithTopology,
+                  bodyId: resultBodyId,
+                  name: 'Chamfered Shaft',
+                  consumed: false
+                }
+              }
+            : {})
+        },
+        exportableBodyIds: [resultBodyId ?? sourceBodyId]
+      };
+    });
+
+    const result = await preflightCadPatch(base, stagedProposal, derive);
+
+    expect(derive).toHaveBeenCalledTimes(2);
+    expect(result.commands).toHaveLength(2);
+    expect(result.commands[1]?.kind).toBe('feature.chamfer');
+    expect(result.commands[1]?.payload).toMatchObject({
+      edgeHashes: [11, 12],
+      edgeReferences: [
+        { currentHash: 11, lineageName: 'primitive.cylinder.edge.bottom' },
+        { currentHash: 12, lineageName: 'primitive.cylinder.edge.top' }
+      ]
+    });
+    expect(result.candidate.derived.warnings).toEqual([]);
   });
 });
