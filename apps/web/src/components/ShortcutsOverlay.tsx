@@ -1,12 +1,23 @@
 import { useRef } from 'react';
-import { KEYBOARD_CONTROL_GROUPS } from '../lib/controlReference';
+import {
+  KEYBOARD_CONTROL_GROUPS,
+  POINTER_CONTROL_GROUPS
+} from '../lib/controlReference';
 import { useModalFocus } from '../lib/useModalFocus';
 
 interface ShortcutsOverlayProps {
   onClose(): void;
 }
 
-/** "?" keyboard cheat sheet. */
+/**
+ * "?" control reference.
+ *
+ * Keyboard only, until now — which left the mouse bindings undiscoverable
+ * anywhere in the product. Orbit is Shift+drag and pan is right-drag; neither
+ * is guessable, and left-drag on empty space box-selects instead, so a new
+ * user who tries the obvious gesture clears their selection rather than
+ * turning the model.
+ */
 export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
@@ -30,7 +41,7 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
         ref={dialogRef}
       >
         <div className="shortcuts-header">
-          <h2>Keyboard shortcuts</h2>
+          <h2>Controls</h2>
           <button
             type="button"
             className="icon-button"
@@ -41,7 +52,7 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
           </button>
         </div>
         <div className="shortcuts-grid">
-          {KEYBOARD_CONTROL_GROUPS.map((group) => (
+          {[...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].map((group) => (
             <section key={group.title}>
               <h3 className="section-title">{group.title}</h3>
               <dl>

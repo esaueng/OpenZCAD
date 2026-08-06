@@ -6,8 +6,18 @@ import type {
 } from '@openzcad/shared';
 import { frameFromFace } from './sketch/session';
 
+/**
+ * Why a face cannot carry a sketch.
+ *
+ * This is the refusal a user meets on the face of any boolean, fillet or
+ * direct-edit result — measured, every planar face of those bodies — so it
+ * cannot describe itself as being about an "edited face" and it cannot offer
+ * remodelling an offset as the way out. What all of them share is that the
+ * face has no identity the rebuild can find again, so a sketch pinned to it
+ * would silently move.
+ */
 export const UNSTABLE_FACE_SKETCH_REASON =
-  'This edited face has no stable topology reference, so a sketch would not follow later changes. Use a principal plane or remodel the offset parametrically.';
+  'This face is produced by an operation that cannot name it again after a rebuild — booleans, fillets and direct edits all lose that identity — so a sketch attached here would silently move. Sketch on a principal plane, or on a face of the primitive that made it.';
 
 const INVALID_FACE_SKETCH_REASON =
   'Pick an exact planar face with valid measurements to sketch on, or choose a principal plane.';

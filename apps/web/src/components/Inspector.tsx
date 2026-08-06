@@ -50,6 +50,7 @@ import {
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
+import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
 
 export interface InspectorCallbacks {
@@ -266,15 +267,16 @@ function BodyAppearance({
 }: {
   body: BodyRepresentation;
   onPreview: InspectorCallbacks['onPreviewBodyAppearance'];
-  onCommit: (
-    appearance: { color?: string; opacity?: number | null }
-  ) => void;
+  onCommit: (appearance: { color?: string; opacity?: number | null }) => void;
 }) {
   const defaultColor = featureColor(body.source);
   const [draftColor, setDraftColor] = useState(body.color);
   const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const committedRef = useRef({ color: body.color, opacity: body.opacity ?? 1 });
+  const committedRef = useRef({
+    color: body.color,
+    opacity: body.opacity ?? 1
+  });
   const controlsRef = useRef<HTMLDivElement | null>(null);
 
   // Resync drafts when the committed representation changes: another body
@@ -597,6 +599,31 @@ export function Inspector(props: InspectorProps) {
       cylinderRadiusSetterRef.current = null;
     };
   }, [cylinderRadiusEdit, cylinderRadiusSetterRef]);
+
+  /**
+   * Hand an edit panel the keyboard without handing it a field.
+   *
+   * Create dialogs are left alone: a child field autofocuses there, and moving
+   * focus to the section afterwards would take it straight back off again.
+   */
+  const panelRef = useRef<HTMLElement | null>(null);
+  const editPanelKey =
+    tool === null
+      ? (selectedFeature?.featureId ??
+        selectedBody?.bodyId ??
+        (selectedTopology ? 'topology' : null))
+      : null;
+  useEffect(() => {
+    if (editPanelKey === null) {
+      return;
+    }
+    const panel = panelRef.current;
+    // Never pull focus out of something the user is already using — a viewport
+    // pick can re-render this panel while a field is being typed into.
+    if (panel && !panel.contains(document.activeElement)) {
+      panel.focus({ preventScroll: true });
+    }
+  }, [editPanelKey]);
 
   let eyebrow = '';
   let title = '';
@@ -1085,7 +1112,23 @@ export function Inspector(props: InspectorProps) {
   }
 
   return (
-    <section className="inspector" aria-label="Feature inspector">
+    <section
+      className="inspector"
+      aria-label="Feature inspector"
+      ref={panelRef}
+      // An edit panel no longer holds the keyboard through a focused field, so
+      // it holds it here instead. A section is not an input, so the workspace
+      // still counts this as "not typing" and B/M/W keep working — but Escape
+      // now reaches the panel that the status bar says it closes, and one Tab
+      // still steps into the first field.
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          props.onCancel();
+        }
+      }}
+    >
       <div className="panel-header">
         <div className="panel-title-row">
           <h2>{title}</h2>
@@ -1101,17 +1144,25 @@ export function Inspector(props: InspectorProps) {
           </button>
         </div>
       </div>
-      <div className="panel-body">
-        {props.commitError && (
-          // A refused exact rebuild leaves this panel open and otherwise
-          // unchanged, so without the reason here the click reads as having
-          // done nothing at all. Rendered in full: the status bar clips it.
-          <p className="field-error inspector-commit-error" role="alert">
-            {props.commitError}
-          </p>
-        )}
-        {body}
-      </div>
+      {/*
+        A create dialog is here because a tool was invoked, so it may take the
+        keyboard; an edit panel is here because something was selected, and
+        must not — the workspace's single-letter shortcuts belong to the user
+        until they ask for a field.
+      */}
+      <FieldAutoFocusProvider allowed={tool !== null}>
+        <div className="panel-body">
+          {props.commitError && (
+            // A refused exact rebuild leaves this panel open and otherwise
+            // unchanged, so without the reason here the click reads as having
+            // done nothing at all. Rendered in full: the status bar clips it.
+            <p className="field-error inspector-commit-error" role="alert">
+              {props.commitError}
+            </p>
+          )}
+          {body}
+        </div>
+      </FieldAutoFocusProvider>
     </section>
   );
 }
