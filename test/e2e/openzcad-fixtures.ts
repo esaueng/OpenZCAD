@@ -6,6 +6,22 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
 
 /**
+ * The compact viewport HUD was intentionally removed. Body count remains in
+ * the workspace status summary's accessible title, so E2E waits on the
+ * supported status surface instead of a deleted presentation-only overlay.
+ */
+export async function expectBodyCount(page: Page, count: number) {
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status', exact: true })
+      .locator('span[title]')
+  ).toHaveAttribute(
+    'title',
+    new RegExp(` · \\d+ features · ${count} bodies$`)
+  );
+}
+
+/**
  * The preview server hosts the static SPA without the Worker API, so the
  * handful of API routes the app touches are stubbed here. Everything else —
  * commands, the geometry worker, the viewport, STEP writing — is the real
