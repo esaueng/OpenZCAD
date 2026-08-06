@@ -444,33 +444,14 @@
   font-size: var(--fs-xs);
 }
 
-.sharing-token-row {
-  display: grid;
-  gap: var(--sp-2);
+.sharing-invite-sent {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
   margin-top: var(--sp-2);
   padding: var(--sp-2);
   border: 1px dashed var(--color-accent-border);
   border-radius: var(--radius-md);
   background: var(--color-accent-dim);
-}
-
-.sharing-token-row output {
-  overflow-wrap: anywhere;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
-.sharing-token-row .secondary {
-  justify-self: start;
-  min-height: 26px;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-}
-
-.sharing-copy-status {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
 }
 
 .sharing-group-label {
