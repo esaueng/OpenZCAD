@@ -1817,7 +1817,10 @@ export function attachDerivedState(
 ): ProjectDocument {
   // Derived state is a disposable projection; attaching it intentionally does
   // not bump `version`, so consumers can tell model edits from re-derivation.
-  return { ...document, derived };
+  // Reference repairs are advice to the session that computed them; stripping
+  // them here keeps stale repair lists out of saved and replayed documents.
+  const { referenceRepairs: _referenceRepairs, ...persisted } = derived;
+  return { ...document, derived: persisted };
 }
 
 export function getLatestSketchId(
