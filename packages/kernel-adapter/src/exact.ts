@@ -4001,6 +4001,31 @@ function importStepWithOwnBudget(
   );
 }
 
+/** Diagnostics an imported STEP produces once, at parse time. */
+interface ImportedStepDiagnostics {
+  declaredSolidCount: number;
+  rejections: string[];
+  flagged: string[];
+}
+
+/**
+ * A parsed STEP import held for reuse: the kernel's serialised solids plus the
+ * diagnostics the parse produced, so a cache hit reports exactly what the
+ * original parse reported rather than a silently emptier set.
+ */
+interface CachedImportedStep {
+  solids: Uint8Array[];
+  diagnostics: ImportedStepDiagnostics;
+}
+
+/**
+ * Ceiling on retained import geometry. Serialised solids run well under half
+ * the STEP text they came from, so this holds a couple of very large imports —
+ * enough for the documents that motivated the cache — while staying bounded,
+ * unlike the WASM heap that repeated parsing grows and never returns.
+ */
+const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
+
 export interface ExactKernelAdapterOptions {
   /**
    * Produces the raw source bytes for a reference-form import. Absent means
@@ -4019,10 +4044,28 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {}
 
   /**
+   * Imported STEP results, keyed by the source checksum that fully determines
+   * them. An import's geometry depends on nothing else in the document, so a
+   * hit is exact by construction — the checksum names the bytes.
+   *
+   * Entries hold the kernel's own serialised solids, which restore without
+   * re-derivation or tolerance normalisation. That matters twice over: a
+   * rebuild skips parsing the STEP text, and skips reading the source at all,
+   * so editing a document that carries a few-hundred-megabyte import no longer
+   * re-reads and re-parses it on every keystroke.
+   */
+  private readonly importedStepCache = new Map<string, CachedImportedStep>();
+  private importedStepCacheBytes = 0;
+
+  /**
    * Reference-form import sources, fetched before the synchronous rebuild
    * walks the history. Keyed by checksum; a missing key at rebuild time means
    * the local blob store and every fallback failed, which each import case
    * reports per-feature rather than failing the whole document.
+   *
+   * A checksum already in {@link importedStepCache} is skipped: its bytes
+   * would only be parsed into a result the cache already holds, and reading
+   * them is the single largest allocation a rebuild makes.
    */
   private async prefetchImportSources(
     document: ProjectDocument
@@ -4037,6 +4080,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       }
       const ref = feature.data.stepSourceRef;
       if (!ref || sources.has(ref.checksumSha256)) {
+        continue;
+      }
+      if (this.importedStepCache.has(ref.checksumSha256)) {
         continue;
       }
       if (!this.options.resolveSourceBytes) {
@@ -4055,6 +4101,45 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       }
     }
     return sources;
+  }
+
+  /**
+   * Records a parsed import against its checksum, evicting least-recently-used
+   * entries to stay inside the byte budget. Serialisation failure is not fatal:
+   * the rebuild already has its solids, and an uncached import merely costs
+   * what it cost before.
+   */
+  private storeImportedStep(
+    checksum: string,
+    kernel: BrepKernel,
+    solids: number[],
+    diagnostics: ImportedStepDiagnostics
+  ): void {
+    let serialized: Uint8Array[];
+    try {
+      serialized = solids.map((solid) => kernel.serializeSolid(solid));
+    } catch {
+      return;
+    }
+    const bytes = serialized.reduce((sum, blob) => sum + blob.byteLength, 0);
+    if (bytes > MAX_IMPORTED_STEP_CACHE_BYTES) {
+      return;
+    }
+    this.importedStepCache.set(checksum, { solids: serialized, diagnostics });
+    this.importedStepCacheBytes += bytes;
+    for (const [key, entry] of this.importedStepCache) {
+      if (this.importedStepCacheBytes <= MAX_IMPORTED_STEP_CACHE_BYTES) {
+        break;
+      }
+      if (key === checksum) {
+        continue;
+      }
+      this.importedStepCache.delete(key);
+      this.importedStepCacheBytes -= entry.solids.reduce(
+        (sum, blob) => sum + blob.byteLength,
+        0
+      );
+    }
   }
 
   private resolveSketchBasisAtHistory(
@@ -4657,54 +4742,78 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           }
           case 'imported-step': {
             if (feature.bodyId) {
-              let sourceBytes: Uint8Array;
-              if (feature.data.stepText !== undefined) {
-                sourceBytes = new TextEncoder().encode(feature.data.stepText);
+              const checksum = feature.data.stepSourceRef?.checksumSha256;
+              const cached = checksum
+                ? this.importedStepCache.get(checksum)
+                : undefined;
+              let solids: number[];
+              let diagnostics: ImportedStepDiagnostics;
+              if (cached) {
+                // The checksum determines the result, so restoring is exact.
+                // Only the handles are new — they belong to this kernel.
+                solids = cached.solids.map((blob) =>
+                  kernel.deserializeSolid(blob)
+                );
+                diagnostics = cached.diagnostics;
               } else {
-                const ref = feature.data.stepSourceRef;
-                const resolved = ref
-                  ? importSources.get(ref.checksumSha256)
-                  : undefined;
-                if (!resolved) {
-                  throw new Error(
-                    `Import source for "${feature.data.sourceName}" is not available on this device.`
+                let sourceBytes: Uint8Array;
+                if (feature.data.stepText !== undefined) {
+                  sourceBytes = new TextEncoder().encode(feature.data.stepText);
+                } else {
+                  const ref = feature.data.stepSourceRef;
+                  const resolved = ref
+                    ? importSources.get(ref.checksumSha256)
+                    : undefined;
+                  if (!resolved) {
+                    throw new Error(
+                      `Import source for "${feature.data.sourceName}" is not available on this device.`
+                    );
+                  }
+                  sourceBytes = resolved;
+                }
+                const declared = Array.from(
+                  importStepWithOwnBudget(kernel, sourceBytes)
+                );
+                if (declared.length === 0) {
+                  throw new Error('STEP file contains no solids.');
+                }
+                // K0.6. A shell that is not closed is not a solid, whatever
+                // volume a divergence integral over its faces happens to
+                // produce. Reject those before they become a body; keep the
+                // rest and say which ones went, because an unreadable solid
+                // that vanishes silently is the worst failure mode the parity
+                // corpus records.
+                const verdicts = declared.map((solid, index) =>
+                  classifyImportedSolid(
+                    diagnoseImportedSolid(kernel, solid, index + 1)
+                  )
+                );
+                solids = declared.filter(
+                  (_, index) => verdicts[index]!.kind !== 'not-a-solid'
+                );
+                const rejections = verdicts.flatMap((verdict) =>
+                  verdict.kind === 'not-a-solid' ? [verdict.reason] : []
+                );
+                if (solids.length === 0) {
+                  throw new Error(importedStepNoSolidError(rejections));
+                }
+                diagnostics = {
+                  declaredSolidCount: declared.length,
+                  rejections,
+                  flagged: verdicts.flatMap((verdict) =>
+                    verdict.kind === 'flagged' ? [verdict.reason] : []
+                  )
+                };
+                if (checksum) {
+                  this.storeImportedStep(
+                    checksum,
+                    kernel,
+                    solids,
+                    diagnostics
                   );
                 }
-                sourceBytes = resolved;
               }
-              const declared = Array.from(
-                importStepWithOwnBudget(kernel, sourceBytes)
-              );
-              if (declared.length === 0) {
-                throw new Error('STEP file contains no solids.');
-              }
-              // K0.6. A shell that is not closed is not a solid, whatever
-              // volume a divergence integral over its faces happens to
-              // produce. Reject those before they become a body; keep the
-              // rest and say which ones went, because an unreadable solid
-              // that vanishes silently is the worst failure mode the parity
-              // corpus records.
-              const verdicts = declared.map((solid, index) =>
-                classifyImportedSolid(
-                  diagnoseImportedSolid(kernel, solid, index + 1)
-                )
-              );
-              const solids = declared.filter(
-                (_, index) => verdicts[index]!.kind !== 'not-a-solid'
-              );
-              const rejections = verdicts.flatMap((verdict) =>
-                verdict.kind === 'not-a-solid' ? [verdict.reason] : []
-              );
-              if (solids.length === 0) {
-                throw new Error(importedStepNoSolidError(rejections));
-              }
-              result.importedStepDiagnostics.set(feature.bodyId, {
-                declaredSolidCount: declared.length,
-                rejections,
-                flagged: verdicts.flatMap((verdict) =>
-                  verdict.kind === 'flagged' ? [verdict.reason] : []
-                )
-              });
+              result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
               result.shapes.set(feature.bodyId, {
                 solids,
                 lineage: createBrepKitImportedStepLineage(
