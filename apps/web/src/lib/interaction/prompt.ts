@@ -48,7 +48,7 @@ function armedStep(state: InteractionState): string {
   if (state.mode === 'face') {
     return state.op === 'resize-cylinder-radius'
       ? 'Drag the radial handle to adjust the radius, or type an exact radius'
-      : 'Drag the arrow to push or pull the face, or type an exact distance';
+      : 'Drag the arrow to push or pull the face, or type an exact distance · Space faces it head-on';
   }
   if (state.mode === 'edges') {
     const count = state.edges.length;

@@ -38,6 +38,22 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The sharing request failed.';
 }
 
+function initialOf(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || '?';
+}
+
+function expiryLabel(expiresAt: number): string {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) {
+    return 'expired';
+  }
+  const days = Math.floor(remaining / 86_400_000);
+  if (days >= 1) {
+    return `expires in ${days}d`;
+  }
+  return `expires in ${Math.ceil(remaining / 3_600_000)}h`;
+}
+
 function activeLease(
   lease: ProjectEditLease | null,
   projectId: string
@@ -130,7 +146,7 @@ export function ProjectSharingDialog({
     >
       <div
         ref={dialogRef}
-        className="shortcuts-card"
+        className="shortcuts-card sharing-card"
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-sharing-title"
@@ -142,19 +158,31 @@ export function ProjectSharingDialog({
           }
         }}
       >
-        <header className="shortcuts-header">
-          <div>
+        <header className="shortcuts-header sharing-header">
+          <div className="sharing-header-text">
             <h2 id="project-sharing-title">Project sharing</h2>
-            <p>
-              Your role: <strong>{role ?? 'Not connected'}</strong> · Room:{' '}
-              <strong>{collaborationStatus}</strong> · Edit lease:{' '}
-              <strong>
-                {role === 'viewer'
-                  ? 'Not available to viewers'
-                  : leaseIsActive
-                    ? 'Active'
-                    : 'Not held'}
-              </strong>
+            <p className="sharing-meta">
+              <span className="sharing-meta-item">
+                Your role: <strong>{role ?? 'Not connected'}</strong>
+              </span>
+              <span className="sharing-meta-item">
+                <span
+                  className="sharing-room-dot"
+                  data-state={collaborationStatus}
+                  aria-hidden="true"
+                />
+                Room: <strong>{collaborationStatus}</strong>
+              </span>
+              <span className="sharing-meta-item">
+                Edit lease:{' '}
+                <strong>
+                  {role === 'viewer'
+                    ? 'Not available to viewers'
+                    : leaseIsActive
+                      ? 'Active'
+                      : 'Not held'}
+                </strong>
+              </span>
             </p>
           </div>
           <button
@@ -167,98 +195,98 @@ export function ProjectSharingDialog({
           </button>
         </header>
 
-        <p aria-live="polite" role={error ? 'alert' : 'status'}>
-          {error ?? (busy ? 'Working…' : '')}
-        </p>
+        <div className="sharing-body">
+          <p
+            className="sharing-status-line"
+            data-tone={error ? 'error' : busy ? 'busy' : undefined}
+            aria-live="polite"
+            role={error ? 'alert' : 'status'}
+          >
+            {error ?? (busy ? 'Working…' : null)}
+          </p>
 
-        {liveMembers.length > 0 && (
-          <section aria-labelledby="active-collaborators-title">
-            <h3 id="active-collaborators-title">Active collaborators</h3>
-            <ul>
-              {liveMembers.map((member) => (
-                <li key={member.clientId}>
-                  {member.displayName} — {member.status}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {conflict && (
-          <section aria-labelledby="conflict-recovery-title">
-            <h3 id="conflict-recovery-title">Resolve local changes</h3>
-            <p>
-              Local version {conflict.localDocument.version} differs from room
-              version {conflict.expectedRemoteVersion}. Your local document
-              remains unresolved if this dialog is closed.
-            </p>
-            <div>
-              <button
-                type="button"
-                disabled={!conflictHandlers || busy !== null}
-                onClick={() => void resolve('use-remote')}
-              >
-                Use room version
-              </button>
-              <button
-                type="button"
-                disabled={!conflictHandlers || !canKeepMine || busy !== null}
-                aria-describedby={
-                  !canKeepMine ? 'keep-mine-requirement' : undefined
-                }
-                onClick={() => void resolve('keep-mine')}
-              >
-                Keep my version
-              </button>
-              <button
-                type="button"
-                disabled={!conflictHandlers || busy !== null}
-                onClick={() => void resolve('save-local-copy')}
-              >
-                Save local as a copy
-              </button>
-            </div>
-            {!canKeepMine && (
-              <p id="keep-mine-requirement">
-                Keep my version requires owner or editor access and an active
-                edit lease.
+          {conflict && (
+            <section
+              className="sharing-section sharing-conflict"
+              aria-labelledby="conflict-recovery-title"
+            >
+              <h3 id="conflict-recovery-title">Resolve local changes</h3>
+              <p>
+                Local version {conflict.localDocument.version} differs from room
+                version {conflict.expectedRemoteVersion}. Your local document
+                remains unresolved if this dialog is closed.
               </p>
-            )}
-          </section>
-        )}
+              <div className="conflict-dialog-actions">
+                <button
+                  type="button"
+                  disabled={!conflictHandlers || busy !== null}
+                  onClick={() => void resolve('use-remote')}
+                >
+                  Use room version
+                </button>
+                <button
+                  type="button"
+                  disabled={!conflictHandlers || !canKeepMine || busy !== null}
+                  aria-describedby={
+                    !canKeepMine ? 'keep-mine-requirement' : undefined
+                  }
+                  onClick={() => void resolve('keep-mine')}
+                >
+                  Keep my version
+                </button>
+                <button
+                  type="button"
+                  disabled={!conflictHandlers || busy !== null}
+                  onClick={() => void resolve('save-local-copy')}
+                >
+                  Save local as a copy
+                </button>
+              </div>
+              {!canKeepMine && (
+                <p id="keep-mine-requirement" className="sharing-conflict-note">
+                  Keep my version requires owner or editor access and an active
+                  edit lease.
+                </p>
+              )}
+            </section>
+          )}
 
-        {role === 'owner' ? (
-          <>
-            <section aria-labelledby="invite-collaborator-title">
-              <h3 id="invite-collaborator-title">Invite a collaborator</h3>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void mutate('invite', async () => {
-                    const created = await client.createInvitation(
-                      projectId,
-                      email,
-                      inviteRole
-                    );
-                    setInvitationToken(created.token);
-                    setCopyStatus(null);
-                    setEmail('');
-                    await refresh();
-                  });
-                }}
+          {role === 'owner' ? (
+            <>
+              <section
+                className="sharing-invite"
+                aria-label="Invite a collaborator"
               >
-                <label>
-                  Email
+                <form
+                  className="sharing-cmd-bar"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void mutate('invite', async () => {
+                      const created = await client.createInvitation(
+                        projectId,
+                        email,
+                        inviteRole
+                      );
+                      setInvitationToken(created.token);
+                      setCopyStatus(null);
+                      setEmail('');
+                      await refresh();
+                    });
+                  }}
+                >
+                  <span className="sharing-cmd-icon" aria-hidden="true">
+                    ✉
+                  </span>
                   <input
                     type="email"
                     required
+                    aria-label="Email"
+                    placeholder="Invite by email…"
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                   />
-                </label>
-                <label>
-                  Role
                   <select
+                    aria-label="Role"
                     value={inviteRole}
                     onChange={(event) =>
                       setInviteRole(event.target.value as ProjectMemberRole)
@@ -269,56 +297,111 @@ export function ProjectSharingDialog({
                       Editor
                     </option>
                   </select>
-                </label>
-                <button type="submit" disabled={busy !== null}>
-                  Create invitation
-                </button>
-              </form>
-              {invitationToken && (
-                <div className="sharing-token-row">
-                  <output aria-label="Invitation token">
-                    Copy this token now; it is shown once: {invitationToken}
-                  </output>
                   <button
-                    type="button"
+                    type="submit"
+                    className="primary"
                     disabled={busy !== null}
-                    onClick={() => {
-                      setCopyStatus(null);
-                      if (!navigator.clipboard) {
-                        setCopyStatus(
-                          'Copy is unavailable. Select the token and copy it manually.'
-                        );
-                        return;
-                      }
-                      void navigator.clipboard
-                        .writeText(invitationToken)
-                        .then(() => setCopyStatus('Invitation token copied.'))
-                        .catch(() =>
-                          setCopyStatus(
-                            'Copy failed. Select the token and copy it manually.'
-                          )
-                        );
-                    }}
                   >
-                    Copy invitation token
+                    Create invitation
                   </button>
-                  {copyStatus && <span role="status">{copyStatus}</span>}
-                </div>
-              )}
-            </section>
+                </form>
+                {invitationToken && (
+                  <div className="sharing-token-row">
+                    <output aria-label="Invitation token">
+                      Copy this token now; it is shown once: {invitationToken}
+                    </output>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy !== null}
+                      onClick={() => {
+                        setCopyStatus(null);
+                        if (!navigator.clipboard) {
+                          setCopyStatus(
+                            'Copy is unavailable. Select the token and copy it manually.'
+                          );
+                          return;
+                        }
+                        void navigator.clipboard
+                          .writeText(invitationToken)
+                          .then(() => setCopyStatus('Invitation token copied.'))
+                          .catch(() =>
+                            setCopyStatus(
+                              'Copy failed. Select the token and copy it manually.'
+                            )
+                          );
+                      }}
+                    >
+                      Copy invitation token
+                    </button>
+                    {copyStatus && (
+                      <span className="sharing-copy-status" role="status">
+                        {copyStatus}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </section>
+            </>
+          ) : null}
 
-            <section aria-labelledby="project-members-title">
-              <h3 id="project-members-title">Members</h3>
-              {sharing?.members.length ? (
-                <ul>
-                  {sharing.members.map((member) => (
-                    <li key={member.userId}>
-                      <span>{member.email ?? member.userId}</span>{' '}
-                      <label>
-                        <span className="sr-only">
-                          Role for {member.email ?? member.userId}
+          {liveMembers.length > 0 && (
+            <section
+              className="sharing-section"
+              aria-labelledby="active-collaborators-title"
+            >
+              <h3
+                id="active-collaborators-title"
+                className="sharing-group-label"
+              >
+                <span>Active collaborators</span>
+                <span className="sharing-count">{liveMembers.length}</span>
+              </h3>
+              <ul className="sharing-list">
+                {liveMembers.map((member) => (
+                  <li key={member.clientId}>
+                    <span className="sharing-avatar" aria-hidden="true">
+                      {initialOf(member.displayName)}
+                    </span>
+                    <span className="sharing-member-id">
+                      {member.displayName}
+                    </span>
+                    <span
+                      className="sharing-presence"
+                      data-status={member.status}
+                    >
+                      {member.status}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {role === 'owner' ? (
+            <>
+              <section
+                className="sharing-section"
+                aria-labelledby="project-members-title"
+              >
+                <h3 id="project-members-title" className="sharing-group-label">
+                  <span>Members</span>
+                  <span className="sharing-count">
+                    {sharing?.members.length ?? 0}
+                  </span>
+                </h3>
+                {sharing?.members.length ? (
+                  <ul className="sharing-list">
+                    {sharing.members.map((member) => (
+                      <li key={member.userId}>
+                        <span className="sharing-avatar" aria-hidden="true">
+                          {initialOf(member.email ?? member.userId)}
+                        </span>
+                        <span className="sharing-member-id">
+                          {member.email ?? member.userId}
                         </span>
                         <select
+                          className="sharing-role-select"
                           aria-label={`Role for ${member.email ?? member.userId}`}
                           value={member.role}
                           disabled={busy !== null}
@@ -341,63 +424,92 @@ export function ProjectSharingDialog({
                             Editor
                           </option>
                         </select>
-                      </label>{' '}
-                      <button
-                        type="button"
-                        disabled={busy !== null}
-                        onClick={() =>
-                          void mutate(`remove:${member.userId}`, async () => {
-                            await client.removeMember(projectId, member.userId);
-                            await refresh();
-                          })
-                        }
-                      >
-                        Remove {member.email ?? member.userId}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p>No project members.</p>
-              )}
-            </section>
-
-            <section aria-labelledby="pending-invitations-title">
-              <h3 id="pending-invitations-title">Pending invitations</h3>
-              {sharing?.invitations.length ? (
-                <ul>
-                  {sharing.invitations.map((invitation) => (
-                    <li key={invitation.invitationId}>
-                      {invitation.email} — {invitation.role}{' '}
-                      <button
-                        type="button"
-                        disabled={busy !== null}
-                        onClick={() =>
-                          void mutate(
-                            `revoke:${invitation.invitationId}`,
-                            async () => {
-                              await client.revokeInvitation(
+                        <button
+                          type="button"
+                          className="sharing-row-action"
+                          aria-label={`Remove ${member.email ?? member.userId}`}
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void mutate(`remove:${member.userId}`, async () => {
+                              await client.removeMember(
                                 projectId,
-                                invitation.invitationId
+                                member.userId
                               );
                               await refresh();
-                            }
-                          )
-                        }
-                      >
-                        Revoke invitation for {invitation.email}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p>No pending invitations.</p>
-              )}
-            </section>
-          </>
-        ) : (
-          <p>Only the project owner can manage members and invitations.</p>
-        )}
+                            })
+                          }
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="sharing-empty">No project members.</p>
+                )}
+              </section>
+
+              <section
+                className="sharing-section"
+                aria-labelledby="pending-invitations-title"
+              >
+                <h3
+                  id="pending-invitations-title"
+                  className="sharing-group-label"
+                >
+                  <span>Pending invitations</span>
+                  <span className="sharing-count">
+                    {sharing?.invitations.length ?? 0}
+                  </span>
+                </h3>
+                {sharing?.invitations.length ? (
+                  <ul className="sharing-list">
+                    {sharing.invitations.map((invitation) => (
+                      <li key={invitation.invitationId}>
+                        <span className="sharing-avatar" aria-hidden="true">
+                          {initialOf(invitation.email)}
+                        </span>
+                        <span className="sharing-member-id">
+                          {invitation.email}
+                        </span>
+                        <span className="sharing-kind">
+                          {invitation.role} ·{' '}
+                          {expiryLabel(invitation.expiresAt)}
+                        </span>
+                        <button
+                          type="button"
+                          className="sharing-row-action"
+                          aria-label={`Revoke invitation for ${invitation.email}`}
+                          disabled={busy !== null}
+                          onClick={() =>
+                            void mutate(
+                              `revoke:${invitation.invitationId}`,
+                              async () => {
+                                await client.revokeInvitation(
+                                  projectId,
+                                  invitation.invitationId
+                                );
+                                await refresh();
+                              }
+                            )
+                          }
+                        >
+                          Revoke
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="sharing-empty">No pending invitations.</p>
+                )}
+              </section>
+            </>
+          ) : (
+            <p className="sharing-empty">
+              Only the project owner can manage members and invitations.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

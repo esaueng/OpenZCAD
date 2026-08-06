@@ -7,6 +7,7 @@ import {
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
+  type NormalToFaceRequest,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
@@ -44,6 +45,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: ViewTarget; nonce: number } | null;
+  normalToFaceRequest: NormalToFaceRequest | null;
   rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
@@ -58,6 +60,10 @@ interface ViewerShellProps {
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo(): void;
+  onRedo(): void;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -132,6 +138,7 @@ export function ViewerShell({
   settings,
   fitSignal,
   viewRequest,
+  normalToFaceRequest,
   rotateRequest,
   units,
   editableBodyIds,
@@ -143,6 +150,10 @@ export function ViewerShell({
   hideViewerToolbar = false,
   selectionChip,
   onClearSelection,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   projection,
   initialView,
   onViewChange,
@@ -203,6 +214,7 @@ export function ViewerShell({
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        normalToFaceRequest={normalToFaceRequest}
         rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
@@ -268,6 +280,10 @@ export function ViewerShell({
           <ViewerToolbar
             settings={settings}
             projection={projection}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={onUndo}
+            onRedo={onRedo}
             onToggleGrid={onToggleGrid}
             onFit={onFit}
             onView={onView}
@@ -296,17 +312,6 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <div className="vp-hud vp-hud-bl" aria-hidden="true">
-        <span className="vp-chip">{units}</span>
-        <span className="vp-chip">
-          {bodies.length} {bodies.length === 1 ? 'body' : 'bodies'}
-        </span>
-        {sketches.length > 0 && (
-          <span className="vp-chip">
-            {sketches.length} {sketches.length === 1 ? 'sketch' : 'sketches'}
-          </span>
-        )}
-      </div>
     </section>
   );
 }
