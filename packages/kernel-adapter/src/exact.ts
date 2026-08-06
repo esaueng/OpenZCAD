@@ -1932,7 +1932,7 @@ function addUniqueSemanticAssignment(
   predicate: (candidate: BrepKitTopologyCandidate) => boolean,
   assignments: BrepKitSemanticAssignment[],
   diagnostics: BrepKitLineageState[],
-  operation: 'primitive' | 'sweep'
+  operation: 'primitive' | 'sweep' | 'fillet' | 'chamfer'
 ) {
   const matches = candidates.filter(
     (candidate) => candidate.kind === kind && predicate(candidate)
@@ -2213,6 +2213,188 @@ function rederivePrimitiveDirectEditLineage(
   return lineage.faceReferences.size > 0 || lineage.edgeReferences.size > 0
     ? lineage
     : null;
+}
+
+/**
+ * True when the modifier chain roots at a cylinder primitive — the one shape
+ * whose fillet/chamfer result the role recognizer below can name. Anything
+ * else in the producer chain (booleans, patterns, transforms with their own
+ * result bodies) keeps the modifier hash-only.
+ */
+function modifierChainRootsAtCylinder(
+  document: ProjectDocument,
+  targetBodyId: BodyId
+): boolean {
+  const features = listFeaturesInOrder(document);
+  const producerByBodyId = new Map(
+    features.flatMap((feature) =>
+      feature.bodyId ? [[feature.bodyId, feature] as const] : []
+    )
+  );
+  const seen = new Set<BodyId>();
+  let bodyId = targetBodyId;
+  while (!seen.has(bodyId)) {
+    seen.add(bodyId);
+    const producer = producerByBodyId.get(bodyId);
+    if (!producer) {
+      return false;
+    }
+    if (producer.data.featureKind === 'primitive') {
+      return producer.data.primitiveKind === 'cylinder';
+    }
+    if (
+      producer.data.featureKind !== 'fillet' &&
+      producer.data.featureKind !== 'chamfer'
+    ) {
+      return false;
+    }
+    bodyId = producer.data.targetBodyId;
+  }
+  return false;
+}
+
+/**
+ * Fillet/chamfer results report no output relation, so they dropped to
+ * hash-only lineage — which meant nothing stacked on a filleted body could
+ * re-resolve across an upstream parametric edit. For a capped-cylinder chain
+ * the modified topology is still fully role-recognizable: one Z-up
+ * cylindrical wall, planar caps at the axial extremes, blend surfaces
+ * between them, and closed circles classified by height. Republishing those
+ * roles under the modifier feature keeps downstream picks resolvable. Every
+ * predicate is radius-independent; a role that is not one-to-one publishes
+ * nothing (fail-closed in `createBrepKitSemanticLineage`), a role with no
+ * candidate is simply absent, and an unrecognizable shape — a tilted axis, a
+ * foreign surface type, a vanished wall — returns null and stays hash-only.
+ */
+function rederiveCylinderModifierLineage(
+  kernel: BrepKernel,
+  solid: number,
+  feature: FeatureNode
+): BrepKitLineageState | null {
+  if (
+    feature.data.featureKind !== 'fillet' &&
+    feature.data.featureKind !== 'chamfer'
+  ) {
+    return null;
+  }
+  const operation = feature.data.featureKind;
+  const candidates = topologyCandidatesForSolid(kernel, solid);
+  const faces = candidates.filter((candidate) => candidate.kind === 'face');
+  const edges = candidates.filter((candidate) => candidate.kind === 'edge');
+  const surfaceOf = (candidate: BrepKitTopologyCandidate): string =>
+    (candidate.witness as FaceWitnessV1).surfaceType;
+  const walls = faces.filter(
+    (candidate) => surfaceOf(candidate) === 'cylinder'
+  );
+  const knownSurfaces = new Set(['cylinder', 'plane', 'torus', 'cone']);
+  const wallAnalytic = (walls[0]?.witness as FaceWitnessV1 | undefined)
+    ?.analytic;
+  if (
+    walls.length !== 1 ||
+    wallAnalytic?.kind !== 'cylinder' ||
+    wallAnalytic.axis[0] !== 0 ||
+    wallAnalytic.axis[1] !== 0 ||
+    faces.some((candidate) => !knownSurfaces.has(surfaceOf(candidate)))
+  ) {
+    return null;
+  }
+  const boundsValues = Array.from(kernel.boundingBox(solid));
+  const zMin = quantizedPoint({
+    x: boundsValues[0]!,
+    y: boundsValues[1]!,
+    z: boundsValues[2]!
+  })[2];
+  const zMax = quantizedPoint({
+    x: boundsValues[3]!,
+    y: boundsValues[4]!,
+    z: boundsValues[5]!
+  })[2];
+  if (zMin >= zMax) {
+    return null;
+  }
+  const zMid = (zMin + zMax) / 2;
+
+  const assignments: BrepKitSemanticAssignment[] = [];
+  const diagnostics: BrepKitLineageState[] = [];
+  const addRole = (
+    kind: 'edge' | 'face',
+    lineageName: string,
+    predicate: (candidate: BrepKitTopologyCandidate) => boolean
+  ) => {
+    const pool = kind === 'face' ? faces : edges;
+    // A role with no candidate is legitimately absent (a single-rim fillet
+    // has one blend); only present-but-ambiguous roles should diagnose.
+    if (!pool.some(predicate)) {
+      return;
+    }
+    addUniqueSemanticAssignment(
+      pool,
+      kind,
+      lineageName,
+      predicate,
+      assignments,
+      diagnostics,
+      operation
+    );
+  };
+  const planeAtZ = (candidate: BrepKitTopologyCandidate, z: number): boolean => {
+    const witness = candidate.witness as FaceWitnessV1;
+    return witness.surfaceType === 'plane' && witness.centroid?.[2] === z;
+  };
+  const blendInHalf = (
+    candidate: BrepKitTopologyCandidate,
+    lower: boolean
+  ): boolean => {
+    const witness = candidate.witness as FaceWitnessV1;
+    if (witness.surfaceType !== 'torus' && witness.surfaceType !== 'cone') {
+      return false;
+    }
+    const z = witness.centroid?.[2];
+    return z !== undefined && z !== null && (lower ? z < zMid : z >= zMid);
+  };
+  const circleAt = (
+    candidate: BrepKitTopologyCandidate,
+    matches: (z: number) => boolean
+  ): boolean => {
+    const witness = candidate.witness as EdgeWitnessV1;
+    return witness.closed && matches(witness.center[2]);
+  };
+
+  addRole('face', 'modifier.cylinder.face.wall', (candidate) =>
+    surfaceOf(candidate) === 'cylinder'
+  );
+  addRole('face', 'modifier.cylinder.face.cap.start', (candidate) =>
+    planeAtZ(candidate, zMin)
+  );
+  addRole('face', 'modifier.cylinder.face.cap.end', (candidate) =>
+    planeAtZ(candidate, zMax)
+  );
+  addRole('face', 'modifier.cylinder.face.blend.start', (candidate) =>
+    blendInHalf(candidate, true)
+  );
+  addRole('face', 'modifier.cylinder.face.blend.end', (candidate) =>
+    blendInHalf(candidate, false)
+  );
+  addRole('edge', 'modifier.cylinder.edge.rim.start', (candidate) =>
+    circleAt(candidate, (z) => z === zMin)
+  );
+  addRole('edge', 'modifier.cylinder.edge.rim.end', (candidate) =>
+    circleAt(candidate, (z) => z === zMax)
+  );
+  addRole('edge', 'modifier.cylinder.edge.tangent.start', (candidate) =>
+    circleAt(candidate, (z) => z > zMin && z < zMid)
+  );
+  addRole('edge', 'modifier.cylinder.edge.tangent.end', (candidate) =>
+    circleAt(candidate, (z) => z >= zMid && z < zMax)
+  );
+
+  if (assignments.length === 0) {
+    return null;
+  }
+  return mergeBrepKitLineageStates([
+    createBrepKitSemanticLineage(feature.featureId, operation, assignments),
+    ...diagnostics
+  ]);
 }
 
 function planeCarrier(
@@ -4738,12 +4920,19 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             result.consumed.add(feature.data.targetBodyId);
             result.shapes.set(feature.bodyId, {
               solids: [modified],
-              lineage: brepKitHashOnlyLineage(
-                feature.data.featureKind,
-                feature.data.featureKind === 'fillet'
-                  ? 'The final production fillet, including analytic fallback results, has no reverified complete output relation.'
-                  : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
-              )
+              lineage:
+                (modifierChainRootsAtCylinder(
+                  document,
+                  feature.data.targetBodyId
+                )
+                  ? rederiveCylinderModifierLineage(kernel, modified, feature)
+                  : null) ??
+                brepKitHashOnlyLineage(
+                  feature.data.featureKind,
+                  feature.data.featureKind === 'fillet'
+                    ? 'The final production fillet, including analytic fallback results, has no reverified complete output relation.'
+                    : 'BrepKit chamfer does not expose a complete generated-face provenance channel.'
+                )
             });
             inheritMeshOrigin(
               result,
