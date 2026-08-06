@@ -889,9 +889,15 @@ describe('worker api routes', () => {
 
   it('creates, lists, and revokes viewer invitations behind the sharing flag', async () => {
     const owner = toUserId('user_sharing_route_owner');
+    const emailSend = vi.fn(async (_message: EmailMessageBuilder) => ({
+      messageId: 'message_sharing'
+    }));
     const sharingEnv = {
       ...env,
-      PROJECT_SHARING_ENABLED: 'true'
+      PROJECT_SHARING_ENABLED: 'true',
+      PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      EMAIL: { send: emailSend }
     };
     const createdResponse = await worker.fetch(
       new Request('https://example.com/api/projects', {
@@ -922,6 +928,16 @@ describe('worker api routes', () => {
     };
     expect(invitation.invitation.email).toBe('viewer@example.com');
     expect(invitation.token).toHaveLength(43);
+    expect(emailSend).toHaveBeenCalledOnce();
+    expect(emailSend.mock.calls[0]![0]).toMatchObject({
+      to: 'viewer@example.com',
+      from: { email: 'noreply@zcad.esau.app', name: 'OpenZCAD' },
+      subject: 'You are invited to an OpenZCAD project'
+    });
+    expect(emailSend.mock.calls[0]![0].text).toContain(
+      `https://zcad.esau.app/#invite=${invitation.token}`
+    );
+    expect(emailSend.mock.calls[0]![0].html).toContain('Sharing routes');
 
     const listed = await worker.fetch(
       new Request(`https://example.com/api/projects/${projectId}/sharing`, {
@@ -953,6 +969,73 @@ describe('worker api routes', () => {
       sharingEnv
     );
     expect(revoked.status).toBe(204);
+  });
+
+  it('revokes a newly created invitation when email delivery fails', async () => {
+    const owner = toUserId('user_sharing_email_failure_owner');
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'Email failure cleanup' })
+      }),
+      env
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    const deliveryError = Object.assign(
+      new Error('member@example.com secret-token-value'),
+      { code: 'E_DELIVERY_FAILED' }
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const failureEnv = {
+      ...env,
+      PROJECT_SHARING_ENABLED: 'true',
+      PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      EMAIL: {
+        send: vi.fn(async (_message: EmailMessageBuilder) =>
+          Promise.reject(deliveryError)
+        )
+      }
+    };
+
+    try {
+      const response = await worker.fetch(
+        new Request(
+          `https://example.com/api/projects/${created.document.projectId}/invitations`,
+          {
+            method: 'POST',
+            headers: { 'x-openzcad-development-user': owner },
+            body: JSON.stringify({
+              email: 'member@example.com',
+              role: 'viewer'
+            })
+          }
+        ),
+        failureEnv
+      );
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toMatchObject({
+        code: 'INVITATION_EMAIL_UNAVAILABLE'
+      });
+
+      const listed = await worker.fetch(
+        new Request(
+          `https://example.com/api/projects/${created.document.projectId}/sharing`,
+          { headers: { 'x-openzcad-development-user': owner } }
+        ),
+        failureEnv
+      );
+      await expect(listed.json()).resolves.toMatchObject({ invitations: [] });
+      const logs = JSON.stringify(consoleError.mock.calls);
+      expect(logs).toContain('E_DELIVERY_FAILED');
+      expect(logs).not.toContain('member@example.com');
+      expect(logs).not.toContain('secret-token-value');
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('lets viewers read shared projects but rejects every revision mutation', async () => {

@@ -9,12 +9,139 @@ import {
 } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
+import { PROJECT_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/projectInvitationLink';
+
+const invitationToken = 'i'.repeat(43);
 
 test('loads the OpenZCAD shell', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await expect(page.getByText('OpenZCAD')).toBeVisible();
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
+});
+
+test('accepts a signed-in project invitation link and scrubs the token', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Invited Link Part',
+    toUserId('user_invitation_owner')
+  );
+  let accepted = false;
+  await stubApi(page, { collaborationRole: 'viewer' });
+  await page.route('**/api/project-invitations/accept', (route) => {
+    expect(route.request().postDataJSON()).toEqual({ token: invitationToken });
+    accepted = true;
+    return route.fulfill({
+      json: { projectId: document.projectId, role: 'viewer' }
+    });
+  });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json: {
+        projects: accepted
+          ? [
+              {
+                projectId: document.projectId,
+                name: document.name,
+                revisionCount: 0,
+                documentVersion: document.version,
+                updatedAt: document.derived.updatedAt
+              }
+            ]
+          : []
+      }
+    })
+  );
+  await page.route(`**/api/projects/${document.projectId}`, (route) =>
+    route.fulfill({ json: document })
+  );
+
+  await page.goto(`/#invite=${invitationToken}`);
+
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText(document.name);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    `Opened ${document.name}`
+  );
+  expect(await page.evaluate(() => window.location.hash)).toBe('');
+  expect(
+    await page.evaluate(
+      (key) => window.sessionStorage.getItem(key),
+      PROJECT_INVITATION_SESSION_KEY
+    )
+  ).toBeNull();
+});
+
+test('focuses signed-out invitation links on email sign-in and resumes them', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Signed-out Invitation Part',
+    toUserId('user_invitation_owner')
+  );
+  let accepted = false;
+  await stubEmailLoginApi(page);
+  await page.route('**/api/collaboration/config', (route) =>
+    route.fulfill({
+      json: {
+        sharingEnabled: true,
+        editLeasesEnforced: true,
+        personalSyncEnabled: false,
+        canary: false
+      }
+    })
+  );
+  await page.route('**/api/project-invitations/accept', (route) => {
+    expect(route.request().postDataJSON()).toEqual({ token: invitationToken });
+    accepted = true;
+    return route.fulfill({
+      json: { projectId: document.projectId, role: 'viewer' }
+    });
+  });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json: {
+        projects: accepted
+          ? [
+              {
+                projectId: document.projectId,
+                name: document.name,
+                revisionCount: 0,
+                documentVersion: document.version,
+                updatedAt: document.derived.updatedAt
+              }
+            ]
+          : []
+      }
+    })
+  );
+  await page.route(`**/api/projects/${document.projectId}`, (route) =>
+    route.fulfill({ json: document })
+  );
+
+  await page.goto(`/#invite=${invitationToken}`);
+
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  await expect(page.getByText(/Project invitation ready/)).toBeVisible();
+  await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.location.hash)).toBe('');
+  await page.getByLabel('Email address').fill('maker@example.com');
+  await page.getByRole('button', { name: 'Email me a code' }).click();
+  await page.getByLabel('Email sign-in code').fill('123456');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText(document.name);
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      (key) => window.sessionStorage.getItem(key),
+      PROJECT_INVITATION_SESSION_KEY
+    )
+  ).toBeNull();
 });
 
 test('keeps a shared-project viewer visibly read-only', async ({ page }) => {

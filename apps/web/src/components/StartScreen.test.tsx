@@ -1,5 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
@@ -31,8 +30,6 @@ function renderStartScreen(
       accountProjectListReached={true}
       conflictedProjectIds={new Set()}
       signedIn={true}
-      collaborationSharingEnabled={false}
-      onAcceptInvitation={vi.fn().mockResolvedValue(undefined)}
       onSaveToAccount={vi.fn()}
       onSaveAllToAccount={vi.fn()}
       syncRun={null}
@@ -122,24 +119,11 @@ describe('StartScreen cloud project status', () => {
     ).toBeNull();
   });
 
-  it('accepts a pasted invitation only for an enabled signed-in account', async () => {
-    const onAcceptInvitation = vi.fn().mockResolvedValue(undefined);
-    const user = userEvent.setup();
-    renderStartScreen({
-      collaborationSharingEnabled: true,
-      onAcceptInvitation
-    });
+  it('does not expose the retired invitation token paste flow', () => {
+    renderStartScreen();
 
-    await user.type(
-      screen.getByLabelText('Invitation token'),
-      ' invite_token '
-    );
-    await user.click(screen.getByRole('button', { name: 'Join project' }));
-
-    await waitFor(() =>
-      expect(onAcceptInvitation).toHaveBeenCalledWith('invite_token')
-    );
-    expect(screen.getByLabelText('Invitation token')).toHaveValue('');
+    expect(screen.queryByLabelText('Invitation token')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Join project' })).toBeNull();
   });
 });
 
