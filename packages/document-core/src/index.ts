@@ -296,7 +296,10 @@ export interface ImportedStepInput {
   name: string;
   artifactId: string;
   sourceName: string;
-  /** Legacy embedded form. Exactly one of `stepText`/`stepSourceRef`. */
+  /**
+   * Embedded form, still written when blob storage is unavailable rather than
+   * only by old imports. Exactly one of `stepText`/`stepSourceRef`.
+   */
   stepText?: string;
   /** Content-addressed form; the bytes live in the source blob store. */
   stepSourceRef?: ImportedSourceReference;
