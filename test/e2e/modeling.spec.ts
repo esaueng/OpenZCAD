@@ -1513,17 +1513,12 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
 
   await page.getByLabel('CAD change request').fill('Union the two bodies');
   await page.getByLabel('CAD change request').press('Enter');
-  const proposal = page.locator('.assistant-card.proposal.open');
-  await expect(proposal).toContainText('Union the two separated bodies.');
-  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
-
+  const failure = page.locator('.assistant-card.message.error');
+  await expect(failure).toContainText('did not pass exact geometry preflight');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Union does not fill empty space.'
   );
-  await expect(proposal).toContainText('Proposed change');
-  await expect(
-    proposal.getByRole('button', { name: 'Apply', exact: true })
-  ).toBeEnabled();
+  await expect(page.locator('.assistant-card.proposal.open')).toHaveCount(0);
   await expect(
     page.locator('.feature-row', { hasText: 'AI disconnected Union' })
   ).toHaveCount(0);
@@ -1534,6 +1529,9 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
     .click();
   await inspector.getByLabel('Move Z').fill('24');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await failure.getByRole('button', { name: 'Try again' }).click();
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText('Union the two separated bodies.');
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
 
   await expect(
@@ -1544,6 +1542,75 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   );
   await expect(page.locator('.body-row.consumed')).toHaveCount(2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('preflights and applies the verified chamfered-shaft suggestion without an AI provider', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  let providerRequests = 0;
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: false,
+        provider: 'openrouter',
+        model: 'not-needed-for-verified-recipes',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    providerRequests += 1;
+    return route.abort();
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Verified Chamfered Shaft');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+
+  await page
+    .getByRole('button', {
+      name: /Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends/
+    })
+    .click();
+  const request = page.getByLabel('CAD change request');
+  await expect(request).toHaveValue(
+    'Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends'
+  );
+  await request.press('Enter');
+
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText(
+    'A Ø30 × 60 mm shaft will be created with 1 mm chamfers'
+  );
+  await expect(proposal.getByText('in the viewport')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(providerRequests).toBe(0);
+
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(
+    page.locator('.feature-row', { hasText: 'Chamfered Shaft' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('contentinfo').locator('[title*="1 bodies"]')
+  ).toBeVisible();
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Applied'
+  );
+
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(
+    page.getByRole('contentinfo').locator('[title*="0 bodies"]')
+  ).toBeVisible();
+  expect(consoleErrors).toEqual([]);
 });
 
 test('grounds all cylinder edges onto its two visible rims', async ({
