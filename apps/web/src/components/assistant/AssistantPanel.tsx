@@ -283,6 +283,18 @@ export function AssistantPanel({
     return null;
   }, [entries]);
 
+  // Let the composer grow with the request while keeping enough of the thread
+  // visible to preserve conversational context. Resetting to `auto` first also
+  // lets it shrink again when text is removed or a prompt is sent.
+  useLayoutEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [collapsed, prompt]);
+
   useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
@@ -783,10 +795,7 @@ export function AssistantPanel({
       onDrop={handleDrop}
     >
       <header className="assistant-header">
-        <span className="assistant-mark" aria-hidden="true">
-          <Sparkles size={13} />
-        </span>
-        <span className="assistant-title">Assistant</span>
+        <span className="assistant-title">AI Assistant</span>
         {turnCount > 0 && (
           <span className="assistant-turn-count">
             {turnCount} {turnCount === 1 ? 'ask' : 'asks'}
@@ -829,9 +838,6 @@ export function AssistantPanel({
       >
         {entries.length === 0 && (
           <div className="assistant-empty">
-            <span className="assistant-empty-mark" aria-hidden="true">
-              <Sparkles size={18} />
-            </span>
             <p className="assistant-empty-lead">
               Describe the part you want, or attach a drawing and let the
               assistant read it.
@@ -954,7 +960,7 @@ export function AssistantPanel({
           <textarea
             ref={promptRef}
             value={prompt}
-            rows={1}
+            rows={3}
             placeholder={
               selectionSummary
                 ? `Ask about ${selectionSummary}…`

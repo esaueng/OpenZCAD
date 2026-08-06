@@ -71,23 +71,11 @@
   border-bottom: var(--border-thin);
 }
 
-.assistant-mark {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: 50%;
-}
-
 .assistant-title {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .assistant-turn-count {
@@ -294,17 +282,6 @@
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
   line-height: 1.55;
-}
-
-.assistant-empty-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: 50%;
 }
 
 .assistant-empty p {
@@ -1128,10 +1105,11 @@
 
 .assistant-prompt textarea {
   width: 100%;
-  min-height: 24px;
-  max-height: 128px;
+  min-height: 64px;
+  max-height: 180px;
   padding: 2px 0;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
   color: var(--color-text);
   background: transparent;
   border: 0;
