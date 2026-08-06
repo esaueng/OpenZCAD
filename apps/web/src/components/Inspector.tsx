@@ -1,11 +1,13 @@
 import {
   useEffect,
+  useRef,
   useState,
   type MutableRefObject,
   type ReactNode
 } from 'react';
 import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
+import { featureColor } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -47,6 +49,7 @@ import {
 } from '../lib/model';
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 import { ExprInput } from './ExprInput';
+import type { BodyAppearancePreview } from './ModelViewer';
 
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
@@ -129,6 +132,13 @@ export interface InspectorCallbacks {
     geometry: FaceGeometry
   ): void;
   onDeleteFeature(feature: FeatureNode): void;
+  /** Drag-phase body appearance patch; null restores the committed look. */
+  onPreviewBodyAppearance(preview: BodyAppearancePreview | null): void;
+  /** Commits body appearance through node metadata; null opacity resets. */
+  onCommitBodyAppearance(
+    bodyId: BodyId,
+    appearance: { color?: string; opacity?: number | null }
+  ): void;
 }
 
 interface InspectorProps extends InspectorCallbacks {
@@ -233,6 +243,125 @@ function BodyStats({
         <span>{body.faceCount}</span>
         <b>status</b>
         <span>{body.consumed ? 'consumed by boolean' : 'live'}</span>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Per-body display color and opacity. Edits stream to the viewport as a
+ * material-level preview on every change and commit through node metadata on
+ * release/blur, so a slider drag never waits on a kernel rebuild.
+ */
+function BodyAppearance({
+  body,
+  onPreview,
+  onCommit
+}: {
+  body: BodyRepresentation;
+  onPreview: InspectorCallbacks['onPreviewBodyAppearance'];
+  onCommit: (
+    appearance: { color?: string; opacity?: number | null }
+  ) => void;
+}) {
+  const defaultColor = featureColor(body.source);
+  const [draftColor, setDraftColor] = useState(body.color);
+  const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
+  const committedRef = useRef({ color: body.color, opacity: body.opacity ?? 1 });
+
+  // Resync drafts when the committed representation changes: another body
+  // selected, an undo, or this commit's rebuild landing.
+  useEffect(() => {
+    const committed = { color: body.color, opacity: body.opacity ?? 1 };
+    committedRef.current = committed;
+    setDraftColor(committed.color);
+    setDraftOpacity(committed.opacity);
+  }, [body.bodyId, body.color, body.opacity]);
+
+  function commitDraft() {
+    onPreview(null);
+    const committed = committedRef.current;
+    const patch: { color?: string; opacity?: number | null } = {};
+    if (draftColor.toLowerCase() !== committed.color.toLowerCase()) {
+      patch.color = draftColor;
+    }
+    if (draftOpacity !== committed.opacity) {
+      patch.opacity = draftOpacity >= 1 ? null : draftOpacity;
+    }
+    if (patch.color === undefined && patch.opacity === undefined) {
+      return;
+    }
+    committedRef.current = {
+      color: patch.color ?? committed.color,
+      opacity: draftOpacity
+    };
+    onCommit(patch);
+  }
+
+  const isDefault =
+    draftColor.toLowerCase() === defaultColor.toLowerCase() &&
+    draftOpacity >= 1;
+
+  return (
+    <>
+      <h3 className="section-title">Appearance</h3>
+      <div className="appearance-controls">
+        <label className="appearance-field">
+          <span>Color</span>
+          <span className="appearance-inputs">
+            <input
+              type="color"
+              aria-label="Body color"
+              value={draftColor}
+              onChange={(event) => {
+                const color = event.target.value;
+                setDraftColor(color);
+                onPreview({ bodyId: body.bodyId, color });
+              }}
+              onBlur={commitDraft}
+            />
+            <span className="appearance-value">{draftColor}</span>
+          </span>
+        </label>
+        <label className="appearance-field">
+          <span>Opacity</span>
+          <span className="appearance-inputs">
+            <input
+              type="range"
+              aria-label="Body opacity"
+              min={0.05}
+              max={1}
+              step={0.05}
+              value={draftOpacity}
+              onChange={(event) => {
+                const opacity = Number(event.target.value);
+                setDraftOpacity(opacity);
+                onPreview({ bodyId: body.bodyId, opacity });
+              }}
+              onPointerUp={commitDraft}
+              onKeyUp={commitDraft}
+              onBlur={commitDraft}
+            />
+            <span className="appearance-value">
+              {Math.round(draftOpacity * 100)}%
+            </span>
+          </span>
+        </label>
+        {!isDefault && (
+          <button
+            type="button"
+            className="appearance-reset"
+            onClick={() => {
+              onPreview(null);
+              committedRef.current = { color: defaultColor, opacity: 1 };
+              setDraftColor(defaultColor);
+              setDraftOpacity(1);
+              onCommit({ color: defaultColor, opacity: null });
+            }}
+          >
+            Reset to feature default
+          </button>
+        )}
       </div>
     </>
   );
@@ -848,6 +977,15 @@ export function Inspector(props: InspectorProps) {
               onRemoveFaceFeature={props.onRemoveFaceFeature}
             />
           )}
+        {selectedBody && !selectedBody.consumed && (
+          <BodyAppearance
+            body={selectedBody}
+            onPreview={props.onPreviewBodyAppearance}
+            onCommit={(appearance) =>
+              props.onCommitBodyAppearance(selectedBody.bodyId, appearance)
+            }
+          />
+        )}
         {selectedBody && <BodyStats body={selectedBody} units={units} />}
         {selectedTopology?.kind !== 'body' && selectedTopology && (
           <div className="topology-selection">
