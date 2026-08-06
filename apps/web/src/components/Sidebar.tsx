@@ -487,7 +487,10 @@ export function Sidebar({
                   type="button"
                   className="feature-row-main"
                   onClick={() => onSelectFeature(feature.id)}
-                  title={`${FEATURE_KIND_LABELS[feature.featureKind]} — click to edit`}
+                  // Every row used to announce the same generic kind label, so
+                  // a history read aloud was a list of identical items. The
+                  // feature's own name comes first, as on screen.
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">{feature.name}</span>
