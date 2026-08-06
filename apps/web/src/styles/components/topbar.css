@@ -340,12 +340,15 @@
 }
 
 /*
- * Only the two states that need a decision are coloured. The rest — including
+ * Only the states that need a decision are coloured. The rest — including
  * "saved on this device only" — are ordinary outcomes, and tinting them would
  * suggest work is at risk when it is sitting safely in IndexedDB.
+ * `local-source` is a decision state: an import source exists only in this
+ * browser, and only the user can trigger the re-archive.
  */
 .save-state.is-conflict,
-.save-state.is-refused {
+.save-state.is-refused,
+.save-state.is-local-source {
   color: var(--color-warning);
   border-color: currentcolor;
 }

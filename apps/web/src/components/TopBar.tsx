@@ -33,6 +33,12 @@ interface TopBarProps {
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
   saveState: WorkspaceSaveState;
+  /**
+   * Import sources that exist only in this browser because their cloud
+   * archival failed. Nonzero shows the File-menu action that retries the
+   * upload without reimporting.
+   */
+  localOnlySourceCount: number;
   artifacts: ArtifactRecord[];
   session: AuthSession | null;
   accountState: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
@@ -50,6 +56,7 @@ interface TopBarProps {
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
+  onArchiveLocalSources(): void;
   onExportDiagnostics(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
@@ -63,6 +70,7 @@ export function TopBar({
   canExport,
   exportScope,
   saveState,
+  localOnlySourceCount,
   artifacts,
   session,
   accountState,
@@ -75,6 +83,7 @@ export function TopBar({
   onSave,
   onImportFile,
   onExport,
+  onArchiveLocalSources,
   onExportDiagnostics,
   onRenameProject,
   onGoHome,
@@ -252,7 +261,9 @@ export function TopBar({
         >
           {saveState === 'saving' || saveState === 'syncing' ? (
             <LoaderCircle className="spin" size={14} aria-hidden="true" />
-          ) : saveState === 'conflict' || saveState === 'refused' ? (
+          ) : saveState === 'conflict' ||
+            saveState === 'refused' ||
+            saveState === 'local-source' ? (
             <TriangleAlert size={14} aria-hidden="true" />
           ) : saveState === 'synced' ? (
             <Check size={14} aria-hidden="true" />
@@ -334,6 +345,21 @@ export function TopBar({
               <span>Export STL</span>
               <small>{exportScope ?? 'all bodies'}</small>
             </button>
+            {localOnlySourceCount > 0 ? (
+              <button
+                type="button"
+                className="topbar-menu-item"
+                title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                onClick={onArchiveLocalSources}
+              >
+                <Upload size={13} aria-hidden="true" />
+                <span>Archive local sources</span>
+                <small>
+                  {localOnlySourceCount} file
+                  {localOnlySourceCount === 1 ? '' : 's'}
+                </small>
+              </button>
+            ) : null}
             <button
               type="button"
               className="topbar-menu-item"

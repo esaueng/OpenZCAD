@@ -17,7 +17,10 @@ import {
   type CreateProjectRequest,
   type CreateProjectResponse,
   type CreateUploadSessionRequest,
+  type CompleteMultipartUploadRequest,
+  type CreateMultipartUploadResponse,
   type CreateUploadSessionResponse,
+  type UploadedArtifactPart,
   type DuplicateProjectRequest,
   type FinalizeArtifactRequest,
   type ListArtifactsResponse,
@@ -276,6 +279,38 @@ export interface PersistenceService {
     uploadSessionId: string,
     body: ArrayBuffer
   ): Promise<void>;
+  /**
+   * Starts a chunked upload into the session's object key. Bodies above the
+   * single-PUT ceiling use this; the parts are stitched into one object at
+   * completion, after which {@link PersistenceService.finalizeArtifact}
+   * proceeds exactly as for a single PUT.
+   */
+  createMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<CreateMultipartUploadResponse>;
+  putUploadPart(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: ArrayBuffer
+  ): Promise<UploadedArtifactPart>;
+  completeMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    request: CompleteMultipartUploadRequest
+  ): Promise<void>;
+  /**
+   * Discards an in-flight chunked upload's stored parts. Idempotent: aborting
+   * an unknown or already-completed upload id is a no-op, so a client can
+   * always abort on its failure path without checking how far it got.
+   */
+  abortMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string
+  ): Promise<void>;
   finalizeArtifact(
     userId: UserId,
     request: FinalizeArtifactRequest
@@ -324,6 +359,8 @@ export class InMemoryPersistenceService implements PersistenceService {
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly uploads = new Map<string, UploadSessionRecord>();
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
+  /** In-flight chunked uploads: `${sessionId}:${uploadId}` → part bodies. */
+  private readonly multipartParts = new Map<string, Map<number, ArrayBuffer>>();
 
   async requireProjectRead(
     userId: UserId,
@@ -870,6 +907,83 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     await this.requireProjectEdit(userId, upload.projectId);
     this.uploadBodies.set(upload.objectKey, body);
+  }
+
+  async createMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<CreateMultipartUploadResponse> {
+    const upload = this.uploads.get(uploadSessionId);
+    if (!upload) {
+      throw new ArtifactStorageError('Upload session was not found.');
+    }
+    await this.requireProjectEdit(userId, upload.projectId);
+    const uploadId = `multipart_${crypto.randomUUID()}`;
+    this.multipartParts.set(`${uploadSessionId}:${uploadId}`, new Map());
+    return { uploadId };
+  }
+
+  async putUploadPart(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: ArrayBuffer
+  ): Promise<UploadedArtifactPart> {
+    const upload = this.uploads.get(uploadSessionId);
+    const parts = this.multipartParts.get(`${uploadSessionId}:${uploadId}`);
+    if (!upload || !parts) {
+      throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    await this.requireProjectEdit(userId, upload.projectId);
+    parts.set(partNumber, body);
+    return { partNumber, etag: `etag-${partNumber}-${body.byteLength}` };
+  }
+
+  async completeMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    request: CompleteMultipartUploadRequest
+  ): Promise<void> {
+    const upload = this.uploads.get(uploadSessionId);
+    const key = `${uploadSessionId}:${request.uploadId}`;
+    const parts = this.multipartParts.get(key);
+    if (!upload || !parts) {
+      throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    await this.requireProjectEdit(userId, upload.projectId);
+    const ordered = [...request.parts].sort(
+      (a, b) => a.partNumber - b.partNumber
+    );
+    const buffers = ordered.map((part) => {
+      const body = parts.get(part.partNumber);
+      if (!body || part.etag !== `etag-${part.partNumber}-${body.byteLength}`) {
+        throw new ArtifactStorageError('Multipart part is missing or stale.');
+      }
+      return body;
+    });
+    const total = buffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+    const assembled = new Uint8Array(total);
+    let offset = 0;
+    for (const buffer of buffers) {
+      assembled.set(new Uint8Array(buffer), offset);
+      offset += buffer.byteLength;
+    }
+    this.uploadBodies.set(upload.objectKey, assembled.buffer);
+    this.multipartParts.delete(key);
+  }
+
+  async abortMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string
+  ): Promise<void> {
+    const upload = this.uploads.get(uploadSessionId);
+    if (!upload) {
+      throw new ArtifactStorageError('Upload session was not found.');
+    }
+    await this.requireProjectEdit(userId, upload.projectId);
+    this.multipartParts.delete(`${uploadSessionId}:${uploadId}`);
   }
 
   async finalizeArtifact(
