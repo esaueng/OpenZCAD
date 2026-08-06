@@ -105,4 +105,25 @@ describe('union tangency suggestion', { timeout: 60_000 }, () => {
       adapter.dispose();
     }
   });
+
+  it('sizes the default cylinder so the first union is reachable', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      // The shipped defaults, as PRIMITIVE_FIELDS states them. A cylinder wider
+      // than the box's smallest footprint cannot union exactly at ANY position,
+      // so this pairing is a property of the defaults rather than of placement:
+      // measured against this box, radius 8 is the last that works and 9 is the
+      // first that facets, where the diameter reaches the 18 mm depth.
+      const { document, boxId, cylId } = boxAndCylinder({ x: 15, y: 9, z: 0 });
+      expect((await adapter.syncDocument(document)).warnings).toEqual([]);
+      const united = booleanBodies(document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [boxId, cylId]
+      }).document;
+      expect((await adapter.syncDocument(united)).warnings).toEqual([]);
+    } finally {
+      adapter.dispose();
+    }
+  });
 });

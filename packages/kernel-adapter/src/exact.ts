@@ -955,9 +955,30 @@ function exactUnionOffsetSuggestion(
   const centre = (bounds: UnionBounds, axis: 'x' | 'y' | 'z') =>
     (bounds.min[axis] + bounds.max[axis]) / 2;
   const axes = ['x', 'y', 'z'] as const;
-  for (const axis of axes) {
-    const delta = centre(anchor.bounds, axis) - centre(mover.bounds, axis);
-    if (Math.abs(delta) <= GEOMETRY_EPSILON) {
+  const toCentre = {
+    x: centre(anchor.bounds, 'x') - centre(mover.bounds, 'x'),
+    y: centre(anchor.bounds, 'y') - centre(mover.bounds, 'y'),
+    z: centre(anchor.bounds, 'z') - centre(mover.bounds, 'z')
+  };
+  // One axis first, because a single number is the easiest move to carry out.
+  // A ball or a ring created against the box's corner needs all three before
+  // it sits anywhere clean, so the combined move is tried after them.
+  const candidates: { x: number; y: number; z: number }[] = [
+    ...axes.map((axis) => ({
+      x: axis === 'x' ? toCentre.x : 0,
+      y: axis === 'y' ? toCentre.y : 0,
+      z: axis === 'z' ? toCentre.z : 0
+    })),
+    toCentre
+  ];
+  const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
+  const format = (value: number) => {
+    const rounded = Number(Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2));
+    return `${rounded > 0 ? '+' : ''}${rounded}`;
+  };
+  for (const offset of candidates) {
+    const moves = axes.filter((axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON);
+    if (moves.length === 0) {
       continue;
     }
     let candidate: number;
@@ -965,14 +986,7 @@ function exactUnionOffsetSuggestion(
       const moved = kernel.copySolid(mover.solid);
       kernel.transformSolid(
         moved,
-        transformMatrix(
-          {
-            x: axis === 'x' ? delta : 0,
-            y: axis === 'y' ? delta : 0,
-            z: axis === 'z' ? delta : 0
-          },
-          { x: 0, y: 0, z: 0 }
-        )
+        transformMatrix(offset, { x: 0, y: 0, z: 0 })
       );
       candidate = kernel.fuseAll(
         Uint32Array.from([kernel.copySolid(anchor.solid), moved])
@@ -980,18 +994,21 @@ function exactUnionOffsetSuggestion(
     } catch {
       continue;
     }
-    const census = censusOfSolids(kernel, [candidate]);
-    const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
+    // A candidate that swallows the mover inside the anchor also loses every
+    // curved face, so it fails this same check rather than being offered as a
+    // move that makes the user's new body disappear.
     if (
       booleanFacetFallbackWarning({
         operands: operandCensus,
-        result: census
-      }) === null
+        result: censusOfSolids(kernel, [candidate])
+      }) !== null
     ) {
-      const rounded = Math.abs(delta) < 1 ? delta.toFixed(3) : delta.toFixed(2);
-      const amount = Number(rounded);
-      return `Moving ${mover.name} ${amount > 0 ? '+' : ''}${amount} ${units} in ${axis.toUpperCase()} clears it.`;
+      continue;
     }
+    const described = moves
+      .map((axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`)
+      .join(', ');
+    return `Moving ${mover.name} ${described} clears it.`;
   }
   return null;
 }
@@ -4930,6 +4947,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             let solid: number;
             let unionFuseOperands: UnionFuseOperand[] | null = null;
+            // Where this feature's warnings start, so a proved move can be
+            // attached to the FIRST of them. A refused commit reports one
+            // reason — whichever came first — and a remedy filed behind it is
+            // a remedy the user never reads.
+            const warningsBefore = result.warnings.length;
             if (feature.data.operation === 'union') {
               const unionOperands = feature.data.targetBodyIds.flatMap(
                 (bodyId, operandIndex) =>
@@ -5029,21 +5051,27 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               result: censusOfSolids(kernel, [solid])
             });
             if (facetFallback) {
-              // Naming the move that works is only possible here, where the
-              // operands are still addressable; by the time this reaches the
-              // panel it is a sentence.
-              const suggestion = unionFuseOperands
-                ? exactUnionOffsetSuggestion(
-                    kernel,
-                    unionFuseOperands,
-                    document.units
-                  )
-                : null;
               result.warnings.push(
-                `Feature "${feature.name}": ${facetFallback}${
-                  suggestion ? ` ${suggestion}` : ''
-                }`
+                `Feature "${feature.name}": ${facetFallback}`
               );
+            }
+            // Naming the move that works is only possible here, where the
+            // operands are still addressable; by the time this reaches the
+            // panel it is a sentence. Probing costs a fuse per candidate, so
+            // it runs only for the failure it answers — a faceted result.
+            // A disconnected union is a different complaint with its own
+            // remedy, and closing that gap by sliding one body to the other's
+            // centre is not advice anyone asked for.
+            if (facetFallback && unionFuseOperands) {
+              const suggestion = exactUnionOffsetSuggestion(
+                kernel,
+                unionFuseOperands,
+                document.units
+              );
+              if (suggestion) {
+                result.warnings[warningsBefore] =
+                  `${result.warnings[warningsBefore]!} ${suggestion}`;
+              }
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)
