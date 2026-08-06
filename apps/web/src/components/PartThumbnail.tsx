@@ -1,23 +1,32 @@
 import { useEffect, useState } from 'react';
-import type { BodyRepresentation, ProjectSummary } from '@openzcad/shared';
+import type { ProjectSummary } from '@openzcad/shared';
 
 interface PartThumbnailProps {
   project: ProjectSummary;
-  loadBodies(project: ProjectSummary): Promise<BodyRepresentation[]>;
+  /**
+   * Reads this device's cached preview. It must not load the project document:
+   * the shelf has to stay reachable for a part whose source is far too large to
+   * hold in memory, so a missing preview is answered with the placeholder
+   * rather than by rendering one here.
+   */
+  loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 interface ThumbnailResult {
   key: string;
-  /** Null is a real empty part; undefined means the preview could not render. */
+  /** Null is a real empty part; undefined means there is no cached preview. */
   source: string | null | undefined;
 }
 
-const thumbnailPromises = new Map<string, Promise<string | null | undefined>>();
+const thumbnailPromises = new Map<
+  string,
+  Promise<string | null | undefined>
+>();
 
 function thumbnailFor(
   cacheKey: string,
   project: ProjectSummary,
-  loadBodies: PartThumbnailProps['loadBodies']
+  loadThumbnail: PartThumbnailProps['loadThumbnail']
 ): Promise<string | null | undefined> {
   const cached = thumbnailPromises.get(cacheKey);
   if (cached) {
@@ -28,24 +37,10 @@ function thumbnailFor(
       thumbnailPromises.delete(key);
     }
   }
-  const pending = loadBodies(project)
-    .then(async (bodies) => {
-      const hasGeometry = bodies.some(
-        (body) =>
-          !body.consumed &&
-          body.mesh.vertices.length >= 9 &&
-          body.mesh.indices.length >= 3
-      );
-      if (!hasGeometry) {
-        return null;
-      }
-      const { renderPartThumbnail } = await import('../lib/partThumbnail');
-      return renderPartThumbnail(bodies);
-    })
-    .catch(() => {
-      thumbnailPromises.delete(cacheKey);
-      return undefined;
-    });
+  const pending = loadThumbnail(project).catch(() => {
+    thumbnailPromises.delete(cacheKey);
+    return undefined;
+  });
   thumbnailPromises.set(cacheKey, pending);
   return pending;
 }
@@ -70,13 +65,13 @@ function ThumbnailPlaceholder({ empty }: { empty: boolean }) {
   );
 }
 
-export function PartThumbnail({ project, loadBodies }: PartThumbnailProps) {
+export function PartThumbnail({ project, loadThumbnail }: PartThumbnailProps) {
   const cacheKey = `${project.projectId}:${project.updatedAt}`;
   const [result, setResult] = useState<ThumbnailResult | null>(null);
 
   useEffect(() => {
     let active = true;
-    void thumbnailFor(cacheKey, project, loadBodies).then((source) => {
+    void thumbnailFor(cacheKey, project, loadThumbnail).then((source) => {
       if (active) {
         setResult({ key: cacheKey, source });
       }
@@ -84,7 +79,7 @@ export function PartThumbnail({ project, loadBodies }: PartThumbnailProps) {
     return () => {
       active = false;
     };
-  }, [cacheKey, loadBodies, project]);
+  }, [cacheKey, loadThumbnail, project]);
 
   if (result?.key === cacheKey) {
     if (result.source) {
