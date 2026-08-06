@@ -1,6 +1,7 @@
 import {
   test,
   expect,
+  expectBodyCount,
   stubApi,
   WORKSPACE_SESSION_STORAGE_KEY
 } from './openzcad-fixtures';
@@ -37,15 +38,15 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(undo).toBeEnabled();
 
   await undo.click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('0 bodies');
+  await expectBodyCount(page, 0);
   await expect(redo).toBeEnabled();
 
   await redo.click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 });
 
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
@@ -208,7 +209,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const canvas = page.locator('.viewer-host canvas');
   const box = await canvas.boundingBox();
@@ -290,7 +291,7 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const view = async () =>
     page.evaluate(() => {
@@ -585,7 +586,7 @@ test('the middle-button drag preference changes what a middle drag does', async 
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const camera = async () =>
     page.evaluate(() => {
@@ -746,7 +747,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
   const filters = page.getByRole('group', { name: 'Selection filter' });
@@ -898,7 +899,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
   const filters = page.getByRole('group', { name: 'Selection filter' });
