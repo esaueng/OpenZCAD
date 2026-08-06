@@ -260,23 +260,32 @@ export function booleanFacetFallbackWarning(
     `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
   ].join(' became ');
   if (lostCurvature && exploded) {
-    // Do not suggest resizing the overlap. Measured on a box and a cylinder,
-    // this refusal reproduces at tangent contact and at a clean 6 mm
-    // transversal overlap alike, so "move or thicken it" sends the user round
-    // a loop that cannot succeed. What does hold is that the curved operand is
-    // the trigger: the same two bodies subtract exactly, and an all-planar
-    // union of the same shapes is unaffected.
+    // Moving the overlap really is the fix, so say where to move it. Measured
+    // on a box and a cylinder: the fuse facets while the cylinder's axis lies
+    // in one of the box's own face planes — the default placement of a new
+    // primitive, since a box is corner-origin and a cylinder is axis-origin —
+    // and is exact as soon as the axis moves inside the solid. Naming the
+    // tangency is what makes the advice actionable; "move it" alone sends
+    // users sliding along the face plane they are already stuck on.
     return (
       `The boolean returned a faceted approximation instead of exact surfaces: ${detail}. ` +
-      'A curved operand is the trigger — the same bodies still subtract exactly, ' +
-      'and unions of planar-only bodies are unaffected. Keep them as separate bodies, ' +
-      'or invert the operation, until the exact case lands.'
+      'This happens where the operands meet tangentially — a round face touching a ' +
+      'flat one edge-on, or an axis lying in a face plane. Move the overlap so the ' +
+      'surfaces cross cleanly (offset it into the solid rather than along the face) ' +
+      'and try again.'
     );
   }
   if (lostCurvature) {
+    // Same tangency fallback as above, caught by the curvature test alone
+    // because a smaller round operand facets into too few faces to trip the
+    // count test. It earns the same remedy: without one this reads as a
+    // property of the result rather than something the user can act on.
     return (
       `The boolean replaced every curved surface with planar faces: ${detail}. ` +
-      'Curved geometry will export faceted.'
+      'This happens where the operands meet tangentially — a round face touching a ' +
+      'flat one edge-on, or an axis lying in a face plane. Move the overlap so the ' +
+      'surfaces cross cleanly (offset it into the solid rather than along the face) ' +
+      'and try again.'
     );
   }
   return (
