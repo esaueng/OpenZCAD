@@ -178,7 +178,7 @@ describe('ProjectSharingDialog', () => {
       screen.getByLabelText('Role', { selector: 'select' }),
       'editor'
     );
-    await user.click(screen.getByRole('button', { name: 'Create invitation' }));
+    await user.click(screen.getByRole('button', { name: 'Send invite' }));
 
     await waitFor(() =>
       expect(sharingClient.createInvitation).toHaveBeenCalledWith(
@@ -187,22 +187,13 @@ describe('ProjectSharingDialog', () => {
         'editor'
       )
     );
-    expect(screen.getByLabelText('Invitation token')).toHaveTextContent(
-      'one-time-token'
-    );
-
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(globalThis.navigator, 'clipboard', {
-      value: { writeText },
-      configurable: true
-    });
-    await user.click(
-      screen.getByRole('button', { name: 'Copy invitation token' })
-    );
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith('one-time-token')
-    );
-    expect(screen.getByText('Invitation token copied.')).toBeVisible();
+    expect(
+      screen.getByText('Invitation sent to new@example.com.')
+    ).toBeVisible();
+    expect(screen.queryByText('one-time-token')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /copy invitation/i })
+    ).not.toBeInTheDocument();
   });
 
   it('keeps editor assignment unavailable when lease enforcement is off', async () => {
