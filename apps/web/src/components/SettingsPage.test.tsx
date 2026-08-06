@@ -128,7 +128,6 @@ describe('settings desktop account section', () => {
   });
 
   it('requires an explicit approval before connecting the desktop app', async () => {
-    const user = userEvent.setup();
     const onApproveDesktopLogin = vi.fn().mockResolvedValue(undefined);
 
     renderSettings(null, {
