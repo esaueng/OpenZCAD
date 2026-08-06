@@ -393,6 +393,145 @@
   background: var(--color-surface-hover);
 }
 
+/* ── The measurement dock ────────────────────────────────── */
+
+/*
+  Right edge, clear of the orientation widget above it — that stack is 10px
+  from the top and about 70px tall with its rotate buttons. Capped the same way
+  as the parts rail so a long tape scrolls rather than reaching the view bar.
+*/
+.measurement-dock {
+  position: absolute;
+  top: 92px;
+  right: 10px;
+  z-index: var(--z-viewer-overlay);
+  width: 232px;
+  max-height: calc(100% - 150px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.measurement-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px 7px 10px;
+  color: var(--color-text-subtle);
+  border-bottom: var(--border-thin);
+}
+
+.measurement-dock-head h2 {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.measurement-dock-clear {
+  margin-left: auto;
+  padding: 2px 5px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-mini);
+  cursor: pointer;
+}
+
+.measurement-dock-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.measurement-dock-empty {
+  margin: 0;
+  padding: 9px 10px 10px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+.measurement-dock-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.measurement-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: 6px 10px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+
+.measurement-row:last-child {
+  border-bottom: 0;
+}
+
+.measurement-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The figure is what the row is for: mono and tabular so a column of them
+   lines up on the decimal, and never the part that gets truncated. */
+.measurement-row-value {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: var(--color-accent-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.measurement-row-note {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.measurement-dock-foot {
+  display: flex;
+  gap: var(--sp-1);
+  padding: 6px;
+  border-top: var(--border-thin);
+}
+
+.measurement-dock-foot button {
+  flex: 1 1 auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.measurement-dock-foot button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
 @media (max-width: 620px) {
   .mode-switch {
     margin-inline: 0;
@@ -426,5 +565,16 @@
   .view-mode-rail-launcher {
     top: 6px;
     left: 6px;
+  }
+
+  /* Narrow enough that the dock and the parts rail cannot both own the width:
+     the dock takes the bottom, above the view bar, and the rail keeps the top. */
+  .measurement-dock {
+    top: auto;
+    right: 6px;
+    bottom: 52px;
+    left: 6px;
+    width: auto;
+    max-height: 40%;
   }
 }
