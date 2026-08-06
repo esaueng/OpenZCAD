@@ -592,10 +592,9 @@ export function SettingsPage({
     };
   }, []);
 
-  const assistantEnabled = settings.assistant.enabled;
   const visibleSections = useMemo(
-    () => visibleSettingsSections({ assistantEnabled, query }),
-    [assistantEnabled, query]
+    () => visibleSettingsSections({ query }),
+    [query]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -620,6 +619,8 @@ export function SettingsPage({
 
   const patch = (next: Partial<AppSettings>) =>
     onChange({ ...settings, ...next });
+  const patchCollaboration = (next: Partial<AppSettings['collaboration']>) =>
+    patch({ collaboration: { ...settings.collaboration, ...next } });
   const patchAssistant = (next: Partial<AppSettings['assistant']>) =>
     patch({ assistant: { ...settings.assistant, ...next } });
 
@@ -765,23 +766,6 @@ export function SettingsPage({
                       }
                     })
                   }
-                />
-              </SettingRow>
-              {/*
-                The assistant's master switch lives here rather than in the AI
-                section, because turning it off removes that whole section from
-                the nav — a toggle inside it would take itself away with it and
-                leave no way back.
-              */}
-              <SettingRow
-                title="AI assistant"
-                description="When off, the assistant is removed from the workspace and its provider settings are hidden. The server also refuses assistant requests."
-                scope="All devices"
-              >
-                <Toggle
-                  checked={settings.assistant.enabled}
-                  label="AI assistant"
-                  onChange={(enabled) => patchAssistant({ enabled })}
                 />
               </SettingRow>
             </Section>
@@ -1233,11 +1217,22 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'assistant' && assistantEnabled && (
+          {active === 'assistant' && (
             <Section
               title="AI Assistant"
-              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied. Turn the assistant off entirely under General."
+              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied."
             >
+              <SettingRow
+                title="AI assistant"
+                description="When off, the assistant is removed from the workspace and the server refuses assistant requests."
+                scope="All devices"
+              >
+                <Toggle
+                  checked={settings.assistant.enabled}
+                  label="AI assistant"
+                  onChange={(enabled) => patchAssistant({ enabled })}
+                />
+              </SettingRow>
               <SettingRow
                 title="Credential source"
                 description="Deployment credentials are managed by the operator; personal tokens are owner-scoped."
@@ -1547,6 +1542,17 @@ export function SettingsPage({
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
+              <SettingRow
+                title="Project sharing"
+                description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
+                scope="Account preference"
+              >
+                <Toggle
+                  checked={settings.collaboration.enabled}
+                  label="Project sharing"
+                  onChange={(enabled) => patchCollaboration({ enabled })}
+                />
+              </SettingRow>
               {session ? (
                 <>
                   <SettingRow
