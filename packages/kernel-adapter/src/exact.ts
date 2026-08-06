@@ -28,6 +28,7 @@ import {
   featureColor,
   isFeatureSuppressed,
   nowIso,
+  type ArtifactId,
   type BodyId,
   type BodyRepresentation,
   type BodyTopology,
@@ -41,6 +42,7 @@ import {
   type FaceTopologyReferenceV5,
   type FaceWitnessV1,
   type FeatureNode,
+  type ImportedSourceReference,
   type ProjectDocument,
   type SketchId,
   type QuantizedTopologyPoint,
@@ -3857,8 +3859,79 @@ function decodeText(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * BrepKit's default hostile-input budgets (128 MiB / 2M entities) predate
+ * reference-based imports. A user-chosen file is not hostile input, so both
+ * budgets are raised to the file's own size: the byte budget exactly, the
+ * entity budget proportionally (the densest realistic STEP runs ~20 bytes per
+ * entity, so bytes/16 leaves margin without becoming unbounded).
+ */
+function importStepWithOwnBudget(
+  kernel: BrepKernel,
+  bytes: Uint8Array
+): Uint32Array {
+  return kernel.importStep(
+    bytes,
+    bytes.byteLength,
+    Math.max(2_000_000, Math.ceil(bytes.byteLength / 16))
+  );
+}
+
+export interface ExactKernelAdapterOptions {
+  /**
+   * Produces the raw source bytes for a reference-form import. Absent means
+   * only legacy embedded imports can rebuild — a reference then fails with an
+   * explicit error instead of silently dropping the body.
+   */
+  resolveSourceBytes?: (
+    ref: ImportedSourceReference,
+    context: { artifactId: ArtifactId; sourceName: string }
+  ) => Promise<Uint8Array>;
+}
+
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'brepkit' as const;
+
+  constructor(private readonly options: ExactKernelAdapterOptions = {}) {}
+
+  /**
+   * Reference-form import sources, fetched before the synchronous rebuild
+   * walks the history. Keyed by checksum; a missing key at rebuild time means
+   * the local blob store and every fallback failed, which each import case
+   * reports per-feature rather than failing the whole document.
+   */
+  private async prefetchImportSources(
+    document: ProjectDocument
+  ): Promise<Map<string, Uint8Array>> {
+    const sources = new Map<string, Uint8Array>();
+    for (const feature of listFeaturesInOrder(document)) {
+      if (
+        feature.data.featureKind !== 'imported-step' ||
+        isFeatureSuppressed(feature)
+      ) {
+        continue;
+      }
+      const ref = feature.data.stepSourceRef;
+      if (!ref || sources.has(ref.checksumSha256)) {
+        continue;
+      }
+      if (!this.options.resolveSourceBytes) {
+        continue;
+      }
+      try {
+        sources.set(
+          ref.checksumSha256,
+          await this.options.resolveSourceBytes(ref, {
+            artifactId: feature.data.artifactId,
+            sourceName: feature.data.sourceName
+          })
+        );
+      } catch {
+        // The imported-step case reports the miss with the feature's name.
+      }
+    }
+    return sources;
+  }
 
   private resolveSketchBasisAtHistory(
     kernel: BrepKernel,
@@ -4373,7 +4446,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
 
   private build(
     kernel: BrepKernel,
-    document: ProjectDocument
+    document: ProjectDocument,
+    importSources: ReadonlyMap<string, Uint8Array> = new Map()
   ): ExactBuildResult {
     const { scope, errors } = getParameterScope(document);
     const result: ExactBuildResult = {
@@ -4459,10 +4533,23 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           }
           case 'imported-step': {
             if (feature.bodyId) {
+              let sourceBytes: Uint8Array;
+              if (feature.data.stepText !== undefined) {
+                sourceBytes = new TextEncoder().encode(feature.data.stepText);
+              } else {
+                const ref = feature.data.stepSourceRef;
+                const resolved = ref
+                  ? importSources.get(ref.checksumSha256)
+                  : undefined;
+                if (!resolved) {
+                  throw new Error(
+                    `Import source for "${feature.data.sourceName}" is not available on this device.`
+                  );
+                }
+                sourceBytes = resolved;
+              }
               const declared = Array.from(
-                kernel.importStep(
-                  new TextEncoder().encode(feature.data.stepText)
-                )
+                importStepWithOwnBudget(kernel, sourceBytes)
               );
               if (declared.length === 0) {
                 throw new Error('STEP file contains no solids.');
@@ -5857,9 +5944,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
+    const importSources = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document);
+      const build = this.build(kernel, document, importSources);
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -5976,9 +6064,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
+    const importSources = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document);
+      const build = this.build(kernel, document, importSources);
       const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
@@ -6013,9 +6102,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
+    const importSources = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document);
+      const build = this.build(kernel, document, importSources);
       const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
@@ -6090,7 +6180,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           : new Uint8Array(data);
       let declared: number[];
       try {
-        declared = Array.from(kernel.importStep(bytes));
+        declared = Array.from(importStepWithOwnBudget(kernel, bytes));
       } catch (error) {
         return {
           solid: false,
@@ -6153,6 +6243,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
  * implementation, in `test/parity/occt-reference/`, and nothing in the shipped
  * app can reach it.
  */
-export async function createExactKernelAdapter(): Promise<ExactKernelAdapter> {
-  return new BrepKitKernelAdapter();
+export async function createExactKernelAdapter(
+  options: ExactKernelAdapterOptions = {}
+): Promise<ExactKernelAdapter> {
+  return new BrepKitKernelAdapter(options);
 }
