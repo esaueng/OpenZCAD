@@ -349,10 +349,17 @@ export function syncFatLineResolution(
  * across tessellation triangles.
  */
 export function createBodyMaterial(body: BodyRepresentation) {
+  const opacity = body.opacity ?? 1;
+  const translucent = opacity < 1;
   return new THREE.MeshPhongMaterial({
     color: body.color,
     shininess: 38,
     specular: '#667487',
+    transparent: translucent,
+    opacity,
+    // Translucent walls must not write depth or back faces and interior
+    // features hidden behind them would be culled instead of showing through.
+    depthWrite: !translucent,
     // Push only the disposable face rasterization back by the smallest
     // practical depth-buffer bias. GL line materials ignore polygonOffset;
     // keeping the bias on the faces lets depth-tested edge/sketch overlays sit

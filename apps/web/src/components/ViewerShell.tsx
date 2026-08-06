@@ -1,6 +1,7 @@
 import type { MutableRefObject } from 'react';
 import {
   ModelViewer,
+  type BodyAppearancePreview,
   type ExtrudePreview,
   type FaceResizeCommit,
   type CylinderRadiusHandleTarget,
@@ -52,6 +53,8 @@ interface ViewerShellProps {
   movePreview: MovePreview | null;
   /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
   moveCommitHold: MovePreview | null;
+  /** Drag-phase body appearance patch; forwarded to the viewer's material. */
+  appearancePreview: BodyAppearancePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
@@ -142,6 +145,7 @@ export function ViewerShell({
   extrudePreview,
   movePreview,
   moveCommitHold,
+  appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
   selectionChip,
@@ -217,6 +221,7 @@ export function ViewerShell({
         extrudePreview={extrudePreview}
         movePreview={movePreview}
         moveCommitHold={moveCommitHold}
+        appearancePreview={appearancePreview}
         projection={projection}
         initialView={initialView}
         onViewChange={onViewChange}
