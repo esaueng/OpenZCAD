@@ -1,4 +1,4 @@
-import type { MutableRefObject } from 'react';
+import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -24,7 +24,6 @@ import type {
   ViewerSettings,
   ViewTarget
 } from '@openzcad/viewport';
-import { useRef, type ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
@@ -34,6 +33,7 @@ import type {
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { RegionPickData } from './viewer/regionOverlay';
+import { formatNumber } from '../lib/model';
 
 interface ViewerShellProps {
   projectId: string;
@@ -84,8 +84,8 @@ interface ViewerShellProps {
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
-  onCylinderRadiusPreview(radius: number): void;
-  onCylinderRadiusCommit(radius: number): void;
+  onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
+  onCylinderRadiusCommit(radius: number): boolean;
   onCylinderRadiusCancel(): void;
   onOpenCylinderRadiusKeypad(radius: number): void;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
@@ -201,6 +201,23 @@ export function ViewerShell({
   onToggleProjection
 }: ViewerShellProps) {
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
+  const cylinderRadiusLabelSetterRef = useRef<
+    ((radius: number | null) => void) | null
+  >(null);
+  cylinderRadiusLabelSetterRef.current = (radius) => {
+    const label = selectionChipLabelRef.current;
+    if (!label || !selectionChip) {
+      return;
+    }
+    label.textContent =
+      radius === null
+        ? selectionChip.label
+        : selectionChip.label.replace(
+            /(Cylindrical face Ø)[^ ·]+/,
+            `$1${formatNumber(radius * 2)}`
+          );
+  };
 
   return (
     <section className="viewer-shell" aria-label="3D viewport">
@@ -237,6 +254,7 @@ export function ViewerShell({
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
+        cylinderRadiusLabelSetterRef={cylinderRadiusLabelSetterRef}
         onCylinderRadiusPreview={onCylinderRadiusPreview}
         onCylinderRadiusCommit={onCylinderRadiusCommit}
         onCylinderRadiusCancel={onCylinderRadiusCancel}
@@ -294,7 +312,9 @@ export function ViewerShell({
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">
-          <span className="selection-chip-label">{selectionChip.label}</span>
+          <span ref={selectionChipLabelRef} className="selection-chip-label">
+            {selectionChip.label}
+          </span>
           {selectionChip.detail && (
             <span className="selection-chip-detail">
               {selectionChip.detail}

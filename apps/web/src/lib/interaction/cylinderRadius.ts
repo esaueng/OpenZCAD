@@ -1,4 +1,4 @@
-import type { Vector3 } from '@openzcad/shared';
+import type { BodyRepresentation, Vector3 } from '@openzcad/shared';
 import { geometryTolerance } from '@openzcad/geometry';
 
 const SNAP_MIN_PIXELS = 8;
@@ -69,6 +69,73 @@ export function sameCylinderAxis(
     pointDistance(firstStart, secondEnd) <= tolerance &&
     pointDistance(firstEnd, secondStart) <= tolerance;
   return aligned || reversed;
+}
+
+/**
+ * Whether scaling the whole disposable body projection is a faithful radius
+ * preview. A standalone analytic cylinder has one cylindrical wall and two
+ * planar caps; holes, blends, booleans, and other result bodies deliberately
+ * stay on the exact-kernel preview path.
+ */
+export function supportsRadialCylinderPreview(
+  body: BodyRepresentation | undefined,
+  axisStart: Vector3,
+  axisEnd: Vector3
+): boolean {
+  const faces = body?.topology?.faces;
+  if (!faces || faces.length !== 3) {
+    return false;
+  }
+
+  const axis = {
+    x: axisEnd.x - axisStart.x,
+    y: axisEnd.y - axisStart.y,
+    z: axisEnd.z - axisStart.z
+  };
+  const axisLength = Math.hypot(axis.x, axis.y, axis.z);
+  if (axisLength <= geometryTolerance(axisLength)) {
+    return false;
+  }
+
+  let cylinderCount = 0;
+  let planeCount = 0;
+  for (const face of faces) {
+    const geometry = face.geometry;
+    if (geometry?.surfaceType === 'plane' && geometry.normal) {
+      const normalLength = Math.hypot(
+        geometry.normal.x,
+        geometry.normal.y,
+        geometry.normal.z
+      );
+      const parallel =
+        normalLength > geometryTolerance(normalLength) &&
+        1 -
+          Math.abs(
+            (axis.x * geometry.normal.x +
+              axis.y * geometry.normal.y +
+              axis.z * geometry.normal.z) /
+              (axisLength * normalLength)
+          ) <=
+          geometryTolerance(1);
+      if (!parallel) {
+        return false;
+      }
+      planeCount += 1;
+      continue;
+    }
+    if (
+      geometry?.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      sameCylinderAxis(axisStart, axisEnd, geometry.axisStart, geometry.axisEnd)
+    ) {
+      cylinderCount += 1;
+      continue;
+    }
+    return false;
+  }
+
+  return cylinderCount === 1 && planeCount === 2;
 }
 
 /**
