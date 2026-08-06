@@ -105,6 +105,45 @@ function recoveryHandlers(calls: string[] = []): ConflictResolutionHandlers {
 }
 
 describe('ProjectSharingDialog', () => {
+  it('labels every live session belonging to the signed-in user', () => {
+    const base = createProjectDocument('Shared sessions', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="viewer"
+        collaborationStatus="live"
+        lease={null}
+        currentUserId={owner}
+        liveMembers={[
+          {
+            clientId: 'client_owner_one',
+            userId: owner,
+            displayName: 'peter',
+            status: 'active'
+          },
+          {
+            clientId: 'client_owner_two',
+            userId: owner,
+            displayName: 'peter',
+            status: 'active'
+          },
+          {
+            clientId: 'client_member',
+            userId: member,
+            displayName: 'alex',
+            status: 'idle'
+          }
+        ]}
+        client={client()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText('peter (you)')).toHaveLength(2);
+    expect(screen.getByText('alex')).toBeVisible();
+    expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
+  });
+
   it('exposes an accessible owner dialog and typed invitation/member controls', async () => {
     const sharingClient = client();
     const base = createProjectDocument('Shared', owner);
