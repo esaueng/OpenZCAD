@@ -170,6 +170,48 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   ).toContainText('1 bounded cell', { timeout: 20_000 });
 });
 
+test('clears every transient sketch HUD overlay when finishing a sketch', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch HUD Cleanup');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
+  if (await gridSnap.isChecked()) {
+    await gridSnap.uncheck();
+  }
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = {
+    x: bounds!.x + bounds!.width / 2 + 100,
+    y: bounds!.y + bounds!.height / 2 + 100
+  };
+
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(start.x + 2, start.y - 200);
+  const marker = page.locator('.sketch-snap-marker');
+  await expect(marker).toBeVisible();
+  await expect(marker).toHaveAttribute('data-kind', 'vertical');
+  await expect(marker).toHaveAttribute('data-label', 'Vertical');
+
+  await page.getByRole('button', { name: 'Finish Sketch' }).click();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toHaveCount(0);
+  await expect(marker).toBeHidden();
+  await expect(page.locator('.sketch-dim-label')).toBeHidden();
+  await expect(page.locator('.sketch-center-target')).toBeHidden();
+});
+
 test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await createBoxProject(page, 'Snap Sketch Part');
 
