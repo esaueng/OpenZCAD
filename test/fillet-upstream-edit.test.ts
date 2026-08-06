@@ -262,7 +262,7 @@ describe('edge modifiers across cylinder radius edits', { timeout: 60_000 }, () 
 
     const after = await adapter.syncDocument(edited);
     expect(after.warnings).toEqual([
-      'Feature "Legacy fillet": A selected edge no longer exists.'
+      'Feature "Legacy fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
     expect(after.bodyRepresentations[filleted.bodyId]).toBeUndefined();
     // The resized cylinder itself is intact.
