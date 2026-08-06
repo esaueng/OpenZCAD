@@ -75,6 +75,7 @@ import {
   createInvitation,
   parseCreateInvitation,
   parseProjectMemberRole,
+  sendProjectInvitationEmail,
   SharingRequestError
 } from './sharing';
 import {
@@ -249,6 +250,33 @@ async function notifyProjectRoleChange(
   if (!response.ok) {
     throw new Error('Project room rejected an internal role update.');
   }
+}
+
+function projectInvitationEmailConfig(env: Env): {
+  email: SendEmail;
+  sender: string;
+  publicAppOrigin: string;
+} {
+  const sender = env.PROJECT_INVITATION_EMAIL_FROM?.trim();
+  const publicAppOrigin = env.PUBLIC_APP_ORIGIN?.trim();
+  if (!env.EMAIL || !sender || !publicAppOrigin) {
+    throw new SharingRequestError(
+      503,
+      'INVITATION_EMAIL_UNAVAILABLE',
+      'Project invitation email is temporarily unavailable.'
+    );
+  }
+  return { email: env.EMAIL, sender, publicAppOrigin };
+}
+
+function emailDeliveryErrorCode(error: unknown): string {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return 'UNKNOWN';
+  }
+  const code = error.code;
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)
+    ? code
+    : 'UNKNOWN';
 }
 
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
@@ -761,16 +789,66 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         'During the collaboration canary, invitations can be sent only to allowlisted accounts.'
       );
     }
-    return json(
-      await createInvitation(
-        persistence,
-        userId,
-        invitationsMatch[1]!,
-        payload,
-        now
-      ),
-      201
+    const projectId = invitationsMatch[1]!;
+    await persistence.requireProjectOwner(userId, projectId);
+    const project = await persistence.loadProject(userId, projectId);
+    if (!project) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    const emailConfig = projectInvitationEmailConfig(env);
+    const created = await createInvitation(
+      persistence,
+      userId,
+      projectId,
+      payload,
+      now
     );
+    try {
+      await sendProjectInvitationEmail(
+        emailConfig.email,
+        {
+          sender: emailConfig.sender,
+          publicAppOrigin: emailConfig.publicAppOrigin
+        },
+        {
+          recipientEmail: created.invitation.email,
+          inviterLabel: session.email ?? session.displayName,
+          projectName: project.name,
+          role: created.invitation.role,
+          expiresAt: created.invitation.expiresAt,
+          token: created.token
+        }
+      );
+    } catch (error) {
+      try {
+        await persistence.revokeProjectInvitation(
+          userId,
+          projectId,
+          created.invitation.invitationId,
+          now
+        );
+      } catch {
+        console.error(
+          JSON.stringify({
+            event: 'project_invitation_email_revoke_failed',
+            invitationId: created.invitation.invitationId
+          })
+        );
+      }
+      console.error(
+        JSON.stringify({
+          event: 'project_invitation_email_failed',
+          invitationId: created.invitation.invitationId,
+          errorCode: emailDeliveryErrorCode(error)
+        })
+      );
+      throw new SharingRequestError(
+        503,
+        'INVITATION_EMAIL_UNAVAILABLE',
+        'Project invitation email is temporarily unavailable. Try again.'
+      );
+    }
+    return json(created, 201);
   }
 
   if (request.method === 'DELETE' && invitationMatch) {

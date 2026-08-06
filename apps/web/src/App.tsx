@@ -180,6 +180,10 @@ import type { DemoDefinition } from './lib/demos';
 import { AssistantPanel } from './components/assistant/AssistantPanel';
 import { ProjectSharingDialog } from './components/ProjectSharingDialog';
 import { createProjectSharingClient } from './lib/projectSharing';
+import {
+  captureProjectInvitationLink,
+  clearPendingProjectInvitation
+} from './lib/projectInvitationLink';
 import { ProjectConflictDialog } from './components/ProjectConflictDialog';
 import {
   ExtrudeOverlay,
@@ -668,6 +672,16 @@ export function App() {
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
+  const [pendingInvitationToken, setPendingInvitationToken] = useState(
+    captureProjectInvitationLink
+  );
+  const [pendingInvitationError, setPendingInvitationError] = useState<
+    string | null
+  >(null);
+  const pendingInvitationAttemptRef = useRef<string | null>(null);
+  const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
+    async () => undefined
+  );
   /**
    * What was on this device at mount, read once. The account fetch resolves
    * long after the settings-persistence effect has already written to storage,
@@ -697,7 +711,9 @@ export function App() {
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
   const [startupProjectId] = useState<string | null>(() =>
-    appSettings.general.reopenLastProject ? loadActiveProjectId() : null
+    !pendingInvitationToken && appSettings.general.reopenLastProject
+      ? loadActiveProjectId()
+      : null
   );
   const [startupState, setStartupState] = useState<'restoring' | 'ready'>(() =>
     startupProjectId ? 'restoring' : 'ready'
@@ -758,7 +774,10 @@ export function App() {
     []
   );
   const [settingsOpen, setSettingsOpen] = useState(
-    () => desktopAuthorizationAttempt !== null || loadSettingsViewState().open
+    () =>
+      pendingInvitationToken !== null ||
+      desktopAuthorizationAttempt !== null ||
+      loadSettingsViewState().open
   );
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
@@ -768,9 +787,11 @@ export function App() {
   const [sharingOpen, setSharingOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState(
-    desktopAuthorizationAttempt
-      ? 'Sign in, then approve OpenZCAD for macOS.'
-      : 'Changes save on this device immediately.'
+    pendingInvitationToken
+      ? 'Sign in to open the shared project automatically.'
+      : desktopAuthorizationAttempt
+        ? 'Sign in, then approve OpenZCAD for macOS.'
+        : 'Changes save on this device immediately.'
   );
   const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
   const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
@@ -3539,7 +3560,13 @@ export function App() {
       setCloudProjectIds(new Set());
       setAccountProjectListReached(false);
       setSaveState('local');
-      setSettingsMessage('Signed out · device settings remain active.');
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationError(null);
+      setSettingsMessage(
+        pendingInvitationToken
+          ? 'Signed out · sign in with the email address that received the project invitation.'
+          : 'Signed out · device settings remain active.'
+      );
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
       throw error;
@@ -4156,6 +4183,58 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+  acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
+
+  useEffect(() => {
+    if (
+      startupState !== 'ready' ||
+      !pendingInvitationToken ||
+      !session ||
+      !collaborationRollout.sharingEnabled
+    ) {
+      return;
+    }
+    const attempt = `${session.userId}:${pendingInvitationToken}`;
+    if (pendingInvitationAttemptRef.current === attempt) {
+      return;
+    }
+    pendingInvitationAttemptRef.current = attempt;
+    setPendingInvitationError(null);
+    setSettingsMessage('Opening the shared project…');
+    void acceptPendingInvitationRef
+      .current(pendingInvitationToken)
+      .then(() => {
+        clearPendingProjectInvitation();
+        setPendingInvitationToken(null);
+        setPendingInvitationError(null);
+        updateSettingsViewState({ open: false });
+        setSettingsOpen(false);
+      })
+      .catch(() => {
+        setPendingInvitationError(
+          'This invitation could not be accepted. It may be expired, revoked, or intended for a different email address.'
+        );
+        setSettingsMessage('The project invitation needs attention.');
+        updateSettingsViewState({
+          open: true,
+          activeSection: 'account'
+        });
+        setSettingsOpen(true);
+      });
+  }, [
+    collaborationRollout.sharingEnabled,
+    pendingInvitationToken,
+    session,
+    startupState
+  ]);
+
+  function dismissProjectInvitation() {
+    clearPendingProjectInvitation();
+    pendingInvitationAttemptRef.current = null;
+    setPendingInvitationToken(null);
+    setPendingInvitationError(null);
+    closeSettings();
   }
 
   async function handleGoHome() {
@@ -7232,7 +7311,13 @@ export function App() {
         session={session}
         busy={settingsBusy}
         message={settingsMessage}
-        initialSection={desktopAuthorizationAttempt ? 'account' : undefined}
+        initialSection={
+          pendingInvitationToken || desktopAuthorizationAttempt
+            ? 'account'
+            : undefined
+        }
+        projectInvitationPending={pendingInvitationToken !== null}
+        projectInvitationError={pendingInvitationError}
         desktopAuthorizationAttempt={desktopAuthorizationAttempt}
         desktopAuthorizationApproved={desktopAuthorizationApproved}
         desktopAuthorizationCode={desktopAuthorizationCode}
@@ -7251,6 +7336,7 @@ export function App() {
         onDeleteCloudData={handleDeleteCloudData}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}
+        onDismissProjectInvitation={dismissProjectInvitation}
         onClose={closeSettings}
       />
     </div>
@@ -7274,8 +7360,6 @@ export function App() {
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
-          collaborationSharingEnabled={projectSharingEnabled}
-          onAcceptInvitation={handleAcceptProjectInvitation}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
