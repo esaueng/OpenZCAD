@@ -389,13 +389,14 @@ import {
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
   putSourceBlob,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
-  selectProjectDocument,
+  saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
 import {
@@ -495,6 +496,12 @@ const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
  * space, which this leaves 40% headroom against.
  */
 const MAX_SOURCE_IMPORT_BYTES = 250 * 1024 * 1024;
+/**
+ * How long the document must sit still before the shelf preview is re-rendered.
+ * Long enough that dragging a dimension does not queue a WebGL render per
+ * frame, short enough that leaving for the start screen finds a current tile.
+ */
+const SHELF_THUMBNAIL_REFRESH_MS = 4000;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -957,29 +964,23 @@ export function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const loadThumbnailBodies = useCallback(
-    async (project: ProjectSummary): Promise<BodyRepresentation[]> => {
-      const localDocument = await loadLocalProject(project.projectId).catch(
+  /**
+   * The shelf's preview source. This reads a small cached image and nothing
+   * else — deliberately not the project document. Loading documents here is
+   * what made the start screen unreachable for large imports: a part with a
+   * few-hundred-megabyte source had to be pulled into memory in full, per
+   * tile, just to draw a 360×200 card, which could take the tab and the
+   * machine down and leave the owner unable to open or delete their own work.
+   * A project this device has never opened simply shows the placeholder.
+   */
+  const loadThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const cached = await loadProjectThumbnail(project.projectId).catch(
         () => null
       );
-      const localRevisionId = localDocument?.revisions.at(-1)?.revisionId;
-      const localMatchesSummary =
-        localDocument !== null &&
-        (!project.lastRevisionId || localRevisionId === project.lastRevisionId);
-
-      const remoteDocument =
-        cloudFunctionsEnabled && !localMatchesSummary && session
-          ? await api.loadProject(project.projectId).catch(() => null)
-          : null;
-      const thumbnailDocument = selectProjectDocument(
-        localDocument,
-        remoteDocument
-      );
-      return thumbnailDocument
-        ? Object.values(thumbnailDocument.derived.bodyRepresentations)
-        : [];
+      return cached ? cached.source : undefined;
     },
-    [cloudFunctionsEnabled, session]
+    []
   );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
@@ -2071,6 +2072,45 @@ export function App() {
   useEffect(() => {
     geometry.sync(doc);
   }, [doc]);
+
+  // Refreshes this device's cached shelf preview. Here rather than on the
+  // shelf because this is the one place the meshes are already in memory:
+  // rendering a tile must never be a reason to load a project document. The
+  // delay coalesces editing bursts, and a cache entry already at this version
+  // skips the render entirely, so ordinary modelling pays nothing.
+  useEffect(() => {
+    if (!doc || geometry.state.phase !== 'ready') {
+      return;
+    }
+    const { projectId, version } = doc;
+    const updatedAt = doc.derived.updatedAt;
+    const bodies = Object.values(doc.derived.bodyRepresentations).filter(
+      (body) => !body.consumed
+    );
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const cached = await loadProjectThumbnail(projectId).catch(() => null);
+        if (cancelled || cached?.version === version) {
+          return;
+        }
+        const { renderPartThumbnail } = await import('./lib/partThumbnail');
+        const source = await renderPartThumbnail(bodies).catch(() => null);
+        if (cancelled) {
+          return;
+        }
+        await saveProjectThumbnail(projectId, {
+          source,
+          version,
+          updatedAt
+        }).catch(() => undefined);
+      })();
+    }, SHELF_THUMBNAIL_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [doc, geometry.state.phase]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
@@ -8014,7 +8054,7 @@ export function App() {
             void handleDeleteProjectForever(project)
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
-          loadThumbnailBodies={loadThumbnailBodies}
+          loadThumbnail={loadThumbnail}
         />
         {settingsOverlay}
       </>
