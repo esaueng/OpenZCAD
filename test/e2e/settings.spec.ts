@@ -321,7 +321,11 @@ test('turns project sharing off without disabling cloud saves', async ({
 
   await expect(
     page.getByRole('form', { name: 'Join a shared project' })
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(page.getByLabel('Invitation token')).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Join project' })
+  ).toHaveCount(0);
   await page.getByLabel('Project name').fill('Private Local Part');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(
