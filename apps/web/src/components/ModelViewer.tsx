@@ -52,7 +52,7 @@ import {
   createFatLine,
   createFatLineMaterial,
   createFatLineSegments,
-  createGradientBackground,
+  createGradientBackdrop,
   createObjectForBody,
   createShadowCatcher,
   createStudioEnvironment,
@@ -907,8 +907,11 @@ export function ModelViewer({
     let firstFrame = true;
     let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
-    const gradientBackground = createGradientBackground();
-    scene.background = gradientBackground;
+    // Solid clear colour stays behind the clip-space gradient as a safe first
+    // frame/context-recovery fallback.
+    scene.background = new THREE.Color('#05070a');
+    const gradientBackdrop = createGradientBackdrop();
+    scene.add(gradientBackdrop);
 
     const renderer = timed(
       'viewer.renderer',
@@ -4526,13 +4529,16 @@ export function ModelViewer({
       clearGroup(overlayGroup);
       clearGroup(gizmoGroup);
       clearGroup(moveGizmoGroup);
-      for (const disposable of [grid, shadowCatcher] as THREE.Mesh[]) {
+      for (const disposable of [
+        gradientBackdrop,
+        grid,
+        shadowCatcher
+      ] as THREE.Mesh[]) {
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
       selection.dispose();
       environment.dispose();
-      gradientBackground.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
       renderer.dispose();
