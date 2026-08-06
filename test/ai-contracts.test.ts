@@ -445,7 +445,7 @@ describe('AI patch contracts', () => {
     ).toThrow(/before any operation declares that localId/);
   });
 
-  it('rejects filleting a body created in the same proposal', () => {
+  it('requires an exact staged selector when finishing a same-proposal body', () => {
     expect(() =>
       parseCadPatchProposal({
         proposalId: 'proposal_local_fillet',
@@ -480,6 +480,42 @@ describe('AI patch contracts', () => {
         ]
       })
     ).toThrow(/cannot target a body created in the same proposal/);
+
+    expect(() =>
+      parseCadPatchProposal({
+        proposalId: 'proposal_staged_fillet',
+        summary: 'Fillet a brand new body after exact topology exists.',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'add_primitive',
+            name: 'Block',
+            localId: 'block',
+            primitiveKind: 'box',
+            dimensions: {
+              width: 10,
+              height: 10,
+              depth: 10,
+              radius: null,
+              bottomRadius: null,
+              topRadius: null,
+              majorRadius: null,
+              minorRadius: null
+            }
+          },
+          {
+            kind: 'add_edge_modifier',
+            name: 'Round it',
+            localId: 'rounded',
+            modifier: 'fillet',
+            targetBodyId: '$block',
+            edgeHashes: [],
+            edgeSelector: 'all-feature-edges',
+            size: 2
+          }
+        ]
+      })
+    ).not.toThrow();
   });
 
   it('rejects a boolean that lists the same body twice', () => {

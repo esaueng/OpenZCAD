@@ -44,6 +44,26 @@ function renderSettings(
   );
 }
 
+describe('settings assistant section', () => {
+  it('keeps the master toggle on the AI Assistant page while disabled', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, { onChange });
+
+    expect(
+      screen.queryByRole('checkbox', { name: 'AI assistant' })
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'AI Assistant' }));
+
+    const toggle = screen.getByRole('checkbox', { name: 'AI assistant' });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange.mock.calls[0]?.[0].assistant.enabled).toBe(true);
+  });
+});
+
 describe('settings advanced section', () => {
   it('reports the kernel build the app was compiled against', async () => {
     const user = userEvent.setup();
@@ -95,6 +115,18 @@ describe('settings advanced section', () => {
 });
 
 describe('settings desktop account section', () => {
+  it('turns project sharing off from the account section', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderSettings(null, { initialSection: 'account', onChange });
+
+    await user.click(screen.getByRole('checkbox', { name: 'Project sharing' }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ collaboration: { enabled: false } })
+    );
+  });
+
   it('offers the secure browser handoff when native auth is ready', async () => {
     const user = userEvent.setup();
     const onStartDesktopLogin = vi.fn().mockResolvedValue(undefined);
