@@ -2549,3 +2549,82 @@ test('a union that facets at a tangency succeeds once the overlap moves off it',
   await expect(page.locator('.body-row.consumed')).toHaveCount(2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
+
+test('the panel refuses a zero extrude and keeps a boolean name honest', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Panel Guards');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // WF-10: a name nobody typed should say what the feature does. Switching the
+  // operation used to leave "Union" on a subtract, so the history row, the body
+  // and the panel heading all named an operation that never ran.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await expect(inspector.getByLabel('Name')).toHaveValue('Union');
+  await inspector.getByLabel('Operation').selectOption('subtract');
+  await expect(inspector.getByLabel('Name')).toHaveValue('Subtract');
+  // A name the user wrote is theirs and must survive the switch.
+  await inspector.getByLabel('Name').fill('Pocket');
+  await inspector.getByLabel('Operation').selectOption('intersect');
+  await expect(inspector.getByLabel('Name')).toHaveValue('Pocket');
+  await page.keyboard.press('Escape');
+
+  // WF-09: zero distance builds nothing. It used to commit, delete the body and
+  // explain itself only in a sidebar diagnostic.
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const centre = {
+    x: bounds!.x + bounds!.width * 0.62,
+    y: bounds!.y + bounds!.height * 0.76
+  };
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 38, centre.y, { steps: 6 });
+  await page.mouse.up();
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  ).toBeVisible();
+
+  // Leave the extrude flow before selecting its feature: the panel stays out
+  // of the way while a viewport command owns the screen.
+  await page.keyboard.press('Escape');
+  await page
+    .locator('.feature-row-main', { hasText: 'Extrude' })
+    .first()
+    .click();
+  const distance = inspector.getByLabel('Distance');
+  await distance.fill('0');
+  await expect(inspector.getByText('Distance cannot be zero')).toBeVisible();
+  await expect(
+    inspector.getByRole('button', { name: /^Apply/ })
+  ).toBeDisabled();
+
+  // Negative is documented as valid — extrude below the plane — so the guard
+  // must not swallow it.
+  await distance.fill('-8');
+  await expect(inspector.getByText('Distance cannot be zero')).toHaveCount(0);
+  await expect(
+    inspector.getByRole('button', { name: /^Apply/ })
+  ).toBeEnabled();
+});
