@@ -134,7 +134,7 @@ function roleOf(entry: AssistantEntry): TurnRole {
 }
 
 /**
- * A turn, with who said it and when, wrapped so every row reads the same way.
+ * A turn, with its role and time, wrapped so every row reads the same way.
  *
  * Two turns in a row from the same speaker are one block: the second drops the
  * "Assistant" heading and squares the corner facing the first, which is what
@@ -150,7 +150,7 @@ function Turn({
   children
 }: {
   role: TurnRole;
-  label: string;
+  label?: string;
   at: number | undefined;
   continues: boolean;
   children: ReactNode;
@@ -161,7 +161,9 @@ function Turn({
       className={`assistant-turn ${role}${continues ? ' continues' : ''}`}
       // A continued turn drops the heading that would have carried its time, so
       // the time stays reachable here rather than disappearing.
-      {...(continues && time ? { title: `${label} · ${time}` } : {})}
+      {...(continues && time
+        ? { title: label ? `${label} · ${time}` : time }
+        : {})}
     >
       {!continues && (
         <header className="assistant-turn-meta">
@@ -170,7 +172,7 @@ function Turn({
               <Sparkles size={11} />
             </span>
           )}
-          <span className="assistant-turn-who">{label}</span>
+          {label && <span className="assistant-turn-who">{label}</span>}
           {time && (
             <time className="assistant-turn-time" dateTime={String(at)}>
               {time}
@@ -282,6 +284,18 @@ export function AssistantPanel({
     }
     return null;
   }, [entries]);
+
+  // Let the composer grow with the request while keeping enough of the thread
+  // visible to preserve conversational context. Resetting to `auto` first also
+  // lets it shrink again when text is removed or a prompt is sent.
+  useLayoutEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [collapsed, prompt]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -609,13 +623,7 @@ export function AssistantPanel({
   function renderEntry(entry: AssistantEntry, continues: boolean) {
     if (entry.kind === 'user') {
       return (
-        <Turn
-          role="user"
-          label="You"
-          at={entry.at}
-          continues={continues}
-          key={entry.id}
-        >
+        <Turn role="user" at={entry.at} continues={continues} key={entry.id}>
           <div className="assistant-bubble">
             {entry.answers.length > 0 ? (
               <dl className="assistant-answer-list">
@@ -783,10 +791,7 @@ export function AssistantPanel({
       onDrop={handleDrop}
     >
       <header className="assistant-header">
-        <span className="assistant-mark" aria-hidden="true">
-          <Sparkles size={13} />
-        </span>
-        <span className="assistant-title">Assistant</span>
+        <span className="assistant-title">AI Assistant</span>
         {turnCount > 0 && (
           <span className="assistant-turn-count">
             {turnCount} {turnCount === 1 ? 'ask' : 'asks'}
@@ -829,9 +834,6 @@ export function AssistantPanel({
       >
         {entries.length === 0 && (
           <div className="assistant-empty">
-            <span className="assistant-empty-mark" aria-hidden="true">
-              <Sparkles size={18} />
-            </span>
             <p className="assistant-empty-lead">
               Describe the part you want, or attach a drawing and let the
               assistant read it.
@@ -954,7 +956,7 @@ export function AssistantPanel({
           <textarea
             ref={promptRef}
             value={prompt}
-            rows={1}
+            rows={3}
             placeholder={
               selectionSummary
                 ? `Ask about ${selectionSummary}…`

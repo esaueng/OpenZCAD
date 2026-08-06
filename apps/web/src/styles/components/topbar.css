@@ -118,9 +118,9 @@
 .topbar-actions {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: 128px 104px 126px 90px 28px;
+  grid-template-columns: repeat(4, max-content) 28px;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   margin-left: auto;
 }
 
@@ -177,7 +177,11 @@
 }
 
 .file-menu > summary {
-  width: 100%;
+  width: auto;
+  min-height: 26px;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: var(--fs-xs);
 }
 
 .artifact-menu > summary::-webkit-details-marker,
