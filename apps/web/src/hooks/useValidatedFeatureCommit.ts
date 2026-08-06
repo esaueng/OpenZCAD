@@ -21,6 +21,16 @@ export interface ValidatedFeatureCommitOptions {
   ): boolean;
   onBusy(busy: boolean): void;
   onStatus(message: string): void;
+  /**
+   * A refusal, verbatim, for the surface the user is actually looking at.
+   *
+   * `onStatus` already carries it, but the status bar is one clipped line at
+   * the bottom of the window: a refused Create leaves the dialog open and
+   * unchanged, so the operation reads as having silently done nothing. The
+   * form renders this inline instead of making the reason something you have
+   * to go find.
+   */
+  onFailure?(message: string): void;
 }
 
 export interface ValidatedFeatureTarget {
@@ -106,7 +116,9 @@ export function useValidatedFeatureCommit(
       host.onStatus(input.successMessage);
       return true;
     } catch (error) {
-      host.onStatus(errorMessage(error, 'Operation was not applied.'));
+      const message = errorMessage(error, 'Operation was not applied.');
+      host.onStatus(message);
+      host.onFailure?.(message);
       return false;
     } finally {
       inFlight.current = false;
