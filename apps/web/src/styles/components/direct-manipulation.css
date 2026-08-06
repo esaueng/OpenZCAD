@@ -415,6 +415,138 @@
   transform: translateY(-50%);
 }
 
+.sketch-snap-marker[data-kind='grid']::after {
+  display: none;
+}
+
+/* Center discovery appears before the snap engages. HUD axes remain legible
+   over the adaptive grid while the matching WebGL guides stay plane-exact. */
+.sketch-center-target {
+  --sketch-center-guide: rgba(125, 211, 252, 0.88);
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(125, 211, 252, 0.8);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 4px rgba(125, 211, 252, 0.1),
+    0 0 18px rgba(125, 211, 252, 0.34);
+  transform: translate(-50%, -50%);
+  animation: sketch-center-breathe 900ms ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.sketch-center-axis {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  opacity: 0.82;
+  filter: drop-shadow(0 0 3px rgba(125, 211, 252, 0.62));
+  pointer-events: none;
+}
+
+.sketch-center-axis.horizontal {
+  width: 200vmax;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--sketch-center-guide) 0 12px,
+    transparent 12px 20px
+  );
+  transform: translate(-50%, -50%);
+  animation: sketch-center-flow-x 760ms linear infinite;
+}
+
+.sketch-center-axis.vertical {
+  width: 2px;
+  height: 200vmax;
+  background: repeating-linear-gradient(
+    180deg,
+    var(--sketch-center-guide) 0 12px,
+    transparent 12px 20px
+  );
+  transform: translate(-50%, -50%);
+  animation: sketch-center-flow-y 760ms linear infinite;
+}
+
+.sketch-center-target::before,
+.sketch-center-target::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  content: '';
+  background: #b9e7ff;
+  box-shadow: 0 0 6px rgba(125, 211, 252, 0.85);
+  transform: translate(-50%, -50%);
+}
+
+.sketch-center-target::before {
+  width: 38px;
+  height: 1px;
+}
+
+.sketch-center-target::after {
+  width: 1px;
+  height: 38px;
+}
+
+.sketch-center-target[data-engaged='true'] {
+  --sketch-center-guide: rgba(134, 239, 172, 0.94);
+  border-color: #86efac;
+  box-shadow:
+    0 0 0 5px rgba(74, 222, 128, 0.14),
+    0 0 22px rgba(74, 222, 128, 0.5);
+  animation-name: sketch-center-lock;
+  animation-duration: 440ms;
+}
+
+.sketch-center-target[data-engaged='true']::before,
+.sketch-center-target[data-engaged='true']::after {
+  background: #bbf7d0;
+  box-shadow: 0 0 7px rgba(74, 222, 128, 0.9);
+}
+
+@keyframes sketch-center-breathe {
+  from {
+    opacity: 0.64;
+    transform: translate(-50%, -50%) scale(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+@keyframes sketch-center-lock {
+  from {
+    opacity: 0.78;
+    transform: translate(-50%, -50%) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+}
+
+@keyframes sketch-center-flow-x {
+  to {
+    background-position-x: 20px;
+  }
+}
+
+@keyframes sketch-center-flow-y {
+  to {
+    background-position-y: 20px;
+  }
+}
+
+[data-reduced-motion='true'] .sketch-center-target,
+[data-reduced-motion='true'] .sketch-center-axis {
+  animation: none;
+}
+
 .sketch-grid-indicator {
   position: absolute;
   right: 14px;
