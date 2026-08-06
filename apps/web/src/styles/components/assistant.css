@@ -71,23 +71,34 @@
   border-bottom: var(--border-thin);
 }
 
+.assistant-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .assistant-title {
+  flex: 0 0 auto;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: 0.08em;
 }
 
+.assistant-model,
 .assistant-turn-count {
-  flex: 1;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
 
-/* Without a count the title still has to take the free space. */
-.assistant-title:last-of-type {
-  flex: 1;
+.assistant-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .assistant-icon-button {
