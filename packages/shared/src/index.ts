@@ -1227,6 +1227,10 @@ export interface HealthResponse {
   documentStorageAccountingReady?: boolean;
   /** Whether migration 0011 and private R2 project storage are available. */
   projectObjectStorageReady?: boolean;
+  /** Whether migration 0014 installed resumable account-erasure fencing. */
+  accountErasureReady?: boolean;
+  /** Whether R2, D1 fencing, and collaboration-room erasure are all ready. */
+  projectErasureReady?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
   projectSharingEnabled?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
@@ -1681,6 +1685,32 @@ export interface AccountStorageUsage {
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;
+}
+
+/** The three independently confirmed cloud-data deletion operations. */
+export type AccountDeletionScope = 'profile' | 'projects' | 'all';
+
+/** Server-owned inventory and confirmation contract for the deletion dialog. */
+export interface AccountDeletionPreview {
+  confirmationKind: 'email' | 'phrase';
+  confirmationText: string;
+  projectCount: number;
+  documentBytes: number;
+  revisionBytes: number;
+  revisionCount: number;
+  collaboratorCount: number;
+}
+
+export interface DeleteAccountDataRequest {
+  scope: AccountDeletionScope;
+  confirmation: string;
+}
+
+export interface DeleteAccountDataResponse {
+  ok: true;
+  scope: AccountDeletionScope;
+  deletedProjectIds: ProjectId[];
+  signedOut: boolean;
 }
 
 export const identityTransform = (): Transform3D => ({

@@ -359,6 +359,9 @@ describe('cloudflare adapters', () => {
     expect(statements[0]).toContain("status = 'deleted'");
     const destroyed = statements.slice(1).join('\n');
     for (const table of [
+      'project_access_events',
+      'project_invitations',
+      'project_members',
       'upload_sessions',
       'artifacts',
       'revisions',

@@ -91,6 +91,33 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('closes sockets and deletes every stored value during internal erasure', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Erased room', toUserId('user_room'));
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development'
+    });
+    const socket = await openSocket(room, base.projectId);
+    await socket.receive(hello(base));
+    expect(values.size).toBeGreaterThan(0);
+
+    const erased = await room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'DELETE',
+        headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+      })
+    );
+
+    expect(erased.status).toBe(204);
+    expect(values.size).toBe(0);
+    expect(socket.closed).toEqual({
+      code: 4001,
+      reason: 'Cloud project was permanently deleted.'
+    });
+    expect((await room.fetch(upgradeRequest(base.projectId))).status).toBe(410);
+  });
+
   it('fails hosted room access closed outside the account canary', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Canary room', toUserId('user_room'));
