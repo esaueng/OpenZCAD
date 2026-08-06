@@ -12,8 +12,7 @@
  *
  * It does not work, and it does not need to: `getEdgeVertexHandles` returns
  * the kernel's own `[start_vertex_handle, end_vertex_handle]`, and `exact.ts`
- * already relies on it in `selectedEdgesShareVertex` and
- * `selectionTouchesBlendFace`. The measurement is kept anyway because "we
+ * already relies on it in `selectionTouchesBlendFace`. The measurement is kept anyway because "we
  * checked and positions are not good enough" is the reason the published
  * field is handle-derived, and a future reader will otherwise re-propose the
  * quantized version.
