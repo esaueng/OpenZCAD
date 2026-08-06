@@ -229,7 +229,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
       timeout: 10_000
     });
     await expect(
-      pageA.getByRole('group', { name: 'Workspace status' })
+      pageA.getByRole('group', { name: 'Workspace status', exact: true })
     ).toContainText('syncSynced');
 
     await pageA.reload();
@@ -277,9 +277,17 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     });
     await expect(conflict).toBeVisible({ timeout: 10_000 });
     await expect(pageB.locator('.status-groups')).toContainText('syncConflict');
+    // A lower overlay may mount after async conflict detection. The account
+    // dialog remains painted above it and must not become inert just because
+    // the lower overlay registered its focus trap later.
+    await pageB.keyboard.press('?');
+    await expect(
+      pageB.locator('.conflict-dialog').locator('..')
+    ).not.toHaveAttribute('inert', '');
     await conflict
       .getByRole('button', { name: 'Use my account’s version' })
       .click();
+    await pageB.keyboard.press('Escape');
     await expect(
       pageB.getByRole('button', { name: 'Rename project' })
     ).toContainText('Device A account edit');
