@@ -72,6 +72,7 @@ import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import type {
   ArtifactKind,
+  AccountDeletionScope,
   ArtifactRecord,
   BodyId,
   BodyRepresentation,
@@ -348,6 +349,7 @@ function extrudeInferenceDescription(resolved: ResolvedExtrude | null): string {
 import {
   chooseProjectDocument,
   clearAllLastSyncedVersions,
+  clearLastSyncedVersion,
   deleteLocalProject,
   listLocalProjectOrganizations,
   listLocalProjects,
@@ -3540,6 +3542,87 @@ export function App() {
       setSettingsMessage('Signed out · device settings remain active.');
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
+      throw error;
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  async function handleDeleteCloudData(
+    scope: AccountDeletionScope,
+    confirmation: string
+  ) {
+    setSettingsBusy(true);
+    setSettingsMessage(
+      scope === 'projects'
+        ? 'Permanently deleting cloud projects…'
+        : scope === 'profile'
+          ? 'Permanently deleting cloud profile…'
+          : 'Permanently deleting all cloud data…'
+    );
+    try {
+      const projectController = cloudProjectAutosaveRef.current;
+      if (scope === 'profile') {
+        await projectController?.flushPending();
+        projectController?.closeProject();
+      } else {
+        // The device copy is already authoritative and safe. Discard a queued
+        // cloud mirror before erasure instead of recreating data the user just
+        // confirmed they want gone, then wait for any request already in flight.
+        projectController?.closeProject();
+        await projectController?.whenIdle();
+      }
+      await cloudSettingsAutosaveRef.current?.flushPending();
+
+      const deleted = await api.deleteAccountData(scope, confirmation);
+      if (deleted.signedOut) {
+        projectController?.closeProject();
+        const listed = await loadProjectSummaries(false);
+        remoteVersionsRef.current.clear();
+        // The successful response invalidated the browser cookie (and the
+        // desktop proxy drops its Keychain credential). Mirror that immediately
+        // in React so no signed-in UI or account state survives the deletion.
+        endCloudSettingsSession();
+        setCloudAvailable(false);
+        setProjects(listed.projects);
+        setCloudProjectIds(new Set());
+        setAccountProjectListReached(false);
+        setSaveState('local');
+        setSettingsMessage(
+          scope === 'all'
+            ? 'All cloud data deleted permanently · local data remains on this device.'
+            : 'Cloud profile deleted permanently · cloud projects and local data remain.'
+        );
+        return;
+      }
+
+      await Promise.all(
+        deleted.deletedProjectIds.map(async (projectId) => {
+          remoteVersionsRef.current.delete(projectId);
+          await clearLastSyncedVersion(projectId).catch(() => undefined);
+        })
+      );
+      const listed = await loadProjectSummaries(true);
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      const currentProjectId = doc?.projectId;
+      const currentIsCloud = Boolean(
+        currentProjectId && listed.cloudProjectIds.has(currentProjectId)
+      );
+      setCloudAvailable(currentIsCloud);
+      setSaveState(currentIsCloud ? 'synced' : 'local');
+      const currentVersion = currentProjectId
+        ? remoteVersionsRef.current.get(currentProjectId)
+        : undefined;
+      if (currentProjectId && currentVersion !== undefined) {
+        projectController?.openProject(currentProjectId, currentVersion);
+      }
+      setSettingsMessage(
+        `${deleted.deletedProjectIds.length} cloud project(s) deleted permanently · local copies remain.`
+      );
+    } catch (error) {
+      setSettingsMessage(errorMessage(error, 'Cloud data deletion failed.'));
       throw error;
     } finally {
       setSettingsBusy(false);
@@ -7165,6 +7248,7 @@ export function App() {
         onStartDesktopLogin={handleStartDesktopLogin}
         onApproveDesktopLogin={handleApproveDesktopLogin}
         onLogout={handleLogout}
+        onDeleteCloudData={handleDeleteCloudData}
         onReset={handleResetAppSettings}
         onApplyViewportDefaults={applyViewportDefaults}
         onClose={closeSettings}

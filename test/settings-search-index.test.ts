@@ -111,6 +111,20 @@ describe('assistant settings', () => {
   });
 });
 
+describe('privacy settings', () => {
+  it('routes account and project deletion searches to Privacy & data', () => {
+    for (const query of [
+      'delete account',
+      'delete projects',
+      'permanent deletion'
+    ]) {
+      expect(
+        visibleSettingsSections({ query }).map((section) => section.id)
+      ).toEqual(['privacy']);
+    }
+  });
+});
+
 describe('offline mode', () => {
   it('keeps its master toggle in the always-visible General section', () => {
     expect(

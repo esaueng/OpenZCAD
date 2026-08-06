@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defaultAppSettings } from '../lib/appSettings';
 import {
   KERNEL_BUILD,
@@ -10,6 +10,11 @@ import {
 } from '../lib/kernelBuild';
 import { toUserId, type HealthResponse } from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
+import { api } from '../lib/api';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function renderSettings(
   health: HealthResponse | null = null,
@@ -38,6 +43,7 @@ function renderSettings(
       onDesktopAuthorizationCodeChange={vi.fn()}
       onApproveDesktopLogin={vi.fn()}
       onLogout={vi.fn()}
+      onDeleteCloudData={vi.fn()}
       onReset={vi.fn()}
       onApplyViewportDefaults={vi.fn()}
       onClose={vi.fn()}
@@ -218,5 +224,129 @@ describe('settings desktop account section', () => {
       screen.getByRole('button', { name: 'Continue in OpenZCAD' })
     ).toBeDisabled();
     expect(onApproveDesktopLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe('settings privacy and data section', () => {
+  const session = {
+    userId: toUserId('user_privacy'),
+    displayName: 'person',
+    email: 'person@example.com',
+    mode: 'email-code' as const
+  };
+  const readyHealth: HealthResponse = {
+    status: 'ok',
+    environment: 'beta',
+    time: '2026-08-05T12:00:00.000Z',
+    documentStorageAccountingReady: true,
+    projectObjectStorageReady: true,
+    accountErasureReady: true,
+    projectErasureReady: true
+  };
+
+  it('keeps all cloud deletion functions together on Privacy & data', () => {
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    expect(
+      screen.getByRole('button', { name: 'Delete projects' })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Delete profile' })
+    ).toBeEnabled();
+    expect(
+      screen.getByRole('button', { name: 'Delete all data' })
+    ).toBeEnabled();
+    expect(screen.getByText(/cloud actions below never delete/)).toBeVisible();
+  });
+
+  it('does not duplicate destructive cloud actions on Account or Files & autosave', async () => {
+    const user = userEvent.setup();
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    expect(
+      screen.queryByRole('button', { name: 'Delete all data' })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Files & autosave' }));
+    expect(
+      screen.queryByRole('button', { name: 'Delete projects' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('requires the exact email before permanent deletion', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
+      confirmationKind: 'email',
+      confirmationText: 'person@example.com',
+      projectCount: 2,
+      documentBytes: 1_024,
+      revisionBytes: 2_048,
+      revisionCount: 5,
+      collaboratorCount: 1
+    });
+    const onDeleteCloudData = vi.fn().mockResolvedValue(undefined);
+    renderSettings(readyHealth, {
+      initialSection: 'privacy',
+      session,
+      onDeleteCloudData
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Delete all data' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Delete all cloud data?'
+    });
+    const confirm = within(dialog).getByRole('button', {
+      name: 'Delete all cloud data'
+    });
+    expect(confirm).toBeDisabled();
+    expect(
+      within(dialog).getByText(/Local projects and settings/)
+    ).toBeVisible();
+
+    await user.type(
+      within(dialog).getByLabelText('Deletion confirmation'),
+      'PERSON@example.com'
+    );
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+
+    expect(onDeleteCloudData).toHaveBeenCalledWith('all', 'PERSON@example.com');
+  });
+
+  it('fails closed when migration 0014 is not ready', () => {
+    renderSettings(
+      {
+        ...readyHealth,
+        accountErasureReady: false,
+        projectErasureReady: false
+      },
+      { initialSection: 'privacy', session }
+    );
+    expect(
+      screen.getByRole('button', { name: 'Delete projects' })
+    ).toBeDisabled();
+    expect(screen.getByText(/migration 0014/)).toBeVisible();
+  });
+
+  it('keeps profile deletion available when project object storage is unavailable', () => {
+    renderSettings(
+      {
+        ...readyHealth,
+        projectObjectStorageReady: false,
+        projectErasureReady: false
+      },
+      { initialSection: 'privacy', session }
+    );
+    expect(
+      screen.getByRole('button', { name: 'Delete projects' })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Delete all data' })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Delete profile' })
+    ).toBeEnabled();
+    expect(
+      screen.getByText(/Profile-only deletion remains available/)
+    ).toBeVisible();
   });
 });

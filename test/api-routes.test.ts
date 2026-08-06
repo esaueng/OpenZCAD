@@ -405,8 +405,10 @@ describe('worker api routes', () => {
       documentStorageAccountingReady: true,
       projectPersonalSyncEnabled: false
     });
-    expect(prepare).toHaveBeenCalledOnce();
-    const query = prepare.mock.calls[0]![0];
+    const query = prepare.mock.calls
+      .map(([statement]) => statement)
+      .find((statement) => statement.includes('idx_revisions_project_bytes'));
+    expect(query).toBeDefined();
     expect(query).toContain("pragma_table_info('projects')");
     expect(query).toContain("pragma_table_info('revisions')");
     expect(query).toContain('idx_revisions_project_bytes');
