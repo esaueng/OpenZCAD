@@ -13,7 +13,11 @@ interface Lease {
   expiresAt: number;
 }
 
-function assistantGuardD1() {
+function assistantGuardD1(
+  options: {
+    beforeLeaseRelease?: () => Promise<void>;
+  } = {}
+) {
   const usage = new Map<
     string,
     { windowStart: number; requestCount: number; costUnits: number }
@@ -132,6 +136,7 @@ function assistantGuardD1() {
         } else if (
           query.includes('DELETE FROM ai_concurrency_leases WHERE lease_id = ?')
         ) {
+          await options.beforeLeaseRelease?.();
           leases.delete(String(values[0]));
         }
         return { success: true, meta: { changes: 1 } };
@@ -410,6 +415,60 @@ describe('assistant provider usage guard', () => {
     if (afterCancel.allowed) {
       await afterCancel.release();
     }
+  });
+
+  it('releases the concurrency lease before exposing a completed stream', async () => {
+    let releaseStarted!: () => void;
+    let finishRelease!: () => void;
+    const releaseHasStarted = new Promise<void>((resolve) => {
+      releaseStarted = resolve;
+    });
+    const releaseCanFinish = new Promise<void>((resolve) => {
+      finishRelease = resolve;
+    });
+    const fixture = assistantGuardD1({
+      beforeLeaseRelease: async () => {
+        releaseStarted();
+        await releaseCanFinish;
+      }
+    });
+    const permit = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('user_stream_completion'),
+      {
+        ENVIRONMENT: 'beta',
+        DB: fixture.db,
+        AI_IDENTITY_PEPPER: 'stream-completion-test-pepper',
+        AI_ACCOUNT_RATE_LIMIT_REQUESTS: '20',
+        AI_IP_RATE_LIMIT_REQUESTS: '20',
+        AI_ACCOUNT_COST_LIMIT_UNITS: '100',
+        AI_IP_COST_LIMIT_UNITS: '100'
+      },
+      { cost: 1, leaseMs: 30_000, now: 1_000 }
+    );
+    expect(permit.allowed).toBe(true);
+    if (!permit.allowed) {
+      return;
+    }
+
+    const response = permit.track(new Response('complete'));
+    const reader = response.body!.getReader();
+    await expect(reader.read()).resolves.toMatchObject({ done: false });
+
+    let streamFinished = false;
+    const finalRead = reader.read().then((result) => {
+      streamFinished = true;
+      return result;
+    });
+    await releaseHasStarted;
+    await Promise.resolve();
+
+    expect(streamFinished).toBe(false);
+    expect(fixture.activeLeases()).toBe(1);
+
+    finishRelease();
+    await expect(finalRead).resolves.toMatchObject({ done: true });
+    expect(fixture.activeLeases()).toBe(0);
   });
 
   it('fails closed in beta without both D1 and a connecting IP, while preserving local development', async () => {
