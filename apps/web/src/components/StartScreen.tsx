@@ -89,6 +89,12 @@ interface StartScreenProps {
    * memory, which is exactly the project whose tile a viewer wants to see.
    */
   loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * Renders the preview for a tile the cache could not answer for. Called only
+   * for the tiles on screen, so an unexpanded shelf pays for nine parts rather
+   * than every part the device holds.
+   */
+  backfillThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 /**
@@ -142,7 +148,8 @@ export function StartScreen({
   onReorder,
   onDeleteForever,
   onEmptyTrash,
-  loadThumbnail
+  loadThumbnail,
+  backfillThumbnail
 }: StartScreenProps) {
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
@@ -289,7 +296,11 @@ export function StartScreen({
     const preview = (
       <>
         <span className="start-tile-thumb">
-          <PartThumbnail project={project} loadThumbnail={loadThumbnail} />
+          <PartThumbnail
+            project={project}
+            loadThumbnail={loadThumbnail}
+            backfillThumbnail={backfillThumbnail}
+          />
           {syncEntry && !trashed ? (
             <span
               className={`start-tile-badge is-sync-${syncEntry.state}`}
