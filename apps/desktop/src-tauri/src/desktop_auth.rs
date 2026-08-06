@@ -555,6 +555,24 @@ async fn send_api_request(
         .map_err(|_| "The OpenZCAD cloud service could not be reached.".to_string())
 }
 
+fn request_deletes_cloud_profile(request: &NativeApiRequest) -> bool {
+    if request.path != "/api/account/delete-data" || request.method != "POST" {
+        return false;
+    }
+    let Some(body) = request.body.as_deref() else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("scope")
+                .and_then(|scope| scope.as_str())
+                .map(str::to_owned)
+        })
+        .is_some_and(|scope| matches!(scope.as_str(), "profile" | "all"))
+}
+
 #[tauri::command]
 pub async fn desktop_api_request(
     state: State<'_, DesktopAuthState>,
@@ -601,6 +619,13 @@ pub async fn desktop_api_request(
         if let Some(token) = access.as_deref() {
             response = send_api_request(&state, &request, path, Some(token)).await?;
         }
+    }
+    if response.status().is_success() && request_deletes_cloud_profile(&request) {
+        *state
+            .access
+            .lock()
+            .map_err(|_| "Desktop auth state is unavailable.")? = None;
+        delete_refresh_credential()?;
     }
     buffer_api_response(response).await
 }
@@ -652,7 +677,7 @@ pub async fn desktop_collaboration_url(
 mod tests {
     use super::{
         api_url, approved_browser_url, collaboration_api_url, collaboration_socket_url,
-        pkce_challenge,
+        pkce_challenge, request_deletes_cloud_profile, NativeApiRequest,
     };
 
     #[test]
@@ -712,5 +737,18 @@ mod tests {
         assert!(collaboration_api_url("proj_ok?next=https://attacker.example", true).is_err());
         assert!(collaboration_socket_url("proj_ok", "short").is_err());
         assert!(collaboration_socket_url("proj_ok", &"!".repeat(43)).is_err());
+    }
+
+    #[test]
+    fn clears_native_credentials_only_for_profile_deletion_scopes() {
+        let request = |scope: &str| NativeApiRequest {
+            method: "POST".to_string(),
+            path: "/api/account/delete-data".to_string(),
+            content_type: Some("application/json".to_string()),
+            body: Some(format!(r#"{{"scope":"{scope}"}}"#).into_bytes()),
+        };
+        assert!(request_deletes_cloud_profile(&request("profile")));
+        assert!(request_deletes_cloud_profile(&request("all")));
+        assert!(!request_deletes_cloud_profile(&request("projects")));
     }
 }
