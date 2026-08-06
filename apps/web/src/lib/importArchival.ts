@@ -11,17 +11,26 @@ export const LOCAL_ARTIFACT_ID_PREFIX = 'artifact_local_';
 export interface LocalOnlyImportSource {
   featureId: FeatureId;
   sourceName: string;
-  /** Content-addressed reference into the local blob store, when present. */
-  checksumSha256: string | null;
-  /** Legacy embedded STEP text, when the import predates references. */
-  stepText: string | null;
+  /** Content-addressed reference; the bytes it names live only on this device. */
+  checksumSha256: string;
 }
 
 /**
- * STEP imports whose source was never archived to the account. Mesh imports
- * are excluded deliberately: their geometry is embedded in the document, so
- * every device can rebuild them — only the original file is unarchived, and
- * those bytes are no longer held anywhere the app can reach.
+ * STEP imports this device alone can rebuild: reference-form sources whose
+ * bytes were never archived, so no other device can resolve the checksum.
+ *
+ * Two kinds of import are excluded, for the same reason — the document itself
+ * carries what a rebuild needs, and it syncs:
+ *
+ * - Mesh imports embed their geometry.
+ * - STEP imports in the legacy embedded form carry `stepText`, which
+ *   `prepareProjectStorageSnapshot` externalises into a project asset and
+ *   hydration restores, and which the kernel consumes directly without
+ *   consulting the blob store or the artifact. Reporting one of these as
+ *   local-only would warn about a project every device can already open.
+ *
+ * In both cases only the *original uploaded file* is unarchived, which costs
+ * nobody a rebuild.
  */
 export function listLocalOnlyImportSources(
   document: ProjectDocument
@@ -34,11 +43,14 @@ export function listLocalOnlyImportSources(
     if (!feature.data.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX)) {
       continue;
     }
+    const checksumSha256 = feature.data.stepSourceRef?.checksumSha256;
+    if (checksumSha256 === undefined) {
+      continue;
+    }
     sources.push({
       featureId: feature.featureId,
       sourceName: feature.data.sourceName,
-      checksumSha256: feature.data.stepSourceRef?.checksumSha256 ?? null,
-      stepText: feature.data.stepText ?? null
+      checksumSha256
     });
   }
   return sources;
@@ -56,9 +68,9 @@ export interface ArchiveLocalSourcesResult {
 /**
  * Uploads every local-only STEP source it can find bytes for, then rewires
  * the owning feature to the finalized artifact id via the injected document
- * edit. The document keeps its content-addressed reference (or embedded
- * text), so a partial failure loses nothing — the untouched features simply
- * stay local-only and the action can run again.
+ * edit. The document keeps its content-addressed reference, so a partial
+ * failure loses nothing — the untouched features simply stay local-only and
+ * the action can run again.
  */
 export async function archiveLocalOnlyImportSources(deps: {
   document: ProjectDocument;
@@ -79,17 +91,11 @@ export async function archiveLocalOnlyImportSources(deps: {
     failed: []
   };
   for (const source of listLocalOnlyImportSources(deps.document)) {
-    let bytes: Uint8Array | null = null;
-    try {
-      if (source.checksumSha256) {
-        bytes = await deps.loadSourceBytes(source.checksumSha256);
-      }
-      if (!bytes && source.stepText !== null) {
-        bytes = new TextEncoder().encode(source.stepText);
-      }
-    } catch {
-      bytes = null;
-    }
+    // A store that throws reads the same as a store that has nothing: this
+    // device cannot produce the bytes, so the source stays local-only.
+    const bytes = await deps
+      .loadSourceBytes(source.checksumSha256)
+      .catch(() => null);
     if (!bytes) {
       result.missing.push(source.sourceName);
       continue;
