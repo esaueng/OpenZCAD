@@ -2466,11 +2466,11 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   // only the status bar, clipped mid-sentence, leaving Create looking inert.
   const refusal = inspector.getByRole('alert');
   await expect(refusal).toContainText('faceted approximation');
-  // And it names the tangency, so the remedy has a direction. Offsetting along
-  // the face plane keeps the axis in it and fails again; moving into the solid
-  // is what succeeds, which is verified end to end below.
-  await expect(refusal).toContainText('tangentially');
-  await expect(refusal).toContainText('into the solid');
+  // It states only what was measured. No single cause is asserted: measured
+  // on a box and a cylinder, repositioning clears this for a small round
+  // operand and clears nothing for one wider than the box it meets.
+  await expect(refusal).toContainText('will export that way');
+  await expect(refusal).toContainText('subtract instead');
 
   // Refused means refused: history is untouched and the form stays open with
   // its picks intact, ready for another operation.
@@ -2516,8 +2516,8 @@ test('a union that facets at a tangency succeeds once the overlap moves off it',
   await inspector.getByRole('button', { name: /^Create/ }).click();
   // Either facet check can be the one that fires — a smaller round operand
   // facets into too few faces to trip the count test — so assert the remedy
-  // they share rather than which branch caught it.
-  await expect(inspector.getByRole('alert')).toContainText('into the solid');
+  // they share. Here the adapter has proved a move that works, so it names it.
+  await expect(inspector.getByRole('alert')).toContainText('clears it');
   await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
     0
   );

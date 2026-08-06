@@ -207,6 +207,26 @@ export interface BooleanFaceCensus {
 const FACET_FALLBACK_FACTOR = 4;
 const FACET_FALLBACK_SLACK = 32;
 
+const FACET_FALLBACK_LEAD =
+  'The boolean returned a faceted approximation';
+
+/**
+ * What to say when no specific remedy has been proved.
+ *
+ * Naming a single cause here was a mistake worth not repeating: measured on a
+ * box and a cylinder, repositioning clears the fallback for a small round
+ * operand and clears nothing at all for one wider than the box it meets, so
+ * "this is a tangency, move it" is confidently wrong half the time. The caller
+ * appends a concrete move only when it has fused that exact move and measured
+ * the result exact; this text covers the rest without pretending to a
+ * diagnosis, and points at the operation that is known to stay exact on the
+ * same operands.
+ */
+const FACET_FALLBACK_REMEDY =
+  'The result is watertight, but its curved surfaces are now planar facets and will ' +
+  'export that way. Repositioning the overlap sometimes clears it; otherwise keep the ' +
+  'bodies separate, or subtract instead — the same operands still cut exactly.';
+
 export interface FaceCensusSubject {
   getSolidFaces(solid: number): ArrayLike<number>;
   getSurfaceType(face: number): string;
@@ -260,33 +280,14 @@ export function booleanFacetFallbackWarning(
     `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
   ].join(' became ');
   if (lostCurvature && exploded) {
-    // Moving the overlap really is the fix, so say where to move it. Measured
-    // on a box and a cylinder: the fuse facets while the cylinder's axis lies
-    // in one of the box's own face planes — the default placement of a new
-    // primitive, since a box is corner-origin and a cylinder is axis-origin —
-    // and is exact as soon as the axis moves inside the solid. Naming the
-    // tangency is what makes the advice actionable; "move it" alone sends
-    // users sliding along the face plane they are already stuck on.
-    return (
-      `The boolean returned a faceted approximation instead of exact surfaces: ${detail}. ` +
-      'This happens where the operands meet tangentially — a round face touching a ' +
-      'flat one edge-on, or an axis lying in a face plane. Move the overlap so the ' +
-      'surfaces cross cleanly (offset it into the solid rather than along the face) ' +
-      'and try again.'
-    );
+    return `${FACET_FALLBACK_LEAD} instead of exact surfaces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
   if (lostCurvature) {
-    // Same tangency fallback as above, caught by the curvature test alone
-    // because a smaller round operand facets into too few faces to trip the
-    // count test. It earns the same remedy: without one this reads as a
-    // property of the result rather than something the user can act on.
-    return (
-      `The boolean replaced every curved surface with planar faces: ${detail}. ` +
-      'This happens where the operands meet tangentially — a round face touching a ' +
-      'flat one edge-on, or an axis lying in a face plane. Move the overlap so the ' +
-      'surfaces cross cleanly (offset it into the solid rather than along the face) ' +
-      'and try again.'
-    );
+    // Same fallback, caught by the curvature test alone because a smaller
+    // round operand facets into too few faces to trip the count test. It
+    // earns the same remedy: without one this reads as a property of the
+    // result rather than as something the user can act on.
+    return `The boolean replaced every curved surface with planar faces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
   return (
     `The boolean produced far more faces than its operands: ${detail}. ` +
