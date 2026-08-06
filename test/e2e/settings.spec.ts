@@ -551,8 +551,11 @@ test('disabling the assistant takes its live preview with it', async ({
     'Add a 10 mm cube.'
   );
 
-  await page.getByRole('button', { name: 'Preview', exact: true }).click();
   const status = page.getByRole('contentinfo');
+  // Exact-valid patches are previewed before an Apply action is ever offered.
+  await expect(
+    page.getByRole('button', { name: 'Hide preview', exact: true })
+  ).toBeVisible();
   await expect(status).toContainText('Previewing exact proposed geometry.');
   // The preview is unapplied geometry: it shows a body the document does not
   // have, which is what makes an orphaned preview visible at all.
