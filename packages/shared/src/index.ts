@@ -560,9 +560,52 @@ export type FeatureData =
       featureKind: 'imported-step';
       artifactId: ArtifactId;
       sourceName: string;
-      /** ISO 10303-21 source retained for deterministic offline rebuilds. */
-      stepText: string;
+      /**
+       * ISO 10303-21 source retained for deterministic offline rebuilds.
+       * Legacy embedded form; new imports write `stepSourceRef` instead and
+       * load-time migration rewrites this into a reference. Exactly one of
+       * the two fields is present.
+       */
+      stepText?: string;
+      /** Content-addressed replacement for `stepText`. */
+      stepSourceRef?: ImportedSourceReference;
     };
+
+/**
+ * A content-addressed pointer to import source bytes held outside the
+ * document — in the browser's blob store locally and in R2 when synced. The
+ * checksum is the identity: any store that can produce bytes hashing to
+ * `checksumSha256` can satisfy the reference, which is what lets a document
+ * stay a few hundred bytes while its source runs to hundreds of megabytes.
+ */
+export interface ImportedSourceReference {
+  marker: 'openzcad-source-ref';
+  version: 1;
+  hashAlgorithm: 'sha256';
+  /** Lowercase hex SHA-256 of the raw source bytes. */
+  checksumSha256: string;
+  /** Byte length of the raw (uncompressed) source. */
+  logicalBytes: number;
+}
+
+export function isImportedSourceReference(
+  value: unknown
+): value is ImportedSourceReference {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.marker === 'openzcad-source-ref' &&
+    record.version === 1 &&
+    record.hashAlgorithm === 'sha256' &&
+    typeof record.checksumSha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(record.checksumSha256) &&
+    typeof record.logicalBytes === 'number' &&
+    Number.isSafeInteger(record.logicalBytes) &&
+    record.logicalBytes >= 0
+  );
+}
 
 export interface FeatureNode extends BaseNode {
   kind: 'feature';

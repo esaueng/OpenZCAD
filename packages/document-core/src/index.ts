@@ -25,6 +25,7 @@ import {
   type ExtrudeOperation,
   type FeatureId,
   type FeatureNode,
+  type ImportedSourceReference,
   type ParameterId,
   type ParameterNode,
   type ParametricVector3,
@@ -295,7 +296,10 @@ export interface ImportedStepInput {
   name: string;
   artifactId: string;
   sourceName: string;
-  stepText: string;
+  /** Legacy embedded form. Exactly one of `stepText`/`stepSourceRef`. */
+  stepText?: string;
+  /** Content-addressed form; the bytes live in the source blob store. */
+  stepSourceRef?: ImportedSourceReference;
   ids?: BodyFeatureIds;
 }
 
@@ -1385,6 +1389,11 @@ export function importStepBody(
   document: ProjectDocument,
   input: ImportedStepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  if ((input.stepText === undefined) === (input.stepSourceRef === undefined)) {
+    throw new Error(
+      'A STEP import needs exactly one of stepText and stepSourceRef.'
+    );
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -1402,7 +1411,9 @@ export function importStepBody(
       featureKind: 'imported-step',
       artifactId: toArtifactId(input.artifactId),
       sourceName: input.sourceName,
-      stepText: input.stepText
+      ...(input.stepText !== undefined
+        ? { stepText: input.stepText }
+        : { stepSourceRef: input.stepSourceRef })
     }
   };
 
