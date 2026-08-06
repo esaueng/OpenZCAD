@@ -2185,6 +2185,36 @@ function buildPrimitiveLineage(
   ]);
 }
 
+/**
+ * A direct edit reports no output relation, so its result normally drops to
+ * hash-only lineage — which is what makes every downstream reference brittle
+ * under parametric edits. When the edited body is still the single solid of a
+ * primitive whose semantic roles are purely geometric (a capped cylinder
+ * keeps its wall/cap/rim roles across a cap offset or wall resize), those
+ * roles re-identify the topology exactly, published under the ORIGINAL
+ * producing feature so stored references keep matching. A role that is no
+ * longer one-to-one publishes nothing (`createBrepKitSemanticLineage` keeps
+ * that fail-closed), and a shape with no recognizable role at all stays
+ * hash-only as before.
+ */
+function rederivePrimitiveDirectEditLineage(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  producer: FeatureNode | undefined
+): BrepKitLineageState | null {
+  if (
+    !producer ||
+    producer.data.featureKind !== 'primitive' ||
+    shape.solids.length !== 1
+  ) {
+    return null;
+  }
+  const lineage = buildPrimitiveLineage(kernel, shape.solids[0]!, producer);
+  return lineage.faceReferences.size > 0 || lineage.edgeReferences.size > 0
+    ? lineage
+    : null;
+}
+
 function planeCarrier(
   normal: Vec3,
   point: Vec3
@@ -4167,10 +4197,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               feature.data.operation,
               scope
             );
-            edited.lineage = brepKitHashOnlyLineage(
-              'direct-edit',
-              'BrepKit does not expose a complete direct-edit output relation.'
+            const targetBodyId = feature.data.targetBodyId;
+            const producer = listFeaturesInOrder(document).find(
+              (candidate) => candidate.bodyId === targetBodyId
             );
+            edited.lineage =
+              rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
+              brepKitHashOnlyLineage(
+                'direct-edit',
+                'BrepKit does not expose a complete direct-edit output relation.'
+              );
             result.shapes.set(feature.data.targetBodyId, edited);
             break;
           }
@@ -4858,6 +4894,64 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   /** Resolves a fingerprint to exactly one face handle, failing closed. */
+  /**
+   * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
+   * face hash embeds radius-dependent measurements (a cap's perimeter, a
+   * wall's radius), so only the lineage identity survives an upstream
+   * parametric edit. Operations saved without a v5 reference keep the hash
+   * resolver and its diagnostics byte-for-byte; a v5 lineage failure is
+   * terminal rather than falling back, so a stale reference can never land
+   * silently on a neighbouring face.
+   */
+  private resolveDirectEditFace(
+    kernel: BrepKernel,
+    target: ExactShape,
+    solid: number,
+    operation: DirectEditOperation
+  ): { face: number; viaLineage: boolean } {
+    const reference = operation.faceReference;
+    const lineage = target.solids.length === 1 ? target.lineage : undefined;
+    if (!reference || !lineage) {
+      return {
+        face: this.resolveFaceByFingerprint(kernel, solid, operation.faceHash),
+        viaLineage: false
+      };
+    }
+    const candidates: TopologyResolutionCandidate[] = Array.from(
+      kernel.getSolidFaces(solid),
+      (handle) => {
+        const witness = faceWitnessOf(kernel, handle);
+        const lineageReference = lineage.faceReferences.get(handle);
+        return {
+          kind: 'face' as const,
+          currentHash: topologyHashOfWitness('face', witness),
+          witnessVersion: 1 as const,
+          witness,
+          ...(lineageReference
+            ? {
+                lineage: {
+                  source: 'semantic' as const,
+                  identity: {
+                    producingFeatureId: lineageReference.producingFeatureId,
+                    lineageName: lineageReference.lineageName
+                  }
+                }
+              }
+            : {}),
+          value: handle
+        };
+      }
+    );
+    const resolution = resolveTopologyReference(reference, candidates);
+    if (resolution.status === 'failed') {
+      throw new Error(`Direct-edit face is stale: ${resolution.message}`);
+    }
+    if (typeof resolution.candidate.value !== 'number') {
+      throw new Error('Direct-edit face resolved without a kernel handle.');
+    }
+    return { face: resolution.candidate.value, viaLineage: true };
+  }
+
   private resolveFaceByFingerprint(
     kernel: BrepKernel,
     solid: number,
@@ -5118,10 +5212,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     scope: Record<string, number>
   ): ExactShape {
     const solid = collapseShape(kernel, target);
-    const face = this.resolveFaceByFingerprint(
+    const { face, viaLineage } = this.resolveDirectEditFace(
       kernel,
+      target,
       solid,
-      operation.faceHash
+      operation
     );
     if (operation.kind === 'resize-through-hole') {
       return {
@@ -5143,8 +5238,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
         throw new Error('The selected face is no longer planar.');
       }
+      // The recorded-area pin proves a hash-resolved face is really the one
+      // the user picked. A cap's area scales with the primitive radius, so
+      // under a lineage-resolved face — where identity is already proven by
+      // role — the pin would only forbid the parametric edits this operation
+      // is defined to survive.
       const areaTolerance = Math.max(operation.sourceArea * 1e-5, 1e-9);
-      if (Math.abs(geometry.area - operation.sourceArea) > areaTolerance) {
+      if (
+        !viaLineage &&
+        Math.abs(geometry.area - operation.sourceArea) > areaTolerance
+      ) {
         throw new Error(
           'The selected face no longer matches its recorded measurements.'
         );
