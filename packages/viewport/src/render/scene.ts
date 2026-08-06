@@ -474,8 +474,9 @@ const GRID_CELLS_PER_VIEW = 60;
  * feeds the shader a power-of-ten step derived from the visible extent. Four
  * nested decades render at once with weights chosen so a decade rollover is
  * seamless — the tier a line leaves and the tier it joins meet at the same
- * alpha, and line colour is a function of that alpha alone. fwidth-based
- * antialiasing keeps every line one crisp screen-space stroke at any zoom.
+ * alpha, and line colour is a function of that alpha alone. Derivative-based
+ * filtering keeps every resolved line crisp, then removes a tier before its
+ * cells collapse into sub-pixel moire in a receding perspective view.
  */
 export function createStudioGrid(): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(2, 2);
@@ -510,8 +511,23 @@ export function createStudioGrid(): THREE.Mesh {
 
       float gridLine(vec2 p, float step) {
         vec2 coord = p / step;
-        vec2 grid = abs(fract(coord - 0.5) - 0.5) / fwidth(coord);
-        return 1.0 - min(min(grid.x, grid.y), 1.0);
+        vec2 footprint = max(fwidth(coord), vec2(1e-6));
+        vec2 distanceToLine = abs(fract(coord - 0.5) - 0.5);
+        vec2 coverage = 1.0 - smoothstep(
+          vec2(0.0),
+          footprint,
+          distanceToLine
+        );
+        // footprint is grid cells per pixel. Fade from four pixels per cell
+        // to the two-pixel Nyquist limit; coarser decades remain visible.
+        // Filter X and Y independently because one direction foreshortens
+        // sooner than the other in an oblique perspective view.
+        vec2 resolved = 1.0 - smoothstep(
+          vec2(0.25),
+          vec2(0.5),
+          footprint
+        );
+        return max(coverage.x * resolved.x, coverage.y * resolved.y);
       }
 
       void main() {
