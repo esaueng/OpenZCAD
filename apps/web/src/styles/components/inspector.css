@@ -311,25 +311,22 @@
   min-width: 0;
 }
 
-.appearance-inputs input[type='color'] {
-  -webkit-appearance: none;
-  appearance: none;
+.appearance-swatch {
   width: 42px;
   height: 26px;
   padding: 0;
-  background: none;
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
-.appearance-inputs input[type='color']::-webkit-color-swatch-wrapper {
-  padding: 2px;
+.appearance-swatch:hover {
+  border-color: var(--color-border-strong);
 }
 
-.appearance-inputs input[type='color']::-webkit-color-swatch {
-  border: none;
-  border-radius: 2px;
+.appearance-swatch[aria-expanded='true'] {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
 .appearance-inputs input[type='range'] {

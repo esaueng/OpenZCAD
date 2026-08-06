@@ -7,7 +7,7 @@ import {
 } from 'react';
 import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
-import { featureColor } from '@openzcad/shared';
+import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -49,6 +49,7 @@ import {
 } from '../lib/model';
 import { edgeLabel, faceLabel } from '../lib/topologyLabels';
 import { ExprInput } from './ExprInput';
+import { ColorPicker } from './ColorPicker';
 import type { BodyAppearancePreview } from './ModelViewer';
 
 export interface InspectorCallbacks {
@@ -248,10 +249,13 @@ function BodyStats({
   );
 }
 
+/** Preset swatches: the feature palette, deduped, in the picker's grid. */
+const BODY_COLOR_PRESETS = [...new Set(Object.values(FEATURE_COLORS))];
+
 /**
  * Per-body display color and opacity. Edits stream to the viewport as a
  * material-level preview on every change and commit through node metadata on
- * release/blur, so a slider drag never waits on a kernel rebuild.
+ * release/blur, so a picker drag never waits on a kernel rebuild.
  */
 function BodyAppearance({
   body,
@@ -267,7 +271,9 @@ function BodyAppearance({
   const defaultColor = featureColor(body.source);
   const [draftColor, setDraftColor] = useState(body.color);
   const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const committedRef = useRef({ color: body.color, opacity: body.opacity ?? 1 });
+  const controlsRef = useRef<HTMLDivElement | null>(null);
 
   // Resync drafts when the committed representation changes: another body
   // selected, an undo, or this commit's rebuild landing.
@@ -278,12 +284,13 @@ function BodyAppearance({
     setDraftOpacity(committed.opacity);
   }, [body.bodyId, body.color, body.opacity]);
 
-  function commitDraft() {
+  function commitDraft(overrideColor?: string) {
     onPreview(null);
     const committed = committedRef.current;
+    const color = overrideColor ?? draftColor;
     const patch: { color?: string; opacity?: number | null } = {};
-    if (draftColor.toLowerCase() !== committed.color.toLowerCase()) {
-      patch.color = draftColor;
+    if (color.toLowerCase() !== committed.color.toLowerCase()) {
+      patch.color = color;
     }
     if (draftOpacity !== committed.opacity) {
       patch.opacity = draftOpacity >= 1 ? null : draftOpacity;
@@ -298,6 +305,39 @@ function BodyAppearance({
     onCommit(patch);
   }
 
+  const commitDraftRef = useRef(commitDraft);
+  commitDraftRef.current = commitDraft;
+
+  // Clicking outside or pressing Escape closes the picker and commits the
+  // last previewed value (a no-op when the picker already committed it).
+  useEffect(() => {
+    if (!pickerOpen) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        controlsRef.current &&
+        event.target instanceof Node &&
+        !controlsRef.current.contains(event.target)
+      ) {
+        setPickerOpen(false);
+        commitDraftRef.current();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPickerOpen(false);
+        commitDraftRef.current();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [pickerOpen]);
+
   const isDefault =
     draftColor.toLowerCase() === defaultColor.toLowerCase() &&
     draftOpacity >= 1;
@@ -305,24 +345,40 @@ function BodyAppearance({
   return (
     <>
       <h3 className="section-title">Appearance</h3>
-      <div className="appearance-controls">
-        <label className="appearance-field">
+      <div className="appearance-controls" ref={controlsRef}>
+        <div className="appearance-field">
           <span>Color</span>
           <span className="appearance-inputs">
-            <input
-              type="color"
-              aria-label="Body color"
-              value={draftColor}
-              onChange={(event) => {
-                const color = event.target.value;
-                setDraftColor(color);
-                onPreview({ bodyId: body.bodyId, color });
+            <button
+              type="button"
+              className="appearance-swatch"
+              aria-label="Pick body color"
+              aria-expanded={pickerOpen}
+              style={{ background: draftColor }}
+              onClick={() => {
+                if (pickerOpen) {
+                  commitDraft();
+                }
+                setPickerOpen((open) => !open);
               }}
-              onBlur={commitDraft}
             />
             <span className="appearance-value">{draftColor}</span>
           </span>
-        </label>
+        </div>
+        {pickerOpen && (
+          <ColorPicker
+            color={draftColor}
+            presets={BODY_COLOR_PRESETS}
+            onChange={(color) => {
+              setDraftColor(color);
+              onPreview({ bodyId: body.bodyId, color });
+            }}
+            onCommit={(color) => {
+              setDraftColor(color);
+              commitDraft(color);
+            }}
+          />
+        )}
         <label className="appearance-field">
           <span>Opacity</span>
           <span className="appearance-inputs">
@@ -338,9 +394,9 @@ function BodyAppearance({
                 setDraftOpacity(opacity);
                 onPreview({ bodyId: body.bodyId, opacity });
               }}
-              onPointerUp={commitDraft}
-              onKeyUp={commitDraft}
-              onBlur={commitDraft}
+              onPointerUp={() => commitDraft()}
+              onKeyUp={() => commitDraft()}
+              onBlur={() => commitDraft()}
             />
             <span className="appearance-value">
               {Math.round(draftOpacity * 100)}%
