@@ -9,11 +9,13 @@ import {
   circleObjectFromDiameter,
   circleObjectFromThreePoints,
   circlePreviewPoints,
+  centerInferenceSegments,
   collectSketchSnapTargets,
   dimensionForInProgress,
   frameFromFace,
   lineObjectFromPoints,
   nearestSnapTarget,
+  nearestCenterGuideTarget,
   pointAtDistanceAlongDirection,
   rankSnapTargets,
   resolveSketchSnap,
@@ -371,6 +373,36 @@ describe('sketch entity snapping', () => {
     });
     expect(targets).toContainEqual(
       expect.objectContaining({ x: 2, y: 0, kind: 'intersection' })
+    );
+  });
+
+  it('previews the nearest center without changing the snap tolerance', () => {
+    const targets = [
+      { id: 'origin', x: 0, y: 0, kind: 'origin' as const },
+      { id: 'rect-center', x: 8, y: 0, kind: 'center' as const },
+      { id: 'endpoint', x: 6, y: 0, kind: 'endpoint' as const }
+    ];
+    expect(nearestCenterGuideTarget({ x: 6.5, y: 0 }, targets, 4)?.id).toBe(
+      'rect-center'
+    );
+    expect(nearestCenterGuideTarget({ x: 6.5, y: 0 }, targets, 1)).toBeNull();
+  });
+
+  it('builds orthogonal center guides only for exact center targets', () => {
+    expect(
+      centerInferenceSegments({ x: 4, y: -2, kind: 'center' }, 10)
+    ).toEqual([
+      [
+        { x: -6, y: -2 },
+        { x: 14, y: -2 }
+      ],
+      [
+        { x: 4, y: -12 },
+        { x: 4, y: 8 }
+      ]
+    ]);
+    expect(centerInferenceSegments({ x: 4, y: -2, kind: 'grid' }, 10)).toEqual(
+      []
     );
   });
 });
