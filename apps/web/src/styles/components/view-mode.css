@@ -1,0 +1,430 @@
+/* ── View mode ──
+   The reading workspace: a top-bar mode switch, a viewport with no docked
+   panels, and one floating bar of view controls. Imported last in app.css so
+   these rules land after the layouts they subtract from. ── */
+
+/* ── Top bar: the mode switch ────────────────────────────── */
+
+/* Sits between the project name and the workspace actions, in the middle of
+   the bar — see `.breadcrumb` in topbar.css for how that space is cleared. */
+.mode-switch {
+  flex: 0 0 auto;
+  margin-inline: auto;
+  display: inline-flex;
+  padding: 2px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.mode-switch-option {
+  min-height: 24px;
+  padding: 0 14px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.mode-switch-option:hover:not(:disabled):not(.active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.mode-switch-option.active {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  box-shadow: inset 0 0 0 1px var(--color-accent-border);
+  font-weight: var(--fw-medium);
+}
+
+.mode-switch-option:disabled {
+  color: var(--color-text-subtle);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Workspace without a sidebar ─────────────────────────── */
+
+/*
+  Matches `.workspace.with-assistant`'s specificity so it survives the
+  narrow-screen rules in responsive.css, which reassert the sidebar column at
+  that weight. The column is zeroed as well as removed from the template so the
+  splitter offsets that read `--sidebar-col-w` collapse with it.
+*/
+.workspace.no-sidebar {
+  --sidebar-col-w: 0px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ── The floating view bar ───────────────────────────────── */
+
+/*
+  Reuses the tool palette's float, re-anchored bottom-center — the same move
+  `.palette-float:has(.direct-mode-strip)` makes for direct-mode strips.
+*/
+.palette-float:has(.view-mode-bar) {
+  top: auto;
+  left: 50%;
+  right: auto;
+  bottom: 10px;
+  transform: translateX(-50%);
+  align-items: flex-end;
+}
+
+.view-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.view-mode-button {
+  min-width: 30px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.view-mode-button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-button.active {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+}
+
+.view-mode-button.open {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-button.wide {
+  padding-inline: 10px;
+}
+
+.view-mode-divider {
+  width: 1px;
+  align-self: stretch;
+  margin-inline: 3px;
+  background: var(--color-border);
+}
+
+.view-mode-views-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Opens upward: the bar is at the bottom edge of the viewport. */
+.view-mode-views-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-viewer-overlay);
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.view-mode-views-panel button {
+  min-width: 66px;
+  min-height: 26px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.view-mode-views-panel button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-view-wide {
+  grid-column: 1 / -1;
+}
+
+/* The chip sits bottom-center too; lift it clear of the bar below it. */
+.viewer-shell.view-mode .selection-chip {
+  bottom: 52px;
+}
+
+/* ── The parts rail ──────────────────────────────────────── */
+
+/*
+  Floats top-left over the viewport, where Build mode keeps its tool palette.
+  Capped short of the view bar so the two never meet on a short window; the
+  list scrolls inside that cap rather than the rail growing past it.
+*/
+.view-mode-rail {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: var(--z-viewer-overlay);
+  width: 208px;
+  max-height: calc(100% - 68px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.view-mode-rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 7px 6px 7px 10px;
+  border-bottom: var(--border-thin);
+}
+
+.view-mode-rail-head h2 {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.view-mode-rail-count {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.view-mode-rail-collapse {
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.view-mode-rail-collapse:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-rail-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.view-mode-rail-empty {
+  margin: 0;
+  padding: 6px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.view-mode-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: var(--radius-sm);
+}
+
+.view-mode-rail-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.view-mode-rail-row.selected {
+  background: var(--color-accent-dim);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+/* Hidden parts stay legible — this row is how they come back. */
+.view-mode-rail-row.hidden-body .view-mode-rail-label {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.view-mode-rail-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px 0 6px;
+  color: var(--color-text);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.view-mode-rail-swatch {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 35%);
+}
+
+.view-mode-rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-mode-rail-action {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+/* Row actions stay out of the way until the row is in play. Anything that is
+   currently hidden keeps its control visible — otherwise the only way back is
+   to hover a row whose state you cannot see. */
+.view-mode-rail-row:hover .view-mode-rail-action,
+.view-mode-rail-row.selected .view-mode-rail-action,
+.view-mode-rail-action:focus-visible,
+.view-mode-rail-action.is-hidden {
+  opacity: 1;
+}
+
+.view-mode-rail-action:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.view-mode-rail-action.is-hidden {
+  color: var(--color-accent);
+}
+
+.view-mode-rail-foot {
+  padding: 6px 10px 7px;
+  border-top: var(--border-thin);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  line-height: var(--lh-tight);
+}
+
+.view-mode-rail-foot button {
+  padding: 0;
+  color: var(--color-accent);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.view-mode-rail-foot button:hover {
+  color: var(--color-accent-hi);
+  text-decoration: underline;
+}
+
+.view-mode-rail-launcher {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: var(--z-viewer-overlay);
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.view-mode-rail-launcher:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+@media (max-width: 620px) {
+  .mode-switch {
+    margin-inline: 0;
+  }
+
+  .mode-switch-option {
+    padding-inline: 9px;
+  }
+
+  /* The stacked narrow layout gives the sidebar a row; without one the
+     viewport takes the whole workspace. Matches the specificity of the
+     stacked rule in responsive.css, and follows it in the cascade. */
+  .workspace.no-sidebar,
+  .workspace.no-sidebar.with-assistant {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .palette-float:has(.view-mode-bar) {
+    bottom: 6px;
+  }
+
+  /* Half a phone screen of parts list is a phone screen with no model on it. */
+  .view-mode-rail {
+    top: 6px;
+    left: 6px;
+    width: 168px;
+    max-height: 44%;
+  }
+
+  .view-mode-rail-launcher {
+    top: 6px;
+    left: 6px;
+  }
+}
