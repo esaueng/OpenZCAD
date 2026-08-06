@@ -82,6 +82,23 @@ describe('StartScreen new part suggestion', () => {
   });
 });
 
+describe('StartScreen project timestamps', () => {
+  it('shows the local date and time each project was last edited', () => {
+    renderStartScreen();
+
+    const editedAt = screen.getByText(/^edited /);
+    const date = new Date(localProject.updatedAt);
+
+    expect(editedAt).toHaveAttribute('datetime', localProject.updatedAt);
+    expect(editedAt).toHaveTextContent(
+      `edited ${date.toLocaleDateString()} at ${date.toLocaleTimeString(
+        undefined,
+        { hour: 'numeric', minute: '2-digit' }
+      )}`
+    );
+  });
+});
+
 describe('StartScreen cloud project status', () => {
   it('offers a confirmed device-only project for account sync', () => {
     renderStartScreen();
