@@ -44,6 +44,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Reopen the last project',
       'Default units',
       'Confirm destructive actions',
+      'Cloud features',
       'AI assistant'
     ]
   },
@@ -70,8 +71,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Sketching',
     detail: 'Linear and angular snapping',
     settings: [
-      'Snap sketch input',
+      'Show sketch grid',
+      'Snap to sketch grid',
+      'Geometry snapping',
+      'Automatic inferencing',
       'Linear snap',
+      'Snap tolerance',
       'Angular snap',
       'Direct manipulation (experimental)'
     ]
@@ -140,6 +145,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
 export interface SettingsSectionVisibility {
   /** `settings.assistant.enabled`. False removes the AI section entirely. */
   assistantEnabled: boolean;
+  /** Device-local offline mode removes every cloud-only settings surface. */
+  cloudFunctionsEnabled?: boolean;
   /** Raw "Find a setting" query; blank matches everything. */
   query?: string;
 }
@@ -151,11 +158,15 @@ export interface SettingsSectionVisibility {
  */
 export function visibleSettingsSections({
   assistantEnabled,
+  cloudFunctionsEnabled = true,
   query = ''
 }: SettingsSectionVisibility): SettingsSectionMeta[] {
-  const available = assistantEnabled
-    ? [...SETTINGS_SECTIONS]
-    : SETTINGS_SECTIONS.filter((section) => section.id !== 'assistant');
+  const available = SETTINGS_SECTIONS.filter(
+    (section) =>
+      (cloudFunctionsEnabled || section.id !== 'account') &&
+      (cloudFunctionsEnabled || section.id !== 'assistant') &&
+      (assistantEnabled || section.id !== 'assistant')
+  );
   const normalized = query.trim().toLowerCase();
   return normalized
     ? available.filter((section) =>

@@ -1,3 +1,5 @@
+import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
+
 export type DesktopMenuCommand =
   | 'open-model'
   | 'save-project'
@@ -85,6 +87,7 @@ function apiPath(input: RequestInfo | URL): string {
 export async function desktopCollaborationUrl(
   projectId: string
 ): Promise<string> {
+  assertCloudFunctionsEnabled();
   if (!isDesktopApp()) {
     throw new Error(
       'Desktop collaboration is only available in the macOS app.'
@@ -94,6 +97,7 @@ export async function desktopCollaborationUrl(
   const value = await invoke<string>('desktop_collaboration_url', {
     projectId
   });
+  assertCloudFunctionsEnabled();
   const url = new URL(value);
   const expectedPath = `/api/projects/${encodeURIComponent(projectId)}/collaboration`;
   const tickets = url.searchParams.getAll('ticket');
@@ -118,10 +122,11 @@ export async function desktopFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<Response> {
+  const signal = cloudRequestSignal(init.signal);
   if (!isDesktopApp()) {
-    return fetch(input, init);
+    return fetch(input, { ...init, signal });
   }
-  if (init.signal?.aborted) {
+  if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
   const headers = new Headers(init.headers);
@@ -134,7 +139,8 @@ export async function desktopFetch(
       body: await requestBodyBytes(init.body)
     }
   });
-  if (init.signal?.aborted) {
+  assertCloudFunctionsEnabled();
+  if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
   return new Response(new Uint8Array(result.body), {
@@ -149,19 +155,28 @@ export async function startDesktopSignIn(): Promise<{
   expiresInSeconds: number;
   userCode: string;
 }> {
+  assertCloudFunctionsEnabled();
   if (!isDesktopApp()) {
     throw new Error('Desktop sign-in is only available in the macOS app.');
   }
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke('start_desktop_sign_in');
+  const result = await invoke<{
+    expiresInSeconds: number;
+    userCode: string;
+  }>('start_desktop_sign_in');
+  assertCloudFunctionsEnabled();
+  return result;
 }
 
 export async function pollDesktopSignIn(): Promise<DesktopAuthPollResult> {
+  assertCloudFunctionsEnabled();
   if (!isDesktopApp()) {
     throw new Error('Desktop sign-in is only available in the macOS app.');
   }
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<DesktopAuthPollResult>('poll_desktop_sign_in');
+  const result = await invoke<DesktopAuthPollResult>('poll_desktop_sign_in');
+  assertCloudFunctionsEnabled();
+  return result;
 }
 
 export async function cancelDesktopSignIn(): Promise<void> {

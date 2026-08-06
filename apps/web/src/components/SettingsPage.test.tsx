@@ -18,6 +18,7 @@ function renderSettings(
   return render(
     <SettingsPage
       settings={defaultAppSettings()}
+      cloudFunctionsEnabled={true}
       accountState={null}
       authConfig={null}
       authConfigStatus="unavailable"
@@ -26,6 +27,7 @@ function renderSettings(
       busy={false}
       message=""
       onChange={vi.fn()}
+      onCloudFunctionsEnabledChange={vi.fn()}
       onSaveCredential={vi.fn()}
       onDeleteCredential={vi.fn()}
       onTestAssistant={vi.fn()}
@@ -43,6 +45,36 @@ function renderSettings(
     />
   );
 }
+
+describe('settings offline mode', () => {
+  it('keeps local features available and removes cloud-only surfaces', async () => {
+    const user = userEvent.setup();
+    const onCloudFunctionsEnabledChange = vi.fn();
+    renderSettings(null, {
+      cloudFunctionsEnabled: false,
+      onCloudFunctionsEnabledChange
+    });
+
+    expect(screen.getByText('Offline mode')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Account' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'AI Assistant' })).toBeNull();
+    expect(
+      screen.getByRole('checkbox', { name: 'AI assistant' })
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Files & autosave' }));
+    expect(screen.getByText('Local autosave')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', { name: 'Cloud autosave' })
+    ).toBeDisabled();
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'General' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Cloud features' }));
+    expect(onCloudFunctionsEnabledChange).toHaveBeenCalledWith(true);
+  });
+});
 
 describe('settings advanced section', () => {
   it('reports the kernel build the app was compiled against', async () => {
@@ -128,7 +160,6 @@ describe('settings desktop account section', () => {
   });
 
   it('requires an explicit approval before connecting the desktop app', async () => {
-    const user = userEvent.setup();
     const onApproveDesktopLogin = vi.fn().mockResolvedValue(undefined);
 
     renderSettings(null, {

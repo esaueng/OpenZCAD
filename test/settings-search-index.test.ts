@@ -58,9 +58,9 @@ describe('settings search index', () => {
     // otherwise make this test pass by comparing two empty maps.
     expect(rendered.size).toBe(10);
     expect(indexed.size).toBe(10);
-    expect(
-      Array.from(rendered.values()).flat().length
-    ).toBeGreaterThanOrEqual(30);
+    expect(Array.from(rendered.values()).flat().length).toBeGreaterThanOrEqual(
+      30
+    );
 
     for (const [section, titles] of rendered) {
       expect({ section, titles: indexed.get(section) }).toEqual({
@@ -75,7 +75,9 @@ describe('assistant kill switch', () => {
   it('keeps the master toggle outside the section it removes', () => {
     // The toggle has to live somewhere that survives being switched off, or
     // there is no way back to it.
-    const general = SETTINGS_SECTIONS.find((section) => section.id === 'general');
+    const general = SETTINGS_SECTIONS.find(
+      (section) => section.id === 'general'
+    );
     const assistant = SETTINGS_SECTIONS.find(
       (section) => section.id === 'assistant'
     );
@@ -129,5 +131,44 @@ describe('assistant kill switch', () => {
     expect(
       visibleSettingsSections({ assistantEnabled: true, query: '   ' })
     ).toHaveLength(SETTINGS_SECTIONS.length);
+  });
+});
+
+describe('offline mode', () => {
+  it('keeps its master toggle in the always-visible General section', () => {
+    expect(
+      SETTINGS_SECTIONS.find((section) => section.id === 'general')?.settings
+    ).toContain('Cloud features');
+  });
+
+  it('removes account and assistant surfaces while keeping local settings', () => {
+    const offline = visibleSettingsSections({
+      assistantEnabled: true,
+      cloudFunctionsEnabled: false
+    });
+
+    expect(offline.map((section) => section.id)).not.toContain('account');
+    expect(offline.map((section) => section.id)).not.toContain('assistant');
+    expect(offline.map((section) => section.id)).toContain('files');
+    expect(offline.map((section) => section.id)).toContain('general');
+  });
+
+  it('cannot surface cloud-only sections through search', () => {
+    for (const query of ['cloud profile', 'personal token', 'provider']) {
+      expect(
+        visibleSettingsSections({
+          assistantEnabled: true,
+          cloudFunctionsEnabled: false,
+          query
+        }).map((section) => section.id)
+      ).not.toContain('account');
+      expect(
+        visibleSettingsSections({
+          assistantEnabled: true,
+          cloudFunctionsEnabled: false,
+          query
+        }).map((section) => section.id)
+      ).not.toContain('assistant');
+    }
   });
 });
