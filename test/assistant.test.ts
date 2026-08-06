@@ -812,6 +812,83 @@ describe('assistant integration', () => {
     });
   });
 
+  it('retries an unavailable strict OpenRouter route without weakening local validation', async () => {
+    let attempt = 0;
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => {
+        attempt += 1;
+        if (attempt === 1) {
+          return Response.json(
+            {
+              error: {
+                code: 404,
+                message:
+                  'No allowed providers are available for the selected model'
+              }
+            },
+            { status: 404 }
+          );
+        }
+        return new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        });
+      }
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const consoleWarn = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {}, 'user_personal', {
+      provider: 'openrouter',
+      apiKey: 'personal-key',
+      model: 'openai/gpt-5.6-sol',
+      reasoningEffort: 'high',
+      maxOutputTokens: 32_000,
+      timeoutMs: 120_000,
+      customInstructions: ''
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [strictUrl, strictInit] = fetchMock.mock.calls[0]!;
+    const [fallbackUrl, fallbackInit] = fetchMock.mock.calls[1]!;
+    expect(strictUrl).toBe('https://openrouter.ai/api/v1/responses');
+    expect(fallbackUrl).toBe(strictUrl);
+    const strictRequest = JSON.parse(strictInit?.body as string) as Record<
+      string,
+      unknown
+    >;
+    const fallbackRequest = JSON.parse(fallbackInit?.body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(strictRequest.provider).toEqual({ require_parameters: true });
+    expect(fallbackRequest.provider).toBeUndefined();
+    expect(fallbackRequest).toMatchObject({
+      model: 'openai/gpt-5.6-sol',
+      safety_identifier: 'user_personal',
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'openzcad_reply',
+          strict: true
+        }
+      }
+    });
+    expect(consoleWarn).toHaveBeenCalledWith(
+      'AI Responses strict route unavailable; retrying:',
+      expect.objectContaining({
+        provider: 'openrouter',
+        model: 'openai/gpt-5.6-sol',
+        status: 404
+      })
+    );
+    expect(JSON.stringify(consoleWarn.mock.calls)).not.toContain(
+      'personal-key'
+    );
+  });
+
   it('logs only bounded metadata for invalid streamed output', async () => {
     const output = 'not-json';
     vi.stubGlobal(
