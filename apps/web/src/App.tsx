@@ -982,6 +982,52 @@ export function App() {
     },
     []
   );
+  /**
+   * Fills the cache for a tile it could not answer for. The cache is only ever
+   * written while a project is open, so every project that predates it — which
+   * on an established shelf is all of them — would otherwise sit behind a
+   * placeholder until it happened to be opened again.
+   *
+   * Two limits keep the reason the cache exists intact. Only what this device
+   * already holds is read, never the network, so a shelf of parts stored only
+   * in the account stays exactly as cheap to draw as it is now. And the load
+   * runs inside the preview queue rather than alongside it, so the tiles on
+   * screen are filled one document at a time instead of all at once.
+   */
+  const backfillThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const { queuePartThumbnail, renderThumbnailFrame } = await import(
+        './lib/partThumbnail'
+      );
+      return queuePartThumbnail(async () => {
+        const stored = await loadLocalProject(project.projectId).catch(
+          () => null
+        );
+        if (!stored) {
+          return undefined;
+        }
+        const bodies = Object.values(stored.derived.bodyRepresentations).filter(
+          (body) => !body.consumed
+        );
+        let source: string | null;
+        try {
+          source = renderThumbnailFrame(bodies);
+        } catch {
+          // A device that cannot give us a WebGL context is not going to on the
+          // next tile either. Leave the cache empty rather than recording a
+          // "no geometry" that says more about the browser than the part.
+          return undefined;
+        }
+        await saveProjectThumbnail(project.projectId, {
+          source,
+          version: stored.version,
+          updatedAt: stored.derived.updatedAt
+        }).catch(() => undefined);
+        return source;
+      });
+    },
+    []
+  );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
     view: ViewTarget;
@@ -8055,6 +8101,7 @@ export function App() {
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
           loadThumbnail={loadThumbnail}
+          backfillThumbnail={backfillThumbnail}
         />
         {settingsOverlay}
       </>
