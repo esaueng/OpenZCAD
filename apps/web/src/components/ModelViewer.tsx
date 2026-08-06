@@ -101,6 +101,7 @@ import {
   type ProjectionMode,
   type SketchOverlay,
   type ViewTarget,
+  type ViewerBodyMaterial,
   type ViewerSettings,
   type FatLineResolution,
   type BodyEdgeOverlay
@@ -278,6 +279,13 @@ export interface ExtrudePreview {
   distance: number;
 }
 
+/** Transient per-body display patch, applied without touching the document. */
+export interface BodyAppearancePreview {
+  bodyId: string;
+  color?: string;
+  opacity?: number;
+}
+
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
@@ -307,6 +315,12 @@ interface ModelViewerProps {
    * in the same commit.
    */
   moveCommitHold: MovePreview | null;
+  /**
+   * Drag-phase body appearance patch applied straight to the live material so
+   * slider drags stay at pointer rate. The committed value arrives through
+   * `bodies` on the next rebuild; null restores the committed look.
+   */
+  appearancePreview: BodyAppearancePreview | null;
   projection: ProjectionMode;
   /** Per-project camera pose restored before the first automatic fit. */
   initialView: ViewportCameraState | null;
@@ -648,6 +662,7 @@ export function ModelViewer({
   extrudePreview,
   movePreview,
   moveCommitHold,
+  appearancePreview,
   projection,
   initialView,
   onViewChange,
@@ -4846,6 +4861,61 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [sketchBasis]);
+
+  // Drag-phase appearance edits patch the live body material directly so
+  // slider drags stay at pointer rate; no document write, no kernel rebuild.
+  // The rebuild effect recreates materials from committed state, so this
+  // re-applies on top after every bodies change, and its cleanup restores the
+  // committed look when the preview clears or the drag ends without commit.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !appearancePreview) {
+      return;
+    }
+    const object = context.objectsByBodyId.get(appearancePreview.bodyId);
+    if (!object) {
+      return;
+    }
+    const patched: {
+      material: ViewerBodyMaterial;
+      color: THREE.Color;
+      opacity: number;
+      transparent: boolean;
+      depthWrite: boolean;
+    }[] = [];
+    forEachMesh(object, (mesh) => {
+      const material = mesh.material;
+      patched.push({
+        material,
+        color: material.color.clone(),
+        opacity: material.opacity,
+        transparent: material.transparent,
+        depthWrite: material.depthWrite
+      });
+      if (appearancePreview.color !== undefined) {
+        material.color.set(appearancePreview.color);
+      }
+      if (appearancePreview.opacity !== undefined) {
+        const opacity = appearancePreview.opacity;
+        material.transparent = opacity < 1;
+        material.opacity = opacity;
+        material.depthWrite = opacity >= 1;
+      }
+    });
+    if (patched.length === 0) {
+      return;
+    }
+    context.requestRender();
+    return () => {
+      for (const entry of patched) {
+        entry.material.color.copy(entry.color);
+        entry.material.opacity = entry.opacity;
+        entry.material.transparent = entry.transparent;
+        entry.material.depthWrite = entry.depthWrite;
+      }
+      context.requestRender();
+    };
+  }, [appearancePreview, bodies]);
 
   // Solids recede while sketching so the plane reads as the work surface.
   // Re-applied after every body rebuild (each entity commit resyncs).
