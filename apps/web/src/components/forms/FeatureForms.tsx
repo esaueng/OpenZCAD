@@ -664,8 +664,22 @@ export function ExtrudeForm({
   const [distance, setDistance] = useState(
     paramValueText(initial?.distance ?? 24)
   );
+  // A zero-distance extrude builds nothing, and the kernel says so only after
+  // the edit has committed and taken the body with it — the panel showed no
+  // error, Apply stayed enabled, and the solid simply vanished, leaving a
+  // sidebar diagnostic as the only account of it. Caught here instead, the
+  // same way RevolveForm catches an out-of-range angle. Expressions are
+  // covered too, since the preview evaluates against the parameter scope.
+  const distancePreview = previewExpression(distance, scope);
+  const distanceIsZero =
+    distancePreview.ok &&
+    distancePreview.value !== undefined &&
+    distancePreview.value === 0;
   const canSubmit =
-    name.trim().length > 0 && sketchId !== '' && fieldsValid(scope, [distance]);
+    name.trim().length > 0 &&
+    sketchId !== '' &&
+    fieldsValid(scope, [distance]) &&
+    !distanceIsZero;
 
   return (
     <FormShell
@@ -707,6 +721,11 @@ export function ExtrudeForm({
         autoFocus
         onChange={setDistance}
       />
+      {distanceIsZero && (
+        <p className="muted error">
+          Distance cannot be zero — a zero-distance extrude builds no solid.
+        </p>
+      )}
       <p className="muted">
         Negative distances extrude below the sketch plane. The operation is
         resolved when the feature is created and is not re-inferred by edits.
@@ -898,6 +917,22 @@ export function BooleanForm({
   const canSubmit = name.trim().length > 0 && selected.length >= 2;
   const operationAutoFocus = useFieldAutoFocus(true);
 
+  /**
+   * Keep an untouched name honest about what the feature does.
+   *
+   * Switching Union to Subtract left the name reading "Union", so the history
+   * row, the body and the panel heading all claimed an operation the feature
+   * did not perform. Only a name the user has not written is re-derived —
+   * comparing against the CURRENT operation's label is what distinguishes
+   * "still the default" from "deliberately called Union".
+   */
+  function changeOperation(next: BooleanOperation) {
+    setName((current) =>
+      current === OPERATION_LABELS[operation] ? OPERATION_LABELS[next] : current
+    );
+    setOperation(next);
+  }
+
   return (
     <FormShell
       name={name}
@@ -918,7 +953,7 @@ export function BooleanForm({
           // silently rather than producing a visible bad value.
           autoFocus={operationAutoFocus}
           onChange={(event) =>
-            setOperation(event.target.value as BooleanOperation)
+            changeOperation(event.target.value as BooleanOperation)
           }
         >
           {(Object.keys(OPERATION_LABELS) as BooleanOperation[]).map((id) => (
@@ -1176,7 +1211,11 @@ export function EdgeModifierForm({
           ? `${edgeHashes.length} exact edge${edgeHashes.length === 1 ? '' : 's'} selected`
           : targetBodyId
             ? 'Select edges in the viewport or select every edge below.'
-            : 'Select a body or edge in the viewport first.'}
+            : // Not "select a body or edge": arming this tool narrows picking
+              // to edges, so a click on a body face resolves to nothing — and
+              // a click that resolves to nothing clears the selection. Name
+              // the routes that work rather than the one the tool forbids.
+              'Click an edge in the viewport, or pick the body in the model tree.'}
       </div>
       {targetBodyId &&
         availableEdgeCount &&
