@@ -1,5 +1,6 @@
 import {
   isPurgeDue,
+  type ImportedSourceReference,
   type ProjectDocument,
   type ProjectOrganization,
   type ProjectSummary
@@ -22,7 +23,15 @@ const META_STORE_NAME = 'projectMeta';
  * another, where it would be a lie.
  */
 const SYNC_STORE_NAME = 'projectSync';
-const DATABASE_VERSION = 3;
+/**
+ * Import source bytes (STEP text today), keyed by content checksum rather than
+ * by project: the same uploaded file referenced from two projects is stored
+ * once, and a reference in a document is satisfiable by any record whose bytes
+ * hash to its checksum. Values are Blobs so the browser can keep hundreds of
+ * megabytes on disk instead of in structured-clone memory.
+ */
+const BLOB_STORE_NAME = 'sourceBlobs';
+const DATABASE_VERSION = 4;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
@@ -51,6 +60,11 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!request.result.objectStoreNames.contains(SYNC_STORE_NAME)) {
         request.result.createObjectStore(SYNC_STORE_NAME, {
           keyPath: 'projectId'
+        });
+      }
+      if (!request.result.objectStoreNames.contains(BLOB_STORE_NAME)) {
+        request.result.createObjectStore(BLOB_STORE_NAME, {
+          keyPath: 'checksumSha256'
         });
       }
     };
@@ -88,6 +102,102 @@ function transaction<T>(
         tx.onabort = fail;
       })
   );
+}
+
+interface SourceBlobRecord {
+  checksumSha256: string;
+  body: Blob;
+  logicalBytes: number;
+  createdAt: string;
+}
+
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (value) =>
+    value.toString(16).padStart(2, '0')
+  ).join('');
+}
+
+/**
+ * Stores source bytes and returns the reference a document should hold. The
+ * checksum is computed here — callers cannot store bytes under a wrong
+ * identity, so readers never need to re-verify local records.
+ */
+export async function putSourceBlob(
+  source: Blob | Uint8Array<ArrayBuffer>
+): Promise<ImportedSourceReference> {
+  const bytes =
+    source instanceof Uint8Array
+      ? source
+      : new Uint8Array(await source.arrayBuffer());
+  const checksumSha256 = await sha256Hex(bytes);
+  const record: SourceBlobRecord = {
+    checksumSha256,
+    body: source instanceof Blob ? source : new Blob([bytes]),
+    logicalBytes: bytes.byteLength,
+    createdAt: new Date().toISOString()
+  };
+  await transaction('readwrite', (store) => store.put(record), BLOB_STORE_NAME);
+  return {
+    marker: 'openzcad-source-ref',
+    version: 1,
+    hashAlgorithm: 'sha256',
+    checksumSha256,
+    logicalBytes: bytes.byteLength
+  };
+}
+
+export async function loadSourceBlob(
+  checksumSha256: string
+): Promise<Uint8Array | null> {
+  const record = await transaction<SourceBlobRecord | undefined>(
+    'readonly',
+    (store) => store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
+    BLOB_STORE_NAME
+  );
+  if (!record) {
+    return null;
+  }
+  return new Uint8Array(await record.body.arrayBuffer());
+}
+
+export function hasSourceBlob(checksumSha256: string): Promise<boolean> {
+  return transaction<number>(
+    'readonly',
+    (store) => store.count(checksumSha256),
+    BLOB_STORE_NAME
+  ).then((count) => count > 0);
+}
+
+/**
+ * Removes every blob whose checksum is not in `referencedChecksums`. Callers
+ * assemble the referenced set from every local document plus any in-flight
+ * import, so a sweep during an import must be avoided by the caller, not here.
+ */
+export async function pruneUnreferencedSourceBlobs(
+  referencedChecksums: ReadonlySet<string>
+): Promise<string[]> {
+  const keys = await transaction<IDBValidKey[]>(
+    'readonly',
+    (store) => store.getAllKeys(),
+    BLOB_STORE_NAME
+  );
+  const removed: string[] = [];
+  for (const key of keys) {
+    if (typeof key !== 'string') {
+      continue;
+    }
+    const checksum = key;
+    if (!referencedChecksums.has(checksum)) {
+      await transaction(
+        'readwrite',
+        (store) => store.delete(checksum),
+        BLOB_STORE_NAME
+      );
+      removed.push(checksum);
+    }
+  }
+  return removed;
 }
 
 export function saveLocalProject(document: ProjectDocument): Promise<void> {
@@ -205,9 +315,7 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
     'readwrite',
     (store) => store.delete(projectId),
     SYNC_STORE_NAME
-  )
-    .then(() => undefined)
-    .catch(() => undefined);
+  ).then(() => undefined);
 }
 
 /**
@@ -215,25 +323,50 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
  * account on this device never reconciles against the previous one's history:
  * an unknown baseline is safe (reconciliation reports instead of assuming
  * agreement), a stale one can silently overwrite the newer side.
+ *
+ * Rejects rather than resolving quietly when the clear fails. A caller that
+ * cannot tell a cleared baseline from a surviving one has no way to warn about
+ * the reconciliation that surviving baseline will later distort.
  */
 export function clearAllLastSyncedVersions(): Promise<void> {
-  return transaction('readwrite', (store) => store.clear(), SYNC_STORE_NAME)
-    .then(() => undefined)
-    .catch(() => undefined);
+  return transaction(
+    'readwrite',
+    (store) => store.clear(),
+    SYNC_STORE_NAME
+  ).then(() => undefined);
 }
 
-/** Destroys a project's document, its shelf state, and its sync baseline. */
+/**
+ * Destroys a project's document, its shelf state, and its sync baseline in a
+ * single transaction.
+ *
+ * Split across three, a crash between them can leave a baseline behind that
+ * describes a document this device no longer holds. Should that project id
+ * come back — re-adoption, or a fresh download of the account copy — the
+ * surviving baseline is consumed as agreement about a lineage that ended, and
+ * reconciliation picks a side instead of reporting the divergence.
+ */
 export function deleteLocalProject(projectId: string): Promise<void> {
-  return transaction('readwrite', (store) => store.delete(projectId))
-    .then(() =>
-      transaction(
-        'readwrite',
-        (store) => store.delete(projectId),
-        META_STORE_NAME
-      )
-    )
-    .then(() => clearLastSyncedVersion(projectId))
-    .then(() => undefined);
+  const storeNames = [STORE_NAME, META_STORE_NAME, SYNC_STORE_NAME];
+  return openDatabase().then(
+    (database) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = database.transaction(storeNames, 'readwrite');
+        for (const storeName of storeNames) {
+          tx.objectStore(storeName).delete(projectId);
+        }
+        tx.oncomplete = () => {
+          database.close();
+          resolve();
+        };
+        const fail = () => {
+          database.close();
+          reject(tx.error ?? new Error('Local project storage failed.'));
+        };
+        tx.onerror = fail;
+        tx.onabort = fail;
+      })
+  );
 }
 
 export async function listLocalProjects(): Promise<ProjectSummary[]> {

@@ -2,6 +2,7 @@ import {
   test,
   expect,
   createProject,
+  expectBodyCount,
   openAssistant,
   stubApi,
   stubAssistant,
@@ -84,7 +85,7 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
 
   const topbar = page.locator('.topbar');
   const actions = topbar.getByRole('group', {
-    name: 'Workspace status and actions'
+    name: 'Workspace actions'
   });
   const actionSlots = actions.locator(':scope > *');
   await expect(actionSlots).toHaveCount(5);
@@ -562,7 +563,7 @@ test('disabling the assistant takes its live preview with it', async ({
   await expect(status).toContainText('Previewing exact proposed geometry.');
   // The preview is unapplied geometry: it shows a body the document does not
   // have, which is what makes an orphaned preview visible at all.
-  await expect(status.locator('[title*="1 bodies"]')).toHaveCount(1);
+  await expectBodyCount(page, 1);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
@@ -578,7 +579,7 @@ test('disabling the assistant takes its live preview with it', async ({
   // The panel is gone, so nothing is left that could retire the preview — the
   // workspace has to drop it rather than render a proposal forever.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(status.locator('[title*="0 bodies"]')).toHaveCount(1);
+  await expectBodyCount(page, 0);
 });
 
 test('settings swallow workspace shortcuts instead of editing behind them', async ({
