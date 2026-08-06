@@ -8638,6 +8638,7 @@ export function App() {
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
+                currentUserId={session?.userId}
                 conflict={collaboration.conflict}
                 conflictHandlers={conflictHandlers}
                 editorInvitationsEnabled={
