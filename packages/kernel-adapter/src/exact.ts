@@ -78,7 +78,8 @@ import {
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import {
   analyzeUnionConnectivity,
-  disconnectedUnionWarning
+  disconnectedUnionWarning,
+  type UnionBounds
 } from './union-connectivity';
 import {
   ambiguousReferenceError,
@@ -917,6 +918,82 @@ function selectionTouchesBlendFace(
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+interface UnionFuseOperand {
+  solid: number;
+  name: string;
+  bounds: UnionBounds;
+}
+
+/**
+ * A move that turns a faceted union into an exact one, or nothing.
+ *
+ * The fuse facets where the operands meet tangentially, which for the shapes
+ * this workspace makes is almost always an axis or a face sitting exactly in
+ * one of the other operand's face planes. That is where a new primitive
+ * lands: a box is corner-origin and a cylinder is axis-origin, so creating
+ * one of each puts the cylinder's axis on the box's corner edge, and the
+ * repair a user reaches for first — slide it along X — keeps the axis in the
+ * y = 0 plane and fails again.
+ *
+ * So the remedy is worth naming exactly rather than describing. Each
+ * candidate is TRIED, on copies, and only offered once the fuse it produces
+ * is measured exact: a suggestion that does not work is worse than the
+ * general advice it replaces, and this is the same reason
+ * `edgeModifierSucceedsSmaller` probes instead of inferring.
+ */
+function exactUnionOffsetSuggestion(
+  kernel: BrepKernel,
+  operands: readonly UnionFuseOperand[],
+  units: string
+): string | null {
+  if (operands.length !== 2) {
+    return null;
+  }
+  const [anchor, mover] = operands as [UnionFuseOperand, UnionFuseOperand];
+  const centre = (bounds: UnionBounds, axis: 'x' | 'y' | 'z') =>
+    (bounds.min[axis] + bounds.max[axis]) / 2;
+  const axes = ['x', 'y', 'z'] as const;
+  for (const axis of axes) {
+    const delta = centre(anchor.bounds, axis) - centre(mover.bounds, axis);
+    if (Math.abs(delta) <= GEOMETRY_EPSILON) {
+      continue;
+    }
+    let candidate: number;
+    try {
+      const moved = kernel.copySolid(mover.solid);
+      kernel.transformSolid(
+        moved,
+        transformMatrix(
+          {
+            x: axis === 'x' ? delta : 0,
+            y: axis === 'y' ? delta : 0,
+            z: axis === 'z' ? delta : 0
+          },
+          { x: 0, y: 0, z: 0 }
+        )
+      );
+      candidate = kernel.fuseAll(
+        Uint32Array.from([kernel.copySolid(anchor.solid), moved])
+      );
+    } catch {
+      continue;
+    }
+    const census = censusOfSolids(kernel, [candidate]);
+    const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
+    if (
+      booleanFacetFallbackWarning({
+        operands: operandCensus,
+        result: census
+      }) === null
+    ) {
+      const rounded = Math.abs(delta) < 1 ? delta.toFixed(3) : delta.toFixed(2);
+      const amount = Number(rounded);
+      return `Moving ${mover.name} ${amount > 0 ? '+' : ''}${amount} ${units} in ${axis.toUpperCase()} clears it.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -4852,6 +4929,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               operands.flatMap((shape) => shape.solids)
             );
             let solid: number;
+            let unionFuseOperands: UnionFuseOperand[] | null = null;
             if (feature.data.operation === 'union') {
               const unionOperands = feature.data.targetBodyIds.flatMap(
                 (bodyId, operandIndex) =>
@@ -4875,6 +4953,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     };
                   })
               );
+              unionFuseOperands = unionOperands;
               const unionSolids = unionOperands.map((operand) => operand.solid);
               const connectivity = analyzeUnionConnectivity(
                 unionOperands,
@@ -4950,8 +5029,20 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               result: censusOfSolids(kernel, [solid])
             });
             if (facetFallback) {
+              // Naming the move that works is only possible here, where the
+              // operands are still addressable; by the time this reaches the
+              // panel it is a sentence.
+              const suggestion = unionFuseOperands
+                ? exactUnionOffsetSuggestion(
+                    kernel,
+                    unionFuseOperands,
+                    document.units
+                  )
+                : null;
               result.warnings.push(
-                `Feature "${feature.name}": ${facetFallback}`
+                `Feature "${feature.name}": ${facetFallback}${
+                  suggestion ? ` ${suggestion}` : ''
+                }`
               );
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
