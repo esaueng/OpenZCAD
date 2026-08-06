@@ -263,14 +263,18 @@ function trackedResponse(
       try {
         const result = await reader.read();
         if (result.done) {
-          controller.close();
           await release();
+          // Do not expose stream completion until the next turn can acquire
+          // the account/IP slot. Closing first lets the browser submit again
+          // while the D1 delete is still pending, and the Worker runtime may
+          // stop post-response work before that best-effort cleanup runs.
+          controller.close();
           return;
         }
         controller.enqueue(result.value);
       } catch (error) {
-        controller.error(error);
         await release();
+        controller.error(error);
       }
     },
     async cancel(reason) {
