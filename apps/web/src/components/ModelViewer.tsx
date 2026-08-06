@@ -133,9 +133,11 @@ import {
   circleObjectFromDiameter,
   circleObjectFromThreePoints,
   circlePreviewPoints,
+  centerInferenceSegments,
   collectSketchSnapTargets,
   dimensionForInProgress,
   lineObjectFromPoints,
+  nearestCenterGuideTarget,
   pointAtDistanceAlongDirection,
   resolveSketchSnap,
   screenRayToPlanePoint,
@@ -839,6 +841,7 @@ export function ModelViewer({
   /** Entity-snap candidates from committed sketch objects + cursor marker. */
   const snapTargetsRef = useRef<SnapTarget[]>([]);
   const sketchSnapMarkerRef = useRef<HTMLDivElement | null>(null);
+  const sketchCenterTargetRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
   const sketchReturnRef = useRef<{
     position: THREE.Vector3;
@@ -1444,6 +1447,18 @@ export function ModelViewer({
       ariaHidden: true
     });
     sketchSnapMarkerRef.current = sketchSnapMarker;
+
+    // Exact center beacon: appears before the snap engages so the cursor has
+    // a visible destination instead of asking users to discover it by chance.
+    const sketchCenterTarget = hud.create('sketch-center-target', {
+      ariaHidden: true
+    });
+    for (const axis of ['horizontal', 'vertical'] as const) {
+      const line = document.createElement('span');
+      line.className = `sketch-center-axis ${axis}`;
+      sketchCenterTarget.appendChild(line);
+    }
+    sketchCenterTargetRef.current = sketchCenterTarget;
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -2406,7 +2421,11 @@ export function ModelViewer({
       kind: SnapTargetKind
     ) {
       sketchSnapMarker.dataset.kind = kind;
-      sketchSnapMarker.dataset.label = SKETCH_SNAP_LABELS[kind];
+      if (kind === 'grid') {
+        delete sketchSnapMarker.dataset.label;
+      } else {
+        sketchSnapMarker.dataset.label = SKETCH_SNAP_LABELS[kind];
+      }
       sketchSnapMarker.textContent = SKETCH_SNAP_GLYPHS[kind];
       sketchSnapMarker.title = SKETCH_SNAP_LABELS[kind];
       hud.showAtPointer(sketchSnapMarker, event);
@@ -2417,6 +2436,32 @@ export function ModelViewer({
       if (marker) {
         marker.hidden = true;
       }
+    }
+
+    function positionSketchCenterTarget(target: SnapTarget, engaged: boolean) {
+      const mode = sketchModeRef.current;
+      if (!mode) {
+        sketchCenterTarget.hidden = true;
+        return;
+      }
+      const basis = mode.basis;
+      const world = new THREE.Vector3(
+        basis.origin.x + basis.u.x * target.x + basis.v.x * target.y,
+        basis.origin.y + basis.u.y * target.x + basis.v.y * target.y,
+        basis.origin.z + basis.u.z * target.x + basis.v.z * target.y
+      );
+      const screen = projectToScreen(
+        world,
+        context.activeCamera,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
+      );
+      if (!screen) {
+        sketchCenterTarget.hidden = true;
+        return;
+      }
+      sketchCenterTarget.dataset.engaged = String(engaged);
+      hud.showAt(sketchCenterTarget, screen.x, screen.y);
     }
 
     function positionSketchDimLabel(
@@ -2612,6 +2657,30 @@ export function ModelViewer({
         return;
       }
       rig.setInference(null);
+      sketchCenterTarget.hidden = true;
+      if (mode.tool !== 'select' && mode.inferenceEnabled && !event.shiftKey) {
+        const worldPerPixel = sketchWorldPerPixel(mode.basis.origin);
+        const discoveryRadiusPx = Math.max(mode.snapTolerancePx * 6, 48);
+        const centerTarget = nearestCenterGuideTarget(
+          point,
+          snapTargetsRef.current,
+          discoveryRadiusPx * worldPerPixel
+        );
+        if (centerTarget) {
+          const halfSpan =
+            worldPerPixel *
+            Math.max(
+              renderer.domElement.clientWidth,
+              renderer.domElement.clientHeight
+            ) *
+            0.65;
+          rig.setInference(centerInferenceSegments(centerTarget, halfSpan));
+          positionSketchCenterTarget(
+            centerTarget,
+            activeSketchSnap?.id === centerTarget.id
+          );
+        }
+      }
       if (
         mode.tool === 'circle' &&
         mode.circleMode === 'three-point' &&
@@ -2699,7 +2768,7 @@ export function ModelViewer({
             : { point, lockedAxis: null };
         rig.setInProgress([gesture.chainAnchor, locked.point], false);
         if (locked.lockedAxis) {
-          rig.setInference([gesture.chainAnchor, locked.point]);
+          rig.setInference([[gesture.chainAnchor, locked.point]]);
           if (!activeSketchSnap) {
             positionSketchSnapMarker(event, locked.lockedAxis);
           }
@@ -3926,6 +3995,8 @@ export function ModelViewer({
     };
     const handlePointerLeave = () => {
       pendingHoverEvent = null;
+      sketchRigRef.current?.setInference(null);
+      sketchCenterTarget.hidden = true;
       if (moveDrag) {
         return;
       }
@@ -4055,6 +4126,7 @@ export function ModelViewer({
 
       const activeSketchMode = sketchModeRef.current;
       const activeSketchRig = sketchRigRef.current;
+      let inferenceAnimating = false;
       if (activeSketchMode && activeSketchRig) {
         const sketchOrigin = new THREE.Vector3(
           activeSketchMode.basis.origin.x,
@@ -4071,6 +4143,10 @@ export function ModelViewer({
         } else {
           sketchGridIndicator.hidden = true;
         }
+        inferenceAnimating = activeSketchRig.advanceInference(
+          now,
+          reducedMotionRef.current === true
+        );
       } else {
         sketchGridIndicator.hidden = true;
       }
@@ -4193,6 +4269,7 @@ export function ModelViewer({
         tweening ||
         controlsChanged ||
         hoverAnimating ||
+        inferenceAnimating ||
         context.fadeIns.size > 0
       ) {
         requestRender();
@@ -4286,6 +4363,7 @@ export function ModelViewer({
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
+      sketchCenterTargetRef.current = null;
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
       moveGizmoHudRef.current = null;
@@ -5221,6 +5299,10 @@ export function ModelViewer({
       if (marker) {
         marker.hidden = true;
       }
+      const centerTarget = sketchCenterTargetRef.current;
+      if (centerTarget) {
+        centerTarget.hidden = true;
+      }
       context.controls.enableRotate = true;
       const saved = sketchReturnRef.current;
       sketchReturnRef.current = null;
@@ -5318,6 +5400,10 @@ export function ModelViewer({
       const marker = sketchSnapMarkerRef.current;
       if (marker) {
         marker.hidden = true;
+      }
+      const centerTarget = sketchCenterTargetRef.current;
+      if (centerTarget) {
+        centerTarget.hidden = true;
       }
       contextRef.current?.requestRender();
     }
