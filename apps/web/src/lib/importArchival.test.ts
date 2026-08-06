@@ -43,6 +43,16 @@ function managerWithImports(): CommandManager {
   );
   manager.execute(
     commandFactories.importStep({
+      name: 'Second local import',
+      artifactId: 'artifact_local_ghi',
+      sourceName: 'local2.step',
+      stepSourceRef: referenceFor('local2')
+    })
+  );
+  // Rebuildable everywhere from the document itself, so it must stay out of
+  // every list and every upload below.
+  manager.execute(
+    commandFactories.importStep({
       name: 'Embedded import',
       artifactId: 'artifact_local_def',
       sourceName: 'embedded.step',
@@ -53,20 +63,32 @@ function managerWithImports(): CommandManager {
 }
 
 describe('listLocalOnlyImportSources', () => {
-  it('lists only STEP imports with an artifact_local_ reference', () => {
+  it('lists reference-form imports whose bytes were never archived', () => {
     const sources = listLocalOnlyImportSources(managerWithImports().document);
     expect(sources.map((source) => source.sourceName)).toEqual([
       'local.step',
-      'embedded.step'
+      'local2.step'
     ]);
-    expect(sources[0]).toMatchObject({
-      checksumSha256: 'checksum-local',
-      stepText: null
-    });
-    expect(sources[1]).toMatchObject({
-      checksumSha256: null,
-      stepText: 'ISO-10303-21;'
-    });
+    expect(sources[0]).toMatchObject({ checksumSha256: 'checksum-local' });
+  });
+
+  it('does not report an embedded-text import as local-only', () => {
+    // `stepText` travels inside the document, which syncs, and the kernel
+    // rebuilds straight from it — so every device can already open this
+    // project. Listing it would raise "other devices cannot rebuild it" over a
+    // project that is fine, and only the original upload is missing.
+    const manager = new CommandManager(
+      createProjectDocument('Embedded only', toUserId('user_archival'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Embedded import',
+        artifactId: 'artifact_local_def',
+        sourceName: 'embedded.step',
+        stepText: 'ISO-10303-21;'
+      })
+    );
+    expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
   });
 
   it('is empty for a fully archived document', () => {
@@ -96,15 +118,13 @@ describe('archiveLocalOnlyImportSources', () => {
       );
   }
 
-  it('uploads blob-store and embedded sources and rewires the features', async () => {
+  it('uploads blob-store sources and rewires the features', async () => {
     const manager = managerWithImports();
     const uploaded: string[] = [];
     const result = await archiveLocalOnlyImportSources({
       document: manager.document,
-      loadSourceBytes: async (checksum) =>
-        checksum === 'checksum-local'
-          ? new TextEncoder().encode('local step bytes')
-          : null,
+      loadSourceBytes: async () =>
+        new TextEncoder().encode('local step bytes'),
       archive: async (input) => {
         uploaded.push(`${input.fileName}:${input.body.size}`);
         return `artifact_cloud_${input.fileName}`;
@@ -112,14 +132,12 @@ describe('archiveLocalOnlyImportSources', () => {
       applyArtifactId: applyViaManager(manager) as never
     });
     expect(result).toEqual({
-      archived: ['local.step', 'embedded.step'],
+      archived: ['local.step', 'local2.step'],
       missing: [],
       failed: []
     });
-    expect(uploaded).toEqual([
-      'local.step:16',
-      'embedded.step:13'
-    ]);
+    // The embedded import is never uploaded: it was never a local-only source.
+    expect(uploaded).toEqual(['local.step:16', 'local2.step:16']);
     expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
     // The content-addressed reference survives the rewire, so local
     // rebuilds keep resolving from the blob store.
@@ -146,10 +164,8 @@ describe('archiveLocalOnlyImportSources', () => {
         throw new Error('should not edit anything');
       }
     });
-    // The blob-backed source has no bytes → missing; the embedded source
-    // still has bytes but its upload throws here → failed.
-    expect(result.missing).toEqual(['local.step']);
-    expect(result.failed).toEqual(['embedded.step']);
+    expect(result.missing).toEqual(['local.step', 'local2.step']);
+    expect(result.failed).toEqual([]);
     expect(manager.document).toBe(before);
   });
 
@@ -163,12 +179,12 @@ describe('archiveLocalOnlyImportSources', () => {
         if (input.fileName === 'local.step') {
           throw new Error('storage down');
         }
-        return 'artifact_cloud_embedded';
+        return 'artifact_cloud_local2';
       },
       applyArtifactId: applyViaManager(manager) as never
     });
     expect(result.failed).toEqual(['local.step']);
-    expect(result.archived).toEqual(['embedded.step']);
+    expect(result.archived).toEqual(['local2.step']);
     expect(
       listLocalOnlyImportSources(manager.document).map((s) => s.sourceName)
     ).toEqual(['local.step']);
