@@ -954,6 +954,9 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
 
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  // Stated rather than inherited: this test drags the radius by a fixed screen
+  // distance and asserts where it lands, so it owns its starting size.
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
@@ -2178,8 +2181,15 @@ test('models a parametric part and exports a true STEP file', async ({
   );
   await page.keyboard.press('Escape'); // back to the tool launcher
 
-  // Second body and a subtract that consumes both inputs.
+  // Second body and a subtract that consumes both inputs. Radius 14 is set
+  // here rather than taken from the form: the faceted-cut finding asserted
+  // below is a property of a cylinder wider than the box is deep, and the
+  // shipped default is now 6, which cuts cleanly.
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByLabel('Radius', { exact: true })
+    .fill('14');
   await page
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
@@ -2433,4 +2443,109 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     1
   );
+});
+
+test('a refused boolean explains itself inside the panel that asked', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refusal Copy');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // A box and a cylinder overlapping at the origin. The exact kernel cannot
+  // fuse the curved operand without dropping to facets, so this union is
+  // refused — the same two bodies subtract exactly, and an all-planar union is
+  // unaffected, which is what the message has to say.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  // Radius 14 is wider than the box is deep, which is the case whose facet
+  // census is the first thing the union has to report; the shipped default of
+  // 6 reports a dropped-operand tangency first instead.
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // The refusal is readable where the user is looking. Before this it reached
+  // only the status bar, clipped mid-sentence, leaving Create looking inert.
+  const refusal = inspector.getByRole('alert');
+  await expect(refusal).toContainText('faceted approximation');
+  // It states only what was measured. No single cause is asserted: measured
+  // on a box and a cylinder, repositioning clears this for a small round
+  // operand and clears nothing for one wider than the box it meets.
+  await expect(refusal).toContainText('will export that way');
+  await expect(refusal).toContainText('subtract instead');
+
+  // Refused means refused: history is untouched and the form stays open with
+  // its picks intact, ready for another operation.
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
+
+  // Starting a different operation clears the stale reason.
+  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await expect(inspector.getByRole('alert')).toHaveCount(0);
+});
+
+test('a union that facets at a tangency succeeds once the overlap moves off it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Tangent Union');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // Default placement is the kernel's worst case and nothing about the UI says
+  // so: a box is corner-origin and a cylinder is axis-origin, so a new
+  // cylinder's axis lands exactly on the box's corner edge — a tangency the
+  // fuse cannot resolve exactly.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius').fill('6');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // Moving along X keeps the axis in the y = 0 face plane, so it still fails —
+  // which is why "move the overlap" needs a direction to be useful advice.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Move X').fill('15');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  // Either facet check can be the one that fires — a smaller round operand
+  // facets into too few faces to trip the count test — so assert the remedy
+  // they share. Here the adapter has proved a move that works, so it names it.
+  await expect(inspector.getByRole('alert')).toContainText('clears it');
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+
+  // Offset into the solid instead and the same union is exact.
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Move Y').fill('9');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible();
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
