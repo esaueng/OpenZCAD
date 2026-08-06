@@ -6,15 +6,23 @@ interface PartThumbnailProps {
   /**
    * Reads this device's cached preview. It must not load the project document:
    * the shelf has to stay reachable for a part whose source is far too large to
-   * hold in memory, so a missing preview is answered with the placeholder
-   * rather than by rendering one here.
+   * hold in memory, so a missing preview is answered from the cache or not at
+   * all.
    */
   loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * Produces the preview a cold cache could not supply, for the tiles a viewer
+   * is actually looking at. Every project predates the cache, so without this
+   * a shelf shows nothing but placeholders until each part is opened again —
+   * which for sixty parts is never. Undefined when there is nothing to render
+   * from, which leaves the placeholder standing.
+   */
+  backfillThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 interface ThumbnailResult {
   key: string;
-  /** Null is a real empty part; undefined means there is no cached preview. */
+  /** Null is a real empty part; undefined means there is no preview to show. */
   source: string | null | undefined;
 }
 
@@ -26,7 +34,8 @@ const thumbnailPromises = new Map<
 function thumbnailFor(
   cacheKey: string,
   project: ProjectSummary,
-  loadThumbnail: PartThumbnailProps['loadThumbnail']
+  loadThumbnail: PartThumbnailProps['loadThumbnail'],
+  backfillThumbnail: PartThumbnailProps['backfillThumbnail']
 ): Promise<string | null | undefined> {
   const cached = thumbnailPromises.get(cacheKey);
   if (cached) {
@@ -37,10 +46,17 @@ function thumbnailFor(
       thumbnailPromises.delete(key);
     }
   }
-  const pending = loadThumbnail(project).catch(() => {
-    thumbnailPromises.delete(cacheKey);
-    return undefined;
-  });
+  const pending = loadThumbnail(project)
+    .then((source) =>
+      // Only a cache miss reaches the backfill. A cached null is an answer —
+      // the part is genuinely empty — and re-deriving it every visit would
+      // undo the caching this store exists for.
+      source === undefined ? backfillThumbnail(project) : source
+    )
+    .catch(() => {
+      thumbnailPromises.delete(cacheKey);
+      return undefined;
+    });
   thumbnailPromises.set(cacheKey, pending);
   return pending;
 }
@@ -65,13 +81,22 @@ function ThumbnailPlaceholder({ empty }: { empty: boolean }) {
   );
 }
 
-export function PartThumbnail({ project, loadThumbnail }: PartThumbnailProps) {
+export function PartThumbnail({
+  project,
+  loadThumbnail,
+  backfillThumbnail
+}: PartThumbnailProps) {
   const cacheKey = `${project.projectId}:${project.updatedAt}`;
   const [result, setResult] = useState<ThumbnailResult | null>(null);
 
   useEffect(() => {
     let active = true;
-    void thumbnailFor(cacheKey, project, loadThumbnail).then((source) => {
+    void thumbnailFor(
+      cacheKey,
+      project,
+      loadThumbnail,
+      backfillThumbnail
+    ).then((source) => {
       if (active) {
         setResult({ key: cacheKey, source });
       }
@@ -79,7 +104,7 @@ export function PartThumbnail({ project, loadThumbnail }: PartThumbnailProps) {
     return () => {
       active = false;
     };
-  }, [cacheKey, loadThumbnail, project]);
+  }, [backfillThumbnail, cacheKey, loadThumbnail, project]);
 
   if (result?.key === cacheKey) {
     if (result.source) {
