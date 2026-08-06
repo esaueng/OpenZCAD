@@ -2466,12 +2466,11 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   // only the status bar, clipped mid-sentence, leaving Create looking inert.
   const refusal = inspector.getByRole('alert');
   await expect(refusal).toContainText('faceted approximation');
-  await expect(refusal).toContainText('subtract exactly');
-
-  // Never advise resizing the overlap: this refusal reproduces at tangent
-  // contact and at a clean transversal overlap alike, so that sends the user
-  // round a loop with no exit.
-  await expect(refusal).not.toContainText('thicken');
+  // And it names the tangency, so the remedy has a direction. Offsetting along
+  // the face plane keeps the axis in it and fails again; moving into the solid
+  // is what succeeds, which is verified end to end below.
+  await expect(refusal).toContainText('tangentially');
+  await expect(refusal).toContainText('into the solid');
 
   // Refused means refused: history is untouched and the form stays open with
   // its picks intact, ready for another operation.
@@ -2484,4 +2483,59 @@ test('a refused boolean explains itself inside the panel that asked', async ({
   // Starting a different operation clears the stale reason.
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
   await expect(inspector.getByRole('alert')).toHaveCount(0);
+});
+
+test('a union that facets at a tangency succeeds once the overlap moves off it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Tangent Union');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // Default placement is the kernel's worst case and nothing about the UI says
+  // so: a box is corner-origin and a cylinder is axis-origin, so a new
+  // cylinder's axis lands exactly on the box's corner edge — a tangency the
+  // fuse cannot resolve exactly.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius').fill('6');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // Moving along X keeps the axis in the y = 0 face plane, so it still fails —
+  // which is why "move the overlap" needs a direction to be useful advice.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Move X').fill('15');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  // Either facet check can be the one that fires — a smaller round operand
+  // facets into too few faces to trip the count test — so assert the remedy
+  // they share rather than which branch caught it.
+  await expect(inspector.getByRole('alert')).toContainText('into the solid');
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+
+  // Offset into the solid instead and the same union is exact.
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await inspector.getByLabel('Move Y').fill('9');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible();
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
