@@ -124,6 +124,7 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   // Absent from settings written before cloud autosave was configurable, which
   // reads as the defaults rather than as "off".
   const files = record(root.files);
+  const collaboration = record(root.collaboration);
   const assistant = record(root.assistant);
   const experiments = record(root.experiments);
   return {
@@ -226,6 +227,9 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         files.cloudAutosaveDelaySeconds,
         CLOUD_AUTOSAVE_DELAY_BOUNDS
       )
+    },
+    collaboration: {
+      enabled: boolean(collaboration.enabled, defaults.collaboration.enabled)
     },
     assistant: {
       enabled: boolean(assistant.enabled, defaults.assistant.enabled),
