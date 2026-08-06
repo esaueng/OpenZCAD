@@ -303,17 +303,6 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <div className="vp-hud vp-hud-bl" aria-hidden="true">
-        <span className="vp-chip">{units}</span>
-        <span className="vp-chip">
-          {bodies.length} {bodies.length === 1 ? 'body' : 'bodies'}
-        </span>
-        {sketches.length > 0 && (
-          <span className="vp-chip">
-            {sketches.length} {sketches.length === 1 ? 'sketch' : 'sketches'}
-          </span>
-        )}
-      </div>
     </section>
   );
 }
