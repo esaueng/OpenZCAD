@@ -185,7 +185,8 @@ import { commandPromptText } from './lib/interaction/prompt';
 import {
   cylinderRadialFrame,
   isValidCylinderRadius,
-  sameCylinderAxis
+  sameCylinderAxis,
+  supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
 import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderRadiusAncestry';
 import { ToolCard } from './components/ToolCard';
@@ -992,8 +993,6 @@ export function App() {
         setPreviewDoc(
           preview ? { ...preview.document, derived: preview.derived } : null
         ),
-      acceptValue: (distance) =>
-        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
       continueAfterSlow: true
     })
   ).current;
@@ -5764,9 +5763,24 @@ export function App() {
         y: target.axisEnd[1],
         z: target.axisEnd[2]
       },
-      originalRadius: target.radius
+      originalRadius: target.radius,
+      smoothPreview:
+        target.concavity === 'boss' &&
+        supportsRadialCylinderPreview(
+          representations[target.bodyId as BodyId],
+          {
+            x: target.axisStart[0],
+            y: target.axisStart[1],
+            z: target.axisStart[2]
+          },
+          {
+            x: target.axisEnd[0],
+            y: target.axisEnd[1],
+            z: target.axisEnd[2]
+          }
+        )
     };
-  }, [interaction]);
+  }, [interaction, representations]);
   const cylinderRadiusInspectorInitial =
     interaction.mode === 'face' &&
     interaction.op === 'resize-cylinder-radius' &&
@@ -5856,7 +5870,7 @@ export function App() {
     };
   }
 
-  function handleCylinderRadiusPreview(radius: number) {
+  function handleCylinderRadiusPreview(radius: number, exactGeometry = true) {
     const current = interactionRef.current;
     if (
       current.mode !== 'face' ||
@@ -5867,7 +5881,14 @@ export function App() {
       return;
     }
     cylinderRadiusInspectorSetterRef.current?.(radius);
-    cylinderRadiusPreview.request(radius);
+    if (exactGeometry) {
+      cylinderRadiusPreview.request(radius);
+    } else {
+      // A simple standalone cylinder is projected with a disposable viewport
+      // transform during drag. Drop any older worker result so it cannot flash
+      // over that proxy; release still validates one exact kernel rebuild.
+      cylinderRadiusPreview.clear();
+    }
   }
 
   function handleCylinderRadiusCancel() {
@@ -5877,11 +5898,11 @@ export function App() {
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
     if (!requireExactGeometryReady()) {
-      return;
+      return false;
     }
     const current = interactionRef.current;
     if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
-      return;
+      return false;
     }
     const sourceRadius = current.target.radius;
     const plan = buildCylinderRadiusCommand(exact ?? radius);
@@ -5892,7 +5913,7 @@ export function App() {
     ) {
       cylinderRadiusInspectorSetterRef.current?.(null);
       setStatus('Radius is too small to form valid geometry at this scale.');
-      return;
+      return false;
     }
     void executeValidatedDirectEdit(
       plan.command,
@@ -5907,6 +5928,7 @@ export function App() {
           )
         : undefined
     );
+    return true;
   }
 
   /**

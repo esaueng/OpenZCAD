@@ -60,16 +60,12 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
 test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
   page
 }) => {
-  // Five gestures on one body, each of which the kernel has to answer
-  // exactly: create, drag the wall out, undo/redo, drag and cancel, then
-  // offset the cap. A trace of a passing run spends ~6 s on the first tool
-  // click alone (viewer cold start behind a software rasteriser) and ~7 s
-  // more inside the two drags, because every intermediate pointermove
-  // rebuilds the exact preview and repaints. That is ~30 s of real work on a
-  // CI runner with no GPU, which leaves the 30 s default with no margin at
-  // all — the same budget the multi-region extrude test already raises.
+  // Five gestures on one body: create, drag the wall out, undo/redo, drag and
+  // cancel, then offset the cap. The wall drag uses a disposable viewport
+  // projection and performs one exact kernel validation on release.
   test.setTimeout(90_000);
   await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -84,9 +80,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
   const selectCylinderSurface = async (surface: 'wall' | 'cap') => {
     await canvas.evaluate((element, requestedSurface) => {
       element.dispatchEvent(
@@ -149,6 +146,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø36'
   );
+  await expect(canvas).toHaveAttribute('data-e2e-cylinder-proxy-radius', '18');
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -159,12 +157,24 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');
+  await expect(canvas).not.toHaveAttribute(
+    'data-e2e-cylinder-proxy-radius',
+    /.+/
+  );
 
-  await page.getByRole('button', { name: 'Undo' }).click();
-  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await page
+    .getByRole('button', { name: 'Undo' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('14');
-  await page.getByRole('button', { name: 'Redo' }).click();
-  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await page
+    .getByRole('button', { name: 'Redo' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
 
   await selectCylinderSurface('wall');
@@ -193,6 +203,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
+  await expect(canvas).not.toHaveAttribute(
+    'data-e2e-cylinder-proxy-radius',
+    /.+/
+  );
   await page.mouse.up();
 
   await selectCylinderSurface('cap');
@@ -955,6 +969,7 @@ for (const modifier of [
   }) => {
     test.setTimeout(90_000);
     await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const consoleErrors: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -986,11 +1001,12 @@ for (const modifier of [
     });
     await expect(blend).toBeVisible();
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+    await expect(page.getByRole('button', { name: 'Bodies 2' })).toBeVisible();
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
 
     const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toBeVisible({ timeout: 120_000 });
     await canvas.evaluate((element) => {
       element.dispatchEvent(
         new CustomEvent('openzcad:e2e-select-cylinder', {
@@ -1033,6 +1049,10 @@ for (const modifier of [
       await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
         '6.4 mm'
       );
+      await expect(canvas).not.toHaveAttribute(
+        'data-e2e-cylinder-proxy-radius',
+        /.+/
+      );
       await page.mouse.up();
     } finally {
       await page.keyboard.up('Shift');
@@ -1043,7 +1063,7 @@ for (const modifier of [
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+    await expect(page.getByRole('button', { name: 'Bodies 2' })).toBeVisible();
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();
     await expect
@@ -1054,14 +1074,22 @@ for (const modifier of [
       )
       .toBeCloseTo(6.4, 5);
 
-    await page.getByRole('button', { name: 'Undo' }).click();
-    await cylinder.locator('.feature-row-main').click();
+    await page
+      .getByRole('button', { name: 'Undo' })
+      .evaluate((element) => (element as HTMLButtonElement).click());
+    await cylinder
+      .locator('.feature-row-main')
+      .evaluate((element) => (element as HTMLButtonElement).click());
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '4.6'
     );
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Redo' }).click();
-    await cylinder.locator('.feature-row-main').click();
+    await page
+      .getByRole('button', { name: 'Redo' })
+      .evaluate((element) => (element as HTMLButtonElement).click());
+    await cylinder
+      .locator('.feature-row-main')
+      .evaluate((element) => (element as HTMLButtonElement).click());
     await expect
       .poll(async () =>
         Number(
