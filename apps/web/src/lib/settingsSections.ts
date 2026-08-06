@@ -41,7 +41,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Reopen the last project',
       'Default units',
-      'Confirm destructive actions'
+      'Confirm destructive actions',
+      'Cloud features'
     ]
   },
   {
@@ -155,20 +156,28 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
 ];
 
 export interface SettingsSectionVisibility {
+  /** Device-local offline mode removes every cloud-only settings surface. */
+  cloudFunctionsEnabled?: boolean;
   /** Raw "Find a setting" query; blank matches everything. */
   query?: string;
 }
 
 /** The settings sections matching the current navigation query. */
 export function visibleSettingsSections({
+  cloudFunctionsEnabled = true,
   query = ''
 }: SettingsSectionVisibility): SettingsSectionMeta[] {
+  const available = SETTINGS_SECTIONS.filter(
+    (section) =>
+      (cloudFunctionsEnabled || section.id !== 'account') &&
+      (cloudFunctionsEnabled || section.id !== 'assistant')
+  );
   const normalized = query.trim().toLowerCase();
   return normalized
-    ? SETTINGS_SECTIONS.filter((section) =>
+    ? available.filter((section) =>
         `${section.label} ${section.detail} ${section.settings.join(' ')} ${section.searchTerms?.join(' ') ?? ''}`
           .toLowerCase()
           .includes(normalized)
       )
-    : [...SETTINGS_SECTIONS];
+    : available;
 }
