@@ -6,10 +6,13 @@ import type {
   AuthConfigResponse,
   AuthSession,
   ArtifactMetadataResponse,
+  CompleteMultipartUploadRequest,
+  CreateMultipartUploadResponse,
   CreateProjectRequest,
   CreateProjectResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
+  UploadedArtifactPart,
   DeleteAccountDataResponse,
   DuplicateProjectResponse,
   FinalizeArtifactRequest,
@@ -258,6 +261,64 @@ export const api = {
     if (!response.ok) {
       throw new Error(
         (await response.text()) || `Upload failed (${response.status}).`
+      );
+    }
+  },
+  createMultipartUpload: (uploadSessionId: string) =>
+    requestJson<CreateMultipartUploadResponse>(
+      `/api/uploads/${uploadSessionId}/multipart`,
+      { method: 'POST' }
+    ),
+  uploadArtifactPart: async (
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: Blob
+  ): Promise<UploadedArtifactPart> => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Upload part ${partNumber} failed (${response.status}).`
+      );
+    }
+    return (await response.json()) as UploadedArtifactPart;
+  },
+  completeMultipartUpload: async (
+    uploadSessionId: string,
+    payload: CompleteMultipartUploadRequest
+  ) => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/multipart/complete`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload)
+      }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Completing the upload failed (${response.status}).`
+      );
+    }
+  },
+  abortMultipartUpload: async (uploadSessionId: string, uploadId: string) => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Aborting the upload failed (${response.status}).`
       );
     }
   },
