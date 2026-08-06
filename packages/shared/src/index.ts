@@ -218,6 +218,10 @@ export const FEATURE_SUPPRESSED_METADATA_KEY = 'suppressed' as const;
 export const FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY =
   'rollbackSuppressed' as const;
 
+/** Replay-compatible metadata keys for per-body display appearance. */
+export const BODY_COLOR_METADATA_KEY = 'color' as const;
+export const BODY_OPACITY_METADATA_KEY = 'opacity' as const;
+
 export function isFeatureManuallySuppressed(
   node: Pick<BaseNode, 'metadata'>
 ): boolean {
@@ -812,6 +816,8 @@ export interface BodyRepresentation {
   /** Number of planar B-Rep faces in the underlying solid. */
   faceCount: number;
   color: string;
+  /** Display opacity in [0, 1]; absent means fully opaque. */
+  opacity?: number;
   exportableStep: boolean;
   /** True when a later boolean feature consumed this body. */
   consumed: boolean;

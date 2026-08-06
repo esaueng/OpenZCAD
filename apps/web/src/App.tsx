@@ -43,6 +43,7 @@ import type {
 import {
   createProjectDocument,
   duplicateProjectDocument,
+  findBodyNode,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -92,6 +93,8 @@ import type {
 } from '@openzcad/shared';
 import {
   applyOrganizationUpdate,
+  BODY_COLOR_METADATA_KEY,
+  BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
@@ -222,6 +225,7 @@ import {
   type ResolvedExtrude
 } from './lib/extrudeInference';
 import type {
+  BodyAppearancePreview,
   ExtrudePreview,
   FaceResizeCommit,
   NormalToFaceRequest
@@ -801,6 +805,12 @@ export function App() {
   const [moveCommitHold, setMoveCommitHold] = useState<MovePreview | null>(
     null
   );
+  /**
+   * Drag-phase body color/opacity patch rendered without a document write;
+   * committed through node metadata when the pointer releases.
+   */
+  const [bodyAppearancePreview, setBodyAppearancePreview] =
+    useState<BodyAppearancePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [modelingTargetBodyId, setModelingTargetBodyId] =
@@ -2984,6 +2994,43 @@ export function App() {
       }
       return next;
     });
+  }
+
+  function previewBodyAppearance(preview: BodyAppearancePreview | null) {
+    setBodyAppearancePreview(preview);
+  }
+
+  function commitBodyAppearance(
+    bodyId: BodyId,
+    appearance: { color?: string; opacity?: number | null }
+  ) {
+    if (!doc) {
+      return;
+    }
+    const bodyNode = findBodyNode(doc, bodyId);
+    if (!bodyNode) {
+      return;
+    }
+    const metadata: Record<string, string | number | null> = {};
+    if (appearance.color !== undefined) {
+      metadata[BODY_COLOR_METADATA_KEY] = appearance.color;
+    }
+    if (appearance.opacity !== undefined) {
+      // null deletes the key, returning the body to fully opaque.
+      metadata[BODY_OPACITY_METADATA_KEY] = appearance.opacity;
+    }
+    if (Object.keys(metadata).length === 0) {
+      return;
+    }
+    // The drag-phase preview has already shown this value; clearing it before
+    // the commit lets the rebuild arrive as the new committed look.
+    setBodyAppearancePreview(null);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        { nodeId: bodyNode.id, metadata },
+        `Set ${bodyNode.name} appearance`
+      )
+    );
   }
 
   function showAllBodies() {
@@ -7538,6 +7585,7 @@ export function App() {
             extrudePreview={extrudePreview}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
+            appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
@@ -7946,6 +7994,8 @@ export function App() {
                 cylinderRadiusEdit={cylinderRadiusInspectorEdit}
                 cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
                 onLaunchTool={launchTool}
+                onPreviewBodyAppearance={previewBodyAppearance}
+                onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
