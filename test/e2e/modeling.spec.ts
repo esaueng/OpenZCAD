@@ -272,8 +272,8 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await expect(page.getByRole('contentinfo')).toContainText('Resize Box');
   const dimensions = await Promise.all([
     page.getByLabel('Width (X)').inputValue(),
-    page.getByLabel('Height (Y)').inputValue(),
-    page.getByLabel('Depth (Z)').inputValue()
+    page.getByLabel('Depth (Y)').inputValue(),
+    page.getByLabel('Height (Z)').inputValue()
   ]);
   expect(dimensions).not.toEqual(['40', '18', '24']);
 });
@@ -550,7 +550,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   await expect(
     page.getByText('Pick a sketch plane', { exact: true })
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
   await sketchTools.getByRole('button', { name: /^Circle/ }).click();
@@ -688,7 +688,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -786,7 +786,7 @@ test('resolves a negative free-plane extrude preview', async ({ page }) => {
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
     page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
   ).toBeVisible();
@@ -849,7 +849,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await sketchTools.getByRole('button', { name: /^Circle/ }).click();
   const bounds = await canvas.boundingBox();
@@ -2355,15 +2355,15 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByLabel('Name').fill('Lower');
   await inspector.getByLabel('Width (X)').fill('10');
-  await inspector.getByLabel('Height (Y)').fill('10');
-  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByLabel('Depth (Y)').fill('10');
+  await inspector.getByLabel('Height (Z)').fill('10');
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByLabel('Name').fill('Upper');
   await inspector.getByLabel('Width (X)').fill('10');
-  await inspector.getByLabel('Height (Y)').fill('10');
-  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByLabel('Depth (Y)').fill('10');
+  await inspector.getByLabel('Height (Z)').fill('10');
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
@@ -2581,7 +2581,7 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   // explain itself only in a sidebar diagnostic.
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -2627,4 +2627,81 @@ test('the panel refuses a zero extrude and keeps a boolean name honest', async (
   await expect(
     inspector.getByRole('button', { name: /^Apply/ })
   ).toBeEnabled();
+});
+
+test('each sketch plane label names the plane it actually opens', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Plane Names');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  const status = page.getByRole('contentinfo');
+
+  // These labels were Y-up names on Z-up planes, so each named the wrong one:
+  // measured before the fix, "Ground (XZ)" built an upright wall and
+  // "Front (XY)" built a slab lying on the grid. The status line is derived
+  // from the plane id rather than from the label, so asserting it here pins
+  // the label-to-plane mapping that was wrong — a rename that only edits
+  // strings cannot keep this green.
+  for (const [label, plane] of [
+    ['Top (XY)', 'XY'],
+    ['Front (XZ)', 'XZ'],
+    ['Right (YZ)', 'YZ']
+  ] as const) {
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await expect(page.getByText('Pick a sketch plane')).toBeVisible();
+    await page.getByRole('button', { name: label }).click();
+    await expect(status).toContainText(`Sketching on the ${plane} plane`);
+    // Finish rather than Escape: leaving an empty sketch by Escape parks the
+    // workspace in a state where the plane prompt will not re-open.
+    await page
+      .getByRole('toolbar', { name: 'Sketch tools' })
+      .getByRole('button', { name: /Finish Sketch/ })
+      .click();
+    await expect(
+      page.getByRole('toolbar', { name: 'Sketch tools' })
+    ).toHaveCount(0);
+  }
+
+  // And an anchor in geometry for the one the app calls Top: a profile drawn
+  // there extrudes upward, so the result is thinnest in Z.
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const centre = {
+    x: bounds.x + bounds.width * 0.55,
+    y: bounds.y + bounds.height * 0.55
+  };
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 150, centre.y, { steps: 10 });
+  await page.mouse.up();
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
+  if (!triple) {
+    throw new Error(`no size in selection chip: ${chip}`);
+  }
+  const [width, depth, height] = [
+    Number(triple[1]),
+    Number(triple[2]),
+    Number(triple[3])
+  ];
+  expect(height).toBeLessThan(width);
+  expect(height).toBeLessThan(depth);
 });
