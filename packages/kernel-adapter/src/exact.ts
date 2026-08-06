@@ -34,6 +34,7 @@ import {
   type DerivedState,
   type DirectEditOperation,
   type EdgeCurve,
+  type EdgeReferenceRepair,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceGeometry,
@@ -268,6 +269,12 @@ interface ExactBuildResult {
    */
   partialRevolveBodies: Set<BodyId>;
   warnings: string[];
+  /**
+   * Legacy hash-only edge modifiers whose rebuild proved a v5 reference for
+   * every selected edge. Surfaced through DerivedState so the app can persist
+   * the upgrade while the stored hashes still resolve.
+   */
+  referenceRepairs: EdgeReferenceRepair[];
 }
 
 interface MeasuredShape {
@@ -2837,13 +2844,44 @@ function resolveShellOpeningFaces(
   return resolved;
 }
 
+/**
+ * A verified v5 reference for one legacy-resolved edge, or null when the
+ * body's lineage cannot vouch for it. `currentHash` must equal the stored
+ * hash: the repair leaves `edgeHashes` untouched, and the resolver requires
+ * every persisted reference to match a stored hash exactly.
+ */
+function edgeReferenceRepairCandidate(
+  kernel: BrepKernel,
+  shape: ExactShape,
+  handle: number,
+  storedHash: number
+): EdgeTopologyReferenceV5 | null {
+  const reference = shape.lineage?.edgeReferences.get(handle);
+  if (!reference || reference.currentHash !== storedHash) {
+    return null;
+  }
+  const witness = edgeWitnessOf(kernel, handle);
+  return topologyHashOfWitness('edge', witness) === storedHash &&
+    topologyWitnessesEqual('edge', reference.witness, witness)
+    ? reference
+    : null;
+}
+
 function resolveEdgeModifierEdges(
   kernel: BrepKernel,
   shape: ExactShape,
   solid: number,
   hashes: readonly number[],
   references: readonly EdgeTopologyReferenceV5[] | undefined
-): number[] {
+): {
+  handles: number[];
+  /**
+   * Set only when a hash-only (legacy) selection resolved AND the body's
+   * lineage proves a v5 reference for every selected edge — the one moment a
+   * legacy edge modifier can be upgraded in place. Null otherwise.
+   */
+  repairedReferences: EdgeTopologyReferenceV5[] | null;
+} {
   const handles = Array.from(kernel.getSolidEdges(solid));
   const legacyHandles = edgeHandlesByFingerprint(kernel, solid);
   const requested = [...new Set(hashes)];
@@ -2853,16 +2891,19 @@ function resolveEdgeModifierEdges(
   // preserve the existing unique-hash resolver for this deliberately
   // unsupported lineage boundary.
   if (shape.solids.length !== 1) {
-    return requested.map((hash) => {
-      const matches = legacyHandles.get(hash) ?? [];
-      if (matches.length === 0) {
-        throw unresolvedReferenceError('edge', hash, handles.length);
-      }
-      if (matches.length > 1) {
-        throw ambiguousReferenceError('edge');
-      }
-      return matches[0]!;
-    });
+    return {
+      handles: requested.map((hash) => {
+        const matches = legacyHandles.get(hash) ?? [];
+        if (matches.length === 0) {
+          throw unresolvedReferenceError('edge', hash, handles.length);
+        }
+        if (matches.length > 1) {
+          throw ambiguousReferenceError('edge');
+        }
+        return matches[0]!;
+      }),
+      repairedReferences: null
+    };
   }
 
   const candidates: TopologyResolutionCandidate[] = handles.map((handle) => {
@@ -2900,6 +2941,7 @@ function resolveEdgeModifierEdges(
     referencesByHash.set(reference.currentHash, matches);
   }
 
+  const repairCandidates: (EdgeTopologyReferenceV5 | null)[] = [];
   const resolved = requested.map((hash) => {
     const storedReferences = referencesByHash.get(hash) ?? [];
     if (storedReferences.length > 1) {
@@ -2926,8 +2968,8 @@ function resolveEdgeModifierEdges(
     }
 
     // A selected hash without a v5 reference is a legacy document edge. Keep
-    // its old resolver and diagnostics byte-for-byte; a v5 failure above is
-    // terminal and never reaches this fallback.
+    // its old resolver and diagnostics; a v5 failure above is terminal and
+    // never reaches this fallback.
     const matches = legacyHandles.get(hash) ?? [];
     if (matches.length === 0) {
       throw unresolvedReferenceError('edge', hash, handles.length);
@@ -2935,12 +2977,34 @@ function resolveEdgeModifierEdges(
     if (matches.length > 1) {
       throw ambiguousReferenceError('edge');
     }
-    return matches[0]!;
+    const handle = matches[0]!;
+    repairCandidates.push(
+      edgeReferenceRepairCandidate(kernel, shape, handle, hash)
+    );
+    return handle;
   });
   if (new Set(resolved).size !== resolved.length) {
     throw new Error('Edge modifier edges do not resolve to a unique set.');
   }
-  return resolved;
+  // All-or-nothing, and only for a fully hash-only selection: a partial
+  // reference list would violate the persisted contract that every stored
+  // reference matches a stored hash. Distinct lineage identities guard
+  // against a publisher ever vouching for two edges with one role.
+  const verified = repairCandidates.filter(
+    (candidate): candidate is EdgeTopologyReferenceV5 => candidate !== null
+  );
+  const repairedReferences =
+    references === undefined &&
+    verified.length === requested.length &&
+    new Set(
+      verified.map(
+        (candidate) =>
+          `${candidate.producingFeatureId}:${candidate.lineageName}`
+      )
+    ).size === verified.length
+      ? verified
+      : null;
+  return { handles: resolved, repairedReferences };
 }
 
 /** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
@@ -4319,7 +4383,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       importedStepDiagnostics: new Map(),
       meshBodies: new Set(),
       partialRevolveBodies: new Set(),
-      warnings: [...errors]
+      warnings: [...errors],
+      referenceRepairs: []
     };
 
     for (const feature of listFeaturesInOrder(document)) {
@@ -4881,13 +4946,14 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               throw new Error('Edge modifier target is unavailable.');
             }
             const target = collapseShape(kernel, storedTarget);
-            const selected = resolveEdgeModifierEdges(
-              kernel,
-              storedTarget,
-              target,
-              feature.data.edgeHashes,
-              feature.data.edgeReferences
-            );
+            const { handles: selected, repairedReferences } =
+              resolveEdgeModifierEdges(
+                kernel,
+                storedTarget,
+                target,
+                feature.data.edgeHashes,
+                feature.data.edgeReferences
+              );
             const size = resolveParamValue(
               feature.data.featureKind === 'fillet'
                 ? feature.data.radius
@@ -4939,6 +5005,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               feature.data.targetBodyId,
               feature.bodyId
             );
+            // Only a feature that actually rebuilt earns a repair: a thrown
+            // modifier above skips this, and the legacy selection stays as it
+            // was for the user to fix.
+            if (repairedReferences) {
+              result.referenceRepairs.push({
+                featureId: feature.featureId,
+                edgeReferences: repairedReferences
+              });
+            }
             break;
           }
           case 'pattern': {
@@ -5887,7 +5962,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         bodyRepresentations,
         exportableBodyIds,
         warnings: build.warnings,
-        updatedAt: nowIso()
+        updatedAt: nowIso(),
+        ...(build.referenceRepairs.length > 0
+          ? { referenceRepairs: build.referenceRepairs }
+          : {})
       };
     } finally {
       kernel.free();
