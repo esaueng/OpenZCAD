@@ -566,21 +566,49 @@ function readShelfSnapshot(): Promise<{
  * store, and returns it. Deliberately one document at a time: holding even a
  * few of these open at once reintroduces the spike the store exists to avoid,
  * and this runs at most once per project on the first refresh after upgrading.
+ *
+ * The recheck, document read, and summary write share one transaction. Another
+ * tab may save the project after the shelf snapshot found no summary; without
+ * the recheck it would be needlessly deserialized, and without the shared
+ * transaction a stale backfill could land after that save and replace its newer
+ * projection.
  */
-async function backfillProjectSummary(
+function backfillProjectSummary(
   projectId: string
 ): Promise<ProjectSummaryRecord | null> {
-  const document = await loadLocalProject(projectId);
-  if (!document) {
-    return null;
-  }
-  const record = summarizeProjectDocument(document);
-  await transaction(
+  let record: ProjectSummaryRecord | null = null;
+  return multiStoreTransaction(
+    [STORE_NAME, SUMMARY_STORE_NAME],
     'readwrite',
-    (store) => store.put(record),
-    SUMMARY_STORE_NAME
+    (stores) => {
+      const documentStore = stores[STORE_NAME];
+      const summaryStore = stores[SUMMARY_STORE_NAME];
+      if (!documentStore || !summaryStore) {
+        throw new Error('Local project storage is incomplete.');
+      }
+
+      const existing = summaryStore.get(projectId) as IDBRequest<
+        ProjectSummaryRecord | undefined
+      >;
+      existing.onsuccess = () => {
+        if (existing.result) {
+          record = existing.result;
+          return;
+        }
+        const document = documentStore.get(projectId) as IDBRequest<
+          ProjectDocument | undefined
+        >;
+        document.onsuccess = () => {
+          if (!document.result) {
+            return;
+          }
+          record = summarizeProjectDocument(document.result);
+          summaryStore.put(record);
+        };
+      };
+      return () => record;
+    }
   );
-  return record;
 }
 
 /**
