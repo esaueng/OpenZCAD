@@ -803,28 +803,6 @@ function revolveRadialProfile(
   );
 }
 
-/** True when two of the selected edges meet at a shared model vertex. */
-function selectedEdgesShareVertex(
-  kernel: BrepKernel,
-  selectedEdges: number[]
-): boolean {
-  if (selectedEdges.length < 2) {
-    return false;
-  }
-  const seen = new Set<number>();
-  for (const edge of selectedEdges) {
-    // Deduplicate per edge: a closed edge reports the same vertex handle at
-    // both ends, which is not a corner between two selected edges.
-    for (const vertex of new Set(kernel.getEdgeVertexHandles(edge))) {
-      if (seen.has(vertex)) {
-        return true;
-      }
-      seen.add(vertex);
-    }
-  }
-  return false;
-}
-
 /**
  * True when `face` is a rolling-ball blend band rather than a modelled wall.
  *
@@ -937,6 +915,10 @@ function selectionTouchesBlendFace(
   );
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Run one edge modifier and apply every acceptance rule the adapter ships a
  * result under, returning `null` when the kernel refused or produced a body
@@ -952,7 +934,9 @@ function applyEdgeModifier(
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
-  size: number
+  size: number,
+  /** Receives the kernel's own refusal text, when it threw one. */
+  reportRefusal?: (message: string) => void
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
@@ -960,13 +944,19 @@ function applyEdgeModifier(
   if (featureKind === 'fillet') {
     try {
       modified = kernel.fillet(target, handles, size);
-    } catch {
+    } catch (error) {
+      // Keep what the kernel said. It names the edges it could not blend, the
+      // vertex the blend engines gave up on, and how many of the selection
+      // would round on their own — none of which can be recovered by
+      // inspecting the inputs afterwards.
+      reportRefusal?.(errorText(error));
       modified = target;
     }
   } else {
     try {
       modified = kernel.chamfer(target, handles, size);
-    } catch {
+    } catch (error) {
+      reportRefusal?.(errorText(error));
       return null;
     }
   }
@@ -1058,13 +1048,45 @@ function edgeModifierSucceedsSmaller(
  * feature that produced the body is known. It is still reported only after
  * the size ladder has failed, so it never buries a working smaller size.
  */
+/**
+ * Turns the kernel's own blend refusal into the sentence a user can act on.
+ *
+ * The kernel reports how many of the named edges it could not blend and how
+ * many would round on their own. That count is the whole remedy — deselect
+ * the ones it named — and no amount of inspecting the selection afterwards
+ * recovers it, so it is relayed rather than re-derived.
+ */
+function blendSubsetRemedy(
+  reported: string | null,
+  featureKind: 'fillet' | 'chamfer'
+): string | null {
+  if (!reported) {
+    return null;
+  }
+  const refused = /(\d+) of the edges named were not blended/.exec(reported);
+  const roundable = /the (\d+) edge\(s\)[^,]*would round on their own/.exec(
+    reported
+  );
+  if (!refused || !roundable) {
+    return null;
+  }
+  const verb = featureKind === 'fillet' ? 'round' : 'chamfer';
+  return (
+    `${refused[1]} of them cannot be blended where two rounds would meet at a corner, ` +
+    `and the kernel will not quietly drop them. The other ${roundable[1]} ${verb} on their own — ` +
+    `deselect those ${refused[1]} and try again.`
+  );
+}
+
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
   size: number,
-  partialRevolveTarget: boolean
+  partialRevolveTarget: boolean,
+  /** What the kernel said when it refused, if it threw. */
+  reported: string | null = null
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -1086,8 +1108,16 @@ function edgeModifierFailureMessage(
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
       return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
     }
-    if (selectedEdgesShareVertex(kernel, selected)) {
-      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
+    // Sharing a corner is NOT itself a refusal: all twelve edges of a plain
+    // box meet at corners and round together at every radius tried. Only the
+    // kernel knows which vertices its blend engines gave up on, so this cause
+    // is claimed only when the kernel actually reported it.
+    const subsetRemedy = blendSubsetRemedy(reported, featureKind);
+    if (subsetRemedy) {
+      return `${prefix} ${subsetRemedy}`;
+    }
+    if (reported?.includes('unsupported vertex blend')) {
+      return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
@@ -4964,12 +4994,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
+            let reportedRefusal: string | null = null;
             const modified = applyEdgeModifier(
               kernel,
               target,
               selected,
               feature.data.featureKind,
-              size
+              size,
+              (message) => {
+                reportedRefusal = message;
+              }
             );
             if (modified === null) {
               throw new Error(
@@ -4979,7 +5013,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   selected,
                   feature.data.featureKind,
                   size,
-                  result.partialRevolveBodies.has(feature.data.targetBodyId)
+                  result.partialRevolveBodies.has(feature.data.targetBodyId),
+                  reportedRefusal
                 )
               );
             }
