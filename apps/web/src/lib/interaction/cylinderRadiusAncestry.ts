@@ -13,8 +13,14 @@ import {
  * points directly at the primitive. Walk only that uninterrupted result-body
  * ancestry: crossing another body-producing feature would make a primitive
  * radius edit ambiguous. In-place transforms are deliberately transparent,
- * matching the existing transformed-cylinder behavior, while any direct edit
- * on a body in the chain remains a hard boundary.
+ * matching the existing transformed-cylinder behavior.
+ *
+ * Direct edits in the chain are transparent only for a planar face offset
+ * that carries a v5 face reference: the operation is radius-independent and
+ * re-resolves its face by lineage, so a primitive radius edit regenerates it
+ * exactly. Every other direct edit — an absolute-radius wall resize above
+ * all — remains a hard boundary, because its recorded measurements pin the
+ * pre-edit geometry.
  */
 export function primitiveCylinderRadiusAncestor(
   document: ProjectDocument,
@@ -61,7 +67,7 @@ export function primitiveCylinderRadiusAncestor(
   if (!primitive) {
     return null;
   }
-  const hasDependentDirectEdit = features.some((feature, index) => {
+  const hasBlockingDirectEdit = features.some((feature, index) => {
     if (
       isFeatureSuppressed(feature) ||
       feature.data.featureKind !== 'direct-edit' ||
@@ -73,7 +79,13 @@ export function primitiveCylinderRadiusAncestor(
     const producerIndex = producer ? features.indexOf(producer) : -1;
     const consumerIndex =
       consumerIndexByBodyId.get(feature.data.targetBodyId) ?? features.length;
-    return index > producerIndex && index < consumerIndex;
+    if (index <= producerIndex || index >= consumerIndex) {
+      return false;
+    }
+    return !(
+      feature.data.operation.kind === 'offset-face' &&
+      feature.data.operation.faceReference
+    );
   });
-  return hasDependentDirectEdit ? null : primitive;
+  return hasBlockingDirectEdit ? null : primitive;
 }

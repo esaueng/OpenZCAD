@@ -10,7 +10,11 @@ import {
   transformBody,
   updateFeature
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import {
+  toUserId,
+  type FaceTopologyReferenceV5,
+  type FaceWitnessV1
+} from '@openzcad/shared';
 import { primitiveCylinderRadiusAncestor } from './cylinderRadiusAncestry';
 
 function cylinderDocument() {
@@ -112,6 +116,55 @@ describe('cylinder radius ancestry', () => {
         filletedOffset.document,
         filletedOffset.bodyId
       )
+    ).toBeNull();
+  });
+
+  it('crosses a referenced cap offset but not a reference-free one', () => {
+    const cylinder = cylinderDocument();
+    const sourceBodyId = cylinder.bodyOrder[0]!;
+    const capReference: FaceTopologyReferenceV5 = {
+      kind: 'face',
+      producingFeatureId: sourceFeatureId(cylinder),
+      lineageName: 'primitive.cylinder.face.cap.end',
+      currentHash: 505,
+      witnessVersion: 1,
+      witness: {} as FaceWitnessV1
+    };
+    const capOffset = (faceReference?: FaceTopologyReferenceV5) =>
+      directEditBody(cylinder, {
+        name: 'Offset cap',
+        targetBodyId: sourceBodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: 505,
+          ...(faceReference ? { faceReference } : {}),
+          sourceSurfaceType: 'plane',
+          sourceArea: 66.5,
+          sourceCenter: { x: 0, y: 0, z: 12 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: 5
+        }
+      });
+
+    const referenced = filletEdges(capOffset(capReference).document, {
+      name: 'Rim fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [101],
+      size: 1
+    });
+    expect(
+      primitiveCylinderRadiusAncestor(referenced.document, referenced.bodyId)
+        ?.featureId
+    ).toBe(sourceFeatureId(cylinder));
+
+    const bare = filletEdges(capOffset(undefined).document, {
+      name: 'Rim fillet',
+      targetBodyId: sourceBodyId,
+      edgeHashes: [101],
+      size: 1
+    });
+    expect(
+      primitiveCylinderRadiusAncestor(bare.document, bare.bodyId)
     ).toBeNull();
   });
 
