@@ -267,6 +267,11 @@ export function parseUpdateAppSettingsRequest(
   // Optional in the payload so a client from before cloud autosave was
   // configurable keeps saving instead of being rejected.
   const files = asRecord(settings.files ?? {}, '"settings.files"');
+  // Optional so clients from before the user-facing sharing switch keep saving.
+  const collaboration = asRecord(
+    settings.collaboration ?? {},
+    '"settings.collaboration"'
+  );
   const assistant = asRecord(settings.assistant, '"settings.assistant"');
   // Experiments are optional in the payload so older clients keep saving.
   const experiments = asRecord(
@@ -353,6 +358,12 @@ export function parseUpdateAppSettingsRequest(
           files.cloudAutosaveDelaySeconds,
           CLOUD_AUTOSAVE_DELAY_BOUNDS
         )
+      },
+      collaboration: {
+        enabled:
+          typeof collaboration.enabled === 'boolean'
+            ? collaboration.enabled
+            : DEFAULT_APP_SETTINGS.collaboration.enabled
       },
       assistant: {
         enabled: requiredBoolean(assistant, 'enabled'),
