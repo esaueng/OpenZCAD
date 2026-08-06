@@ -135,12 +135,17 @@ import {
 import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
 import {
   CloudProjectAutosave,
+  currentVersionOf,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
 import {
   decideProjectSync,
   shouldPollForFreshness
 } from './lib/projectSyncDecision';
+import {
+  claimProjectOwnership,
+  type ProjectOwnershipClaim
+} from './lib/projectTabOwnership';
 
 import { mark, measure, timed, timedAsync } from './lib/perf';
 import { useModalFocus } from './lib/useModalFocus';
@@ -1027,6 +1032,26 @@ export function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
   const localSaveTimeoutRef = useRef<number | null>(null);
+  // Reached from the page-hide listener, which is registered once and would
+  // otherwise hold the first render's closure.
+  const flushPendingLocalSaveRef = useRef<() => Promise<void>>(() =>
+    Promise.resolve()
+  );
+  /**
+   * Another tab is already editing this project, so this one must not write
+   * over its storage. Mirrored into a ref because the autosave path that has
+   * to check it is not a render.
+   */
+  const [projectOpenElsewhere, setProjectOpenElsewhere] = useState(false);
+  const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
+  projectOpenElsewhereRef.current = projectOpenElsewhere;
+  /**
+   * Settles once this tab knows whether it owns the open project. Claiming is
+   * asynchronous and the autosave debounce is not, so without somewhere to wait
+   * the first write can land before the answer does — which is the overwrite
+   * the claim exists to prevent.
+   */
+  const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
   const cylinderRadiusPreview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
       build: (radius) => {
@@ -1240,23 +1265,25 @@ export function App() {
     session &&
     doc.ownerUserId !== session.userId
   );
-  const editDisabledReason = sharedProjectDisabled
-    ? 'Project sharing is disabled in Settings'
-    : !cloudAvailable || !session || !projectSharingEnabled
-      ? null
-      : collaboration.conflict
-        ? 'Resolve the collaboration conflict before editing'
-        : collaboration.role === 'viewer' ||
-            collaboration.status === 'read-only'
-          ? 'This shared project is read-only'
-          : collaboration.role === null
-            ? 'Waiting for project access'
-            : collaborationRollout.editLeasesEnforced &&
-                !activeCollaborationLease
-              ? collaboration.status === 'lease-denied'
-                ? 'Another collaborator holds the edit lease'
-                : 'Waiting for the project edit lease'
-              : null;
+  const editDisabledReason = projectOpenElsewhere
+    ? 'This project is open in another tab'
+    : sharedProjectDisabled
+      ? 'Project sharing is disabled in Settings'
+      : !cloudAvailable || !session || !projectSharingEnabled
+        ? null
+        : collaboration.conflict
+          ? 'Resolve the collaboration conflict before editing'
+          : collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only'
+            ? 'This shared project is read-only'
+            : collaboration.role === null
+              ? 'Waiting for project access'
+              : collaborationRollout.editLeasesEnforced &&
+                  !activeCollaborationLease
+                ? collaboration.status === 'lease-denied'
+                  ? 'Another collaborator holds the edit lease'
+                  : 'Waiting for the project edit lease'
+                : null;
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     if (!editDisabledReason) {
@@ -1476,19 +1503,7 @@ export function App() {
         void saveLastSyncedVersion(projectId, version);
       },
       onConflict({ projectId, localDocument, accountVersion }) {
-        setStatus(
-          `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
-        );
-        // Fetch the account's copy so the user is choosing between two real
-        // documents rather than two version numbers.
-        void api
-          .loadProject(projectId)
-          .then((remote) => {
-            setAccountConflict(
-              conflictFromDocuments(localDocument, remote, 'account')
-            );
-          })
-          .catch(() => undefined);
+        raiseAccountConflict(projectId, localDocument, accountVersion);
       },
       onSessionExpired() {
         remoteVersionsRef.current.clear();
@@ -1543,6 +1558,51 @@ export function App() {
   }, [cloudFunctionsEnabled, doc?.projectId, session]);
 
   /**
+   * Exactly one tab writes a project's device storage.
+   *
+   * Autosave replaces the whole document under one key, so a second tab editing
+   * the same project does not merge with the first — it overwrites it, and
+   * whichever tab saved last wins with no record that the other's work existed.
+   * The tab that does not hold the project opens read-only instead, and takes
+   * over if the owner goes away.
+   */
+  useEffect(() => {
+    const projectId = doc?.projectId ?? null;
+    if (!projectId) {
+      projectOwnershipSettledRef.current = null;
+      setProjectOpenElsewhere(false);
+      return;
+    }
+    let cancelled = false;
+    let claim: ProjectOwnershipClaim | null = null;
+    const settled = claimProjectOwnership(projectId, () => {
+      if (cancelled) {
+        return;
+      }
+      setProjectOpenElsewhere(false);
+      void adoptStoredProject(projectId);
+    }).then((result) => {
+      if (cancelled) {
+        result.release();
+        return;
+      }
+      claim = result;
+      setProjectOpenElsewhere(!result.owned);
+      if (!result.owned) {
+        // The project is on this device — the other tab is keeping it that
+        // way. Nothing here is unsaved, and nothing here may be saved.
+        setSaveState('local');
+      }
+    });
+    projectOwnershipSettledRef.current = settled;
+    return () => {
+      cancelled = true;
+      projectOwnershipSettledRef.current = null;
+      claim?.release();
+    };
+  }, [doc?.projectId]);
+
+  /**
    * Last call before the tab goes away. `pagehide` is the only one of these
    * that fires reliably on mobile, and `visibilitychange` is the only one that
    * fires when a tab is merely backgrounded — which on a phone is usually the
@@ -1550,7 +1610,13 @@ export function App() {
    */
   useEffect(() => {
     const flush = () => {
-      void cloudProjectAutosaveRef.current?.flushPending();
+      // The device write comes first and the account drain is chained behind
+      // it: the controller only learns of an edit once the local save has
+      // stored it, so draining the account copy first would miss an edit still
+      // sitting in the 450 ms debounce and the tab would take it with it.
+      void flushPendingLocalSaveRef
+        .current()
+        .then(() => cloudProjectAutosaveRef.current?.flushPending());
     };
     const onVisibilityChange = () => {
       if (globalThis.document.visibilityState === 'hidden') {
@@ -1581,18 +1647,7 @@ export function App() {
    * which is what the room is for.
    */
   useEffect(() => {
-    const projectId = doc?.projectId ?? null;
-    if (
-      !cloudFunctionsEnabled ||
-      !shouldPollForFreshness({
-        projectId,
-        signedIn: Boolean(session),
-        accountHoldsProject: Boolean(
-          projectId && remoteVersionsRef.current.has(projectId)
-        ),
-        awaitingResolution: cloudProjectAutosaveRef.current?.isHalted !== false
-      })
-    ) {
+    if (!cloudFunctionsEnabled || !doc?.projectId || !session) {
       return;
     }
     let cancelled = false;
@@ -1600,7 +1655,21 @@ export function App() {
     async function check() {
       const controller = cloudProjectAutosaveRef.current;
       const current = managerRef.current?.document;
-      if (cancelled || !controller || !current || controller.isHalted) {
+      if (cancelled || !controller || !current) {
+        return;
+      }
+      // Asked on every tick rather than once when the effect was set up. Both
+      // answers change without anything here changing with them: saving the
+      // open project to the account makes it worth polling, and resolving a
+      // conflict releases the controller that was holding it back.
+      if (
+        !shouldPollForFreshness({
+          projectId: current.projectId,
+          signedIn: Boolean(session),
+          accountHoldsProject: remoteVersionsRef.current.has(current.projectId),
+          awaitingResolution: controller.isHalted
+        })
+      ) {
         return;
       }
       const summary = (
@@ -1880,6 +1949,12 @@ export function App() {
 
   useEffect(() => {
     if (!doc) {
+      return;
+    }
+    if (projectOpenElsewhereRef.current) {
+      // Nothing here is on its way to storage, so the indicator must not claim
+      // it is. The tab that owns the project is the one keeping it current.
+      setSaveState('local');
       return;
     }
     setSaveState('saving');
@@ -2430,6 +2505,26 @@ export function App() {
     setTool(null);
   }
 
+  /**
+   * Picks up a project this tab had open read-only, once the tab that owned it
+   * has gone. A read-only tab has no edits of its own to weigh, so whatever is
+   * stored is unambiguously the version to continue from.
+   */
+  async function adoptStoredProject(projectId: string) {
+    const stored = await loadLocalProject(projectId).catch(() => null);
+    const current = managerRef.current?.document;
+    if (
+      !stored ||
+      !current ||
+      stored.projectId !== current.projectId ||
+      stored.version === current.version
+    ) {
+      return;
+    }
+    hydrateDocument(stored, { restoreView: false, rememberProject: false });
+    setStatus('Editing this project here now.');
+  }
+
   async function flushPendingLocalSave() {
     if (localSaveTimeoutRef.current !== null) {
       window.clearTimeout(localSaveTimeoutRef.current);
@@ -2437,6 +2532,16 @@ export function App() {
     }
     const pending = pendingLocalSaveRef.current;
     pendingLocalSaveRef.current = null;
+    // The debounce can come due before the claim has been answered. Writing on
+    // the strength of not having heard "no" yet is the overwrite this is here
+    // to prevent, so wait for the answer rather than assume it.
+    await projectOwnershipSettledRef.current;
+    if (projectOpenElsewhereRef.current) {
+      // Another tab owns this project's storage. Its copy is the one being
+      // kept up to date; writing here would land on top of it.
+      setSaveState('local');
+      return;
+    }
     if (!pending) {
       return;
     }
@@ -2447,16 +2552,22 @@ export function App() {
       // effect means nothing is ever queued for the account that this device
       // has not already stored.
       const controller = cloudProjectAutosaveRef.current;
-      if (controller) {
-        controller.schedule(pending);
-      } else {
+      if (!controller) {
         setSaveState(cloudAvailable ? 'synced' : 'local');
+      } else if (controller.holdsDocument(pending)) {
+        // An adoption, not an edit: the account already has this exact
+        // version, so there is nothing to mirror back.
+        setSaveState('synced');
+      } else {
+        controller.schedule(pending);
       }
     } catch {
       setSaveState('offline');
       setStatus('Local autosave failed. Export your model before closing.');
     }
   }
+
+  flushPendingLocalSaveRef.current = flushPendingLocalSave;
 
   function handleViewportChange(camera: ViewportCameraState) {
     reportCameraPose(doc?.projectId ?? null, camera);
@@ -3228,7 +3339,11 @@ export function App() {
     }
     // The next session on this device may be a different account; it must not
     // reconcile against this account's sync baselines.
-    void clearAllLastSyncedVersions();
+    void clearAllLastSyncedVersions().catch(() => {
+      setStatus(
+        'Could not clear this account’s sync baselines. Check which copy you keep if this project is opened again on this device.'
+      );
+    });
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
@@ -3581,8 +3696,16 @@ export function App() {
       remoteVersionsRef.current.clear();
       cloudSettingsAutosaveRef.current?.endSession();
       cloudSettingsSessionUserRef.current = null;
-      // The next sign-in on this device may be a different account.
-      void clearAllLastSyncedVersions();
+      // The next sign-in on this device may be a different account. Awaited so
+      // it cannot be cut short by whatever navigation follows sign-out, and a
+      // failure is reported rather than left for a later reconciliation to
+      // resolve against a baseline belonging to the account that just left.
+      let baselinesCleared = true;
+      try {
+        await clearAllLastSyncedVersions();
+      } catch {
+        baselinesCleared = false;
+      }
       sessionRef.current = null;
       setSession(null);
       accountSettingsRef.current = null;
@@ -3598,9 +3721,11 @@ export function App() {
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationError(null);
       setSettingsMessage(
-        pendingInvitationToken
-          ? 'Signed out · sign in with the email address that received the project invitation.'
-          : 'Signed out · device settings remain active.'
+        !baselinesCleared
+          ? 'Signed out · this account’s sync baselines could not be cleared, so check which copy you keep if one of its projects is opened again here.'
+          : pendingInvitationToken
+            ? 'Signed out · sign in with the email address that received the project invitation.'
+            : 'Signed out · device settings remain active.'
       );
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Sign-out failed.'));
@@ -4602,6 +4727,34 @@ export function App() {
     setStatus('Redo');
   }
 
+  /**
+   * Turns a refused write into a choice between two real documents rather than
+   * two version numbers.
+   *
+   * Autosave and an explicit save can both lose the version fence, and losing
+   * it is not the same as losing the connection: the account answered, and it
+   * answered that it holds something this device has not seen.
+   */
+  function raiseAccountConflict(
+    projectId: string,
+    localDocument: ProjectDocument,
+    accountVersion: number | null
+  ) {
+    setStatus(
+      accountVersion === null
+        ? 'This project changed elsewhere. Your work is saved on this device.'
+        : `This project changed elsewhere (account version ${accountVersion}). Your work is saved on this device.`
+    );
+    void api
+      .loadProject(projectId)
+      .then((remote) => {
+        setAccountConflict(
+          conflictFromDocuments(localDocument, remote, 'account')
+        );
+      })
+      .catch(() => undefined);
+  }
+
   async function handleSave() {
     if (!doc) {
       return;
@@ -4651,12 +4804,15 @@ export function App() {
         remoteVersionsRef.current.clear();
         endCloudSettingsSession();
       }
+      if (error instanceof ApiError && error.status === 409) {
+        // The account is plainly reachable — it is what refused the write — so
+        // this is a divergence to resolve, not a connection to give up on.
+        setSaveState('conflict');
+        raiseAccountConflict(doc.projectId, doc, currentVersionOf(error));
+        return;
+      }
       setCloudAvailable(false);
-      setSaveState(
-        error instanceof ApiError && error.status === 409
-          ? 'conflict'
-          : 'offline'
-      );
+      setSaveState('offline');
       setStatus(
         `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
       );
