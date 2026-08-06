@@ -14,6 +14,7 @@ import type {
   SketchPlaneRef,
   TopologySelection
 } from '@openzcad/shared';
+import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 
 const faceReference: FaceTopologyReferenceV5 = {
   kind: 'face',
@@ -343,9 +344,12 @@ describe('toolCardFor', () => {
     ).toMatchObject({
       enabled: false
     });
+    // Compare against the constant, not a phrase from it: the wording is
+    // user-facing copy and has already been rewritten once underneath these
+    // assertions.
     expect(
       card?.actions?.find((action) => action.id === 'sketch-on-face')
         ?.disabledReason
-    ).toContain('no stable topology reference');
+    ).toBe(UNSTABLE_FACE_SKETCH_REASON);
   });
 });
