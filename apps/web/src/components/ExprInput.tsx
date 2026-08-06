@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { previewExpression } from '../lib/model';
+import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 
 interface ExprInputProps {
   label: string;
@@ -9,7 +10,11 @@ interface ExprInputProps {
   placeholder?: string;
   /** Allow an empty / zero-result field without flagging it (e.g. offsets). */
   optional?: boolean;
-  /** Focus this field when the form opens so typing replaces the default. */
+  /**
+   * Ask to focus this field when the form opens so typing replaces the
+   * default. Honoured only where the panel host allows it — see
+   * `useFieldAutoFocus`.
+   */
   autoFocus?: boolean;
 }
 
@@ -28,6 +33,7 @@ export function ExprInput({
   autoFocus
 }: ExprInputProps) {
   const id = useId();
+  const mayAutoFocus = useFieldAutoFocus(autoFocus);
   const preview = previewExpression(value, scope);
   const showError = !preview.ok && !(optional && value.trim().length === 0);
   const isPlainNumber = /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/.test(value);
@@ -43,7 +49,7 @@ export function ExprInput({
           placeholder={placeholder}
           spellCheck={false}
           autoComplete="off"
-          autoFocus={autoFocus}
+          autoFocus={mayAutoFocus}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => onChange(event.target.value)}
         />

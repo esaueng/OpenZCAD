@@ -1388,3 +1388,44 @@ test('Escape backs out of the sketch plane prompt', async ({ page }) => {
   await expect(prompt).toBeHidden();
   await expect(status).toContainText('Sketch canceled');
 });
+
+test('a shortcut still fires when a panel opened because you selected something', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Shortcut Focus');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // The create dialog is the case where landing in the field is right: the user
+  // just asked for it, and typing a size is the next thing they mean to do.
+  await expect(inspector.getByLabel('Width (X)')).toBeFocused();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.body-row')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+
+  // Selecting a body opens the same form for a different reason. Nobody asked
+  // to type here, and the documented shortcuts have to keep working.
+  await page.getByRole('button', { name: /^Box Body/ }).click();
+  const width = inspector.getByLabel('Width (X)');
+  await expect(width).toBeVisible();
+  await expect(width).not.toBeFocused();
+
+  // W cycles the display mode and leaves the panel up, so it can show both
+  // halves at once: the shortcut fired, and the letter did not land in the
+  // field. Autofocus made the second half worse than it sounds — focus selects
+  // the value, so the first letter REPLACED the dimension rather than appending.
+  const displayButton = page.getByRole('button', { name: /^Display mode \(W\)/ });
+  const before = await displayButton.getAttribute('aria-label');
+  await page.keyboard.press('w');
+  await expect(displayButton).not.toHaveAttribute('aria-label', before ?? '');
+  await expect(width).toHaveValue('30');
+
+  // And a tool shortcut still launches its tool.
+  await page.keyboard.press('m');
+  await expect(
+    page.getByRole('form', { name: 'Move controls' })
+  ).toBeVisible();
+});

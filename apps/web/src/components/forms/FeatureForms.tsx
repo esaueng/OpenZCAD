@@ -17,6 +17,7 @@ import {
   type SketchObjectKind
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
+import { useFieldAutoFocus } from './fieldAutoFocus';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -607,12 +608,13 @@ function SketchPicker({
   onChange,
   autoFocus
 }: SketchPickerProps) {
+  const mayAutoFocus = useFieldAutoFocus(autoFocus);
   return (
     <label className="field">
       <span>Sketch</span>
       <select
         value={value}
-        autoFocus={autoFocus}
+        autoFocus={mayAutoFocus}
         onChange={(event) => onChange(event.target.value as SketchId)}
       >
         {sketches.length === 0 && <option value="">No sketches yet</option>}
@@ -894,6 +896,7 @@ export function BooleanForm({
   }
 
   const canSubmit = name.trim().length > 0 && selected.length >= 2;
+  const operationAutoFocus = useFieldAutoFocus(true);
 
   return (
     <FormShell
@@ -910,7 +913,10 @@ export function BooleanForm({
         <span>Operation</span>
         <select
           value={operation}
-          autoFocus
+          // A select is the worst field to hand the keyboard to unasked: a
+          // stray letter jumps to a matching option, so the operation changes
+          // silently rather than producing a visible bad value.
+          autoFocus={operationAutoFocus}
           onChange={(event) =>
             setOperation(event.target.value as BooleanOperation)
           }
