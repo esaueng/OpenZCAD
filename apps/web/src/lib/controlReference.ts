@@ -159,6 +159,12 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Frame all visible model geometry.'
       },
       {
+        id: 'normal-to-face',
+        keys: ['Space'],
+        action: 'Normal to selected face',
+        detail: 'Centres and frames an exact planar face head-on.'
+      },
+      {
         id: 'toggle-grid',
         keys: ['G'],
         action: 'Toggle the grid',
