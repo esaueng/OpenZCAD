@@ -23,6 +23,13 @@
   inset: 0;
 }
 
+/* HudLayer owns imperative canvas overlays whose class styles may select a
+   layout display mode. The hidden state always wins so transient markers and
+   labels cannot survive after their interaction mode exits. */
+[data-viewport-hud][hidden] {
+  display: none !important;
+}
+
 /* Top-right orientation widget. The utility rail used to stack beneath it;
    it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {
