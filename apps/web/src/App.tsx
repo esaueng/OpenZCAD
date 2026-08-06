@@ -174,6 +174,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { ViewModeRail } from './components/ViewModeRail';
+import { MeasurementDock } from './components/MeasurementDock';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
@@ -427,6 +428,12 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
+import {
+  appendMeasurement,
+  measurementsToCsv,
+  measurementsToText,
+  type Measurement
+} from './lib/measurements';
 import {
   loadPanelState,
   savePanelState,
@@ -2329,10 +2336,19 @@ export function App() {
     return doc.derived.exportableBodyIds;
   }, [doc, selectedBody]);
 
-  // Bottom-center selection summary: what is picked plus a quick measurement.
-  const selectionChip = useMemo<{
+  /**
+   * What the current selection is, and the figure that goes with it.
+   *
+   * One derivation feeds two surfaces: the bottom-center chip, which shows the
+   * live pick, and View mode's measurement tape, which keeps the ones worth
+   * writing down. `measurement` is absent when a selection carries no number —
+   * a planar face has no length, and a multi-body pick's chip text is a
+   * modeling hint rather than a figure.
+   */
+  const selectionSummary = useMemo<{
     label: string;
     detail?: string;
+    measurement?: Measurement;
   } | null>(() => {
     if (!doc || tool === 'sketch') {
       return null;
@@ -2344,9 +2360,22 @@ export function App() {
         const body = renderedRepresentations[edge.bodyId];
         return sum + (edgeLength(body, edge.hash, edge.topologyId) ?? 0);
       }, 0);
+      const label = `${selectedEdges.length} edges`;
+      const value = total > 0 ? `≈ ${round(total)} ${units}` : undefined;
       return {
-        label: `${selectedEdges.length} edges`,
-        detail: total > 0 ? `≈ ${round(total)} ${units}` : undefined
+        label,
+        detail: value,
+        measurement: value
+          ? {
+              key: `edges:${selectedEdges
+                .map((edge) => `${edge.bodyId}/${edge.topologyId ?? edge.hash}`)
+                .sort()
+                .join(',')}`,
+              kind: 'edge-total',
+              label,
+              value
+            }
+          : undefined
       };
     }
     if (
@@ -2361,12 +2390,20 @@ export function App() {
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
       const name = edgeLabel(body, hash, topologyId);
       const length = edgeLength(body, hash, topologyId);
+      const label = body ? `${body.name} · ${name}` : name;
+      const value =
+        length !== null && length > 0 ? `${round(length)} ${units}` : undefined;
       return {
-        label: body ? `${body.name} · ${name}` : name,
-        detail:
-          length !== null && length > 0
-            ? `${round(length)} ${units}`
-            : undefined
+        label,
+        detail: value,
+        measurement: value
+          ? {
+              key: `edge:${bodyId ?? '?'}/${topologyId ?? hash}`,
+              kind: 'edge',
+              label,
+              value
+            }
+          : undefined
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
@@ -2376,13 +2413,19 @@ export function App() {
           candidate.topologyId === renderedSelectedTopology.topologyId
       );
       const geometry = face?.geometry;
+      const faceKey = `face:${renderedSelectedTopology.bodyId}/${
+        renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
+      }`;
       if (
         geometry?.featureType === 'through-hole' &&
         geometry.diameter !== undefined
       ) {
+        const label = body ? `${body.name} · Through hole` : 'Through hole';
+        const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: 'Through hole',
-          detail: `Ø ${round(geometry.diameter)} ${units}`
+          detail: value,
+          measurement: { key: faceKey, kind: 'hole', label, value }
         };
       }
       const name = faceLabel(
@@ -2390,8 +2433,22 @@ export function App() {
         renderedSelectedTopology.hash,
         renderedSelectedTopology.topologyId
       );
+      const label = body ? `${body.name} · ${name}` : name;
+      // A cylinder is the other pick that carries a number of its own; every
+      // other face kind has a name but nothing to measure yet.
+      const cylinderDiameter =
+        geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined;
       return {
-        label: body ? `${body.name} · ${name}` : name
+        label,
+        measurement:
+          cylinderDiameter !== undefined
+            ? {
+                key: faceKey,
+                kind: 'diameter',
+                label,
+                value: `Ø ${round(cylinderDiameter)} ${units}`
+              }
+            : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -2408,9 +2465,17 @@ export function App() {
         y: round(body.bbox.max.y - body.bbox.min.y),
         z: round(body.bbox.max.z - body.bbox.min.z)
       };
+      const value = `${size.x} × ${size.y} × ${size.z} ${units}`;
       return {
         label: body.name,
-        detail: `${size.x} × ${size.y} × ${size.z} ${units}`
+        detail: value,
+        measurement: {
+          key: `body:${body.bodyId}`,
+          kind: 'body',
+          label: body.name,
+          value,
+          note: `${round(body.volume)} ${units}³`
+        }
       };
     }
     return null;
@@ -2422,6 +2487,55 @@ export function App() {
     selectedBodyIds,
     renderedRepresentations
   ]);
+
+  const selectionChip = useMemo(
+    () =>
+      selectionSummary
+        ? { label: selectionSummary.label, detail: selectionSummary.detail }
+        : null,
+    [selectionSummary]
+  );
+
+  /** View mode's measure tool: off until asked for, and only ever in View. */
+  const [measuring, setMeasuring] = useState(false);
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const capturedMeasurement =
+    viewMode && measuring ? selectionSummary?.measurement : undefined;
+  // Recording is a side effect of picking rather than a second gesture: with
+  // the tool on, whatever you select and can measure lands on the tape.
+  // `appendMeasurement` returns the list unchanged when nothing is new, and an
+  // unchanged reference is a state update React drops.
+  useEffect(() => {
+    if (!capturedMeasurement) {
+      return;
+    }
+    setMeasurements((current) =>
+      appendMeasurement(current, capturedMeasurement)
+    );
+  }, [capturedMeasurement]);
+
+  async function copyMeasurements() {
+    if (measurements.length === 0) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(measurementsToText(measurements));
+      setStatus(
+        `Copied ${measurements.length} measurement${measurements.length === 1 ? '' : 's'}.`
+      );
+    } catch {
+      setStatus('Could not reach the clipboard. Export CSV instead.');
+    }
+  }
+
+  function exportMeasurements() {
+    if (!doc || measurements.length === 0) {
+      return;
+    }
+    const fileName = `${exportFileStem(doc.name)}.measurements.csv`;
+    downloadText(fileName, `${measurementsToCsv(measurements)}\n`, 'text/csv');
+    setStatus(`Exported ${measurements.length} measurements to ${fileName}.`);
+  }
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
@@ -3110,7 +3224,9 @@ export function App() {
       cancelPanel();
       setStatus('View mode · the model is read-only here.');
     } else {
-      setManualSelectionFilter(null);
+      // The tape survives the trip — leaving to make an edit and coming back
+      // should not cost the figures you just took — but recording stops.
+      setMeasuring(false);
       setStatus('Build mode · modeling tools are back.');
     }
     setWorkspaceMode(mode);
@@ -7756,34 +7872,45 @@ export function App() {
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
   // "Esc cancels" can never tell you.
-  const hint =
-    commandPromptText(
-      interaction,
-      tool !== null || selectedFeatureNodeId !== null
-    ) ??
-    (tool === 'sketch'
-      ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
-      : tool === 'extrude'
-        ? extrudePreview
-          ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
-          : 'Click a shaded closed profile · Esc cancels'
-        : tool === 'fillet' || tool === 'chamfer'
-          ? selectedEdges.length > 0
-            ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-            : 'Click edges with Shift or choose Select all edges · Esc cancels'
-          : tool
-            ? 'Enter creates · Esc cancels'
-            : selectedBodyIds.length >= 2
-              ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-              : selectedTopology?.kind === 'face'
-                ? 'Face selected — Space faces it head-on'
-                : selectedTopology?.kind === 'edge'
-                  ? 'Edge selected — Fillet or Chamfer from the toolbar'
-                  : selectedFeature
-                    ? 'Edit in the panel · Del deletes · Esc closes'
-                    : viewerBodies.length > 0
-                      ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                      : 'Ctrl+K commands · ? shortcuts');
+  // View mode writes its own hints rather than filtering the build chain below.
+  // Selecting a cylinder still arms the radius interaction even with its handle
+  // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  const viewModeHint = measuring
+    ? 'Click an edge, hole or cylinder to record it · Shift+Click totals edges'
+    : selectedTopology?.kind === 'face'
+      ? 'Face selected — Space faces it head-on'
+      : viewerBodies.length > 0
+        ? 'Click a body, face, or edge · Measure records what you pick'
+        : 'Ctrl+K commands · ? shortcuts';
+  const hint = viewMode
+    ? viewModeHint
+    : (commandPromptText(
+        interaction,
+        tool !== null || selectedFeatureNodeId !== null
+      ) ??
+      (tool === 'sketch'
+        ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+        : tool === 'extrude'
+          ? extrudePreview
+            ? 'Drag the arrow across the plane · Enter creates · Esc cancels'
+            : 'Click a shaded closed profile · Esc cancels'
+          : tool === 'fillet' || tool === 'chamfer'
+            ? selectedEdges.length > 0
+              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+              : 'Click edges with Shift or choose Select all edges · Esc cancels'
+            : tool
+              ? 'Enter creates · Esc cancels'
+              : selectedBodyIds.length >= 2
+                ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                : selectedTopology?.kind === 'face'
+                  ? 'Face selected — Space faces it head-on'
+                  : selectedTopology?.kind === 'edge'
+                    ? 'Edge selected — Fillet or Chamfer from the toolbar'
+                    : selectedFeature
+                      ? 'Edit in the panel · Del deletes · Esc closes'
+                      : viewerBodies.length > 0
+                        ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                        : 'Ctrl+K commands · ? shortcuts'));
 
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in View mode rather than
@@ -8182,10 +8309,15 @@ export function App() {
           <ViewModeBar
             settings={viewerSettings}
             projection={projection}
-            measuring={manualSelectionFilter === 'edge'}
-            onMeasure={(measuring) =>
-              setManualSelectionFilter(measuring ? 'edge' : null)
-            }
+            measuring={measuring}
+            onMeasure={(next) => {
+              setMeasuring(next);
+              setStatus(
+                next
+                  ? 'Measure: every edge, hole or cylinder you pick is recorded.'
+                  : 'Measure off · the list is kept until you clear it.'
+              );
+            }}
             onFit={() => setFitSignal((value) => value + 1)}
             onToggleGrid={() =>
               setViewerSettings((current) => ({
@@ -8345,22 +8477,35 @@ export function App() {
             regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
               viewMode ? (
-                <ViewModeRail
-                  bodies={partBodies}
-                  hiddenBodyIds={hiddenBodyIds}
-                  selectedBodyIds={selectedBodyIds}
-                  open={panelState.viewModeRailOpen}
-                  onOpenChange={(viewModeRailOpen) =>
-                    setPanelState((current) => ({
-                      ...current,
-                      viewModeRailOpen
-                    }))
-                  }
-                  onSelectBody={handleSelectBodyFromTree}
-                  onToggleVisibility={toggleBodyVisibility}
-                  onIsolate={isolateBody}
-                  onShowAll={showAllBodies}
-                />
+                <>
+                  <ViewModeRail
+                    bodies={partBodies}
+                    hiddenBodyIds={hiddenBodyIds}
+                    selectedBodyIds={selectedBodyIds}
+                    open={panelState.viewModeRailOpen}
+                    onOpenChange={(viewModeRailOpen) =>
+                      setPanelState((current) => ({
+                        ...current,
+                        viewModeRailOpen
+                      }))
+                    }
+                    onSelectBody={handleSelectBodyFromTree}
+                    onToggleVisibility={toggleBodyVisibility}
+                    onIsolate={isolateBody}
+                    onShowAll={showAllBodies}
+                  />
+                  {(measuring || measurements.length > 0) && (
+                    <MeasurementDock
+                      measurements={measurements}
+                      onClear={() => {
+                        setMeasurements([]);
+                        setStatus('Measurement list cleared.');
+                      }}
+                      onCopy={() => void copyMeasurements()}
+                      onExport={exportMeasurements}
+                    />
+                  )}
+                </>
               ) : contextualToolCard ? (
                 <>
                   <ToolCard
