@@ -1596,7 +1596,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
     );
     const proposal = {
       proposalId: 'proposal_cylinder_rims_e2e',
-      summary: 'Fillet the cylinder top and bottom rims by 1 mm.',
+      summary: 'Fillet the cylinder top and bottom rims by 2 mm.',
       assumptions: [],
       operations: [
         {
@@ -1608,7 +1608,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
           // Deliberately wrong: client grounding must replace it with the two
           // modifier candidates and must not include the periodic seam.
           edgeHashes: [999],
-          size: 1
+          size: 2
         }
       ]
     };
@@ -1644,7 +1644,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
 
   await page
     .getByLabel('CAD change request')
-    .fill('Add a 1 mm fillet to all the edges');
+    .fill('Round every outside edge by 2 mm');
   await page.getByLabel('CAD change request').press('Enter');
 
   const assistantRequest = await assistantRequestPromise;
@@ -1671,7 +1671,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
 
   await expect(page.locator('.assistant-card.proposal.open')).toContainText(
-    'Fillet the cylinder top and bottom rims by 1 mm.',
+    'Fillet the cylinder top and bottom rims by 2 mm.',
     { timeout: 15_000 }
   );
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
