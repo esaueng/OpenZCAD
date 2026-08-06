@@ -29,7 +29,7 @@ import {
   SNAP_RADIUS_PX,
   isBoxSelectDrag,
   rectFromDrag,
-  edgeRunFrom,
+  edgeRunSelections,
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
@@ -4188,22 +4188,13 @@ export function ModelViewer({
         );
         const edges = body?.topology?.edges;
         if (edges) {
-          const chain = edgeRunFrom(edges, picked.selection.topologyId);
+          const chain = edgeRunSelections(
+            edges,
+            picked.selection.topologyId,
+            picked.selection.bodyId
+          );
           if (chain.length > 1) {
-            const byId = new Map(
-              edges.map((edgeTopology) => [
-                edgeTopology.topologyId,
-                edgeTopology
-              ])
-            );
-            onSelectEdgeChainRef.current(
-              chain.map((topologyId) => ({
-                bodyId: picked.selection!.bodyId,
-                kind: 'edge' as const,
-                topologyId,
-                hash: byId.get(topologyId)?.hash
-              }))
-            );
+            onSelectEdgeChainRef.current(chain);
             return;
           }
         }
