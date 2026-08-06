@@ -40,7 +40,7 @@ function renderStartScreen(
       onReorder={vi.fn()}
       onDeleteForever={vi.fn()}
       onEmptyTrash={vi.fn()}
-      loadThumbnailBodies={vi.fn().mockResolvedValue([])}
+      loadThumbnail={vi.fn().mockResolvedValue(undefined)}
       {...overrides}
     />
   );
