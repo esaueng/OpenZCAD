@@ -80,6 +80,7 @@ import type {
   FeatureId,
   FeatureNode,
   FaceGeometry,
+  FaceTopology,
   ParamValue,
   ProjectDocument,
   ProjectOrganization,
@@ -207,7 +208,10 @@ import {
   sameCylinderAxis,
   supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
-import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderRadiusAncestry';
+import {
+  primitiveCylinderHeightAncestor,
+  primitiveCylinderRadiusAncestor
+} from './lib/interaction/cylinderPrimitiveAncestry';
 import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
@@ -6849,6 +6853,68 @@ export function App() {
   }
 
   /**
+   * A cap drag on a cylinder means "make it this tall", not "push this disc".
+   * Once the rim is filleted the blend belongs to the edge, so offsetting the
+   * flat remainder alone leaves a step where the part should simply have
+   * grown. Retarget the drag onto the primitive's height whenever the picked
+   * face is provably its top cap; the wall stretches and the fillet
+   * regenerates at the new rim, which is what keeping the modifier in history
+   * is for. Anything unproven stays on the generic offset.
+   */
+  function buildCylinderHeightCommand(
+    face: FaceTopology,
+    faceHash: number,
+    bodyId: BodyId,
+    offset: number,
+    exact?: ParamValue
+  ): { command: AnyCommand; sourceFeatureId: FeatureId; height: number } | null {
+    const base = managerRef.current?.document;
+    if (!base || Math.abs(offset) <= 1e-9) {
+      return null;
+    }
+    const primitive = primitiveCylinderHeightAncestor(
+      base,
+      bodyId,
+      face.reference,
+      faceHash
+    );
+    const dimensions =
+      primitive?.data.featureKind === 'primitive'
+        ? primitive.data.dimensions
+        : null;
+    // The ancestry only resolves against a numeric height; narrowing here
+    // keeps that guarantee visible instead of casting it away.
+    if (!primitive || !dimensions || typeof dimensions.height !== 'number') {
+      return null;
+    }
+    // The drag was measured along the cap's outward normal, which is the
+    // primitive's own axis direction whatever rigid placement it sits under,
+    // so the gesture is a signed delta on the stored height. `offset` is the
+    // evaluated distance even when `exact` is a typed expression; composing
+    // keeps that expression live in the document.
+    const height = dimensions.height + offset;
+    return {
+      command: commandFactories.updateFeature(
+        {
+          featureId: primitive.featureId,
+          data: {
+            dimensions: {
+              ...dimensions,
+              height:
+                typeof exact === 'string'
+                  ? `${dimensions.height} + (${exact})`
+                  : Math.round(height * 1000) / 1000
+            }
+          }
+        },
+        'Resize Cylinder Height'
+      ),
+      sourceFeatureId: primitive.featureId,
+      height
+    };
+  }
+
+  /**
    * Face-offset commit as a validated direct edit. `exact` preserves a typed
    * expression as the stored parametric value; plain drags store the number.
    */
@@ -6877,6 +6943,31 @@ export function App() {
     ) {
       setStatus('Exact face measurements are unavailable for this offset.');
       dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    const heightPlan = buildCylinderHeightCommand(
+      faceTopology,
+      target.hash,
+      bodyId,
+      offset,
+      exact
+    );
+    if (heightPlan) {
+      if (heightPlan.height <= 0) {
+        setStatus('That distance would leave the cylinder with no height.');
+        return;
+      }
+      void executeValidatedDirectEdit(
+        heightPlan.command,
+        bodyId,
+        `Cylinder height set to ${formatNumber(heightPlan.height)} ${doc?.units ?? ''}.`,
+        offset,
+        undefined,
+        affectedFeatureTargets(
+          managerRef.current!.document,
+          heightPlan.sourceFeatureId
+        )
+      );
       return;
     }
     void executeValidatedDirectEdit(
