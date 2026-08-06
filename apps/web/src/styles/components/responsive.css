@@ -13,7 +13,16 @@
   .topbar .topbar-action:not(.save-state) {
     font-size: 0;
     gap: 0;
-    padding-inline: 8px;
+    padding-inline: 0;
+  }
+
+  .topbar-actions {
+    grid-template-columns: 104px 128px 126px 28px 28px;
+  }
+
+  .file-menu > summary {
+    width: 100%;
+    min-height: 28px;
   }
 
   .shortcuts-grid {
@@ -53,8 +62,7 @@
 
   .brand .beta-tag,
   .topbar-divider,
-  .breadcrumb .mono,
-  .session-user {
+  .breadcrumb .mono {
     display: none;
   }
 
@@ -66,8 +74,9 @@
     max-width: 100%;
   }
 
-  .topbar-tools {
-    flex: 0 0 auto;
+  .topbar-actions {
+    grid-template-columns: repeat(5, 28px);
+    gap: var(--sp-1);
     margin-left: 0;
   }
 
@@ -80,9 +89,12 @@
     font-size: 0;
   }
 
+  .account-state,
   .collaboration-state {
-    flex: 0 0 auto;
+    width: 28px;
+    justify-content: center;
     gap: 0;
+    padding-inline: 0;
     font-size: 0;
   }
 

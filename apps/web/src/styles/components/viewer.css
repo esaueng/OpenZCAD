@@ -67,7 +67,7 @@
   border-radius: var(--radius-sm);
 }
 
-.rail-button:hover,
+.rail-button:hover:not(:disabled),
 .rail-button.open {
   color: var(--color-text);
   background: var(--color-surface-2);
@@ -243,44 +243,6 @@
 .selection-chip-clear:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
-}
-
-/* Viewport HUD: ghost stat chips bottom-left; the rail covers view/display
-   state top-right. */
-.vp-hud {
-  position: absolute;
-  z-index: var(--z-viewer-overlay);
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  pointer-events: none;
-}
-
-.vp-hud-bl {
-  bottom: 10px;
-  left: 10px;
-}
-
-.vp-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 16px;
-  padding: 1px 6px;
-  color: var(--color-text-muted);
-  background: rgba(17, 24, 33, 0.82);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  line-height: 1.4;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.vp-chip-sel {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
 }
 
 /* Snap glyph: a marker on the point a drag locked onto, with the kind named
