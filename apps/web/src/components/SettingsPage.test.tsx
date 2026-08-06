@@ -95,6 +95,18 @@ describe('settings advanced section', () => {
 });
 
 describe('settings desktop account section', () => {
+  it('turns project sharing off from the account section', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderSettings(null, { initialSection: 'account', onChange });
+
+    await user.click(screen.getByRole('checkbox', { name: 'Project sharing' }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ collaboration: { enabled: false } })
+    );
+  });
+
   it('offers the secure browser handoff when native auth is ready', async () => {
     const user = userEvent.setup();
     const onStartDesktopLogin = vi.fn().mockResolvedValue(undefined);

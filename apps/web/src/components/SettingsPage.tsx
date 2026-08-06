@@ -620,6 +620,8 @@ export function SettingsPage({
 
   const patch = (next: Partial<AppSettings>) =>
     onChange({ ...settings, ...next });
+  const patchCollaboration = (next: Partial<AppSettings['collaboration']>) =>
+    patch({ collaboration: { ...settings.collaboration, ...next } });
   const patchAssistant = (next: Partial<AppSettings['assistant']>) =>
     patch({ assistant: { ...settings.assistant, ...next } });
 
@@ -1547,6 +1549,17 @@ export function SettingsPage({
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
+              <SettingRow
+                title="Project sharing"
+                description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
+                scope="Account preference"
+              >
+                <Toggle
+                  checked={settings.collaboration.enabled}
+                  label="Project sharing"
+                  onChange={(enabled) => patchCollaboration({ enabled })}
+                />
+              </SettingRow>
               {session ? (
                 <>
                   <SettingRow
