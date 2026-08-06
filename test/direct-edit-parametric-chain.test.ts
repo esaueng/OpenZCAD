@@ -181,7 +181,7 @@ describe('direct edits across cylinder radius edits', { timeout: 60_000 }, () =>
 
     const after = await adapter.syncDocument(withRadius(chain.document, 12));
     expect(after.warnings).toEqual([
-      'Feature "Offset cap": A selected face no longer exists.'
+      'Feature "Offset cap": A selected face no longer exists. Re-select the face(s) and re-create this feature.'
     ]);
     // The failed edit leaves the resized primitive untouched.
     expect(after.bodyRepresentations[chain.bodyId]?.volume).toBeCloseTo(

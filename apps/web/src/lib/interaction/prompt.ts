@@ -1,4 +1,8 @@
-import { escapeTarget, type InteractionState } from './machine';
+import {
+  escapeTarget,
+  isStaleSelectionError,
+  type InteractionState
+} from './machine';
 
 /**
  * What the workspace should be telling you to do right now.
@@ -113,7 +117,9 @@ export function commandPrompt(
   if (state.phase === 'failed') {
     return {
       step: state.error
-        ? `${state.error} Try another value.`
+        ? isStaleSelectionError(state.error)
+          ? state.error
+          : `${state.error} Try another value.`
         : 'That value did not build. Try another.',
       escape
     };
