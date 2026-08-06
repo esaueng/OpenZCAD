@@ -365,6 +365,7 @@ import {
   loadLastSyncedVersion,
   loadLocalProject,
   purgeExpiredLocalProjects,
+  putSourceBlob,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
@@ -448,7 +449,19 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
+/**
+ * Fallback ceiling when the source blob store is unavailable (private
+ * browsing, storage denied) and the STEP text must be embedded in the
+ * document itself, as every import was before content-addressed references.
+ */
 const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
+/**
+ * Reference-form ceiling. The kernel comfortably imports files this size
+ * (measured: 283 MB peaks at 1.2 GB wasm memory, ~7 s — see
+ * scripts/profile-step-import.mjs); the binding constraint is wasm32 address
+ * space, which this leaves 40% headroom against.
+ */
+const MAX_SOURCE_IMPORT_BYTES = 250 * 1024 * 1024;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -5005,14 +5018,27 @@ export function App() {
       return;
     }
 
-    if (file.size > MAX_EMBEDDED_STEP_BYTES) {
-      setStatus(
-        'STEP import is limited to 12 MB while source B-reps are stored in the offline document.'
-      );
+    if (file.size > MAX_SOURCE_IMPORT_BYTES) {
+      setStatus('STEP import is limited to 250 MB.');
       return;
     }
 
     try {
+      // Content-addressed storage first: the document carries a checksum
+      // reference and the bytes live in the browser's blob store (and the
+      // artifact archive, once uploaded). Embedding the text in the document
+      // is the fallback for storage-denied contexts, at the old 12 MB cap.
+      let sourceRef = null;
+      try {
+        sourceRef = await putSourceBlob(file);
+      } catch {
+        if (file.size > MAX_EMBEDDED_STEP_BYTES) {
+          setStatus(
+            'STEP import over 12 MB needs browser storage, which is unavailable in this session.'
+          );
+          return;
+        }
+      }
       const stepText = await file.text();
       const metadata = parseStepMetadata(file.name, stepText);
       const productName = metadata.products[0]?.trim();
@@ -5028,7 +5054,8 @@ export function App() {
         });
         archived = true;
       } catch {
-        // The STEP source remains embedded for deterministic offline rebuilds.
+        // The source stays in the local blob store (or embedded); rebuilds
+        // remain deterministic and offline either way.
       }
 
       const imported = executeCommand(
@@ -5036,7 +5063,7 @@ export function App() {
           name: productName || file.name.replace(/\.(step|stp)$/i, ''),
           artifactId,
           sourceName: file.name,
-          stepText
+          ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
         })
       );
       if (imported) {
