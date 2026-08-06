@@ -34,9 +34,55 @@ export function canonicalProjectContentKey(document: ProjectDocument): string {
   return stableJson(content);
 }
 
+/**
+ * Approximate retained size, counted by walking the value rather than
+ * serialising it. The previous measure built a stable JSON string purely to
+ * take its length — for a derived projection holding a few hundred thousand
+ * mesh floats that is a multi-megabyte transient string on every store, which
+ * is a strange price to pay for a number nobody reads.
+ *
+ * Counting is also closer to the truth: a float costs 8 bytes here, against
+ * the ~20 its decimal text occupies. Budgets in terms of this measure are
+ * therefore real bytes rather than an inflated proxy.
+ */
 function defaultSizeOf(value: unknown): number {
+  const seen = new Set<object>();
+  const measure = (node: unknown): number => {
+    if (node === null || node === undefined) {
+      return 4;
+    }
+    switch (typeof node) {
+      case 'number':
+        return 8;
+      case 'boolean':
+        return 4;
+      case 'string':
+        return node.length * 2;
+      case 'object':
+        break;
+      default:
+        return 8;
+    }
+    const object = node;
+    if (seen.has(object)) {
+      return 0;
+    }
+    seen.add(object);
+    if (Array.isArray(object)) {
+      let total = 16;
+      for (const entry of object) {
+        total += measure(entry);
+      }
+      return total;
+    }
+    let total = 16;
+    for (const [key, entry] of Object.entries(object)) {
+      total += key.length * 2 + measure(entry);
+    }
+    return total;
+  };
   try {
-    return stableJson(value).length * 2;
+    return measure(value);
   } catch {
     return Number.POSITIVE_INFINITY;
   }
