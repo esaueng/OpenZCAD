@@ -98,7 +98,7 @@ function semanticReference(
  */
 export function createBrepKitSemanticLineage(
   producingFeatureId: FeatureId,
-  operation: 'primitive' | 'sweep' | 'imported-step',
+  operation: 'primitive' | 'sweep' | 'imported-step' | 'fillet' | 'chamfer',
   assignments: readonly BrepKitSemanticAssignment[]
 ): BrepKitLineageState {
   const state = emptyLineageState();
