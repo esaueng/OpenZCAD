@@ -223,7 +223,8 @@ import {
 } from './lib/extrudeInference';
 import type {
   ExtrudePreview,
-  FaceResizeCommit
+  FaceResizeCommit,
+  NormalToFaceRequest
 } from './components/ModelViewer';
 import type {
   SelectionFilter,
@@ -234,6 +235,36 @@ import type {
   ViewTarget
 } from '@openzcad/viewport/types';
 import type { MovePreview, MoveSnap } from '@openzcad/viewport';
+
+/**
+ * Space activates focused buttons and belongs in free-text fields. Numeric and
+ * expression controls do not require spaces, though, and feature inspectors
+ * can leave one focused after the user clicks a face in the viewport; let the
+ * face shortcut through in that specific case without touching its value.
+ */
+function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
+  if (!target) {
+    return false;
+  }
+  if (target instanceof HTMLInputElement) {
+    return (
+      target.type !== 'number' &&
+      target.type !== 'range' &&
+      !target.closest('.expr-field')
+    );
+  }
+  if (
+    target.closest(
+      'button, a, [role="button"], [role="tab"], [contenteditable="true"]'
+    )
+  ) {
+    return true;
+  }
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+    return true;
+  }
+  return false;
+}
 
 const LazyViewerShell = lazy(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -849,6 +880,8 @@ export function App() {
     view: ViewTarget;
     nonce: number;
   } | null>(null);
+  const [normalToFaceRequest, setNormalToFaceRequest] =
+    useState<NormalToFaceRequest | null>(null);
   const [rotateRequest, setRotateRequest] = useState<{
     direction: 'cw' | 'ccw';
     nonce: number;
@@ -1899,6 +1932,43 @@ export function App() {
         }
       : selectedTopology;
   }, [interaction, renderedRepresentations, selectedTopology]);
+  const normalToFaceTarget = useMemo(() => {
+    const selection = renderedSelectedTopology;
+    if (selection?.kind !== 'face' || !selection.topologyId) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    const face = body?.topology?.faces.find(
+      (candidate) =>
+        candidate.topologyId === selection.topologyId ||
+        (selection.hash !== undefined && candidate.hash === selection.hash)
+    );
+    const geometry = face?.geometry;
+    if (
+      !body ||
+      !face ||
+      face.triangleCount <= 0 ||
+      geometry?.surfaceType !== 'plane' ||
+      !geometry.normal ||
+      ![
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z,
+        geometry.normal.x,
+        geometry.normal.y,
+        geometry.normal.z
+      ].every(Number.isFinite) ||
+      Math.hypot(geometry.normal.x, geometry.normal.y, geometry.normal.z) <
+        1e-12
+    ) {
+      return null;
+    }
+    return {
+      bodyId: body.bodyId,
+      topologyId: face.topologyId,
+      label: faceLabel(body, face.hash, face.topologyId)
+    };
+  }, [renderedRepresentations, renderedSelectedTopology]);
   // Warnings must describe what is actually on screen. While a preview is up the
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
@@ -2858,6 +2928,19 @@ export function App() {
 
   function requestView(view: ViewTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function requestNormalToSelectedFace() {
+    if (!normalToFaceTarget) {
+      setStatus('Normal view requires an exact planar face selection.');
+      return;
+    }
+    setNormalToFaceRequest({
+      bodyId: normalToFaceTarget.bodyId,
+      topologyId: normalToFaceTarget.topologyId,
+      nonce: ++viewNonceRef.current
+    });
+    setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
   function requestRotate(direction: 'cw' | 'ccw') {
@@ -6646,6 +6729,27 @@ export function App() {
         return;
       }
 
+      const normalViewSpace =
+        (event.code === 'Space' || event.key === ' ') &&
+        !event.repeat &&
+        !meta &&
+        !event.altKey &&
+        !event.shiftKey;
+      const stableFaceSelection =
+        renderedSelectedTopology?.kind === 'face' &&
+        (interaction.mode === 'idle' ||
+          (interaction.mode === 'face' && interaction.phase === 'armed'));
+      if (
+        normalViewSpace &&
+        tool === null &&
+        stableFaceSelection &&
+        !focusedControlOwnsSpace(target)
+      ) {
+        event.preventDefault();
+        requestNormalToSelectedFace();
+        return;
+      }
+
       // Escape is exempt from the typing guard. Every other shortcut must
       // yield to a focused field, but a panel that autofocuses an input is
       // exactly the situation someone presses Escape to get out of, and
@@ -6953,13 +7057,15 @@ export function App() {
             ? 'Enter creates · Esc cancels'
             : selectedBodyIds.length >= 2
               ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-              : selectedTopology?.kind === 'edge'
-                ? 'Edge selected — Fillet or Chamfer from the toolbar'
-                : selectedFeature
-                  ? 'Edit in the panel · Del deletes · Esc closes'
-                  : viewerBodies.length > 0
-                    ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                    : 'Ctrl+K commands · ? shortcuts');
+              : selectedTopology?.kind === 'face'
+                ? 'Face selected — Space faces it head-on'
+                : selectedTopology?.kind === 'edge'
+                  ? 'Edge selected — Fillet or Chamfer from the toolbar'
+                  : selectedFeature
+                    ? 'Edit in the panel · Del deletes · Esc closes'
+                    : viewerBodies.length > 0
+                      ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                      : 'Ctrl+K commands · ? shortcuts');
 
   const paletteCommands: PaletteCommand[] = [
     ...TOOL_GROUPS.flatMap((group) =>
@@ -7015,6 +7121,20 @@ export function App() {
       shortcut: 'F',
       icon: <Maximize2 size={16} aria-hidden="true" />,
       run: () => setFitSignal((value) => value + 1)
+    },
+    {
+      id: 'view-normal-to-face',
+      label: 'Normal to selected face',
+      group: 'View',
+      shortcut: 'Space',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      disabledReason:
+        renderedSelectedTopology?.kind !== 'face'
+          ? 'Select a planar face first'
+          : normalToFaceTarget
+            ? null
+            : 'The selected face is not an exact plane',
+      run: requestNormalToSelectedFace
     },
     {
       id: 'view-grid',
@@ -7394,6 +7514,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
+            normalToFaceRequest={normalToFaceRequest}
             rotateRequest={rotateRequest}
             units={doc.units}
             editableBodyIds={directEditableBodyIds}
