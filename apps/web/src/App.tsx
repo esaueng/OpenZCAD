@@ -973,6 +973,7 @@ export function App() {
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
         setMoveCommitHold(null);
+        applyEdgeReferenceRepairs(derived.referenceRepairs);
       }
     },
     onError: (message) => {
@@ -2459,6 +2460,40 @@ export function App() {
 
   function handleViewportChange(camera: ViewportCameraState) {
     reportCameraPose(doc?.projectId ?? null, camera);
+  }
+
+  /**
+   * Backfills kernel-proven v5 references onto legacy hash-only fillet and
+   * chamfer features. A closed-edge hash embeds its length, so the only
+   * moment a legacy feature can be upgraded is while its stored hashes still
+   * resolve — right after the clean rebuild that carried these repairs.
+   * Applied as a normalization: it persists and syncs like an edit without
+   * stealing an undo step from the user.
+   */
+  function applyEdgeReferenceRepairs(
+    repairs: ProjectDocument['derived']['referenceRepairs']
+  ): void {
+    const manager = managerRef.current;
+    if (!manager || !repairs?.length || editDisabledReason) {
+      return;
+    }
+    try {
+      for (const repair of repairs) {
+        manager.normalize(
+          commandFactories.updateFeature(
+            {
+              featureId: repair.featureId,
+              data: { edgeReferences: repair.edgeReferences }
+            },
+            'Repair edge references'
+          )
+        );
+      }
+      setDoc(manager.document);
+    } catch {
+      // A failed repair leaves the document exactly as it was; the legacy
+      // hash resolver keeps working at the current geometry.
+    }
   }
 
   function executeCommand(
