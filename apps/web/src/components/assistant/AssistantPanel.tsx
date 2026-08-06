@@ -25,6 +25,7 @@ import {
 import {
   createCadDocumentDigest,
   MAX_ASSISTANT_ATTACHMENTS,
+  parseCadPatchProposal,
   type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
@@ -59,7 +60,10 @@ import {
   readAssistantProgress,
   type AssistantProgress
 } from '../../lib/assistant/progress';
-import { assistantSuggestions } from '../../lib/assistant/suggestions';
+import {
+  assistantSuggestions,
+  type AssistantSuggestion
+} from '../../lib/assistant/suggestions';
 import {
   ACCEPTED_ATTACHMENT_TYPES,
   attachmentDataUrl,
@@ -274,6 +278,16 @@ export function AssistantPanel({
       }),
     [doc.bodyOrder.length, selection]
   );
+  const verifiedPrompt = useMemo(
+    () =>
+      pending.length === 0
+        ? suggestions.find(
+            (suggestion) =>
+              suggestion.proposal && suggestion.label === prompt.trim()
+          )
+        : undefined,
+    [pending.length, prompt, suggestions]
+  );
   /** The last thing the user asked, which is what "try again" repeats. */
   const lastAsk = useMemo(() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -440,6 +454,35 @@ export function AssistantPanel({
       });
 
       try {
+        const verifiedSuggestion =
+          attachments.length === 0
+            ? suggestions.find(
+                (suggestion) => suggestion.proposal && suggestion.label === text
+              )
+            : undefined;
+        if (verifiedSuggestion?.proposal) {
+          const proposal = parseCadPatchProposal(
+            structuredClone(verifiedSuggestion.proposal)
+          );
+          if (!(await onPreview(proposal))) {
+            throw new Error(
+              'This verified recipe did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+            );
+          }
+          const entryId = nextEntryId('reply');
+          dispatch({
+            type: 'reply',
+            id: entryId,
+            reply: {
+              kind: 'patch',
+              proposal,
+              readings: []
+            },
+            at: Date.now()
+          });
+          dispatch({ type: 'preview', entryId });
+          return;
+        }
         // One immutable snapshot per turn: if the selection or document changes
         // while the provider is thinking, this turn still means what it meant
         // when it was sent.
@@ -462,12 +505,21 @@ export function AssistantPanel({
             onDelta: (partial) => setProgress(readAssistantProgress(partial))
           }
         );
+        if (reply.kind === 'patch' && !(await onPreview(reply.proposal))) {
+          throw new Error(
+            'The proposed change did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+          );
+        }
+        const entryId = nextEntryId('reply');
         dispatch({
           type: 'reply',
-          id: nextEntryId('reply'),
+          id: entryId,
           reply,
           at: Date.now()
         });
+        if (reply.kind === 'patch') {
+          dispatch({ type: 'preview', entryId });
+        }
       } catch (error) {
         if (controller.signal.aborted) {
           dispatch({ type: 'cancel' });
@@ -484,12 +536,22 @@ export function AssistantPanel({
         });
       }
     },
-    [conversation, doc, onPreview, selection]
+    [conversation, doc, onPreview, selection, suggestions]
   );
 
   function submitPrompt() {
     const text = prompt.trim();
-    if ((!text && pending.length === 0) || thinking || !configured) {
+    const verified = Boolean(
+      pending.length === 0 &&
+      suggestions.some(
+        (suggestion) => suggestion.proposal && suggestion.label === text
+      )
+    );
+    if (
+      (!text && pending.length === 0) ||
+      thinking ||
+      (!configured && !verified)
+    ) {
       return;
     }
     const attachments = pending;
@@ -513,10 +575,10 @@ export function AssistantPanel({
     void send(text, [], answers, entry.id);
   }
 
-  function applySuggestion(text: string) {
+  function applySuggestion(suggestion: AssistantSuggestion) {
     // Offered, not sent: the opener is a starting point to edit, and a click
     // that fires a request the user has not read yet is a trap.
-    setPrompt(text);
+    setPrompt(suggestion.label);
     promptRef.current?.focus();
   }
 
@@ -859,14 +921,19 @@ export function AssistantPanel({
             </p>
             <ul className="assistant-suggestions">
               {suggestions.map((suggestion) => (
-                <li key={suggestion}>
+                <li key={suggestion.id}>
                   <button
                     type="button"
                     className="assistant-suggestion"
-                    disabled={!configured}
+                    disabled={!configured && !suggestion.proposal}
                     onClick={() => applySuggestion(suggestion)}
                   >
-                    {suggestion}
+                    <span>{suggestion.label}</span>
+                    {suggestion.proposal && (
+                      <span className="assistant-suggestion-badge">
+                        Verified
+                      </span>
+                    )}
                   </button>
                 </li>
               ))}
@@ -978,7 +1045,7 @@ export function AssistantPanel({
                 : 'Describe a part, or attach a drawing…'
             }
             aria-label="CAD change request"
-            disabled={!configured}
+            disabled={!configured && !verifiedPrompt}
             onChange={(event) => setPrompt(event.target.value)}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData?.files ?? []);
@@ -1008,7 +1075,10 @@ export function AssistantPanel({
             <button
               type="button"
               className="assistant-submit"
-              disabled={!configured || (!prompt.trim() && pending.length === 0)}
+              disabled={
+                (!configured && !verifiedPrompt) ||
+                (!prompt.trim() && pending.length === 0)
+              }
               onClick={submitPrompt}
               aria-label="Send to the assistant"
               title="Send (Enter)"
@@ -1017,9 +1087,11 @@ export function AssistantPanel({
             </button>
           )}
         </div>
-        {pending.length > 0 && (
+        {(verifiedPrompt || pending.length > 0) && (
           <p className="assistant-foot">
-            Drawings are sent to your AI provider
+            {verifiedPrompt
+              ? 'Verified exact recipe · no AI provider request'
+              : 'Drawings are sent to your AI provider'}
           </p>
         )}
         <input
