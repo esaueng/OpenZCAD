@@ -127,6 +127,8 @@ export interface CloudflareEnv {
   AUTH_LEGACY_OWNER_EMAIL?: string;
   AUTH_OTP_PEPPER?: string;
   AUTH_EMAIL_FROM?: string;
+  /** Sender reserved for transactional project invitation links. */
+  PROJECT_INVITATION_EMAIL_FROM?: string;
   AUTH_SESSION_DAYS?: string;
   /** Fail-closed rollout gate for the native PKCE/device authorization flow. */
   DESKTOP_AUTH_ENABLED?: string;
