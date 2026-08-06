@@ -36,4 +36,16 @@ describe('beta deployment safety', () => {
     expect(config).toContain('"PROJECT_EDIT_LEASES_ENFORCED": "true"');
     expect(config).toContain('"PROJECT_PERSONAL_SYNC_ENABLED": "true"');
   });
+
+  it('keeps authentication and project invitation senders separately allowlisted', () => {
+    const config = readFileSync('wrangler.jsonc', 'utf8');
+
+    expect(config).toContain('"AUTH_EMAIL_FROM": "login@auth.esau.app"');
+    expect(config).toContain(
+      '"PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app"'
+    );
+    expect(config).toMatch(
+      /"allowed_sender_addresses":\s*\[\s*"login@auth\.esau\.app",\s*"noreply@zcad\.esau\.app"\s*\]/
+    );
+  });
 });
