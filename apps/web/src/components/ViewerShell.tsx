@@ -6,6 +6,7 @@ import {
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
+  type NormalToFaceRequest,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
@@ -43,6 +44,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: ViewTarget; nonce: number } | null;
+  normalToFaceRequest: NormalToFaceRequest | null;
   rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
@@ -133,6 +135,7 @@ export function ViewerShell({
   settings,
   fitSignal,
   viewRequest,
+  normalToFaceRequest,
   rotateRequest,
   units,
   editableBodyIds,
@@ -207,6 +210,7 @@ export function ViewerShell({
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        normalToFaceRequest={normalToFaceRequest}
         rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
