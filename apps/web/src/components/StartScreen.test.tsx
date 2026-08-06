@@ -41,6 +41,7 @@ function renderStartScreen(
       onDeleteForever={vi.fn()}
       onEmptyTrash={vi.fn()}
       loadThumbnail={vi.fn().mockResolvedValue(undefined)}
+      backfillThumbnail={vi.fn().mockResolvedValue(undefined)}
       {...overrides}
     />
   );
