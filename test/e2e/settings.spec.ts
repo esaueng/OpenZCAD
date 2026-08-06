@@ -313,6 +313,67 @@ test('settings name their sections and search individual settings', async ({
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
+test('turns project sharing off without disabling cloud saves', async ({
+  page
+}) => {
+  await stubApi(page, { collaborationRole: 'owner' });
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('form', { name: 'Join a shared project' })
+  ).toBeVisible();
+  await page.getByLabel('Project name').fill('Private Local Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing' })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __e2eCollaborationSocketUrls: string[];
+            }
+          ).__e2eCollaborationSocketUrls.length
+      )
+    )
+    .toBe(1);
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Project sharing' }).uncheck();
+  await page
+    .getByRole('button', { name: 'Files & autosave', exact: true })
+    .click();
+  await expect(
+    page.getByRole('checkbox', { name: 'Cloud autosave' })
+  ).toBeChecked();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing' })
+  ).toHaveCount(0);
+  await expect(page.locator('.save-state')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __e2eCollaborationOpenSocketCount: number;
+            }
+          ).__e2eCollaborationOpenSocketCount
+      )
+    )
+    .toBe(0);
+
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.getByRole('form', { name: 'Join a shared project' })
+  ).toHaveCount(0);
+});
+
 test('settings restore the exact non-sensitive view after reload', async ({
   page
 }) => {
