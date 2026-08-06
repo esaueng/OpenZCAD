@@ -138,7 +138,7 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await page.getByLabel('Project name').fill('Continuous Line Chain');
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
     page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
   ).toBeVisible();
@@ -178,7 +178,7 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   await page.getByLabel('Project name').fill('Sketch HUD Cleanup');
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
     page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
   ).toBeVisible();

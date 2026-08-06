@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { previewExpression } from '../lib/model';
+import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 
 interface ExprInputProps {
   label: string;
@@ -9,7 +10,11 @@ interface ExprInputProps {
   placeholder?: string;
   /** Allow an empty / zero-result field without flagging it (e.g. offsets). */
   optional?: boolean;
-  /** Focus this field when the form opens so typing replaces the default. */
+  /**
+   * Ask to focus this field when the form opens so typing replaces the
+   * default. Honoured only where the panel host allows it — see
+   * `useFieldAutoFocus`.
+   */
   autoFocus?: boolean;
 }
 
@@ -28,13 +33,14 @@ export function ExprInput({
   autoFocus
 }: ExprInputProps) {
   const id = useId();
+  const mayAutoFocus = useFieldAutoFocus(autoFocus);
   const preview = previewExpression(value, scope);
   const showError = !preview.ok && !(optional && value.trim().length === 0);
   const isPlainNumber = /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/.test(value);
 
   return (
     <label className="field expr-field" htmlFor={id}>
-      <span>{label}</span>
+      <span id={`${id}-label`}>{label}</span>
       <div className="expr-input-row">
         <input
           id={id}
@@ -43,12 +49,23 @@ export function ExprInput({
           placeholder={placeholder}
           spellCheck={false}
           autoComplete="off"
-          autoFocus={autoFocus}
+          autoFocus={mayAutoFocus}
+          // The preview sits inside this label, so it was being read as part
+          // of the field's name: "Width (X) = 30" one keystroke, "Width (X)
+          // Unknown identifier "w"" the next — a name that changes as you
+          // type. Point the name at the label text and let the preview be a
+          // description that announces itself when it changes.
+          aria-labelledby={`${id}-label`}
+          aria-describedby={isPlainNumber ? undefined : `${id}-preview`}
+          aria-invalid={showError || undefined}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => onChange(event.target.value)}
         />
         {!isPlainNumber && (
-          <small className={`expr-preview ${showError ? 'error' : ''}`}>
+          <small
+            id={`${id}-preview`}
+            className={`expr-preview ${showError ? 'error' : ''}`}
+          >
             {preview.text}
           </small>
         )}
