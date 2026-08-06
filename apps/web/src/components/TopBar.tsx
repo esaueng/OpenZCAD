@@ -186,6 +186,21 @@ export function TopBar({
         role="group"
         aria-label="Workspace status and actions"
       >
+        <span
+          className={`account-state is-${accountState}`}
+          role="status"
+          title={`Cloud account: ${accountLabel.toLowerCase()}`}
+          aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
+        >
+          {accountState === 'checking' ? (
+            <LoaderCircle className="spin" size={13} aria-hidden="true" />
+          ) : accountState === 'signed-in' ? (
+            <Cloud size={13} aria-hidden="true" />
+          ) : (
+            <CloudOff size={13} aria-hidden="true" />
+          )}
+          {accountLabel}
+        </span>
         <button
           className={`save-state topbar-action is-${saveState}`}
           type="button"
@@ -204,21 +219,6 @@ export function TopBar({
           )}
           {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
         </button>
-        <span
-          className={`account-state is-${accountState}`}
-          role="status"
-          title={`Cloud account: ${accountLabel.toLowerCase()}`}
-          aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
-        >
-          {accountState === 'checking' ? (
-            <LoaderCircle className="spin" size={13} aria-hidden="true" />
-          ) : accountState === 'signed-in' ? (
-            <Cloud size={13} aria-hidden="true" />
-          ) : (
-            <CloudOff size={13} aria-hidden="true" />
-          )}
-          {accountLabel}
-        </span>
         <button
           type="button"
           className={`collaboration-state ${collaborationStatus}`}
