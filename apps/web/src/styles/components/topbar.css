@@ -309,16 +309,27 @@
   min-height: 30px;
   padding: 0 9px;
   color: var(--color-text-muted);
-  border: 1px solid transparent;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   justify-content: flex-start;
 }
 
-.save-state:hover {
+.save-state:hover:not(:disabled),
+.save-state:focus-visible,
+.collaboration-state:hover:not(:disabled),
+.collaboration-state:focus-visible {
   color: var(--color-text);
   background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  outline: none;
+}
+
+.save-state:active:not(:disabled),
+.collaboration-state:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 /*
@@ -347,7 +358,16 @@
 }
 
 .collaboration-state {
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  cursor: pointer;
   text-transform: capitalize;
+}
+
+.collaboration-state:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .account-state.is-signed-in {
