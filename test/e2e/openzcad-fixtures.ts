@@ -5,20 +5,14 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
 
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
 
-/**
- * The compact viewport HUD was intentionally removed. Body count remains in
- * the workspace status summary's accessible title, so E2E waits on the
- * supported status surface instead of a deleted presentation-only overlay.
- */
+/** Waits on the production workspace summary instead of viewport chrome. */
 export async function expectBodyCount(page: Page, count: number) {
+  const bodyLabel = `${count} ${count === 1 ? 'body' : 'bodies'}`;
   await expect(
     page
-      .getByRole('group', { name: 'Workspace status', exact: true })
-      .locator('span[title]')
-  ).toHaveAttribute(
-    'title',
-    new RegExp(` · \\d+ features · ${count} bodies$`)
-  );
+      .getByRole('group', { name: 'Workspace status' })
+      .getByLabel(new RegExp(` · \\d+ features? · ${bodyLabel}\\. Sync `))
+  ).toBeVisible();
 }
 
 /**
