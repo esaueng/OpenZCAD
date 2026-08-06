@@ -858,11 +858,29 @@ export interface ProjectAssetRef {
   createdAt: string;
 }
 
+/**
+ * Kernel-proven v5 references for one legacy hash-only edge modifier. A
+ * closed-edge hash embeds its length, so the only moment a hash-only
+ * fillet/chamfer can be upgraded is while its stored hashes still resolve —
+ * the rebuild that succeeds is the proof. The app persists these onto the
+ * feature so later upstream edits resolve by lineage instead of dying on the
+ * orphaned hashes.
+ */
+export interface EdgeReferenceRepair {
+  featureId: FeatureId;
+  edgeReferences: EdgeTopologyReferenceV5[];
+}
+
 export interface DerivedState {
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
+  /**
+   * Advice to the session that ran this rebuild, not document state:
+   * `attachDerivedState` strips it so it is never persisted or replayed.
+   */
+  referenceRepairs?: EdgeReferenceRepair[];
 }
 
 export interface ProjectDocument {
