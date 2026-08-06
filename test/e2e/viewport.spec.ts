@@ -1,4 +1,9 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  WORKSPACE_SESSION_STORAGE_KEY
+} from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -10,6 +15,38 @@ async function selectRailView(page: Page, name: RegExp | string) {
   await page.getByRole('button', { name: 'Standard views' }).click();
   await page.getByRole('button', { name }).click();
 }
+
+test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('History Rail Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const topbar = page.locator('.topbar');
+  await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+  await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
+
+  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
+  const undo = rail.getByRole('button', { name: 'Undo' });
+  const redo = rail.getByRole('button', { name: 'Redo' });
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeDisabled();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(undo).toBeEnabled();
+
+  await undo.click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('0 bodies');
+  await expect(redo).toBeEnabled();
+
+  await redo.click();
+  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+});
 
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
   page
@@ -70,6 +107,90 @@ test('P toggles the camera projection', async ({ page }) => {
   );
   await orthoButton.click();
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('Space centres and faces an exact planar selection head-on', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Normal Face View');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const cylinderFeature = page.locator('.feature-row-main', {
+    hasText: 'Cylinder'
+  });
+  await expect(cylinderFeature).toBeVisible();
+  await cylinderFeature.click();
+  const radiusInput = inspector.getByLabel('Radius', { exact: true });
+  const radiusBefore = await radiusInput.inputValue();
+  await radiusInput.click();
+  await expect(radiusInput).toBeFocused();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await canvas.evaluate((element) => {
+    element.dispatchEvent(
+      new CustomEvent('openzcad:e2e-select-cylinder', {
+        detail: { surface: 'cap' }
+      })
+    );
+  });
+  const faceOperation = page.getByRole('region', {
+    name: 'Offset Face operation'
+  });
+  await expect(faceOperation).toBeVisible();
+  await expect(
+    faceOperation.getByRole('tab', { name: 'Sketch' })
+  ).toBeVisible();
+  // The viewport pick does not steal focus from the inspector. Space still
+  // needs to work here without replacing the selected expression value.
+  await expect(radiusInput).toBeFocused();
+
+  const cameraPose = async () =>
+    page.evaluate((storageKey) => {
+      const raw = localStorage.getItem(storageKey);
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      return views ? (Object.values(views)[0]?.camera ?? null) : null;
+    }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  await expect.poll(cameraPose).not.toBeNull();
+  await page.keyboard.press('Space');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'viewing normal to face'
+  );
+  await page.waitForTimeout(900);
+
+  const pose = await cameraPose();
+  expect(pose).not.toBeNull();
+  const direction = pose!.position.map(
+    (value, axis) => value - pose!.target[axis]!
+  );
+  const distance = Math.hypot(...direction);
+  expect(Math.abs(direction[2]! / distance)).toBeGreaterThan(0.999999);
+  expect(Math.abs(direction[0]! / distance)).toBeLessThan(0.001);
+  expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
+
+  await expect(radiusInput).toHaveValue(radiusBefore);
+  await expect(faceOperation).toBeVisible();
+  await expect(page.locator('.selection-chip')).toContainText(/face/i);
+  await expect(
+    page.getByRole('button', { name: /projection \(P\).*perspective/i })
+  ).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
 });
 
 test('the wheel zooms toward the pointer, and the preference turns it off', async ({

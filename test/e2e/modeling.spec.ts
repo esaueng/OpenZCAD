@@ -1260,6 +1260,63 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('shows a stable failure when the assistant completes with invalid structured output', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'invalid-output-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      headers: {
+        'x-openzcad-request-id': '019fcf75-2cc4-7832-befc-50ae06c9e985'
+      },
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: 'I could not return the requested JSON object.'
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    })
+  );
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Failure Handling');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Create a simple bottle bumper');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const failure = page.locator('.assistant-card.message.error');
+  await expect(failure).toContainText(
+    'The provider returned invalid structured output.'
+  );
+  await expect(failure).toContainText(
+    'Reference: 019fcf75-2cc4-7832-befc-50ae06c9e985.'
+  );
+  await expect(failure).not.toContainText('JSON.parse');
+  await expect(
+    failure.getByRole('button', { name: 'Try again' })
+  ).toBeVisible();
+  expect(consoleErrors).toEqual([]);
+});
+
 test('grounds an AI fillet request onto every selected edge', async ({
   page
 }) => {
@@ -1456,17 +1513,12 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
 
   await page.getByLabel('CAD change request').fill('Union the two bodies');
   await page.getByLabel('CAD change request').press('Enter');
-  const proposal = page.locator('.assistant-card.proposal.open');
-  await expect(proposal).toContainText('Union the two separated bodies.');
-  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
-
+  const failure = page.locator('.assistant-card.message.error');
+  await expect(failure).toContainText('did not pass exact geometry preflight');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Union does not fill empty space.'
   );
-  await expect(proposal).toContainText('Proposed change');
-  await expect(
-    proposal.getByRole('button', { name: 'Apply', exact: true })
-  ).toBeEnabled();
+  await expect(page.locator('.assistant-card.proposal.open')).toHaveCount(0);
   await expect(
     page.locator('.feature-row', { hasText: 'AI disconnected Union' })
   ).toHaveCount(0);
@@ -1477,6 +1529,9 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
     .click();
   await inspector.getByLabel('Move Z').fill('24');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await failure.getByRole('button', { name: 'Try again' }).click();
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText('Union the two separated bodies.');
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
 
   await expect(
@@ -1487,6 +1542,75 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   );
   await expect(page.locator('.body-row.consumed')).toHaveCount(2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('preflights and applies the verified chamfered-shaft suggestion without an AI provider', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  let providerRequests = 0;
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: false,
+        provider: 'openrouter',
+        model: 'not-needed-for-verified-recipes',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    providerRequests += 1;
+    return route.abort();
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Verified Chamfered Shaft');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+
+  await page
+    .getByRole('button', {
+      name: /Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends/
+    })
+    .click();
+  const request = page.getByLabel('CAD change request');
+  await expect(request).toHaveValue(
+    'Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends'
+  );
+  await request.press('Enter');
+
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText(
+    'A Ø30 × 60 mm shaft will be created with 1 mm chamfers'
+  );
+  await expect(proposal.getByText('in the viewport')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(providerRequests).toBe(0);
+
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(
+    page.locator('.feature-row', { hasText: 'Chamfered Shaft' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('contentinfo').locator('[title*="1 bodies"]')
+  ).toBeVisible();
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Applied'
+  );
+
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(
+    page.getByRole('contentinfo').locator('[title*="0 bodies"]')
+  ).toBeVisible();
+  expect(consoleErrors).toEqual([]);
 });
 
 test('grounds all cylinder edges onto its two visible rims', async ({
@@ -1539,7 +1663,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
     );
     const proposal = {
       proposalId: 'proposal_cylinder_rims_e2e',
-      summary: 'Fillet the cylinder top and bottom rims by 1 mm.',
+      summary: 'Fillet the cylinder top and bottom rims by 2 mm.',
       assumptions: [],
       operations: [
         {
@@ -1551,7 +1675,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
           // Deliberately wrong: client grounding must replace it with the two
           // modifier candidates and must not include the periodic seam.
           edgeHashes: [999],
-          size: 1
+          size: 2
         }
       ]
     };
@@ -1587,7 +1711,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
 
   await page
     .getByLabel('CAD change request')
-    .fill('Add a 1 mm fillet to all the edges');
+    .fill('Round every outside edge by 2 mm');
   await page.getByLabel('CAD change request').press('Enter');
 
   const assistantRequest = await assistantRequestPromise;
@@ -1614,7 +1738,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
 
   await expect(page.locator('.assistant-card.proposal.open')).toContainText(
-    'Fillet the cylinder top and bottom rims by 1 mm.',
+    'Fillet the cylinder top and bottom rims by 2 mm.',
     { timeout: 15_000 }
   );
   await page.getByRole('button', { name: 'Apply', exact: true }).click();

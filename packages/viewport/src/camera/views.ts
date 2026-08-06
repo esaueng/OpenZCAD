@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { StandardView, ViewTarget } from '../types';
+import type { CameraPose } from '../render/scene';
 
 export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
   // Direction from the target toward the camera, in the Z-up frame. Top and
@@ -73,6 +74,97 @@ export function viewDirectionFor(target: ViewTarget): THREE.Vector3 {
   }
   const [x, y, z] = target.corner;
   return new THREE.Vector3(x, y, z).normalize();
+}
+
+/** Padding around a face framed by the normal-to-selection action. */
+const FACE_VIEW_PADDING = 1.18;
+
+/**
+ * Computes a camera pose that centres one planar face and looks back along its
+ * outward normal. The face vertices are projected into the eventual screen
+ * basis, so a wide face fits a portrait viewport without relying on a
+ * world-axis bounding box.
+ *
+ * Returns null for incomplete or degenerate derived geometry. Camera commands
+ * must fail closed rather than inventing a usable plane from a bad normal.
+ */
+export function computeNormalToFacePose(
+  camera: THREE.PerspectiveCamera,
+  facePoints: readonly THREE.Vector3[],
+  center: THREE.Vector3,
+  outwardNormal: THREE.Vector3
+): CameraPose | null {
+  if (
+    facePoints.length === 0 ||
+    ![center.x, center.y, center.z].every(Number.isFinite) ||
+    ![outwardNormal.x, outwardNormal.y, outwardNormal.z].every(Number.isFinite)
+  ) {
+    return null;
+  }
+  const normalLength = outwardNormal.length();
+  if (!Number.isFinite(normalLength) || normalLength < 1e-12) {
+    return null;
+  }
+
+  const direction = outwardNormal.clone().divideScalar(normalLength);
+  // Match the named top/bottom views: an exact pole leaves OrbitControls'
+  // azimuth undefined, so the first orbit after arriving can choose a random
+  // roll. This hair is visually head-on while keeping that azimuth stable.
+  if (direction.x * direction.x + direction.y * direction.y < 1e-16) {
+    direction.set(
+      0,
+      direction.z >= 0 ? -0.0001 : 0.0001,
+      direction.z >= 0 ? 1 : -1
+    );
+    direction.normalize();
+  }
+
+  const up = cameraUpForDirection(direction);
+  const right = up.clone().cross(direction).normalize();
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  const tanHalfFov = Math.tan(halfFov);
+  const aspect = Math.max(camera.aspect, 1e-6);
+  if (!Number.isFinite(tanHalfFov) || tanHalfFov <= 0) {
+    return null;
+  }
+
+  let requiredDistance = 0;
+  let faceRadius = 0;
+  for (const point of facePoints) {
+    if (![point.x, point.y, point.z].every(Number.isFinite)) {
+      return null;
+    }
+    const offset = point.clone().sub(center);
+    const depthTowardCamera = offset.dot(direction);
+    requiredDistance = Math.max(
+      requiredDistance,
+      depthTowardCamera + Math.abs(offset.dot(up)) / tanHalfFov,
+      depthTowardCamera + Math.abs(offset.dot(right)) / (tanHalfFov * aspect)
+    );
+    faceRadius = Math.max(faceRadius, offset.length());
+  }
+  if (
+    !Number.isFinite(requiredDistance) ||
+    !Number.isFinite(faceRadius) ||
+    faceRadius < 1e-12
+  ) {
+    return null;
+  }
+
+  const distance = Math.max(requiredDistance * FACE_VIEW_PADDING, 1e-9);
+  const near = Math.max(
+    Math.min(camera.near, distance / 1_000),
+    distance / 1_000_000,
+    1e-9
+  );
+  return {
+    position: center.clone().addScaledVector(direction, distance),
+    target: center.clone(),
+    near,
+    // Preserve a farther existing scene range while guaranteeing the selected
+    // face remains inside the frustum at every supported model scale.
+    far: Math.max(camera.far, distance * 12 + faceRadius * 4, near * 1_000)
+  };
 }
 
 /** What each standard view is called in the interface. */

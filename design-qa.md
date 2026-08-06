@@ -125,3 +125,19 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
   use explicit New Body explanations instead of silently consuming a target.
 - Desktop and compact-width acceptance must verify the operation detail wraps
   inside the controller without covering Distance or Apply Extrude.
+
+## Top-bar and quick-actions rail QA addendum
+
+- Reference sources: `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-e36a0c60-efae-4f19-8224-63cf3e172bf1.png` (812 x 136) and `/var/folders/t_/tvn84c292rzdfcbj06vltnsw0000gn/T/codex-clipboard-f9d574c0-ddcd-4803-afee-44e5702c3b8b.png` (300 x 548).
+- Implementation evidence: `/private/tmp/openzcad-topbar-desktop.png` (1280 x 720 at DPR 1), `/private/tmp/openzcad-topbar-mobile.png` (390 x 844 at DPR 1), and the focused side-by-side comparison `/private/tmp/openzcad-topbar-comparison.png` (880 x 970).
+- Captured state: local `Topbar QA` project, signed-in development account state, unavailable cloud-project storage, offline collaboration, and one exact box body after exercising undo and redo.
+- Layout and spacing: desktop action tracks measure 128, 104, 126, 90, and 28 px for save, account, collaboration, File, and Settings. Their x positions remained 744, 884, 1000, 1138, and 1240 through repeated save samples. At 390 px, all five tracks collapse to 28 px icons at x positions 228, 260, 292, 324, and 356 with no horizontal overflow.
+- Typography and color: the existing compact monospace status typography, dark chrome, green authenticated state, muted local/collaboration states, and blue active grid control remain consistent with the product and supplied references.
+- Icons and surfaces: existing Lucide icons are reused. No image, custom SVG, or placeholder substitution was introduced.
+- Copy and hierarchy: the top bar contains state-only account copy (`Signed in`) and does not render the development user's name or email. The DOM and rendered order is save, account, collaboration, File, Settings, which produces the requested right-to-left order of Settings, File, collaboration, account, and save.
+- Interaction states: File remains a menu immediately left of Settings; undo and redo are absent from the banner and are the first two controls in the semantic `Quick actions` toolbar. Creating a box enabled Undo, Undo returned the project to zero bodies and enabled Redo, and Redo restored one body.
+- Accessibility: the action cluster is named `Workspace status and actions`; the account status exposes `Cloud account: signed in`; the rail is named `Quick actions`; and disabled undo/redo states are conveyed semantically.
+- Comparison history: the first implementation capture passed the focused source-to-implementation review. No P0, P1, or P2 fidelity defect was observed, so no post-capture correction was required.
+- Console and responsive health: the in-app browser reported no warning or error logs. Document scroll width equaled viewport width at both 1280 and 390 px.
+
+final result: passed
