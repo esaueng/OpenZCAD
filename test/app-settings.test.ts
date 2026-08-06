@@ -58,6 +58,7 @@ describe('application settings', () => {
       appearance: { density: 'huge' },
       viewport: { showGrid: false, displayMode: 'xray' },
       sketching: { linearSnap: 0 },
+      collaboration: { enabled: false },
       assistant: { model: '' }
     });
 
@@ -66,6 +67,7 @@ describe('application settings', () => {
     expect(normalized.viewport.showGrid).toBe(false);
     expect(normalized.viewport.displayMode).toBe('shaded-edges');
     expect(normalized.sketching.linearSnap).toBe(1);
+    expect(normalized.collaboration.enabled).toBe(false);
     expect(normalized.assistant.enabled).toBe(false);
     expect(normalized.assistant.model).toBe('openai/gpt-5.6-sol');
   });
@@ -255,12 +257,12 @@ describe('application settings', () => {
 
   it('round-trips the synced revision alongside device settings', () => {
     const edited = defaultAppSettings();
-    edited.assistant.enabled = false;
+    edited.collaboration.enabled = false;
 
     expect(saveLocalAppSettings(edited, null)).toBe(true);
     const dirty = loadLocalAppSettingsRecord();
     expect(dirty?.syncedRevision).toBeNull();
-    expect(dirty?.settings.assistant.enabled).toBe(false);
+    expect(dirty?.settings.collaboration.enabled).toBe(false);
     expect(shouldAdoptAccountSettings(dirty)).toBe(false);
 
     expect(saveLocalAppSettings(edited, 7)).toBe(true);
@@ -334,6 +336,31 @@ describe('application settings', () => {
     expect(normalized.files.cloudAutosaveDelaySeconds).toBe(
       CLOUD_AUTOSAVE_DELAY_BOUNDS.default
     );
+  });
+
+  it('keeps project sharing on for settings written before its switch existed', () => {
+    const normalized = normalizeAppSettings({
+      general: { defaultUnits: 'mm' }
+    });
+    expect(normalized.collaboration.enabled).toBe(true);
+
+    const { collaboration: _omitted, ...settings } =
+      deepClone(DEFAULT_APP_SETTINGS);
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.collaboration.enabled).toBe(true);
+  });
+
+  it('carries the project sharing switch through the account round trip', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.collaboration.enabled = false;
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.collaboration.enabled).toBe(false);
   });
 
   it('keeps the autosave delay inside the bounds every layer agrees on', () => {
