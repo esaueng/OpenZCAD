@@ -3830,7 +3830,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       resize.apply(legacy.document)
     );
     expect(legacyDerived.warnings).toEqual([
-      'Feature "Legacy box fillet": A selected edge no longer exists.'
+      'Feature "Legacy box fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
     expect(legacyDerived.bodyRepresentations[legacy.bodyId]).toBeUndefined();
   });

@@ -436,7 +436,7 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     }).document;
     const derived = await adapter.syncDocument(stale);
     expect(derived.warnings).toEqual([
-      'Feature "Pre-flip fillet": A selected edge no longer exists.'
+      'Feature "Pre-flip fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
     expect(
       derived.bodyRepresentations[stale.bodyOrder.at(-1)!]
