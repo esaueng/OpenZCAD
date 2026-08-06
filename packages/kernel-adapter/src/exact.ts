@@ -21,6 +21,7 @@ import {
 } from '@openzcad/geometry';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import {
+  BODY_OPACITY_METADATA_KEY,
   DEFAULT_BODY_COLOR,
   FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
@@ -122,6 +123,19 @@ import {
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
+
+/**
+ * Per-body display opacity rides body metadata through the derived projection.
+ * Anything that is not a finite number (unset, legacy string, NaN) means
+ * "fully opaque" and stays absent so opaque bodies keep the fast render path.
+ */
+function bodyOpacityFromMetadata(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const clamped = Math.min(1, Math.max(0, value));
+  return clamped >= 1 ? undefined : clamped;
+}
 /** Sewing gap for imported meshes, relative to the mesh's largest extent. */
 const MESH_SEW_TOLERANCE_RATIO = 1e-6;
 const CURVE_SEGMENTS = 32;
@@ -5563,6 +5577,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               body.metadata?.color ??
                 featureColor(feature?.featureKind ?? 'primitive')
             ) || DEFAULT_BODY_COLOR,
+          opacity: bodyOpacityFromMetadata(
+            body.metadata?.[BODY_OPACITY_METADATA_KEY]
+          ),
           exportableStep: body.exportableStep,
           consumed,
           volume: measured.volume,
