@@ -52,9 +52,15 @@ export type CloudProjectSyncState =
 /**
  * What the workspace shows. `saving` is the device write, which the controller
  * never sees — it is over in milliseconds and is the only one of these that
- * means "not yet safe anywhere".
+ * means "not yet safe anywhere". `local-source` is derived by the workspace,
+ * never emitted here: the document itself synced, but it references an import
+ * source that was never archived, so other devices cannot rebuild it and a
+ * plain "Synced" would be a lie.
  */
-export type WorkspaceSaveState = CloudProjectSyncState | 'saving';
+export type WorkspaceSaveState =
+  | CloudProjectSyncState
+  | 'saving'
+  | 'local-source';
 
 export interface CloudProjectAutosaveStatus {
   state: CloudProjectSyncState;
