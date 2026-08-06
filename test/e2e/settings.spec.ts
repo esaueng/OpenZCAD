@@ -313,6 +313,67 @@ test('settings name their sections and search individual settings', async ({
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
+test('turns project sharing off without disabling cloud saves', async ({
+  page
+}) => {
+  await stubApi(page, { collaborationRole: 'owner' });
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('form', { name: 'Join a shared project' })
+  ).toBeVisible();
+  await page.getByLabel('Project name').fill('Private Local Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing' })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __e2eCollaborationSocketUrls: string[];
+            }
+          ).__e2eCollaborationSocketUrls.length
+      )
+    )
+    .toBe(1);
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Project sharing' }).uncheck();
+  await page
+    .getByRole('button', { name: 'Files & autosave', exact: true })
+    .click();
+  await expect(
+    page.getByRole('checkbox', { name: 'Cloud autosave' })
+  ).toBeChecked();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing' })
+  ).toHaveCount(0);
+  await expect(page.locator('.save-state')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __e2eCollaborationOpenSocketCount: number;
+            }
+          ).__e2eCollaborationOpenSocketCount
+      )
+    )
+    .toBe(0);
+
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.getByRole('form', { name: 'Join a shared project' })
+  ).toHaveCount(0);
+});
+
 test('settings restore the exact non-sensitive view after reload', async ({
   page
 }) => {
@@ -490,15 +551,25 @@ test('disabling the assistant takes its live preview with it', async ({
     'Add a 10 mm cube.'
   );
 
-  await page.getByRole('button', { name: 'Preview', exact: true }).click();
   const status = page.getByRole('contentinfo');
+  // Exact-valid patches are previewed before an Apply action is ever offered.
+  await expect(
+    page.getByRole('button', { name: 'Hide preview', exact: true })
+  ).toBeVisible();
   await expect(status).toContainText('Previewing exact proposed geometry.');
   // The preview is unapplied geometry: it shows a body the document does not
   // have, which is what makes an orphaned preview visible at all.
   await expect(status.locator('[title*="1 bodies"]')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
   await page.getByRole('checkbox', { name: 'AI assistant' }).uncheck();
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'AI Assistant' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', { name: 'AI assistant' })
+  ).not.toBeChecked();
   await page.getByRole('button', { name: 'Back to workspace' }).click();
 
   // The panel is gone, so nothing is left that could retire the preview — the
