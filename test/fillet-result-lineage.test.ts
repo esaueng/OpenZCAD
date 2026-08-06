@@ -172,7 +172,7 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
 
     const after = await adapter.syncDocument(withRadius(chain.document, 6.4));
     expect(after.warnings).toEqual([
-      'Feature "Fillet bottom": A selected edge no longer exists.'
+      'Feature "Fillet bottom": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
     expect(after.bodyRepresentations[chain.bodyId]).toBeUndefined();
   });
