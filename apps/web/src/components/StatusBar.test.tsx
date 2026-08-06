@@ -20,6 +20,19 @@ const defaultProps = {
 };
 
 describe('StatusBar activity log', () => {
+  it('exposes a stable, correctly pluralized workspace summary', () => {
+    const { rerender } = render(<StatusBar {...defaultProps} />);
+
+    expect(
+      screen.getByLabelText('Test project · 2 features · 1 body. Sync Synced.')
+    ).toBeVisible();
+
+    rerender(<StatusBar {...defaultProps} featureCount={1} bodyCount={2} />);
+    expect(
+      screen.getByLabelText('Test project · 1 feature · 2 bodies. Sync Synced.')
+    ).toBeVisible();
+  });
+
   it('shows the same local-only state as the workspace top bar', () => {
     render(<StatusBar {...defaultProps} saveState="local" />);
 
