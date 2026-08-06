@@ -55,6 +55,8 @@ import type { BodyAppearancePreview } from './ModelViewer';
 export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
   onCancel(): void;
+  /** Verbatim reason the last exact rebuild refused this form's operation. */
+  commitError?: string | null;
   onCreatePrimitive(
     kind: PrimitiveKind,
     name: string,
@@ -1099,7 +1101,17 @@ export function Inspector(props: InspectorProps) {
           </button>
         </div>
       </div>
-      <div className="panel-body">{body}</div>
+      <div className="panel-body">
+        {props.commitError && (
+          // A refused exact rebuild leaves this panel open and otherwise
+          // unchanged, so without the reason here the click reads as having
+          // done nothing at all. Rendered in full: the status bar clips it.
+          <p className="field-error inspector-commit-error" role="alert">
+            {props.commitError}
+          </p>
+        )}
+        {body}
+      </div>
     </section>
   );
 }

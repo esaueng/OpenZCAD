@@ -57,6 +57,12 @@ interface ViewerShellProps {
   appearancePreview: BodyAppearancePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
+  /**
+   * View mode drops the utility rail — its controls move to the floating view
+   * bar, and undo/redo have nothing to act on — but keeps the orientation cube,
+   * which is navigation rather than editing.
+   */
+  viewMode?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
@@ -148,6 +154,7 @@ export function ViewerShell({
   appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  viewMode = false,
   selectionChip,
   onClearSelection,
   canUndo,
@@ -220,7 +227,10 @@ export function ViewerShell({
   };
 
   return (
-    <section className="viewer-shell" aria-label="3D viewport">
+    <section
+      className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
+      aria-label="3D viewport"
+    >
       <ModelViewer
         key={projectId}
         bodies={bodies}
@@ -295,19 +305,21 @@ export function ViewerShell({
               onDragEnd={() => orientationDragRef.current?.end()}
             />
           </div>
-          <ViewerToolbar
-            settings={settings}
-            projection={projection}
-            canUndo={canUndo}
-            canRedo={canRedo}
-            onUndo={onUndo}
-            onRedo={onRedo}
-            onToggleGrid={onToggleGrid}
-            onFit={onFit}
-            onView={onView}
-            onCycleDisplayMode={onCycleDisplayMode}
-            onToggleProjection={onToggleProjection}
-          />
+          {!viewMode && (
+            <ViewerToolbar
+              settings={settings}
+              projection={projection}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onToggleGrid={onToggleGrid}
+              onFit={onFit}
+              onView={onView}
+              onCycleDisplayMode={onCycleDisplayMode}
+              onToggleProjection={onToggleProjection}
+            />
+          )}
         </>
       )}
       {selectionChip && (

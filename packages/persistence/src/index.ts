@@ -301,6 +301,16 @@ export interface PersistenceService {
     uploadSessionId: string,
     request: CompleteMultipartUploadRequest
   ): Promise<void>;
+  /**
+   * Discards an in-flight chunked upload's stored parts. Idempotent: aborting
+   * an unknown or already-completed upload id is a no-op, so a client can
+   * always abort on its failure path without checking how far it got.
+   */
+  abortMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string
+  ): Promise<void>;
   finalizeArtifact(
     userId: UserId,
     request: FinalizeArtifactRequest
@@ -961,6 +971,19 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     this.uploadBodies.set(upload.objectKey, assembled.buffer);
     this.multipartParts.delete(key);
+  }
+
+  async abortMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string
+  ): Promise<void> {
+    const upload = this.uploads.get(uploadSessionId);
+    if (!upload) {
+      throw new ArtifactStorageError('Upload session was not found.');
+    }
+    await this.requireProjectEdit(userId, upload.projectId);
+    this.multipartParts.delete(`${uploadSessionId}:${uploadId}`);
   }
 
   async finalizeArtifact(

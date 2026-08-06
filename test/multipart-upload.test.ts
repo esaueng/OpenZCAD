@@ -96,6 +96,38 @@ describe('multipart artifact upload', () => {
     ).rejects.toThrow(ArtifactStorageError);
   });
 
+  it('discards parts on abort so completion can no longer stitch them', async () => {
+    const service = new InMemoryPersistenceService();
+    const { session } = await sessionFor(service);
+    const { uploadId } = await service.createMultipartUpload(
+      userId,
+      session.uploadSessionId
+    );
+    const part = await service.putUploadPart(
+      userId,
+      session.uploadSessionId,
+      uploadId,
+      1,
+      chunk('DATA')
+    );
+    await service.abortMultipartUpload(
+      userId,
+      session.uploadSessionId,
+      uploadId
+    );
+    await expect(
+      service.completeMultipartUpload(userId, session.uploadSessionId, {
+        uploadId,
+        parts: [part]
+      })
+    ).rejects.toThrow(ArtifactStorageError);
+    // Aborting an unknown or already-aborted id is a no-op, so a client can
+    // always abort on its failure path.
+    await expect(
+      service.abortMultipartUpload(userId, session.uploadSessionId, uploadId)
+    ).resolves.toBeUndefined();
+  });
+
   it('parses a completion request and rejects malformed part lists', () => {
     const valid = parseCompleteMultipartUploadRequest({
       uploadId: 'multipart_a',

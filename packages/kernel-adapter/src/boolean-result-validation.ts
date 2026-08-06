@@ -207,6 +207,26 @@ export interface BooleanFaceCensus {
 const FACET_FALLBACK_FACTOR = 4;
 const FACET_FALLBACK_SLACK = 32;
 
+const FACET_FALLBACK_LEAD =
+  'The boolean returned a faceted approximation';
+
+/**
+ * What to say when no specific remedy has been proved.
+ *
+ * Naming a single cause here was a mistake worth not repeating: measured on a
+ * box and a cylinder, repositioning clears the fallback for a small round
+ * operand and clears nothing at all for one wider than the box it meets, so
+ * "this is a tangency, move it" is confidently wrong half the time. The caller
+ * appends a concrete move only when it has fused that exact move and measured
+ * the result exact; this text covers the rest without pretending to a
+ * diagnosis, and points at the operation that is known to stay exact on the
+ * same operands.
+ */
+const FACET_FALLBACK_REMEDY =
+  'The result is watertight, but its curved surfaces are now planar facets and will ' +
+  'export that way. Repositioning the overlap sometimes clears it; otherwise keep the ' +
+  'bodies separate, or subtract instead — the same operands still cut exactly.';
+
 export interface FaceCensusSubject {
   getSolidFaces(solid: number): ArrayLike<number>;
   getSurfaceType(face: number): string;
@@ -260,16 +280,14 @@ export function booleanFacetFallbackWarning(
     `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
   ].join(' became ');
   if (lostCurvature && exploded) {
-    return (
-      `The boolean returned a faceted approximation instead of exact surfaces: ${detail}. ` +
-      'This happens on sliver or near-tangent contacts; move or thicken the overlap and try again.'
-    );
+    return `${FACET_FALLBACK_LEAD} instead of exact surfaces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
   if (lostCurvature) {
-    return (
-      `The boolean replaced every curved surface with planar faces: ${detail}. ` +
-      'Curved geometry will export faceted.'
-    );
+    // Same fallback, caught by the curvature test alone because a smaller
+    // round operand facets into too few faces to trip the count test. It
+    // earns the same remedy: without one this reads as a property of the
+    // result rather than as something the user can act on.
+    return `The boolean replaced every curved surface with planar faces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
   return (
     `The boolean produced far more faces than its operands: ${detail}. ` +

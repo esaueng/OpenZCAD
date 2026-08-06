@@ -310,6 +310,18 @@ export const api = {
       );
     }
   },
+  abortMultipartUpload: async (uploadSessionId: string, uploadId: string) => {
+    const response = await desktopFetch(
+      `/api/uploads/${uploadSessionId}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
+      { method: 'DELETE' }
+    );
+    if (!response.ok) {
+      throw new Error(
+        (await response.text()) ||
+          `Aborting the upload failed (${response.status}).`
+      );
+    }
+  },
   finalizeArtifact: (payload: FinalizeArtifactRequest) =>
     requestJson<{ artifactId: string | null }>('/api/artifacts/finalize', {
       method: 'POST',
