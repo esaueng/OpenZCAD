@@ -498,7 +498,14 @@ test('disabling the assistant takes its live preview with it', async ({
   await expect(status.locator('[title*="1 bodies"]')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
   await page.getByRole('checkbox', { name: 'AI assistant' }).uncheck();
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'AI Assistant' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', { name: 'AI assistant' })
+  ).not.toBeChecked();
   await page.getByRole('button', { name: 'Back to workspace' }).click();
 
   // The panel is gone, so nothing is left that could retire the preview — the
