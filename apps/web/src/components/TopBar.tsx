@@ -186,7 +186,7 @@ export function TopBar({
       <div
         className="topbar-actions"
         role="group"
-        aria-label="Workspace status and actions"
+        aria-label="Workspace actions"
       >
         <span
           className={`account-state is-${accountState}`}
