@@ -40,7 +40,7 @@ export function ExprInput({
 
   return (
     <label className="field expr-field" htmlFor={id}>
-      <span>{label}</span>
+      <span id={`${id}-label`}>{label}</span>
       <div className="expr-input-row">
         <input
           id={id}
@@ -50,11 +50,22 @@ export function ExprInput({
           spellCheck={false}
           autoComplete="off"
           autoFocus={mayAutoFocus}
+          // The preview sits inside this label, so it was being read as part
+          // of the field's name: "Width (X) = 30" one keystroke, "Width (X)
+          // Unknown identifier "w"" the next — a name that changes as you
+          // type. Point the name at the label text and let the preview be a
+          // description that announces itself when it changes.
+          aria-labelledby={`${id}-label`}
+          aria-describedby={isPlainNumber ? undefined : `${id}-preview`}
+          aria-invalid={showError || undefined}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => onChange(event.target.value)}
         />
         {!isPlainNumber && (
-          <small className={`expr-preview ${showError ? 'error' : ''}`}>
+          <small
+            id={`${id}-preview`}
+            className={`expr-preview ${showError ? 'error' : ''}`}
+          >
             {preview.text}
           </small>
         )}
