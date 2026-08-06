@@ -1489,6 +1489,36 @@ export class D1R2PersistenceService implements PersistenceService {
       .run();
   }
 
+  async abortMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().abortMultipartUpload(
+        userId,
+        uploadSessionId,
+        uploadId
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
+      // Unknown or already completed/aborted: nothing to clean up.
+      return;
+    }
+    await this.env
+      .ARTIFACTS!.resumeMultipartUpload(session.objectKey, uploadId)
+      .abort()
+      .catch(() => undefined);
+    const { [MULTIPART_UPLOAD_METADATA_KEY]: _gone, ...metadata } =
+      session.metadata;
+    await this.env.DB.prepare(
+      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    )
+      .bind(JSON.stringify(metadata), uploadSessionId)
+      .run();
+  }
+
   async finalizeArtifact(
     userId: UserId,
     request: FinalizeArtifactRequest

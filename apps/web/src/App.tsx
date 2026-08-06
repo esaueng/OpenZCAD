@@ -116,8 +116,14 @@ import type {
   HealthResponse,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
-import { ARTIFACT_UPLOAD_PART_BYTES, toUserId } from '@openzcad/shared';
+import { toArtifactId, toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
+import { uploadArtifactBody } from './lib/artifactUpload';
+import {
+  archiveLocalOnlyImportSources,
+  listLocalOnlyImportSources
+} from './lib/importArchival';
+import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
   isDesktopApp,
@@ -383,6 +389,7 @@ import {
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadSourceBlob,
   purgeExpiredLocalProjects,
   putSourceBlob,
   restoreDuplicateDerivedProjection,
@@ -2063,6 +2070,16 @@ export function App() {
     [doc]
   );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  // Import sources that were never archived to the account. They gate the
+  // sync indicator: a doc that references them is not fully "Synced".
+  const localOnlySources = useMemo(
+    () => (doc ? listLocalOnlyImportSources(doc) : []),
+    [doc]
+  );
+  const presentedSaveState = presentedWorkspaceSaveState(
+    saveState,
+    localOnlySources.length
+  );
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
@@ -5158,34 +5175,13 @@ export function App() {
     if (!upload.uploadUrl) {
       throw new Error('Artifact upload is unavailable.');
     }
-    if (input.body.size > ARTIFACT_UPLOAD_PART_BYTES) {
-      // Chunked path: fixed-size parts keep each request under every
-      // Cloudflare plan's body cap; R2 stitches them into one object.
-      const { uploadId } = await api.createMultipartUpload(
-        upload.uploadSessionId
-      );
-      const parts = [];
-      for (
-        let partNumber = 1, offset = 0;
-        offset < input.body.size;
-        partNumber += 1, offset += ARTIFACT_UPLOAD_PART_BYTES
-      ) {
-        parts.push(
-          await api.uploadArtifactPart(
-            upload.uploadSessionId,
-            uploadId,
-            partNumber,
-            input.body.slice(offset, offset + ARTIFACT_UPLOAD_PART_BYTES)
-          )
-        );
-      }
-      await api.completeMultipartUpload(upload.uploadSessionId, {
-        uploadId,
-        parts
-      });
-    } else {
-      await api.uploadArtifact(upload.uploadUrl, input.body);
-    }
+    // Chunked above the part size, single PUT below; retries each part and
+    // aborts the multipart state if the upload cannot finish.
+    await uploadArtifactBody(
+      api,
+      { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
+      input.body
+    );
     await api.finalizeArtifact({
       projectId: doc.projectId,
       uploadSessionId: upload.uploadSessionId,
@@ -5318,6 +5314,54 @@ export function App() {
     } catch (error) {
       setStatus(errorMessage(error, 'STEP import failed.'));
     }
+  }
+
+  /**
+   * Uploads import sources that exist only in this browser (their archival
+   * failed at import time) and points the owning features at the finalized
+   * artifacts. Runs on the user's explicit request from the File menu; a
+   * partial failure leaves the remaining features local-only and retryable.
+   */
+  async function handleArchiveLocalSources() {
+    if (
+      !doc ||
+      localOnlySources.length === 0 ||
+      !ensureCanEdit('archive import sources')
+    ) {
+      return;
+    }
+    setStatus(
+      `Archiving ${localOnlySources.length} local import source(s)…`
+    );
+    const result = await archiveLocalOnlyImportSources({
+      document: doc,
+      loadSourceBytes: loadSourceBlob,
+      archive: (input) => archiveArtifact(input),
+      applyArtifactId: (featureId, artifactId) =>
+        executeCommand(
+          commandFactories.updateFeature(
+            { featureId, data: { artifactId: toArtifactId(artifactId) } },
+            'Archive import source'
+          )
+        )
+    });
+    const notes: string[] = [];
+    if (result.archived.length > 0) {
+      notes.push(`archived ${result.archived.join(', ')}`);
+    }
+    if (result.missing.length > 0) {
+      notes.push(
+        `source bytes for ${result.missing.join(', ')} are not on this device`
+      );
+    }
+    if (result.failed.length > 0) {
+      notes.push(`upload failed for ${result.failed.join(', ')} — try again`);
+    }
+    setStatus(
+      notes.length > 0
+        ? `Archive local sources: ${notes.join('; ')}.`
+        : 'No local import sources needed archiving.'
+    );
   }
 
   async function handleExport(format: 'step' | 'stl') {
@@ -8388,7 +8432,8 @@ export function App() {
               ? selectedBody.name
               : null
           }
-          saveState={saveState}
+          saveState={presentedSaveState}
+          localOnlySourceCount={localOnlySources.length}
           artifacts={artifacts}
           session={session}
           accountState={
@@ -8411,6 +8456,7 @@ export function App() {
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
+          onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onExportDiagnostics={handleExportDiagnostics}
           onRenameProject={(name) =>
             executeCommand(
@@ -9334,7 +9380,7 @@ export function App() {
           featureCount={features.length}
           warningCount={warnings.length}
           documentVersion={doc.version}
-          saveState={saveState}
+          saveState={presentedSaveState}
           units={doc.units}
           selectionFilter={selectionFilter}
           selectionFilterIsAutomatic={manualSelectionFilter === null}
