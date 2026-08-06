@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   test,
   expect,
+  expectBodyCount,
   openAssistant,
   shiftSelectTwoVisibleBoxEdges,
   stubApi
@@ -28,17 +29,17 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
       .getByRole('button', { name: /^Create/ })
       .click();
   }
-  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await expectBodyCount(page, 2);
 
   const box = page.locator('.feature-row', { hasText: /^Box/ });
   const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
   await box.getByRole('button', { name: 'Suppress Box' }).click();
   await expect(box).toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   await box.getByRole('button', { name: 'Resume Box' }).click();
   await expect(box).not.toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await expectBodyCount(page, 2);
 
   const rollback = box.getByRole('button', {
     name: 'Roll back history after Box'
@@ -46,14 +47,14 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   await rollback.click();
   await expect(rollback).toHaveAttribute('aria-pressed', 'true');
   await expect(cylinder).toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect(cylinder).not.toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await expectBodyCount(page, 2);
   await page.getByRole('button', { name: 'Redo' }).click();
   await expect(cylinder).toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -572,7 +573,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
   await page.getByRole('button', { name: 'Apply Extrude' }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -750,7 +751,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   );
   await expect(extrude).toContainText('1 selected');
   await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude 1' })
   ).toBeVisible();
@@ -761,8 +762,10 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude 1');
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Undo' }).click();
-  await page.getByRole('button', { name: 'Redo' }).click();
+  // The feature inspector intentionally floats over the rail at this viewport.
+  // Exercise the same history commands through their supported shortcuts.
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+Shift+z');
   await expect(page.getByRole('contentinfo')).toContainText('Redo');
   await page.locator('.feature-row-main', { hasText: 'Extrude 1' }).click();
   await expect(
@@ -870,7 +873,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
     'exact preview ready · Add to Box Body',
     { timeout: 20_000 }
   );
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
 
   const extrudeFeature = page.getByRole('button', {
@@ -889,7 +892,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
     'add'
   );
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -1067,7 +1070,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
 
   await cylinder.locator('.feature-row-main').click();
@@ -1075,7 +1078,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Cylinder');
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
 
   // A radius smaller than the stored 1 mm fillet is invalid. Exact preflight
@@ -1091,20 +1094,20 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
     '6.4'
   );
 
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.keyboard.press('Control+z');
   await cylinder.locator('.feature-row-main').click();
   await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
     '4.6'
   );
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Redo' }).click();
+  await page.keyboard.press('Control+Shift+z');
   await cylinder.locator('.feature-row-main').click();
   await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
     '6.4'
   );
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -1282,7 +1285,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
     page.locator('.feature-row-main', { hasText: 'Shell' })
   ).toBeVisible();
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
@@ -1431,7 +1434,7 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
     'Applied'
   );
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
@@ -1973,7 +1976,7 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
     0
   );
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   // The kernel measured the imported solid, not a mesh approximation of it.
   await importedRow.locator('.feature-row-main').click();
@@ -2117,7 +2120,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();
