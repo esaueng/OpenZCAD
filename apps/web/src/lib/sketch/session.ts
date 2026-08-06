@@ -470,6 +470,8 @@ export interface SnapTarget extends SketchPoint {
   sourceId?: string;
 }
 
+export type SketchInferenceSegment = readonly [SketchPoint, SketchPoint];
+
 export const SKETCH_SNAP_PRIORITY: Record<SnapTargetKind, number> = {
   origin: 0,
   endpoint: 1,
@@ -790,4 +792,63 @@ export function nearestSnapTarget(
   tolerance: number
 ): SnapTarget | null {
   return resolveSketchSnap(point, targets, tolerance)?.target ?? null;
+}
+
+/**
+ * Finds the closest exact center worth previewing before the tighter snap
+ * tolerance engages. This is a visual discovery aid only; callers must still
+ * use `resolveSketchSnap` to commit an exact point.
+ */
+export function nearestCenterGuideTarget(
+  point: SketchPoint,
+  targets: readonly SnapTarget[],
+  tolerance: number
+): SnapTarget | null {
+  if (!Number.isFinite(tolerance) || tolerance <= 0) {
+    return null;
+  }
+  return (
+    targets
+      .filter((target) => target.kind === 'origin' || target.kind === 'center')
+      .map((target) => ({
+        target,
+        distance: Math.hypot(point.x - target.x, point.y - target.y)
+      }))
+      .filter((candidate) => candidate.distance <= tolerance)
+      .sort((first, second) => {
+        if (Math.abs(first.distance - second.distance) > 1e-12) {
+          return first.distance - second.distance;
+        }
+        const priority =
+          SKETCH_SNAP_PRIORITY[first.target.kind] -
+          SKETCH_SNAP_PRIORITY[second.target.kind];
+        return priority !== 0
+          ? priority
+          : (first.target.id ?? '').localeCompare(second.target.id ?? '');
+      })[0]?.target ?? null
+  );
+}
+
+/** Full horizontal and vertical construction guides through an exact center. */
+export function centerInferenceSegments(
+  target: SnapTarget,
+  halfSpan: number
+): SketchInferenceSegment[] {
+  if (
+    (target.kind !== 'origin' && target.kind !== 'center') ||
+    !Number.isFinite(halfSpan) ||
+    halfSpan <= 0
+  ) {
+    return [];
+  }
+  return [
+    [
+      { x: target.x - halfSpan, y: target.y },
+      { x: target.x + halfSpan, y: target.y }
+    ],
+    [
+      { x: target.x, y: target.y - halfSpan },
+      { x: target.x, y: target.y + halfSpan }
+    ]
+  ];
 }
