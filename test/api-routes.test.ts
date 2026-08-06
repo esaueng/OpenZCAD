@@ -4,6 +4,7 @@ import { getInMemoryPersistence } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
+  MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   toUserId,
@@ -1612,6 +1613,42 @@ describe('worker api routes', () => {
       env
     );
     expect(replayed.status).toBe(404);
+  });
+
+  it('rejects multipart part numbers above the upload ceiling', async () => {
+    const created = await createProject('Bounded Multipart Upload');
+    const sessionResponse = await worker.fetch(
+      post('/api/uploads', {
+        projectId: created.project.projectId,
+        fileName: 'large.step',
+        contentType: 'model/step',
+        kind: 'step-import'
+      }),
+      env
+    );
+    const { session } = (await sessionResponse.json()) as {
+      session: { uploadSessionId: string };
+    };
+    const multipartResponse = await worker.fetch(
+      post(`/api/uploads/${session.uploadSessionId}/multipart`, {}),
+      env
+    );
+    const { uploadId } = (await multipartResponse.json()) as {
+      uploadId: string;
+    };
+
+    const rejected = await worker.fetch(
+      new Request(
+        `https://example.com/api/uploads/${session.uploadSessionId}/parts/${MAX_ARTIFACT_UPLOAD_PARTS + 1}?uploadId=${encodeURIComponent(uploadId)}`,
+        { method: 'PUT', body: 'x' }
+      ),
+      env
+    );
+
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({
+      error: `Upload part number cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS}.`
+    });
   });
 
   it('lists and downloads completed artifacts', async () => {

@@ -84,7 +84,11 @@ import {
   isDocumentStorageAccountingReady,
   isProjectObjectStorageReady
 } from './readiness';
-import { MAX_ARTIFACT_PART_BYTES, toUserId } from '@openzcad/shared';
+import {
+  MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_PARTS,
+  toUserId
+} from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -1083,6 +1087,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!uploadId) {
       throw new HttpError(400, 'Missing uploadId.');
     }
+    const partNumber = Number(partMatch[2]!);
+    if (partNumber > MAX_ARTIFACT_UPLOAD_PARTS) {
+      throw new HttpError(
+        400,
+        `Upload part number cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS}.`
+      );
+    }
     const contentLength = Number(request.headers.get('content-length') ?? '0');
     if (
       Number.isFinite(contentLength) &&
@@ -1104,7 +1115,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         userId,
         partMatch[1]!,
         uploadId,
-        Number(partMatch[2]!),
+        partNumber,
         body
       )
     );
