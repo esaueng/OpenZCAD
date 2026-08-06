@@ -143,6 +143,21 @@
   font-size: var(--fs-xs);
 }
 
+/*
+ * A refusal from the exact kernel, at the top of the panel that asked for it.
+ * These messages carry a cause and a remedy and are a couple of sentences
+ * long, so they wrap rather than clip — the status-bar copy is the one that
+ * truncates.
+ */
+.inspector-commit-error {
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-2);
+  line-height: 1.45;
+  background: var(--color-error-dim, rgba(255, 116, 82, 0.12));
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+}
+
 .field-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;

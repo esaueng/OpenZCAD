@@ -869,6 +869,12 @@ export function App() {
     cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
   );
   const [busy, setBusy] = useState(false);
+  /**
+   * The last refusal from an exact rebuild, shown inside the form that asked
+   * for it. Cleared whenever a panel opens or closes so a stale reason can
+   * never outlive the attempt that produced it.
+   */
+  const [featureFormError, setFeatureFormError] = useState<string | null>(null);
   const {
     projection,
     setProjection,
@@ -1158,7 +1164,8 @@ export function App() {
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived),
     onBusy: setBusy,
-    onStatus: setStatus
+    onStatus: setStatus,
+    onFailure: setFeatureFormError
   });
 
   const projectSharingPreferenceEnabled = appSettings.collaboration.enabled;
@@ -2787,6 +2794,7 @@ export function App() {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
     }
+    setFeatureFormError(null);
     // A toolbar command owns the next gesture. Preserve the body selection
     // that pre-fills Move/boolean forms, but disarm any selection-first face or
     // edge handle so two manipulators can never claim the same pointer.
@@ -2888,6 +2896,7 @@ export function App() {
   }
 
   function cancelPanel() {
+    setFeatureFormError(null);
     const sketchReturn =
       tool === 'extrude' || extrudePreview
         ? extrudeSketchReturnRef.current
@@ -7087,7 +7096,17 @@ export function App() {
       }
 
       if (tool === 'sketch') {
-        // The focused sketch workspace owns drawing shortcuts and Escape.
+        // `tool` is only 'sketch' while the plane prompt is up: choosing a
+        // plane clears it and hands the keys to the sketch session, which is
+        // matched by `interaction.mode` below. Drawing shortcuts stay reserved
+        // here so a stray letter cannot launch a primitive over the prompt,
+        // but Escape has to keep working — the prompt has no other way out,
+        // and the workspace promises Escape is always a way back.
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelPanel();
+          setStatus('Sketch canceled · no plane was chosen.');
+        }
         return;
       }
       if (tool === 'extrude') {
@@ -8203,6 +8222,18 @@ export function App() {
                         {PLANE_LABELS[plane]}
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      className="sketch-plane-dismiss"
+                      aria-label="Cancel sketch"
+                      title="Cancel sketch (Esc)"
+                      onClick={() => {
+                        cancelPanel();
+                        setStatus('Sketch canceled · no plane was chosen.');
+                      }}
+                    >
+                      ×
+                    </button>
                   </span>
                 </div>
               ) : extrudePreview && selectedSketchProfileName ? (
@@ -8330,6 +8361,7 @@ export function App() {
             ) : (
               <Inspector
                 tool={tool}
+                commitError={featureFormError}
                 selectedFeature={selectedFeature}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
