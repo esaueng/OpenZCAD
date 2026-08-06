@@ -1,11 +1,12 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { createProjectDocument } from '@openzcad/document-core';
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   deleteLocalProject,
   listLocalProjects,
+  loadLocalProject,
   saveLocalProject,
   saveLocalProjectOrganization
 } from './localProjectStore';
@@ -25,6 +26,39 @@ const LEGACY_STORES = [
 function projectDocument(name: string, id: string): ProjectDocument {
   const document = createProjectDocument(name, toUserId('user-1'));
   return { ...document, projectId: toProjectId(id) };
+}
+
+/** A legacy import large enough that putting every document on the shelf path hurts. */
+function largeStepImportDocument(name: string, id: string): ProjectDocument {
+  const stepText = [
+    'ISO-10303-21;\nDATA;\n/*',
+    'STEP-PAYLOAD'.repeat(700_000),
+    '*/\nENDSEC;\nEND-ISO-10303-21;'
+  ].join('');
+  const imported = importStepBody(projectDocument(name, id), {
+    name: 'Imported assembly',
+    artifactId: `artifact_${id}`,
+    sourceName: `${id}.step`,
+    stepText
+  }).document;
+  return {
+    ...imported,
+    derived: { ...imported.derived, updatedAt: '2026-08-06T14:30:00.000Z' }
+  };
+}
+
+function embeddedStepLength(document: ProjectDocument | null): number {
+  const feature = Object.values(document?.nodes ?? {}).find(
+    (node) => node.kind === 'feature' && node.featureKind === 'imported-step'
+  );
+  if (
+    !feature ||
+    feature.kind !== 'feature' ||
+    feature.data.featureKind !== 'imported-step'
+  ) {
+    return 0;
+  }
+  return feature.data.stepText?.length ?? 0;
 }
 
 const failed = (cause: DOMException | null) =>
@@ -101,7 +135,10 @@ interface ReadTrace {
  * Records the reads the store makes, so a test can prove the start-screen path
  * never deserializes a document rather than just asserting on its output.
  */
-function traceReads(poisonedKey?: string): ReadTrace {
+function traceReads(
+  poisonedKey?: string,
+  onDocumentRead?: (key: IDBValidKey) => void
+): ReadTrace {
   const prototype = IDBObjectStore.prototype;
   const original = {
     get: prototype.get,
@@ -136,7 +173,10 @@ function traceReads(poisonedKey?: string): ReadTrace {
       const settle = () => {
         openDocumentReads -= 1;
       };
-      source.addEventListener('success', settle);
+      source.addEventListener('success', () => {
+        settle();
+        onDocumentRead?.(key);
+      });
       source.addEventListener('error', settle);
     }
     return source;
@@ -287,6 +327,70 @@ describe('backfilling projections for documents saved before this store', () => 
 
     expect(trace.documentReads()).toEqual([]);
     expect(projects).toHaveLength(2);
+  });
+
+  it('preserves a large embedded STEP project and keeps it off later shelf reads', async () => {
+    const imported = largeStepImportDocument('Imported turbine', 'proj-step');
+    const stepLength = embeddedStepLength(imported);
+    await seedLegacyDocuments([
+      imported,
+      projectDocument('Small bracket', 'proj-small')
+    ]);
+
+    trace = traceReads();
+    const firstShelf = await listLocalProjects();
+
+    expect(firstShelf).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          projectId: 'proj-step',
+          name: 'Imported turbine',
+          updatedAt: '2026-08-06T14:30:00.000Z'
+        })
+      ])
+    );
+    expect(trace.calls).not.toContain(`${DOCUMENT_STORE}.getAll`);
+    expect(trace.peakConcurrentDocumentReads).toBe(1);
+
+    trace.restore();
+    const restored = await loadLocalProject('proj-step');
+    expect(stepLength).toBeGreaterThan(8 * 1024 * 1024);
+    expect(embeddedStepLength(restored)).toBe(stepLength);
+
+    trace = traceReads();
+    const warmShelf = await listLocalProjects();
+    expect(warmShelf).toHaveLength(2);
+    expect(trace.documentReads()).toEqual([]);
+  });
+
+  it('cannot replace a newer cross-tab save with a stale backfill summary', async () => {
+    const original = projectDocument('Bracket', 'proj-a');
+    const updated = {
+      ...original,
+      name: 'Bracket renamed elsewhere',
+      version: original.version + 1,
+      derived: { ...original.derived, updatedAt: '2026-08-06T15:00:00.000Z' }
+    };
+    await seedLegacyDocuments([original]);
+
+    let concurrentSave: Promise<void> | undefined;
+    trace = traceReads(undefined, (key) => {
+      if (key === 'proj-a' && !concurrentSave) {
+        concurrentSave = saveLocalProject(updated);
+      }
+    });
+    await listLocalProjects();
+    await concurrentSave;
+    trace.restore();
+    trace = null;
+
+    expect(await listLocalProjects()).toEqual([
+      expect.objectContaining({
+        name: 'Bracket renamed elsewhere',
+        documentVersion: updated.version,
+        updatedAt: '2026-08-06T15:00:00.000Z'
+      })
+    ]);
   });
 
   it('skips a document it cannot read instead of emptying the shelf', async () => {
