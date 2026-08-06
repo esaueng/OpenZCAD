@@ -87,6 +87,25 @@ describe('workspace panel state', () => {
     ).toBe(true);
   });
 
+  it('remembers the workspace mode across reloads', () => {
+    // Build to begin with: View has to be chosen, never arrived at by default.
+    expect(defaultPanelState().workspaceMode).toBe('build');
+    expect(
+      savePanelState({ ...defaultPanelState(), workspaceMode: 'view' })
+    ).toBe(true);
+    expect(loadPanelState().workspaceMode).toBe('view');
+  });
+
+  it('falls back to Build on an unrecognised workspace mode', () => {
+    // A stored value from a future build must not strip the modeling UI.
+    expect(normalizePanelState({ workspaceMode: 'review' }).workspaceMode).toBe(
+      'build'
+    );
+    expect(normalizePanelState({ workspaceMode: 7 }).workspaceMode).toBe(
+      'build'
+    );
+  });
+
   it('ignores unknown sections and wrong types', () => {
     const normalized = normalizePanelState({
       toolPaletteOpen: 'yes',
