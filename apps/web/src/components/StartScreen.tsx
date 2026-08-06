@@ -100,7 +100,7 @@ const COLLAPSED_PROJECT_LIMIT = 9;
 
 function formatLastEdited(updatedAt: string): string {
   const date = new Date(updatedAt);
-  return `${date.toLocaleDateString()} at ${date.toLocaleTimeString(undefined, {
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, {
     hour: 'numeric',
     minute: '2-digit'
   })}`;
@@ -358,7 +358,7 @@ export function StartScreen({
         <small className="start-tile-meta">
           rev {project.revisionCount} ·{' '}
           <time dateTime={project.updatedAt}>
-            edited {formatLastEdited(project.updatedAt)}
+            {formatLastEdited(project.updatedAt)}
           </time>
           {trashed && (
             <>
