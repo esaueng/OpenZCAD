@@ -31,7 +31,8 @@ AI_MODEL=openai/gpt-5.6-sol
 # TURNSTILE_SECRET_KEY, the public TURNSTILE_SITE_KEY binding,
 # AUTH_EMAIL_FROM, a D1 binding with all migrations applied, and an EMAIL
 # sending binding backed by an onboarded sender domain.
-# Project invitation delivery additionally uses PROJECT_INVITATION_EMAIL_FROM;
-# the checked-in beta value is noreply@zcad.esau.app.
+# Project invitation delivery additionally uses PROJECT_INVITATION_EMAIL_FROM
+# and PUBLIC_APP_ORIGIN; the checked-in beta values are
+# noreply@zcad.esau.app and https://zcad.esau.app.
 # AUTH_LEGACY_OWNER_EMAIL can map historical user_beta_dev projects to one
 # verified owner email without rewriting document ownership.

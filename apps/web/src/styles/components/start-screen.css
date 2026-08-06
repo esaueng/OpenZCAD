@@ -490,41 +490,6 @@
   color: var(--color-warning);
 }
 
-.start-invitation-bar {
-  display: grid;
-  grid-template-columns: auto auto minmax(180px, 1fr) auto;
-  align-items: center;
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface-1);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-}
-
-.start-invitation-bar input {
-  min-width: 0;
-}
-
-.start-invitation-error {
-  grid-column: 3 / -1;
-  color: var(--color-warning);
-}
-
-@media (max-width: 680px) {
-  .start-invitation-bar {
-    grid-template-columns: auto 1fr;
-  }
-
-  .start-invitation-bar input,
-  .start-invitation-bar .start-shelf-action,
-  .start-invitation-error {
-    grid-column: 1 / -1;
-  }
-}
-
 .start-tile-thumb {
   position: relative;
   display: grid;
