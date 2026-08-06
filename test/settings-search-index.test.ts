@@ -110,3 +110,39 @@ describe('assistant settings', () => {
     );
   });
 });
+
+describe('offline mode', () => {
+  it('keeps its master toggle in the always-visible General section', () => {
+    expect(
+      SETTINGS_SECTIONS.find((section) => section.id === 'general')?.settings
+    ).toContain('Cloud features');
+  });
+
+  it('removes account and assistant surfaces while keeping local settings', () => {
+    const offline = visibleSettingsSections({
+      cloudFunctionsEnabled: false
+    });
+
+    expect(offline.map((section) => section.id)).not.toContain('account');
+    expect(offline.map((section) => section.id)).not.toContain('assistant');
+    expect(offline.map((section) => section.id)).toContain('files');
+    expect(offline.map((section) => section.id)).toContain('general');
+  });
+
+  it('cannot surface cloud-only sections through search', () => {
+    for (const query of ['cloud profile', 'personal token', 'provider']) {
+      expect(
+        visibleSettingsSections({
+          cloudFunctionsEnabled: false,
+          query
+        }).map((section) => section.id)
+      ).not.toContain('account');
+      expect(
+        visibleSettingsSections({
+          cloudFunctionsEnabled: false,
+          query
+        }).map((section) => section.id)
+      ).not.toContain('assistant');
+    }
+  });
+});

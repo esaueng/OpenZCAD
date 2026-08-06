@@ -19,6 +19,7 @@ import {
   desktopFetch,
   isDesktopApp
 } from './desktopBridge';
+import { cloudFunctionsAreEnabled } from './cloudMode';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -33,6 +34,7 @@ export type CollaborationStatus =
   | 'update-required';
 
 interface CollaborationOptions {
+  enabled: boolean;
   document: ProjectDocument | null;
   session: AuthSession | null;
   onRemoteDocument(document: ProjectDocument): void;
@@ -206,6 +208,7 @@ function clientId(): string {
 }
 
 export function useCollaboration({
+  enabled,
   document,
   session,
   onRemoteDocument,
@@ -237,12 +240,14 @@ export function useCollaboration({
   const displayName = session?.displayName ?? null;
 
   useEffect(() => {
-    if (!projectId || !userId || !displayName) {
+    if (!enabled || !projectId || !userId || !displayName) {
       setStatus('offline');
       setMembers([]);
       setRole(null);
       setLease(null);
       setRoomVersion(null);
+      conflictRef.current = null;
+      setConflict(null);
       return;
     }
     conflictRef.current = null;
@@ -627,6 +632,7 @@ export function useCollaboration({
       }
       window.clearInterval(leaseRenewTimer);
       if (
+        cloudFunctionsAreEnabled() &&
         socketRef.current?.readyState === WebSocket.OPEN &&
         leaseIdRef.current
       ) {
@@ -647,10 +653,11 @@ export function useCollaboration({
       setRole(null);
       setMembers([]);
     };
-  }, [displayName, projectId, userId]);
+  }, [displayName, enabled, projectId, userId]);
 
   useEffect(() => {
     if (
+      !enabled ||
       !document ||
       conflictRef.current ||
       readUnresolvedConflict(document.projectId) ||
@@ -734,7 +741,7 @@ export function useCollaboration({
       lastSentVersionRef.current = document.version;
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [document?.projectId, document?.version]);
+  }, [document?.projectId, document?.version, enabled]);
 
   const useRemoteVersion = useCallback(
     (expectedRemoteVersion: number): boolean => {
