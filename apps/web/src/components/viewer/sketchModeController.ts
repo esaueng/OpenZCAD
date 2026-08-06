@@ -11,6 +11,7 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
 import {
   adaptiveGridSpacing,
+  type SketchInferenceSegment,
   type SketchPoint
 } from '../../lib/sketch/session';
 import {
@@ -54,8 +55,10 @@ export interface SketchModeRig {
   pickObject(raycaster: THREE.Raycaster, threshold: number): string | null;
   /** Replaces the in-progress (orange) polyline; null hides it. */
   setInProgress(points: SketchPoint[] | null, closed: boolean): void;
-  /** Temporary horizontal/vertical inference guide. */
-  setInference(points: SketchPoint[] | null): void;
+  /** Temporary horizontal/vertical or center-cross inference guides. */
+  setInference(segments: readonly SketchInferenceSegment[] | null): void;
+  /** Advances the center-guide dash flow; true while another frame is useful. */
+  advanceInference(now: number, reducedMotion: boolean): boolean;
   /** Highlights open/gapped endpoints requested by profile diagnostics. */
   setDiagnostics(points: SketchPoint[]): void;
   dispose(): void;
@@ -204,20 +207,50 @@ export function buildSketchModeRig(
 
   const inferenceMaterial = createFatLineMaterial({
     color: INFERENCE_COLOR,
-    linewidth: 1,
-    opacity: 0.72,
+    linewidth: 1.4,
+    opacity: 0.92,
     depthTest: false,
     resolution: resolution()
   });
   inferenceMaterial.dashed = true;
-  inferenceMaterial.dashSize = 1.2;
-  inferenceMaterial.gapSize = 0.8;
-  const inference = new Line2(new LineGeometry(), inferenceMaterial);
-  inference.name = 'sketch-inference';
-  inference.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
-  inference.visible = false;
-  inference.frustumCulled = false;
-  group.add(inference);
+  inferenceMaterial.dashSize = 2.2;
+  inferenceMaterial.gapSize = 1.2;
+  const inferenceGlowMaterial = createFatLineMaterial({
+    color: INFERENCE_COLOR,
+    linewidth: 5,
+    opacity: 0.16,
+    depthTest: false,
+    resolution: resolution()
+  });
+  const inferenceGroup = new THREE.Group();
+  inferenceGroup.name = 'sketch-inference';
+  inferenceGroup.visible = false;
+  group.add(inferenceGroup);
+  const inferenceGlowGroup = new THREE.Group();
+  inferenceGlowGroup.name = 'sketch-inference-glow';
+  inferenceGlowGroup.visible = false;
+  group.add(inferenceGlowGroup);
+  const inferenceLines: Line2[] = [];
+  const inferenceGlowLines: Line2[] = [];
+
+  const inferenceLine = (
+    lines: Line2[],
+    container: THREE.Group,
+    material: typeof inferenceMaterial,
+    index: number,
+    renderOrder: number
+  ): Line2 => {
+    const existing = lines[index];
+    if (existing) {
+      return existing;
+    }
+    const line = new Line2(new LineGeometry(), material);
+    line.renderOrder = renderOrder;
+    line.frustumCulled = false;
+    lines.push(line);
+    container.add(line);
+    return line;
+  };
 
   const diagnosticMaterial = new THREE.PointsMaterial({
     color: 0xff5d73,
@@ -385,23 +418,69 @@ export function buildSketchModeRig(
       );
       inProgress.visible = true;
     },
-    setInference(points) {
-      if (!points || points.length < 2) {
-        inference.visible = false;
+    setInference(segments) {
+      if (!segments || segments.length === 0) {
+        inferenceGroup.visible = false;
+        inferenceGlowGroup.visible = false;
         return;
       }
-      const geometry = new LineGeometry();
-      geometry.setPositions(
-        points
+      for (const [index, segment] of segments.entries()) {
+        const positions = segment
           .map((point) => liftPoint(basis, point))
-          .flatMap((point) => [point.x, point.y, point.z])
-      );
-      inference.geometry.dispose();
-      inference.geometry = geometry;
-      inference.computeLineDistances();
+          .flatMap((point) => [point.x, point.y, point.z]);
+        for (const line of [
+          inferenceLine(
+            inferenceLines,
+            inferenceGroup,
+            inferenceMaterial,
+            index,
+            VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH
+          ),
+          inferenceLine(
+            inferenceGlowLines,
+            inferenceGlowGroup,
+            inferenceGlowMaterial,
+            index,
+            VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH - 1
+          )
+        ]) {
+          const geometry = new LineGeometry();
+          geometry.setPositions(positions);
+          line.geometry.dispose();
+          line.geometry = geometry;
+          line.computeLineDistances();
+          line.visible = true;
+        }
+      }
+      for (
+        let index = segments.length;
+        index < inferenceLines.length;
+        index += 1
+      ) {
+        inferenceLines[index]!.visible = false;
+        inferenceGlowLines[index]!.visible = false;
+      }
       const { width, height } = resolution();
       inferenceMaterial.resolution.set(Math.max(width, 1), Math.max(height, 1));
-      inference.visible = true;
+      inferenceGlowMaterial.resolution.set(
+        Math.max(width, 1),
+        Math.max(height, 1)
+      );
+      inferenceGroup.visible = true;
+      inferenceGlowGroup.visible = true;
+    },
+    advanceInference(now, reducedMotion) {
+      if (!inferenceGroup.visible || reducedMotion) {
+        inferenceMaterial.dashOffset = 0;
+        inferenceMaterial.opacity = 0.92;
+        inferenceGlowMaterial.opacity = 0.16;
+        return false;
+      }
+      const pulse = (Math.sin(now * 0.006) + 1) / 2;
+      inferenceMaterial.dashOffset = -((now * 0.006) % 3.4);
+      inferenceMaterial.opacity = 0.82 + pulse * 0.16;
+      inferenceGlowMaterial.opacity = 0.1 + pulse * 0.14;
+      return true;
     },
     setDiagnostics(points) {
       diagnostics.geometry.dispose();
@@ -421,8 +500,11 @@ export function buildSketchModeRig(
       originMaterial.dispose();
       inProgress.geometry.dispose();
       inProgressMaterial.dispose();
-      inference.geometry.dispose();
+      for (const line of [...inferenceLines, ...inferenceGlowLines]) {
+        line.geometry.dispose();
+      }
       inferenceMaterial.dispose();
+      inferenceGlowMaterial.dispose();
       diagnostics.geometry.dispose();
       diagnosticMaterial.dispose();
     }
