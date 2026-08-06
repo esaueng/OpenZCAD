@@ -17,7 +17,7 @@
   }
 
   .topbar-actions {
-    grid-template-columns: 128px 104px 126px 28px 28px;
+    grid-template-columns: 104px 128px 126px 28px 28px;
   }
 
   .file-menu > summary {
