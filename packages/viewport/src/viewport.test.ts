@@ -14,6 +14,7 @@ import {
   createExtrudePreviewGeometry,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
+  EDGE_IDLE_WIDTH,
   isViewerMesh,
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
@@ -174,11 +175,40 @@ describe('model viewer mesh classification', () => {
     const raycaster = new THREE.Raycaster();
     configureEdgeRaycasting(raycaster);
 
-    raycaster.setFromCamera(new THREE.Vector2(0, (2.9 * 2) / 1000), camera);
+    // Line2 answers within (linewidth + threshold) / 2 CSS px, so this 2 px
+    // line has a 5 px pick radius. The radius is the point of the test: at the
+    // original threshold it was 3 px here and 2.7 px for a real idle edge,
+    // which is inside the jitter of an ordinary click — edges read as
+    // unpickable by hand even though picking worked.
+    raycaster.setFromCamera(new THREE.Vector2(0, (4.9 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(1);
 
-    raycaster.setFromCamera(new THREE.Vector2(0, (3.1 * 2) / 1000), camera);
+    raycaster.setFromCamera(new THREE.Vector2(0, (5.1 * 2) / 1000), camera);
     expect(raycaster.intersectObject(edge)).toHaveLength(0);
+  });
+
+  it('keeps the idle edge pick radius wide enough to hit by hand', () => {
+    const geometry = new LineGeometry();
+    geometry.setPositions([-1, 0, 0, 1, 0, 0]);
+    const material = new LineMaterial({ linewidth: EDGE_IDLE_WIDTH });
+    material.resolution.set(1000, 1000);
+    const edge = new Line2(geometry, material);
+    edge.computeLineDistances();
+    edge.updateMatrixWorld(true);
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster();
+    configureEdgeRaycasting(raycaster);
+
+    // A pointer 4 px off an edge as it renders must still take it. Measured in
+    // the browser, the shipped bands were 3–5 px wide end to end at the old
+    // threshold, which is what made edge selection feel impossible by hand.
+    raycaster.setFromCamera(new THREE.Vector2(0, (4 * 2) / 1000), camera);
+    expect(raycaster.intersectObject(edge)).toHaveLength(1);
   });
 
   it('does not prioritize an edge hidden meaningfully behind a face', () => {
