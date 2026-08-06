@@ -43,6 +43,7 @@ import type {
 import {
   createProjectDocument,
   duplicateProjectDocument,
+  findBodyNode,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -93,6 +94,8 @@ import type {
 } from '@openzcad/shared';
 import {
   applyOrganizationUpdate,
+  BODY_COLOR_METADATA_KEY,
+  BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
@@ -125,6 +128,10 @@ import {
   startDesktopSignIn,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
+import {
+  cloudFunctionsAreEnabled,
+  setCloudFunctionsEnabled
+} from './lib/cloudMode';
 import { CloudSettingsAutosave } from './lib/cloudSettingsAutosave';
 import {
   CloudProjectAutosave,
@@ -186,7 +193,8 @@ import { commandPromptText } from './lib/interaction/prompt';
 import {
   cylinderRadialFrame,
   isValidCylinderRadius,
-  sameCylinderAxis
+  sameCylinderAxis,
+  supportsRadialCylinderPreview
 } from './lib/interaction/cylinderRadius';
 import { primitiveCylinderRadiusAncestor } from './lib/interaction/cylinderRadiusAncestry';
 import { ToolCard } from './components/ToolCard';
@@ -223,6 +231,7 @@ import {
   type ResolvedExtrude
 } from './lib/extrudeInference';
 import type {
+  BodyAppearancePreview,
   ExtrudePreview,
   FaceResizeCommit,
   NormalToFaceRequest
@@ -670,6 +679,12 @@ export function App() {
   );
   const appSettingsRef = useRef(appSettings);
   appSettingsRef.current = appSettings;
+  const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
+    cloudFunctionsAreEnabled
+  );
+  const cloudFunctionsEnabledRef = useRef(cloudFunctionsEnabled);
+  cloudFunctionsEnabledRef.current = cloudFunctionsEnabled;
+  const bootCloudFunctionsEnabledRef = useRef(cloudFunctionsEnabled);
   /**
    * The account revision `appSettings` is in step with, or null once edited
    * here without being saved. Persisted with the settings so a reload can tell
@@ -803,6 +818,12 @@ export function App() {
   const [moveCommitHold, setMoveCommitHold] = useState<MovePreview | null>(
     null
   );
+  /**
+   * Drag-phase body color/opacity patch rendered without a document write;
+   * committed through node metadata when the pointer releases.
+   */
+  const [bodyAppearancePreview, setBodyAppearancePreview] =
+    useState<BodyAppearancePreview | null>(null);
   const [moveSnap, setMoveSnap] = useState<MoveSnap | null>(null);
   const [tool, setTool] = useState<ToolId | null>(null);
   const [modelingTargetBodyId, setModelingTargetBodyId] =
@@ -823,7 +844,9 @@ export function App() {
    * so that arming Fillet does not silently undo a filter set on purpose.
    */
   const selectionFilter = effectiveSelectionFilter(manualSelectionFilter, tool);
-  const [status, setStatus] = useState('Checking beta API...');
+  const [status, setStatus] = useState(
+    cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
+  );
   const [busy, setBusy] = useState(false);
   const {
     projection,
@@ -864,7 +887,7 @@ export function App() {
         (!project.lastRevisionId || localRevisionId === project.lastRevisionId);
 
       const remoteDocument =
-        !localMatchesSummary && session
+        cloudFunctionsEnabled && !localMatchesSummary && session
           ? await api.loadProject(project.projectId).catch(() => null)
           : null;
       const thumbnailDocument = selectProjectDocument(
@@ -875,7 +898,7 @@ export function App() {
         ? Object.values(thumbnailDocument.derived.bodyRepresentations)
         : [];
     },
-    [session]
+    [cloudFunctionsEnabled, session]
   );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
@@ -994,8 +1017,6 @@ export function App() {
         setPreviewDoc(
           preview ? { ...preview.document, derived: preview.derived } : null
         ),
-      acceptValue: (distance) =>
-        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
       continueAfterSlow: true
     })
   ).current;
@@ -1067,6 +1088,8 @@ export function App() {
           );
         }
       },
+      acceptValue: (distance) =>
+        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
       continueAfterSlow: true
     })
   ).current;
@@ -1125,6 +1148,7 @@ export function App() {
       collaborationRollout.personalSyncEnabled);
 
   const collaboration = useCollaboration({
+    enabled: cloudFunctionsEnabled,
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
     // account credentials to a collaboration room after this exact project has
@@ -1461,12 +1485,13 @@ export function App() {
 
   useEffect(() => {
     cloudProjectAutosaveRef.current?.configure({
-      enabled: appSettings.files.cloudAutosave,
+      enabled: cloudFunctionsEnabled && appSettings.files.cloudAutosave,
       idleDelayMs: appSettings.files.cloudAutosaveDelaySeconds * 1000
     });
   }, [
     appSettings.files.cloudAutosave,
-    appSettings.files.cloudAutosaveDelaySeconds
+    appSettings.files.cloudAutosaveDelaySeconds,
+    cloudFunctionsEnabled
   ]);
 
   /**
@@ -1483,12 +1508,17 @@ export function App() {
     const accountVersion = projectId
       ? remoteVersionsRef.current.get(projectId)
       : undefined;
-    if (!projectId || !session || accountVersion === undefined) {
+    if (
+      !cloudFunctionsEnabled ||
+      !projectId ||
+      !session ||
+      accountVersion === undefined
+    ) {
       controller.closeProject();
       return;
     }
     controller.openProject(projectId, accountVersion);
-  }, [doc?.projectId, session]);
+  }, [cloudFunctionsEnabled, doc?.projectId, session]);
 
   /**
    * Last call before the tab goes away. `pagehide` is the only one of these
@@ -1531,6 +1561,7 @@ export function App() {
   useEffect(() => {
     const projectId = doc?.projectId ?? null;
     if (
+      !cloudFunctionsEnabled ||
       !shouldPollForFreshness({
         projectId,
         signedIn: Boolean(session),
@@ -1601,7 +1632,7 @@ export function App() {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('online', onFocus);
     };
-  }, [doc?.projectId, session]);
+  }, [cloudFunctionsEnabled, doc?.projectId, session]);
 
   useEffect(() => {
     const controller = cloudSettingsAutosaveRef.current;
@@ -1609,7 +1640,7 @@ export function App() {
     if (!controller) {
       return;
     }
-    if (!userId || !accountSettings) {
+    if (!cloudFunctionsEnabled || !userId || !accountSettings) {
       if (cloudSettingsSessionUserRef.current !== null) {
         controller.endSession();
         cloudSettingsSessionUserRef.current = null;
@@ -1625,7 +1656,7 @@ export function App() {
       return;
     }
     controller.updateAccountSettings(accountSettings);
-  }, [accountSettings, session]);
+  }, [accountSettings, cloudFunctionsEnabled, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1633,26 +1664,35 @@ export function App() {
     void (async () => {
       try {
         const [health, rememberedLocal, currentAuth] = await Promise.all([
-          api.health().catch(() => null),
+          bootCloudFunctionsEnabledRef.current
+            ? api.health().catch(() => null)
+            : null,
           startupProjectId
             ? timedAsync('startup.localProject', () =>
                 loadLocalProject(startupProjectId).catch(() => null)
               )
             : Promise.resolve(null),
-          api
-            .authConfig()
-            .then((config) => ({
-              config,
-              status: 'ready' as const
-            }))
-            .catch(() => ({
-              config: null,
-              status: 'unavailable' as const
-            }))
+          bootCloudFunctionsEnabledRef.current
+            ? api
+                .authConfig()
+                .then((config) => ({
+                  config,
+                  status: 'ready' as const
+                }))
+                .catch(() => ({
+                  config: null,
+                  status: 'unavailable' as const
+                }))
+            : {
+                config: null,
+                status: 'unavailable' as const
+              }
         ]);
-        const activeSession = await timedAsync('startup.session', () =>
-          api.session().catch(() => null)
-        );
+        const activeSession = bootCloudFunctionsEnabledRef.current
+          ? await timedAsync('startup.session', () =>
+              api.session().catch(() => null)
+            )
+          : null;
         const [
           listed,
           rememberedRemote,
@@ -1787,11 +1827,13 @@ export function App() {
           clearActiveProject();
         }
         setStatus(
-          activeSession && listed.remoteReached
-            ? `Cloud profile ready · ${merged.length} project(s)`
-            : health
-              ? `Local workspace · ${merged.length} local project(s)`
-              : `Offline workspace · ${merged.length} local project(s)`
+          !bootCloudFunctionsEnabledRef.current
+            ? `Offline mode · ${merged.length} local project(s)`
+            : activeSession && listed.remoteReached
+              ? `Cloud profile ready · ${merged.length} project(s)`
+              : health
+                ? `Local workspace · ${merged.length} local project(s)`
+                : `Offline workspace · ${merged.length} local project(s)`
         );
       } catch (error) {
         if (!cancelled) {
@@ -2988,6 +3030,43 @@ export function App() {
     });
   }
 
+  function previewBodyAppearance(preview: BodyAppearancePreview | null) {
+    setBodyAppearancePreview(preview);
+  }
+
+  function commitBodyAppearance(
+    bodyId: BodyId,
+    appearance: { color?: string; opacity?: number | null }
+  ) {
+    if (!doc) {
+      return;
+    }
+    const bodyNode = findBodyNode(doc, bodyId);
+    if (!bodyNode) {
+      return;
+    }
+    const metadata: Record<string, string | number | null> = {};
+    if (appearance.color !== undefined) {
+      metadata[BODY_COLOR_METADATA_KEY] = appearance.color;
+    }
+    if (appearance.opacity !== undefined) {
+      // null deletes the key, returning the body to fully opaque.
+      metadata[BODY_OPACITY_METADATA_KEY] = appearance.opacity;
+    }
+    if (Object.keys(metadata).length === 0) {
+      return;
+    }
+    // The drag-phase preview has already shown this value; clearing it before
+    // the commit lets the rebuild arrive as the new committed look.
+    setBodyAppearancePreview(null);
+    executeCommand(
+      commandFactories.setNodeMetadata(
+        { nodeId: bodyNode.id, metadata },
+        `Set ${bodyNode.name} appearance`
+      )
+    );
+  }
+
   function showAllBodies() {
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
@@ -2997,17 +3076,72 @@ export function App() {
     appSettingsRef.current = next;
     setAppSettings(next);
     const controller = cloudSettingsAutosaveRef.current;
-    if (controller) {
+    if (cloudFunctionsEnabledRef.current && controller) {
       controller.schedule(next);
     } else {
       syncedRevisionRef.current = null;
       saveLocalAppSettings(next, null);
     }
-    if (sessionRef.current && accountSettingsRef.current) {
+    if (
+      cloudFunctionsEnabledRef.current &&
+      sessionRef.current &&
+      accountSettingsRef.current
+    ) {
       setSettingsMessage('Saved on this device · saving to cloud profile…');
     } else {
       setSettingsMessage('Saved on this device.');
     }
+  }
+
+  function handleCloudFunctionsEnabledChange(next: boolean) {
+    if (next === cloudFunctionsEnabledRef.current) {
+      return;
+    }
+    // Flip the transport gate before React can render another cloud consumer.
+    // This also aborts active browser API and assistant fetches when going off.
+    setCloudFunctionsEnabled(next);
+    cloudFunctionsEnabledRef.current = next;
+    setCloudFunctionsEnabledState(next);
+
+    if (next) {
+      setSettingsMessage('Cloud features enabled · reconnecting…');
+      setStatus('Cloud features enabled · reconnecting…');
+      void refreshCloudConnection();
+      return;
+    }
+
+    cloudProjectAutosaveRef.current?.configure({ enabled: false });
+    cloudProjectAutosaveRef.current?.closeProject();
+    cloudSettingsAutosaveRef.current?.endSession();
+    cloudSettingsSessionUserRef.current = null;
+    remoteVersionsRef.current.clear();
+    sessionRef.current = null;
+    accountSettingsRef.current = null;
+    setSession(null);
+    setAccountSettings(null);
+    setAuthConfig(null);
+    setAuthConfigStatus('unavailable');
+    setDeploymentHealth(null);
+    setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
+    setCloudAvailable(false);
+    setCloudProjectIds(new Set());
+    setAccountProjectListReached(false);
+    setArtifacts([]);
+    setSharingOpen(false);
+    setAccountConflict(null);
+    setSyncRun(null);
+    setSaveState('local');
+    setSettingsMessage(
+      'Offline mode active · cloud functions are disabled on this device.'
+    );
+    setStatus('Offline mode · work is saved on this device.');
+    void loadProjectSummaries(false)
+      .then((listed) => {
+        if (!cloudFunctionsEnabledRef.current) {
+          setProjects(listed.projects);
+        }
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -3046,54 +3180,83 @@ export function App() {
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
   }
 
-  function openSettings() {
-    updateSettingsViewState({ open: true });
-    setSettingsOpen(true);
-    setPaletteOpen(false);
-    setSettingsMessage('Changes save on this device immediately.');
+  async function refreshCloudConnection() {
+    if (!cloudFunctionsEnabledRef.current) {
+      return;
+    }
     setAuthConfigStatus('loading');
     void api
       .health()
       .then(setDeploymentHealth)
       .catch(() => setDeploymentHealth(null));
-    void Promise.all([
+    const [nextAuth, activeSession] = await Promise.all([
       api
         .authConfig()
         .then((config) => ({ config, status: 'ready' as const }))
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
-    ]).then(async ([nextAuth, activeSession]) => {
-      setAuthConfig(nextAuth.config);
-      setAuthConfigStatus(nextAuth.status);
-      sessionRef.current = activeSession;
-      setSession(activeSession);
-      if (!activeSession) {
-        endCloudSettingsSession();
-        setSettingsMessage(
-          nextAuth.status === 'ready'
-            ? 'Device settings active · sign in for cloud sync.'
-            : 'Beta sign-in unavailable · device settings remain active.'
-        );
+    ]);
+    if (!cloudFunctionsEnabledRef.current) {
+      return;
+    }
+    setAuthConfig(nextAuth.config);
+    setAuthConfigStatus(nextAuth.status);
+    sessionRef.current = activeSession;
+    setSession(activeSession);
+    if (!activeSession) {
+      endCloudSettingsSession();
+      setSettingsMessage(
+        nextAuth.status === 'ready'
+          ? 'Device settings active · sign in for cloud sync.'
+          : 'Beta sign-in unavailable · device settings remain active.'
+      );
+      return;
+    }
+    setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
+    try {
+      const [remoteSettings, collaborationCapabilities] = await Promise.all([
+        api.getSettings(),
+        api
+          .collaborationCapabilities()
+          .catch(() => DISABLED_COLLABORATION_ROLLOUT)
+      ]);
+      if (!cloudFunctionsEnabledRef.current) {
         return;
       }
-      setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
-      try {
-        const [remoteSettings, collaborationCapabilities] = await Promise.all([
-          api.getSettings(),
-          api
-            .collaborationCapabilities()
-            .catch(() => DISABLED_COLLABORATION_ROLLOUT)
-        ]);
-        accountSettingsRef.current = remoteSettings;
-        setAccountSettings(remoteSettings);
-        setCollaborationRollout(collaborationCapabilities);
-        setSettingsMessage('Cloud profile connected.');
-      } catch {
+      accountSettingsRef.current = remoteSettings;
+      setAccountSettings(remoteSettings);
+      setCollaborationRollout(collaborationCapabilities);
+      const listed = await loadProjectSummaries(true);
+      if (!cloudFunctionsEnabledRef.current) {
+        return;
+      }
+      setProjects(listed.projects);
+      setCloudProjectIds(listed.cloudProjectIds);
+      setAccountProjectListReached(listed.remoteReached);
+      setSettingsMessage('Cloud profile connected.');
+      setStatus(`Cloud profile ready · ${listed.projects.length} project(s)`);
+    } catch {
+      if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
         );
       }
-    });
+    }
+  }
+
+  function openSettings() {
+    updateSettingsViewState({ open: true });
+    setSettingsOpen(true);
+    setPaletteOpen(false);
+    if (!cloudFunctionsEnabledRef.current) {
+      setSettingsMessage(
+        'Offline mode active · cloud functions are disabled on this device.'
+      );
+      setAuthConfigStatus('unavailable');
+      return;
+    }
+    setSettingsMessage('Changes save on this device immediately.');
+    void refreshCloudConnection();
   }
 
   function closeSettings() {
@@ -5138,21 +5301,26 @@ export function App() {
       : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
+  const sketchDocumentRef = useRef(doc);
+  sketchDocumentRef.current = doc;
+  const sketchSessionNameRef = useRef(sketchSessionName);
+  sketchSessionNameRef.current = sketchSessionName;
   const sketchBasis = useMemo(() => {
-    if (!sketchSessionPlane || !doc) {
+    const sessionDocument = sketchDocumentRef.current;
+    if (!sketchSessionPlane || !sessionDocument) {
       return null;
     }
     try {
       return resolvedSketchPlaneBasis(
-        doc,
+        sessionDocument,
         sketchSessionPlane,
         (value) => evalParamValue(value, parameterScopeRef.current.scope) ?? 0,
-        sketchSessionName
+        sketchSessionNameRef.current
       );
     } catch {
       return null;
     }
-  }, [doc, sketchSessionName, sketchSessionPlane]);
+  }, [sketchSessionPlane]);
 
   /** Active in-viewport sketch session for the viewport. */
   const sketchModeState = useMemo(() => {
@@ -5857,9 +6025,24 @@ export function App() {
         y: target.axisEnd[1],
         z: target.axisEnd[2]
       },
-      originalRadius: target.radius
+      originalRadius: target.radius,
+      smoothPreview:
+        target.concavity === 'boss' &&
+        supportsRadialCylinderPreview(
+          representations[target.bodyId as BodyId],
+          {
+            x: target.axisStart[0],
+            y: target.axisStart[1],
+            z: target.axisStart[2]
+          },
+          {
+            x: target.axisEnd[0],
+            y: target.axisEnd[1],
+            z: target.axisEnd[2]
+          }
+        )
     };
-  }, [interaction]);
+  }, [interaction, representations]);
   const cylinderRadiusInspectorInitial =
     interaction.mode === 'face' &&
     interaction.op === 'resize-cylinder-radius' &&
@@ -5949,7 +6132,7 @@ export function App() {
     };
   }
 
-  function handleCylinderRadiusPreview(radius: number) {
+  function handleCylinderRadiusPreview(radius: number, exactGeometry = true) {
     const current = interactionRef.current;
     if (
       current.mode !== 'face' ||
@@ -5960,7 +6143,14 @@ export function App() {
       return;
     }
     cylinderRadiusInspectorSetterRef.current?.(radius);
-    cylinderRadiusPreview.request(radius);
+    if (exactGeometry) {
+      cylinderRadiusPreview.request(radius);
+    } else {
+      // A simple standalone cylinder is projected with a disposable viewport
+      // transform during drag. Drop any older worker result so it cannot flash
+      // over that proxy; release still validates one exact kernel rebuild.
+      cylinderRadiusPreview.clear();
+    }
   }
 
   function handleCylinderRadiusCancel() {
@@ -5970,11 +6160,11 @@ export function App() {
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
     if (!requireExactGeometryReady()) {
-      return;
+      return false;
     }
     const current = interactionRef.current;
     if (current.mode !== 'face' || current.op !== 'resize-cylinder-radius') {
-      return;
+      return false;
     }
     const sourceRadius = current.target.radius;
     const plan = buildCylinderRadiusCommand(exact ?? radius);
@@ -5985,7 +6175,7 @@ export function App() {
     ) {
       cylinderRadiusInspectorSetterRef.current?.(null);
       setStatus('Radius is too small to form valid geometry at this scale.');
-      return;
+      return false;
     }
     void executeValidatedDirectEdit(
       plan.command,
@@ -6000,6 +6190,7 @@ export function App() {
           )
         : undefined
     );
+    return true;
   }
 
   /**
@@ -7033,6 +7224,7 @@ export function App() {
     >
       <SettingsPage
         settings={appSettings}
+        cloudFunctionsEnabled={cloudFunctionsEnabled}
         accountState={accountSettings}
         authConfig={authConfig}
         authConfigStatus={authConfigStatus}
@@ -7046,6 +7238,7 @@ export function App() {
         desktopAuthorizationCode={desktopAuthorizationCode}
         onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
         onChange={handleAppSettingsChange}
+        onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
         onSaveCredential={(token) => void handleSaveAssistantCredential(token)}
         onDeleteCredential={() => void handleDeleteAssistantCredential()}
         onTestAssistant={() => void handleTestAssistantConnection()}
@@ -7329,7 +7522,8 @@ export function App() {
   // rail's mount effect. A direct-manipulation mode only hides it — the panel
   // owns the conversation and the in-flight request, so unmounting to enter a
   // sketch would throw both away.
-  const assistantAvailable = appSettings.assistant.enabled;
+  const assistantAvailable =
+    cloudFunctionsEnabled && appSettings.assistant.enabled;
   const assistantHidden = directMode;
   const baseToolCard = toolCardFor(interaction);
   const editingSketchName =
@@ -7521,7 +7715,9 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaboratorCount={collaboration.members.length}
-          projectSharingEnabled={projectSharingPreferenceEnabled}
+          projectSharingEnabled={
+            cloudFunctionsEnabled && projectSharingPreferenceEnabled
+          }
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
@@ -7622,6 +7818,7 @@ export function App() {
             extrudePreview={extrudePreview}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
+            appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
@@ -8030,6 +8227,8 @@ export function App() {
                 cylinderRadiusEdit={cylinderRadiusInspectorEdit}
                 cylinderRadiusSetterRef={cylinderRadiusInspectorSetterRef}
                 onLaunchTool={launchTool}
+                onPreviewBodyAppearance={previewBodyAppearance}
+                onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
@@ -8429,19 +8628,24 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
-          {sharingOpen && projectSharingPreferenceEnabled && doc && (
-            <ProjectSharingDialog
-              projectId={doc.projectId}
-              role={collaboration.role}
-              collaborationStatus={collaboration.status}
-              lease={collaboration.lease}
-              liveMembers={collaboration.members}
-              conflict={collaboration.conflict}
-              conflictHandlers={conflictHandlers}
-              editorInvitationsEnabled={collaborationRollout.editLeasesEnforced}
-              onClose={() => setSharingOpen(false)}
-            />
-          )}
+          {sharingOpen &&
+            cloudFunctionsEnabled &&
+            projectSharingPreferenceEnabled &&
+            doc && (
+              <ProjectSharingDialog
+                projectId={doc.projectId}
+                role={collaboration.role}
+                collaborationStatus={collaboration.status}
+                lease={collaboration.lease}
+                liveMembers={collaboration.members}
+                conflict={collaboration.conflict}
+                conflictHandlers={conflictHandlers}
+                editorInvitationsEnabled={
+                  collaborationRollout.editLeasesEnforced
+                }
+                onClose={() => setSharingOpen(false)}
+              />
+            )}
           {accountConflict && (
             <ProjectConflictDialog
               conflict={accountConflict}
