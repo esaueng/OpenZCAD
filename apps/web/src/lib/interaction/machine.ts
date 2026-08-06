@@ -481,7 +481,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
             ...(actions.length > 1 ? { actions } : {}),
             ...lifecycleHint(
               state,
-              'Drag the arrow to offset the face, or tap the value to type.'
+              'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.'
             )
           };
     }
