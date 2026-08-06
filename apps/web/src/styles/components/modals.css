@@ -637,7 +637,12 @@
 }
 
 .shortcut-row dt {
-  flex: 0 0 96px;
+  /*
+   * Wide enough for a pointer binding. The keyboard half fits in 96px, but the
+   * mouse gestures now listed here do not — "Shift + left-drag" and
+   * "Ctrl/Cmd + right-drag" clip at that width.
+   */
+  flex: 0 0 148px;
 }
 
 .shortcut-key-sequence {

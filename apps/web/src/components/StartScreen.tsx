@@ -989,6 +989,10 @@ export function StartScreen({
                 type="button"
                 className="demo-card"
                 disabled={busy}
+                // Named as one thing, because that is what it is: a card whose
+                // name was otherwise assembled from its heading, its tagline
+                // and three loose revision chips read in sequence.
+                aria-label={`Open demo: ${demo.name.replace('Demo · ', '')} — ${demo.tagline}`}
                 onClick={() => onOpenDemo(demo)}
               >
                 <span className="demo-card-head">
