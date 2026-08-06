@@ -115,7 +115,7 @@ import type {
   HealthResponse,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
-import { toUserId } from '@openzcad/shared';
+import { ARTIFACT_UPLOAD_PART_BYTES, toUserId } from '@openzcad/shared';
 import { ApiError, api } from './lib/api';
 import {
   cancelDesktopSignIn,
@@ -4788,7 +4788,34 @@ export function App() {
     if (!upload.uploadUrl) {
       throw new Error('Artifact upload is unavailable.');
     }
-    await api.uploadArtifact(upload.uploadUrl, input.body);
+    if (input.body.size > ARTIFACT_UPLOAD_PART_BYTES) {
+      // Chunked path: fixed-size parts keep each request under every
+      // Cloudflare plan's body cap; R2 stitches them into one object.
+      const { uploadId } = await api.createMultipartUpload(
+        upload.uploadSessionId
+      );
+      const parts = [];
+      for (
+        let partNumber = 1, offset = 0;
+        offset < input.body.size;
+        partNumber += 1, offset += ARTIFACT_UPLOAD_PART_BYTES
+      ) {
+        parts.push(
+          await api.uploadArtifactPart(
+            upload.uploadSessionId,
+            uploadId,
+            partNumber,
+            input.body.slice(offset, offset + ARTIFACT_UPLOAD_PART_BYTES)
+          )
+        );
+      }
+      await api.completeMultipartUpload(upload.uploadSessionId, {
+        uploadId,
+        parts
+      });
+    } else {
+      await api.uploadArtifact(upload.uploadUrl, input.body);
+    }
     await api.finalizeArtifact({
       projectId: doc.projectId,
       uploadSessionId: upload.uploadSessionId,
