@@ -58,9 +58,9 @@ describe('settings search index', () => {
     // otherwise make this test pass by comparing two empty maps.
     expect(rendered.size).toBe(10);
     expect(indexed.size).toBe(10);
-    expect(
-      Array.from(rendered.values()).flat().length
-    ).toBeGreaterThanOrEqual(30);
+    expect(Array.from(rendered.values()).flat().length).toBeGreaterThanOrEqual(
+      30
+    );
 
     for (const [section, titles] of rendered) {
       expect({ section, titles: indexed.get(section) }).toEqual({
@@ -71,63 +71,42 @@ describe('settings search index', () => {
   });
 });
 
-describe('assistant kill switch', () => {
-  it('keeps the master toggle outside the section it removes', () => {
-    // The toggle has to live somewhere that survives being switched off, or
-    // there is no way back to it.
-    const general = SETTINGS_SECTIONS.find((section) => section.id === 'general');
+describe('assistant settings', () => {
+  it('indexes the master toggle on the AI Assistant page', () => {
+    const general = SETTINGS_SECTIONS.find(
+      (section) => section.id === 'general'
+    );
     const assistant = SETTINGS_SECTIONS.find(
       (section) => section.id === 'assistant'
     );
-    expect(general?.settings).toContain('AI assistant');
-    expect(assistant?.settings ?? []).not.toContain('AI assistant');
+    expect(general?.settings).not.toContain('AI assistant');
+    expect(assistant?.settings).toContain('AI assistant');
   });
 
-  it('removes the assistant section when the assistant is disabled', () => {
-    const enabled = visibleSettingsSections({ assistantEnabled: true });
-    const disabled = visibleSettingsSections({ assistantEnabled: false });
-
-    expect(enabled.map((section) => section.id)).toContain('assistant');
-    expect(disabled.map((section) => section.id)).not.toContain('assistant');
-    expect(disabled).toHaveLength(enabled.length - 1);
+  it('keeps the assistant section available so the toggle can be changed', () => {
+    expect(visibleSettingsSections({}).map((section) => section.id)).toContain(
+      'assistant'
+    );
   });
 
-  it('hides the assistant section from search as well as the nav', () => {
-    // Filtering must happen before the query, otherwise a search for a term
-    // that only the AI section carries would walk straight past the switch.
-    for (const query of ['token', 'provider', 'reasoning', 'AI']) {
+  it('finds the assistant section by its toggle and provider settings', () => {
+    for (const query of ['AI assistant', 'token', 'provider', 'reasoning']) {
       expect(
-        visibleSettingsSections({ assistantEnabled: false, query }).map(
-          (section) => section.id
-        )
-      ).not.toContain('assistant');
+        visibleSettingsSections({ query }).map((section) => section.id)
+      ).toContain('assistant');
     }
-    expect(
-      visibleSettingsSections({ assistantEnabled: true, query: 'token' }).map(
-        (section) => section.id
-      )
-    ).toContain('assistant');
   });
 
   it('still matches sections by label, detail, and setting title', () => {
-    const byLabel = visibleSettingsSections({
-      assistantEnabled: true,
-      query: 'viewport'
-    });
-    const bySettingTitle = visibleSettingsSections({
-      assistantEnabled: true,
-      query: 'angular snap'
-    });
-    const byDetail = visibleSettingsSections({
-      assistantEnabled: true,
-      query: 'diagnostics'
-    });
+    const byLabel = visibleSettingsSections({ query: 'viewport' });
+    const bySettingTitle = visibleSettingsSections({ query: 'angular snap' });
+    const byDetail = visibleSettingsSections({ query: 'diagnostics' });
 
     expect(byLabel.map((section) => section.id)).toContain('viewport');
     expect(bySettingTitle.map((section) => section.id)).toEqual(['sketching']);
     expect(byDetail.map((section) => section.id)).toEqual(['advanced']);
-    expect(
-      visibleSettingsSections({ assistantEnabled: true, query: '   ' })
-    ).toHaveLength(SETTINGS_SECTIONS.length);
+    expect(visibleSettingsSections({ query: '   ' })).toHaveLength(
+      SETTINGS_SECTIONS.length
+    );
   });
 });

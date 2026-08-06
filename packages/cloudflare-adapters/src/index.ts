@@ -127,6 +127,8 @@ export interface CloudflareEnv {
   AUTH_LEGACY_OWNER_EMAIL?: string;
   AUTH_OTP_PEPPER?: string;
   AUTH_EMAIL_FROM?: string;
+  /** Sender reserved for transactional project invitation links. */
+  PROJECT_INVITATION_EMAIL_FROM?: string;
   AUTH_SESSION_DAYS?: string;
   /** Fail-closed rollout gate for the native PKCE/device authorization flow. */
   DESKTOP_AUTH_ENABLED?: string;
@@ -702,7 +704,7 @@ export class D1R2PersistenceService implements PersistenceService {
             AND pm.user_id = ?
             AND pm.role IN ('editor', 'viewer')
            WHERE p.user_id = ? OR pm.user_id IS NOT NULL
-           ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
+           ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC`
         ).bind(userId, userId)
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
@@ -710,7 +712,7 @@ export class D1R2PersistenceService implements PersistenceService {
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
            FROM projects p
            WHERE p.user_id = ?
-           ORDER BY pinned DESC, sort_order ASC, updated_at DESC`
+           ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC`
         ).bind(userId);
     const rows = await statement.all<ProjectRow>();
 

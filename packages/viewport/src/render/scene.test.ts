@@ -88,6 +88,20 @@ describe('shouldShowGroundShadow', () => {
 });
 
 describe('updateStudioGrid', () => {
+  it('filters unresolved grid directions before they alias', () => {
+    const grid = createStudioGrid();
+    const material = grid.material as THREE.ShaderMaterial;
+    const shader = material.fragmentShader.replace(/\s+/g, ' ');
+
+    expect(shader).toContain('vec2 footprint = max(fwidth(coord)');
+    expect(shader).toContain(
+      'vec2 resolved = 1.0 - smoothstep( vec2(0.25), vec2(0.5), footprint )'
+    );
+    expect(shader).toContain(
+      'max(coverage.x * resolved.x, coverage.y * resolved.y)'
+    );
+  });
+
   it('rescales the lattice a decade at a time as the camera zooms', () => {
     const grid = createStudioGrid();
     const material = grid.material as THREE.ShaderMaterial;

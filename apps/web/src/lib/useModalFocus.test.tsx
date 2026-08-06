@@ -4,16 +4,22 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { useModalFocus } from './useModalFocus';
 
-function Modal({ onClose }: { onClose(): void }) {
+function Modal({
+  label = 'Test dialog',
+  onClose
+}: {
+  label?: string;
+  onClose(): void;
+}) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const initialFocusRef = useRef<HTMLInputElement | null>(null);
   useModalFocus(dialogRef, { autoFocus: true, initialFocusRef });
   return (
     <div className="modal-backdrop">
-      <div ref={dialogRef} role="dialog" aria-label="Test dialog" tabIndex={-1}>
-        <input ref={initialFocusRef} aria-label="First field" />
+      <div ref={dialogRef} role="dialog" aria-label={label} tabIndex={-1}>
+        <input ref={initialFocusRef} aria-label={`${label} first field`} />
         <button type="button" onClick={onClose}>
-          Close dialog
+          Close {label}
         </button>
       </div>
     </div>
@@ -48,18 +54,80 @@ describe('useModalFocus', () => {
     });
     await user.click(opener);
 
-    expect(screen.getByLabelText('First field')).toHaveFocus();
+    expect(screen.getByLabelText('Test dialog first field')).toHaveFocus();
     expect(opener).toHaveAttribute('inert');
     expect(background).toHaveAttribute('inert');
 
     await user.tab({ shift: true });
-    expect(screen.getByRole('button', { name: 'Close dialog' })).toHaveFocus();
+    expect(
+      screen.getByRole('button', { name: 'Close Test dialog' })
+    ).toHaveFocus();
     await user.tab();
-    expect(screen.getByLabelText('First field')).toHaveFocus();
+    expect(screen.getByLabelText('Test dialog first field')).toHaveFocus();
 
-    await user.click(screen.getByRole('button', { name: 'Close dialog' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Close Test dialog' })
+    );
     await waitFor(() => expect(opener).toHaveFocus());
     expect(opener).not.toHaveAttribute('inert');
     expect(background).not.toHaveAttribute('inert');
+  });
+
+  it('keeps the topmost concurrent dialog interactive and reactivates the one below', async () => {
+    const user = userEvent.setup();
+
+    function StackedHarness() {
+      const [lowerOpen, setLowerOpen] = useState(false);
+      const [upperOpen, setUpperOpen] = useState(false);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              setLowerOpen(true);
+              setUpperOpen(true);
+            }}
+          >
+            Open stacked dialogs
+          </button>
+          {lowerOpen && (
+            <Modal label="Lower dialog" onClose={() => setLowerOpen(false)} />
+          )}
+          {upperOpen && (
+            <Modal label="Upper dialog" onClose={() => setUpperOpen(false)} />
+          )}
+        </>
+      );
+    }
+
+    render(
+      <StrictMode>
+        <StackedHarness />
+      </StrictMode>
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Open stacked dialogs' })
+    );
+
+    const upper = screen.getByRole('dialog', { name: 'Upper dialog' });
+    expect(upper.parentElement).not.toHaveAttribute('inert');
+    expect(screen.getByLabelText('Upper dialog first field')).toHaveFocus();
+
+    await user.click(
+      screen.getByRole('button', { name: 'Close Upper dialog' })
+    );
+    expect(screen.getByLabelText('Lower dialog first field')).toHaveFocus();
+    expect(
+      screen.getByRole('dialog', { name: 'Lower dialog' }).parentElement
+    ).not.toHaveAttribute('inert');
+
+    await user.click(
+      screen.getByRole('button', { name: 'Close Lower dialog' })
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Open stacked dialogs' })
+      ).toHaveFocus()
+    );
   });
 });

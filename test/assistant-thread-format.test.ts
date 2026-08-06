@@ -204,7 +204,7 @@ describe('assistant openers', () => {
       topologyKind: 'edge',
       selectedBodyCount: 0
     });
-    expect(suggestions[0]).toMatch(/edge/i);
+    expect(suggestions[0]?.label).toMatch(/edge/i);
   });
 
   it('offers something to build when the document is empty', () => {
@@ -214,6 +214,9 @@ describe('assistant openers', () => {
       selectedBodyCount: 0
     });
     expect(suggestions).toHaveLength(3);
-    expect(suggestions.join(' ')).toMatch(/mm/);
+    expect(suggestions.map((suggestion) => suggestion.label).join(' ')).toMatch(
+      /mm/
+    );
+    expect(suggestions.every((suggestion) => suggestion.proposal)).toBe(true);
   });
 });

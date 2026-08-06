@@ -53,6 +53,7 @@
 }
 
 .breadcrumb {
+  flex: 1 1 auto;
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -114,11 +115,17 @@
   color: var(--color-text-subtle);
 }
 
-.topbar-tools {
-  display: inline-flex;
+.topbar-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, max-content) 28px;
   align-items: center;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
   margin-left: auto;
+}
+
+.topbar-actions > * {
+  min-width: 0;
 }
 
 .icon-button {
@@ -167,6 +174,14 @@
   align-items: center;
   gap: 6px;
   list-style: none;
+}
+
+.file-menu > summary {
+  width: auto;
+  min-height: 26px;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: var(--fs-xs);
 }
 
 .artifact-menu > summary::-webkit-details-marker,
@@ -287,21 +302,34 @@
 }
 
 .save-state {
+  width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-height: 30px;
   padding: 0 9px;
   color: var(--color-text-muted);
-  border: 1px solid transparent;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
   border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
+  justify-content: flex-start;
 }
 
-.save-state:hover {
+.save-state:hover:not(:disabled),
+.save-state:focus-visible,
+.collaboration-state:hover:not(:disabled),
+.collaboration-state:focus-visible {
   color: var(--color-text);
   background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  outline: none;
+}
+
+.save-state:active:not(:disabled),
+.collaboration-state:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 /*
@@ -315,24 +343,35 @@
   border-color: currentcolor;
 }
 
-.session-user {
-  max-width: 150px;
-  overflow: hidden;
+.account-state,
+.collaboration-state {
+  width: 100%;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .collaboration-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  cursor: pointer;
   text-transform: capitalize;
+}
+
+.collaboration-state:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.account-state.is-signed-in {
+  color: var(--color-success);
 }
 
 .collaboration-state.live {
