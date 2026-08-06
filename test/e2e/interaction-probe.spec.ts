@@ -188,3 +188,104 @@ test('interaction probe', async ({ page }) => {
       )
   );
 });
+
+test('cylinder radius proxy probe', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Cylinder Radius Proxy Probe');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  await expect
+    .poll(
+      async () =>
+        canvas.evaluate((element) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-cylinder', {
+              detail: { surface: 'wall' }
+            })
+          );
+          return element.dataset.e2eHandleX ?? null;
+        }),
+      { timeout: 120_000 }
+    )
+    .not.toBeNull();
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(Object.values(handle).every(Number.isFinite)).toBe(true);
+  const start = {
+    x: bounds!.x + handle.x,
+    y: bounds!.y + handle.y
+  };
+
+  await page.evaluate(() => {
+    performance.clearMarks('oz:cylinder-radius.proxy-frame');
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  for (let index = 1; index <= 80; index += 1) {
+    const radialDelta = Math.sin((index / 80) * Math.PI * 4) * 5;
+    await page.mouse.move(
+      start.x + handle.dx * handle.pixelsPerUnit * radialDelta,
+      start.y + handle.dy * handle.pixelsPerUnit * radialDelta
+    );
+    await page.waitForTimeout(10);
+  }
+
+  const samples = await page.evaluate(() =>
+    performance
+      .getEntriesByName('oz:cylinder-radius.proxy-frame', 'mark')
+      .map((entry) => ({
+        at: entry.startTime,
+        ...((entry as PerformanceMark).detail as {
+          latencyMs: number;
+          radius: number;
+        })
+      }))
+  );
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+
+  expect(samples.length).toBeGreaterThan(20);
+  expect(samples.every((sample) => Number.isFinite(sample.radius))).toBe(true);
+  const latencies = samples.map((sample) => sample.latencyMs);
+  const frameIntervals = samples
+    .slice(1)
+    .map((sample, index) => sample.at - samples[index]!.at);
+  const round = (value: number) => Math.round(value * 100) / 100;
+  console.log(
+    'CYLINDER_RADIUS_PERF ' +
+      JSON.stringify(
+        {
+          pointerMoves: 80,
+          renderedProxyFrames: samples.length,
+          inputToFrameMs: {
+            p50: round(percentile(latencies, 0.5)),
+            p95: round(percentile(latencies, 0.95)),
+            max: round(Math.max(...latencies))
+          },
+          frameIntervalMs: {
+            p50: round(percentile(frameIntervals, 0.5)),
+            p95: round(percentile(frameIntervals, 0.95)),
+            max: round(Math.max(...frameIntervals))
+          }
+        },
+        null,
+        2
+      )
+  );
+});
