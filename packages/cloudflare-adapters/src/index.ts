@@ -38,6 +38,9 @@ import {
   type AccountStorageUsage,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
+  type CompleteMultipartUploadRequest,
+  type CreateMultipartUploadResponse,
+  type UploadedArtifactPart,
   type CreateProjectRequest,
   type CreateProjectResponse,
   type CreateUploadSessionRequest,
@@ -1352,6 +1355,140 @@ export class D1R2PersistenceService implements PersistenceService {
     });
   }
 
+  /**
+   * Loads and authorizes an upload session for a chunked-upload call. Every
+   * part call re-validates: sessions expire mid-upload, and project access
+   * can be revoked between parts.
+   */
+  private async requireUploadSession(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<{
+    objectKey: string;
+    contentType: string;
+    metadata: Record<string, unknown>;
+  }> {
+    const upload = await this.env
+      .DB!.prepare(
+        `SELECT project_id, object_key, content_type, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
+      )
+      .bind(uploadSessionId)
+      .first<{
+        project_id: string;
+        object_key: string;
+        content_type: string;
+        metadata_json: string;
+        expires_at: string;
+      }>();
+    if (!upload || Date.parse(upload.expires_at) < Date.now()) {
+      throw new ArtifactStorageError(
+        'Upload session was not found or expired.'
+      );
+    }
+    await this.requireProjectEdit(userId, upload.project_id);
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    return {
+      objectKey: upload.object_key,
+      contentType: upload.content_type,
+      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>
+    };
+  }
+
+  async createMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<CreateMultipartUploadResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().createMultipartUpload(
+        userId,
+        uploadSessionId
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    const upload = await this.env.ARTIFACTS!.createMultipartUpload(
+      session.objectKey,
+      { httpMetadata: { contentType: session.contentType } }
+    );
+    // Recorded so purgeExpiredUploadSessions can abort an abandoned upload;
+    // R2 keeps incomplete multipart state until an explicit abort.
+    await this.env.DB.prepare(
+      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    )
+      .bind(
+        JSON.stringify({
+          ...session.metadata,
+          [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
+        }),
+        uploadSessionId
+      )
+      .run();
+    return { uploadId: upload.uploadId };
+  }
+
+  async putUploadPart(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: ArrayBuffer
+  ): Promise<UploadedArtifactPart> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().putUploadPart(
+        userId,
+        uploadSessionId,
+        uploadId,
+        partNumber,
+        body
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
+      throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
+      session.objectKey,
+      uploadId
+    );
+    const part = await upload.uploadPart(partNumber, body);
+    return { partNumber: part.partNumber, etag: part.etag };
+  }
+
+  async completeMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    request: CompleteMultipartUploadRequest
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().completeMultipartUpload(
+        userId,
+        uploadSessionId,
+        request
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== request.uploadId) {
+      throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
+      session.objectKey,
+      request.uploadId
+    );
+    await upload.complete(
+      [...request.parts].sort((a, b) => a.partNumber - b.partNumber)
+    );
+    // The upload is now a plain object; drop the abort marker so purge
+    // treats the session like a completed single PUT.
+    const { [MULTIPART_UPLOAD_METADATA_KEY]: _done, ...metadata } =
+      session.metadata;
+    await this.env.DB.prepare(
+      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    )
+      .bind(JSON.stringify(metadata), uploadSessionId)
+      .run();
+  }
+
   async finalizeArtifact(
     userId: UserId,
     request: FinalizeArtifactRequest
@@ -1996,16 +2133,37 @@ export class D1R2PersistenceService implements PersistenceService {
       return 0;
     }
     const expired = await this.env.DB.prepare(
-      `SELECT id, object_key FROM upload_sessions WHERE expires_at < ? LIMIT 100`
+      `SELECT id, object_key, metadata_json FROM upload_sessions WHERE expires_at < ? LIMIT 100`
     )
       .bind(nowIso())
-      .all<{ id: string; object_key: string }>();
+      .all<{ id: string; object_key: string; metadata_json: string }>();
     const rows = expired.results ?? [];
     if (rows.length === 0) {
       return 0;
     }
     const deletions = await Promise.allSettled(
-      rows.map((row) => this.env.ARTIFACTS!.delete(row.object_key))
+      rows.map(async (row) => {
+        let metadata: Record<string, unknown> = {};
+        try {
+          metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+        } catch {
+          // Absent or malformed metadata reads as "no multipart in flight".
+        }
+        const multipartUploadId = metadata[MULTIPART_UPLOAD_METADATA_KEY];
+        if (typeof multipartUploadId === 'string') {
+          // Abort is idempotent-ish: a completed upload's id is already
+          // removed from metadata, and aborting an unknown id throws, which
+          // allSettled tolerates without blocking the object delete below.
+          await this.env
+            .ARTIFACTS!.resumeMultipartUpload(
+              row.object_key,
+              multipartUploadId
+            )
+            .abort()
+            .catch(() => undefined);
+        }
+        return this.env.ARTIFACTS!.delete(row.object_key);
+      })
     );
     const deletedRows = rows.filter(
       (_row, index) => deletions[index]?.status === 'fulfilled'
@@ -2023,6 +2181,14 @@ export class D1R2PersistenceService implements PersistenceService {
     return deletedRows.length;
   }
 }
+
+/**
+ * Session-metadata key holding the R2 multipart upload id while parts are in
+ * flight. Written at multipart create, removed at complete, and read by the
+ * expired-session purge so an abandoned upload's R2 state is aborted rather
+ * than accumulating forever. Never surfaced on finalized artifacts.
+ */
+const MULTIPART_UPLOAD_METADATA_KEY = '__openzcadMultipartUploadId';
 
 function createUploadSessionRecord(
   request: CreateUploadSessionRequest
