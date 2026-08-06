@@ -96,7 +96,14 @@ function FormShell({
           title="Enter"
         >
           {submitLabel}
-          <kbd className="kbd-inline">↵</kbd>
+          {/*
+            Decoration, not part of the name. Without this the button announced
+            itself as "Create ↵"; the hint stays visible and `title` already
+            carries it for anyone reading the tooltip.
+          */}
+          <kbd className="kbd-inline" aria-hidden="true">
+            ↵
+          </kbd>
         </button>
         {onCancel && (
           <button type="button" className="secondary" onClick={onCancel}>
