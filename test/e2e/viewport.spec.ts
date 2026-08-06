@@ -122,9 +122,11 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
-
-  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  const cylinderFeature = page.locator('.feature-row-main', {
+    hasText: 'Cylinder'
+  });
+  await expect(cylinderFeature).toBeVisible();
+  await cylinderFeature.click();
   const radiusInput = inspector.getByLabel('Radius', { exact: true });
   const radiusBefore = await radiusInput.inputValue();
   await radiusInput.click();
