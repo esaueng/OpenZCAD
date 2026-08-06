@@ -173,6 +173,7 @@ import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
+import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
@@ -290,6 +291,11 @@ const LazyViewerShell = lazy(() =>
     default: module.ViewerShell
   }))
 );
+const LazyViewModeBar = lazy(() =>
+  import('./components/ViewModeBar').then((module) => ({
+    default: module.ViewModeBar
+  }))
+);
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -311,6 +317,14 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
       }
     >
       <LazyViewerShell {...props} />
+    </Suspense>
+  );
+}
+
+function ViewModeBar(props: ComponentProps<typeof LazyViewModeBar>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyViewModeBar {...props} />
     </Suspense>
   );
 }
@@ -418,7 +432,8 @@ import {
   savePanelState,
   toggleSidebarSection,
   type PanelState,
-  type SidebarSectionId
+  type SidebarSectionId,
+  type WorkspaceMode
 } from './lib/panelState';
 import {
   loadSettingsViewState,
@@ -760,6 +775,9 @@ export function App() {
   const assistantCollapsed = panelState.assistantCollapsed;
   const setAssistantCollapsed = useCallback((collapsed: boolean) => {
     setPanelState((current) => ({ ...current, assistantCollapsed: collapsed }));
+  }, []);
+  const setWorkspaceMode = useCallback((mode: WorkspaceMode) => {
+    setPanelState((current) => ({ ...current, workspaceMode: mode }));
   }, []);
   const workspaceRef = useRef<HTMLElement | null>(null);
   // Panel widths are capped against the window, so a narrower window has to
@@ -1278,25 +1296,42 @@ export function App() {
     session &&
     doc.ownerUserId !== session.userId
   );
+  // A read-only share has no build workspace to offer, so the mode switch is
+  // pinned to View rather than presenting a Build mode that refuses every edit.
+  const buildModeDisabledReason =
+    !sharedProjectDisabled &&
+    cloudAvailable &&
+    session &&
+    projectSharingEnabled &&
+    (collaboration.role === 'viewer' || collaboration.status === 'read-only')
+      ? 'This shared project is read-only'
+      : null;
+  const viewMode =
+    panelState.workspaceMode === 'view' || buildModeDisabledReason !== null;
+  // View mode joins the same guard every other read-only condition uses, so a
+  // keyboard shortcut or a command that slips past the hidden UI is refused at
+  // the same choke point rather than needing its own check.
   const editDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
-    : sharedProjectDisabled
-      ? 'Project sharing is disabled in Settings'
-      : !cloudAvailable || !session || !projectSharingEnabled
-        ? null
-        : collaboration.conflict
-          ? 'Resolve the collaboration conflict before editing'
-          : collaboration.role === 'viewer' ||
-              collaboration.status === 'read-only'
-            ? 'This shared project is read-only'
-            : collaboration.role === null
-              ? 'Waiting for project access'
-              : collaborationRollout.editLeasesEnforced &&
-                  !activeCollaborationLease
-                ? collaboration.status === 'lease-denied'
-                  ? 'Another collaborator holds the edit lease'
-                  : 'Waiting for the project edit lease'
-                : null;
+    : viewMode
+      ? 'View mode is read-only — switch to Build to edit'
+      : sharedProjectDisabled
+        ? 'Project sharing is disabled in Settings'
+        : !cloudAvailable || !session || !projectSharingEnabled
+          ? null
+          : collaboration.conflict
+            ? 'Resolve the collaboration conflict before editing'
+            : collaboration.role === 'viewer' ||
+                collaboration.status === 'read-only'
+              ? 'This shared project is read-only'
+              : collaboration.role === null
+                ? 'Waiting for project access'
+                : collaborationRollout.editLeasesEnforced &&
+                    !activeCollaborationLease
+                  ? collaboration.status === 'lease-denied'
+                    ? 'Another collaborator holds the edit lease'
+                    : 'Waiting for the project edit lease'
+                  : null;
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     if (!editDisabledReason) {
@@ -2147,6 +2182,23 @@ export function App() {
           : []
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
     [doc, previewDoc, renderedRepresentations, hiddenBodyIds]
+  );
+
+  /**
+   * Every body the model ends up with, hidden ones included — `viewerBodies`
+   * drops those, and a parts list that loses a row when you hide it is a list
+   * you cannot unhide from. Consumed bodies stay out: they are boolean
+   * scaffolding, not parts.
+   */
+  const partBodies = useMemo<BodyRepresentation[]>(
+    () =>
+      (previewDoc
+        ? Object.values(renderedRepresentations)
+        : doc
+          ? Object.values(doc.derived.bodyRepresentations)
+          : []
+      ).filter((body) => !body.consumed),
+    [doc, previewDoc, renderedRepresentations]
   );
 
   const directEditableBodyIds = useMemo<string[]>(
@@ -3042,6 +3094,29 @@ export function App() {
   }
 
   /**
+   * Switches workspaces. Leaving Build tears down whatever gesture was in
+   * flight first: a sketch or an extrude preview whose panel is about to be
+   * unmounted would otherwise keep owning the pointer with nothing on screen
+   * to cancel it from.
+   */
+  function handleWorkspaceMode(mode: WorkspaceMode) {
+    if (mode === 'view') {
+      cancelDirectManipulationRef.current?.();
+      cylinderRadiusPreview.clear();
+      cylinderRadiusInspectorSetterRef.current?.(null);
+      edgePreview.clear();
+      setKeypad(null);
+      dispatchInteraction({ type: 'clear' });
+      cancelPanel();
+      setStatus('View mode · the model is read-only here.');
+    } else {
+      setManualSelectionFilter(null);
+      setStatus('Build mode · modeling tools are back.');
+    }
+    setWorkspaceMode(mode);
+  }
+
+  /**
    * Commits a sketch drag: the world translation projects onto the sketch
    * plane's axes, becoming an in-plane object translation plus — for a
    * canonical-plane sketch — a plane-offset change. A face-attached sketch
@@ -3250,6 +3325,25 @@ export function App() {
   function showAllBodies() {
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
+  }
+
+  /**
+   * Hides every part except one. Running it again on the part already alone on
+   * screen brings the rest back, so the same control both enters and leaves the
+   * isolated view rather than stranding someone with everything hidden.
+   */
+  function isolateBody(bodyId: string) {
+    const others = partBodies.filter((body) => body.bodyId !== bodyId);
+    const alreadyAlone = others.every((body) => hiddenBodyIds.has(body.bodyId));
+    if (alreadyAlone) {
+      showAllBodies();
+      return;
+    }
+    setHiddenBodyIds(new Set(others.map((body) => body.bodyId)));
+    const name = partBodies.find((body) => body.bodyId === bodyId)?.name;
+    setStatus(
+      `Showing ${name ?? 'one body'} only · ${others.length} hidden. Isolate again to show all.`
+    );
   }
 
   function handleAppSettingsChange(next: AppSettings) {
@@ -7016,7 +7110,10 @@ export function App() {
     if (!doc) {
       return;
     }
-    if (!selection) {
+    // View mode gets the viewport menu whatever was clicked: the selection
+    // menu is entirely modeling actions, and an empty one would be worse than
+    // the viewport controls someone reading a model actually wants.
+    if (!selection || viewMode) {
       openContextMenu(
         x,
         y,
@@ -7245,6 +7342,16 @@ export function App() {
         return;
       }
 
+      if (meta && event.shiftKey && event.key.toLowerCase() === 'm') {
+        event.preventDefault();
+        if (viewMode && buildModeDisabledReason) {
+          setStatus(`Build mode unavailable: ${buildModeDisabledReason}.`);
+        } else {
+          handleWorkspaceMode(viewMode ? 'build' : 'view');
+        }
+        return;
+      }
+
       if (!doc) {
         return;
       }
@@ -7296,6 +7403,14 @@ export function App() {
         }
       }
 
+      const historyKey =
+        meta &&
+        (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y');
+      if (historyKey && viewMode) {
+        event.preventDefault();
+        ensureCanEdit('undo or redo');
+        return;
+      }
       if (meta && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         if (event.shiftKey) {
@@ -7407,6 +7522,9 @@ export function App() {
           return;
         case 'Delete':
         case 'Backspace':
+          if (viewMode) {
+            return;
+          }
           if (selectedFeature) {
             event.preventDefault();
             handleDeleteFeature(
@@ -7468,6 +7586,11 @@ export function App() {
         return;
       }
       const shortcutTool = SHORTCUT_TO_TOOL[key];
+      if (shortcutTool && viewMode) {
+        event.preventDefault();
+        ensureCanEdit(`use ${TOOL_META[shortcutTool].label}`);
+        return;
+      }
       if (shortcutTool) {
         // Without this the same keystroke would type into the form field
         // that the tool dialog autofocuses.
@@ -7663,20 +7786,24 @@ export function App() {
                       : 'Ctrl+K commands · ? shortcuts');
 
   const paletteCommands: PaletteCommand[] = [
-    ...TOOL_GROUPS.flatMap((group) =>
-      group.tools.map((toolId): PaletteCommand => {
-        const meta = TOOL_META[toolId];
-        return {
-          id: `tool-${toolId}`,
-          label: meta.label,
-          group: group.label,
-          shortcut: meta.shortcut,
-          icon: meta.icon,
-          disabledReason: toolDisabledReason(toolId, availability),
-          run: () => launchTool(toolId)
-        };
-      })
-    ),
+    // Modeling tools leave the palette entirely in View mode rather than
+    // appearing greyed out: a list of things you cannot do is not a menu.
+    ...(viewMode
+      ? []
+      : TOOL_GROUPS.flatMap((group) =>
+          group.tools.map((toolId): PaletteCommand => {
+            const meta = TOOL_META[toolId];
+            return {
+              id: `tool-${toolId}`,
+              label: meta.label,
+              group: group.label,
+              shortcut: meta.shortcut,
+              icon: meta.icon,
+              disabledReason: toolDisabledReason(toolId, availability),
+              run: () => launchTool(toolId)
+            };
+          })
+        )),
     {
       id: 'view-front',
       label: 'Front view',
@@ -7806,6 +7933,19 @@ export function App() {
       run: () => void handleGoHome()
     },
     {
+      id: 'workspace-mode',
+      label: viewMode ? 'Switch to Build mode' : 'Switch to View mode',
+      group: 'General',
+      shortcut: 'Ctrl+Shift+M',
+      icon: viewMode ? (
+        <PenLine size={16} aria-hidden="true" />
+      ) : (
+        <Eye size={16} aria-hidden="true" />
+      ),
+      disabledReason: viewMode ? buildModeDisabledReason : null,
+      run: () => handleWorkspaceMode(viewMode ? 'build' : 'view')
+    },
+    {
       id: 'app-settings',
       label: 'Open settings',
       group: 'General',
@@ -7825,7 +7965,7 @@ export function App() {
   // owns the conversation and the in-flight request, so unmounting to enter a
   // sketch would throw both away.
   const assistantAvailable =
-    cloudFunctionsEnabled && appSettings.assistant.enabled;
+    cloudFunctionsEnabled && appSettings.assistant.enabled && !viewMode;
   const assistantHidden = directMode;
   const baseToolCard = toolCardFor(interaction);
   const editingSketchName =
@@ -7839,7 +7979,7 @@ export function App() {
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
   const inspectorActive =
-    !directMode && (tool !== null || selectedFeature !== null);
+    !viewMode && !directMode && (tool !== null || selectedFeature !== null);
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' || tool === 'shell' || tool === 'solid-offset'
       ? tool
@@ -8020,6 +8160,9 @@ export function App() {
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
+          workspaceMode={viewMode ? 'view' : 'build'}
+          buildModeDisabledReason={buildModeDisabledReason}
+          onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
@@ -8035,7 +8178,26 @@ export function App() {
         />
       }
       toolBar={
-        tool === 'sketch' ? (
+        viewMode ? (
+          <ViewModeBar
+            settings={viewerSettings}
+            projection={projection}
+            measuring={manualSelectionFilter === 'edge'}
+            onMeasure={(measuring) =>
+              setManualSelectionFilter(measuring ? 'edge' : null)
+            }
+            onFit={() => setFitSignal((value) => value + 1)}
+            onToggleGrid={() =>
+              setViewerSettings((current) => ({
+                ...current,
+                showGrid: !current.showGrid
+              }))
+            }
+            onView={requestView}
+            onCycleDisplayMode={cycleDisplayMode}
+            onToggleProjection={toggleProjection}
+          />
+        ) : tool === 'sketch' ? (
           <div className="direct-mode-strip">
             <PenLine size={16} aria-hidden="true" />
             <strong>Editing Sketch: {editingSketchName}</strong>
@@ -8065,34 +8227,38 @@ export function App() {
         )
       }
       sidebar={
-        <Sidebar
-          parameters={parameters}
-          parameterValues={parameterScope.scope}
-          features={features}
-          representations={representations}
-          selectedFeatureNodeId={selectedFeatureNodeId}
-          hiddenBodyIds={hiddenBodyIds}
-          warnings={warnings}
-          checkpoints={doc?.checkpoints ?? []}
-          onSelectFeature={handleSelectFeatureFromTree}
-          onSelectBody={handleSelectBodyFromTree}
-          selectedBodyIds={selectedBodyIds}
-          onToggleBodyVisibility={toggleBodyVisibility}
-          onFeatureContextMenu={handleFeatureContextMenu}
-          onToggleFeatureSuppression={handleToggleFeatureSuppression}
-          onRollbackAfterFeature={handleRollbackAfterFeature}
-          onSetParameter={(name, expression) =>
-            executeCommand(commandFactories.setParameter({ name, expression }))
-          }
-          onDeleteParameter={(name) =>
-            executeCommand(commandFactories.deleteParameter({ name }))
-          }
-          onDeleteFeature={handleDeleteFeature}
-          panelState={panelState}
-          onToggleSection={(id: SidebarSectionId) =>
-            setPanelState((current) => toggleSidebarSection(current, id))
-          }
-        />
+        viewMode ? null : (
+          <Sidebar
+            parameters={parameters}
+            parameterValues={parameterScope.scope}
+            features={features}
+            representations={representations}
+            selectedFeatureNodeId={selectedFeatureNodeId}
+            hiddenBodyIds={hiddenBodyIds}
+            warnings={warnings}
+            checkpoints={doc?.checkpoints ?? []}
+            onSelectFeature={handleSelectFeatureFromTree}
+            onSelectBody={handleSelectBodyFromTree}
+            selectedBodyIds={selectedBodyIds}
+            onToggleBodyVisibility={toggleBodyVisibility}
+            onFeatureContextMenu={handleFeatureContextMenu}
+            onToggleFeatureSuppression={handleToggleFeatureSuppression}
+            onRollbackAfterFeature={handleRollbackAfterFeature}
+            onSetParameter={(name, expression) =>
+              executeCommand(
+                commandFactories.setParameter({ name, expression })
+              )
+            }
+            onDeleteParameter={(name) =>
+              executeCommand(commandFactories.deleteParameter({ name }))
+            }
+            onDeleteFeature={handleDeleteFeature}
+            panelState={panelState}
+            onToggleSection={(id: SidebarSectionId) =>
+              setPanelState((current) => toggleSidebarSection(current, id))
+            }
+          />
+        )
       }
       viewer={
         <ErrorBoundary
@@ -8116,16 +8282,21 @@ export function App() {
             normalToFaceRequest={normalToFaceRequest}
             rotateRequest={rotateRequest}
             units={doc.units}
-            editableBodyIds={directEditableBodyIds}
+            // Every drag handle below is disarmed by passing nothing to arm:
+            // the viewer only builds a manipulator when it is given a target,
+            // so view mode keeps orbit, pan and picking while no gesture can
+            // reach the document.
+            editableBodyIds={viewMode ? [] : directEditableBodyIds}
             extrudePreview={extrudePreview}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
+            viewMode={viewMode}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
-            canUndo={managerRef.current?.canUndo ?? false}
-            canRedo={managerRef.current?.canRedo ?? false}
+            canUndo={!viewMode && (managerRef.current?.canUndo ?? false)}
+            canRedo={!viewMode && (managerRef.current?.canRedo ?? false)}
             onUndo={handleUndo}
             onRedo={handleRedo}
             initialView={initialView}
@@ -8136,18 +8307,18 @@ export function App() {
                 current ? { ...current, translation, rotationDeg } : current
               );
             }}
-            offsetHandle={offsetHandleTarget}
+            offsetHandle={viewMode ? null : offsetHandleTarget}
             onOffsetCommit={handleOffsetCommit}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
             keypadAnchorRef={keypadAnchorRef}
             offsetSetterRef={offsetSetterRef}
-            cylinderRadiusHandle={cylinderRadiusHandleTarget}
+            cylinderRadiusHandle={viewMode ? null : cylinderRadiusHandleTarget}
             onCylinderRadiusPreview={handleCylinderRadiusPreview}
             onCylinderRadiusCommit={handleCylinderRadiusCommit}
             onCylinderRadiusCancel={handleCylinderRadiusCancel}
             onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
             cancelDirectManipulationRef={cancelDirectManipulationRef}
-            edgeHandle={edgeHandleTarget}
+            edgeHandle={viewMode ? null : edgeHandleTarget}
             onEdgeRadiusPreview={(size) => edgePreview.request(size)}
             onEdgeCommit={handleEdgeCommit}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
@@ -8156,7 +8327,7 @@ export function App() {
                 type: dragging ? 'drag-engage' : 'drag-release'
               })
             }
-            sketchMode={sketchModeState}
+            sketchMode={viewMode ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
@@ -8171,9 +8342,26 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
-            regionHandle={regionHandleTarget}
+            regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
-              contextualToolCard ? (
+              viewMode ? (
+                <ViewModeRail
+                  bodies={partBodies}
+                  hiddenBodyIds={hiddenBodyIds}
+                  selectedBodyIds={selectedBodyIds}
+                  open={panelState.viewModeRailOpen}
+                  onOpenChange={(viewModeRailOpen) =>
+                    setPanelState((current) => ({
+                      ...current,
+                      viewModeRailOpen
+                    }))
+                  }
+                  onSelectBody={handleSelectBodyFromTree}
+                  onToggleVisibility={toggleBodyVisibility}
+                  onIsolate={isolateBody}
+                  onShowAll={showAllBodies}
+                />
+              ) : contextualToolCard ? (
                 <>
                   <ToolCard
                     model={contextualToolCard}
