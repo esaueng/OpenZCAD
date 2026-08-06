@@ -205,9 +205,7 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
     'readwrite',
     (store) => store.delete(projectId),
     SYNC_STORE_NAME
-  )
-    .then(() => undefined)
-    .catch(() => undefined);
+  ).then(() => undefined);
 }
 
 /**
@@ -215,25 +213,50 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
  * account on this device never reconciles against the previous one's history:
  * an unknown baseline is safe (reconciliation reports instead of assuming
  * agreement), a stale one can silently overwrite the newer side.
+ *
+ * Rejects rather than resolving quietly when the clear fails. A caller that
+ * cannot tell a cleared baseline from a surviving one has no way to warn about
+ * the reconciliation that surviving baseline will later distort.
  */
 export function clearAllLastSyncedVersions(): Promise<void> {
-  return transaction('readwrite', (store) => store.clear(), SYNC_STORE_NAME)
-    .then(() => undefined)
-    .catch(() => undefined);
+  return transaction(
+    'readwrite',
+    (store) => store.clear(),
+    SYNC_STORE_NAME
+  ).then(() => undefined);
 }
 
-/** Destroys a project's document, its shelf state, and its sync baseline. */
+/**
+ * Destroys a project's document, its shelf state, and its sync baseline in a
+ * single transaction.
+ *
+ * Split across three, a crash between them can leave a baseline behind that
+ * describes a document this device no longer holds. Should that project id
+ * come back — re-adoption, or a fresh download of the account copy — the
+ * surviving baseline is consumed as agreement about a lineage that ended, and
+ * reconciliation picks a side instead of reporting the divergence.
+ */
 export function deleteLocalProject(projectId: string): Promise<void> {
-  return transaction('readwrite', (store) => store.delete(projectId))
-    .then(() =>
-      transaction(
-        'readwrite',
-        (store) => store.delete(projectId),
-        META_STORE_NAME
-      )
-    )
-    .then(() => clearLastSyncedVersion(projectId))
-    .then(() => undefined);
+  const storeNames = [STORE_NAME, META_STORE_NAME, SYNC_STORE_NAME];
+  return openDatabase().then(
+    (database) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = database.transaction(storeNames, 'readwrite');
+        for (const storeName of storeNames) {
+          tx.objectStore(storeName).delete(projectId);
+        }
+        tx.oncomplete = () => {
+          database.close();
+          resolve();
+        };
+        const fail = () => {
+          database.close();
+          reject(tx.error ?? new Error('Local project storage failed.'));
+        };
+        tx.onerror = fail;
+        tx.onabort = fail;
+      })
+  );
 }
 
 export async function listLocalProjects(): Promise<ProjectSummary[]> {
