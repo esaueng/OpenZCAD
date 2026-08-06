@@ -210,8 +210,6 @@ import {
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
 import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
-import { SketchToolRail } from './components/SketchToolRail';
-import { SketchEntityEditor } from './components/SketchEntityEditor';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
@@ -229,7 +227,8 @@ import {
 import type {
   BodyAppearancePreview,
   ExtrudePreview,
-  FaceResizeCommit
+  FaceResizeCommit,
+  NormalToFaceRequest
 } from './components/ModelViewer';
 import type {
   SelectionFilter,
@@ -241,9 +240,49 @@ import type {
 } from '@openzcad/viewport/types';
 import type { MovePreview, MoveSnap } from '@openzcad/viewport';
 
+/**
+ * Space activates focused buttons and belongs in free-text fields. Numeric and
+ * expression controls do not require spaces, though, and feature inspectors
+ * can leave one focused after the user clicks a face in the viewport; let the
+ * face shortcut through in that specific case without touching its value.
+ */
+function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
+  if (!target) {
+    return false;
+  }
+  if (target instanceof HTMLInputElement) {
+    return (
+      target.type !== 'number' &&
+      target.type !== 'range' &&
+      !target.closest('.expr-field')
+    );
+  }
+  if (
+    target.closest(
+      'button, a, [role="button"], [role="tab"], [contenteditable="true"]'
+    )
+  ) {
+    return true;
+  }
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+    return true;
+  }
+  return false;
+}
+
 const LazyViewerShell = lazy(() =>
   import('./components/ViewerShell').then((module) => ({
     default: module.ViewerShell
+  }))
+);
+const LazySketchToolRail = lazy(() =>
+  import('./components/SketchToolRail').then((module) => ({
+    default: module.SketchToolRail
+  }))
+);
+const LazySketchEntityEditor = lazy(() =>
+  import('./components/SketchEntityEditor').then((module) => ({
+    default: module.SketchEntityEditor
   }))
 );
 
@@ -257,6 +296,24 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
       }
     >
       <LazyViewerShell {...props} />
+    </Suspense>
+  );
+}
+
+function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function SketchEntityEditor(
+  props: ComponentProps<typeof LazySketchEntityEditor>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchEntityEditor {...props} />
     </Suspense>
   );
 }
@@ -833,6 +890,8 @@ export function App() {
     view: ViewTarget;
     nonce: number;
   } | null>(null);
+  const [normalToFaceRequest, setNormalToFaceRequest] =
+    useState<NormalToFaceRequest | null>(null);
   const [rotateRequest, setRotateRequest] = useState<{
     direction: 'cw' | 'ccw';
     nonce: number;
@@ -1065,18 +1124,21 @@ export function App() {
     onStatus: setStatus
   });
 
+  const projectSharingPreferenceEnabled = appSettings.collaboration.enabled;
+  const projectSharingEnabled =
+    projectSharingPreferenceEnabled && collaborationRollout.sharingEnabled;
+  const liveCollaborationEnabled =
+    projectSharingPreferenceEnabled &&
+    (collaborationRollout.sharingEnabled ||
+      collaborationRollout.personalSyncEnabled);
+
   const collaboration = useCollaboration({
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
-    session:
-      cloudAvailable &&
-      (collaborationRollout.sharingEnabled ||
-        collaborationRollout.personalSyncEnabled)
-        ? session
-        : null,
+    session: cloudAvailable && liveCollaborationEnabled ? session : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -1117,7 +1179,7 @@ export function App() {
         rememberProject: false
       });
       setStatus(
-        collaborationRollout.sharingEnabled
+        projectSharingEnabled
           ? `Applied live revision ${remoteDocument.version} from a collaborator.`
           : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
@@ -1134,8 +1196,15 @@ export function App() {
     collaboration.lease.projectId === doc?.projectId &&
     collaboration.lease.expiresAt > Date.now()
   );
-  const editDisabledReason =
-    !cloudAvailable || !session || !collaborationRollout.sharingEnabled
+  const sharedProjectDisabled = Boolean(
+    !projectSharingPreferenceEnabled &&
+    doc &&
+    session &&
+    doc.ownerUserId !== session.userId
+  );
+  const editDisabledReason = sharedProjectDisabled
+    ? 'Project sharing is disabled in Settings'
+    : !cloudAvailable || !session || !projectSharingEnabled
       ? null
       : collaboration.conflict
         ? 'Resolve the collaboration conflict before editing'
@@ -1883,6 +1952,43 @@ export function App() {
         }
       : selectedTopology;
   }, [interaction, renderedRepresentations, selectedTopology]);
+  const normalToFaceTarget = useMemo(() => {
+    const selection = renderedSelectedTopology;
+    if (selection?.kind !== 'face' || !selection.topologyId) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    const face = body?.topology?.faces.find(
+      (candidate) =>
+        candidate.topologyId === selection.topologyId ||
+        (selection.hash !== undefined && candidate.hash === selection.hash)
+    );
+    const geometry = face?.geometry;
+    if (
+      !body ||
+      !face ||
+      face.triangleCount <= 0 ||
+      geometry?.surfaceType !== 'plane' ||
+      !geometry.normal ||
+      ![
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z,
+        geometry.normal.x,
+        geometry.normal.y,
+        geometry.normal.z
+      ].every(Number.isFinite) ||
+      Math.hypot(geometry.normal.x, geometry.normal.y, geometry.normal.z) <
+        1e-12
+    ) {
+      return null;
+    }
+    return {
+      bodyId: body.bodyId,
+      topologyId: face.topologyId,
+      label: faceLabel(body, face.hash, face.topologyId)
+    };
+  }, [renderedRepresentations, renderedSelectedTopology]);
   // Warnings must describe what is actually on screen. While a preview is up the
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
@@ -2842,6 +2948,19 @@ export function App() {
 
   function requestView(view: ViewTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
+  }
+
+  function requestNormalToSelectedFace() {
+    if (!normalToFaceTarget) {
+      setStatus('Normal view requires an exact planar face selection.');
+      return;
+    }
+    setNormalToFaceRequest({
+      bodyId: normalToFaceTarget.bodyId,
+      topologyId: normalToFaceTarget.topologyId,
+      nonce: ++viewNonceRef.current
+    });
+    setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
   function requestRotate(direction: 'cw' | 'ccw') {
@@ -3819,7 +3938,7 @@ export function App() {
   }
 
   async function handleAcceptProjectInvitation(token: string) {
-    if (!session || !collaborationRollout.sharingEnabled) {
+    if (!session || !projectSharingEnabled) {
       throw new Error('Project sharing is not enabled for this account.');
     }
     setBusy(true);
@@ -5017,14 +5136,34 @@ export function App() {
           ? [{ id: objectId, data: node.data }]
           : [];
       }) ?? [];
+    const resolve = (value: unknown): number =>
+      evalParamValue(value as ParamValue, parameterScope.scope) ?? 0;
+    let profiles: {
+      outer: { x: number; y: number }[];
+      holes: { x: number; y: number }[][];
+    }[] = [];
+    try {
+      profiles = computeSketchRegions(objects, resolve).map((profile) => ({
+        outer: profile.outer.polyline,
+        holes: profile.holes.map((hole) => hole.polyline)
+      }));
+    } catch {
+      // An unresolved parameter must not make the sketch session disappear.
+    }
     return {
       basis: sketchBasis,
       tool: session.tool,
+      circleMode: session.circleMode,
       snapStep: appSettings.sketching.snapEnabled
         ? appSettings.sketching.linearSnap
         : null,
+      gridVisible: appSettings.sketching.gridVisible,
+      geometrySnapEnabled: appSettings.sketching.geometrySnapEnabled,
+      inferenceEnabled: appSettings.sketching.inferenceEnabled,
+      snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
+      profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       diagnosticPoints: sketchDiagnosticPoints
@@ -6549,6 +6688,12 @@ export function App() {
     }
   }, [appSettings.assistant.enabled]);
 
+  useEffect(() => {
+    if (!projectSharingPreferenceEnabled) {
+      setSharingOpen(false);
+    }
+  }, [projectSharingPreferenceEnabled]);
+
   /**
    * Whether the workspace still owns the keyboard. A surface layered over it
    * takes the keys with it: Settings sits on top of a live document, so
@@ -6644,6 +6789,27 @@ export function App() {
       if (meta && event.key.toLowerCase() === 's') {
         event.preventDefault();
         void handleSave();
+        return;
+      }
+
+      const normalViewSpace =
+        (event.code === 'Space' || event.key === ' ') &&
+        !event.repeat &&
+        !meta &&
+        !event.altKey &&
+        !event.shiftKey;
+      const stableFaceSelection =
+        renderedSelectedTopology?.kind === 'face' &&
+        (interaction.mode === 'idle' ||
+          (interaction.mode === 'face' && interaction.phase === 'armed'));
+      if (
+        normalViewSpace &&
+        tool === null &&
+        stableFaceSelection &&
+        !focusedControlOwnsSpace(target)
+      ) {
+        event.preventDefault();
+        requestNormalToSelectedFace();
         return;
       }
 
@@ -6878,7 +7044,7 @@ export function App() {
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
-          collaborationSharingEnabled={collaborationRollout.sharingEnabled}
+          collaborationSharingEnabled={projectSharingEnabled}
           onAcceptInvitation={handleAcceptProjectInvitation}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
@@ -6954,13 +7120,15 @@ export function App() {
             ? 'Enter creates · Esc cancels'
             : selectedBodyIds.length >= 2
               ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
-              : selectedTopology?.kind === 'edge'
-                ? 'Edge selected — Fillet or Chamfer from the toolbar'
-                : selectedFeature
-                  ? 'Edit in the panel · Del deletes · Esc closes'
-                  : viewerBodies.length > 0
-                    ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                    : 'Ctrl+K commands · ? shortcuts');
+              : selectedTopology?.kind === 'face'
+                ? 'Face selected — Space faces it head-on'
+                : selectedTopology?.kind === 'edge'
+                  ? 'Edge selected — Fillet or Chamfer from the toolbar'
+                  : selectedFeature
+                    ? 'Edit in the panel · Del deletes · Esc closes'
+                    : viewerBodies.length > 0
+                      ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                      : 'Ctrl+K commands · ? shortcuts');
 
   const paletteCommands: PaletteCommand[] = [
     ...TOOL_GROUPS.flatMap((group) =>
@@ -7016,6 +7184,20 @@ export function App() {
       shortcut: 'F',
       icon: <Maximize2 size={16} aria-hidden="true" />,
       run: () => setFitSignal((value) => value + 1)
+    },
+    {
+      id: 'view-normal-to-face',
+      label: 'Normal to selected face',
+      group: 'View',
+      shortcut: 'Space',
+      icon: <Monitor size={16} aria-hidden="true" />,
+      disabledReason:
+        renderedSelectedTopology?.kind !== 'face'
+          ? 'Select a planar face first'
+          : normalToFaceTarget
+            ? null
+            : 'The selected face is not an exact plane',
+      run: requestNormalToSelectedFace
     },
     {
       id: 'view-grid',
@@ -7280,8 +7462,6 @@ export function App() {
         <TopBar
           projectName={doc.name}
           units={doc.units}
-          canUndo={managerRef.current?.canUndo ?? false}
-          canRedo={managerRef.current?.canRedo ?? false}
           canExport={exportBodyIds.length > 0}
           exportScope={
             selectedBody &&
@@ -7293,10 +7473,18 @@ export function App() {
           saveState={saveState}
           artifacts={artifacts}
           session={session}
+          accountState={
+            session
+              ? 'signed-in'
+              : authConfigStatus === 'loading'
+                ? 'checking'
+                : authConfigStatus === 'ready'
+                  ? 'signed-out'
+                  : 'unavailable'
+          }
           collaborationStatus={collaboration.status}
           collaboratorCount={collaboration.members.length}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
+          projectSharingEnabled={projectSharingPreferenceEnabled}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
@@ -7390,6 +7578,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             viewRequest={viewRequest}
+            normalToFaceRequest={normalToFaceRequest}
             rotateRequest={rotateRequest}
             units={doc.units}
             editableBodyIds={directEditableBodyIds}
@@ -7400,6 +7589,10 @@ export function App() {
             hideViewerToolbar={false}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
+            canUndo={managerRef.current?.canUndo ?? false}
+            canRedo={managerRef.current?.canRedo ?? false}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
             initialView={initialView}
             onViewChange={handleViewportChange}
             onMovePreviewChange={(translation, rotationDeg, snap) => {
@@ -7472,14 +7665,28 @@ export function App() {
                   {interaction.mode === 'sketch' && (
                     <SketchToolRail
                       tool={interaction.session.tool}
+                      circleMode={interaction.session.circleMode}
                       construction={sketchConstruction}
+                      settings={appSettings.sketching}
+                      units={doc.units}
+                      paletteVisible={selectedSketchEntity === null}
                       onTool={(sketchTool) =>
                         dispatchInteraction({
                           type: 'sketch-tool',
                           tool: sketchTool
                         })
                       }
+                      onCircleMode={(mode) =>
+                        dispatchInteraction({
+                          type: 'sketch-circle-mode',
+                          mode
+                        })
+                      }
                       onConstruction={setSketchConstruction}
+                      onSettings={(sketching) => {
+                        const current = appSettingsRef.current;
+                        handleAppSettingsChange({ ...current, sketching });
+                      }}
                       onDiagnostics={showProfileDiagnostics}
                       onExtrude={() => {
                         if (interaction.session.sketchId) {
@@ -8188,7 +8395,7 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
-          {sharingOpen && doc && (
+          {sharingOpen && projectSharingPreferenceEnabled && doc && (
             <ProjectSharingDialog
               projectId={doc.projectId}
               role={collaboration.role}
