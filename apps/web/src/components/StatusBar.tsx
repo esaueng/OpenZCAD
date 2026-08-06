@@ -46,6 +46,10 @@ export function StatusBar({
   const logPanelId = useId();
   const [logOpen, setLogOpen] = useState(false);
   const statusButtonRef = useRef<HTMLButtonElement | null>(null);
+  const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
+  const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
+  const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
+  const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
   const closeLog = useCallback((restoreFocus: boolean) => {
     setLogOpen(false);
     if (restoreFocus) {
@@ -132,10 +136,11 @@ export function StatusBar({
             {documentVersion ?? '—'}
           </span>
           <span
-            title={`${projectName ?? 'Project'} · ${featureCount} features · ${bodyCount} bodies`}
+            title={workspaceSummary}
+            aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
           >
             <b>sync</b>
-            {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel}
+            {syncLabel}
           </span>
         </div>
       </footer>
