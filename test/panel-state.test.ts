@@ -106,6 +106,19 @@ describe('workspace panel state', () => {
     );
   });
 
+  it('remembers the parts rail across reloads', () => {
+    // Open to begin with; collapsing it is what leaves a single-body model the
+    // bare viewport, and that choice is a habit worth restoring.
+    expect(defaultPanelState().viewModeRailOpen).toBe(true);
+    expect(
+      savePanelState({ ...defaultPanelState(), viewModeRailOpen: false })
+    ).toBe(true);
+    expect(loadPanelState().viewModeRailOpen).toBe(false);
+    expect(
+      normalizePanelState({ viewModeRailOpen: 'no' }).viewModeRailOpen
+    ).toBe(true);
+  });
+
   it('ignores unknown sections and wrong types', () => {
     const normalized = normalizePanelState({
       toolPaletteOpen: 'yes',

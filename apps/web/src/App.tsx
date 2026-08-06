@@ -169,6 +169,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { ViewModeBar } from './components/ViewModeBar';
+import { ViewModeRail } from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
@@ -2083,6 +2084,23 @@ export function App() {
     [doc, previewDoc, renderedRepresentations, hiddenBodyIds]
   );
 
+  /**
+   * Every body the model ends up with, hidden ones included — `viewerBodies`
+   * drops those, and a parts list that loses a row when you hide it is a list
+   * you cannot unhide from. Consumed bodies stay out: they are boolean
+   * scaffolding, not parts.
+   */
+  const partBodies = useMemo<BodyRepresentation[]>(
+    () =>
+      (previewDoc
+        ? Object.values(renderedRepresentations)
+        : doc
+          ? Object.values(doc.derived.bodyRepresentations)
+          : []
+      ).filter((body) => !body.consumed),
+    [doc, previewDoc, renderedRepresentations]
+  );
+
   const directEditableBodyIds = useMemo<string[]>(
     () =>
       previewDoc
@@ -3171,6 +3189,25 @@ export function App() {
   function showAllBodies() {
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
+  }
+
+  /**
+   * Hides every part except one. Running it again on the part already alone on
+   * screen brings the rest back, so the same control both enters and leaves the
+   * isolated view rather than stranding someone with everything hidden.
+   */
+  function isolateBody(bodyId: string) {
+    const others = partBodies.filter((body) => body.bodyId !== bodyId);
+    const alreadyAlone = others.every((body) => hiddenBodyIds.has(body.bodyId));
+    if (alreadyAlone) {
+      showAllBodies();
+      return;
+    }
+    setHiddenBodyIds(new Set(others.map((body) => body.bodyId)));
+    const name = partBodies.find((body) => body.bodyId === bodyId)?.name;
+    setStatus(
+      `Showing ${name ?? 'one body'} only · ${others.length} hidden. Isolate again to show all.`
+    );
   }
 
   function handleAppSettingsChange(next: AppSettings) {
@@ -8112,7 +8149,24 @@ export function App() {
             onHoverRegion={handleHoverRegion}
             regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
-              viewMode ? null : contextualToolCard ? (
+              viewMode ? (
+                <ViewModeRail
+                  bodies={partBodies}
+                  hiddenBodyIds={hiddenBodyIds}
+                  selectedBodyIds={selectedBodyIds}
+                  open={panelState.viewModeRailOpen}
+                  onOpenChange={(viewModeRailOpen) =>
+                    setPanelState((current) => ({
+                      ...current,
+                      viewModeRailOpen
+                    }))
+                  }
+                  onSelectBody={handleSelectBodyFromTree}
+                  onToggleVisibility={toggleBodyVisibility}
+                  onIsolate={isolateBody}
+                  onShowAll={showAllBodies}
+                />
+              ) : contextualToolCard ? (
                 <>
                   <ToolCard
                     model={contextualToolCard}

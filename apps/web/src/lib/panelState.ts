@@ -47,6 +47,12 @@ export interface PanelState {
    */
   workspaceMode: WorkspaceMode;
   /**
+   * View mode's parts rail. Open to begin with — a model worth viewing usually
+   * has more than one body — and collapsible to nothing for someone who just
+   * wants the model on screen.
+   */
+  viewModeRailOpen: boolean;
+  /**
    * The assistant dock, collapsed to its launcher. Remembered because it is a
    * working habit — someone who models without it should not have to close it
    * again on every reload — and because collapsing gives its column back to the
@@ -68,6 +74,7 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   },
   toolPaletteOpen: true,
   workspaceMode: 'build',
+  viewModeRailOpen: true,
   assistantCollapsed: true
 };
 
@@ -76,6 +83,7 @@ function copyDefaults(): PanelState {
     sidebarSections: { ...DEFAULT_PANEL_STATE.sidebarSections },
     toolPaletteOpen: DEFAULT_PANEL_STATE.toolPaletteOpen,
     workspaceMode: DEFAULT_PANEL_STATE.workspaceMode,
+    viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed
   };
 }
@@ -94,6 +102,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (root.workspaceMode === 'view' || root.workspaceMode === 'build') {
     state.workspaceMode = root.workspaceMode;
+  }
+  if (typeof root.viewModeRailOpen === 'boolean') {
+    state.viewModeRailOpen = root.viewModeRailOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {
