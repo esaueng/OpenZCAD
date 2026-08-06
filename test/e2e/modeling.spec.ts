@@ -1778,17 +1778,13 @@ test('preflights and applies the verified chamfered-shaft suggestion without an 
   await expect(
     page.locator('.feature-row', { hasText: 'Chamfered Shaft' })
   ).toBeVisible();
-  await expect(
-    page.getByRole('contentinfo').locator('[title*="1 bodies"]')
-  ).toBeVisible();
+  await expectBodyCount(page, 1);
   await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
     'Applied'
   );
 
   await page.getByRole('button', { name: 'Undo' }).click();
-  await expect(
-    page.getByRole('contentinfo').locator('[title*="0 bodies"]')
-  ).toBeVisible();
+  await expectBodyCount(page, 0);
   expect(consoleErrors).toEqual([]);
 });
 
