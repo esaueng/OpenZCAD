@@ -52,8 +52,15 @@
   background: var(--color-border);
 }
 
+/*
+  Sized to its content rather than greedy, so the mode switch after it can take
+  the middle of the bar instead of being pushed against the actions. The cap
+  stops a long project name from claiming that middle back; narrow screens hand
+  the growth back in responsive.css, where there is no middle left to hold.
+*/
 .breadcrumb {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  max-width: 40%;
   min-width: 0;
   display: inline-flex;
   align-items: center;

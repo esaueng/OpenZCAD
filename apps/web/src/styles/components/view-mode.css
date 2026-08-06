@@ -1,0 +1,206 @@
+/* ── View mode ──
+   The reading workspace: a top-bar mode switch, a viewport with no docked
+   panels, and one floating bar of view controls. Imported last in app.css so
+   these rules land after the layouts they subtract from. ── */
+
+/* ── Top bar: the mode switch ────────────────────────────── */
+
+/* Sits between the project name and the workspace actions, in the middle of
+   the bar — see `.breadcrumb` in topbar.css for how that space is cleared. */
+.mode-switch {
+  flex: 0 0 auto;
+  margin-inline: auto;
+  display: inline-flex;
+  padding: 2px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.mode-switch-option {
+  min-height: 24px;
+  padding: 0 14px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.mode-switch-option:hover:not(:disabled):not(.active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.mode-switch-option.active {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  box-shadow: inset 0 0 0 1px var(--color-accent-border);
+  font-weight: var(--fw-medium);
+}
+
+.mode-switch-option:disabled {
+  color: var(--color-text-subtle);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Workspace without a sidebar ─────────────────────────── */
+
+/*
+  Matches `.workspace.with-assistant`'s specificity so it survives the
+  narrow-screen rules in responsive.css, which reassert the sidebar column at
+  that weight. The column is zeroed as well as removed from the template so the
+  splitter offsets that read `--sidebar-col-w` collapse with it.
+*/
+.workspace.no-sidebar {
+  --sidebar-col-w: 0px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ── The floating view bar ───────────────────────────────── */
+
+/*
+  Reuses the tool palette's float, re-anchored bottom-center — the same move
+  `.palette-float:has(.direct-mode-strip)` makes for direct-mode strips.
+*/
+.palette-float:has(.view-mode-bar) {
+  top: auto;
+  left: 50%;
+  right: auto;
+  bottom: 10px;
+  transform: translateX(-50%);
+  align-items: flex-end;
+}
+
+.view-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.view-mode-button {
+  min-width: 30px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.view-mode-button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-button.active {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+}
+
+.view-mode-button.open {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-button.wide {
+  padding-inline: 10px;
+}
+
+.view-mode-divider {
+  width: 1px;
+  align-self: stretch;
+  margin-inline: 3px;
+  background: var(--color-border);
+}
+
+.view-mode-views-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Opens upward: the bar is at the bottom edge of the viewport. */
+.view-mode-views-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-viewer-overlay);
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.view-mode-views-panel button {
+  min-width: 66px;
+  min-height: 26px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.view-mode-views-panel button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-view-wide {
+  grid-column: 1 / -1;
+}
+
+/* The chip sits bottom-center too; lift it clear of the bar below it. */
+.viewer-shell.view-mode .selection-chip {
+  bottom: 52px;
+}
+
+@media (max-width: 620px) {
+  .mode-switch {
+    margin-inline: 0;
+  }
+
+  .mode-switch-option {
+    padding-inline: 9px;
+  }
+
+  /* The stacked narrow layout gives the sidebar a row; without one the
+     viewport takes the whole workspace. Matches the specificity of the
+     stacked rule in responsive.css, and follows it in the cascade. */
+  .workspace.no-sidebar,
+  .workspace.no-sidebar.with-assistant {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .palette-float:has(.view-mode-bar) {
+    bottom: 6px;
+  }
+}
