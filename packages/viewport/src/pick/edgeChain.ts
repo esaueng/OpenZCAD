@@ -1,4 +1,9 @@
-import type { EdgeCurve, EdgeTopology } from '@openzcad/shared';
+import type {
+  BodyId,
+  EdgeCurve,
+  EdgeTopology,
+  TopologySelection
+} from '@openzcad/shared';
 
 /**
  * Selecting a whole run of edges from one of them.
@@ -495,4 +500,34 @@ export function edgeRunFrom(
   }
   // Ordered along the run so a caller can draw or measure it in sequence.
   return [...backward.reverse(), seed.topologyId, ...forward];
+}
+
+/**
+ * The run from `seedTopologyId` as selections, carrying every identity an
+ * edge publishes: `topologyId` for this build, `hash` for persistence, and
+ * the v5 `reference` where the kernel proved one.
+ *
+ * The reference is not optional politeness. A closed edge's ADR-011 hash
+ * embeds its circumference, so a hash-only modifier fails closed on the
+ * first upstream parameter edit — and the create form persists references
+ * only when every selected edge has one, so a single edge dropped here
+ * silently downgrades the whole modifier to the fail-closed legacy path.
+ */
+export function edgeRunSelections(
+  edges: EdgeTopology[],
+  seedTopologyId: string,
+  bodyId: BodyId,
+  options: EdgeChainOptions = {}
+): TopologySelection[] {
+  const byId = new Map(edges.map((edge) => [edge.topologyId, edge]));
+  return edgeRunFrom(edges, seedTopologyId, options).map((topologyId) => {
+    const edge = byId.get(topologyId);
+    return {
+      bodyId,
+      kind: 'edge' as const,
+      topologyId,
+      hash: edge?.hash,
+      ...(edge?.reference ? { reference: edge.reference } : {})
+    };
+  });
 }
