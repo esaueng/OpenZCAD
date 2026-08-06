@@ -1266,6 +1266,32 @@ export interface FinalizeArtifactRequest {
   artifactId: ArtifactId;
 }
 
+/**
+ * Bodies larger than the single-PUT ceiling upload as fixed-size parts.
+ * 16 MiB stays under every Cloudflare plan's request-body cap and R2's
+ * equal-part-size rule; the last part may be smaller. R2's own floor for
+ * non-final parts is 5 MiB.
+ */
+export const ARTIFACT_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
+/** Server-side ceiling for one part body; parts above this are refused. */
+export const MAX_ARTIFACT_PART_BYTES = 32 * 1024 * 1024;
+/** Ceiling on parts per upload (with 16 MiB parts: 1 GiB). */
+export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
+
+export interface CreateMultipartUploadResponse {
+  uploadId: string;
+}
+
+export interface UploadedArtifactPart {
+  partNumber: number;
+  etag: string;
+}
+
+export interface CompleteMultipartUploadRequest {
+  uploadId: string;
+  parts: UploadedArtifactPart[];
+}
+
 /** @deprecated Use FinalizeArtifactRequest. */
 export type FinalizeImportRequest = FinalizeArtifactRequest;
 
