@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { EdgeTopology } from '@openzcad/shared';
-import { edgeRunFrom } from './edgeChain';
+import {
+  toBodyId,
+  toFeatureId,
+  type EdgeTopology,
+  type EdgeTopologyReferenceV5
+} from '@openzcad/shared';
+import { edgeRunFrom, edgeRunSelections } from './edgeChain';
 
 /** An edge from a polyline given as [x, y, z] points. */
 function edge(topologyId: string, points: number[][]): EdgeTopology {
@@ -232,6 +237,90 @@ describe('incidence by vertex identity', () => {
       withVertices(edge('right', [[20, 0, 0], [30, 0, 0]]), [2, 3])
     ];
     expect(edgeRunFrom(edges, 'left')).toEqual(['left', 'middle', 'right']);
+  });
+});
+
+describe('the run as selections', () => {
+  const bodyId = toBodyId('body-1');
+
+  function reference(lineageName: string): EdgeTopologyReferenceV5 {
+    return {
+      kind: 'edge',
+      producingFeatureId: toFeatureId('feature-1'),
+      lineageName,
+      currentHash: 0,
+      witnessVersion: 1,
+      witness: {
+        curveType: 'LINE',
+        length: 10,
+        closed: false,
+        endpoints: [
+          [0, 0, 0],
+          [10_000_000, 0, 0]
+        ],
+        midpoint: [5_000_000, 0, 0]
+      }
+    };
+  }
+
+  /** Three collinear edges, published the way a referenced body publishes
+   *  them: hash and v5 reference alongside the polyline. */
+  function referencedRun(): EdgeTopology[] {
+    return [
+      {
+        ...edge('left', [[0, 0, 0], [10, 0, 0]]),
+        hash: 11,
+        reference: reference('edge.left')
+      },
+      {
+        ...edge('middle', [[10, 0, 0], [20, 0, 0]]),
+        hash: 12,
+        reference: reference('edge.middle')
+      },
+      {
+        ...edge('right', [[20, 0, 0], [30, 0, 0]]),
+        hash: 13,
+        reference: reference('edge.right')
+      }
+    ];
+  }
+
+  it('carries hash and reference for every edge of the run', () => {
+    // The reference is what lets a chain-selected fillet or chamfer survive an
+    // upstream parameter edit: a closed edge's ADR-011 hash embeds its
+    // circumference, so persisting the run hash-only fails closed on the first
+    // radius change. This mapping once dropped `reference`, and the create
+    // form's all-or-nothing guard turned that into zero persisted references.
+    const run = referencedRun();
+    const selections = edgeRunSelections(run, 'middle', bodyId);
+    expect(selections.map((selection) => selection.topologyId)).toEqual([
+      'left',
+      'middle',
+      'right'
+    ]);
+    selections.forEach((selection, index) => {
+      expect(selection.bodyId).toBe(bodyId);
+      expect(selection.kind).toBe('edge');
+      expect(selection.hash).toBe(run[index]!.hash);
+      expect(selection.reference).toBe(run[index]!.reference);
+    });
+    // The exact guard the create form applies: references are persisted only
+    // when every selected edge carries one. A full run must pass it.
+    const references = selections.flatMap((selection) =>
+      selection.reference?.kind === 'edge' ? [selection.reference] : []
+    );
+    expect(references).toHaveLength(selections.length);
+  });
+
+  it('omits the reference key for an edge the kernel could not prove', () => {
+    const run = referencedRun();
+    delete run[1]!.reference;
+    const selections = edgeRunSelections(run, 'left', bodyId);
+    expect(selections.map((selection) => 'reference' in selection)).toEqual([
+      true,
+      false,
+      true
+    ]);
   });
 });
 
