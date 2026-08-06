@@ -182,6 +182,217 @@
   bottom: 52px;
 }
 
+/* ── The parts rail ──────────────────────────────────────── */
+
+/*
+  Floats top-left over the viewport, where Build mode keeps its tool palette.
+  Capped short of the view bar so the two never meet on a short window; the
+  list scrolls inside that cap rather than the rail growing past it.
+*/
+.view-mode-rail {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: var(--z-viewer-overlay);
+  width: 208px;
+  max-height: calc(100% - 68px);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.view-mode-rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 7px 6px 7px 10px;
+  border-bottom: var(--border-thin);
+}
+
+.view-mode-rail-head h2 {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.view-mode-rail-count {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.view-mode-rail-collapse {
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.view-mode-rail-collapse:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-mode-rail-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.view-mode-rail-empty {
+  margin: 0;
+  padding: 6px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.view-mode-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  border-radius: var(--radius-sm);
+}
+
+.view-mode-rail-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.view-mode-rail-row.selected {
+  background: var(--color-accent-dim);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+/* Hidden parts stay legible — this row is how they come back. */
+.view-mode-rail-row.hidden-body .view-mode-rail-label {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.view-mode-rail-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px 0 6px;
+  color: var(--color-text);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.view-mode-rail-swatch {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 35%);
+}
+
+.view-mode-rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-mode-rail-action {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+/* Row actions stay out of the way until the row is in play. Anything that is
+   currently hidden keeps its control visible — otherwise the only way back is
+   to hover a row whose state you cannot see. */
+.view-mode-rail-row:hover .view-mode-rail-action,
+.view-mode-rail-row.selected .view-mode-rail-action,
+.view-mode-rail-action:focus-visible,
+.view-mode-rail-action.is-hidden {
+  opacity: 1;
+}
+
+.view-mode-rail-action:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.view-mode-rail-action.is-hidden {
+  color: var(--color-accent);
+}
+
+.view-mode-rail-foot {
+  padding: 6px 10px 7px;
+  border-top: var(--border-thin);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  line-height: var(--lh-tight);
+}
+
+.view-mode-rail-foot button {
+  padding: 0;
+  color: var(--color-accent);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.view-mode-rail-foot button:hover {
+  color: var(--color-accent-hi);
+  text-decoration: underline;
+}
+
+.view-mode-rail-launcher {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: var(--z-viewer-overlay);
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.view-mode-rail-launcher:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
 @media (max-width: 620px) {
   .mode-switch {
     margin-inline: 0;
@@ -202,5 +413,18 @@
 
   .palette-float:has(.view-mode-bar) {
     bottom: 6px;
+  }
+
+  /* Half a phone screen of parts list is a phone screen with no model on it. */
+  .view-mode-rail {
+    top: 6px;
+    left: 6px;
+    width: 168px;
+    max-height: 44%;
+  }
+
+  .view-mode-rail-launcher {
+    top: 6px;
+    left: 6px;
   }
 }
