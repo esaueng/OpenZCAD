@@ -20,6 +20,11 @@
     grid-template-columns: 128px 104px 126px 28px 28px;
   }
 
+  .file-menu > summary {
+    width: 100%;
+    min-height: 28px;
+  }
+
   .shortcuts-grid {
     grid-template-columns: 1fr;
   }
