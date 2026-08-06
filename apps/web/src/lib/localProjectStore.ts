@@ -31,10 +31,28 @@ const SYNC_STORE_NAME = 'projectSync';
  * megabytes on disk instead of in structured-clone memory.
  */
 const BLOB_STORE_NAME = 'sourceBlobs';
-const DATABASE_VERSION = 4;
+/**
+ * Card-sized preview images, one per project. Kept here rather than derived on
+ * demand because the shelf must never load a ProjectDocument: a part whose
+ * source runs to hundreds of megabytes would otherwise have to be read into
+ * memory in full just to draw a 360×200 tile, which is enough to take the tab
+ * (and the machine) down and leave the user unable to reach their own projects.
+ * Written while the project is open, where the meshes are already in memory.
+ */
+const THUMBNAIL_STORE_NAME = 'projectThumbnails';
+const DATABASE_VERSION = 5;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+}
+
+interface ProjectThumbnailRecord {
+  projectId: string;
+  /** `image/webp` data URL, or null for a project with no visible geometry. */
+  source: string | null;
+  /** Document version this was rendered from; only used to avoid re-renders. */
+  version: number;
+  updatedAt: string;
 }
 
 interface ProjectSyncRecord {
@@ -65,6 +83,14 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!request.result.objectStoreNames.contains(BLOB_STORE_NAME)) {
         request.result.createObjectStore(BLOB_STORE_NAME, {
           keyPath: 'checksumSha256'
+        });
+      }
+      // Absent for every project on an upgraded database, which reads as "no
+      // preview yet" — the shelf draws its placeholder and fills the cache the
+      // next time each project is opened.
+      if (!request.result.objectStoreNames.contains(THUMBNAIL_STORE_NAME)) {
+        request.result.createObjectStore(THUMBNAIL_STORE_NAME, {
+          keyPath: 'projectId'
         });
       }
     };
@@ -277,6 +303,39 @@ export function listLocalProjectOrganizations(): Promise<
 }
 
 /**
+ * Stores a project's card preview. Called while the project is open, where the
+ * meshes are already in memory — the shelf itself never renders one, because
+ * doing so would mean loading the document.
+ */
+export function saveProjectThumbnail(
+  projectId: string,
+  thumbnail: { source: string | null; version: number; updatedAt: string }
+): Promise<void> {
+  const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
+  return transaction(
+    'readwrite',
+    (store) => store.put(record),
+    THUMBNAIL_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * The cached preview for one project, or null when this device has never
+ * rendered it. A stale image is deliberately preferred over loading the
+ * document to refresh it: the tile is a recognition aid, not a source of truth.
+ */
+export function loadProjectThumbnail(
+  projectId: string
+): Promise<ProjectThumbnailRecord | null> {
+  return transaction<ProjectThumbnailRecord | undefined>(
+    'readonly',
+    (store) =>
+      store.get(projectId) as IDBRequest<ProjectThumbnailRecord | undefined>,
+    THUMBNAIL_STORE_NAME
+  ).then((record) => record ?? null);
+}
+
+/**
  * Records that this device and the account now hold the same version of
  * `projectId`. Everything the conflict machinery decides is measured from here.
  */
@@ -337,8 +396,8 @@ export function clearAllLastSyncedVersions(): Promise<void> {
 }
 
 /**
- * Destroys a project's document, its shelf state, and its sync baseline in a
- * single transaction.
+ * Destroys a project's document, its shelf state, its cached preview, and its
+ * sync baseline in a single transaction.
  *
  * Split across three, a crash between them can leave a baseline behind that
  * describes a document this device no longer holds. Should that project id
@@ -347,7 +406,12 @@ export function clearAllLastSyncedVersions(): Promise<void> {
  * reconciliation picks a side instead of reporting the divergence.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
-  const storeNames = [STORE_NAME, META_STORE_NAME, SYNC_STORE_NAME];
+  const storeNames = [
+    STORE_NAME,
+    META_STORE_NAME,
+    SYNC_STORE_NAME,
+    THUMBNAIL_STORE_NAME
+  ];
   return openDatabase().then(
     (database) =>
       new Promise<void>((resolve, reject) => {
