@@ -873,6 +873,23 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.destroyProjects([projectId]);
   }
 
+  async deleteOwnedProjects(userId: UserId): Promise<ProjectId[]> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().deleteOwnedProjects(userId);
+    }
+    const rows = await this.env.DB.prepare(
+      `SELECT id FROM projects WHERE user_id = ? ORDER BY id`
+    )
+      .bind(userId)
+      .all<{ id: string }>();
+    const projectIds = (rows.results ?? []).map((row) => row.id);
+    // Keep statement sizes, bound parameters, and object-deletion fanout small.
+    for (let start = 0; start < projectIds.length; start += 50) {
+      await this.destroyProjects(projectIds.slice(start, start + 50));
+    }
+    return projectIds.map(toProjectId);
+  }
+
   async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {
     if (!this.env.DB) {
       return getInMemoryPersistence().purgeExpiredProjects(userId);
@@ -1843,11 +1860,10 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /**
-   * Irreversibly removes projects and their stored bytes. Revisions, artifact
-   * rows, and upload sessions cascade from the project row, so only the R2
-   * objects they point at have to be swept by hand — and they are swept first,
-   * because a deleted row would otherwise leave the bytes unreferenced and
-   * unbilled to nobody's knowledge.
+   * Irreversibly removes projects and their stored bytes. R2 objects are swept
+   * first because deleting their index rows first could strand unreferenced
+   * user data. Child rows are then removed explicitly so correctness does not
+   * depend on D1 foreign-key enforcement being enabled on this connection.
    */
   private async destroyProjects(projectIds: string[]): Promise<void> {
     if (projectIds.length === 0) {
@@ -1890,6 +1906,9 @@ export class D1R2PersistenceService implements PersistenceService {
     // leave orphaned revisions behind if it is ever off.
     await this.env.DB!.batch(
       [
+        'DELETE FROM project_access_events WHERE project_id IN',
+        'DELETE FROM project_invitations WHERE project_id IN',
+        'DELETE FROM project_members WHERE project_id IN',
         'DELETE FROM upload_sessions WHERE project_id IN',
         'DELETE FROM artifacts WHERE project_id IN',
         'DELETE FROM revisions WHERE project_id IN',
@@ -2325,6 +2344,7 @@ interface RoomStorage {
     (key: string): Promise<boolean>;
     (keys: string[]): Promise<number>;
   };
+  deleteAll(): Promise<void>;
 }
 
 function historyKey(version: number): string {
@@ -2355,6 +2375,7 @@ export class ProjectCollaborationRoom extends DurableObject {
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
   private projectId: string | null = null;
+  private erasing = false;
 
   constructor(ctx: unknown, env: unknown) {
     super(ctx, env);
@@ -2435,6 +2456,14 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     await this.ready;
+    if (request.method === 'DELETE') {
+      return this.eraseRoom(request);
+    }
+    if (this.erasing) {
+      return new Response('Cloud project deletion is in progress.', {
+        status: 410
+      });
+    }
     if (request.method === 'PATCH') {
       return this.acceptInternalRoleUpdate(request);
     }
@@ -2513,6 +2542,32 @@ export class ProjectCollaborationRoom extends DurableObject {
     server.addEventListener('close', close);
     server.addEventListener('error', close);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** Internal-only hard deletion used by the account erasure coordinator. */
+  private async eraseRoom(request: Request): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (
+      request.headers.get('x-openzcad-internal-project-erasure') !== 'v1' ||
+      !projectId ||
+      (this.projectId !== null && this.projectId !== projectId)
+    ) {
+      return new Response('Invalid project erasure request.', { status: 403 });
+    }
+    return this.roomContext.blockConcurrencyWhile(async () => {
+      this.erasing = true;
+      for (const socket of this.sockets.keys()) {
+        socket.close(4001, 'Cloud project was permanently deleted.');
+      }
+      this.sockets.clear();
+      this.presence.clear();
+      this.editLease = null;
+      this.latestDocument = null;
+      this.documentHistory.clear();
+      this.projectId = null;
+      await this.roomContext.storage.deleteAll();
+      return new Response(null, { status: 204 });
+    });
   }
 
   private enqueueTicketOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -2629,6 +2684,19 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? claim
         : null;
     }
+    try {
+      const erasure = await this.roomEnv.DB.prepare(
+        `SELECT 1 AS pending FROM account_erasure_requests WHERE user_id = ?`
+      )
+        .bind(claim.userId)
+        .first<{ pending: number }>();
+      if (erasure) {
+        return null;
+      }
+    } catch {
+      // Migration 0014 is independently rolled out. Project access remains on
+      // its existing checks until the account-erasure feature itself is ready.
+    }
     const rollout = projectCollaborationRollout(this.roomEnv, claim.email);
     const owner = await this.roomEnv.DB.prepare(
       `SELECT user_id FROM projects WHERE id = ? AND user_id = ?`
@@ -2661,6 +2729,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     role: SharedProjectAccessRole,
     email?: string
   ): Promise<void> {
+    if (this.erasing) {
+      socket.close(4001, 'Cloud project was permanently deleted.');
+      return;
+    }
     if (typeof raw !== 'string' || raw.length > 950_000) {
       socket.close(1009, 'Collaboration message is too large.');
       return;

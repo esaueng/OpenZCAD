@@ -67,8 +67,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Sketching',
     detail: 'Linear and angular snapping',
     settings: [
-      'Snap sketch input',
+      'Show sketch grid',
+      'Snap to sketch grid',
+      'Geometry snapping',
+      'Automatic inferencing',
       'Linear snap',
+      'Snap tolerance',
       'Angular snap',
       'Direct manipulation (experimental)'
     ]
@@ -118,8 +122,23 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'privacy',
     label: 'Privacy & data',
-    detail: 'Local data and reset actions',
-    settings: ['Reset application settings', 'Project data']
+    detail: 'Local and cloud data controls',
+    settings: [
+      'Reset application settings',
+      'Local project data',
+      'Delete all cloud projects',
+      'Delete cloud profile',
+      'Delete all cloud data',
+      'Cloud data'
+    ],
+    searchTerms: [
+      'delete account',
+      'erase account',
+      'delete projects',
+      'erase cloud',
+      'remove profile',
+      'permanent deletion'
+    ]
   },
   {
     id: 'advanced',
