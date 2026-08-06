@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
@@ -38,6 +39,14 @@ interface TopBarProps {
   collaborationStatus: CollaborationStatus;
   collaboratorCount: number;
   projectSharingEnabled: boolean;
+  workspaceMode: WorkspaceMode;
+  /**
+   * Why Build is unavailable, or null when it is. A read-only share has no
+   * build workspace to switch to, so the control says so rather than offering
+   * a mode that would refuse every edit.
+   */
+  buildModeDisabledReason: string | null;
+  onWorkspaceMode(mode: WorkspaceMode): void;
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
@@ -60,6 +69,9 @@ export function TopBar({
   collaborationStatus,
   collaboratorCount,
   projectSharingEnabled,
+  workspaceMode,
+  buildModeDisabledReason,
+  onWorkspaceMode,
   onSave,
   onImportFile,
   onExport,
@@ -182,6 +194,34 @@ export function TopBar({
           <strong>No project</strong>
         )}
         {projectName && <span className="mono">{units ?? ''}</span>}
+      </div>
+      <div
+        className="mode-switch"
+        role="group"
+        aria-label="Workspace mode"
+        title={
+          buildModeDisabledReason
+            ? `View mode · ${buildModeDisabledReason}`
+            : 'Switch between viewing and modeling (Ctrl+Shift+M)'
+        }
+      >
+        {(['view', 'build'] as const).map((mode) => {
+          const disabledReason =
+            mode === 'build' ? buildModeDisabledReason : null;
+          return (
+            <button
+              key={mode}
+              type="button"
+              className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
+              aria-pressed={workspaceMode === mode}
+              disabled={disabledReason !== null}
+              title={disabledReason ?? undefined}
+              onClick={() => onWorkspaceMode(mode)}
+            >
+              {mode === 'view' ? 'View' : 'Build'}
+            </button>
+          );
+        })}
       </div>
       <div
         className="topbar-actions"
