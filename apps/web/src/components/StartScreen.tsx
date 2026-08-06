@@ -32,6 +32,7 @@ import {
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
+import { generateCutePartName } from '../lib/cutePartName';
 import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demos';
@@ -97,6 +98,14 @@ interface StartScreenProps {
  */
 const COLLAPSED_PROJECT_LIMIT = 9;
 
+function formatLastEdited(updatedAt: string): string {
+  const date = new Date(updatedAt);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  })}`;
+}
+
 const SHELVES: ReadonlyArray<{
   status: ProjectStatus;
   label: string;
@@ -136,7 +145,7 @@ export function StartScreen({
   onEmptyTrash,
   loadThumbnailBodies
 }: StartScreenProps) {
-  const [name, setName] = useState('New Part');
+  const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
@@ -347,13 +356,18 @@ export function StartScreen({
         </span>
         <strong className="start-tile-name">{project.name}</strong>
         <small className="start-tile-meta">
-          {trashed
-            ? daysLeft === 0
-              ? 'deleting shortly'
-              : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`
-            : `rev ${project.revisionCount} · ${new Date(
-                project.updatedAt
-              ).toLocaleDateString()}`}
+          rev {project.revisionCount} ·{' '}
+          <time dateTime={project.updatedAt}>
+            {formatLastEdited(project.updatedAt)}
+          </time>
+          {trashed && (
+            <>
+              {' · '}
+              {daysLeft === 0
+                ? 'deleting shortly'
+                : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`}
+            </>
+          )}
         </small>
       </>
     );
@@ -926,7 +940,6 @@ export function StartScreen({
                   aria-describedby={
                     nameTooLong ? 'project-name-error' : undefined
                   }
-                  onFocus={(event) => event.currentTarget.select()}
                   onChange={(event) => setName(event.target.value)}
                 />
                 {nameTooLong && (
