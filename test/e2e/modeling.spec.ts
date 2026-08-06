@@ -459,7 +459,14 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
   expect(consoleErrors).toEqual([]);
 });
 
-test('refuses a new face sketch after a hash-only direct edit', async ({
+// Until the kernel adapter re-derived primitive lineage on direct-edit
+// results, this scenario pinned a REFUSAL: the offset box face lost its
+// reference and sketching on it was blocked. The box is still a box after a
+// face offset, so its roles — and the face reference — now survive, and the
+// sketch attaches associatively. The reference-less refusal itself stays
+// pinned in faceSketchAttachment.test.ts and capabilities.test.ts, where
+// non-primitive bodies still exercise it.
+test('keeps face sketching available after a primitive direct edit', async ({
   page
 }) => {
   test.setTimeout(60_000);
@@ -517,23 +524,13 @@ test('refuses a new face sketch after a hash-only direct edit', async ({
   const offsetCard = page.getByRole('region', {
     name: 'Offset Face operation'
   });
-  const sketchAction = offsetCard.getByRole('tab', {
-    name: /Sketch: This edited face has no stable topology reference/
-  });
-  await expect(sketchAction).toBeDisabled();
-  await expect(sketchAction).toHaveAttribute(
-    'title',
-    /no stable topology reference/
-  );
-
-  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.mouse.click(editedFacePoint!.x, editedFacePoint!.y);
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'This edited face has no stable topology reference'
-  );
+  await expect(offsetCard).toBeVisible();
+  const sketchAction = offsetCard.getByRole('tab', { name: 'Sketch' });
+  await expect(sketchAction).toBeEnabled();
+  await sketchAction.click();
   await expect(
-    page.locator('.feature-row-main', { hasText: /^Sketch/ })
-  ).toHaveCount(0);
+    page.getByRole('region', { name: 'Sketch operation' })
+  ).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
@@ -934,6 +931,108 @@ test('fillets all twelve edges of a box in one exact feature', async ({
     ignoreCase: true
   });
   await expect(page.locator('.panel-body')).toContainText('faces');
+  expect(consoleErrors).toEqual([]);
+});
+
+test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('One Body Radius');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const selectCylinderSurface = async (surface: 'wall' | 'cap') => {
+    await canvas.evaluate((element, requestedSurface) => {
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-cylinder', {
+          detail: { surface: requestedSurface }
+        })
+      );
+    }, surface);
+  };
+
+  // A cap offset, recorded exactly as the direct-manipulation flow records
+  // it — the in-chain direct edit that used to force every later radius
+  // change onto the single-face path.
+  await selectCylinderSurface('cap');
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
+  await page.getByTestId('direct-manipulation-value').click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  await offsetKeypad.getByRole('textbox').fill('4');
+  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Offset face by 4 mm.'
+  );
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('1');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const offsetRow = page.locator('.feature-row', { hasText: 'Offset face' });
+  const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
+  await expect(fillet).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  // Drag the wall. The parametric ancestry now crosses the referenced cap
+  // offset, so this must edit the Cylinder's radius parameter — one body —
+  // instead of appending a Resize Cylinder Radius direct edit that would
+  // move the wall and leave the offset cap behind.
+  await selectCylinderSurface('wall');
+  await expect(
+    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = await canvas.boundingBox();
+  const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 4,
+    start.y + handle.dy * handle.pixelsPerUnit * 4,
+    { steps: 8 }
+  );
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Adjusted cylinder radius to R 18 mm.'
+  );
+
+  // Parametric, not stacked: the Cylinder feature carries the new radius, no
+  // Resize feature was appended, and the whole chain rebuilt warning-free.
+  await expect(
+    page.locator('.feature-row', { hasText: 'Resize Cylinder Radius' })
+  ).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(offsetRow.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   expect(consoleErrors).toEqual([]);
 });
 
