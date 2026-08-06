@@ -40,11 +40,36 @@ const BLOB_STORE_NAME = 'sourceBlobs';
  * Written while the project is open, where the meshes are already in memory.
  */
 const THUMBNAIL_STORE_NAME = 'projectThumbnails';
-const DATABASE_VERSION = 5;
+/**
+ * The handful of document fields the shelf actually draws, projected out of
+ * each document when it is saved.
+ *
+ * Same reason the thumbnails store exists: the shelf must never load a
+ * ProjectDocument. Reading the documents store to build these rows means
+ * deserializing every mesh, every command-log entry, and any legacy inline
+ * STEP text on the device at once — a spike that scales with everything the
+ * user has ever imported and can take the tab down before the start screen
+ * paints. A projection is a few hundred bytes and scales with nothing.
+ *
+ * Kept out of {@link META_STORE_NAME} because the two answer different
+ * questions: this is derived from the document, while the shelf record is this
+ * device's own arrangement and gets merged with the account's copy. Folding a
+ * document projection into a record that travels would make it a lie on the
+ * other side, exactly as it would for the sync baseline.
+ */
+const SUMMARY_STORE_NAME = 'projectSummaries';
+const DATABASE_VERSION = 6;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
 }
+
+/**
+ * A stored summary holds only what the document says. Shelf state is merged in
+ * at read time from {@link META_STORE_NAME}, so a device that has never
+ * organised a project still reports "no record" rather than defaults.
+ */
+type ProjectSummaryRecord = Omit<ProjectSummary, 'organization'>;
 
 interface ProjectThumbnailRecord {
   projectId: string;
@@ -93,6 +118,16 @@ function openDatabase(): Promise<IDBDatabase> {
           keyPath: 'projectId'
         });
       }
+      // Empty for every project on an upgraded database. Backfilled by
+      // `listLocalProjects` one document at a time rather than here: the
+      // upgrade transaction would have to read every document to fill it,
+      // which is the memory spike this store exists to remove, and it would
+      // block the app from opening until it finished.
+      if (!request.result.objectStoreNames.contains(SUMMARY_STORE_NAME)) {
+        request.result.createObjectStore(SUMMARY_STORE_NAME, {
+          keyPath: 'projectId'
+        });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
@@ -126,6 +161,52 @@ function transaction<T>(
         };
         tx.onerror = fail;
         tx.onabort = fail;
+      })
+  );
+}
+
+/**
+ * Runs `action` against several stores in one transaction, so the records it
+ * touches move together or not at all. `action` may read as well as write; its
+ * requests are awaited by the transaction itself, and the resolved value is
+ * whatever `read` reports once every request has completed.
+ */
+function multiStoreTransaction<T = void>(
+  storeNames: readonly string[],
+  mode: IDBTransactionMode,
+  action: (stores: Record<string, IDBObjectStore>) => (() => T) | void
+): Promise<T> {
+  return openDatabase().then(
+    (database) =>
+      new Promise<T>((resolve, reject) => {
+        const tx = database.transaction(storeNames, mode);
+        let read: (() => T) | void;
+        tx.oncomplete = () => {
+          database.close();
+          resolve(read ? read() : (undefined as T));
+        };
+        const fail = () => {
+          database.close();
+          reject(tx.error ?? new Error('Local project storage failed.'));
+        };
+        tx.onerror = fail;
+        tx.onabort = fail;
+        try {
+          read = action(
+            Object.fromEntries(
+              storeNames.map((name) => [name, tx.objectStore(name)])
+            )
+          );
+        } catch (error) {
+          // Rejected with the thrown cause before the abort lands, so the
+          // caller sees what actually went wrong rather than a null tx.error.
+          reject(error instanceof Error ? error : new Error(String(error)));
+          try {
+            tx.abort();
+          } catch {
+            database.close();
+          }
+        }
       })
   );
 }
@@ -226,9 +307,39 @@ export async function pruneUnreferencedSourceBlobs(
   return removed;
 }
 
+/**
+ * The shelf's view of a document. The single definition of that projection:
+ * what {@link saveLocalProject} persists and what a backfill reproduces have to
+ * agree, or the start screen shows one thing and opening the project another.
+ */
+export function summarizeProjectDocument(
+  document: ProjectDocument
+): ProjectSummaryRecord {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    documentVersion: document.version
+  };
+}
+
+/**
+ * Stores a document and refreshes its shelf projection in the same
+ * transaction. Split across two, a crash between them leaves the start screen
+ * describing a version of the project that is no longer on disk — and since
+ * nothing else reads the documents store on that path, nothing would ever
+ * notice the disagreement.
+ */
 export function saveLocalProject(document: ProjectDocument): Promise<void> {
-  return transaction('readwrite', (store) => store.put(document)).then(
-    () => undefined
+  return multiStoreTransaction(
+    [STORE_NAME, SUMMARY_STORE_NAME],
+    'readwrite',
+    (stores) => {
+      stores[STORE_NAME]?.put(document);
+      stores[SUMMARY_STORE_NAME]?.put(summarizeProjectDocument(document));
+    }
   );
 }
 
@@ -396,68 +507,119 @@ export function clearAllLastSyncedVersions(): Promise<void> {
 }
 
 /**
- * Destroys a project's document, its shelf state, its cached preview, and its
- * sync baseline in a single transaction.
+ * Destroys a project's document, its shelf state, its shelf projection, its
+ * cached preview, and its sync baseline in a single transaction.
  *
- * Split across three, a crash between them can leave a baseline behind that
+ * Split across several, a crash between them can leave a baseline behind that
  * describes a document this device no longer holds. Should that project id
  * come back — re-adoption, or a fresh download of the account copy — the
  * surviving baseline is consumed as agreement about a lineage that ended, and
- * reconciliation picks a side instead of reporting the divergence.
+ * reconciliation picks a side instead of reporting the divergence. A surviving
+ * projection is the same failure in the other direction: a start-screen tile
+ * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
   const storeNames = [
     STORE_NAME,
     META_STORE_NAME,
     SYNC_STORE_NAME,
-    THUMBNAIL_STORE_NAME
+    THUMBNAIL_STORE_NAME,
+    SUMMARY_STORE_NAME
   ];
-  return openDatabase().then(
-    (database) =>
-      new Promise<void>((resolve, reject) => {
-        const tx = database.transaction(storeNames, 'readwrite');
-        for (const storeName of storeNames) {
-          tx.objectStore(storeName).delete(projectId);
-        }
-        tx.oncomplete = () => {
-          database.close();
-          resolve();
-        };
-        const fail = () => {
-          database.close();
-          reject(tx.error ?? new Error('Local project storage failed.'));
-        };
-        tx.onerror = fail;
-        tx.onabort = fail;
-      })
+  return multiStoreTransaction(storeNames, 'readwrite', (stores) => {
+    for (const storeName of storeNames) {
+      stores[storeName]?.delete(projectId);
+    }
+  });
+}
+
+/**
+ * Which projects exist and which of them already have a projection, read
+ * together so the two cannot disagree. Only the documents store's *keys* are
+ * read — no document value is deserialized, which is the whole point.
+ */
+function readShelfSnapshot(): Promise<{
+  projectIds: string[];
+  summaries: Map<string, ProjectSummaryRecord>;
+}> {
+  return multiStoreTransaction(
+    [STORE_NAME, SUMMARY_STORE_NAME],
+    'readonly',
+    (stores) => {
+      const keys = stores[STORE_NAME]?.getAllKeys();
+      const records = stores[SUMMARY_STORE_NAME]?.getAll() as
+        IDBRequest<ProjectSummaryRecord[]> | undefined;
+      return () => ({
+        projectIds: (keys?.result ?? []).filter(
+          (key): key is string => typeof key === 'string'
+        ),
+        summaries: new Map(
+          (records?.result ?? []).map((record) => [record.projectId, record])
+        )
+      });
+    }
   );
 }
 
+/**
+ * Writes the shelf projection for one document that predates the projections
+ * store, and returns it. Deliberately one document at a time: holding even a
+ * few of these open at once reintroduces the spike the store exists to avoid,
+ * and this runs at most once per project on the first refresh after upgrading.
+ */
+async function backfillProjectSummary(
+  projectId: string
+): Promise<ProjectSummaryRecord | null> {
+  const document = await loadLocalProject(projectId);
+  if (!document) {
+    return null;
+  }
+  const record = summarizeProjectDocument(document);
+  await transaction(
+    'readwrite',
+    (store) => store.put(record),
+    SUMMARY_STORE_NAME
+  );
+  return record;
+}
+
+/**
+ * The shelf rows for every project on this device, read from the projections
+ * store rather than from the documents themselves. A document is only opened
+ * when it has no projection yet, and then one at a time — see
+ * {@link SUMMARY_STORE_NAME}.
+ */
 export async function listLocalProjects(): Promise<ProjectSummary[]> {
-  const [documents, organizations] = await Promise.all([
-    transaction<ProjectDocument[]>(
-      'readonly',
-      (store) => store.getAll() as IDBRequest<ProjectDocument[]>
-    ),
+  const [snapshot, organizations] = await Promise.all([
+    readShelfSnapshot(),
     listLocalProjectOrganizations().catch(
       () => new Map<string, ProjectOrganization>()
     )
   ]);
-  return documents.map((document) => {
-    const organization = organizations.get(document.projectId);
-    return {
-      projectId: document.projectId,
-      name: document.name,
-      lastRevisionId: document.revisions.at(-1)?.revisionId,
-      updatedAt: document.derived.updatedAt,
-      revisionCount: document.checkpoints.length,
-      documentVersion: document.version,
+  const projects: ProjectSummary[] = [];
+  // Driven by the document keys, not by the projections: a projection whose
+  // document is gone describes a project that cannot be opened, so it is
+  // ignored rather than drawn as a tile that leads nowhere.
+  for (const projectId of snapshot.projectIds) {
+    const summary =
+      snapshot.summaries.get(projectId) ??
+      // A document this device cannot read is skipped rather than allowed to
+      // fail the whole listing, which would empty the shelf over one bad
+      // record. The next refresh tries it again.
+      (await backfillProjectSummary(projectId).catch(() => null));
+    if (!summary) {
+      continue;
+    }
+    const organization = organizations.get(projectId);
+    projects.push({
+      ...summary,
       // Left undefined when this device has never organised the project, so a
       // merge can fall back to whatever the account knows instead of treating
       // "no record" as "active, unpinned, first".
       ...(organization ? { organization } : {})
-    };
-  });
+    });
+  }
+  return projects;
 }
 
 /**
