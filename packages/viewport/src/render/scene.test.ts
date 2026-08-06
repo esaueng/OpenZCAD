@@ -3,12 +3,58 @@ import * as THREE from 'three';
 import {
   computeFitPose,
   createAxesGizmo,
+  createBodyMaterial,
   createStudioGrid,
   shouldShowGroundShadow,
   updateAxesGizmo,
   updateStudioGrid
 } from './scene';
 import { VIEW_DIRECTIONS } from '../camera/views';
+import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
+
+function bodyFixture(
+  overrides: Partial<BodyRepresentation> = {}
+): BodyRepresentation {
+  return {
+    bodyId: toBodyId('body_appearance'),
+    name: 'Appearance body',
+    source: 'primitive',
+    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    faceCount: 0,
+    color: '#4da3ff',
+    exportableStep: true,
+    consumed: false,
+    volume: 0,
+    bbox: {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 1, y: 1, z: 1 }
+    },
+    ...overrides
+  };
+}
+
+describe('createBodyMaterial', () => {
+  it('keeps opaque bodies on the depth-writing path', () => {
+    const material = createBodyMaterial(bodyFixture());
+    expect(material.transparent).toBe(false);
+    expect(material.opacity).toBe(1);
+    expect(material.depthWrite).toBe(true);
+    expect(material.color.getHexString()).toBe('4da3ff');
+  });
+
+  it('treats an explicit opacity of 1 as opaque', () => {
+    const material = createBodyMaterial(bodyFixture({ opacity: 1 }));
+    expect(material.transparent).toBe(false);
+    expect(material.depthWrite).toBe(true);
+  });
+
+  it('blends translucent bodies without writing depth', () => {
+    const material = createBodyMaterial(bodyFixture({ opacity: 0.45 }));
+    expect(material.transparent).toBe(true);
+    expect(material.opacity).toBe(0.45);
+    expect(material.depthWrite).toBe(false);
+  });
+});
 
 function cameraLookingFrom(x: number, y: number, z: number) {
   const camera = new THREE.PerspectiveCamera();
