@@ -2438,3 +2438,50 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
     1
   );
 });
+
+test('a refused boolean explains itself inside the panel that asked', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refusal Copy');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // A box and a cylinder overlapping at the origin. The exact kernel cannot
+  // fuse the curved operand without dropping to facets, so this union is
+  // refused — the same two bodies subtract exactly, and an all-planar union is
+  // unaffected, which is what the message has to say.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // The refusal is readable where the user is looking. Before this it reached
+  // only the status bar, clipped mid-sentence, leaving Create looking inert.
+  const refusal = inspector.getByRole('alert');
+  await expect(refusal).toContainText('faceted approximation');
+  await expect(refusal).toContainText('subtract exactly');
+
+  // Never advise resizing the overlap: this refusal reproduces at tangent
+  // contact and at a clean transversal overlap alike, so that sends the user
+  // round a loop with no exit.
+  await expect(refusal).not.toContainText('thicken');
+
+  // Refused means refused: history is untouched and the form stays open with
+  // its picks intact, ready for another operation.
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
+
+  // Starting a different operation clears the stale reason.
+  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await expect(inspector.getByRole('alert')).toHaveCount(0);
+});

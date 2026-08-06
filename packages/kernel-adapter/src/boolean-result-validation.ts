@@ -260,9 +260,17 @@ export function booleanFacetFallbackWarning(
     `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
   ].join(' became ');
   if (lostCurvature && exploded) {
+    // Do not suggest resizing the overlap. Measured on a box and a cylinder,
+    // this refusal reproduces at tangent contact and at a clean 6 mm
+    // transversal overlap alike, so "move or thicken it" sends the user round
+    // a loop that cannot succeed. What does hold is that the curved operand is
+    // the trigger: the same two bodies subtract exactly, and an all-planar
+    // union of the same shapes is unaffected.
     return (
       `The boolean returned a faceted approximation instead of exact surfaces: ${detail}. ` +
-      'This happens on sliver or near-tangent contacts; move or thicken the overlap and try again.'
+      'A curved operand is the trigger — the same bodies still subtract exactly, ' +
+      'and unions of planar-only bodies are unaffected. Keep them as separate bodies, ' +
+      'or invert the operation, until the exact case lands.'
     );
   }
   if (lostCurvature) {
