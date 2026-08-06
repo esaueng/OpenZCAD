@@ -44,6 +44,7 @@ import {
   closestAxisT,
   composeMoveTransform,
   computeFitPose,
+  computeNormalToFacePose,
   createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
@@ -291,6 +292,14 @@ export interface ExtrudePreview {
   distance: number;
 }
 
+/** Runtime-only request to centre and face one exact planar face head-on. */
+export interface NormalToFaceRequest {
+  bodyId: string;
+  topologyId: string;
+  /** Makes pressing Space again replay the camera action for the same face. */
+  nonce: number;
+}
+
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
@@ -304,6 +313,8 @@ interface ModelViewerProps {
   fitSignal: number;
   /** Set to move the camera to a view target; nonce forces re-runs. */
   viewRequest: { view: ViewTarget; nonce: number } | null;
+  /** Set to centre and frame an exact planar face; nonce forces re-runs. */
+  normalToFaceRequest: NormalToFaceRequest | null;
   /**
    * Set to spin the view a quarter turn about the world up axis; direction is
    * how the model appears to turn on screen. Nonce forces re-runs.
@@ -655,6 +666,7 @@ export function ModelViewer({
   settings,
   fitSignal,
   viewRequest,
+  normalToFaceRequest,
   rotateRequest,
   units,
   editableBodyIds,
@@ -5620,6 +5632,62 @@ export function ModelViewer({
       far: camera.far
     });
   }, [viewRequest]);
+
+  // A normal-to-face request uses the exact surface centre/normal for the
+  // target and orientation, then the selected face's display triangles only
+  // for framing. Body vertices are already world-space projections.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !normalToFaceRequest) {
+      return;
+    }
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === normalToFaceRequest.bodyId
+    );
+    const face = body?.topology?.faces.find(
+      (candidate) => candidate.topologyId === normalToFaceRequest.topologyId
+    );
+    const geometry = face?.geometry;
+    if (
+      !body ||
+      !face ||
+      geometry?.surfaceType !== 'plane' ||
+      !geometry.normal
+    ) {
+      return;
+    }
+
+    const points: THREE.Vector3[] = [];
+    const firstIndex = face.triangleStart * 3;
+    const endIndex = (face.triangleStart + face.triangleCount) * 3;
+    for (let corner = firstIndex; corner < endIndex; corner += 1) {
+      const vertexIndex = body.mesh.indices[corner];
+      if (vertexIndex === undefined) {
+        return;
+      }
+      points.push(
+        new THREE.Vector3().fromArray(body.mesh.vertices, vertexIndex * 3)
+      );
+    }
+    const pose = computeNormalToFacePose(
+      context.camera,
+      points,
+      new THREE.Vector3(
+        geometry.center.x,
+        geometry.center.y,
+        geometry.center.z
+      ),
+      new THREE.Vector3(geometry.normal.x, geometry.normal.y, geometry.normal.z)
+    );
+    if (!pose) {
+      return;
+    }
+    context.startCameraTween(pose, () => {
+      if (context.projection === 'orthographic') {
+        context.syncOrthographic(true);
+      }
+    });
+  }, [bodies, normalToFaceRequest]);
 
   // The view-cube arrows swing the camera a quarter turn around the world up
   // axis. In a head-on top or bottom view the orbit offset is only the tiny

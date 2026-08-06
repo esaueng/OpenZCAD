@@ -300,6 +300,7 @@ describe('toolCardFor', () => {
       interactionReducer(IDLE, { type: 'select-face', target: face() })
     );
     expect(faceCard?.title).toBe('Offset Face');
+    expect(faceCard?.hint).toContain('Space faces it head-on');
     expect(faceCard?.actions?.map((action) => action.label)).toEqual([
       'Offset Face',
       'Sketch'
