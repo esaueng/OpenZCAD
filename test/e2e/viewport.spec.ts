@@ -1494,3 +1494,56 @@ test('view keys still work while a profile pick is waiting for a click', async (
     page.getByRole('region', { name: 'Feature inspector' })
   ).toHaveCount(0);
 });
+
+test('the control reference shows the mouse bindings, not just the keys', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Controls Sheet');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+
+  await page.keyboard.press('?');
+  const sheet = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect(sheet).toBeVisible();
+
+  // Orbit is Shift+drag and pan is right-drag. Neither is guessable, and the
+  // obvious gesture — left-drag on empty space — box-selects instead, so a new
+  // user who reaches for it clears their selection rather than turning the
+  // model. The sheet was keyboard-only, so nothing in the product said so.
+  await expect(sheet).toContainText('Orbit');
+  await expect(sheet).toContainText('Shift + left-drag');
+  await expect(sheet).toContainText('Pan');
+});
+
+test('controls announce themselves as what they are', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+
+  // The demo cards were three unnamed buttons whose names were assembled from
+  // a heading, a tagline and three loose revision chips read in sequence.
+  await expect(
+    page.getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+  ).toBeVisible();
+
+  await page.getByLabel('Project name').fill('Names');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // The keycap glyph was part of the button's name: "Create ↵".
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await expect(
+    inspector.getByRole('button', { name: 'Create', exact: true })
+  ).toBeVisible();
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.locator('.body-row')).toHaveCount(1);
+
+  // The row's accessible NAME comes from its content, so it was always the
+  // feature's name — the claim that every row announced the same thing was
+  // wrong. Its tooltip was the generic part, and that is what changed.
+  await expect(page.locator('.feature-row-main').first()).toHaveAttribute(
+    'title',
+    'Box — Primitive, click to edit'
+  );
+});
