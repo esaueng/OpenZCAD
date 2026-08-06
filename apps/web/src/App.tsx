@@ -7782,11 +7782,23 @@ export function App() {
         if (event.key === 'Escape') {
           event.preventDefault();
           cancelPanel();
-        } else if (event.key === 'Enter' && !typing) {
+          return;
+        }
+        if (event.key === 'Enter' && !typing) {
           event.preventDefault();
           void confirmExtrude();
+          return;
         }
-        return;
+        // Everything else used to stop here, which took the view keys with it.
+        // Profile picking asks the user to click a region it has not framed —
+        // the camera returns to the solid, and the profiles can be off-screen
+        // entirely — so F, the standard views, the grid and the display mode
+        // are exactly what someone reaches for, and exactly what did nothing.
+        // Only the letters that would launch another tool mid-pick stay
+        // reserved.
+        if (SHORTCUT_TO_TOOL[event.key.toLowerCase()]) {
+          return;
+        }
       }
       if (movePreview) {
         if (event.key === 'Escape') {
