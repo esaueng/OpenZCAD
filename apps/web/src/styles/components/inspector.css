@@ -287,6 +287,112 @@
   font-size: var(--fs-mini);
 }
 
+/* ── Body appearance ─────────────────────────────────────── */
+
+.appearance-controls {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.appearance-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.appearance-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.appearance-inputs input[type='color'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 42px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.appearance-inputs input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.appearance-inputs input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.appearance-inputs input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 130px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.appearance-inputs input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+.appearance-inputs input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--color-text);
+  border: 2px solid var(--color-accent);
+}
+
+.appearance-inputs input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+.appearance-inputs input[type='range']::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-text);
+  border: 2px solid var(--color-accent);
+}
+
+.appearance-value {
+  min-width: 44px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.appearance-reset {
+  justify-self: start;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.appearance-reset:hover {
+  color: var(--color-accent-hi);
+}
+
 /* ── Key-value stats ─────────────────────────────────────── */
 
 .kv-grid {
