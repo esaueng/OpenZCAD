@@ -589,9 +589,8 @@ export async function streamAssistantProposal(
     }
   }
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(upstreamUrl, {
+  const requestUpstream = (requireOpenRouterParameters: boolean) =>
+    fetch(upstreamUrl, {
       method: 'POST',
       redirect: 'manual',
       headers,
@@ -620,14 +619,32 @@ export async function streamAssistantProposal(
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
-        // OpenRouter otherwise permits routes that silently ignore unsupported
-        // parameters, including the strict response format this endpoint needs.
-        ...(provider === 'openrouter'
+        // Prefer a route that explicitly advertises structured output. The
+        // Responses API can still return 404 when account/provider routing
+        // filters leave no such route, even for a model that supports it. The
+        // caller retries that one pre-generation failure without this routing
+        // constraint; the strict schema and local contract parser still guard
+        // the returned proposal.
+        ...(provider === 'openrouter' && requireOpenRouterParameters
           ? { provider: { require_parameters: true } }
           : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
     });
+
+  let upstream: Response;
+  try {
+    upstream = await requestUpstream(true);
+    if (provider === 'openrouter' && upstream.status === 404) {
+      await upstream.body?.cancel();
+      console.warn('AI Responses strict route unavailable; retrying:', {
+        requestId,
+        provider,
+        model,
+        status: upstream.status
+      });
+      upstream = await requestUpstream(false);
+    }
   } catch (error) {
     const timedOut =
       error instanceof DOMException &&
