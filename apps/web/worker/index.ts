@@ -27,6 +27,12 @@ import {
   parseUpdateProjectRequest
 } from './validation';
 import {
+  AccountDeletionError,
+  accountDeletionPreview,
+  assertAccountNotErasing,
+  deleteAccountData
+} from './accountDeletion';
+import {
   getAssistantStatus,
   HttpAssistantConfigurationError,
   maxOutputTokensFor,
@@ -72,6 +78,7 @@ import {
   SharingRequestError
 } from './sharing';
 import {
+  isAccountErasureReady,
   isDocumentStorageAccountingReady,
   isProjectObjectStorageReady
 } from './readiness';
@@ -249,18 +256,26 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const { pathname } = url;
 
   if (request.method === 'GET' && pathname === '/api/health') {
-    const documentStorageAccountingReady =
-      await isDocumentStorageAccountingReady(env.DB);
-    const projectObjectStorageReady = await isProjectObjectStorageReady(
-      env.DB,
-      env.PROJECT_STORAGE ?? env.ARTIFACTS
-    );
+    const [
+      documentStorageAccountingReady,
+      projectObjectStorageReady,
+      accountErasureReady
+    ] = await Promise.all([
+      isDocumentStorageAccountingReady(env.DB),
+      isProjectObjectStorageReady(env.DB, env.PROJECT_STORAGE ?? env.ARTIFACTS),
+      isAccountErasureReady(env.DB)
+    ]);
     return json({
       status: 'ok',
       environment: env.ENVIRONMENT ?? 'beta',
       time: new Date().toISOString(),
       documentStorageAccountingReady,
       projectObjectStorageReady,
+      accountErasureReady,
+      projectErasureReady:
+        projectObjectStorageReady &&
+        accountErasureReady &&
+        Boolean(env.PROJECT_ROOM),
       projectSharingEnabled: isCloudflareFeatureEnabled(
         env,
         'PROJECT_SHARING_ENABLED'
@@ -533,6 +548,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const identity = await identifyAssistantIdentity(request, env);
     const userId = identity.userId;
+    await assertAccountNotErasing(env.DB, userId);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
@@ -579,6 +595,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const persistence = createPersistenceService(
     envForCollaborationRollout(env, collaborationRollout)
   );
+
+  const isAccountDeletionRoute =
+    pathname === '/api/account/deletion-preview' ||
+    pathname === '/api/account/delete-data';
+  if (
+    !isAccountDeletionRoute &&
+    !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+  ) {
+    await assertAccountNotErasing(env.DB, userId);
+  }
 
   if (
     (request.method === 'GET' || request.method === 'POST') &&
@@ -661,6 +687,36 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'GET' && pathname === '/api/account/storage') {
     return json(await persistence.getStorageUsage(userId));
+  }
+
+  if (
+    request.method === 'GET' &&
+    pathname === '/api/account/deletion-preview'
+  ) {
+    return json(
+      await accountDeletionPreview(
+        session,
+        url.searchParams.get('scope'),
+        env,
+        persistence
+      )
+    );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/account/delete-data') {
+    const deleted = await deleteAccountData(
+      session,
+      await readJsonBody(request),
+      env,
+      persistence
+    );
+    return json(
+      deleted,
+      200,
+      deleted.signedOut
+        ? { 'set-cookie': await destroyEmailSession(request, env) }
+        : undefined
+    );
   }
 
   if (request.method === 'GET' && pathname === '/api/projects') {
@@ -999,6 +1055,9 @@ export default {
             : undefined
         );
       }
+      if (error instanceof AccountDeletionError) {
+        return json({ error: error.message, code: error.code }, error.status);
+      }
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);
       }
@@ -1042,6 +1101,18 @@ export default {
       }
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
+      }
+      if (
+        error instanceof Error &&
+        error.message.includes('ACCOUNT_ERASURE_IN_PROGRESS')
+      ) {
+        return json(
+          {
+            error: 'Cloud data deletion is already in progress.',
+            code: 'ACCOUNT_ERASURE_IN_PROGRESS'
+          },
+          409
+        );
       }
       console.error('Unhandled API error.', request.method, pathname, error);
       return json({ error: 'Internal error' }, 500);

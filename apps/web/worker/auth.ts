@@ -145,6 +145,14 @@ async function hmac(value: string, secret: string): Promise<string> {
   );
 }
 
+/** Opaque D1 rate-limit bucket corresponding to one sign-in email. */
+export async function authEmailRateLimitBucket(
+  email: string,
+  pepper: string
+): Promise<string> {
+  return `email:${await hmac(`email:${email.trim().toLowerCase()}`, pepper)}`;
+}
+
 function constantTimeEqual(left: string, right: string): boolean {
   if (left.length !== right.length) {
     return false;
@@ -517,17 +525,12 @@ export async function startEmailLogin(
   const connectingIp =
     request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
   const [emailBucket, ipBucket] = await Promise.all([
-    hmac(`email:${email}`, env.AUTH_OTP_PEPPER),
+    authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER),
     hmac(`ip:${connectingIp}`, env.AUTH_OTP_PEPPER)
   ]);
   await cleanExpiredAuthRows(env.DB, timestamp);
   await Promise.all([
-    consumeRateLimit(
-      env.DB,
-      `email:${emailBucket}`,
-      LOGIN_EMAIL_RATE_LIMIT,
-      timestamp
-    ),
+    consumeRateLimit(env.DB, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp),
     consumeRateLimit(env.DB, `ip:${ipBucket}`, LOGIN_IP_RATE_LIMIT, timestamp)
   ]);
 

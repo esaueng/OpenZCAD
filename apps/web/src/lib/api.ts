@@ -1,5 +1,7 @@
 import type {
   AccountStorageUsage,
+  AccountDeletionPreview,
+  AccountDeletionScope,
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
@@ -8,6 +10,7 @@ import type {
   CreateProjectResponse,
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
+  DeleteAccountDataResponse,
   DuplicateProjectResponse,
   FinalizeArtifactRequest,
   HealthResponse,
@@ -155,6 +158,15 @@ export const api = {
       { method: 'POST', body: '{}' }
     ),
   storageUsage: () => requestJson<AccountStorageUsage>('/api/account/storage'),
+  accountDeletionPreview: (scope: AccountDeletionScope) =>
+    requestJson<AccountDeletionPreview>(
+      `/api/account/deletion-preview?scope=${encodeURIComponent(scope)}`
+    ),
+  deleteAccountData: (scope: AccountDeletionScope, confirmation: string) =>
+    requestJson<DeleteAccountDataResponse>('/api/account/delete-data', {
+      method: 'POST',
+      body: JSON.stringify({ scope, confirmation })
+    }),
   listProjects: () => requestJson<ListProjectsResponse>('/api/projects'),
   createProject: (payload: CreateProjectRequest) =>
     requestJson<CreateProjectResponse>('/api/projects', {
