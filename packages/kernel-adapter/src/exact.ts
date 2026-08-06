@@ -80,7 +80,8 @@ import {
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import {
   analyzeUnionConnectivity,
-  disconnectedUnionWarning
+  disconnectedUnionWarning,
+  type UnionBounds
 } from './union-connectivity';
 import {
   ambiguousReferenceError,
@@ -805,28 +806,6 @@ function revolveRadialProfile(
   );
 }
 
-/** True when two of the selected edges meet at a shared model vertex. */
-function selectedEdgesShareVertex(
-  kernel: BrepKernel,
-  selectedEdges: number[]
-): boolean {
-  if (selectedEdges.length < 2) {
-    return false;
-  }
-  const seen = new Set<number>();
-  for (const edge of selectedEdges) {
-    // Deduplicate per edge: a closed edge reports the same vertex handle at
-    // both ends, which is not a corner between two selected edges.
-    for (const vertex of new Set(kernel.getEdgeVertexHandles(edge))) {
-      if (seen.has(vertex)) {
-        return true;
-      }
-      seen.add(vertex);
-    }
-  }
-  return false;
-}
-
 /**
  * True when `face` is a rolling-ball blend band rather than a modelled wall.
  *
@@ -939,6 +918,103 @@ function selectionTouchesBlendFace(
   );
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface UnionFuseOperand {
+  solid: number;
+  name: string;
+  bounds: UnionBounds;
+}
+
+/**
+ * A move that turns a faceted union into an exact one, or nothing.
+ *
+ * The fuse facets where the operands meet tangentially, which for the shapes
+ * this workspace makes is almost always an axis or a face sitting exactly in
+ * one of the other operand's face planes. That is where a new primitive
+ * lands: a box is corner-origin and a cylinder is axis-origin, so creating
+ * one of each puts the cylinder's axis on the box's corner edge, and the
+ * repair a user reaches for first — slide it along X — keeps the axis in the
+ * y = 0 plane and fails again.
+ *
+ * So the remedy is worth naming exactly rather than describing. Each
+ * candidate is TRIED, on copies, and only offered once the fuse it produces
+ * is measured exact: a suggestion that does not work is worse than the
+ * general advice it replaces, and this is the same reason
+ * `edgeModifierSucceedsSmaller` probes instead of inferring.
+ */
+function exactUnionOffsetSuggestion(
+  kernel: BrepKernel,
+  operands: readonly UnionFuseOperand[],
+  units: string
+): string | null {
+  if (operands.length !== 2) {
+    return null;
+  }
+  const [anchor, mover] = operands as [UnionFuseOperand, UnionFuseOperand];
+  const centre = (bounds: UnionBounds, axis: 'x' | 'y' | 'z') =>
+    (bounds.min[axis] + bounds.max[axis]) / 2;
+  const axes = ['x', 'y', 'z'] as const;
+  const toCentre = {
+    x: centre(anchor.bounds, 'x') - centre(mover.bounds, 'x'),
+    y: centre(anchor.bounds, 'y') - centre(mover.bounds, 'y'),
+    z: centre(anchor.bounds, 'z') - centre(mover.bounds, 'z')
+  };
+  // One axis first, because a single number is the easiest move to carry out.
+  // A ball or a ring created against the box's corner needs all three before
+  // it sits anywhere clean, so the combined move is tried after them.
+  const candidates: { x: number; y: number; z: number }[] = [
+    ...axes.map((axis) => ({
+      x: axis === 'x' ? toCentre.x : 0,
+      y: axis === 'y' ? toCentre.y : 0,
+      z: axis === 'z' ? toCentre.z : 0
+    })),
+    toCentre
+  ];
+  const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
+  const format = (value: number) => {
+    const rounded = Number(Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2));
+    return `${rounded > 0 ? '+' : ''}${rounded}`;
+  };
+  for (const offset of candidates) {
+    const moves = axes.filter((axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON);
+    if (moves.length === 0) {
+      continue;
+    }
+    let candidate: number;
+    try {
+      const moved = kernel.copySolid(mover.solid);
+      kernel.transformSolid(
+        moved,
+        transformMatrix(offset, { x: 0, y: 0, z: 0 })
+      );
+      candidate = kernel.fuseAll(
+        Uint32Array.from([kernel.copySolid(anchor.solid), moved])
+      );
+    } catch {
+      continue;
+    }
+    // A candidate that swallows the mover inside the anchor also loses every
+    // curved face, so it fails this same check rather than being offered as a
+    // move that makes the user's new body disappear.
+    if (
+      booleanFacetFallbackWarning({
+        operands: operandCensus,
+        result: censusOfSolids(kernel, [candidate])
+      }) !== null
+    ) {
+      continue;
+    }
+    const described = moves
+      .map((axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`)
+      .join(', ');
+    return `Moving ${mover.name} ${described} clears it.`;
+  }
+  return null;
+}
+
 /**
  * Run one edge modifier and apply every acceptance rule the adapter ships a
  * result under, returning `null` when the kernel refused or produced a body
@@ -954,7 +1030,9 @@ function applyEdgeModifier(
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
-  size: number
+  size: number,
+  /** Receives the kernel's own refusal text, when it threw one. */
+  reportRefusal?: (message: string) => void
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
@@ -962,13 +1040,19 @@ function applyEdgeModifier(
   if (featureKind === 'fillet') {
     try {
       modified = kernel.fillet(target, handles, size);
-    } catch {
+    } catch (error) {
+      // Keep what the kernel said. It names the edges it could not blend, the
+      // vertex the blend engines gave up on, and how many of the selection
+      // would round on their own — none of which can be recovered by
+      // inspecting the inputs afterwards.
+      reportRefusal?.(errorText(error));
       modified = target;
     }
   } else {
     try {
       modified = kernel.chamfer(target, handles, size);
-    } catch {
+    } catch (error) {
+      reportRefusal?.(errorText(error));
       return null;
     }
   }
@@ -1060,13 +1144,45 @@ function edgeModifierSucceedsSmaller(
  * feature that produced the body is known. It is still reported only after
  * the size ladder has failed, so it never buries a working smaller size.
  */
+/**
+ * Turns the kernel's own blend refusal into the sentence a user can act on.
+ *
+ * The kernel reports how many of the named edges it could not blend and how
+ * many would round on their own. That count is the whole remedy — deselect
+ * the ones it named — and no amount of inspecting the selection afterwards
+ * recovers it, so it is relayed rather than re-derived.
+ */
+function blendSubsetRemedy(
+  reported: string | null,
+  featureKind: 'fillet' | 'chamfer'
+): string | null {
+  if (!reported) {
+    return null;
+  }
+  const refused = /(\d+) of the edges named were not blended/.exec(reported);
+  const roundable = /the (\d+) edge\(s\)[^,]*would round on their own/.exec(
+    reported
+  );
+  if (!refused || !roundable) {
+    return null;
+  }
+  const verb = featureKind === 'fillet' ? 'round' : 'chamfer';
+  return (
+    `${refused[1]} of them cannot be blended where two rounds would meet at a corner, ` +
+    `and the kernel will not quietly drop them. The other ${roundable[1]} ${verb} on their own — ` +
+    `deselect those ${refused[1]} and try again.`
+  );
+}
+
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
   size: number,
-  partialRevolveTarget: boolean
+  partialRevolveTarget: boolean,
+  /** What the kernel said when it refused, if it threw. */
+  reported: string | null = null
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -1088,8 +1204,16 @@ function edgeModifierFailureMessage(
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
       return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
     }
-    if (selectedEdgesShareVertex(kernel, selected)) {
-      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
+    // Sharing a corner is NOT itself a refusal: all twelve edges of a plain
+    // box meet at corners and round together at every radius tried. Only the
+    // kernel knows which vertices its blend engines gave up on, so this cause
+    // is claimed only when the kernel actually reported it.
+    const subsetRemedy = blendSubsetRemedy(reported, featureKind);
+    if (subsetRemedy) {
+      return `${prefix} ${subsetRemedy}`;
+    }
+    if (reported?.includes('unsupported vertex blend')) {
+      return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
@@ -4909,6 +5033,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               operands.flatMap((shape) => shape.solids)
             );
             let solid: number;
+            let unionFuseOperands: UnionFuseOperand[] | null = null;
+            // Where this feature's warnings start, so a proved move can be
+            // attached to the FIRST of them. A refused commit reports one
+            // reason — whichever came first — and a remedy filed behind it is
+            // a remedy the user never reads.
+            const warningsBefore = result.warnings.length;
             if (feature.data.operation === 'union') {
               const unionOperands = feature.data.targetBodyIds.flatMap(
                 (bodyId, operandIndex) =>
@@ -4932,6 +5062,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     };
                   })
               );
+              unionFuseOperands = unionOperands;
               const unionSolids = unionOperands.map((operand) => operand.solid);
               const connectivity = analyzeUnionConnectivity(
                 unionOperands,
@@ -5011,6 +5142,24 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 `Feature "${feature.name}": ${facetFallback}`
               );
             }
+            // Naming the move that works is only possible here, where the
+            // operands are still addressable; by the time this reaches the
+            // panel it is a sentence. Probing costs a fuse per candidate, so
+            // it runs only for the failure it answers — a faceted result.
+            // A disconnected union is a different complaint with its own
+            // remedy, and closing that gap by sliding one body to the other's
+            // centre is not advice anyone asked for.
+            if (facetFallback && unionFuseOperands) {
+              const suggestion = exactUnionOffsetSuggestion(
+                kernel,
+                unionFuseOperands,
+                document.units
+              );
+              if (suggestion) {
+                result.warnings[warningsBefore] =
+                  `${result.warnings[warningsBefore]!} ${suggestion}`;
+              }
+            }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)
             );
@@ -5051,12 +5200,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
+            let reportedRefusal: string | null = null;
             const modified = applyEdgeModifier(
               kernel,
               target,
               selected,
               feature.data.featureKind,
-              size
+              size,
+              (message) => {
+                reportedRefusal = message;
+              }
             );
             if (modified === null) {
               throw new Error(
@@ -5066,7 +5219,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   selected,
                   feature.data.featureKind,
                   size,
-                  result.partialRevolveBodies.has(feature.data.targetBodyId)
+                  result.partialRevolveBodies.has(feature.data.targetBodyId),
+                  reportedRefusal
                 )
               );
             }
