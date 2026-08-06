@@ -1086,6 +1086,8 @@ export function App() {
           );
         }
       },
+      acceptValue: (distance) =>
+        Number.isFinite(distance) && Math.abs(distance) >= 0.1,
       continueAfterSlow: true
     })
   ).current;
@@ -5216,21 +5218,26 @@ export function App() {
       : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
+  const sketchDocumentRef = useRef(doc);
+  sketchDocumentRef.current = doc;
+  const sketchSessionNameRef = useRef(sketchSessionName);
+  sketchSessionNameRef.current = sketchSessionName;
   const sketchBasis = useMemo(() => {
-    if (!sketchSessionPlane || !doc) {
+    const sessionDocument = sketchDocumentRef.current;
+    if (!sketchSessionPlane || !sessionDocument) {
       return null;
     }
     try {
       return resolvedSketchPlaneBasis(
-        doc,
+        sessionDocument,
         sketchSessionPlane,
         (value) => evalParamValue(value, parameterScopeRef.current.scope) ?? 0,
-        sketchSessionName
+        sketchSessionNameRef.current
       );
     } catch {
       return null;
     }
-  }, [doc, sketchSessionName, sketchSessionPlane]);
+  }, [sketchSessionPlane]);
 
   /** Active in-viewport sketch session for the viewport. */
   const sketchModeState = useMemo(() => {
