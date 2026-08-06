@@ -775,6 +775,12 @@ export function AssistantPanel({
   }
 
   const turnCount = entries.filter((entry) => entry.kind === 'user').length;
+  const modelLabel = status?.configured
+    ? `${status.model.slice(status.model.lastIndexOf('/') + 1)} · ${status.reasoningEffort}`
+    : 'Unavailable';
+  const modelDescription = status?.configured
+    ? `${status.model} · ${status.reasoningEffort} reasoning`
+    : 'Assistant unavailable';
 
   return (
     <section
@@ -791,7 +797,16 @@ export function AssistantPanel({
       onDrop={handleDrop}
     >
       <header className="assistant-header">
-        <span className="assistant-title">AI Assistant</span>
+        <div className="assistant-heading">
+          <span className="assistant-title">AI Assistant</span>
+          <span
+            className="assistant-model"
+            title={modelDescription}
+            aria-label={modelDescription}
+          >
+            {modelLabel}
+          </span>
+        </div>
         {turnCount > 0 && (
           <span className="assistant-turn-count">
             {turnCount} {turnCount === 1 ? 'ask' : 'asks'}
@@ -1002,12 +1017,11 @@ export function AssistantPanel({
             </button>
           )}
         </div>
-        <p className="assistant-foot">
-          {status?.configured
-            ? `${status.model} · ${status.reasoningEffort} reasoning`
-            : 'Assistant unavailable'}
-          {pending.length > 0 && ' · drawings are sent to your AI provider'}
-        </p>
+        {pending.length > 0 && (
+          <p className="assistant-foot">
+            Drawings are sent to your AI provider
+          </p>
+        )}
         <input
           ref={fileInputRef}
           type="file"
