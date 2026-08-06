@@ -1,12 +1,10 @@
 import { CONTROL_REFERENCE_SEARCH_TERMS } from './controlReference';
 
 /**
- * Settings navigation metadata and the rules for which sections a user can see.
+ * Settings navigation metadata and search rules.
  *
- * This lives apart from `SettingsPage.tsx` because both of its consumers are
- * about *which* sections exist rather than how they render: the "Find a setting"
- * index, and the assistant kill switch that has to take the whole AI section
- * away. Keeping it JSX-free makes both directly unit-testable.
+ * This lives apart from `SettingsPage.tsx` so the "Find a setting" index stays
+ * JSX-free and directly unit-testable.
  */
 
 export type SettingsSectionId =
@@ -43,8 +41,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Reopen the last project',
       'Default units',
-      'Confirm destructive actions',
-      'AI assistant'
+      'Confirm destructive actions'
     ]
   },
   {
@@ -94,6 +91,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'AI Assistant',
     detail: 'Provider, model, and credential',
     settings: [
+      'AI assistant',
       'Credential source',
       'Provider',
       'API endpoint',
@@ -138,30 +136,20 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
 ];
 
 export interface SettingsSectionVisibility {
-  /** `settings.assistant.enabled`. False removes the AI section entirely. */
-  assistantEnabled: boolean;
   /** Raw "Find a setting" query; blank matches everything. */
   query?: string;
 }
 
-/**
- * The sections a user may navigate to. A disabled assistant is filtered out
- * before the query is applied, so no search term — "model", "token",
- * "provider" — can surface AI configuration on an AI-free workspace.
- */
+/** The settings sections matching the current navigation query. */
 export function visibleSettingsSections({
-  assistantEnabled,
   query = ''
 }: SettingsSectionVisibility): SettingsSectionMeta[] {
-  const available = assistantEnabled
-    ? [...SETTINGS_SECTIONS]
-    : SETTINGS_SECTIONS.filter((section) => section.id !== 'assistant');
   const normalized = query.trim().toLowerCase();
   return normalized
-    ? available.filter((section) =>
+    ? SETTINGS_SECTIONS.filter((section) =>
         `${section.label} ${section.detail} ${section.settings.join(' ')} ${section.searchTerms?.join(' ') ?? ''}`
           .toLowerCase()
           .includes(normalized)
       )
-    : available;
+    : [...SETTINGS_SECTIONS];
 }
