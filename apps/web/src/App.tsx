@@ -5904,6 +5904,21 @@ export function App() {
     if (!doc) {
       return;
     }
+    // A move in flight owns the drag. The gizmo answers within about 15 px of
+    // its arrow, so a grab that slips a little further lands on empty space
+    // and used to arrive here as an empty box selection — which cleared the
+    // selection out from under the Move panel, leaving the panel and the
+    // gizmo on screen still naming a body that was no longer selected. The
+    // near miss should cost nothing, not the selection.
+    if (movePreview && bodyIds.length === 0) {
+      return;
+    }
+    // A sweep that does pick something is a change of intent, so the move goes
+    // rather than staying armed on a body the user has just selected away from.
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
     // A box selection replaces the active topology selection. Any direct-
     // manipulation target belongs to that old face or edge, so retaining it
     // would leave a handle capable of editing geometry that is no longer
