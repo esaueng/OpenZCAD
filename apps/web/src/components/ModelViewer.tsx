@@ -45,6 +45,7 @@ import {
   composeMoveTransform,
   computeFitPose,
   computeNormalToFacePose,
+  cylinderRadiusPreviewMatrix,
   createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
@@ -183,6 +184,15 @@ export interface CylinderRadiusHandleTarget {
   axisStart: { x: number; y: number; z: number };
   axisEnd: { x: number; y: number; z: number };
   originalRadius: number;
+  /** True when a radial scene transform exactly represents this body. */
+  smoothPreview: boolean;
+}
+
+interface CylinderRadiusProxyController {
+  /** Restore the authoritative projection after cancellation or validation failure. */
+  restore(): void;
+  /** Forget a proxy whose object is about to be replaced by exact geometry. */
+  discard(): void;
 }
 
 /** Active in-viewport sketch session, derived from the interaction machine. */
@@ -387,10 +397,14 @@ interface ModelViewerProps {
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   /** Dedicated cylindrical-wall handle; never reuses face translation. */
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
-  /** Streamed absolute radius during a drag. */
-  onCylinderRadiusPreview(radius: number): void;
+  /** Imperative bridge to the React-owned selection readout. */
+  cylinderRadiusLabelSetterRef: MutableRefObject<
+    ((radius: number | null) => void) | null
+  >;
+  /** Streamed absolute radius; exact geometry is optional for safe proxies. */
+  onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   /** Fired once on release with the absolute radius. */
-  onCylinderRadiusCommit(radius: number): void;
+  onCylinderRadiusCommit(radius: number): boolean;
   /** Clears transient exact geometry without creating history. */
   onCylinderRadiusCancel(): void;
   /** Value chip tapped: open exact entry for the absolute radius. */
@@ -705,6 +719,7 @@ export function ModelViewer({
   keypadAnchorRef,
   offsetSetterRef,
   cylinderRadiusHandle,
+  cylinderRadiusLabelSetterRef,
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
@@ -869,6 +884,8 @@ export function ModelViewer({
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
+  const cylinderRadiusProxyControllerRef =
+    useRef<CylinderRadiusProxyController | null>(null);
   const offsetChipRef = useRef<HTMLDivElement | null>(null);
 
   // Scene, renderers, controls, and the render loop live for the component's
@@ -1231,6 +1248,135 @@ export function ModelViewer({
       originalRadius: number;
       initialRadius: number;
     } | null = null;
+    /**
+     * Disposable visual-only projection for a standalone cylinder. Pointer
+     * events only replace `pendingRadius`; the render loop applies the newest
+     * value once per frame, so a fast drag cannot queue stale geometry work.
+     */
+    let cylinderRadiusProxy: {
+      object: THREE.Object3D;
+      originalMatrix: THREE.Matrix4;
+      originalMatrixAutoUpdate: boolean;
+      axisStart: THREE.Vector3;
+      axisEnd: THREE.Vector3;
+      originalRadius: number;
+      pendingRadius: number | null;
+      requestedAt: number;
+    } | null = null;
+
+    function updateCylinderRadiusLabels(radius: number | null) {
+      cylinderRadiusLabelSetterRef.current?.(radius);
+      if (radius === null) {
+        return;
+      }
+      const replacement = `$1${formatNumber(radius * 2)}`;
+      for (const label of labelRenderer.domElement.querySelectorAll<HTMLElement>(
+        '.selection-callout:not(.dimension-callout):not(.extrude-value-callout)'
+      )) {
+        label.textContent =
+          label.textContent?.replace(
+            /(Cylindrical face Ø)[^ ·]+/,
+            replacement
+          ) ?? null;
+      }
+    }
+
+    function restoreCylinderRadiusProxy() {
+      const proxy = cylinderRadiusProxy;
+      if (!proxy) {
+        cylinderRadiusLabelSetterRef.current?.(null);
+        delete renderer.domElement.dataset.e2eCylinderProxyRadius;
+        return;
+      }
+      proxy.object.matrix.copy(proxy.originalMatrix);
+      proxy.object.matrixAutoUpdate = proxy.originalMatrixAutoUpdate;
+      proxy.object.matrixWorldNeedsUpdate = true;
+      proxy.object.updateMatrixWorld(true);
+      updateCylinderRadiusLabels(proxy.originalRadius);
+      cylinderRadiusLabelSetterRef.current?.(null);
+      delete renderer.domElement.dataset.e2eCylinderProxyRadius;
+      cylinderRadiusProxy = null;
+      renderer.shadowMap.needsUpdate = true;
+      requestRender();
+    }
+
+    function discardCylinderRadiusProxy() {
+      cylinderRadiusProxy = null;
+      cylinderRadiusLabelSetterRef.current?.(null);
+      delete renderer.domElement.dataset.e2eCylinderProxyRadius;
+    }
+
+    function beginCylinderRadiusProxy(target: CylinderRadiusHandleTarget) {
+      restoreCylinderRadiusProxy();
+      if (!target.smoothPreview) {
+        return;
+      }
+      const object = context.objectsByBodyId.get(target.bodyId);
+      if (!object) {
+        return;
+      }
+      object.updateMatrix();
+      cylinderRadiusProxy = {
+        object,
+        originalMatrix: object.matrix.clone(),
+        originalMatrixAutoUpdate: object.matrixAutoUpdate,
+        axisStart: new THREE.Vector3(
+          target.axisStart.x,
+          target.axisStart.y,
+          target.axisStart.z
+        ),
+        axisEnd: new THREE.Vector3(
+          target.axisEnd.x,
+          target.axisEnd.y,
+          target.axisEnd.z
+        ),
+        originalRadius: target.originalRadius,
+        pendingRadius: null,
+        requestedAt: performance.now()
+      };
+    }
+
+    function queueCylinderRadiusProxy(radius: number): boolean {
+      if (!cylinderRadiusProxy) {
+        return false;
+      }
+      cylinderRadiusProxy.pendingRadius = radius;
+      cylinderRadiusProxy.requestedAt = performance.now();
+      updateCylinderRadiusLabels(radius);
+      requestRender();
+      return true;
+    }
+
+    function flushCylinderRadiusProxy(): {
+      radius: number;
+      requestedAt: number;
+    } | null {
+      const proxy = cylinderRadiusProxy;
+      const radius = proxy?.pendingRadius;
+      if (!proxy || radius == null) {
+        return null;
+      }
+      const previewMatrix = cylinderRadiusPreviewMatrix(
+        proxy.axisStart,
+        proxy.axisEnd,
+        radius / proxy.originalRadius
+      );
+      proxy.pendingRadius = null;
+      if (!previewMatrix) {
+        return null;
+      }
+      proxy.object.matrixAutoUpdate = false;
+      proxy.object.matrix.copy(previewMatrix).multiply(proxy.originalMatrix);
+      proxy.object.matrixWorldNeedsUpdate = true;
+      proxy.object.updateMatrixWorld(true);
+      renderer.domElement.dataset.e2eCylinderProxyRadius = String(radius);
+      return { radius, requestedAt: proxy.requestedAt };
+    }
+
+    cylinderRadiusProxyControllerRef.current = {
+      restore: restoreCylinderRadiusProxy,
+      discard: discardCylinderRadiusProxy
+    };
     /** Screen-projected drag growing the edge blend radius. */
     let edgeDrag: {
       pointerId: number;
@@ -1258,6 +1404,7 @@ export function ModelViewer({
         cylinderRadiusDrag = null;
         cylinderRadiusDragActiveRef.current = false;
         cylinderRadiusRigRef.current?.setValue(originalRadius);
+        restoreCylinderRadiusProxy();
         onCylinderRadiusCancelRef.current();
         cancelled = true;
       }
@@ -3073,7 +3220,8 @@ export function ModelViewer({
           );
           if (value !== null && Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
-            onCylinderRadiusPreviewRef.current(value);
+            const usedProxy = queueCylinderRadiusProxy(value);
+            onCylinderRadiusPreviewRef.current(value, !usedProxy);
             requestRender();
           }
           renderer.domElement.style.cursor = 'grabbing';
@@ -3343,6 +3491,7 @@ export function ModelViewer({
             originalRadius: cylinderTarget.originalRadius,
             initialRadius: armedCylinderRig.value()
           };
+          beginCylinderRadiusProxy(cylinderTarget);
           cylinderRadiusDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
           gestures.capture(event);
@@ -3851,14 +4000,19 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.originalRadius);
+          restoreCylinderRadiusProxy();
           onCylinderRadiusCancelRef.current();
           selectAtPointer(event);
           return;
         }
         depthCycle = null;
         if (rig && Math.abs(finalRadius - completed.originalRadius) > 1e-9) {
-          onCylinderRadiusCommitRef.current(finalRadius);
+          queueCylinderRadiusProxy(finalRadius);
+          if (!onCylinderRadiusCommitRef.current(finalRadius)) {
+            restoreCylinderRadiusProxy();
+          }
         } else {
+          restoreCylinderRadiusProxy();
           onCylinderRadiusCancelRef.current();
         }
         return;
@@ -3976,6 +4130,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         cylinderRadiusRigRef.current?.setValue(originalRadius);
+        restoreCylinderRadiusProxy();
         onCylinderRadiusCancelRef.current();
         requestRender();
       }
@@ -4219,6 +4374,7 @@ export function ModelViewer({
         edgeRig.group.scale.setScalar(rigScale);
         edgeRig.group.userData.gizmoScale = rigScale;
       }
+      const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       updateOffsetChip();
       updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
       updateAxesGizmo(axes, context.activeCamera);
@@ -4259,6 +4415,15 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
+      if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
+        mark('cylinder-radius.proxy-frame', {
+          latencyMs: Math.max(
+            performance.now() - cylinderRadiusProxyFrame.requestedAt,
+            0
+          ),
+          radius: cylinderRadiusProxyFrame.radius
+        });
+      }
       clampNameCallouts(labelRenderer.domElement);
 
       // Push camera orientation to the view widget only when it changes.
@@ -4355,6 +4520,7 @@ export function ModelViewer({
       renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
       host.removeEventListener('contextmenu', handleContextMenu);
       renderer.domElement.removeEventListener('wheel', handleWheel);
+      discardCylinderRadiusProxy();
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
@@ -4381,6 +4547,7 @@ export function ModelViewer({
       sketchCenterTargetRef.current = null;
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
+      cylinderRadiusProxyControllerRef.current = null;
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
@@ -4400,6 +4567,9 @@ export function ModelViewer({
 
     const bodiesChanged = renderedBodiesRef.current !== bodies;
     if (bodiesChanged) {
+      // The exact worker result is authoritative. Forget the visual proxy
+      // before its old Three object is disposed and replaced.
+      cylinderRadiusProxyControllerRef.current?.discard();
       mark('viewer.bodies:begin');
       clearGroup(context.bodyGroup);
       context.selection.resetForRebuild();
@@ -4865,6 +5035,9 @@ export function ModelViewer({
       context.requestRender();
       return;
     }
+    // A failed exact release returns the same edit target. Its old mesh is
+    // still installed, so restore the held proxy before re-arming the handle.
+    cylinderRadiusProxyControllerRef.current?.restore();
     const rig = buildCylinderRadiusHandle({
       origin: cylinderRadiusHandle.point,
       direction: cylinderRadiusHandle.radialDirection,
