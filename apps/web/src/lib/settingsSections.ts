@@ -70,8 +70,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Sketching',
     detail: 'Linear and angular snapping',
     settings: [
-      'Snap sketch input',
+      'Show sketch grid',
+      'Snap to sketch grid',
+      'Geometry snapping',
+      'Automatic inferencing',
       'Linear snap',
+      'Snap tolerance',
       'Angular snap',
       'Direct manipulation (experimental)'
     ]

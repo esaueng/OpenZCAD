@@ -201,7 +201,8 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     for (const expectation of [
       { offset: 2, distance: 4, operation: 'cut' },
       { offset: 8, distance: 4, operation: 'add' },
-      { offset: 10, distance: 4, operation: 'new-body' }
+      { offset: 10, distance: 4, operation: 'new-body' },
+      { offset: 10, distance: -4, operation: 'cut' }
     ] as const) {
       const base = baseSketchDocument(expectation.offset).document;
       const resolved = await resolveExtrudeOperation({
@@ -216,6 +217,41 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
       expect(resolved.inference.operation).toBe(expectation.operation);
       expect(resolved.command.payload.operation).toBe(expectation.operation);
     }
+  });
+
+  it('resolves a negative free-plane preview as a new body', async () => {
+    let base = createProjectDocument(
+      'Negative free-plane preview',
+      toUserId('user_negative_free_plane')
+    );
+    base = addSketchFeature(base, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 4,
+        height: 4,
+        centerX: 0,
+        centerY: 0
+      }
+    }).document;
+
+    const resolved = await resolveExtrudeOperation({
+      base,
+      input: {
+        name: 'Preview',
+        sketchId: getLatestSketchId(base)!,
+        distance: -4
+      },
+      derive: (document) => kernel.syncDocument(document)
+    });
+
+    expect(resolved.inference).toMatchObject({
+      operation: 'new-body',
+      reason: 'no-live-body'
+    });
+    expect(resolved.command.payload.distance).toBe(-4);
   });
 
   it('ignores an exact zero-overlap candidate whose bounds overlap', async () => {

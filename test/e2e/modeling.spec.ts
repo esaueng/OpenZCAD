@@ -762,6 +762,55 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('resolves a negative free-plane extrude preview', async ({ page }) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Negative Extrude Preview');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    x: bounds!.x + bounds!.width * 0.65,
+    y: bounds!.y + bounds!.height * 0.65
+  };
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 40, center.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketch 01 started.'
+  );
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  const extrude = page.getByRole('form', { name: 'Extrude controls' });
+  await expect(extrude).toContainText('1 selected');
+  await extrude.getByRole('spinbutton').fill('-24');
+  await expect(extrude).toContainText('Opposite side');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 profile selected · exact preview ready · New Body',
+    { timeout: 20_000 }
+  );
+  await expect(
+    extrude.getByRole('button', { name: 'Apply Extrude' })
+  ).toBeEnabled();
+});
+
 test('infers and stores an additive extrude from exact overlap', async ({
   page
 }) => {
