@@ -561,13 +561,30 @@ export type FeatureData =
       artifactId: ArtifactId;
       sourceName: string;
       /**
-       * ISO 10303-21 source retained for deterministic offline rebuilds.
-       * Legacy embedded form; new imports write `stepSourceRef` instead and
-       * load-time migration rewrites this into a reference. Exactly one of
-       * the two fields is present.
+       * ISO 10303-21 source embedded in the document, for deterministic
+       * offline rebuilds. Written by imports that predate `stepSourceRef`,
+       * and still by the fallback when this browser denies blob storage —
+       * capped at 12 MB on both paths. The cloud path externalises it into a
+       * project asset and restores it on load, so a document in hand always
+       * carries the text.
+       *
+       * Deliberately never migrated into `stepSourceRef`. The embedded form
+       * is the more portable of the two: the document carries everything a
+       * rebuild needs and it syncs, while a reference is only resolvable
+       * where something can produce bytes matching its checksum. Rewriting
+       * one into the other on load would strand the source on whichever
+       * device did it until the bytes were archived, and — being a change to
+       * canonical content that no user made — would leave an untouched
+       * project reading as diverged. See `listLocalOnlyImportSources`.
+       *
+       * Exactly one of the two fields is present.
        */
       stepText?: string;
-      /** Content-addressed replacement for `stepText`. */
+      /**
+       * Content-addressed alternative to `stepText`, written by imports that
+       * could reach the blob store. This is what keeps a document a few
+       * hundred bytes while its source runs to hundreds of megabytes.
+       */
       stepSourceRef?: ImportedSourceReference;
     };
 
