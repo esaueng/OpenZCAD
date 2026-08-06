@@ -4,7 +4,8 @@ import type {
   ProjectAccessRole,
   ProjectEditLease,
   ProjectMemberRole,
-  ProjectSharingResponse
+  ProjectSharingResponse,
+  UserId
 } from '@openzcad/shared';
 import {
   resolveProjectConflict,
@@ -27,6 +28,7 @@ export interface ProjectSharingDialogProps {
   collaborationStatus: CollaborationStatus;
   lease: ProjectEditLease | null;
   liveMembers?: readonly CollaborationMember[];
+  currentUserId?: UserId | null;
   conflict?: ProjectConflict | null;
   conflictHandlers?: ConflictResolutionHandlers;
   client?: ProjectSharingClient;
@@ -70,6 +72,7 @@ export function ProjectSharingDialog({
   collaborationStatus,
   lease,
   liveMembers = [],
+  currentUserId = null,
   conflict = null,
   conflictHandlers,
   client = defaultClient,
@@ -365,6 +368,7 @@ export function ProjectSharingDialog({
                     </span>
                     <span className="sharing-member-id">
                       {member.displayName}
+                      {member.userId === currentUserId ? ' (you)' : ''}
                     </span>
                     <span
                       className="sharing-presence"
