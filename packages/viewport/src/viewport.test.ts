@@ -10,6 +10,7 @@ import {
   chooseRotateSnapStep,
   composeMoveTransform,
   configureEdgeRaycasting,
+  computeNormalToFacePose,
   createExtrudePreviewGeometry,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
@@ -447,6 +448,76 @@ describe('standard views are posed for a Z-up world', () => {
     expect(corner.x).toBeCloseTo(unit, 6);
     expect(corner.y).toBeCloseTo(-unit, 6);
     expect(corner.z).toBeCloseTo(unit, 6);
+  });
+});
+
+describe('normal-to-face camera framing', () => {
+  it('centres a planar face, follows its outward normal, and fits a portrait viewport', () => {
+    const camera = new THREE.PerspectiveCamera(45, 0.55, 0.1, 4000);
+    const center = new THREE.Vector3(4, -3, 7);
+    const points = [
+      new THREE.Vector3(-16, -13, 7),
+      new THREE.Vector3(24, -13, 7),
+      new THREE.Vector3(24, 7, 7),
+      new THREE.Vector3(-16, 7, 7)
+    ];
+    const normal = new THREE.Vector3(0, 0, 1);
+    const pose = computeNormalToFacePose(camera, points, center, normal);
+
+    expect(pose).not.toBeNull();
+    expect(pose!.target.distanceTo(center)).toBeLessThan(1e-9);
+    const direction = pose!.position.clone().sub(pose!.target).normalize();
+    expect(direction.dot(normal)).toBeGreaterThan(0.999999);
+    // The same tiny pole nudge as the named top view keeps the next orbit
+    // deterministic while remaining visually normal to the face.
+    expect(direction.y).toBeLessThan(0);
+
+    camera.position.copy(pose!.position);
+    camera.quaternion.copy(tweenOrientationFor(direction));
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    for (const point of points) {
+      const projected = point.clone().project(camera);
+      expect(Math.abs(projected.x)).toBeLessThan(0.9);
+      expect(Math.abs(projected.y)).toBeLessThan(0.9);
+    }
+  });
+
+  it('frames an arbitrarily oriented planar face without axis guessing', () => {
+    const camera = new THREE.PerspectiveCamera(50, 1.6, 0.1, 1000);
+    const center = new THREE.Vector3(12, 8, -5);
+    const points = [
+      new THREE.Vector3(12, -12, -15),
+      new THREE.Vector3(12, 28, -15),
+      new THREE.Vector3(12, 28, 5),
+      new THREE.Vector3(12, -12, 5)
+    ];
+    const normal = new THREE.Vector3(2, 0, 0);
+    const pose = computeNormalToFacePose(camera, points, center, normal);
+
+    expect(pose).not.toBeNull();
+    const direction = pose!.position.clone().sub(center).normalize();
+    expect(direction.x).toBeCloseTo(1, 9);
+    expect(direction.y).toBeCloseTo(0, 9);
+    expect(direction.z).toBeCloseTo(0, 9);
+    expect(pose!.near).toBeGreaterThan(0);
+    expect(pose!.far).toBeGreaterThan(pose!.near);
+  });
+
+  it('fails closed for missing points or a degenerate normal', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+    const center = new THREE.Vector3();
+    expect(
+      computeNormalToFacePose(camera, [], center, new THREE.Vector3(0, 0, 1))
+    ).toBeNull();
+    expect(
+      computeNormalToFacePose(
+        camera,
+        [new THREE.Vector3(1, 0, 0)],
+        center,
+        new THREE.Vector3()
+      )
+    ).toBeNull();
   });
 });
 
