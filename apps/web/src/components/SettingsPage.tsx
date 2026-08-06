@@ -14,6 +14,7 @@ import {
   Box,
   ChevronLeft,
   CircleUserRound,
+  CloudOff,
   Database,
   Eye,
   FileCog,
@@ -107,6 +108,7 @@ type SectionId = SettingsSectionId;
 
 interface SettingsPageProps {
   settings: AppSettings;
+  cloudFunctionsEnabled: boolean;
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
   authConfigStatus: AuthConfigStatus;
@@ -119,6 +121,7 @@ interface SettingsPageProps {
   desktopAuthorizationApproved?: boolean;
   desktopAuthorizationCode?: string;
   onChange(settings: AppSettings): void;
+  onCloudFunctionsEnabledChange(enabled: boolean): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
   onTestAssistant(): void;
@@ -184,10 +187,12 @@ function SettingRow({
 function Toggle({
   checked,
   label,
+  disabled = false,
   onChange
 }: {
   checked: boolean;
   label: string;
+  disabled?: boolean;
   onChange(checked: boolean): void;
 }) {
   return (
@@ -195,6 +200,7 @@ function Toggle({
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         aria-label={label}
         onChange={(event) => onChange(event.target.checked)}
       />
@@ -461,6 +467,7 @@ function TurnstileWidget({
 
 export function SettingsPage({
   settings,
+  cloudFunctionsEnabled,
   accountState,
   authConfig,
   authConfigStatus,
@@ -473,6 +480,7 @@ export function SettingsPage({
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
   onChange,
+  onCloudFunctionsEnabledChange,
   onSaveCredential,
   onDeleteCredential,
   onTestAssistant,
@@ -527,7 +535,7 @@ export function SettingsPage({
   // Fetched only when the panel that shows it is open, and dropped on sign-out
   // so one account's totals never linger in front of another.
   useEffect(() => {
-    if (active !== 'files' || !session) {
+    if (active !== 'files' || !session || !cloudFunctionsEnabled) {
       setStorageUsage(null);
       return;
     }
@@ -543,7 +551,7 @@ export function SettingsPage({
     return () => {
       cancelled = true;
     };
-  }, [active, session]);
+  }, [active, cloudFunctionsEnabled, session]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -592,10 +600,15 @@ export function SettingsPage({
     };
   }, []);
 
-  const assistantEnabled = settings.assistant.enabled;
+  const assistantEnabled = cloudFunctionsEnabled && settings.assistant.enabled;
   const visibleSections = useMemo(
-    () => visibleSettingsSections({ assistantEnabled, query }),
-    [assistantEnabled, query]
+    () =>
+      visibleSettingsSections({
+        assistantEnabled,
+        cloudFunctionsEnabled,
+        query
+      }),
+    [assistantEnabled, cloudFunctionsEnabled, query]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -688,10 +701,18 @@ export function SettingsPage({
             )}
           </nav>
           <div className="settings-nav-status">
-            <Database size={13} aria-hidden="true" />
+            {cloudFunctionsEnabled ? (
+              <Database size={13} aria-hidden="true" />
+            ) : (
+              <CloudOff size={13} aria-hidden="true" />
+            )}
             <span>
               <strong>
-                {session ? 'Cloud profile connected' : 'Device only'}
+                {!cloudFunctionsEnabled
+                  ? 'Offline mode'
+                  : session
+                    ? 'Cloud profile connected'
+                    : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
             </span>
@@ -774,13 +795,29 @@ export function SettingsPage({
                 leave no way back.
               */}
               <SettingRow
+                title="Cloud features"
+                description="When off, OpenZCAD blocks account, sync, collaboration, artifact archive, and AI requests. Local modeling, autosave, imports, and exports keep working."
+                scope="This device"
+              >
+                <Toggle
+                  checked={cloudFunctionsEnabled}
+                  label="Cloud features"
+                  onChange={onCloudFunctionsEnabledChange}
+                />
+              </SettingRow>
+              <SettingRow
                 title="AI assistant"
-                description="When off, the assistant is removed from the workspace and its provider settings are hidden. The server also refuses assistant requests."
+                description={
+                  cloudFunctionsEnabled
+                    ? 'When off, the assistant is removed from the workspace and its provider settings are hidden. The server also refuses assistant requests.'
+                    : 'Unavailable while cloud features are disabled on this device.'
+                }
                 scope="All devices"
               >
                 <Toggle
                   checked={settings.assistant.enabled}
                   label="AI assistant"
+                  disabled={!cloudFunctionsEnabled}
                   onChange={(enabled) => patchAssistant({ enabled })}
                 />
               </SettingRow>
@@ -1169,6 +1206,7 @@ export function SettingsPage({
                 <Toggle
                   label="Cloud autosave"
                   checked={settings.files.cloudAutosave}
+                  disabled={!cloudFunctionsEnabled}
                   onChange={(cloudAutosave) =>
                     onChange({
                       ...settings,
@@ -1185,7 +1223,9 @@ export function SettingsPage({
                 <input
                   type="number"
                   aria-label="Cloud autosave delay in seconds"
-                  disabled={!settings.files.cloudAutosave}
+                  disabled={
+                    !cloudFunctionsEnabled || !settings.files.cloudAutosave
+                  }
                   min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
                   max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
                   step={1}
@@ -1208,11 +1248,17 @@ export function SettingsPage({
                 description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint. Autosave does not add to this history."
                 scope="Current project"
               >
-                <span className="settings-state">Manual</span>
+                <span className="settings-state">
+                  {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
+                </span>
               </SettingRow>
               <SettingRow
                 title="Account storage"
-                description={storageDescription(storageUsage)}
+                description={
+                  cloudFunctionsEnabled
+                    ? storageDescription(storageUsage)
+                    : 'Account storage is not contacted while cloud features are disabled.'
+                }
                 scope="Account"
               >
                 <span className="settings-state">
@@ -1542,7 +1588,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'account' && (
+          {active === 'account' && cloudFunctionsEnabled && (
             <Section
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
