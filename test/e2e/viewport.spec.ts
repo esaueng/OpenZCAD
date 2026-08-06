@@ -1350,3 +1350,41 @@ test('releasing an orbit eases out instead of stopping dead', async ({
   // …but decisive, not a map viewer's coast past the chosen framing.
   expect(result.settleMs).toBeLessThan(1_200);
 });
+
+test('Escape backs out of the sketch plane prompt', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Plane Escape');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const prompt = page.getByText('Pick a sketch plane');
+  const status = page.getByRole('contentinfo');
+  // Keyboard shortcuts are ignored until the document exists, so wait for the
+  // workspace rather than racing it.
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+
+  // `tool` is 'sketch' only while this prompt is up, and the prompt owns the
+  // viewport: without Escape there is no way back to selection except by
+  // committing to a plane, which is the one thing the user has declined to do.
+  await page.keyboard.press('s');
+  await expect(prompt).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(prompt).toBeHidden();
+  await expect(status).toContainText('Sketch canceled');
+
+  // Escape landed on idle rather than another rung: the tool is released, so
+  // the next plain keystroke is a workspace shortcut again.
+  await page.keyboard.press('b');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // The close button is the same exit for the pointer.
+  await page.keyboard.press('s');
+  await expect(prompt).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel sketch' }).click();
+  await expect(prompt).toBeHidden();
+  await expect(status).toContainText('Sketch canceled');
+});
