@@ -506,6 +506,15 @@ export interface SceneContext {
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
   edgeOverlaysByBodyId: Map<string, BodyEdgeOverlay>;
+  /**
+   * The body projection currently installed in `bodyGroup`, used to skip the
+   * mesh rebuild on selection-only renders. It belongs to the context rather
+   * than the component because it describes what this scene holds: a context
+   * that is torn down and rebuilt (React Strict Mode's double mount, a dev
+   * hot update) starts empty and must rebuild even though the props never
+   * changed.
+   */
+  renderedBodies: readonly BodyRepresentation[] | null;
   hasFitCamera: boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
@@ -780,8 +789,6 @@ export function ModelViewer({
   sketchesRef.current = sketches;
   const bodiesRef = useRef(bodies);
   bodiesRef.current = bodies;
-  /** Last body projection installed in Three.js; selection-only renders reuse it. */
-  const renderedBodiesRef = useRef<readonly BodyRepresentation[] | null>(null);
   const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const onContextMenuRef = useRef(onContextMenu);
@@ -1162,6 +1169,7 @@ export function ModelViewer({
       raycaster: picker.raycaster,
       objectsByBodyId,
       edgeOverlaysByBodyId,
+      renderedBodies: null,
       hasFitCamera: false,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
@@ -4562,7 +4570,7 @@ export function ModelViewer({
       return;
     }
 
-    const bodiesChanged = renderedBodiesRef.current !== bodies;
+    const bodiesChanged = context.renderedBodies !== bodies;
     if (bodiesChanged) {
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
@@ -4833,7 +4841,7 @@ export function ModelViewer({
       // Bodies are the only dynamic shadow casters; camera and selection-only
       // frames reuse this map until geometry or the light rig changes again.
       context.renderer.shadowMap.needsUpdate = true;
-      renderedBodiesRef.current = bodies;
+      context.renderedBodies = bodies;
     }
 
     // Name callout on the primary (last picked) selected body.

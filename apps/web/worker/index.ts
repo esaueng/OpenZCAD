@@ -393,6 +393,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     (request.method === 'POST' && pathname === '/api/uploads') ||
     (request.method === 'PUT' && UPLOAD_CONTENT_ROUTE.test(pathname)) ||
     (request.method === 'POST' && UPLOAD_MULTIPART_ROUTE.test(pathname)) ||
+    (request.method === 'DELETE' && UPLOAD_MULTIPART_ROUTE.test(pathname)) ||
     (request.method === 'POST' &&
       UPLOAD_MULTIPART_COMPLETE_ROUTE.test(pathname)) ||
     (request.method === 'PUT' && UPLOAD_PART_ROUTE.test(pathname)) ||
@@ -1066,6 +1067,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await persistence.createMultipartUpload(userId, multipartMatch[1]!),
       201
     );
+  }
+  if (request.method === 'DELETE' && multipartMatch) {
+    const uploadId = new URL(request.url).searchParams.get('uploadId');
+    if (!uploadId) {
+      throw new HttpError(400, 'Missing uploadId.');
+    }
+    await persistence.abortMultipartUpload(userId, multipartMatch[1]!, uploadId);
+    return new Response(null, { status: 204 });
   }
 
   const partMatch = UPLOAD_PART_ROUTE.exec(pathname);

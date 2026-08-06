@@ -51,6 +51,11 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
     () => commands.filter((command) => matches(command, query)),
     [commands, query]
   );
+  // View mode hands the palette no modeling commands, so the examples have to
+  // follow — a hint naming tools the list does not contain reads as a bug.
+  const examples = commands.some((command) => command.id.startsWith('tool-'))
+    ? 'box, extrude, front view, export'
+    : 'front view, fit, export';
   const clampedIndex = Math.min(activeIndex, Math.max(visible.length - 1, 0));
 
   useEffect(() => {
@@ -92,7 +97,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
           <input
             ref={searchRef}
             value={query}
-            placeholder="Type a command… (box, extrude, front view, export)"
+            placeholder={`Type a command… (${examples})`}
             spellCheck={false}
             aria-label="Search commands"
             aria-controls={LIST_ID}

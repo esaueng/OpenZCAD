@@ -136,7 +136,7 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
 - Icons and surfaces: existing Lucide icons are reused. No image, custom SVG, or placeholder substitution was introduced.
 - Copy and hierarchy: the top bar contains state-only account copy (`Signed in`) and does not render the development user's name or email. The DOM and rendered order is save, account, collaboration, File, Settings, which produces the requested right-to-left order of Settings, File, collaboration, account, and save.
 - Interaction states: File remains a menu immediately left of Settings; undo and redo are absent from the banner and are the first two controls in the semantic `Quick actions` toolbar. Creating a box enabled Undo, Undo returned the project to zero bodies and enabled Redo, and Redo restored one body.
-- Accessibility: the action cluster is named `Workspace status and actions`; the account status exposes `Cloud account: signed in`; the rail is named `Quick actions`; and disabled undo/redo states are conveyed semantically.
+- Accessibility: the action cluster is named `Workspace actions`; the account status exposes `Cloud account: signed in`; the rail is named `Quick actions`; and disabled undo/redo states are conveyed semantically.
 - Comparison history: the first implementation capture passed the focused source-to-implementation review. No P0, P1, or P2 fidelity defect was observed, so no post-capture correction was required.
 - Console and responsive health: the in-app browser reported no warning or error logs. Document scroll width equaled viewport width at both 1280 and 390 px.
 

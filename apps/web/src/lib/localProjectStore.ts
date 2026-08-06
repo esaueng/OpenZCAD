@@ -31,10 +31,28 @@ const SYNC_STORE_NAME = 'projectSync';
  * megabytes on disk instead of in structured-clone memory.
  */
 const BLOB_STORE_NAME = 'sourceBlobs';
-const DATABASE_VERSION = 4;
+/**
+ * Card-sized preview images, one per project. Kept here rather than derived on
+ * demand because the shelf must never load a ProjectDocument: a part whose
+ * source runs to hundreds of megabytes would otherwise have to be read into
+ * memory in full just to draw a 360×200 tile, which is enough to take the tab
+ * (and the machine) down and leave the user unable to reach their own projects.
+ * Written while the project is open, where the meshes are already in memory.
+ */
+const THUMBNAIL_STORE_NAME = 'projectThumbnails';
+const DATABASE_VERSION = 5;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+}
+
+interface ProjectThumbnailRecord {
+  projectId: string;
+  /** `image/webp` data URL, or null for a project with no visible geometry. */
+  source: string | null;
+  /** Document version this was rendered from; only used to avoid re-renders. */
+  version: number;
+  updatedAt: string;
 }
 
 interface ProjectSyncRecord {
@@ -65,6 +83,14 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!request.result.objectStoreNames.contains(BLOB_STORE_NAME)) {
         request.result.createObjectStore(BLOB_STORE_NAME, {
           keyPath: 'checksumSha256'
+        });
+      }
+      // Absent for every project on an upgraded database, which reads as "no
+      // preview yet" — the shelf draws its placeholder and fills the cache the
+      // next time each project is opened.
+      if (!request.result.objectStoreNames.contains(THUMBNAIL_STORE_NAME)) {
+        request.result.createObjectStore(THUMBNAIL_STORE_NAME, {
+          keyPath: 'projectId'
         });
       }
     };
@@ -277,6 +303,39 @@ export function listLocalProjectOrganizations(): Promise<
 }
 
 /**
+ * Stores a project's card preview. Called while the project is open, where the
+ * meshes are already in memory — the shelf itself never renders one, because
+ * doing so would mean loading the document.
+ */
+export function saveProjectThumbnail(
+  projectId: string,
+  thumbnail: { source: string | null; version: number; updatedAt: string }
+): Promise<void> {
+  const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
+  return transaction(
+    'readwrite',
+    (store) => store.put(record),
+    THUMBNAIL_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * The cached preview for one project, or null when this device has never
+ * rendered it. A stale image is deliberately preferred over loading the
+ * document to refresh it: the tile is a recognition aid, not a source of truth.
+ */
+export function loadProjectThumbnail(
+  projectId: string
+): Promise<ProjectThumbnailRecord | null> {
+  return transaction<ProjectThumbnailRecord | undefined>(
+    'readonly',
+    (store) =>
+      store.get(projectId) as IDBRequest<ProjectThumbnailRecord | undefined>,
+    THUMBNAIL_STORE_NAME
+  ).then((record) => record ?? null);
+}
+
+/**
  * Records that this device and the account now hold the same version of
  * `projectId`. Everything the conflict machinery decides is measured from here.
  */
@@ -315,9 +374,7 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
     'readwrite',
     (store) => store.delete(projectId),
     SYNC_STORE_NAME
-  )
-    .then(() => undefined)
-    .catch(() => undefined);
+  ).then(() => undefined);
 }
 
 /**
@@ -325,25 +382,55 @@ export function clearLastSyncedVersion(projectId: string): Promise<void> {
  * account on this device never reconciles against the previous one's history:
  * an unknown baseline is safe (reconciliation reports instead of assuming
  * agreement), a stale one can silently overwrite the newer side.
+ *
+ * Rejects rather than resolving quietly when the clear fails. A caller that
+ * cannot tell a cleared baseline from a surviving one has no way to warn about
+ * the reconciliation that surviving baseline will later distort.
  */
 export function clearAllLastSyncedVersions(): Promise<void> {
-  return transaction('readwrite', (store) => store.clear(), SYNC_STORE_NAME)
-    .then(() => undefined)
-    .catch(() => undefined);
+  return transaction(
+    'readwrite',
+    (store) => store.clear(),
+    SYNC_STORE_NAME
+  ).then(() => undefined);
 }
 
-/** Destroys a project's document, its shelf state, and its sync baseline. */
+/**
+ * Destroys a project's document, its shelf state, its cached preview, and its
+ * sync baseline in a single transaction.
+ *
+ * Split across three, a crash between them can leave a baseline behind that
+ * describes a document this device no longer holds. Should that project id
+ * come back — re-adoption, or a fresh download of the account copy — the
+ * surviving baseline is consumed as agreement about a lineage that ended, and
+ * reconciliation picks a side instead of reporting the divergence.
+ */
 export function deleteLocalProject(projectId: string): Promise<void> {
-  return transaction('readwrite', (store) => store.delete(projectId))
-    .then(() =>
-      transaction(
-        'readwrite',
-        (store) => store.delete(projectId),
-        META_STORE_NAME
-      )
-    )
-    .then(() => clearLastSyncedVersion(projectId))
-    .then(() => undefined);
+  const storeNames = [
+    STORE_NAME,
+    META_STORE_NAME,
+    SYNC_STORE_NAME,
+    THUMBNAIL_STORE_NAME
+  ];
+  return openDatabase().then(
+    (database) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = database.transaction(storeNames, 'readwrite');
+        for (const storeName of storeNames) {
+          tx.objectStore(storeName).delete(projectId);
+        }
+        tx.oncomplete = () => {
+          database.close();
+          resolve();
+        };
+        const fail = () => {
+          database.close();
+          reject(tx.error ?? new Error('Local project storage failed.'));
+        };
+        tx.onerror = fail;
+        tx.onabort = fail;
+      })
+  );
 }
 
 export async function listLocalProjects(): Promise<ProjectSummary[]> {
