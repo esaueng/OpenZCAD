@@ -238,6 +238,8 @@ export interface PersistenceService {
    * @throws ProjectNotFoundError when the project does not exist.
    */
   deleteProject(userId: UserId, projectId: string): Promise<void>;
+  /** Destroys every project owned by this account, preserving shared projects. */
+  deleteOwnedProjects(userId: UserId): Promise<ProjectId[]>;
   /** Destroys deleted projects whose retention window has run out. */
   purgeExpiredProjects(userId: UserId): Promise<ProjectId[]>;
   /** Removes expired upload bytes and their tracking records. */
@@ -702,6 +704,16 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(projectId);
     }
     this.destroyProject(projectId);
+  }
+
+  async deleteOwnedProjects(userId: UserId): Promise<ProjectId[]> {
+    const projectIds = this.ownedProjects(userId).map(
+      (document) => document.projectId
+    );
+    for (const projectId of projectIds) {
+      this.destroyProject(projectId);
+    }
+    return projectIds;
   }
 
   async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {

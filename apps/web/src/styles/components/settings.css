@@ -246,6 +246,10 @@
   border-radius: var(--radius-lg);
 }
 
+.settings-cloud-delete-all {
+  background: color-mix(in srgb, var(--color-error) 7%, transparent);
+}
+
 .setting-row {
   min-height: 68px;
   display: grid;
