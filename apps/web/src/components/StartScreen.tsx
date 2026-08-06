@@ -26,7 +26,6 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   TRASH_RETENTION_DAYS,
-  type BodyRepresentation,
   type ProjectStatus,
   type ProjectSummary,
   type UnitSystem
@@ -84,7 +83,12 @@ interface StartScreenProps {
   /** Irreversible: destroys the project outright. */
   onDeleteForever(project: ProjectSummary): void;
   onEmptyTrash(projects: ProjectSummary[]): void;
-  loadThumbnailBodies(project: ProjectSummary): Promise<BodyRepresentation[]>;
+  /**
+   * Reads a cached preview image. Deliberately not a document load: the shelf
+   * must stay usable — openable, deletable — for a project too large to hold in
+   * memory, which is exactly the project whose tile a viewer wants to see.
+   */
+  loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 /**
@@ -138,7 +142,7 @@ export function StartScreen({
   onReorder,
   onDeleteForever,
   onEmptyTrash,
-  loadThumbnailBodies
+  loadThumbnail
 }: StartScreenProps) {
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
@@ -285,7 +289,7 @@ export function StartScreen({
     const preview = (
       <>
         <span className="start-tile-thumb">
-          <PartThumbnail project={project} loadBodies={loadThumbnailBodies} />
+          <PartThumbnail project={project} loadThumbnail={loadThumbnail} />
           {syncEntry && !trashed ? (
             <span
               className={`start-tile-badge is-sync-${syncEntry.state}`}
