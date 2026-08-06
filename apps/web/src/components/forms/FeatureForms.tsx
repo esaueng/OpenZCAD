@@ -137,10 +137,15 @@ const PRIMITIVE_FIELDS: Record<
   PrimitiveKind,
   { key: string; label: string; initial: string }[]
 > = {
+  // Labelled by what the dimension IS, not by the document key that carries
+  // it. The keys are OCCT's makeBox(dx, dy, dz), so `depth` lands on Z — and Z
+  // is up here, which made "Depth (Z)" the upright size and "Height (Y)" a
+  // horizontal one, while the cylinder next door called its vertical extent
+  // Height. Keys are untouched; only the human contract changes.
   box: [
     { key: 'width', label: 'Width (X)', initial: '30' },
-    { key: 'height', label: 'Height (Y)', initial: '18' },
-    { key: 'depth', label: 'Depth (Z)', initial: '24' }
+    { key: 'height', label: 'Depth (Y)', initial: '18' },
+    { key: 'depth', label: 'Height (Z)', initial: '24' }
   ],
   cylinder: [
     { key: 'radius', label: 'Radius', initial: '6' },
