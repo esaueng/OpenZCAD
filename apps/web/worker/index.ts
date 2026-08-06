@@ -18,6 +18,7 @@ import {
   HttpError,
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
+  parseCompleteMultipartUploadRequest,
   parseCreateUploadSessionRequest,
   parseDuplicateProjectRequest,
   parseFinalizeImportRequest,
@@ -83,7 +84,7 @@ import {
   isDocumentStorageAccountingReady,
   isProjectObjectStorageReady
 } from './readiness';
-import { toUserId } from '@openzcad/shared';
+import { MAX_ARTIFACT_PART_BYTES, toUserId } from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -111,6 +112,10 @@ const PROJECT_MEMBER_ROUTE = /^\/api\/projects\/([^/]+)\/members\/([^/]+)$/;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
+const UPLOAD_MULTIPART_ROUTE = /^\/api\/uploads\/([^/]+)\/multipart$/;
+const UPLOAD_MULTIPART_COMPLETE_ROUTE =
+  /^\/api\/uploads\/([^/]+)\/multipart\/complete$/;
+const UPLOAD_PART_ROUTE = /^\/api\/uploads\/([^/]+)\/parts\/([1-9]\d{0,3})$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 
@@ -387,6 +392,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const requiresArtifactStorage =
     (request.method === 'POST' && pathname === '/api/uploads') ||
     (request.method === 'PUT' && UPLOAD_CONTENT_ROUTE.test(pathname)) ||
+    (request.method === 'POST' && UPLOAD_MULTIPART_ROUTE.test(pathname)) ||
+    (request.method === 'POST' &&
+      UPLOAD_MULTIPART_COMPLETE_ROUTE.test(pathname)) ||
+    (request.method === 'PUT' && UPLOAD_PART_ROUTE.test(pathname)) ||
     (request.method === 'POST' &&
       (pathname === '/api/artifacts/finalize' ||
         pathname === '/api/imports/finalize')) ||
@@ -1048,6 +1057,60 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     await persistence.putUpload(userId, uploadContentMatch[1]!, body);
+    return new Response(null, { status: 204 });
+  }
+
+  const multipartMatch = UPLOAD_MULTIPART_ROUTE.exec(pathname);
+  if (request.method === 'POST' && multipartMatch) {
+    return json(
+      await persistence.createMultipartUpload(userId, multipartMatch[1]!),
+      201
+    );
+  }
+
+  const partMatch = UPLOAD_PART_ROUTE.exec(pathname);
+  if (request.method === 'PUT' && partMatch) {
+    const uploadId = new URL(request.url).searchParams.get('uploadId');
+    if (!uploadId) {
+      throw new HttpError(400, 'Missing uploadId.');
+    }
+    const contentLength = Number(request.headers.get('content-length') ?? '0');
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_ARTIFACT_PART_BYTES
+    ) {
+      throw new HttpError(413, 'Upload part is too large.');
+    }
+    const body = await request.arrayBuffer();
+    if (body.byteLength === 0 || body.byteLength > MAX_ARTIFACT_PART_BYTES) {
+      throw new HttpError(
+        body.byteLength === 0 ? 400 : 413,
+        body.byteLength === 0
+          ? 'Upload part is empty.'
+          : 'Upload part is too large.'
+      );
+    }
+    return json(
+      await persistence.putUploadPart(
+        userId,
+        partMatch[1]!,
+        uploadId,
+        Number(partMatch[2]!),
+        body
+      )
+    );
+  }
+
+  const multipartCompleteMatch = UPLOAD_MULTIPART_COMPLETE_ROUTE.exec(pathname);
+  if (request.method === 'POST' && multipartCompleteMatch) {
+    const payload = parseCompleteMultipartUploadRequest(
+      await readJsonBody(request)
+    );
+    await persistence.completeMultipartUpload(
+      userId,
+      multipartCompleteMatch[1]!,
+      payload
+    );
     return new Response(null, { status: 204 });
   }
 
