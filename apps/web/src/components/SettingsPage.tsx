@@ -119,6 +119,8 @@ interface SettingsPageProps {
   busy: boolean;
   message: string;
   initialSection?: SectionId;
+  projectInvitationPending?: boolean;
+  projectInvitationError?: string | null;
   desktopAuthorizationAttempt?: string | null;
   desktopAuthorizationApproved?: boolean;
   desktopAuthorizationCode?: string;
@@ -143,6 +145,7 @@ interface SettingsPageProps {
   ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
+  onDismissProjectInvitation(): void;
   onClose(): void;
 }
 
@@ -482,6 +485,8 @@ export function SettingsPage({
   busy,
   message,
   initialSection,
+  projectInvitationPending = false,
+  projectInvitationError = null,
   desktopAuthorizationAttempt = null,
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
@@ -500,6 +505,7 @@ export function SettingsPage({
   onDeleteCloudData,
   onReset,
   onApplyViewportDefaults,
+  onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
   const [initialViewState] = useState(loadSettingsViewState);
@@ -1591,6 +1597,28 @@ export function SettingsPage({
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
+              {projectInvitationPending ? (
+                <div
+                  className="settings-warning settings-sign-in-warning"
+                  role={projectInvitationError ? 'alert' : 'status'}
+                >
+                  <span>
+                    {projectInvitationError ??
+                      'Project invitation ready. Sign in with the email address that received the link and the project will open automatically.'}
+                    {projectInvitationError && session
+                      ? ' Sign out below to try a different email address.'
+                      : ''}
+                  </span>
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy}
+                    onClick={onDismissProjectInvitation}
+                  >
+                    Not now
+                  </button>
+                </div>
+              ) : null}
               <SettingRow
                 title="Project sharing"
                 description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
