@@ -1114,18 +1114,21 @@ export function App() {
     onStatus: setStatus
   });
 
+  const projectSharingPreferenceEnabled = appSettings.collaboration.enabled;
+  const projectSharingEnabled =
+    projectSharingPreferenceEnabled && collaborationRollout.sharingEnabled;
+  const liveCollaborationEnabled =
+    projectSharingPreferenceEnabled &&
+    (collaborationRollout.sharingEnabled ||
+      collaborationRollout.personalSyncEnabled);
+
   const collaboration = useCollaboration({
     document: doc,
     // A signed-in user can still be editing a device-only project. Only attach
     // account credentials to a collaboration room after this exact project has
     // been resolved as a cloud-backed document. Desktop exchanges its native
     // bearer credential for a short-lived, one-use WebSocket ticket.
-    session:
-      cloudAvailable &&
-      (collaborationRollout.sharingEnabled ||
-        collaborationRollout.personalSyncEnabled)
-        ? session
-        : null,
+    session: cloudAvailable && liveCollaborationEnabled ? session : null,
     onRemoteDocument(remoteDocument) {
       const current = managerRef.current?.document;
       if (
@@ -1166,7 +1169,7 @@ export function App() {
         rememberProject: false
       });
       setStatus(
-        collaborationRollout.sharingEnabled
+        projectSharingEnabled
           ? `Applied live revision ${remoteDocument.version} from a collaborator.`
           : `Applied revision ${remoteDocument.version} from another of your devices.`
       );
@@ -1183,8 +1186,15 @@ export function App() {
     collaboration.lease.projectId === doc?.projectId &&
     collaboration.lease.expiresAt > Date.now()
   );
-  const editDisabledReason =
-    !cloudAvailable || !session || !collaborationRollout.sharingEnabled
+  const sharedProjectDisabled = Boolean(
+    !projectSharingPreferenceEnabled &&
+    doc &&
+    session &&
+    doc.ownerUserId !== session.userId
+  );
+  const editDisabledReason = sharedProjectDisabled
+    ? 'Project sharing is disabled in Settings'
+    : !cloudAvailable || !session || !projectSharingEnabled
       ? null
       : collaboration.conflict
         ? 'Resolve the collaboration conflict before editing'
@@ -3881,7 +3891,7 @@ export function App() {
   }
 
   async function handleAcceptProjectInvitation(token: string) {
-    if (!session || !collaborationRollout.sharingEnabled) {
+    if (!session || !projectSharingEnabled) {
       throw new Error('Project sharing is not enabled for this account.');
     }
     setBusy(true);
@@ -6631,6 +6641,12 @@ export function App() {
     }
   }, [appSettings.assistant.enabled]);
 
+  useEffect(() => {
+    if (!projectSharingPreferenceEnabled) {
+      setSharingOpen(false);
+    }
+  }, [projectSharingPreferenceEnabled]);
+
   /**
    * Whether the workspace still owns the keyboard. A surface layered over it
    * takes the keys with it: Settings sits on top of a live document, so
@@ -6981,7 +6997,7 @@ export function App() {
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
-          collaborationSharingEnabled={collaborationRollout.sharingEnabled}
+          collaborationSharingEnabled={projectSharingEnabled}
           onAcceptInvitation={handleAcceptProjectInvitation}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
@@ -7421,6 +7437,7 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaboratorCount={collaboration.members.length}
+          projectSharingEnabled={projectSharingPreferenceEnabled}
           onSave={() => void handleSave()}
           onImportFile={(file) => void handleImportFile(file)}
           onExport={(format) => void handleExport(format)}
@@ -8328,7 +8345,7 @@ export function App() {
                 onClose={() => setContextMenu(null)}
               />
             ))}
-          {sharingOpen && doc && (
+          {sharingOpen && projectSharingPreferenceEnabled && doc && (
             <ProjectSharingDialog
               projectId={doc.projectId}
               role={collaboration.role}
