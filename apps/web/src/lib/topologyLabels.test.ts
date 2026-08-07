@@ -125,7 +125,7 @@ describe('edgeLabel / edgeLength', () => {
     exactBody.topology!.edges[0]!.length = 6.999_999_999;
     expect(edgeLengthMeasurement(exactBody, 11)).toEqual({
       value: 6.999_999_999,
-      quality: 'kernel-integrated'
+      quality: 'exact-kernel'
     });
   });
 });

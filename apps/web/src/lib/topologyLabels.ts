@@ -121,7 +121,15 @@ export function edgeLabel(
   return match ? `Edge ${match.index + 1}` : 'Edge';
 }
 
-export type EdgeLengthQuality = 'kernel-integrated' | 'sampled';
+/**
+ * `exact-kernel` rather than the old `kernel-integrated`: `kernel.edgeLength`
+ * takes no deflection parameter, and is exact for LINE and for the CIRCLE a
+ * fillet blend turns out to be — the only two curve types this build's
+ * primitives, booleans and blends produce. Measured in
+ * `test/measurement-provenance.test.ts`, which also declines to grade
+ * BSPLINE_CURVE and ELLIPSE because it did not measure them.
+ */
+export type EdgeLengthQuality = 'exact-kernel' | 'sampled';
 
 /**
  * Length of an edge in document units, with the provenance needed to present
@@ -138,7 +146,7 @@ export function edgeLengthMeasurement(
     return null;
   }
   if (match.edge.length !== undefined && Number.isFinite(match.edge.length)) {
-    return { value: match.edge.length, quality: 'kernel-integrated' };
+    return { value: match.edge.length, quality: 'exact-kernel' };
   }
   const points = match.edge.points;
   let length = 0;
