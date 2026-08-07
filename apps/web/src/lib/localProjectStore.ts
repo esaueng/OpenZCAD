@@ -58,6 +58,29 @@ const THUMBNAIL_STORE_NAME = 'projectThumbnails';
  * other side, exactly as it would for the sync baseline.
  */
 const SUMMARY_STORE_NAME = 'projectSummaries';
+/**
+ * Bumping this is not the small change it looks like, and that is why the
+ * hardening around it does not.
+ *
+ * A device with the app open in two tabs runs both on the OLD version. The tab
+ * that reloads into a NEW one issues an upgrade that the other tab's live
+ * connection blocks, and that upgrade parks — indefinitely, since the other tab
+ * has no reason to close. Every `openDatabase` below then queues behind the
+ * parked upgrade and never settles, so calls into this module HANG rather than
+ * fail: the start screen never paints, autosave never returns, and an import
+ * stops with the commit lock still held.
+ *
+ * `request.onblocked` is not a way out on its own. It fires for at most one
+ * queued upgrade at a time, so opens issued after the first are never told
+ * anything — a grace period armed from it rescues the first caller and abandons
+ * every one behind it. Measured in Chromium 148 and in fake-indexeddb.
+ *
+ * So a version bump needs a real cross-tab story: `versionchange` closing the
+ * old connection, the other tab reloading or degrading deliberately, and a
+ * settled answer for every open that arrives while an upgrade is parked. That
+ * is its own change, designed and tested on its own. Adding the store is the
+ * easy half.
+ */
 const DATABASE_VERSION = 6;
 
 interface ProjectMetaRecord extends ProjectOrganization {
@@ -135,6 +158,39 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
+/** Whether this device's local project storage can be used right now. */
+export type LocalStorageReadiness =
+  /** Open, with every store this build expects. */
+  | 'ready'
+  /** No IndexedDB at all — private browsing, or storage denied. */
+  | 'unavailable';
+
+/**
+ * Opens the database once, running any pending schema creation, and lets go.
+ *
+ * For a caller that is about to take a lock it must not still be holding if the
+ * store cannot be opened at all. An import writes up to 250 MB under the commit
+ * lock, so it asks this BEFORE the lock exists: a device that has no storage is
+ * then turned away without the lock ever being taken, and the first-run creation
+ * of the object stores happens off the lock rather than under it.
+ *
+ * Deliberately only two answers. Every tab of this build asks for the same
+ * schema version, so no open here can be parked behind another tab's upgrade —
+ * see {@link DATABASE_VERSION} for what changes the day that stops being true.
+ * Reporting a third, "blocked" state would mean writing a recovery path for a
+ * condition this build cannot produce, and getting it wrong is worse than not
+ * having it: an unsettled open leaves the caller waiting forever.
+ */
+export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
+  return openDatabase().then(
+    (database) => {
+      database.close();
+      return 'ready' as const;
+    },
+    () => 'unavailable' as const
+  );
+}
+
 /** Settles when one request inside an open transaction has its result. */
 function settled<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -145,22 +201,40 @@ function settled<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 /**
- * Runs `action` inside ONE transaction and resolves with its value once that
- * transaction commits.
+ * Runs `action` inside ONE transaction over `storeNames` and resolves with its
+ * value once that transaction commits.
  *
  * `action` may await each request and issue the next from its result: a request
  * started while an earlier one's success handler is still on the microtask
  * queue joins the same transaction, so read-then-write stays a single atomic
  * unit. Splitting it across two transactions would not — every tab and the
  * geometry worker share these stores, and another writer can land in between.
+ *
+ * Several stores in one transaction is the same guarantee widened: a document
+ * and the shelf projection derived from it have to move together, or the start
+ * screen describes a version of the project that is not on disk.
+ *
+ * The two lines at the bottom are the whole of the failure contract, and
+ * neither is visible in the records a successful run leaves behind:
+ *
+ * - `tx.abort()` rolls back what `action` already wrote before it threw. A
+ *   request that errors aborts the transaction by itself; a THROW from
+ *   `action`'s own code does not, and without this the writes that preceded it
+ *   commit on behalf of a decision that was never reached.
+ * - `database.close()` gives the connection back on every path. One connection
+ *   per transaction is one leaked per autosave and one per shelf read, and it
+ *   stays invisible until some future schema version cannot upgrade past it.
  */
-function transactionScope<T>(
+function scopedTransaction<T>(
   mode: IDBTransactionMode,
-  action: (store: IDBObjectStore) => Promise<T>,
-  storeName: string = STORE_NAME
+  storeNames: readonly string[],
+  action: (store: (name: string) => IDBObjectStore) => Promise<T>
 ): Promise<T> {
   return openDatabase().then(async (database) => {
-    const tx = database.transaction(storeName, mode);
+    const tx = database.transaction(
+      storeNames.length === 1 ? storeNames[0]! : [...storeNames],
+      mode
+    );
     const committed = new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
       const fail = () =>
@@ -172,7 +246,7 @@ function transactionScope<T>(
     // from also surfacing as an unhandled rejection when `action` fails first.
     committed.catch(() => undefined);
     try {
-      const value = await action(tx.objectStore(storeName));
+      const value = await action((name) => tx.objectStore(name));
       await committed;
       return value;
     } catch (error) {
@@ -188,6 +262,16 @@ function transactionScope<T>(
   });
 }
 
+function transactionScope<T>(
+  mode: IDBTransactionMode,
+  action: (store: IDBObjectStore) => Promise<T>,
+  storeName: string = STORE_NAME
+): Promise<T> {
+  return scopedTransaction(mode, [storeName], (store) =>
+    action(store(storeName))
+  );
+}
+
 function transaction<T>(
   mode: IDBTransactionMode,
   action: (store: IDBObjectStore) => IDBRequest<T>,
@@ -201,45 +285,20 @@ function transaction<T>(
  * touches move together or not at all. `action` may read as well as write; its
  * requests are awaited by the transaction itself, and the resolved value is
  * whatever `read` reports once every request has completed.
+ *
+ * The fire-and-continue shape {@link scopedTransaction} does not have: `action`
+ * issues its requests without awaiting them and hands back a `read` closure,
+ * which is called only after the transaction commits. Callers that need to
+ * branch on a result mid-transaction want `scopedTransaction` instead.
  */
 function multiStoreTransaction<T = void>(
   storeNames: readonly string[],
   mode: IDBTransactionMode,
   action: (stores: Record<string, IDBObjectStore>) => (() => T) | void
 ): Promise<T> {
-  return openDatabase().then(
-    (database) =>
-      new Promise<T>((resolve, reject) => {
-        const tx = database.transaction(storeNames, mode);
-        let read: (() => T) | void;
-        tx.oncomplete = () => {
-          database.close();
-          resolve(read ? read() : (undefined as T));
-        };
-        const fail = () => {
-          database.close();
-          reject(tx.error ?? new Error('Local project storage failed.'));
-        };
-        tx.onerror = fail;
-        tx.onabort = fail;
-        try {
-          read = action(
-            Object.fromEntries(
-              storeNames.map((name) => [name, tx.objectStore(name)])
-            )
-          );
-        } catch (error) {
-          // Rejected with the thrown cause before the abort lands, so the
-          // caller sees what actually went wrong rather than a null tx.error.
-          reject(error instanceof Error ? error : new Error(String(error)));
-          try {
-            tx.abort();
-          } catch {
-            database.close();
-          }
-        }
-      })
-  );
+  return scopedTransaction(mode, storeNames, async (store) =>
+    action(Object.fromEntries(storeNames.map((name) => [name, store(name)])))
+  ).then((read) => (read ? read() : (undefined as T)));
 }
 
 interface SourceBlobRecord {
