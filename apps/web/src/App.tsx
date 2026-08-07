@@ -924,6 +924,12 @@ export function App() {
   extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /**
+   * Name for the Move feature the gizmo is about to create. The gizmo is now
+   * the only way to make one (WF-07), so the name it commits under has to be
+   * editable here rather than in the form this replaced.
+   */
+  const [moveName, setMoveName] = useState('Move');
+  /**
    * A committed Move whose exact rebuild is still in flight. The viewer keeps
    * the body posed at the applied transform until the recomputed meshes land,
    * so the old geometry never flashes at its resting position.
@@ -1417,7 +1423,11 @@ export function App() {
   const editDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
     : viewMode
-      ? 'View mode is read-only — switch to Build to edit'
+      ? // "Switch to Build" is only advice worth giving to someone who can.
+        // A read-only share pins the mode to View, so telling a viewer to
+        // switch names a route they will find disabled — say why instead.
+        (buildModeDisabledReason ??
+        'View mode is read-only — switch to Build to edit')
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
         : !cloudAvailable || !session || !projectSharingEnabled
@@ -3439,21 +3449,20 @@ export function App() {
         );
         return;
       }
-      // Prefer the gizmo flow when a target body is unambiguous; the classic
-      // form remains for multi-body documents with nothing selected.
-      //
-      // WF-07 (open): these are two UIs for one command, and which one you get
-      // is decided by document state rather than by what you asked for — the
-      // gizmo has a live preview, the form has a Name field, and they commit
-      // through differently labelled buttons. Collapsing them onto the gizmo
-      // was tried and reverted: it silently removes naming a Move at creation,
-      // which is a capability trade that wants deciding rather than assuming.
-      // The half that needed no decision — navigation keys during a profile
-      // pick — is fixed separately.
+      // WF-07 (resolved): Move used to be two UIs for one command, and which
+      // one you got was decided by document state rather than by what you
+      // asked for — the gizmo had a live preview, the form had a Name field
+      // and a body picker, and they committed through differently labelled
+      // buttons. The gizmo now carries both, so it is the only Move UI. With
+      // nothing selected in a multi-body document it opens on the first body
+      // and the picker changes it, which is what the form's picker was for.
+      // `.at(-1)`, not `[0]`: the retired form defaulted to the last live body
+      // — the one you most likely just made — and changing which body an
+      // unselected Move lands on would silently rewrite existing flows.
       const targetBodyId =
-        selectedBodyIds.at(-1) ??
-        (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null);
+        selectedBodyIds.at(-1) ?? viewerBodies.at(-1)?.bodyId ?? null;
       if (targetBodyId) {
+        setMoveName('Move');
         setExtrudePreview(null);
         setSelectedBodyIds([targetBodyId]);
         setMovePreview({
@@ -3621,7 +3630,9 @@ export function App() {
     setMovePreview(null);
     const created = createFeature(
       commandFactories.transformBody({
-        name: 'Move',
+        // Whatever the gizmo's Name field holds, falling back to the default
+        // rather than committing a feature with a blank name.
+        name: moveName.trim() || 'Move',
         targetBodyId: preview.bodyId as BodyId,
         translation: {
           x: round(translation.x),
@@ -9285,6 +9296,40 @@ export function App() {
                         'Selected body')
                   }
                   hideRotation={movePreview.target === 'sketch'}
+                  // A sketch move commits as a sketch translation, not a named
+                  // feature, so it gets neither a name nor a body picker.
+                  name={
+                    movePreview.target === 'sketch' ? undefined : moveName
+                  }
+                  onName={
+                    movePreview.target === 'sketch' ? undefined : setMoveName
+                  }
+                  targets={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : viewerBodies.map((body) => ({
+                          bodyId: body.bodyId,
+                          name: representations[body.bodyId]?.name ?? body.bodyId
+                        }))
+                  }
+                  targetBodyId={movePreview.bodyId}
+                  onTargetBody={(bodyId) => {
+                    setSelectedBodyIds([bodyId as BodyId]);
+                    setMoveSnap(null);
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            bodyId,
+                            // Values are relative to the body's own centre, so
+                            // carrying them to a different body would apply a
+                            // move nobody asked for.
+                            translation: { x: 0, y: 0, z: 0 },
+                            rotationDeg: { x: 0, y: 0, z: 0 }
+                          }
+                        : current
+                    );
+                  }}
                   values={{
                     translation: movePreview.translation,
                     rotationDeg: movePreview.rotationDeg

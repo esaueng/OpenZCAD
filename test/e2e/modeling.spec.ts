@@ -1689,9 +1689,10 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await inspector.getByLabel('Name').fill('Separate upper');
-  await inspector.getByLabel('Move Z').fill('32');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const separateMove = page.getByRole('form', { name: 'Move controls' });
+  await separateMove.getByLabel('Name').fill('Separate upper');
+  await separateMove.getByLabel('Move Z in mm').fill('32');
+  await separateMove.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByLabel('CAD change request').fill('Union the two bodies');
   await page.getByLabel('CAD change request').press('Enter');
@@ -2201,12 +2202,10 @@ test('models a parametric part and exports a true STEP file', async ({
   // Move the cutter into the box instead of leaving it tangent to the box's
   // origin corner, which is a deliberately degenerate boolean setup.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  const moveInspector = page.getByRole('region', {
-    name: 'Feature inspector'
-  });
-  await moveInspector.getByLabel('Move X').fill('30');
-  await moveInspector.getByLabel('Move Y').fill('9');
-  await moveInspector.getByRole('button', { name: /^Create/ }).click();
+  const moveOverlay = page.getByRole('form', { name: 'Move controls' });
+  await moveOverlay.getByLabel('Move X in mm').fill('30');
+  await moveOverlay.getByLabel('Move Y in mm').fill('9');
+  await moveOverlay.getByRole('button', { name: /Apply move/ }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Move' })
   ).toBeVisible();
@@ -2367,9 +2366,10 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await inspector.getByLabel('Name').fill('Lift upper');
-  await inspector.getByLabel('Move Z').fill('12');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const liftMove = page.getByRole('form', { name: 'Move controls' });
+  await liftMove.getByLabel('Name').fill('Lift upper');
+  await liftMove.getByLabel('Move Z in mm').fill('12');
+  await liftMove.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await expect(inspector).toContainText(
@@ -2517,8 +2517,9 @@ test('a union that facets at a tangency succeeds once the overlap moves off it',
   // Moving along X keeps the axis in the y = 0 face plane, so it still fails —
   // which is why "move the overlap" needs a direction to be useful advice.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await inspector.getByLabel('Move X').fill('15');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const shiftX = page.getByRole('form', { name: 'Move controls' });
+  await shiftX.getByLabel('Move X in mm').fill('15');
+  await shiftX.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
@@ -2535,8 +2536,9 @@ test('a union that facets at a tangency succeeds once the overlap moves off it',
   // Offset into the solid instead and the same union is exact.
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await inspector.getByLabel('Move Y').fill('9');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const shiftY = page.getByRole('form', { name: 'Move controls' });
+  await shiftY.getByLabel('Move Y in mm').fill('9');
+  await shiftY.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
@@ -2704,4 +2706,107 @@ test('each sketch plane label names the plane it actually opens', async ({
   ];
   expect(height).toBeLessThan(width);
   expect(height).toBeLessThan(depth);
+});
+
+test('Move is one UI: the gizmo names the feature and picks the body', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('One Move UI');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // Two bodies and nothing selected — the case that used to open a different
+  // Move UI from the one a selection would have opened (WF-07).
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lower');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Upper');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const move = page.getByRole('form', { name: 'Move controls' });
+  await expect(move).toBeVisible();
+  // The feature inspector must not offer a second, differently-labelled Move.
+  await expect(inspector).toHaveCount(0);
+
+  // Both things the retired form carried now live here: a Name and a body
+  // picker. Choosing a body from the picker is what the form existed for.
+  await move.getByLabel('Body').selectOption({ label: 'Upper Body' });
+  await move.getByLabel('Name').fill('Lift upper');
+  await move.getByLabel('Move Z in mm').fill('40');
+  await move.getByRole('button', { name: /Apply move/ }).click();
+
+  // The name reaches the document, which is the capability whose loss kept
+  // this unification unshipped.
+  await expect(
+    page.locator('.feature-row', { hasText: 'Lift upper' })
+  ).toBeVisible();
+
+  // And it moved the body the picker chose, not the one that happened to be
+  // selected: Upper is the one now standing 40mm clear of the origin.
+  await page.locator('.feature-row', { hasText: 'Lift upper' }).click();
+  await expect(inspector.getByLabel('Move Z')).toHaveValue('40');
+});
+
+test('types an exact rectangle while drawing it', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Exact Rectangle');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
+  // Screen-space clicks must wait for the head-on entry tween to settle.
+  await page.waitForTimeout(800);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const corner = {
+    x: bounds.x + bounds.width * 0.4,
+    y: bounds.y + bounds.height * 0.6
+  };
+
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  // Click-click, not press-drag: a single click plants the first corner and
+  // leaves the pointer free, which is the window numeric entry lives in.
+  await page.mouse.click(corner.x, corner.y);
+  await page.mouse.move(corner.x + 120, corner.y - 80, { steps: 5 });
+
+  // Width, Tab, height, Enter. Tab swaps sides rather than converting, because
+  // a rectangle's two sides are independent.
+  await page.keyboard.type('40');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Width: 40');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('20');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Height: 20');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Width: 40');
+  await page.keyboard.press('Enter');
+
+  // Extruding is the honest check that the typed numbers reached the geometry:
+  // on Top (XY) the width lands on X and the height on Y.
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
+  if (!triple) {
+    throw new Error(`no size in selection chip: ${chip}`);
+  }
+  expect(Number(triple[1])).toBeCloseTo(40, 1);
+  expect(Number(triple[2])).toBeCloseTo(20, 1);
 });

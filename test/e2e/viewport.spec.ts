@@ -1636,3 +1636,73 @@ test('the sketch status does not promise an exit Escape will not make', async ({
   await expect(status).toContainText('Sketch closed');
   await expect(status).not.toContainText('Sketching on');
 });
+
+test('a viewport callout keeps its position while it animates in', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Callout Entrance');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await page
+    .getByRole('list', { name: 'Bodies' })
+    .getByRole('button', { name: /^Box/ })
+    .click();
+
+  const callout = page.locator('.selection-callout').first();
+  await expect(callout).toBeVisible();
+
+  // These elements are positioned by CSS2DRenderer writing an inline
+  // `transform`, and a CSS animation outranks inline style — so an entrance
+  // that touches `transform` drops the placement for its whole duration. That
+  // is a flash at the container origin for a callout shown once, and permanent
+  // for the extrude value pill, which is rebuilt on every pointer move and
+  // restarts the animation every frame (FB-04).
+  const entrance = await callout.evaluate((element) => {
+    const name = getComputedStyle(element).animationName;
+    const animated: string[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules: CSSRuleList;
+      try {
+        rules = sheet.cssRules;
+      } catch {
+        continue; // cross-origin sheet
+      }
+      for (const rule of Array.from(rules)) {
+        if (
+          rule instanceof CSSKeyframesRule &&
+          rule.name === name &&
+          !animated.length
+        ) {
+          for (const frame of Array.from(rule.cssRules)) {
+            const style = (frame as CSSKeyframeRule).style;
+            for (const property of Array.from(style)) {
+              if (!animated.includes(property)) {
+                animated.push(property);
+              }
+            }
+          }
+        }
+      }
+    }
+    return { name, animated };
+  });
+
+  expect(entrance.name).not.toBe('none');
+  expect(entrance.animated.length).toBeGreaterThan(0);
+  expect(entrance.animated).not.toContain('transform');
+
+  // And the placement it must not lose is a real one, not the origin.
+  const placed = await callout.evaluate(
+    (element) => getComputedStyle(element).transform
+  );
+  const offsets = /matrix\(1, 0, 0, 1, ([-\d.]+), ([-\d.]+)\)/.exec(placed);
+  expect(offsets).not.toBeNull();
+  expect(Math.abs(Number(offsets![1]))).toBeGreaterThan(1);
+});

@@ -697,18 +697,10 @@ export function Inspector(props: InspectorProps) {
           onCancel={props.onCancel}
         />
       );
-    } else if (tool === 'transform') {
-      body = (
-        <TransformForm
-          key="create-transform"
-          scope={scope}
-          bodies={bodies}
-          initialTarget={selectedBodyIds.at(-1)}
-          submitLabel="Create"
-          onSubmit={props.onCreateTransform}
-          onCancel={props.onCancel}
-        />
-      );
+      // No create branch for 'transform': the move gizmo is the only way to
+      // make a Move now that it carries the Name field and body picker this
+      // form existed for (WF-07). Editing an existing Move still uses
+      // TransformForm, below.
     } else if (tool === 'fillet' || tool === 'chamfer') {
       body = (
         <EdgeModifierForm
