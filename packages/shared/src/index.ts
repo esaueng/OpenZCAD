@@ -717,6 +717,16 @@ export interface FaceGeometry {
   center: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
+  /**
+   * The `d` in the plane's equation `n·x = d`, alongside {@link normal}.
+   *
+   * Present only when `normal` is, which excludes NURBS-backed planes — the
+   * imported-STEP faces a raw pick most often lands on. Its whole purpose is
+   * to make signed point-to-plane distance an exact client-side calculation
+   * rather than a kernel round trip, so a consumer must treat the absence as
+   * "cannot answer" rather than substituting a plane through the origin.
+   */
+  planeOffset?: number;
   /** Present for exact cylindrical surfaces. */
   radius?: number;
   diameter?: number;
