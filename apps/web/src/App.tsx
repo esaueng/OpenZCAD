@@ -181,7 +181,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { ViewModeRail } from './components/ViewModeRail';
-import { MeasurementDock } from './components/MeasurementDock';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
@@ -237,7 +236,11 @@ import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
-import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
+import {
+  edgeLabel,
+  edgeLengthMeasurement,
+  faceLabel
+} from './lib/topologyLabels';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
@@ -308,6 +311,11 @@ const LazyViewModeBar = lazy(() =>
     default: module.ViewModeBar
   }))
 );
+const LazyMeasurementDock = lazy(() =>
+  import('./components/MeasurementDock').then((module) => ({
+    default: module.MeasurementDock
+  }))
+);
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -337,6 +345,16 @@ function ViewModeBar(props: ComponentProps<typeof LazyViewModeBar>) {
   return (
     <Suspense fallback={null}>
       <LazyViewModeBar {...props} />
+    </Suspense>
+  );
+}
+
+function MeasurementDock(
+  props: ComponentProps<typeof LazyMeasurementDock>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyMeasurementDock {...props} />
     </Suspense>
   );
 }
@@ -443,9 +461,21 @@ import {
 } from './lib/appSettings';
 import {
   appendMeasurement,
+  createAngleMeasurement,
+  createDistanceMeasurement,
+  createEdgeTotalMeasurement,
+  createSmartMeasurement,
+  formatMeasurement,
+  measurementTargetFromSelection,
+  measurementToViewportAnnotation,
   measurementsToCsv,
   measurementsToText,
-  type Measurement
+  refreshMeasurements,
+  type Measurement,
+  type MeasurementDisplayOptions,
+  type MeasurementMode,
+  type MeasurementTarget,
+  type RadialDisplay
 } from './lib/measurements';
 import {
   loadPanelState,
@@ -2454,16 +2484,13 @@ export function App() {
   /**
    * What the current selection is, and the figure that goes with it.
    *
-   * One derivation feeds two surfaces: the bottom-center chip, which shows the
-   * live pick, and View mode's measurement tape, which keeps the ones worth
-   * writing down. `measurement` is absent when a selection carries no number —
-   * a planar face has no length, and a multi-body pick's chip text is a
-   * modeling hint rather than a figure.
+   * This stays a lightweight live readout. The measurement workbench records
+   * explicit pick events below rather than coupling its history to selection
+   * state effects.
    */
   const selectionSummary = useMemo<{
     label: string;
     detail?: string;
-    measurement?: Measurement;
   } | null>(() => {
     if (!doc || tool === 'sketch') {
       return null;
@@ -2471,26 +2498,25 @@ export function App() {
     const units = doc.units;
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
+      let sampled = false;
       const total = selectedEdges.reduce((sum, edge) => {
         const body = renderedRepresentations[edge.bodyId];
-        return sum + (edgeLength(body, edge.hash, edge.topologyId) ?? 0);
+        const measured = edgeLengthMeasurement(
+          body,
+          edge.hash,
+          edge.topologyId
+        );
+        sampled = sampled || measured?.quality === 'sampled';
+        return sum + (measured?.value ?? 0);
       }, 0);
       const label = `${selectedEdges.length} edges`;
-      const value = total > 0 ? `≈ ${round(total)} ${units}` : undefined;
+      const value =
+        total > 0
+          ? `${sampled ? '≈ ' : ''}${round(total)} ${units}`
+          : undefined;
       return {
         label,
-        detail: value,
-        measurement: value
-          ? {
-              key: `edges:${selectedEdges
-                .map((edge) => `${edge.bodyId}/${edge.topologyId ?? edge.hash}`)
-                .sort()
-                .join(',')}`,
-              kind: 'edge-total',
-              label,
-              value
-            }
-          : undefined
+        detail: value
       };
     }
     if (
@@ -2504,21 +2530,15 @@ export function App() {
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
       const name = edgeLabel(body, hash, topologyId);
-      const length = edgeLength(body, hash, topologyId);
+      const length = edgeLengthMeasurement(body, hash, topologyId);
       const label = body ? `${body.name} · ${name}` : name;
       const value =
-        length !== null && length > 0 ? `${round(length)} ${units}` : undefined;
+        length && length.value > 0
+          ? `${length.quality === 'sampled' ? '≈ ' : ''}${round(length.value)} ${units}`
+          : undefined;
       return {
         label,
-        detail: value,
-        measurement: value
-          ? {
-              key: `edge:${bodyId ?? '?'}/${topologyId ?? hash}`,
-              kind: 'edge',
-              label,
-              value
-            }
-          : undefined
+        detail: value
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
@@ -2528,19 +2548,14 @@ export function App() {
           candidate.topologyId === renderedSelectedTopology.topologyId
       );
       const geometry = face?.geometry;
-      const faceKey = `face:${renderedSelectedTopology.bodyId}/${
-        renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
-      }`;
       if (
         geometry?.featureType === 'through-hole' &&
         geometry.diameter !== undefined
       ) {
-        const label = body ? `${body.name} · Through hole` : 'Through hole';
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: 'Through hole',
-          detail: value,
-          measurement: { key: faceKey, kind: 'hole', label, value }
+          detail: value
         };
       }
       const name = faceLabel(
@@ -2555,15 +2570,12 @@ export function App() {
         geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined;
       return {
         label,
-        measurement:
+        detail:
           cylinderDiameter !== undefined
-            ? {
-                key: faceKey,
-                kind: 'diameter',
-                label,
-                value: `Ø ${round(cylinderDiameter)} ${units}`
-              }
-            : undefined
+            ? `Ø ${round(cylinderDiameter)} ${units}`
+            : geometry?.area !== undefined
+              ? `${round(geometry.area)} ${units}²`
+              : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -2583,14 +2595,7 @@ export function App() {
       const value = `${size.x} × ${size.y} × ${size.z} ${units}`;
       return {
         label: body.name,
-        detail: value,
-        measurement: {
-          key: `body:${body.bodyId}`,
-          kind: 'body',
-          label: body.name,
-          value,
-          note: `${round(body.volume)} ${units}³`
-        }
+        detail: value
       };
     }
     return null;
@@ -2611,32 +2616,207 @@ export function App() {
     [selectionSummary]
   );
 
-  /** View mode's measure tool: off until asked for, and only ever in View. */
+  /** View-only measurement session. None of this enters document/history. */
   const [measuring, setMeasuring] = useState(false);
+  const [measurementMode, setMeasurementMode] =
+    useState<MeasurementMode>('smart');
+  const [measurementDraft, setMeasurementDraft] =
+    useState<MeasurementTarget | null>(null);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
-  const capturedMeasurement =
-    viewMode && measuring ? selectionSummary?.measurement : undefined;
-  // Recording is a side effect of picking rather than a second gesture: with
-  // the tool on, whatever you select and can measure lands on the tape.
-  // `appendMeasurement` returns the list unchanged when nothing is new, and an
-  // unchanged reference is a state update React drops.
+  const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(
+    null
+  );
+  const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
+  const [measurementPrecision, setMeasurementPrecision] = useState(2);
+  const [radialDisplay, setRadialDisplay] =
+    useState<RadialDisplay>('diameter');
+  const measurementDisplay = useMemo<MeasurementDisplayOptions>(
+    () => ({
+      unit: measurementUnit,
+      precision: measurementPrecision,
+      radialDisplay
+    }),
+    [measurementPrecision, measurementUnit, radialDisplay]
+  );
+
+  // A measurement session belongs to one open project, not the application.
   useEffect(() => {
-    if (!capturedMeasurement) {
+    setMeasurements([]);
+    setActiveMeasurementId(null);
+    setMeasurementDraft(null);
+    if (doc) {
+      setMeasurementUnit(doc.units);
+    }
+  }, [doc?.projectId]);
+
+  useEffect(() => {
+    if (!doc || !exactGeometryReady) {
       return;
     }
     setMeasurements((current) =>
-      appendMeasurement(current, capturedMeasurement)
+      refreshMeasurements(current, viewerBodies, doc.version)
     );
-  }, [capturedMeasurement]);
+  }, [doc?.version, exactGeometryReady, viewerBodies]);
 
-  async function copyMeasurements() {
-    if (measurements.length === 0) {
+  function recordMeasurement(measurement: Measurement) {
+    setMeasurements((current) => appendMeasurement(current, measurement));
+    setActiveMeasurementId(measurement.id);
+    setMeasurementDraft(null);
+    setStatus(`${measurement.label} measured.`);
+  }
+
+  function handleMeasurementPick(
+    selection: TopologySelection,
+    additive: boolean,
+    detail?: PickDetail
+  ) {
+    if (!doc || !viewMode || !measuring) {
+      return;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      setStatus('The selected body has no current exact projection to measure.');
+      return;
+    }
+    const point = detail?.point;
+    if (measurementMode === 'smart') {
+      if (selection.kind === 'edge' && additive) {
+        const sameBody = selectedEdges.every(
+          (edge) => edge.bodyId === selection.bodyId
+        );
+        const alreadySelected = selectedEdges.some(
+          (edge) => edge.topologyId === selection.topologyId
+        );
+        const nextEdges =
+          sameBody && alreadySelected
+            ? selectedEdges.filter(
+                (edge) => edge.topologyId !== selection.topologyId
+              )
+            : sameBody
+              ? [...selectedEdges, selection]
+              : [selection];
+        const total = createEdgeTotalMeasurement(
+          viewerBodies,
+          nextEdges,
+          doc.version,
+          doc.units
+        );
+        if (total) {
+          recordMeasurement(total);
+          return;
+        }
+      }
+      const measurement = createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      if (measurement) {
+        recordMeasurement(measurement);
+      } else {
+        setStatus('That selection does not expose a trustworthy measurement.');
+      }
+      return;
+    }
+    const target = measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      setStatus(
+        measurementMode === 'angle'
+          ? 'Angle needs a straight edge, circular axis, or measured face direction.'
+          : 'That selection does not expose a trustworthy measurement point.'
+      );
+      return;
+    }
+    if (!measurementDraft) {
+      setMeasurementDraft(target);
+      setStatus(`${target.label} selected · pick the second target.`);
+      return;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    if (measurement) {
+      recordMeasurement(measurement);
+    } else {
+      setStatus(
+        measurementMode === 'angle'
+          ? 'Those targets do not provide two stable directions; the first target is still selected.'
+          : 'Those targets could not produce a stable distance; the first target is still selected.'
+      );
+    }
+  }
+
+  const measurementAnnotations = useMemo(
+    () => {
+      const pinned = measurements.flatMap((measurement) => {
+        const annotation = measurementToViewportAnnotation(
+          measurement,
+          measurementDisplay,
+          measurement.id === activeMeasurementId
+        );
+        return annotation ? [annotation] : [];
+      });
+      return measurementDraft?.point
+        ? [
+            ...pinned,
+            {
+              id: 'measurement-draft',
+              label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
+              selected: true,
+              status: 'current' as const,
+              anchor: measurementDraft.point,
+              segments: []
+            }
+          ]
+        : pinned;
+    },
+    [
+      activeMeasurementId,
+      measurementDisplay,
+      measurementDraft,
+      measurements
+    ]
+  );
+  const formattedMeasurements = useMemo(
+    () =>
+      Object.fromEntries(
+        measurements.map((measurement) => [
+          measurement.id,
+          formatMeasurement(measurement, measurementDisplay)
+        ])
+      ),
+    [measurementDisplay, measurements]
+  );
+
+  async function copyMeasurements(measurement?: Measurement) {
+    const selected = measurement ? [measurement] : measurements;
+    if (selected.length === 0) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(measurementsToText(measurements));
+      await navigator.clipboard.writeText(
+        measurementsToText(selected, measurementDisplay)
+      );
       setStatus(
-        `Copied ${measurements.length} measurement${measurements.length === 1 ? '' : 's'}.`
+        `Copied ${selected.length} measurement${selected.length === 1 ? '' : 's'}.`
       );
     } catch {
       setStatus('Could not reach the clipboard. Export CSV instead.');
@@ -2648,7 +2828,11 @@ export function App() {
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.measurements.csv`;
-    downloadText(fileName, `${measurementsToCsv(measurements)}\n`, 'text/csv');
+    downloadText(
+      fileName,
+      `${measurementsToCsv(measurements, measurementDisplay)}\n`,
+      'text/csv'
+    );
     setStatus(`Exported ${measurements.length} measurements to ${fileName}.`);
   }
 
@@ -5693,6 +5877,7 @@ export function App() {
       );
       return;
     }
+    handleMeasurementPick(selection, additive, detail);
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -7916,6 +8101,17 @@ export function App() {
       }
       switch (event.key) {
         case 'Escape':
+          if (viewMode && measuring) {
+            event.preventDefault();
+            if (measurementDraft) {
+              setMeasurementDraft(null);
+              setStatus(`${measurementMode} measurement canceled · pick the first target.`);
+            } else {
+              setMeasuring(false);
+              setStatus('Measure off · pinned results remain in this View session.');
+            }
+            return;
+          }
           if (interaction.mode !== 'idle') {
             event.preventDefault();
             if (
@@ -7955,6 +8151,16 @@ export function App() {
         case 'Delete':
         case 'Backspace':
           if (viewMode) {
+            if (activeMeasurementId) {
+              event.preventDefault();
+              setMeasurements((current) =>
+                current.filter(
+                  (measurement) => measurement.id !== activeMeasurementId
+                )
+              );
+              setActiveMeasurementId(null);
+              setStatus('Measurement removed.');
+            }
             return;
           }
           if (selectedFeature) {
@@ -7988,6 +8194,18 @@ export function App() {
       }
 
       const key = event.key.toLowerCase();
+      if (key === 'm' && viewMode) {
+        event.preventDefault();
+        const next = !measuring;
+        setMeasuring(next);
+        setMeasurementDraft(null);
+        setStatus(
+          next
+            ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+            : 'Measure off · pinned results stay available in this View session.'
+        );
+        return;
+      }
       if (key === 'f') {
         setFitSignal((value) => value + 1);
         return;
@@ -8193,7 +8411,13 @@ export function App() {
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
   const viewModeHint = measuring
-    ? 'Click an edge, hole or cylinder to record it · Shift+Click totals edges'
+    ? measurementDraft
+      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
+      : measurementMode === 'smart'
+        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
+        : measurementMode === 'distance'
+          ? 'Distance · pick the first target · centers resolve automatically'
+          : 'Angle · pick a straight edge or measured face direction'
     : selectedTopology?.kind === 'face'
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0
@@ -8633,10 +8857,11 @@ export function App() {
             measuring={measuring}
             onMeasure={(next) => {
               setMeasuring(next);
+              setMeasurementDraft(null);
               setStatus(
                 next
-                  ? 'Measure: every edge, hole or cylinder you pick is recorded.'
-                  : 'Measure off · the list is kept until you clear it.'
+                  ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+                  : 'Measure off · pinned results stay available in this View session.'
               );
             }}
             onFit={() => setFitSignal((value) => value + 1)}
@@ -8721,6 +8946,7 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             bodies={viewerBodies}
+            measurementAnnotations={measurementAnnotations}
             sketches={
               // Region-based rendering (sketchViews) supersedes the legacy
               // single-profile overlays under direct manipulation.
@@ -8818,11 +9044,78 @@ export function App() {
                   {(measuring || measurements.length > 0) && (
                     <MeasurementDock
                       measurements={measurements}
+                      formattedMeasurements={formattedMeasurements}
+                      enabled={measuring}
+                      activeMeasurementId={activeMeasurementId}
+                      mode={measurementMode}
+                      draftTargetLabel={measurementDraft?.label ?? null}
+                      display={measurementDisplay}
+                      onMode={(mode) => {
+                        setMeasuring(true);
+                        setMeasurementMode(mode);
+                        setMeasurementDraft(null);
+                        setStatus(
+                          mode === 'smart'
+                            ? 'Smart measure · pick an edge, face, hole, or body.'
+                            : mode === 'distance'
+                              ? 'Distance · pick the first target.'
+                              : 'Angle · pick the first straight edge or measured face direction.'
+                        );
+                      }}
+                      onUnit={setMeasurementUnit}
+                      onPrecision={setMeasurementPrecision}
+                      onRadialDisplay={setRadialDisplay}
+                      onSelect={setActiveMeasurementId}
+                      onToggleVisibility={(id) =>
+                        setMeasurements((current) =>
+                          current.map((measurement) =>
+                            measurement.id === id
+                              ? {
+                                  ...measurement,
+                                  visible: !measurement.visible
+                                }
+                              : measurement
+                          )
+                        )
+                      }
+                      onRename={(id, label, note) =>
+                        setMeasurements((current) =>
+                          current.map((measurement) =>
+                            measurement.id === id
+                              ? {
+                                  ...measurement,
+                                  label,
+                                  note: note || undefined,
+                                  renamed: true
+                                }
+                              : measurement
+                          )
+                        )
+                      }
+                      onDelete={(id) => {
+                        setMeasurements((current) =>
+                          current.filter((measurement) => measurement.id !== id)
+                        );
+                        setActiveMeasurementId((current) =>
+                          current === id ? null : current
+                        );
+                        setStatus('Measurement removed.');
+                      }}
                       onClear={() => {
+                        if (
+                          appSettings.general.confirmDestructiveActions &&
+                          !window.confirm('Clear every measurement in this View session?')
+                        ) {
+                          return;
+                        }
                         setMeasurements([]);
+                        setActiveMeasurementId(null);
+                        setMeasurementDraft(null);
                         setStatus('Measurement list cleared.');
                       }}
-                      onCopy={() => void copyMeasurements()}
+                      onCopy={(measurement) =>
+                        void copyMeasurements(measurement)
+                      }
                       onExport={exportMeasurements}
                     />
                   )}

@@ -405,13 +405,16 @@
   top: 92px;
   right: 10px;
   z-index: var(--z-viewer-overlay);
-  width: 232px;
+  width: min(320px, calc(100% - 20px));
   max-height: calc(100% - 150px);
   display: flex;
   flex-direction: column;
-  background: var(--color-surface);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
   border: var(--border-thin);
   border-radius: var(--radius-md);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
 }
 
 .measurement-dock-head {
@@ -445,6 +448,84 @@
   cursor: pointer;
 }
 
+.measurement-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  padding: 7px 8px 0;
+}
+
+.measurement-mode-tabs button,
+.measurement-radial-toggle button {
+  min-height: 28px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.measurement-mode-tabs button:hover,
+.measurement-mode-tabs button.active,
+.measurement-radial-toggle button:hover,
+.measurement-radial-toggle button.active {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.measurement-dock-instruction {
+  min-height: 32px;
+  margin: 0;
+  padding: 7px 10px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+.measurement-display-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+  align-items: end;
+  padding: 0 8px 8px;
+  border-bottom: var(--border-thin);
+}
+
+.measurement-display-controls label {
+  display: grid;
+  gap: 3px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.measurement-display-controls select,
+.measurement-row-editor input {
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 6px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-xs);
+}
+
+.measurement-display-controls select:focus-visible,
+.measurement-row-editor input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.measurement-radial-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 3px;
+}
+
 .measurement-dock-clear:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
@@ -464,16 +545,57 @@
 }
 
 .measurement-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
   border-bottom: 1px solid
     color-mix(in srgb, var(--color-border) 55%, transparent);
 }
 
 .measurement-row:last-child {
   border-bottom: 0;
+}
+
+.measurement-row.active {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent-dim) 55%, transparent);
+}
+
+.measurement-row.stale {
+  background: color-mix(in srgb, var(--color-warning) 5%, transparent);
+}
+
+.measurement-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 8px 4px 8px 10px;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.measurement-row-main:hover {
+  background: color-mix(in srgb, var(--color-surface-hover) 60%, transparent);
+}
+
+.measurement-row-main:focus-visible,
+.measurement-row-actions button:focus-visible,
+.measurement-dock-foot button:focus-visible,
+.measurement-mode-tabs button:focus-visible,
+.measurement-radial-toggle button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.measurement-row-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .measurement-row-label {
@@ -486,22 +608,116 @@
   white-space: nowrap;
 }
 
-/* The figure is what the row is for: mono and tabular so a column of them
-   lines up on the decimal, and never the part that gets truncated. */
 .measurement-row-value {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
   color: var(--color-accent-hi);
   font-family: var(--font-mono);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   font-variant-numeric: tabular-nums;
 }
 
 .measurement-row-note {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
+  line-height: var(--lh-normal);
+}
+
+.measurement-row-user-note {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+
+.measurement-quality,
+.measurement-status {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.measurement-quality.exact-analytic,
+.measurement-quality.kernel-integrated {
+  color: var(--color-success);
+}
+
+.measurement-quality.sampled,
+.measurement-status.stale {
+  color: var(--color-warning);
+}
+
+.measurement-quality.unavailable,
+.measurement-status.unresolved {
+  color: var(--color-error);
+}
+
+.measurement-row-actions {
+  width: 31px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  padding: 4px 3px;
+  border-left: 1px solid
+    color-mix(in srgb, var(--color-border) 45%, transparent);
+}
+
+.measurement-row-actions button {
+  min-width: 24px;
+  min-height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.measurement-row-actions button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.measurement-row-editor {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+}
+
+.measurement-row-editor label {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.measurement-row-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.measurement-row-editor-actions button {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
 }
 
 .measurement-dock-foot {

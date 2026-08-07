@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { BodyRepresentation } from '@openzcad/shared';
-import { edgeLabel, edgeLength, faceLabel } from './topologyLabels';
+import {
+  edgeLabel,
+  edgeLength,
+  edgeLengthMeasurement,
+  faceLabel
+} from './topologyLabels';
 
 function makeBody(): BodyRepresentation {
   return {
@@ -109,5 +114,18 @@ describe('edgeLabel / edgeLength', () => {
     expect(edgeLength(body, 11)).toBeCloseTo(7);
     expect(edgeLength(body, 12)).toBe(0);
     expect(edgeLength(undefined, 11)).toBeNull();
+    expect(edgeLengthMeasurement(body, 11)).toEqual({
+      value: 7,
+      quality: 'sampled'
+    });
+  });
+
+  it('prefers the kernel edge length and reports its provenance', () => {
+    const exactBody = makeBody();
+    exactBody.topology!.edges[0]!.length = 6.999_999_999;
+    expect(edgeLengthMeasurement(exactBody, 11)).toEqual({
+      value: 6.999_999_999,
+      quality: 'kernel-integrated'
+    });
   });
 });
