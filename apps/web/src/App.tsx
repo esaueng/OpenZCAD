@@ -1393,7 +1393,11 @@ export function App() {
   const editDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
     : viewMode
-      ? 'View mode is read-only — switch to Build to edit'
+      ? // "Switch to Build" is only advice worth giving to someone who can.
+        // A read-only share pins the mode to View, so telling a viewer to
+        // switch names a route they will find disabled — say why instead.
+        (buildModeDisabledReason ??
+        'View mode is read-only — switch to Build to edit')
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
         : !cloudAvailable || !session || !projectSharingEnabled
