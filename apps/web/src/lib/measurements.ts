@@ -11,6 +11,7 @@ import { edgeLabel, edgeLengthMeasurement, faceLabel } from './topologyLabels';
 import {
   resolveEdge,
   resolveFace,
+  topologyResolutionMessage,
   type TopologyResolutionReason
 } from './topologyResolution';
 import {
@@ -227,6 +228,29 @@ function findFace(
 ): FaceTopology | undefined {
   const found = resolveFace(body, selection);
   return found.ok ? found.entry : undefined;
+}
+
+/**
+ * Why a pick cannot be measured, in the words the status bar should use, or
+ * `null` when it can. Kept here rather than at the call site so a refusal
+ * names the actual obstacle — "two features match this equally" is something a
+ * person can act on, where "does not expose a trustworthy measurement" is not.
+ */
+export function measurementSelectionFailure(
+  body: BodyRepresentation,
+  selection: Pick<
+    TopologySelection,
+    'kind' | 'topologyId' | 'hash' | 'reference'
+  >
+): string | null {
+  if (selection.kind === 'body') {
+    return null;
+  }
+  const found =
+    selection.kind === 'edge'
+      ? resolveEdge(body, selection)
+      : resolveFace(body, selection);
+  return found.ok ? null : topologyResolutionMessage(found.reason);
 }
 
 /**
