@@ -261,7 +261,13 @@ describe('what STL export actually writes', () => {
     expect(stl.volume).toBeLessThan(704.23);
     expect(stl.openEdges).toBe(0);
     expect(stl.facets).toBe(3256);
-    expect(warnings).toEqual([]);
+    // The export is still silent — nothing about the FILE says it is wrong —
+    // but the model that produced it is not: the failed-cut guard names it
+    // upstream of here. Export fidelity and modelling truth are separate
+    // problems and this file is about the first.
+    expect(warnings.join(' ')).toContain(
+      'the tool overlaps this body but the cut did not take'
+    );
   }, 120_000);
 
   // Leakage is much better here — 60 -> 2 and 120 -> 15 open edges — while the
@@ -278,7 +284,9 @@ describe('what STL export actually writes', () => {
       expect(result.stl.facets).toBe(facets);
       // Not watertight, so a slicer must guess or repair.
       expect(result.stl.openEdges).toBe(openEdges);
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings.join(' ')).toContain(
+        'the tool overlaps this body but the cut did not take'
+      );
     },
     120_000
   );

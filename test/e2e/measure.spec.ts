@@ -268,3 +268,38 @@ test('a measurement survives a reload', async ({ page }) => {
     page.getByLabel('Measurement workbench').getByRole('listitem')
   ).toHaveText(recorded!);
 });
+
+test('measurements stay with their own project across a switch', async ({
+  page
+}) => {
+  await createBox(page, 'Measured First Project');
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+
+  const firstWorkbench = page.getByLabel('Measurement workbench');
+  const recorded = await firstWorkbench.getByRole('listitem').textContent();
+  expect(recorded).toBeTruthy();
+  await page.waitForTimeout(700);
+
+  await page.getByTitle('Back to projects').click();
+  await page.getByLabel('Project name').fill('Unmeasured Second Project');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await expect(
+    page.getByLabel('Measurement workbench').getByRole('listitem')
+  ).toHaveCount(0);
+
+  await page.getByTitle('Back to projects').click();
+  await page
+    .locator('.start-tile-open', { hasText: 'Measured First Project' })
+    .click();
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await expect(
+    page.getByLabel('Measurement workbench').getByRole('listitem')
+  ).toHaveText(recorded!);
+});

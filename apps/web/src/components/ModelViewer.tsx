@@ -884,14 +884,6 @@ export function ModelViewer({
    * their arrowheads and witness ticks are pixel-sized, and the world size of
    * a pixel changes with a zoom that never touches the camera's orientation.
    */
-  /**
-   * The snap point the measure preview settled on, if any. Read by the click
-   * so the recorded measurement uses the position the glyph promised — a
-   * marker that does not change the number is a decoration.
-   */
-  const measureSnapRef = useRef<{ x: number; y: number; z: number } | null>(
-    null
-  );
   const measurementDimensionsRef = useRef<
     {
       graphic: DimensionGraphic;
@@ -2334,11 +2326,15 @@ export function ModelViewer({
         onSelectSketchProfileRef.current(result.sketchId);
         return;
       }
-      // A snap the preview resolved wins over the raw ray hit, so the click
-      // records the position the glyph promised. Confined to measuring: the
-      // ref is only ever set while a measure preview is running, and a
-      // modelling pick still wants the point the pointer was actually on.
-      const snapped = measureSnapRef.current;
+      // Recompute from THIS click's candidate and coordinates. Reusing the last
+      // rAF-coalesced hover result can record a point from the previous pointer
+      // position when a move and click arrive before the next animation frame.
+      // Confined to measuring: a modelling pick still wants the point the
+      // pointer was actually on.
+      const snapped =
+        result && onMeasurePreviewRef.current
+          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          : null;
       const detail: PickDetail | undefined = result
         ? {
             point: snapped ?? {
@@ -2537,7 +2533,7 @@ export function ModelViewer({
       const preview = onMeasurePreviewRef.current;
       if (!preview) {
         hud.hide(measurePreviewChip);
-        measureSnapRef.current = null;
+        hud.hide(snapGlyph);
         return;
       }
       const stack = picker.pickAll(event);
@@ -2551,11 +2547,9 @@ export function ModelViewer({
       if (!selection) {
         hud.hide(measurePreviewChip);
         hud.hide(snapGlyph);
-        measureSnapRef.current = null;
         return;
       }
       const snapped = resolveMeasureSnap(event, wouldPick);
-      measureSnapRef.current = snapped?.candidate.point ?? null;
       if (snapped) {
         showSnapGlyph(snapped);
       } else {
@@ -2566,7 +2560,7 @@ export function ModelViewer({
         // The snapped position when there is one, so the preview reports the
         // number the click will actually record rather than the one under the
         // raw cursor.
-        measureSnapRef.current ?? {
+        snapped?.candidate.point ?? {
           x: wouldPick.hit.point.x,
           y: wouldPick.hit.point.y,
           z: wouldPick.hit.point.z
@@ -4516,6 +4510,7 @@ export function ModelViewer({
       clearMoveGizmoHover();
       applyHover(null);
       hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
     };
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
