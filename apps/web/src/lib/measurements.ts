@@ -7,11 +7,21 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import { edgeLabel, edgeLengthMeasurement, faceLabel } from './topologyLabels';
 import {
-  edgeLabel,
-  edgeLengthMeasurement,
-  faceLabel
-} from './topologyLabels';
+  resolveEdge,
+  resolveFace,
+  topologyResolutionMessage,
+  type TopologyResolutionReason
+} from './topologyResolution';
+import {
+  ANGLE_CONVENTION_LABELS,
+  angleBetweenEdges,
+  angleBetweenFaces,
+  angleBetweenLineAndPlane,
+  type AngleConvention,
+  type AngleMeasurement
+} from './measurementGeometry';
 
 export type MeasurementMode = 'smart' | 'distance' | 'angle';
 
@@ -24,9 +34,33 @@ export type MeasurementKind =
   | 'distance'
   | 'angle';
 
+/**
+ * Where a figure came from, and therefore how far it can be trusted.
+ *
+ * `kernel-integrated` used to cover both an edge length and a face area, which
+ * are not comparable: `kernel.edgeLength` takes no deflection parameter and is
+ * exact for every curve type ordinary modelling produces, while
+ * `kernel.faceArea` takes one — and, per `test/measurement-provenance.test.ts`,
+ * is not even bounded by it. A planar face with a curved boundary reads
+ * 1.004e-4 low from a fixed 256-point inscribed polygon no matter what
+ * deflection is asked for.
+ *
+ * The split matters now rather than later: Stage 4 persists these strings, and
+ * a stored vocabulary that conflates exact with approximate cannot be corrected
+ * afterwards without a migration.
+ *
+ * `tessellated` is a floor, not a verdict. A box face's area is exact and is
+ * still labelled `tessellated` today, because nothing published per-face says
+ * which is which. Publishing that provenance is what promotes those figures.
+ */
 export type MeasurementQuality =
+  /** Closed form computed here from exact published parameters. */
   | 'exact-analytic'
-  | 'kernel-integrated'
+  /** A kernel measurement with no deflection parameter and no sampling. */
+  | 'exact-kernel'
+  /** A kernel measurement bounded by, or sampled at, a fixed resolution. */
+  | 'tessellated'
+  /** Derived from display geometry or from where the pointer landed. */
   | 'sampled'
   | 'unavailable';
 
@@ -44,12 +78,15 @@ export interface MeasurementTarget {
   label: string;
   point?: Vector3;
   direction?: Vector3;
+  /**
+   * A straight edge's two ends. Carried so two edges can be told apart from
+   * two edges that MEET: only a shared corner makes an included angle over
+   * 0-180 defensible, because an edge's `direction` follows the kernel's
+   * traversal order rather than the geometry. See `measurementGeometry.ts`.
+   */
+  endpoints?: readonly [Vector3, Vector3];
   semantic:
-    | 'body-center'
-    | 'face-center'
-    | 'circle-center'
-    | 'edge-midpoint'
-    | 'pick';
+    'body-center' | 'face-center' | 'circle-center' | 'edge-midpoint' | 'pick';
   quality: MeasurementQuality;
 }
 
@@ -95,6 +132,18 @@ export interface Measurement {
   result: MeasurementResult;
   quality: MeasurementQuality;
   status: MeasurementStatus;
+  /**
+   * Why the row stopped resolving, when it has. Kept beside `status` rather
+   * than folded into it because "gone" and "now ambiguous" call for different
+   * repairs, and only the second is fixed by re-picking.
+   */
+  reason?: TopologyResolutionReason;
+  /**
+   * Which angle was measured, for `kind: 'angle'`. Shown beside the figure
+   * because a bare "30°" between two faces does not say whether it describes
+   * the material or its normals, and those differ by 120.
+   */
+  angleConvention?: AngleConvention;
   sourceRevision: number;
   sourceUnit: UnitSystem;
   visible: boolean;
@@ -125,16 +174,21 @@ const UNIT_TO_MM: Record<UnitSystem, number> = {
 
 const QUALITY_RANK: Record<MeasurementQuality, number> = {
   'exact-analytic': 0,
-  'kernel-integrated': 1,
-  sampled: 2,
-  unavailable: 3
+  'exact-kernel': 1,
+  tessellated: 2,
+  sampled: 3,
+  unavailable: 4
 };
 
 function vector(x: number, y: number, z: number): Vector3 {
   return { x, y, z };
 }
 
-function addScaled(origin: Vector3, direction: Vector3, scale: number): Vector3 {
+function addScaled(
+  origin: Vector3,
+  direction: Vector3,
+  scale: number
+): Vector3 {
   return vector(
     origin.x + direction.x * scale,
     origin.y + direction.y * scale,
@@ -163,11 +217,7 @@ function normalized(direction: Vector3): Vector3 | null {
 }
 
 function distance(first: Vector3, second: Vector3): number {
-  return Math.hypot(
-    second.x - first.x,
-    second.y - first.y,
-    second.z - first.z
-  );
+  return Math.hypot(second.x - first.x, second.y - first.y, second.z - first.z);
 }
 
 function bodyCenter(body: BodyRepresentation): Vector3 {
@@ -185,54 +235,73 @@ function edgeEndpoints(edge: EdgeTopology): [Vector3, Vector3] | null {
   ];
 }
 
+/**
+ * Both lookups fail closed through {@link resolveEdge}/{@link resolveFace}:
+ * an identity carried by more than one sub-shape yields nothing rather than
+ * the first candidate, so an ambiguous pick is refused instead of measured
+ * against a guess. See ADR-011 and `topologyResolution.ts` for why the
+ * previous `Array.prototype.find` was a live defect on a plain sphere.
+ */
 function findEdge(
   body: BodyRepresentation,
   selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
 ): EdgeTopology | undefined {
-  const edges = body.topology?.edges ?? [];
-  if (selection.reference?.kind === 'edge') {
-    const lineage = edges.find(
-      (edge) =>
-        edge.reference?.kind === 'edge' &&
-        edge.reference.producingFeatureId ===
-          selection.reference?.producingFeatureId &&
-        edge.reference.lineageName === selection.reference?.lineageName
-    );
-    if (lineage) {
-      return lineage;
-    }
-  }
-  return edges.find(
-    (edge) =>
-      (selection.topologyId !== undefined &&
-        edge.topologyId === selection.topologyId) ||
-      (selection.hash !== undefined && edge.hash === selection.hash)
-  );
+  const found = resolveEdge(body, selection);
+  return found.ok ? found.entry : undefined;
 }
 
 function findFace(
   body: BodyRepresentation,
   selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
 ): FaceTopology | undefined {
-  const faces = body.topology?.faces ?? [];
-  if (selection.reference?.kind === 'face') {
-    const lineage = faces.find(
-      (face) =>
-        face.reference?.kind === 'face' &&
-        face.reference.producingFeatureId ===
-          selection.reference?.producingFeatureId &&
-        face.reference.lineageName === selection.reference?.lineageName
-    );
-    if (lineage) {
-      return lineage;
-    }
+  const found = resolveFace(body, selection);
+  return found.ok ? found.entry : undefined;
+}
+
+/**
+ * Why a pick cannot be measured, in the words the status bar should use, or
+ * `null` when it can. Kept here rather than at the call site so a refusal
+ * names the actual obstacle — "two features match this equally" is something a
+ * person can act on, where "does not expose a trustworthy measurement" is not.
+ */
+export function measurementSelectionFailure(
+  body: BodyRepresentation,
+  selection: Pick<
+    TopologySelection,
+    'kind' | 'topologyId' | 'hash' | 'reference'
+  >
+): string | null {
+  if (selection.kind === 'body') {
+    return null;
   }
-  return faces.find(
-    (face) =>
-      (selection.topologyId !== undefined &&
-        face.topologyId === selection.topologyId) ||
-      (selection.hash !== undefined && face.hash === selection.hash)
-  );
+  const found =
+    selection.kind === 'edge'
+      ? resolveEdge(body, selection)
+      : resolveFace(body, selection);
+  return found.ok ? null : topologyResolutionMessage(found.reason);
+}
+
+/**
+ * Why a target stopped resolving, for the row to explain and for a person to
+ * repair by re-picking. `null` when it resolves.
+ */
+export function measurementTargetFailure(
+  target: MeasurementTarget,
+  bodies: readonly BodyRepresentation[]
+): TopologyResolutionReason | null {
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) {
+    return 'body-missing';
+  }
+  if (target.kind === 'body') {
+    return null;
+  }
+  const identity = selectionForTarget(target);
+  const found =
+    target.kind === 'edge'
+      ? resolveEdge(body, identity)
+      : resolveFace(body, identity);
+  return found.ok ? null : found.reason;
 }
 
 function targetKey(target: MeasurementTarget): string {
@@ -286,7 +355,9 @@ export function measurementTargetFromSelection(
       label: body.name,
       point: bodyCenter(body),
       semantic: 'body-center',
-      quality: 'kernel-integrated'
+      // The bbox midpoint. `kernel.boundingBox` is tight rather than a loose
+      // tessellation hull — measured on a sphere, where a hull would show.
+      quality: 'exact-kernel'
     };
   }
   if (selection.kind === 'edge') {
@@ -328,6 +399,7 @@ export function measurementTargetFromSelection(
         label: `${label} midpoint`,
         point: midpoint(endpoints![0], endpoints![1]),
         direction: lineDirection,
+        endpoints: endpoints!,
         semantic: 'edge-midpoint',
         quality: 'exact-analytic'
       };
@@ -361,13 +433,14 @@ export function measurementTargetFromSelection(
       reference: face.reference,
       label: `${label} center`,
       point: midpoint(geometry.axisStart, geometry.axisEnd),
-      direction: normalized(
-        vector(
-          geometry.axisEnd.x - geometry.axisStart.x,
-          geometry.axisEnd.y - geometry.axisStart.y,
-          geometry.axisEnd.z - geometry.axisStart.z
-        )
-      ) ?? undefined,
+      direction:
+        normalized(
+          vector(
+            geometry.axisEnd.x - geometry.axisStart.x,
+            geometry.axisEnd.y - geometry.axisStart.y,
+            geometry.axisEnd.z - geometry.axisStart.z
+          )
+        ) ?? undefined,
       semantic: 'circle-center',
       quality: 'exact-analytic'
     };
@@ -394,7 +467,11 @@ export function measurementTargetFromSelection(
       label,
       point: geometry.center,
       semantic: 'face-center',
-      quality: 'kernel-integrated'
+      // `FaceGeometry.center` is a mean of the face's VERTEX positions, not an
+      // area centroid — exactly reproducible, but not the centre of the face
+      // for anything L-shaped or trimmed. Reproducible is what a measurement
+      // anchor needs, so this is honest rather than exact.
+      quality: 'tessellated'
     };
   }
   return {
@@ -409,7 +486,9 @@ export function measurementTargetFromSelection(
   };
 }
 
-function annotationForEdge(edge: EdgeTopology): MeasurementAnnotation | undefined {
+function annotationForEdge(
+  edge: EdgeTopology
+): MeasurementAnnotation | undefined {
   const endpoints = edgeEndpoints(edge);
   if (!endpoints) {
     return undefined;
@@ -455,7 +534,11 @@ export function createSmartMeasurement(
       kind: 'body',
       label: body.name,
       result: { value: body.volume, dimension: 'volume', components },
-      quality: 'kernel-integrated',
+      // Volume takes a deflection and is provably inexact on a filleted body —
+      // 4.2e-6 low, and the error scales with the whole part rather than with
+      // the blend (test/filleted-body-volume.test.ts). The bbox extents beside
+      // it are exact, but the row's headline figure is the volume.
+      quality: 'tessellated',
       annotation: { anchor: bodyCenter(body), segments: [] }
     };
   }
@@ -482,10 +565,7 @@ export function createSmartMeasurement(
   if (!face || !geometry) {
     return null;
   }
-  if (
-    geometry.surfaceType === 'cylinder' &&
-    geometry.diameter !== undefined
-  ) {
+  if (geometry.surfaceType === 'cylinder' && geometry.diameter !== undefined) {
     return {
       ...common,
       id: `diameter:${targetKey(target)}`,
@@ -518,7 +598,11 @@ export function createSmartMeasurement(
     kind: 'face-area',
     label: target.label,
     result: { value: geometry.area, dimension: 'area' },
-    quality: 'kernel-integrated',
+    // A floor rather than a verdict: a box face's area is exact and lands here
+    // too, because nothing published per-face distinguishes it from a disc cap
+    // that reads 1.004e-4 low. Publishing that provenance promotes the exact
+    // ones without ever overclaiming for the sampled ones.
+    quality: 'tessellated',
     annotation: target.point
       ? { anchor: target.point, segments: [] }
       : undefined
@@ -539,7 +623,9 @@ export function createEdgeTotalMeasurement(
     if (selection.kind !== 'edge') {
       continue;
     }
-    const body = bodies.find((candidate) => candidate.bodyId === selection.bodyId);
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === selection.bodyId
+    );
     if (!body) {
       return null;
     }
@@ -625,33 +711,54 @@ export function createDistanceMeasurement(
   };
 }
 
+/**
+ * Picks the angle convention the pair of picks actually supports.
+ *
+ * A face target carries an outward normal, which is directed; an edge target
+ * carries a traversal direction, which is not. Mixing them without saying so
+ * is how the old `Math.abs` came to fold every angle into 0-90.
+ */
+function angleBetweenTargets(
+  first: MeasurementTarget,
+  second: MeasurementTarget
+): AngleMeasurement | null {
+  const firstIsFace = first.kind === 'face' && first.semantic === 'face-center';
+  const secondIsFace =
+    second.kind === 'face' && second.semantic === 'face-center';
+  if (!first.direction || !second.direction) {
+    return null;
+  }
+  if (firstIsFace && secondIsFace) {
+    return angleBetweenFaces(first.direction, second.direction);
+  }
+  if (firstIsFace !== secondIsFace) {
+    const line = firstIsFace ? second : first;
+    const plane = firstIsFace ? first : second;
+    return angleBetweenLineAndPlane(line.direction!, plane.direction!);
+  }
+  return angleBetweenEdges(
+    { direction: first.direction, endpoints: first.endpoints },
+    { direction: second.direction, endpoints: second.endpoints }
+  );
+}
+
 export function createAngleMeasurement(
   first: MeasurementTarget,
   second: MeasurementTarget,
   sourceRevision: number,
   sourceUnit: UnitSystem
 ): Measurement | null {
-  const firstDirection = first.direction
-    ? normalized(first.direction)
-    : null;
+  const firstDirection = first.direction ? normalized(first.direction) : null;
   const secondDirection = second.direction
     ? normalized(second.direction)
     : null;
   if (!firstDirection || !secondDirection || !first.point || !second.point) {
     return null;
   }
-  const dot = Math.min(
-    1,
-    Math.max(
-      0,
-      Math.abs(
-        firstDirection.x * secondDirection.x +
-          firstDirection.y * secondDirection.y +
-          firstDirection.z * secondDirection.z
-      )
-    )
-  );
-  const angleDeg = (Math.acos(dot) * 180) / Math.PI;
+  const measured = angleBetweenTargets(first, second);
+  if (!measured) {
+    return null;
+  }
   const separation = distance(first.point, second.point);
   const armLength = separation > 1e-9 ? separation * 0.45 : 10;
   const origin = first.point;
@@ -659,8 +766,9 @@ export function createAngleMeasurement(
     id: `angle:${targetKey(first)}:${targetKey(second)}`,
     kind: 'angle',
     label: `${first.label} ∠ ${second.label}`,
+    angleConvention: measured.convention,
     targets: [first, second],
-    result: { value: angleDeg, dimension: 'angle' },
+    result: { value: measured.degrees, dimension: 'angle' },
     quality: worstQuality([first.quality, second.quality]),
     status: 'current',
     sourceRevision,
@@ -709,11 +817,34 @@ export function appendMeasurement(
     };
     return replaced;
   }
-  const appended = [...list, next];
-  return appended.length > MEASUREMENT_LIMIT
-    ? appended.slice(appended.length - MEASUREMENT_LIMIT)
-    : appended;
+  if (!canAppendMeasurement(list, next)) {
+    return list as Measurement[];
+  }
+  return [...list, next];
 }
+
+/**
+ * Whether a new row fits. Re-measuring something already on the list always
+ * does, because that path updates in place rather than growing.
+ *
+ * The cap used to evict the oldest row instead of refusing. That was a
+ * reasonable way to bound a scratch tape, but it is silent data loss the
+ * moment the list outlives the session — someone who measures fifty-one things
+ * would find the first one simply gone, with nothing having said so. A refusal
+ * the caller can report is the version that survives being persisted.
+ */
+export function canAppendMeasurement(
+  list: readonly Measurement[],
+  next: Measurement
+): boolean {
+  return (
+    list.length < MEASUREMENT_LIMIT ||
+    list.some((entry) => entry.id === next.id)
+  );
+}
+
+/** What to tell someone whose measurement did not fit. */
+export const MEASUREMENT_LIMIT_MESSAGE = `Measurement list is full at ${MEASUREMENT_LIMIT}. Delete a row to record another.`;
 
 function resolvedTarget(
   target: MeasurementTarget,
@@ -733,22 +864,32 @@ function resolvedTarget(
     );
   }
   const selection = selectionForTarget(target);
-  const topologyExists =
+  const found =
     target.kind === 'edge'
-      ? findEdge(body, selection) !== undefined
-      : findFace(body, selection) !== undefined;
-  if (
-    !topologyExists ||
-    (target.semantic === 'pick' && purpose !== 'smart')
-  ) {
+      ? resolveEdge(body, selection)
+      : resolveFace(body, selection);
+  if (!found.ok) {
     return null;
   }
-  return measurementTargetFromSelection(
-    body,
-    selection,
-    undefined,
-    purpose
-  );
+  // A target anchored to a raw surface pick rather than to a derived centre
+  // used to be discarded outright outside smart mode, which meant a distance
+  // taken from anywhere on a face could never survive a rebuild. It can, but
+  // only on the hash rung: an ADR-011 hash is a fingerprint of quantized
+  // geometry, so its resolving is proof the surface is still where it was and
+  // the stored point still lies on it. A lineage-only answer proves the same
+  // FEATURE, not the same position — ADR-013 keeps lineage across rigid
+  // transforms by design — so the point is dropped rather than carried onto
+  // geometry that may have moved out from under it.
+  const anchor =
+    target.semantic === 'pick'
+      ? found.via === 'hash'
+        ? target.point
+        : undefined
+      : undefined;
+  if (target.semantic === 'pick' && !anchor) {
+    return null;
+  }
+  return measurementTargetFromSelection(body, selection, anchor, purpose);
 }
 
 function retainRowState(
@@ -765,23 +906,22 @@ function retainRowState(
   };
 }
 
-function measurementTopologyStillExists(
+/**
+ * The first reason any of a measurement's targets failed to resolve, or `null`
+ * when all of them still do. Ordered by the targets themselves so the message
+ * names the same target the row lists first.
+ */
+function firstTargetFailure(
   measurement: Measurement,
   bodies: readonly BodyRepresentation[]
-): boolean {
-  return measurement.targets.every((target) => {
-    const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
-    if (!body) {
-      return false;
+): TopologyResolutionReason | null {
+  for (const target of measurement.targets) {
+    const failure = measurementTargetFailure(target, bodies);
+    if (failure) {
+      return failure;
     }
-    if (target.kind === 'body') {
-      return true;
-    }
-    const selection = selectionForTarget(target);
-    return target.kind === 'edge'
-      ? findEdge(body, selection) !== undefined
-      : findFace(body, selection) !== undefined;
-  });
+  }
+  return null;
 }
 
 /** Re-resolve only by authoritative body/topology identity; never proximity. */
@@ -805,19 +945,28 @@ export function refreshMeasurements(
       resolvedTarget(target, bodies, purpose)
     );
     if (targets.some((target) => target === null)) {
-      const status: MeasurementStatus = measurementTopologyStillExists(
-        measurement,
-        bodies
-      )
-        ? 'stale'
-        : 'unresolved';
-      if (measurement.status === status) {
+      // The topology may still be there and merely unusable for this kind of
+      // measurement (`stale`), or genuinely gone/ambiguous (`unresolved`).
+      const failure = firstTargetFailure(measurement, bodies);
+      const status: MeasurementStatus = failure ? 'unresolved' : 'stale';
+      // `sourceRevision` advances even though no value was recomputed. Without
+      // this the row never matches the short-circuit at the top of the loop, so
+      // it re-evaluates on EVERY refresh — including the ones triggered by
+      // merely hiding a body, which is how a once-stale row could go on to
+      // demote itself against a body list it was never meant to be judged by.
+      if (
+        measurement.status === status &&
+        measurement.reason === (failure ?? undefined) &&
+        measurement.sourceRevision === sourceRevision
+      ) {
         return measurement;
       }
       changed = true;
       return {
         ...measurement,
-        status
+        status,
+        sourceRevision,
+        ...(failure ? { reason: failure } : {})
       };
     }
     const resolved = targets as MeasurementTarget[];
@@ -845,7 +994,9 @@ export function refreshMeasurements(
       );
     } else {
       const target = resolved[0]!;
-      const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === target.bodyId
+      );
       if (body) {
         refreshed = createSmartMeasurement(
           body,
@@ -857,9 +1008,20 @@ export function refreshMeasurements(
       }
     }
     changed = true;
-    return refreshed
-      ? retainRowState(measurement, refreshed)
-      : { ...measurement, status: 'unresolved' as const };
+    if (refreshed) {
+      // `refreshed` carries no `reason`, so a row that starts resolving again
+      // sheds its explanation rather than keeping a stale one beside a fresh
+      // number.
+      return retainRowState(measurement, refreshed);
+    }
+    // Every target resolved, yet no measurement could be rebuilt from them —
+    // the topology is present but no longer supports this kind of figure.
+    return {
+      ...measurement,
+      status: 'unresolved' as const,
+      sourceRevision,
+      reason: firstTargetFailure(measurement, bodies) ?? 'not-found'
+    };
   });
   return changed ? refreshedList : (list as Measurement[]);
 }
@@ -911,13 +1073,13 @@ function formatQuantity(
   )}`;
 }
 
-export function measurementQualityLabel(
-  quality: MeasurementQuality
-): string {
+export function measurementQualityLabel(quality: MeasurementQuality): string {
   switch (quality) {
     case 'exact-analytic':
+    case 'exact-kernel':
+      // Both are exact; the row shows that, and the CSV keeps which kind.
       return 'Exact';
-    case 'kernel-integrated':
+    case 'tessellated':
       return 'Kernel';
     case 'sampled':
       return 'Approx';
@@ -975,7 +1137,12 @@ export function formatMeasurement(
     options.precision
   )} ${unitLabel(result.dimension, options.unit)}`;
   let detail: string | undefined;
-  if (measurement.kind === 'distance' && result.components) {
+  if (measurement.kind === 'angle' && measurement.angleConvention) {
+    // Never show an angle without naming which one it is: the dihedral of a
+    // 30 degree wedge and the angle between its normals are both true, and
+    // they differ by 120.
+    detail = `Angle ${ANGLE_CONVENTION_LABELS[measurement.angleConvention]}`;
+  } else if (measurement.kind === 'distance' && result.components) {
     const component = (value: number) =>
       fixed(
         convertedValue(value, 'length', measurement.sourceUnit, options.unit),
