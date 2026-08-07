@@ -51,6 +51,7 @@ import {
   createExtrudePreviewGeometry,
   createDimensionGraphic,
   createFatLine,
+  measureSnapEdges,
   createFatLineMaterial,
   createFatLineSegments,
   createGradientBackdrop,
@@ -1616,6 +1617,55 @@ export function ModelViewer({
       hud.showAt(snapGlyph, resolved.screen.x, resolved.screen.y);
     }
 
+    /**
+     * The snap point a measuring pointer is asking for, or null.
+     *
+     * Scoped by `measureSnapEdges` before anything is projected. A move drag
+     * collects snaps body-wide, which it can afford because it does so once at
+     * drag start; this runs on every hover frame, and handing `resolveSnap` a
+     * whole imported assembly would be six figures of matrix work per frame.
+     */
+    function resolveMeasureSnap(
+      event: PointerEvent,
+      candidate: PickCandidate
+    ): SnapResolution | null {
+      const bodyId = candidate.selection?.bodyId;
+      const body = bodiesRef.current.find(
+        (entry) => entry.bodyId === bodyId && !entry.consumed
+      );
+      const edges = body?.topology?.edges;
+      if (!edges) {
+        return null;
+      }
+      const selection = candidate.selection;
+      const hoveredEdge =
+        selection?.kind === 'edge'
+          ? (edges.find((entry) => entry.hash === selection.hash) ?? null)
+          : null;
+      const scoped = measureSnapEdges(edges, {
+        edge: hoveredEdge,
+        faceHash: selection?.kind === 'face' ? (selection.hash ?? null) : null
+      });
+      if (scoped.length === 0) {
+        return null;
+      }
+      const local = hud.toLocal(event.clientX, event.clientY);
+      if (!local) {
+        return null;
+      }
+      return resolveSnap(
+        snapsFromEdges(scoped, { label: body?.name }),
+        local,
+        (point) =>
+          projectToScreen(
+            new THREE.Vector3(point.x, point.y, point.z),
+            context.activeCamera,
+            renderer.domElement.clientWidth,
+            renderer.domElement.clientHeight
+          )
+      );
+    }
+
     /** Snap candidates from every body except the one being moved. */
     function collectMoveSnaps(movingBodyId: string | null): SnapCandidate[] {
       return bodiesRef.current
@@ -2276,9 +2326,18 @@ export function ModelViewer({
         onSelectSketchProfileRef.current(result.sketchId);
         return;
       }
+      // Recompute from THIS click's candidate and coordinates. Reusing the last
+      // rAF-coalesced hover result can record a point from the previous pointer
+      // position when a move and click arrive before the next animation frame.
+      // Confined to measuring: a modelling pick still wants the point the
+      // pointer was actually on.
+      const snapped =
+        result && onMeasurePreviewRef.current
+          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: {
+            point: snapped ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -2474,6 +2533,7 @@ export function ModelViewer({
       const preview = onMeasurePreviewRef.current;
       if (!preview) {
         hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
         return;
       }
       const stack = picker.pickAll(event);
@@ -2486,13 +2546,26 @@ export function ModelViewer({
       const selection = wouldPick?.selection;
       if (!selection) {
         hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
         return;
       }
-      const label = preview(selection, {
-        x: wouldPick.hit.point.x,
-        y: wouldPick.hit.point.y,
-        z: wouldPick.hit.point.z
-      });
+      const snapped = resolveMeasureSnap(event, wouldPick);
+      if (snapped) {
+        showSnapGlyph(snapped);
+      } else {
+        hud.hide(snapGlyph);
+      }
+      const label = preview(
+        selection,
+        // The snapped position when there is one, so the preview reports the
+        // number the click will actually record rather than the one under the
+        // raw cursor.
+        snapped?.candidate.point ?? {
+          x: wouldPick.hit.point.x,
+          y: wouldPick.hit.point.y,
+          z: wouldPick.hit.point.z
+        }
+      );
       if (!label) {
         hud.hide(measurePreviewChip);
         return;
@@ -4437,6 +4510,7 @@ export function ModelViewer({
       clearMoveGizmoHover();
       applyHover(null);
       hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
     };
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
