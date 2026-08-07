@@ -457,7 +457,12 @@ export function Sidebar({
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
-              No features yet. Pick a tool from the toolbar above.
+              {/* The feature tools are a vertical rail immediately right of
+                  this panel, running its full height — measured at x 262-334
+                  against the panel's 0-252. Nothing sits above the history
+                  but the rest of the model tree. */}
+              No features yet. Pick a tool from the Feature tools rail, just
+              right of this panel.
             </p>
           )}
           {features.map((feature, index) => {
