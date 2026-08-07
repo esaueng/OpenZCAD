@@ -99,6 +99,17 @@ test('P toggles the camera projection', async ({ page }) => {
   await page.getByLabel('Project name').fill('Projection Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
+  // The projection control ships inside the lazily imported viewer shell, so
+  // wait for the viewport rather than for the workspace around it. The feature
+  // rail renders while `Loading 3D viewport…` is still standing in for the
+  // shell, which makes it a gate that lets this test through too early: on a
+  // loaded runner the chunk can still be arriving, and the failure then reads
+  // as "the ortho button says nothing about its projection" when the button
+  // does not exist yet. Waiting on the canvas waits for the thing under test.
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 15_000
+  });
+
   const orthoButton = page.getByRole('button', { name: /Ortho/ });
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('p');
