@@ -12,12 +12,19 @@ export interface ValidatedFeatureCommitOptions {
    * candidate; committing it alongside the command lets the caller render
    * the new geometry immediately instead of waiting for the broadcast
    * rebuild (which briefly shows the stale meshes).
+   *
+   * It is null when the document moved while `finalize` ran: that rebuild
+   * predates whatever else landed, so attaching it would blank the body the
+   * other operation just produced. The broadcast rebuild fills it in instead.
    */
-  commit(command: AnyCommand, derived: ProjectDocument['derived']): boolean;
+  commit(
+    command: AnyCommand,
+    derived: ProjectDocument['derived'] | null
+  ): boolean;
   commitTransaction(
     label: string,
     commands: AnyCommand[],
-    derived: ProjectDocument['derived']
+    derived: ProjectDocument['derived'] | null
   ): boolean;
   onBusy(busy: boolean): void;
   onStatus(message: string): void;
@@ -39,9 +46,56 @@ export interface ValidatedFeatureTarget {
 }
 
 export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
-  successMessage: string;
+  /**
+   * Emitted once the result body exists. A function is resolved after
+   * `finalize`, so the message can report what finalize actually achieved.
+   */
+  successMessage: string | (() => string);
+  /**
+   * Status while the rebuild runs. The default names an "operation", which
+   * reads wrong for work that takes long enough to be worth narrating.
+   */
+  validatingMessage?: string;
   /** Exact result features reachable from the edited source feature. */
   targets?: readonly ValidatedFeatureTarget[];
+  /**
+   * Rebuilds the candidate once more against the current document when an
+   * unrelated edit lands mid-validation, instead of refusing outright.
+   *
+   * The refusal exists because committing a rebuild computed against a stale
+   * document reverts whatever else landed — so the fresh rebuild, not the
+   * stale one, is what gets committed here. Opt in only where re-applying the
+   * command to the moved document is known to describe the same result: a
+   * STEP import appends a feature whose geometry depends on nothing but its
+   * own source bytes, so the second pass can only agree with the first, and
+   * the parsed source is cached by checksum so it costs no re-parse. An edit
+   * of an existing feature is the opposite case — there the move may be a
+   * conflicting change to the very thing being edited, which the user needs to
+   * be told about rather than silently validated against.
+   */
+  revalidateOnDocumentMove?: boolean;
+  /**
+   * Yields the command actually committed, once validation has accepted the
+   * previewed one. Work a rejection would waste — a large upload, say —
+   * belongs here rather than ahead of the rebuild.
+   *
+   * The returned command MUST carry the same ids as the previewed one. Those
+   * ids are what {@link ValidatedFeatureTarget} named, so a command that
+   * differs in them lands history the acceptance check never looked at.
+   *
+   * The commit lock is released while this runs, because a network transfer is
+   * not geometry and other modelling must not stall behind it. The command it
+   * returns therefore has to stay valid against a document that moved
+   * underneath it — true for a STEP import, whose geometry depends only on its
+   * own source bytes, and the reason no other caller uses this.
+   */
+  finalize?(): Promise<AnyCommand>;
+  /**
+   * Refusal sink for this run, replacing the host's. The host's renders inline
+   * in an open feature form; a caller that has none — the File menu's import —
+   * must not leave its refusal in an unrelated panel.
+   */
+  onFailure?(message: string): void;
   onSuccess?(): void;
 }
 
@@ -53,6 +107,40 @@ export interface ValidatedFeatureTransactionRunOptions {
 }
 
 /**
+ * How a run ended. This was one `false` until a caller had to undo work on
+ * refusal: an import prunes the source blob it wrote, and pruning it on
+ * anything but a verdict against the file itself throws away bytes that are
+ * either still live — `busy`, where the checksum may be the one another import
+ * is committing against — or exactly what the retry needs.
+ *
+ * Only `rejected` means "the candidate was judged and refused".
+ */
+export type ValidatedFeatureOutcome =
+  /** Validated, accepted, and in document history. */
+  | 'committed'
+  /** Validation ran and refused the candidate; nothing changed. */
+  | 'rejected'
+  /** Never validated: no document, or another run holds the commit lock. */
+  | 'busy'
+  /**
+   * Validated, but the document kept moving underneath it, so no verdict on
+   * the candidate itself was ever reached. Like `busy`, and unlike `rejected`,
+   * this says nothing against the input — a caller that undoes its own work on
+   * refusal must keep it here, because the obvious next step is to try the
+   * same input again.
+   */
+  | 'superseded';
+
+export const VALIDATED_FEATURE_BUSY_STATUS =
+  'Another exact operation is still finishing. Try again once it completes.';
+
+export const VALIDATED_FEATURE_REVALIDATING_STATUS =
+  'The document changed while this validated. Rebuilding against the current model…';
+
+export const VALIDATED_FEATURE_SUPERSEDED_STATUS =
+  'The document kept changing while this validated, so nothing was applied. Try again once other edits have settled.';
+
+/**
  * Rebuilds an exact feature candidate before placing it in document history.
  * A rejected candidate leaves the current model, selection, and tool intact.
  */
@@ -61,37 +149,114 @@ export function useValidatedFeatureCommit(
 ) {
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const inFlight = useRef(false);
+  /**
+   * Serialises validate → commit. Held as the running run's own promise rather
+   * than a boolean so a run that stepped aside for `finalize` can wait for
+   * whoever took its place instead of committing on top of them.
+   */
+  const inFlight = useRef<Promise<void> | null>(null);
+
+  function takeLock(): () => void {
+    let settle!: () => void;
+    const held = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    inFlight.current = held;
+    return () => {
+      if (inFlight.current === held) {
+        inFlight.current = null;
+      }
+      settle();
+    };
+  }
+
+  async function waitForLock(): Promise<() => void> {
+    while (inFlight.current) {
+      await inFlight.current;
+    }
+    return takeLock();
+  }
 
   async function validateAndCommit(input: {
     targets: readonly ValidatedFeatureTarget[];
-    successMessage: string;
+    successMessage: string | (() => string);
+    validatingMessage?: string;
+    revalidateOnDocumentMove?: boolean;
     onSuccess?(): void;
+    onFailure?(message: string): void;
     preview(current: ProjectDocument): ProjectDocument;
+    finalize?(): Promise<AnyCommand>;
     commit(
       host: ValidatedFeatureCommitOptions,
-      derived: ProjectDocument['derived']
+      derived: ProjectDocument['derived'] | null,
+      finalized: AnyCommand | null
     ): boolean;
     commitFailure: string;
-  }): Promise<boolean> {
+  }): Promise<ValidatedFeatureOutcome> {
     const host = optionsRef.current;
     const manager = host.manager();
-    if (!manager || inFlight.current) {
-      return false;
+    if (!manager) {
+      // Straight to the host sink: with no project open there is no run of our
+      // own whose form could be showing this.
+      host.onStatus('Open a project before running an exact operation.');
+      host.onFailure?.('Open a project before running an exact operation.');
+      return 'busy';
+    }
+    if (inFlight.current) {
+      // Never silent, on either surface: the refusal used to look identical to
+      // a tool that had simply done nothing, and the status bar alone leaves
+      // an open feature form — the thing the user is actually looking at —
+      // unchanged. This goes to the HOST sink rather than the run's own,
+      // because it is a statement about the operation that owns that form, not
+      // about whatever input this run was carrying.
+      host.onStatus(VALIDATED_FEATURE_BUSY_STATUS);
+      host.onFailure?.(VALIDATED_FEATURE_BUSY_STATUS);
+      return 'busy';
     }
 
-    inFlight.current = true;
-    const current = manager.document;
+    let releaseLock = takeLock();
+    /** The document the candidate in hand was previewed and rebuilt against. */
+    let current = manager.document;
+    const projectSwitched = (): boolean => host.manager() !== manager;
+    const documentMovedFrom = (base: ProjectDocument): boolean =>
+      projectSwitched() ||
+      manager.document.projectId !== base.projectId ||
+      manager.document.version !== base.version;
     host.onBusy(true);
-    host.onStatus('Validating operation with the exact geometry kernel…');
+    host.onStatus(
+      input.validatingMessage ??
+        'Validating operation with the exact geometry kernel…'
+    );
     try {
-      const preview = input.preview(current);
-      const derived = await host.derive(preview);
-      const live = host.manager();
-      const documentMoved =
-        live !== manager ||
-        manager.document.projectId !== current.projectId ||
-        manager.document.version !== current.version;
+      let derived: ProjectDocument['derived'];
+      let documentMoved: boolean;
+      // At most twice: an unrelated edit landing mid-rebuild is not the
+      // candidate's fault, and destroying a multi-minute import over a feature
+      // rename is a punishment out of all proportion to it. A second move ends
+      // the run rather than looping, so a steady stream of edits cannot hold a
+      // rebuild running forever.
+      for (let attempt = 0; ; attempt += 1) {
+        const preview = input.preview(current);
+        derived = await host.derive(preview);
+        documentMoved = documentMovedFrom(current);
+        if (
+          !documentMoved ||
+          !input.revalidateOnDocumentMove ||
+          // A different project is open. Re-previewing would build the
+          // candidate against a document it was never meant for.
+          projectSwitched()
+        ) {
+          break;
+        }
+        if (attempt > 0) {
+          const message = VALIDATED_FEATURE_SUPERSEDED_STATUS;
+          host.onStatus(message);
+          (input.onFailure ?? host.onFailure)?.(message);
+          return 'superseded';
+        }
+        host.onStatus(VALIDATED_FEATURE_REVALIDATING_STATUS);
+        current = manager.document;
+      }
       for (const target of input.targets) {
         const rejection = validatedFeatureRejection({
           featureName: target.featureName,
@@ -108,38 +273,90 @@ export function useValidatedFeatureCommit(
       if (input.targets.length === 0 && documentMoved) {
         throw new Error('The document changed while the operation validated.');
       }
-      if (!input.commit(host, derived)) {
+      // Past the acceptance decision, so anything deferred to `finalize` is
+      // spent only on a candidate that is going into history.
+      let finalized: AnyCommand | null = null;
+      let commitDerived: ProjectDocument['derived'] | null = derived;
+      if (input.finalize) {
+        // The lock covers geometry, and this is a network transfer: holding it
+        // across a 250 MB upload turns every other validated operation into a
+        // silent no-op for minutes. Dropping it and simply carrying on would
+        // interleave a concurrent run with the commit below, so the lock is
+        // handed back and then re-acquired — waiting for whoever took it.
+        releaseLock();
+        try {
+          finalized = await input.finalize();
+        } finally {
+          releaseLock = await waitForLock();
+        }
+        host.onBusy(true);
+        if (host.manager() !== manager) {
+          // A different project is open. Landing an import in it would be
+          // worse than the artifact this leaves unreferenced.
+          throw new Error('The project changed while the operation finished.');
+        }
+        if (documentMovedFrom(current)) {
+          commitDerived = null;
+        }
+      }
+      if (!input.commit(host, commitDerived, finalized)) {
         throw new Error(input.commitFailure);
       }
 
       input.onSuccess?.();
-      host.onStatus(input.successMessage);
-      return true;
+      host.onStatus(
+        typeof input.successMessage === 'function'
+          ? input.successMessage()
+          : input.successMessage
+      );
+      return 'committed';
     } catch (error) {
       const message = errorMessage(error, 'Operation was not applied.');
       host.onStatus(message);
-      host.onFailure?.(message);
-      return false;
+      if (input.onFailure) {
+        input.onFailure(message);
+      } else {
+        host.onFailure?.(message);
+      }
+      return 'rejected';
     } finally {
-      inFlight.current = false;
+      releaseLock();
       host.onBusy(false);
     }
   }
 
   return {
+    /**
+     * Whether a run holds the commit lock right now.
+     *
+     * For callers whose preparation is itself expensive or destructive — an
+     * import writes its source bytes to storage before it can validate
+     * anything — so that work is never spent on a run the lock is about to
+     * refuse. It is a check, not a reservation: a run may still start between
+     * asking and calling {@link run}, which is why `run` reports `busy` too.
+     */
+    isRunning(): boolean {
+      return inFlight.current !== null;
+    },
+
     async run(
       command: AnyCommand,
       runOptions: ValidatedFeatureRunOptions
-    ): Promise<boolean> {
+    ): Promise<ValidatedFeatureOutcome> {
       return validateAndCommit({
         targets: runOptions.targets ?? [runOptions],
         successMessage: runOptions.successMessage,
+        validatingMessage: runOptions.validatingMessage,
+        revalidateOnDocumentMove: runOptions.revalidateOnDocumentMove,
         onSuccess: runOptions.onSuccess,
+        onFailure: runOptions.onFailure,
         preview(current) {
           command.validate(current);
           return command.apply(current);
         },
-        commit: (host, derived) => host.commit(command, derived),
+        finalize: runOptions.finalize,
+        commit: (host, derived, finalized) =>
+          host.commit(finalized ?? command, derived),
         commitFailure: 'The validated operation could not be committed.'
       });
     },
@@ -147,7 +364,7 @@ export function useValidatedFeatureCommit(
     async runTransaction(
       commands: AnyCommand[],
       runOptions: ValidatedFeatureTransactionRunOptions
-    ): Promise<boolean> {
+    ): Promise<ValidatedFeatureOutcome> {
       return validateAndCommit({
         targets: runOptions.targets,
         successMessage: runOptions.successMessage,
