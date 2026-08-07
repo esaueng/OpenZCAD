@@ -412,6 +412,7 @@ import {
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
@@ -419,6 +420,7 @@ import {
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
+  saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
@@ -482,6 +484,7 @@ import type {
  * so naming the module here does not pull it back into the eager chunk.
  */
 import type * as MeasurementModule from './lib/measurements';
+import { buildMeasurementRecord } from './lib/measurementStore';
 import {
   EMPTY_MEASURE_SESSION,
   edgeRunIsTotalable,
@@ -1324,19 +1327,18 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const {
-    run: executeValidatedFeature,
-    isRunning: validatedFeatureRunning
-  } = useValidatedFeatureCommit({
-    manager: () => managerRef.current,
-    derive: (document) => geometry.syncOnce(document),
-    commit: (command, derived) => executeCommand(command, derived ?? undefined),
-    commitTransaction: (label, commands, derived) =>
-      executeTransaction(label, commands, derived ?? undefined),
-    onBusy: setBusy,
-    onStatus: setStatus,
-    onFailure: setFeatureFormError
-  });
+  const { run: executeValidatedFeature, isRunning: validatedFeatureRunning } =
+    useValidatedFeatureCommit({
+      manager: () => managerRef.current,
+      derive: (document) => geometry.syncOnce(document),
+      commit: (command, derived) =>
+        executeCommand(command, derived ?? undefined),
+      commitTransaction: (label, commands, derived) =>
+        executeTransaction(label, commands, derived ?? undefined),
+      onBusy: setBusy,
+      onStatus: setStatus,
+      onFailure: setFeatureFormError
+    });
   /**
    * Checksums of imports between their blob write and their commit decision.
    * Content addressing puts a re-import of the same file on the same key, so
@@ -2696,14 +2698,69 @@ export function App() {
   );
 
   // A measurement session belongs to one open project, not the application.
+  //
+  // The list is cleared first and then restored from storage, so a project
+  // with no stored measurements lands empty rather than inheriting the last
+  // project's. The restore is deliberately not awaited before clearing: an
+  // in-flight read for the PREVIOUS project must not be able to land on this
+  // one, which the id check inside the effect prevents.
   useEffect(() => {
     setMeasurements([]);
     setActiveMeasurementId(null);
     clearMeasurementPicks();
-    if (doc) {
-      setMeasurementUnit(doc.units);
+    if (!doc) {
+      return;
     }
+    const projectId = doc.projectId;
+    setMeasurementUnit(doc.units);
+    let cancelled = false;
+    void loadProjectMeasurements(projectId)
+      .then((record) => {
+        if (cancelled || !record) {
+          return;
+        }
+        setMeasurements(record.measurements);
+        setMeasurementUnit(record.display.unit);
+        setMeasurementPrecision(record.display.precision);
+        setRadialDisplay(record.display.radialDisplay);
+      })
+      .catch(() => {
+        // Storage being unavailable is not worth interrupting anyone over:
+        // measuring still works, it just will not be there next time.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [doc?.projectId]);
+
+  /**
+   * Writes the measurement list back, debounced.
+   *
+   * Coalesced rather than written per pick because a Shift+Click run rewrites
+   * the list on every click, and an IndexedDB put per click would serialise
+   * the whole list each time for a result that is superseded a moment later.
+   */
+  useEffect(() => {
+    if (!doc) {
+      return;
+    }
+    const projectId = doc.projectId;
+    const timeout = window.setTimeout(() => {
+      void saveProjectMeasurements(
+        buildMeasurementRecord(
+          projectId,
+          measurements,
+          measurementDisplay,
+          new Date().toISOString()
+        )
+      ).catch(() => {
+        // Same as the read: a device that cannot store them still measures.
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [doc?.projectId, measurements, measurementDisplay]);
 
   /**
    * The measurement library, loaded on first entry to View mode.
