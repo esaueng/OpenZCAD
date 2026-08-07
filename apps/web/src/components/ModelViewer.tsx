@@ -111,6 +111,7 @@ import {
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
   type SketchModeRig
@@ -323,6 +324,8 @@ export interface NormalToFaceRequest {
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  /** Runtime-only View-mode measurements rendered above exact geometry. */
+  measurementAnnotations: MeasurementViewportAnnotation[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
@@ -699,6 +702,7 @@ const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 export function ModelViewer({
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -845,6 +849,8 @@ export function ModelViewer({
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
+  /** Separate from direct-edit overlays so body rebuilds do not erase it. */
+  const measurementGroupRef = useRef<THREE.Group | null>(null);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -1032,6 +1038,11 @@ export function ModelViewer({
     const overlayGroup = new THREE.Group();
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
+
+    const measurementGroup = new THREE.Group();
+    measurementGroup.name = 'measurements';
+    scene.add(measurementGroup);
+    measurementGroupRef.current = measurementGroup;
 
     const gizmoGroup = new THREE.Group();
     gizmoGroup.name = 'direct-modeling-gizmo';
@@ -4526,6 +4537,7 @@ export function ModelViewer({
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
+      clearGroup(measurementGroup);
       clearGroup(gizmoGroup);
       clearGroup(moveGizmoGroup);
       for (const disposable of [
@@ -4560,6 +4572,60 @@ export function ModelViewer({
       contextRef.current = null;
     };
   }, []);
+
+  // Measurements are session-owned overlays. They use their own group so an
+  // exact body refresh cannot remove a pinned result between React commits.
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = measurementGroupRef.current;
+    if (!context || !group) {
+      return;
+    }
+    clearGroup(group);
+    const resolution = context.fatLineResolution();
+    for (const annotation of measurementAnnotations) {
+      const stale = annotation.status !== 'current';
+      const color = stale
+        ? 0xf59e0b
+        : annotation.selected
+          ? 0x9bd3ff
+          : 0x7cc0ff;
+      for (const segment of annotation.segments) {
+        const line = createFatLine(
+          [
+            new THREE.Vector3(segment.start.x, segment.start.y, segment.start.z),
+            new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
+          ],
+          {
+            color,
+            linewidth: annotation.selected ? 2.4 : 1.6,
+            opacity: stale ? 0.55 : 0.92,
+            depthTest: false,
+            resolution
+          }
+        );
+        line.name = 'measurement-witness';
+        line.raycast = () => undefined;
+        line.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+        group.add(line);
+      }
+      const label = makeLabel(
+        `selection-callout direct-edit-callout measurement-callout${
+          annotation.selected ? ' selected' : ''
+        }${stale ? ' stale' : ''}`,
+        annotation.label
+      );
+      label.name = 'measurement-label';
+      label.position.set(
+        annotation.anchor.x,
+        annotation.anchor.y,
+        annotation.anchor.z
+      );
+      label.element.setAttribute('role', 'status');
+      group.add(label);
+    }
+    context.requestRender();
+  }, [measurementAnnotations]);
 
   // Body geometry is rebuilt only when the derived body projection changes.
   // Selection-only renders reuse the installed meshes, materials, edge
