@@ -2751,3 +2751,62 @@ test('Move is one UI: the gizmo names the feature and picks the body', async ({
   await page.locator('.feature-row', { hasText: 'Lift upper' }).click();
   await expect(inspector.getByLabel('Move Z')).toHaveValue('40');
 });
+
+test('types an exact rectangle while drawing it', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Exact Rectangle');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
+  // Screen-space clicks must wait for the head-on entry tween to settle.
+  await page.waitForTimeout(800);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const corner = {
+    x: bounds.x + bounds.width * 0.4,
+    y: bounds.y + bounds.height * 0.6
+  };
+
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  // Click-click, not press-drag: a single click plants the first corner and
+  // leaves the pointer free, which is the window numeric entry lives in.
+  await page.mouse.click(corner.x, corner.y);
+  await page.mouse.move(corner.x + 120, corner.y - 80, { steps: 5 });
+
+  // Width, Tab, height, Enter. Tab swaps sides rather than converting, because
+  // a rectangle's two sides are independent.
+  await page.keyboard.type('40');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Width: 40');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('20');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Height: 20');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Width: 40');
+  await page.keyboard.press('Enter');
+
+  // Extruding is the honest check that the typed numbers reached the geometry:
+  // on Top (XY) the width lands on X and the height on Y.
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
+  if (!triple) {
+    throw new Error(`no size in selection chip: ${chip}`);
+  }
+  expect(Number(triple[1])).toBeCloseTo(40, 1);
+  expect(Number(triple[2])).toBeCloseTo(20, 1);
+});
