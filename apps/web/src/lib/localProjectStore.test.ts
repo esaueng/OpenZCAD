@@ -5,8 +5,11 @@ import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   deleteLocalProject,
+  deleteSourceBlob,
+  ensureLocalProjectStorage,
   listLocalProjects,
   loadLocalProject,
+  putSourceBlobIfAbsent,
   saveLocalProject,
   saveLocalProjectOrganization
 } from './localProjectStore';
@@ -200,7 +203,59 @@ function traceReads(
   return trace;
 }
 
+/**
+ * Every connection this module opens, and whether it was let go of.
+ *
+ * The store opens one connection per transaction and closes it when the
+ * transaction ends. Nothing in the records shows whether the close happened —
+ * the writes land either way — so it is counted here instead. A leak of one
+ * IDBDatabase per transaction is one per autosave and one per shelf read, and
+ * it stays invisible until some future schema version cannot upgrade past it.
+ */
+interface ConnectionTrace {
+  /** Connections opened and not yet closed. */
+  live(): number;
+  opened(): number;
+  restore(): void;
+}
+
+function traceConnections(): ConnectionTrace {
+  const factory = Object.getPrototypeOf(globalThis.indexedDB) as IDBFactory;
+  const originalOpen = factory.open;
+  const databasePrototype = IDBDatabase.prototype;
+  const originalClose = databasePrototype.close;
+  const open = new Set<IDBDatabase>();
+  let opened = 0;
+
+  databasePrototype.close = function (this: IDBDatabase) {
+    open.delete(this);
+    return originalClose.call(this);
+  };
+  factory.open = function (
+    this: IDBFactory,
+    name: string,
+    version?: number
+  ): IDBOpenDBRequest {
+    const request = originalOpen.call(this, name, version);
+    request.addEventListener('success', () => {
+      opened += 1;
+      open.add(request.result);
+    });
+    return request;
+  };
+
+  return {
+    live: () => open.size,
+    opened: () => opened,
+    restore: () => {
+      factory.open = originalOpen;
+      databasePrototype.close = originalClose;
+    }
+  };
+}
+
 let trace: ReadTrace | null = null;
+let connections: ConnectionTrace | null = null;
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -209,6 +264,67 @@ beforeEach(() => {
 afterEach(() => {
   trace?.restore();
   trace = null;
+  connections?.restore();
+  connections = null;
+});
+
+/**
+ * Two claims the code makes about its transactions that the records left behind
+ * cannot show: a failed one is rolled back rather than half applied, and every
+ * one of them gives its connection back.
+ */
+describe('what a transaction leaves behind', () => {
+  /**
+   * A document `summarizeProjectDocument` cannot project. `saveLocalProject`
+   * issues the document write FIRST and then derives the projection, so this
+   * throws out of the action with a write already in the transaction — the one
+   * failure shape IndexedDB does not abort on by itself, since no request
+   * errored.
+   */
+  function unsummarizable(name: string, id: string): ProjectDocument {
+    const document = projectDocument(name, id);
+    return { ...document, checkpoints: undefined as unknown as [] };
+  }
+
+  it('rolls back the writes of a transaction that could not finish', async () => {
+    // Without the abort, the document write commits on behalf of a save that
+    // failed: the stored document is replaced by one the shelf cannot project,
+    // while the projection still describes the version that is no longer there.
+    // That disagreement is exactly what putting the two in one transaction is
+    // for, and it is invisible on the successful path.
+    await saveLocalProject(projectDocument('Bracket', 'proj-a'));
+
+    await expect(
+      saveLocalProject(unsummarizable('Renamed', 'proj-a'))
+    ).rejects.toThrow();
+
+    expect((await loadLocalProject('proj-a'))?.name).toBe('Bracket');
+    expect((await listLocalProjects()).map((project) => project.name)).toEqual([
+      'Bracket'
+    ]);
+  });
+
+  it('gives every connection back, on the paths that fail as well', async () => {
+    connections = traceConnections();
+
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    const stored = await putSourceBlobIfAbsent(
+      new TextEncoder().encode('ISO-10303-21; /* accounted for */')
+    );
+    await saveLocalProject(projectDocument('Bracket', 'proj-a'));
+    await listLocalProjects();
+    await loadLocalProject('proj-a');
+    await deleteSourceBlob(stored.ref.checksumSha256);
+    await expect(
+      saveLocalProject(unsummarizable('Renamed', 'proj-a'))
+    ).rejects.toThrow();
+
+    // One per transaction, which is the design; none of them still held, which
+    // is the property. A leak here is one connection per autosave and one per
+    // shelf read, growing for the life of the tab.
+    expect(connections.opened()).toBeGreaterThan(5);
+    expect(connections.live()).toBe(0);
+  });
 });
 
 describe('listLocalProjects', () => {
