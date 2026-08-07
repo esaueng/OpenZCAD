@@ -65,6 +65,7 @@ import {
   isSameMoveGizmoFocus,
   makeLabel,
   markExtrudeGizmo,
+  moveCalloutAnchor,
   moveEuler,
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
@@ -1112,12 +1113,8 @@ export function ModelViewer({
         if (child.userData.calloutBodyId !== bodyId || !resting) {
           continue;
         }
-        const anchor = resting.clone().applyEuler(moveEuler(rotationDeg));
-        child.position.set(
-          anchor.x + final.x,
-          anchor.y + final.y,
-          anchor.z + final.z
-        );
+        const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+        child.position.set(anchor.x, anchor.y, anchor.z);
       }
     }
 
@@ -1463,7 +1460,19 @@ export function ModelViewer({
     let latestSketchPointerEvent: PointerEvent | null = null;
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
-    let sketchNumericKind: 'radius' | 'diameter' | 'length' = 'length';
+    let sketchNumericKind:
+      | 'radius'
+      | 'diameter'
+      | 'length'
+      | 'width'
+      | 'height' = 'length';
+    /**
+     * The rectangle's other side while you type this one. A rectangle is the
+     * only shape here with two independent numbers, so Tab parks the value you
+     * finished and swaps which side you are editing; whichever side you never
+     * type keeps whatever the drag was showing.
+     */
+    let sketchNumericOther: string | null = null;
     cancelDirectManipulationRef.current = () => {
       let cancelled = false;
       if (cylinderRadiusDrag) {
@@ -2716,20 +2725,37 @@ export function ModelViewer({
       }
     }
 
+    const SKETCH_NUMERIC_LABELS = {
+      radius: 'Radius',
+      diameter: 'Diameter',
+      length: 'Length',
+      width: 'Width',
+      height: 'Height'
+    } as const;
+
     function renderSketchNumericHud(event: PointerEvent) {
-      const label =
-        sketchNumericKind === 'radius'
-          ? 'Radius'
-          : sketchNumericKind === 'diameter'
-            ? 'Diameter'
-            : 'Length';
-      sketchDimLabel.textContent = `${label}: ${sketchNumericRaw || '…'} ${unitsRef.current} · Enter`;
+      const label = SKETCH_NUMERIC_LABELS[sketchNumericKind];
+      const units = unitsRef.current;
+      // A rectangle shows both sides at once, so it is clear which one Tab is
+      // about to take you to and what the other already holds.
+      const text =
+        sketchNumericKind === 'width' || sketchNumericKind === 'height'
+          ? (() => {
+              const other =
+                sketchNumericKind === 'width' ? 'Height' : 'Width';
+              return `${label}: ${sketchNumericRaw || '…'} ${units} · ${other}: ${
+                sketchNumericOther || 'drag'
+              } · Tab · Enter`;
+            })()
+          : `${label}: ${sketchNumericRaw || '…'} ${units} · Enter`;
+      sketchDimLabel.textContent = text;
       sketchDimLabel.dataset.editing = 'true';
       hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }
 
     function finishSketchNumericEntry() {
       sketchNumericRaw = null;
+      sketchNumericOther = null;
       sketchDimLabel.dataset.editing = 'false';
       hideSketchDimLabel();
     }
@@ -2785,6 +2811,47 @@ export function ModelViewer({
         requestRender();
         return true;
       }
+      if (mode.tool === 'rectangle' && gesture.dragStart) {
+        // Whichever side was not typed keeps the size the drag is showing, so
+        // typing one number pins that side and leaves the other under the
+        // pointer rather than refusing the whole entry.
+        const live = latestSketchPoint ?? gesture.dragStart;
+        const typedOther = Number(sketchNumericOther);
+        const otherValue =
+          sketchNumericOther !== null &&
+          sketchNumericOther !== '' &&
+          Number.isFinite(typedOther) &&
+          typedOther > 0
+            ? typedOther
+            : null;
+        const width =
+          sketchNumericKind === 'width'
+            ? value
+            : (otherValue ?? Math.abs(live.x - gesture.dragStart.x));
+        const height =
+          sketchNumericKind === 'height'
+            ? value
+            : (otherValue ?? Math.abs(live.y - gesture.dragStart.y));
+        // Keep the corner the drag is heading toward: an exact 40x20 typed
+        // while dragging up and left must not flip to down and right.
+        const signX = live.x < gesture.dragStart.x ? -1 : 1;
+        const signY = live.y < gesture.dragStart.y ? -1 : 1;
+        const rectangle = sketchObjectFromDrag('rectangle', gesture.dragStart, {
+          x: gesture.dragStart.x + signX * width,
+          y: gesture.dragStart.y + signY * height
+        });
+        if (!rectangle) {
+          return false;
+        }
+        onSketchCommitRef.current(rectangle);
+        gesture.dragStart = null;
+        gesture.awaitingSecondPoint = false;
+        sketchRigRef.current?.setInProgress(null, false);
+        onSketchDrawingChangeRef.current(false);
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
       if (mode.tool === 'line' && gesture.chainAnchor) {
         const end = pointAtDistanceAlongDirection(
           gesture.chainAnchor,
@@ -2812,6 +2879,7 @@ export function ModelViewer({
         ((mode.tool === 'circle' &&
           mode.circleMode !== 'three-point' &&
           gesture.dragStart !== null) ||
+          (mode.tool === 'rectangle' && gesture.dragStart !== null) ||
           (mode.tool === 'line' && gesture.chainAnchor !== null));
       if (!supported) {
         return false;
@@ -2832,6 +2900,19 @@ export function ModelViewer({
               sketchNumericKind === 'diameter' ? numeric * 2 : numeric / 2
             );
           }
+          if (latestSketchPointerEvent) {
+            renderSketchNumericHud(latestSketchPointerEvent);
+          }
+        }
+        if (mode.tool === 'rectangle') {
+          // Park this side and edit the other. Tab is a swap, not a
+          // conversion: a rectangle's two sides are independent, unlike a
+          // circle's radius and diameter.
+          const parked = sketchNumericRaw;
+          sketchNumericRaw = sketchNumericOther ?? '';
+          sketchNumericOther = parked;
+          sketchNumericKind =
+            sketchNumericKind === 'width' ? 'height' : 'width';
           if (latestSketchPointerEvent) {
             renderSketchNumericHud(latestSketchPointerEvent);
           }
@@ -2858,8 +2939,11 @@ export function ModelViewer({
               ? mode.circleMode === 'two-point-diameter'
                 ? 'diameter'
                 : 'radius'
-              : 'length';
+              : mode.tool === 'rectangle'
+                ? 'width'
+                : 'length';
           sketchNumericRaw = '';
+          sketchNumericOther = null;
         }
         if (event.key !== '.' || !sketchNumericRaw.includes('.')) {
           sketchNumericRaw += event.key;
