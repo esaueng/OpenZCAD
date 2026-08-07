@@ -222,6 +222,7 @@ import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
   IDLE,
+  escapeTarget,
   interactionReducer,
   toolCardFor,
   type FaceTarget
@@ -5659,7 +5660,11 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setTool(null);
-    setStatus('Sketching on the selected face. Esc exits.');
+    // Not "Esc exits": a sketch opens with the Line tool armed, so the first
+    // Escape returns to selection and only the second leaves. The live hint
+    // beside this message already names the rung you are actually on, and two
+    // contradictory promises on one status bar is worse than one honest one.
+    setStatus('Sketching on the selected face · Finish Sketch when done.');
     return true;
   }
 
@@ -7931,7 +7936,15 @@ export function App() {
               edgePreview.clear();
             }
             if (!cancelledPointer) {
+              // Read the rung before climbing it. Escape out of a sketch left
+              // the "Sketching on ..." message standing over a workspace the
+              // sketch had already been left — only Finish Sketch said
+              // anything. Both dispatch the same exit, so both can say so.
+              const leftSketch = escapeTarget(interaction) === 'exit-sketch';
               dispatchInteraction({ type: 'escape' });
+              if (leftSketch) {
+                setStatus('Sketch closed · sketch edits preserved.');
+              }
             }
           } else if (tool || selectedFeatureNodeId) {
             cancelPanel();
@@ -8209,7 +8222,9 @@ export function App() {
                 : selectedTopology?.kind === 'face'
                   ? 'Face selected — Space faces it head-on'
                   : selectedTopology?.kind === 'edge'
-                    ? 'Edge selected — Fillet or Chamfer from the toolbar'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
                     : selectedFeature
                       ? 'Edit in the panel · Del deletes · Esc closes'
                       : viewerBodies.length > 0
@@ -9018,7 +9033,14 @@ export function App() {
                           });
                           setTool(null);
                           setStatus(
-                            `Sketching on the ${plane} plane. Esc exits.`
+                            // Keep the plane id here rather than PLANE_LABELS:
+                            // the e2e test that pins the label-to-plane
+                            // mapping reads this line precisely because it is
+                            // derived from the id, so a rename that only edits
+                            // strings cannot keep it green. Only the "Esc
+                            // exits" claim goes — the armed Line tool makes it
+                            // untrue on the first press.
+                            `Sketching on the ${plane} plane · Finish Sketch when done.`
                           );
                         }}
                       >
