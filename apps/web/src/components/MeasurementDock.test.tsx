@@ -1,9 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  formatMeasurement,
-  type Measurement
-} from '../lib/measurements';
+import { formatMeasurement, type Measurement } from '../lib/measurements';
 import { MeasurementDock } from './MeasurementDock';
 
 function measurement(): Measurement {
@@ -23,7 +20,7 @@ function measurement(): Measurement {
       }
     ],
     result: { value: 84, dimension: 'length' },
-    quality: 'kernel-integrated',
+    quality: 'exact-kernel',
     status: 'current',
     sourceRevision: 3,
     sourceUnit: 'mm',
@@ -31,7 +28,9 @@ function measurement(): Measurement {
   };
 }
 
-function renderDock(overrides: Partial<Parameters<typeof MeasurementDock>[0]> = {}) {
+function renderDock(
+  overrides: Partial<Parameters<typeof MeasurementDock>[0]> = {}
+) {
   const props: Parameters<typeof MeasurementDock>[0] = {
     measurements: [measurement()],
     formattedMeasurements: {
@@ -68,13 +67,18 @@ describe('MeasurementDock', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Distance' }));
     expect(props.onMode).toHaveBeenCalledWith('distance');
     expect(screen.getByLabelText('Measurement units')).toHaveValue('mm');
-    expect(screen.getByLabelText('Measurement decimal places')).toHaveValue('2');
+    expect(screen.getByLabelText('Measurement decimal places')).toHaveValue(
+      '2'
+    );
   });
 
   it('renders value provenance and row actions', () => {
     const { props } = renderDock();
     expect(screen.getByText('84.00 mm')).toBeInTheDocument();
-    expect(screen.getByText('Kernel')).toBeInTheDocument();
+    // An edge length carries no deflection parameter, so it reads Exact. It
+    // used to read Kernel, sharing a tier with face areas that are not.
+    expect(screen.getByText('Exact')).toBeInTheDocument();
+    expect(screen.queryByText('Kernel')).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Hide Bracket · Edge 1'));
     fireEvent.click(screen.getByLabelText('Copy Bracket · Edge 1'));
     fireEvent.click(screen.getByLabelText('Delete Bracket · Edge 1'));
