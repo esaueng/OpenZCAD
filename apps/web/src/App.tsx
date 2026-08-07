@@ -460,11 +460,13 @@ import {
 } from './lib/appSettings';
 import {
   appendMeasurement,
+  canAppendMeasurement,
   createAngleMeasurement,
   createDistanceMeasurement,
   createEdgeTotalMeasurement,
   createSmartMeasurement,
   formatMeasurement,
+  MEASUREMENT_LIMIT_MESSAGE,
   measurementSelectionFailure,
   measurementTargetFromSelection,
   measurementToViewportAnnotation,
@@ -2667,6 +2669,13 @@ export function App() {
   }, [doc?.version, exactGeometryReady, viewerBodies]);
 
   function recordMeasurement(measurement: Measurement) {
+    // Checked before the state update rather than inside it, so the refusal can
+    // be reported. The list is capped rather than self-trimming: dropping the
+    // oldest row to make room is data loss nobody was told about.
+    if (!canAppendMeasurement(measurements, measurement)) {
+      setStatus(MEASUREMENT_LIMIT_MESSAGE);
+      return;
+    }
     setMeasurements((current) => appendMeasurement(current, measurement));
     setActiveMeasurementId(measurement.id);
     setMeasurementDraft(null);

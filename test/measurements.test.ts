@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import {
   appendMeasurement,
+  canAppendMeasurement,
   createAngleMeasurement,
   createDistanceMeasurement,
   createSmartMeasurement,
@@ -166,13 +167,34 @@ describe('measurement workbench records', () => {
     expect(list[1]?.result.value).toBe(20);
   });
 
-  it('drops the oldest rows past the limit', () => {
+  it('refuses past the limit rather than dropping the oldest row', () => {
+    // This used to evict FIFO, which is a reasonable way to bound a scratch
+    // tape and silent data loss the moment the list outlives the session: the
+    // fifty-first measurement would quietly delete the first, and nothing
+    // said so. The cap now holds and the caller reports it.
     let list: Measurement[] = [];
     for (let index = 0; index < MEASUREMENT_LIMIT + 5; index += 1) {
       list = appendMeasurement(list, edge(index));
     }
     expect(list).toHaveLength(MEASUREMENT_LIMIT);
-    expect(list[0]?.label).toBe('Bracket · Edge 5');
+    // The FIRST row survives — under FIFO it was the first thing thrown away.
+    expect(list[0]?.label).toBe('Bracket · Edge 0');
+    expect(list.at(-1)?.label).toBe(`Bracket · Edge ${MEASUREMENT_LIMIT - 1}`);
+  });
+
+  it('still updates a row already on a full list', () => {
+    // A full list must not stop someone re-measuring something already on it:
+    // that path replaces in place and cannot grow the list.
+    let list: Measurement[] = [];
+    for (let index = 0; index < MEASUREMENT_LIMIT; index += 1) {
+      list = appendMeasurement(list, edge(index));
+    }
+    expect(canAppendMeasurement(list, edge(0, 999))).toBe(true);
+    expect(canAppendMeasurement(list, edge(MEASUREMENT_LIMIT + 1))).toBe(false);
+
+    const updated = appendMeasurement(list, edge(0, 999));
+    expect(updated).toHaveLength(MEASUREMENT_LIMIT);
+    expect(updated[0]?.result.value).toBe(999);
   });
 
   it('formats display units without changing the stored source value', () => {
