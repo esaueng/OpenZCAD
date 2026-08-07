@@ -1,6 +1,7 @@
 import type {
   BodyRepresentation,
   EdgeTopology,
+  FaceAreaProvenance,
   FaceTopology,
   TopologyReferenceV5,
   TopologySelection,
@@ -218,6 +219,21 @@ function normalized(direction: Vector3): Vector3 | null {
 
 function distance(first: Vector3, second: Vector3): number {
   return Math.hypot(second.x - first.x, second.y - first.y, second.z - first.z);
+}
+
+/**
+ * How far a face's published area can be trusted.
+ *
+ * The adapter decides this per face, because only it can see the boundary: a
+ * plane bounded by straight edges is exact where the same plane bounded by a
+ * circle is not, and both arrive here as `surfaceType: 'plane'`. An older
+ * projection carries no verdict at all, which must read as approximate rather
+ * than as exact — absence of evidence is not a promise.
+ */
+function faceAreaQuality(geometry: {
+  areaProvenance?: FaceAreaProvenance;
+}): MeasurementQuality {
+  return geometry.areaProvenance === 'exact' ? 'exact-kernel' : 'tessellated';
 }
 
 function bodyCenter(body: BodyRepresentation): Vector3 {
@@ -598,11 +614,7 @@ export function createSmartMeasurement(
     kind: 'face-area',
     label: target.label,
     result: { value: geometry.area, dimension: 'area' },
-    // A floor rather than a verdict: a box face's area is exact and lands here
-    // too, because nothing published per-face distinguishes it from a disc cap
-    // that reads 1.004e-4 low. Publishing that provenance promotes the exact
-    // ones without ever overclaiming for the sampled ones.
-    quality: 'tessellated',
+    quality: faceAreaQuality(geometry),
     annotation: target.point
       ? { anchor: target.point, segments: [] }
       : undefined
