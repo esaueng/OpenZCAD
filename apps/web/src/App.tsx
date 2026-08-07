@@ -458,27 +458,20 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
-import {
-  appendMeasurement,
-  canAppendMeasurement,
-  createAngleMeasurement,
-  createDistanceMeasurement,
-  createEdgeTotalMeasurement,
-  createSmartMeasurement,
-  formatMeasurement,
-  MEASUREMENT_LIMIT_MESSAGE,
-  measurementSelectionFailure,
-  measurementTargetFromSelection,
-  measurementToViewportAnnotation,
-  measurementsToCsv,
-  measurementsToText,
-  refreshMeasurements,
-  type Measurement,
-  type MeasurementDisplayOptions,
-  type MeasurementMode,
-  type MeasurementTarget,
-  type RadialDisplay
+import type {
+  Measurement,
+  MeasurementDisplayOptions,
+  MeasurementMode,
+  MeasurementTarget,
+  MeasurementViewportAnnotation,
+  RadialDisplay
 } from './lib/measurements';
+/**
+ * The measurement module's shape, for the deferred handle below. A type-only
+ * namespace import is erased at build time exactly like the named ones above,
+ * so naming the module here does not pull it back into the eager chunk.
+ */
+import type * as MeasurementModule from './lib/measurements';
 import {
   loadPanelState,
   savePanelState,
@@ -2659,24 +2652,66 @@ export function App() {
     }
   }, [doc?.projectId]);
 
+  /**
+   * The measurement library, loaded on first entry to View mode.
+   *
+   * It is roughly nine kilobytes of derivation, formatting and export that
+   * only View mode can reach, and importing it at the top of this file put all
+   * of it in the eager entry chunk — which the bundle budget guards precisely
+   * because it is what every visitor downloads before anything renders. Types
+   * are erased at build time, so `import type` above costs nothing; only the
+   * runtime import is deferred.
+   *
+   * Every consumer below therefore has to tolerate `null` for the frame or two
+   * between entering View mode and the chunk arriving. That is a real state
+   * rather than a formality: a fast picker can click before it lands, and the
+   * pick is dropped rather than half-handled.
+   *
+   * This is the interim shape. The measure seam replaces it with a session
+   * that owns this state outright instead of App holding it at arm's length.
+   */
+  const [measurementApi, setMeasurementApi] = useState<
+    typeof MeasurementModule | null
+  >(null);
+
   useEffect(() => {
-    if (!doc || !exactGeometryReady) {
+    if (!viewMode || measurementApi) {
+      return;
+    }
+    let cancelled = false;
+    void import('./lib/measurements').then((module) => {
+      if (!cancelled) {
+        setMeasurementApi(module);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, measurementApi]);
+
+  useEffect(() => {
+    if (!doc || !exactGeometryReady || !measurementApi) {
       return;
     }
     setMeasurements((current) =>
-      refreshMeasurements(current, viewerBodies, doc.version)
+      measurementApi.refreshMeasurements(current, viewerBodies, doc.version)
     );
-  }, [doc?.version, exactGeometryReady, viewerBodies]);
+  }, [doc?.version, exactGeometryReady, viewerBodies, measurementApi]);
 
   function recordMeasurement(measurement: Measurement) {
     // Checked before the state update rather than inside it, so the refusal can
     // be reported. The list is capped rather than self-trimming: dropping the
     // oldest row to make room is data loss nobody was told about.
-    if (!canAppendMeasurement(measurements, measurement)) {
-      setStatus(MEASUREMENT_LIMIT_MESSAGE);
+    if (!measurementApi) {
       return;
     }
-    setMeasurements((current) => appendMeasurement(current, measurement));
+    if (!measurementApi.canAppendMeasurement(measurements, measurement)) {
+      setStatus(measurementApi.MEASUREMENT_LIMIT_MESSAGE);
+      return;
+    }
+    setMeasurements((current) =>
+      measurementApi.appendMeasurement(current, measurement)
+    );
     setActiveMeasurementId(measurement.id);
     setMeasurementDraft(null);
     setStatus(`${measurement.label} measured.`);
@@ -2688,6 +2723,13 @@ export function App() {
     detail?: PickDetail
   ) {
     if (!doc || !viewMode || !measuring) {
+      return;
+    }
+    // One guard for the whole handler. Dropping a pick that lands before the
+    // measurement chunk arrives is better than servicing half of it, and the
+    // window is a frame or two on first entry to View mode only.
+    if (!measurementApi) {
+      setStatus('Measure is still loading. Try that pick again.');
       return;
     }
     const body = renderedRepresentations[selection.bodyId];
@@ -2714,7 +2756,7 @@ export function App() {
             : sameBody
               ? [...selectedEdges, selection]
               : [selection];
-        const total = createEdgeTotalMeasurement(
+        const total = measurementApi.createEdgeTotalMeasurement(
           viewerBodies,
           nextEdges,
           doc.version,
@@ -2725,7 +2767,7 @@ export function App() {
           return;
         }
       }
-      const measurement = createSmartMeasurement(
+      const measurement = measurementApi.createSmartMeasurement(
         body,
         selection,
         point,
@@ -2736,13 +2778,13 @@ export function App() {
         recordMeasurement(measurement);
       } else {
         setStatus(
-          measurementSelectionFailure(body, selection) ??
+          measurementApi.measurementSelectionFailure(body, selection) ??
             'That selection does not expose a trustworthy measurement.'
         );
       }
       return;
     }
-    const target = measurementTargetFromSelection(
+    const target = measurementApi.measurementTargetFromSelection(
       body,
       selection,
       point,
@@ -2750,7 +2792,7 @@ export function App() {
     );
     if (!target?.point) {
       setStatus(
-        measurementSelectionFailure(body, selection) ??
+        measurementApi.measurementSelectionFailure(body, selection) ??
           (measurementMode === 'angle'
             ? 'Angle needs a straight edge, circular axis, or measured face direction.'
             : 'That selection does not expose a trustworthy measurement point.')
@@ -2764,13 +2806,13 @@ export function App() {
     }
     const measurement =
       measurementMode === 'distance'
-        ? createDistanceMeasurement(
+        ? measurementApi.createDistanceMeasurement(
             measurementDraft,
             target,
             doc.version,
             doc.units
           )
-        : createAngleMeasurement(
+        : measurementApi.createAngleMeasurement(
             measurementDraft,
             target,
             doc.version,
@@ -2787,9 +2829,14 @@ export function App() {
     }
   }
 
-  const measurementAnnotations = useMemo(() => {
+  const measurementAnnotations = useMemo<
+    MeasurementViewportAnnotation[]
+  >(() => {
+    if (!measurementApi) {
+      return [];
+    }
     const pinned = measurements.flatMap((measurement) => {
-      const annotation = measurementToViewportAnnotation(
+      const annotation = measurementApi.measurementToViewportAnnotation(
         measurement,
         measurementDisplay,
         measurement.id === activeMeasurementId
@@ -2809,26 +2856,34 @@ export function App() {
           }
         ]
       : pinned;
-  }, [activeMeasurementId, measurementDisplay, measurementDraft, measurements]);
+  }, [
+    activeMeasurementId,
+    measurementDisplay,
+    measurementDraft,
+    measurements,
+    measurementApi
+  ]);
   const formattedMeasurements = useMemo(
     () =>
-      Object.fromEntries(
-        measurements.map((measurement) => [
-          measurement.id,
-          formatMeasurement(measurement, measurementDisplay)
-        ])
-      ),
-    [measurementDisplay, measurements]
+      measurementApi
+        ? Object.fromEntries(
+            measurements.map((measurement) => [
+              measurement.id,
+              measurementApi.formatMeasurement(measurement, measurementDisplay)
+            ])
+          )
+        : {},
+    [measurementDisplay, measurements, measurementApi]
   );
 
   async function copyMeasurements(measurement?: Measurement) {
     const selected = measurement ? [measurement] : measurements;
-    if (selected.length === 0) {
+    if (selected.length === 0 || !measurementApi) {
       return;
     }
     try {
       await navigator.clipboard.writeText(
-        measurementsToText(selected, measurementDisplay)
+        measurementApi.measurementsToText(selected, measurementDisplay)
       );
       setStatus(
         `Copied ${selected.length} measurement${selected.length === 1 ? '' : 's'}.`
@@ -2839,13 +2894,13 @@ export function App() {
   }
 
   function exportMeasurements() {
-    if (!doc || measurements.length === 0) {
+    if (!doc || measurements.length === 0 || !measurementApi) {
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.measurements.csv`;
     downloadText(
       fileName,
-      `${measurementsToCsv(measurements, measurementDisplay)}\n`,
+      `${measurementApi.measurementsToCsv(measurements, measurementDisplay)}\n`,
       'text/csv'
     );
     setStatus(`Exported ${measurements.length} measurements to ${fileName}.`);
