@@ -49,6 +49,7 @@ import {
   createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
+  createDimensionGraphic,
   createFatLine,
   createFatLineMaterial,
   createFatLineSegments,
@@ -107,7 +108,8 @@ import {
   type ViewerBodyMaterial,
   type ViewerSettings,
   type FatLineResolution,
-  type BodyEdgeOverlay
+  type BodyEdgeOverlay,
+  type DimensionGraphic
 } from '@openzcad/viewport';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -861,6 +863,20 @@ export function ModelViewer({
   const regionGroupRef = useRef<THREE.Group | null>(null);
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
+  /**
+   * Live dimension graphics with the world points they span.
+   *
+   * Held outside React because the animation loop resizes them every frame:
+   * their arrowheads and witness ticks are pixel-sized, and the world size of
+   * a pixel changes with a zoom that never touches the camera's orientation.
+   */
+  const measurementDimensionsRef = useRef<
+    {
+      graphic: DimensionGraphic;
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+    }[]
+  >([]);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -1138,8 +1154,7 @@ export function ModelViewer({
     ) {
       for (const child of context.overlayGroup.children) {
         const resting = child.userData.calloutRestingPosition as
-          | THREE.Vector3
-          | undefined;
+          THREE.Vector3 | undefined;
         if (child.userData.calloutBodyId !== bodyId || !resting) {
           continue;
         }
@@ -1152,8 +1167,7 @@ export function ModelViewer({
     function restSelectionCallouts() {
       for (const child of context.overlayGroup.children) {
         const resting = child.userData.calloutRestingPosition as
-          | THREE.Vector3
-          | undefined;
+          THREE.Vector3 | undefined;
         if (resting) {
           child.position.copy(resting);
         }
@@ -1499,11 +1513,7 @@ export function ModelViewer({
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
     let sketchNumericKind:
-      | 'radius'
-      | 'diameter'
-      | 'length'
-      | 'width'
-      | 'height' = 'length';
+      'radius' | 'diameter' | 'length' | 'width' | 'height' = 'length';
     /**
      * The rectangle's other side while you type this one. A rectangle is the
      * only shape here with two independent numbers, so Tab parks the value you
@@ -2779,8 +2789,7 @@ export function ModelViewer({
       const text =
         sketchNumericKind === 'width' || sketchNumericKind === 'height'
           ? (() => {
-              const other =
-                sketchNumericKind === 'width' ? 'Height' : 'Width';
+              const other = sketchNumericKind === 'width' ? 'Height' : 'Width';
               return `${label}: ${sketchNumericRaw || '…'} ${units} · ${other}: ${
                 sketchNumericOther || 'drag'
               } · Tab · Enter`;
@@ -4518,6 +4527,18 @@ export function ModelViewer({
           context.fadeIns.delete(material);
         }
       }
+      // Dimensions are resized on every drawn frame, not behind a guard keyed
+      // on the camera's orientation: a wheel-zoom changes the world size of a
+      // pixel without rotating anything, and a rotation guard would leave the
+      // arrowheads frozen at their pre-zoom size. The loop is already
+      // on-demand, so this costs nothing on a still frame.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.update(
+          entry.start,
+          entry.end,
+          moveGizmoWorldScale(worldPerPixelAt(entry.start)) * 0.55
+        );
+      }
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
           (moveGizmoGroup.userData.baseGizmoScale as number | undefined) ?? 1,
@@ -4726,6 +4747,12 @@ export function ModelViewer({
       offsetChip.removeEventListener('click', handleChipClick);
       radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
+      // Dimension graphics own their own geometries and materials; clearing
+      // the group they sit in would orphan those on the GPU.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.dispose();
+      }
+      measurementDimensionsRef.current = [];
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
@@ -4749,6 +4776,10 @@ export function ModelViewer({
     if (!context || !group) {
       return;
     }
+    for (const entry of measurementDimensionsRef.current) {
+      entry.graphic.dispose();
+    }
+    measurementDimensionsRef.current = [];
     clearGroup(group);
     const resolution = context.fatLineResolution();
     for (const annotation of measurementAnnotations) {
@@ -4758,10 +4789,47 @@ export function ModelViewer({
         : annotation.selected
           ? 0x9bd3ff
           : 0x7cc0ff;
-      for (const segment of annotation.segments) {
+      // A measured span is drawn as a drawing's dimension rather than as a
+      // bare line: witness ticks stand it off the geometry, and the arrowheads
+      // say which two points the number is between. Angle arms are not a span,
+      // so they keep the plain line — an arrowhead on the far end of an arm
+      // would claim the arm's length was the measurement.
+      if (annotation.graphic === 'span') {
+        for (const segment of annotation.segments) {
+          const dimension = createDimensionGraphic({ witnessLines: true });
+          const start = new THREE.Vector3(
+            segment.start.x,
+            segment.start.y,
+            segment.start.z
+          );
+          const end = new THREE.Vector3(
+            segment.end.x,
+            segment.end.y,
+            segment.end.z
+          );
+          dimension.object.renderOrder =
+            VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+          dimension.object.traverse((child) => {
+            child.raycast = () => undefined;
+          });
+          group.add(dimension.object);
+          measurementDimensionsRef.current.push({
+            graphic: dimension,
+            start,
+            end
+          });
+        }
+      }
+      for (const segment of annotation.graphic === 'span'
+        ? []
+        : annotation.segments) {
         const line = createFatLine(
           [
-            new THREE.Vector3(segment.start.x, segment.start.y, segment.start.z),
+            new THREE.Vector3(
+              segment.start.x,
+              segment.start.y,
+              segment.start.z
+            ),
             new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
           ],
           {
