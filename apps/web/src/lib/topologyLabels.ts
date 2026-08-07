@@ -127,15 +127,24 @@ export function edgeLabel(
   return match ? `Edge ${match.index + 1}` : 'Edge';
 }
 
-/** Approximate length of an edge's sampled polyline, in document units. */
-export function edgeLength(
+export type EdgeLengthQuality = 'kernel-integrated' | 'sampled';
+
+/**
+ * Length of an edge in document units, with the provenance needed to present
+ * it honestly. New projections publish the kernel measurement; sampled
+ * display points remain a backwards-compatible approximate fallback.
+ */
+export function edgeLengthMeasurement(
   body: BodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
-): number | null {
+): { value: number; quality: EdgeLengthQuality } | null {
   const match = findEdge(body, hash, topologyId);
   if (!match) {
     return null;
+  }
+  if (match.edge.length !== undefined && Number.isFinite(match.edge.length)) {
+    return { value: match.edge.length, quality: 'kernel-integrated' };
   }
   const points = match.edge.points;
   let length = 0;
@@ -146,5 +155,14 @@ export function edgeLength(
       points[index + 2]! - points[index - 1]!
     );
   }
-  return length;
+  return { value: length, quality: 'sampled' };
+}
+
+/** Length-only compatibility helper for selection labels and older callers. */
+export function edgeLength(
+  body: BodyRepresentation | undefined,
+  hash: number | undefined,
+  topologyId?: string
+): number | null {
+  return edgeLengthMeasurement(body, hash, topologyId)?.value ?? null;
 }
