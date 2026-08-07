@@ -3213,8 +3213,20 @@ function measureFaceGeometry(
         y: normal[1]!,
         z: normal[2]!
       };
+      // The plane's own equation, n·x = d, completed here because it is
+      // arithmetic on two values already in hand rather than a kernel call.
+      // `center` is the mean of the face's vertices and every one of them lies
+      // on the plane, so any affine combination of them does too — which makes
+      // this exact, and makes an exact point-to-plane distance computable
+      // without a kernel round trip.
+      geometry.planeOffset =
+        geometry.normal.x * geometry.center.x +
+        geometry.normal.y * geometry.center.y +
+        geometry.normal.z * geometry.center.z;
     } catch {
-      // NURBS-backed planes have no analytic normal; leave it unset.
+      // NURBS-backed planes have no analytic normal; leave both unset. These
+      // are exactly the imported-STEP faces a raw pick tends to land on, so
+      // the absence is load-bearing rather than incidental.
     }
     return geometry;
   }
