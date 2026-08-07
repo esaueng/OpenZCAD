@@ -6153,6 +6153,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             topologyId: `edge:${hash}`,
             hash,
             reference: verifiedReference,
+            length: kernel.edgeLength(edge),
             displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
             adjacentFaceHashes: brepAdjacentFaceHashes(
               edge,
