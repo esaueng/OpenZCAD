@@ -123,6 +123,10 @@ import {
   createInFlightImportChecksums,
   listLocalOnlyImportSources
 } from './lib/importArchival';
+import {
+  LOCAL_AUTOSAVE_FAILED_STATUS,
+  reparkFailedAutosave
+} from './lib/localAutosaveFailure';
 import { runStepImport } from './lib/stepImportRun';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
@@ -3228,8 +3232,19 @@ export function App() {
         controller.schedule(pending);
       }
     } catch {
+      // The document goes back in the queue rather than on the floor. It was
+      // taken out of the ref above so a write that LANDS is not repeated, but a
+      // write that did not land leaves this closure holding the only copy of
+      // those edits — and simply returning loses them outright.
+      const repark = reparkFailedAutosave({
+        pending,
+        queued: pendingLocalSaveRef.current
+      });
+      if (repark) {
+        pendingLocalSaveRef.current = repark;
+      }
       setSaveState('offline');
-      setStatus('Local autosave failed. Export your model before closing.');
+      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
     }
   }
 
