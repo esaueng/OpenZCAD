@@ -5297,7 +5297,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               const droppedOperand = droppedUnionOperandWarning({
                 operands: unionOperands.map((operand) => ({
                   name: operand.name,
-                  bounds: operand.bounds
+                  bounds: operand.bounds,
+                  hasCurvedFaces:
+                    censusOfSolids(kernel, [operand.solid]).curvedFaces > 0
                 })),
                 result: {
                   min: {
