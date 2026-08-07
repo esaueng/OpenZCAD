@@ -500,6 +500,8 @@ export interface SceneContext {
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg']
   ): void;
+  /** Returns selection callouts to the pose their bodies rest at. */
+  restSelectionCallouts(): void;
   grid: THREE.Object3D;
   shadowCatcher: THREE.Object3D;
   keyLight: THREE.DirectionalLight;
@@ -1082,6 +1084,44 @@ export function ModelViewer({
             : 'default'
     });
 
+    /**
+     * Poses the named body's selection callout under the same rotate-then-
+     * translate the mesh just took. At most one callout carries a body id —
+     * the effect that builds them names only the primary selection.
+     */
+    function poseSelectionCallout(
+      bodyId: MovePreview['bodyId'],
+      rotationDeg: MovePreview['rotationDeg'],
+      final: { x: number; y: number; z: number }
+    ) {
+      for (const child of context.overlayGroup.children) {
+        const resting = child.userData.calloutRestingPosition as
+          | THREE.Vector3
+          | undefined;
+        if (child.userData.calloutBodyId !== bodyId || !resting) {
+          continue;
+        }
+        const anchor = resting.clone().applyEuler(moveEuler(rotationDeg));
+        child.position.set(
+          anchor.x + final.x,
+          anchor.y + final.y,
+          anchor.z + final.z
+        );
+      }
+    }
+
+    /** Returns every selection callout to the pose its body rests at. */
+    function restSelectionCallouts() {
+      for (const child of context.overlayGroup.children) {
+        const resting = child.userData.calloutRestingPosition as
+          | THREE.Vector3
+          | undefined;
+        if (resting) {
+          child.position.copy(resting);
+        }
+      }
+    }
+
     function applyMovePreview(
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
@@ -1109,6 +1149,11 @@ export function ModelViewer({
           const final = composeMoveTransform(center, translation, rotationDeg);
           object.rotation.copy(moveEuler(rotationDeg));
           object.position.set(final.x, final.y, final.z);
+          // The mesh rotates about its own origin and then translates, so the
+          // callout's anchor has to take the same two steps to stay over the
+          // body — adding the translation alone would drift it off under any
+          // rotation.
+          poseSelectionCallout(preview.bodyId, rotationDeg, final);
         }
       }
       moveGizmoGroup.position.set(
@@ -1163,6 +1208,7 @@ export function ModelViewer({
       gizmoGroup,
       moveGizmoGroup,
       applyMovePreview,
+      restSelectionCallouts,
       grid,
       shadowCatcher,
       keyLight,
@@ -4879,6 +4925,12 @@ export function ModelViewer({
             `${body.name}${suffix}${count}`
           );
           label.position.copy(top);
+          // The callout lives in the overlay group, not under the body, so a
+          // move preview would leave the name behind while its body slid out
+          // from under it. Record which body it names and where it rests, and
+          // `applyMovePreview` carries it along under the same transform.
+          label.userData.calloutBodyId = primaryId;
+          label.userData.calloutRestingPosition = top.clone();
           context.overlayGroup.add(label);
         }
       }
@@ -4949,6 +5001,7 @@ export function ModelViewer({
         object.position.set(0, 0, 0);
         object.rotation.set(0, 0, 0);
       }
+      context.restSelectionCallouts();
       const overlay = regionGroupRef.current;
       if (overlay) {
         for (const child of overlay.children) {

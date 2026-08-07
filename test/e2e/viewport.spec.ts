@@ -1547,3 +1547,92 @@ test('controls announce themselves as what they are', async ({ page }) => {
     'Box — Primitive, click to edit'
   );
 });
+
+test('the selection callout follows the body it names through a move', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Callout Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  // Selecting the body raises the name callout over it.
+  await page
+    .getByRole('list', { name: 'Bodies' })
+    .getByRole('button', { name: /^Box/ })
+    .click();
+  const callout = page.locator('.selection-callout');
+  await expect(callout).toHaveCount(1);
+
+  // Read the CSS transform, not the page rect: the callout is placed in the
+  // viewer's own pixels, and opening or closing a panel shifts the whole
+  // viewer without the callout having moved over its body at all.
+  const placement = async () =>
+    callout.evaluate((element) => (element as HTMLElement).style.transform);
+  const resting = await placement();
+  expect(resting).toContain('translate(');
+
+  await page.keyboard.press('m');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+
+  // The callout lives in the overlay group rather than under the body, so it
+  // used to sit still while the body slid out from under its own name.
+  await overlay.getByLabel('Move X in mm').fill('40');
+  await expect.poll(placement).not.toBe(resting);
+  const moved = await placement();
+
+  // Rotation turns the anchor about the body's centre, so the callout has to
+  // take that step too rather than only the translation. It must be Y or X:
+  // the anchor sits directly above the centre of the bounding box, which is on
+  // the Z axis of the rotation, and a Z turn leaves a point on its own axis
+  // exactly where it was.
+  await overlay.getByLabel('Rotate Y in degrees').fill('90');
+  await expect.poll(placement).not.toBe(moved);
+
+  // Cancelling restores the resting pose for the callout, not just the mesh.
+  await page.keyboard.press('Escape');
+  await expect(overlay).toBeHidden();
+  await expect.poll(placement).toBe(resting);
+});
+
+test('the sketch status does not promise an exit Escape will not make', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch Status');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  // Exact: the status message now names this control, so the activity-log
+  // button that echoes the status matches a loose "Finish Sketch" too.
+  const finish = page.getByRole('button', { name: 'Finish Sketch', exact: true });
+  await expect(finish).toBeVisible();
+
+  const status = page.getByRole('contentinfo');
+  // A sketch opens with the Line tool armed, so the first Escape returns to
+  // selection. Saying "Esc exits" here contradicted the live hint next to it.
+  await expect(status).toContainText('Sketching on the XY plane');
+  await expect(status).not.toContainText('Esc exits');
+  await expect(status).toContainText('returns to selection');
+
+  // First Escape: still in the sketch, now on the select tool.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeVisible();
+  await expect(status).toContainText('leaves the sketch');
+
+  // Second Escape leaves, and says so rather than leaving the "Sketching on"
+  // message standing over a workspace the sketch has already been left.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeHidden();
+  await expect(status).toContainText('Sketch closed');
+  await expect(status).not.toContainText('Sketching on');
+});
