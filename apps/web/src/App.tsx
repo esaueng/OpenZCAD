@@ -424,6 +424,7 @@ import {
 } from './lib/localProjectStore';
 import {
   applyLocalProjectOrganizations,
+  cachedThumbnailSource,
   mergeProjectSummaries
 } from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
@@ -1024,7 +1025,7 @@ export function App() {
       const cached = await loadProjectThumbnail(project.projectId).catch(
         () => null
       );
-      return cached ? cached.source : undefined;
+      return cachedThumbnailSource(cached, project);
     },
     []
   );
