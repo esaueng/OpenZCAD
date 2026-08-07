@@ -42,3 +42,27 @@ export function composeMoveTransform(
     z: translation.z + center.z - rotated.z
   };
 }
+
+/**
+ * Where a label anchored at `resting` in world space ends up under the move
+ * `composeMoveTransform` produced, so an overlay that is not parented to the
+ * body still tracks it.
+ *
+ * The body mesh rotates about its own origin and then translates by `final`,
+ * so an anchor has to take both steps. Skipping the rotation still moves the
+ * label — `final` already carries the centre compensation — which is why this
+ * lives here with exact expectations rather than being asserted through screen
+ * pixels, where "it moved" passes either way.
+ */
+export function moveCalloutAnchor(
+  resting: Vec3,
+  rotationDeg: Vec3,
+  final: Vec3
+): Vec3 {
+  const rotated = rotateZyx(resting, rotationDeg);
+  return {
+    x: rotated.x + final.x,
+    y: rotated.y + final.y,
+    z: rotated.z + final.z
+  };
+}
