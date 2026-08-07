@@ -240,8 +240,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
       brepkit-wasm:
-        specifier: github:esaueng/brepkit#8733eab7e55c1f7a899210136b2839ab870a4396&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/brepkit/tar.gz/8733eab7e55c1f7a899210136b2839ab870a4396#path:/crates/wasm/pkg
+        specifier: github:esaueng/brepkit#main&path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/brepkit/tar.gz/061c1b2def8803d4fbc1e4f2d171c9a413ab9035#path:/crates/wasm/pkg
 
   packages/persistence:
     dependencies:
@@ -1324,8 +1324,8 @@ packages:
     resolution: {integrity: sha512-JZyDyq3D4AUifKTPOB7DELf6XsB3WdPuNxCtob1vFXPsSXhdAiHBWJ/tJ8HAc9aH84BK+5JFZLNkJKx3G9kzQg==}
     engines: {node: 20 || >=22}
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/8733eab7e55c1f7a899210136b2839ab870a4396#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/8733eab7e55c1f7a899210136b2839ab870a4396}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/061c1b2def8803d4fbc1e4f2d171c9a413ab9035#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/brepkit/tar.gz/061c1b2def8803d4fbc1e4f2d171c9a413ab9035}
     version: 2.129.0
 
   buffer-image-size@0.6.4:
@@ -2933,7 +2933,7 @@ snapshots:
     dependencies:
       balanced-match: 4.0.4
 
-  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/8733eab7e55c1f7a899210136b2839ab870a4396#path:/crates/wasm/pkg: {}
+  brepkit-wasm@https://codeload.github.com/esaueng/brepkit/tar.gz/061c1b2def8803d4fbc1e4f2d171c9a413ab9035#path:/crates/wasm/pkg: {}
 
   buffer-image-size@0.6.4:
     dependencies:
