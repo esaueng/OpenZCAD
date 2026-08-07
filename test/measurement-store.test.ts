@@ -99,6 +99,33 @@ describe('what gets read back', () => {
     expect(parsed?.measurements[0]?.result.value).toBe(10);
   });
 
+  it('sanitizes stored rows instead of casting them into the renderer', () => {
+    const unsafe = {
+      ...record([measurement(1)]),
+      measurements: [
+        {
+          ...measurement(1),
+          annotation: measurement(1).annotation,
+          unknownFutureField: 'do not retain'
+        },
+        {
+          ...persistableMeasurement(measurement(2)),
+          targets: [
+            {
+              ...measurement(2).targets[0],
+              point: { x: 'not a number', y: 0, z: 0 }
+            }
+          ]
+        }
+      ]
+    };
+
+    const parsed = parseStoredMeasurements(unsafe);
+    expect(parsed?.measurements).toHaveLength(1);
+    expect(parsed?.measurements[0]?.annotation).toBeUndefined();
+    expect(parsed?.measurements[0]).not.toHaveProperty('unknownFutureField');
+  });
+
   it('refuses a record from a newer build outright', () => {
     // Reading it partially would be worse than not reading it: this build
     // would drop the fields it did not understand and then write the
@@ -109,6 +136,14 @@ describe('what gets read back', () => {
       version: MEASUREMENT_RECORD_VERSION + 1
     };
     expect(parseStoredMeasurements(future)).toBeNull();
+  });
+
+  it('refuses nonsensical record versions', () => {
+    for (const version of [Number.NaN, -1, 0, 1.5]) {
+      expect(
+        parseStoredMeasurements({ ...record([measurement(1)]), version })
+      ).toBeNull();
+    }
   });
 
   it('drops one malformed row without losing the rest', () => {
