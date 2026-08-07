@@ -5,6 +5,7 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import { formatNumber } from './model';
+import { resolveEdge, resolveFace } from './topologyResolution';
 
 /**
  * Human-readable names for picked topology. Raw fingerprints like
@@ -46,21 +47,22 @@ const PLANAR_NAMES: Record<string, string> = {
   'y:-1': 'Front face'
 };
 
+/**
+ * Both lookups go through the same fail-closed resolver the measurement tape
+ * uses, so the two can never disagree about what a pick refers to.
+ *
+ * That mattered in practice: a sphere's two faces carry one ADR-011 hash, and
+ * while the tape refused to measure either, the selection chip went on
+ * confidently printing an area for "Face 1" — two answers to one pick, which
+ * is exactly the divergence a single shared derivation exists to prevent.
+ */
 function findFace(
   body: BodyRepresentation | undefined,
   hash: number | undefined,
   topologyId: string | undefined
 ): { face: FaceTopology; index: number } | null {
-  const faces = body?.topology?.faces;
-  if (!faces) {
-    return null;
-  }
-  const index = faces.findIndex(
-    (candidate) =>
-      (hash !== undefined && candidate.hash === hash) ||
-      (topologyId !== undefined && candidate.topologyId === topologyId)
-  );
-  return index >= 0 ? { face: faces[index]!, index } : null;
+  const found = resolveFace(body, { hash, topologyId });
+  return found.ok ? { face: found.entry, index: found.index } : null;
 }
 
 function findEdge(
@@ -68,16 +70,8 @@ function findEdge(
   hash: number | undefined,
   topologyId: string | undefined
 ): { edge: EdgeTopology; index: number } | null {
-  const edges = body?.topology?.edges;
-  if (!edges) {
-    return null;
-  }
-  const index = edges.findIndex(
-    (candidate) =>
-      (hash !== undefined && candidate.hash === hash) ||
-      (topologyId !== undefined && candidate.topologyId === topologyId)
-  );
-  return index >= 0 ? { edge: edges[index]!, index } : null;
+  const found = resolveEdge(body, { hash, topologyId });
+  return found.ok ? { edge: found.entry, index: found.index } : null;
 }
 
 /**
@@ -127,7 +121,15 @@ export function edgeLabel(
   return match ? `Edge ${match.index + 1}` : 'Edge';
 }
 
-export type EdgeLengthQuality = 'kernel-integrated' | 'sampled';
+/**
+ * `exact-kernel` rather than the old `kernel-integrated`: `kernel.edgeLength`
+ * takes no deflection parameter, and is exact for LINE and for the CIRCLE a
+ * fillet blend turns out to be — the only two curve types this build's
+ * primitives, booleans and blends produce. Measured in
+ * `test/measurement-provenance.test.ts`, which also declines to grade
+ * BSPLINE_CURVE and ELLIPSE because it did not measure them.
+ */
+export type EdgeLengthQuality = 'exact-kernel' | 'sampled';
 
 /**
  * Length of an edge in document units, with the provenance needed to present
@@ -144,7 +146,7 @@ export function edgeLengthMeasurement(
     return null;
   }
   if (match.edge.length !== undefined && Number.isFinite(match.edge.length)) {
-    return { value: match.edge.length, quality: 'kernel-integrated' };
+    return { value: match.edge.length, quality: 'exact-kernel' };
   }
   const points = match.edge.points;
   let length = 0;

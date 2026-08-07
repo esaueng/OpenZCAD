@@ -639,9 +639,19 @@
   text-transform: uppercase;
 }
 
+/*
+ * The colour ladder mirrors the provenance ladder rather than collapsing it.
+ * `tessellated` used to share the green of an exact figure, which overclaimed:
+ * a face area is bounded by a fixed sample count and a body volume by a
+ * deflection, so neither is the same kind of number as an exact edge length.
+ */
 .measurement-quality.exact-analytic,
-.measurement-quality.kernel-integrated {
+.measurement-quality.exact-kernel {
   color: var(--color-success);
+}
+
+.measurement-quality.tessellated {
+  color: var(--color-text-muted);
 }
 
 .measurement-quality.sampled,
