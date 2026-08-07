@@ -506,6 +506,13 @@ export interface SceneContext {
   ): void;
   /** Returns selection callouts to the pose their bodies rest at. */
   restSelectionCallouts(): void;
+  /**
+   * Marks the frozen shadow map dirty for exactly one frame. The map is
+   * camera-independent, so orbiting must never call this — that freeze is
+   * where most of the render win lives — but anything that moves a caster
+   * must, or its shadow stays where the caster used to be.
+   */
+  refreshShadowMap(): void;
   grid: THREE.Object3D;
   shadowCatcher: THREE.Object3D;
   keyLight: THREE.DirectionalLight;
@@ -944,6 +951,26 @@ export function ModelViewer({
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.autoUpdate = false;
+    /**
+     * The single place that thaws the frozen shadow map, counting refreshes on
+     * the canvas so a test can assert both halves of the contract: orbiting
+     * must not refresh it, moving a body must. Declared here rather than
+     * beside its callers because the light rig calls it during setup, and a
+     * `let` read before its declaration is a dead-zone throw that takes the
+     * whole viewer down.
+     */
+    let shadowRefreshes = 0;
+    function refreshShadowMap() {
+      renderer.shadowMap.needsUpdate = true;
+      shadowRefreshes += 1;
+      renderer.domElement.dataset.e2eShadowRefreshes = String(shadowRefreshes);
+      // The freeze itself, not just the thaws: a refresh count alone cannot
+      // tell that three.js has gone back to updating the map every frame,
+      // which is the regression that would quietly undo the render win.
+      renderer.domElement.dataset.e2eShadowAutoUpdate = String(
+        renderer.shadowMap.autoUpdate
+      );
+    }
     // PCF is the soft one now: three r185 deprecated PCFSoftShadowMap and
     // silently substitutes this, warning on every renderer. Its sampler spreads
     // five Vogel-disk taps over `light.shadow.radius`, tuned in
@@ -1001,7 +1028,10 @@ export function ModelViewer({
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     tuneShadowFrustum(keyLight, 120);
-    renderer.shadowMap.needsUpdate = true;
+    // Through the helper like every other site, so the refresh count on the
+    // canvas starts from a known value rather than being absent until the
+    // first thaw.
+    refreshShadowMap();
     scene.add(keyLight);
     scene.add(keyLight.target);
     // Left, behind, slightly above — cool rim for edge separation.
@@ -1162,6 +1192,13 @@ export function ModelViewer({
           // body — adding the translation alone would drift it off under any
           // rotation.
           poseSelectionCallout(preview.bodyId, rotationDeg, final);
+          // The shadow map is frozen (`autoUpdate = false`) so camera-only
+          // frames reuse it — that is where most of the render win came from.
+          // A body moving under the light is one of the few things that
+          // genuinely invalidates it, and leaving it stale strands the body's
+          // shadow on the ground where the body used to be. Bounded to the
+          // drag: it re-freezes as soon as the preview ends.
+          refreshShadowMap();
         }
       }
       moveGizmoGroup.position.set(
@@ -1217,6 +1254,7 @@ export function ModelViewer({
       moveGizmoGroup,
       applyMovePreview,
       restSelectionCallouts,
+      refreshShadowMap,
       grid,
       shadowCatcher,
       keyLight,
@@ -1361,7 +1399,7 @@ export function ModelViewer({
       cylinderRadiusLabelSetterRef.current?.(null);
       delete renderer.domElement.dataset.e2eCylinderProxyRadius;
       cylinderRadiusProxy = null;
-      renderer.shadowMap.needsUpdate = true;
+      refreshShadowMap();
       requestRender();
     }
 
@@ -5036,7 +5074,7 @@ export function ModelViewer({
       }
       // Bodies are the only dynamic shadow casters; camera and selection-only
       // frames reuse this map until geometry or the light rig changes again.
-      context.renderer.shadowMap.needsUpdate = true;
+      context.refreshShadowMap();
       context.renderedBodies = bodies;
     }
 
@@ -5152,6 +5190,10 @@ export function ModelViewer({
         object.rotation.set(0, 0, 0);
       }
       context.restSelectionCallouts();
+      // Nothing about the document changed, so no rebuild will refresh the
+      // shadow map — without this the shadow stays where the cancelled move
+      // had dragged it.
+      context.refreshShadowMap();
       const overlay = regionGroupRef.current;
       if (overlay) {
         for (const child of overlay.children) {
