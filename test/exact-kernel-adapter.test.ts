@@ -158,6 +158,15 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(body?.topology?.edges.every((edge) => edge.points.length >= 6)).toBe(
       true
     );
+    const edgeLengths = [...(body?.topology?.edges ?? [])]
+      .map((edge) => edge.length)
+      .sort((left, right) => (left ?? 0) - (right ?? 0));
+    expect(edgeLengths).toHaveLength(12);
+    [10, 10, 10, 10, 20, 20, 20, 20, 30, 30, 30, 30].forEach(
+      (expected, index) => {
+        expect(edgeLengths[index]).toBeCloseTo(expected, 8);
+      }
+    );
     // Face hashes are geometric fingerprints: unique per face, positive, and
     // stable across identical rebuilds (they are NOT ordinals).
     const faceHashes = body?.topology?.faces.map((face) => face.hash) ?? [];

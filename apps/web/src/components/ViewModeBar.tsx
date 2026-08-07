@@ -22,7 +22,7 @@ const VIEWS: { id: StandardView; shortcut?: string }[] = [
 interface ViewModeBarProps {
   settings: ViewerSettings;
   projection: ProjectionMode;
-  /** True while picking is narrowed to edges for measurement. */
+  /** True while the View-only measurement workbench owns measurement picks. */
   measuring: boolean;
   onMeasure(measuring: boolean): void;
   onFit(): void;
@@ -87,7 +87,7 @@ export function ViewModeBar({
         type="button"
         className={`view-mode-button wide${measuring ? ' active' : ''}`}
         aria-pressed={measuring}
-        title="Measure — click an edge for its length, Shift-click to total several"
+        title="Measure (M) — inspect geometry, distance, and angle"
         onClick={() => onMeasure(!measuring)}
       >
         <Ruler size={15} aria-hidden="true" />
