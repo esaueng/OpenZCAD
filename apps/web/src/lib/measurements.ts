@@ -34,8 +34,35 @@ export type MeasurementKind =
   | 'distance'
   | 'angle';
 
+/**
+ * Where a figure came from, and therefore how far it can be trusted.
+ *
+ * `kernel-integrated` used to cover both an edge length and a face area, which
+ * are not comparable: `kernel.edgeLength` takes no deflection parameter and is
+ * exact for every curve type ordinary modelling produces, while
+ * `kernel.faceArea` takes one — and, per `test/measurement-provenance.test.ts`,
+ * is not even bounded by it. A planar face with a curved boundary reads
+ * 1.004e-4 low from a fixed 256-point inscribed polygon no matter what
+ * deflection is asked for.
+ *
+ * The split matters now rather than later: Stage 4 persists these strings, and
+ * a stored vocabulary that conflates exact with approximate cannot be corrected
+ * afterwards without a migration.
+ *
+ * `tessellated` is a floor, not a verdict. A box face's area is exact and is
+ * still labelled `tessellated` today, because nothing published per-face says
+ * which is which. Publishing that provenance is what promotes those figures.
+ */
 export type MeasurementQuality =
-  'exact-analytic' | 'kernel-integrated' | 'sampled' | 'unavailable';
+  /** Closed form computed here from exact published parameters. */
+  | 'exact-analytic'
+  /** A kernel measurement with no deflection parameter and no sampling. */
+  | 'exact-kernel'
+  /** A kernel measurement bounded by, or sampled at, a fixed resolution. */
+  | 'tessellated'
+  /** Derived from display geometry or from where the pointer landed. */
+  | 'sampled'
+  | 'unavailable';
 
 export type MeasurementStatus = 'current' | 'stale' | 'unresolved';
 export type MeasurementDimension = 'length' | 'area' | 'volume' | 'angle';
@@ -147,9 +174,10 @@ const UNIT_TO_MM: Record<UnitSystem, number> = {
 
 const QUALITY_RANK: Record<MeasurementQuality, number> = {
   'exact-analytic': 0,
-  'kernel-integrated': 1,
-  sampled: 2,
-  unavailable: 3
+  'exact-kernel': 1,
+  tessellated: 2,
+  sampled: 3,
+  unavailable: 4
 };
 
 function vector(x: number, y: number, z: number): Vector3 {
@@ -327,7 +355,9 @@ export function measurementTargetFromSelection(
       label: body.name,
       point: bodyCenter(body),
       semantic: 'body-center',
-      quality: 'kernel-integrated'
+      // The bbox midpoint. `kernel.boundingBox` is tight rather than a loose
+      // tessellation hull — measured on a sphere, where a hull would show.
+      quality: 'exact-kernel'
     };
   }
   if (selection.kind === 'edge') {
@@ -437,7 +467,11 @@ export function measurementTargetFromSelection(
       label,
       point: geometry.center,
       semantic: 'face-center',
-      quality: 'kernel-integrated'
+      // `FaceGeometry.center` is a mean of the face's VERTEX positions, not an
+      // area centroid — exactly reproducible, but not the centre of the face
+      // for anything L-shaped or trimmed. Reproducible is what a measurement
+      // anchor needs, so this is honest rather than exact.
+      quality: 'tessellated'
     };
   }
   return {
@@ -500,7 +534,11 @@ export function createSmartMeasurement(
       kind: 'body',
       label: body.name,
       result: { value: body.volume, dimension: 'volume', components },
-      quality: 'kernel-integrated',
+      // Volume takes a deflection and is provably inexact on a filleted body —
+      // 4.2e-6 low, and the error scales with the whole part rather than with
+      // the blend (test/filleted-body-volume.test.ts). The bbox extents beside
+      // it are exact, but the row's headline figure is the volume.
+      quality: 'tessellated',
       annotation: { anchor: bodyCenter(body), segments: [] }
     };
   }
@@ -560,7 +598,11 @@ export function createSmartMeasurement(
     kind: 'face-area',
     label: target.label,
     result: { value: geometry.area, dimension: 'area' },
-    quality: 'kernel-integrated',
+    // A floor rather than a verdict: a box face's area is exact and lands here
+    // too, because nothing published per-face distinguishes it from a disc cap
+    // that reads 1.004e-4 low. Publishing that provenance promotes the exact
+    // ones without ever overclaiming for the sampled ones.
+    quality: 'tessellated',
     annotation: target.point
       ? { anchor: target.point, segments: [] }
       : undefined
@@ -1011,8 +1053,10 @@ function formatQuantity(
 export function measurementQualityLabel(quality: MeasurementQuality): string {
   switch (quality) {
     case 'exact-analytic':
+    case 'exact-kernel':
+      // Both are exact; the row shows that, and the CSV keeps which kind.
       return 'Exact';
-    case 'kernel-integrated':
+    case 'tessellated':
       return 'Kernel';
     case 'sampled':
       return 'Approx';
