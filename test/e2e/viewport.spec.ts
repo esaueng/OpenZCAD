@@ -1706,3 +1706,136 @@ test('a viewport callout keeps its position while it animates in', async ({
   expect(offsets).not.toBeNull();
   expect(Math.abs(Number(offsets![1]))).toBeGreaterThan(1);
 });
+
+test('clicking a cube corner past its drawn facet snaps to that isometric view', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Cube Corner');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  // Start somewhere that is definitely not isometric, so arriving there is
+  // the click's doing and not the default camera. The cube's own Front facet
+  // does it without opening the rail flyout, which carries a button of the
+  // same name.
+  await page.getByRole('button', { name: 'Front view', exact: true }).click();
+  await page.waitForTimeout(900);
+
+  // Find a point inside the corner's target but outside the triangle you can
+  // see — the margin the deeper cut adds. Only a real browser can answer this:
+  // it needs the stylesheet's pointer-events and real hit-testing, neither of
+  // which exists in the unit environment.
+  const probe = await page.evaluate(() => {
+    const svg = document.querySelector('.orientation-cube');
+    if (!svg) {
+      return { error: 'no cube' } as const;
+    }
+    const box = svg.getBoundingClientRect();
+    const points = (element: Element) =>
+      (element.getAttribute('points') ?? '')
+        .trim()
+        .split(/\s+/)
+        .map((pair) => pair.split(',').map(Number) as [number, number]);
+    const area = (poly: [number, number][]) => {
+      let sum = 0;
+      for (let i = 0; i < poly.length; i += 1) {
+        const a = poly[i]!;
+        const b = poly[(i + 1) % poly.length]!;
+        sum += a[0] * b[1] - b[0] * a[1];
+      }
+      return Math.abs(sum) / 2;
+    };
+    const inside = (poly: [number, number][], x: number, y: number) => {
+      let hit = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i]!;
+        const [xj, yj] = poly[j]!;
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+          hit = !hit;
+        }
+      }
+      return hit;
+    };
+    const groups = [...svg.querySelectorAll('.cube-corner-target')]
+      .map((group) => ({
+        drawn: group.querySelector('.cube-corner')!,
+        target: group.querySelector('.cube-corner-hit')!
+      }))
+      .filter((pair) => pair.drawn.getAttribute('points'));
+    // The corner most turned toward the camera is the one worth aiming at, and
+    // foreshortening makes it the largest.
+    const best = groups.sort(
+      (a, b) => area(points(b.drawn)) - area(points(a.drawn))
+    )[0];
+    if (!best) {
+      return { error: 'no visible corner' } as const;
+    }
+    const drawn = points(best.drawn);
+    const target = points(best.target);
+    const cx = target.reduce((sum, p) => sum + p[0], 0) / target.length;
+    const cy = target.reduce((sum, p) => sum + p[1], 0) / target.length;
+    for (const vertex of target) {
+      for (let t = 0.05; t < 0.95; t += 0.05) {
+        const x = vertex[0] + (cx - vertex[0]) * t;
+        const y = vertex[1] + (cy - vertex[1]) * t;
+        if (inside(target, x, y) && !inside(drawn, x, y)) {
+          const clientX = box.left + x;
+          const clientY = box.top + y;
+          const top = document.elementFromPoint(clientX, clientY);
+          return {
+            x: clientX,
+            y: clientY,
+            owner: top?.getAttribute('class') ?? null,
+            label: top?.getAttribute('aria-label') ?? null,
+            targetArea: Math.round(area(target)),
+            drawnArea: Math.round(area(drawn))
+          } as const;
+        }
+      }
+    }
+    return { error: 'no margin point' } as const;
+  });
+
+  if ('error' in probe) {
+    throw new Error(`corner probe failed: ${probe.error}`);
+  }
+  // The margin exists, belongs to the corner, and is more than the facet.
+  expect(probe.owner).toBe('cube-corner-hit');
+  expect(probe.label).toMatch(/isometric view$/);
+  expect(probe.targetArea).toBeGreaterThan(probe.drawnArea * 2);
+
+  await page.mouse.click(probe.x, probe.y);
+  await page.waitForTimeout(900);
+
+  const pose = await page.evaluate((storageKey) => {
+    const raw = localStorage.getItem(storageKey);
+    const views = raw
+      ? (
+          JSON.parse(raw) as {
+            views?: Record<
+              string,
+              { camera: { position: number[]; target: number[] } }
+            >;
+          }
+        ).views
+      : undefined;
+    return views ? (Object.values(views)[0]?.camera ?? null) : null;
+  }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  expect(pose).not.toBeNull();
+  const direction = pose!.position.map(
+    (value, axis) => value - pose!.target[axis]!
+  );
+  const distance = Math.hypot(...direction);
+  // An isometric view looks down a cube diagonal: all three components equal.
+  for (const component of direction) {
+    expect(Math.abs(Math.abs(component) / distance)).toBeCloseTo(0.5774, 2);
+  }
+});
