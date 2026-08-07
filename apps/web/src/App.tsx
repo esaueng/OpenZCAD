@@ -41,6 +41,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import {
+  createBodyFeatureIds,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -114,6 +115,7 @@ import type {
   AuthConfigResponse,
   AuthSession,
   HealthResponse,
+  ImportedSourceReference,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import { toArtifactId, toUserId } from '@openzcad/shared';
@@ -121,7 +123,9 @@ import { ApiError, api } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
 import {
   archiveLocalOnlyImportSources,
-  listLocalOnlyImportSources
+  createInFlightImportChecksums,
+  listLocalOnlyImportSources,
+  settleImportSource
 } from './lib/importArchival';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
@@ -404,6 +408,7 @@ import {
   clearAllLastSyncedVersions,
   clearLastSyncedVersion,
   deleteLocalProject,
+  deleteSourceBlob,
   listLocalProjectOrganizations,
   listLocalProjects,
   loadLastSyncedVersion,
@@ -411,7 +416,7 @@ import {
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
-  putSourceBlob,
+  putSourceBlobIfAbsent,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
@@ -428,7 +433,11 @@ import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
-import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
+import {
+  useValidatedFeatureCommit,
+  VALIDATED_FEATURE_BUSY_STATUS,
+  type ValidatedFeatureOutcome
+} from './hooks/useValidatedFeatureCommit';
 import { affectedFeatureTargets } from './lib/affectedFeatureTargets';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
@@ -1315,16 +1324,38 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const { run: executeValidatedFeature } = useValidatedFeatureCommit({
+  const {
+    run: executeValidatedFeature,
+    isRunning: validatedFeatureRunning
+  } = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
-    commit: (command, derived) => executeCommand(command, derived),
+    commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
-      executeTransaction(label, commands, derived),
+      executeTransaction(label, commands, derived ?? undefined),
     onBusy: setBusy,
     onStatus: setStatus,
     onFailure: setFeatureFormError
   });
+  /**
+   * Checksums of imports between their blob write and their commit decision.
+   * Content addressing puts a re-import of the same file on the same key, so
+   * without this a second import's cleanup can delete the bytes the first one
+   * is still validating against.
+   */
+  const inFlightImportChecksums = useRef(createInFlightImportChecksums());
+  /**
+   * Checksums this tab wrote for an import that then ended without a verdict on
+   * the file — the document moved out from under it, or the commit lock had
+   * been taken by the time it asked. The bytes are deliberately kept: they are
+   * exactly what the retry needs, and content addressing makes that retry's
+   * write a no-op instead of another 250 MB.
+   *
+   * Remembering them is what keeps the retry's cleanup armed. Without it the
+   * retry finds the key already present, concludes it is not its to delete, and
+   * a genuine kernel refusal would then keep the whole source forever.
+   */
+  const abandonedImportChecksums = useRef(new Set<string>());
 
   const projectSharingPreferenceEnabled = appSettings.collaboration.enabled;
   const projectSharingEnabled =
@@ -1446,11 +1477,19 @@ export function App() {
                     : 'Waiting for the project edit lease'
                   : null;
 
+  // Read through a ref, because an async caller holds the closure of the
+  // render it started in: a STEP import that spends minutes rebuilding and
+  // archiving would otherwise check a permission that was current before View
+  // mode was entered or the project was opened in a second tab.
+  const editDisabledReasonRef = useRef(editDisabledReason);
+  editDisabledReasonRef.current = editDisabledReason;
+
   function ensureCanEdit(action = 'edit this project'): boolean {
-    if (!editDisabledReason) {
+    const reason = editDisabledReasonRef.current;
+    if (!reason) {
       return true;
     }
-    setStatus(`Cannot ${action}: ${editDisabledReason}.`);
+    setStatus(`Cannot ${action}: ${reason}.`);
     return false;
   }
 
@@ -5463,7 +5502,9 @@ export function App() {
       throw new Error('No project is open.');
     }
     if (!ensureCanEdit('upload a project artifact')) {
-      throw new Error(editDisabledReason ?? 'Project editing is unavailable.');
+      throw new Error(
+        editDisabledReasonRef.current ?? 'Project editing is unavailable.'
+      );
     }
     const { session: upload } = await api.createUploadSession({
       projectId: doc.projectId,
@@ -5560,14 +5601,40 @@ export function App() {
       return;
     }
 
+    // Asked BEFORE anything is written: a run that cannot proceed must not
+    // leave up to 250 MB of source bytes behind it. Nothing sweeps unreferenced
+    // blobs, so those bytes would be permanent — and their mere presence would
+    // then disarm the cleanup of every later refused import of the same file,
+    // which sees a key it did not create.
+    if (validatedFeatureRunning()) {
+      setStatus(VALIDATED_FEATURE_BUSY_STATUS);
+      setFeatureFormError(VALIDATED_FEATURE_BUSY_STATUS);
+      return;
+    }
+
+    // Content-addressed storage first: the document carries a checksum
+    // reference and the bytes live in the browser's blob store (and the
+    // artifact archive, once uploaded). Embedding the text in the document
+    // is the fallback for storage-denied contexts, at the old 12 MB cap.
+    let sourceRef: ImportedSourceReference | null = null;
+    // Only what this import created may be deleted again: the store is
+    // device-global, so the same key can already be backing another project.
+    // Bytes an earlier run of this tab wrote and abandoned count as this
+    // import's own — nothing else can be pointing at them.
+    let sourceBlobCreated = false;
+    let archived = false;
+    // `threw` is the import failing before it ever reached the kernel; its
+    // bytes are as abandoned as a refusal's.
+    let outcome: ValidatedFeatureOutcome | 'threw' = 'threw';
     try {
-      // Content-addressed storage first: the document carries a checksum
-      // reference and the bytes live in the browser's blob store (and the
-      // artifact archive, once uploaded). Embedding the text in the document
-      // is the fallback for storage-denied contexts, at the old 12 MB cap.
-      let sourceRef = null;
       try {
-        sourceRef = await putSourceBlob(file);
+        const stored = await putSourceBlobIfAbsent(file);
+        sourceRef = stored.ref;
+        sourceBlobCreated = stored.created;
+        // Marked in-flight in the same tick the bytes become reachable, so no
+        // window exists in which a concurrent import of the same file sees a
+        // blob it could prune.
+        inFlightImportChecksums.current.acquire(sourceRef.checksumSha256);
       } catch {
         if (file.size > MAX_EMBEDDED_STEP_BYTES) {
           setStatus(
@@ -5579,41 +5646,121 @@ export function App() {
       const stepText = await file.text();
       const metadata = parseStepMetadata(file.name, stepText);
       const productName = metadata.products[0]?.trim();
-      let artifactId = `artifact_local_${crypto.randomUUID()}`;
-      let archived = false;
-      try {
-        artifactId = await archiveArtifact({
-          fileName: file.name,
-          contentType,
-          kind: 'step-import',
-          body: file,
-          metadata: { source: 'direct-upload' }
-        });
-        archived = true;
-      } catch {
-        // The source stays in the local blob store (or embedded); rebuilds
-        // remain deterministic and offline either way.
-      }
-
-      const imported = executeCommand(
+      const name = productName || file.name.replace(/\.(step|stp)$/i, '');
+      // Pre-assigned so the pre-flight can ask about THIS body, and reused
+      // verbatim by the finalized command: the candidate that was accepted and
+      // the command that lands must name the same feature and body, or the
+      // acceptance check proved nothing about what is in history.
+      const ids = createBodyFeatureIds();
+      const payload = {
+        name,
+        ids,
+        sourceName: file.name,
+        ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
+      };
+      // The artifact id is geometry-inert: the worker resolves source bytes by
+      // checksum from the local blob store and reaches for the archive only as
+      // a fallback. So a candidate validated against a provisional local id
+      // rebuilds identically once the finalized id replaces it.
+      const localArtifactId = `artifact_local_${crypto.randomUUID()}`;
+      outcome = await executeValidatedFeature(
         commandFactories.importStep({
-          name: productName || file.name.replace(/\.(step|stp)$/i, ''),
-          artifactId,
-          sourceName: file.name,
-          ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
-        })
-      );
-      if (imported) {
-        setStatus(
-          `Imported editable STEP solid from ${file.name}` +
+          ...payload,
+          artifactId: localArtifactId
+        }),
+        {
+          featureName: name,
+          resultBodyId: ids.bodyId,
+          validatingMessage: `Rebuilding ${file.name} with the exact geometry kernel…`,
+          // The workspace stays live while this rebuilds, and rebuilding a
+          // large assembly takes minutes: renaming a feature or nudging a body
+          // in that time must not destroy the import. The candidate is simply
+          // rebuilt against the moved document instead — an import appends a
+          // feature that reads nothing but its own source bytes, so the second
+          // pass can only reach the same verdict, and the parsed source is
+          // cached by checksum so it costs no re-parse.
+          revalidateOnDocumentMove: true,
+          // Archiving ahead of the rebuild spends a transfer of up to 250 MB
+          // on a file the kernel may be about to refuse, and leaves an
+          // artifact nothing references. Best-effort, as before: the source
+          // stays in the local blob store (or embedded) and rebuilds remain
+          // deterministic and offline either way.
+          finalize: async () => {
+            // Edit permission can flip during a rebuild that takes minutes
+            // (View mode, or the project opened in a second tab). Refusing
+            // here costs nothing and keeps the upload from producing an
+            // artifact the commit is then not allowed to reference. The
+            // window it leaves is the upload itself, which is why the local
+            // bytes survive an archive that outran its permission.
+            const blockedReason = editDisabledReasonRef.current;
+            if (blockedReason) {
+              throw new Error(`Cannot import geometry: ${blockedReason}.`);
+            }
+            let artifactId = localArtifactId;
+            try {
+              artifactId = await archiveArtifact({
+                fileName: file.name,
+                contentType,
+                kind: 'step-import',
+                body: file,
+                metadata: { source: 'direct-upload' }
+              });
+              archived = true;
+            } catch {
+              // Local-only, and listed in the File menu for a later retry.
+            }
+            return commandFactories.importStep({ ...payload, artifactId });
+          },
+          // Two separate facts: the source is stored, and the exact kernel
+          // rebuilt a body from it. Claiming the second before the rebuild ran
+          // is what left a success toast next to an empty viewport.
+          successMessage: () =>
+            `Imported editable STEP solid from ${file.name}: ` +
             (archived
-              ? '.'
-              : ' (cloud archive unavailable; source saved locally).')
-        );
-      }
+              ? 'exact body rebuilt, source archived.'
+              : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
+          onFailure: () => {
+            // The kernel's verdict is already in the status bar. The host sink
+            // renders inline in whichever feature form is open, and an import
+            // has none of its own — routing it there would show a STEP parse
+            // error as the refusal of an unrelated operation.
+          }
+        }
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'STEP import failed.'));
+    } finally {
+      if (sourceRef) {
+        inFlightImportChecksums.current.release(sourceRef.checksumSha256);
+      }
     }
+    if (!sourceRef) {
+      return;
+    }
+    if (outcome === 'superseded') {
+      // The kernel never disagreed with the file; the user's own concurrent
+      // edits are why this stopped. Say so, and say what it costs to try again:
+      // the bytes are still stored, so the retry re-runs the rebuild and
+      // nothing else.
+      setStatus(
+        `${file.name} was not imported: the model kept changing while it rebuilt. ` +
+          'Its source is still stored, so importing it again costs only the rebuild.'
+      );
+    }
+    await settleImportSource({
+      checksumSha256: sourceRef.checksumSha256,
+      result:
+        outcome === 'committed'
+          ? 'committed'
+          : outcome === 'busy' || outcome === 'superseded'
+            ? 'no-verdict'
+            : 'refused',
+      createdByThisImport: sourceBlobCreated,
+      abandonedChecksums: abandonedImportChecksums.current,
+      document: managerRef.current?.document ?? null,
+      inFlightChecksums: inFlightImportChecksums.current,
+      deleteSourceBlob
+    });
   }
 
   /**
