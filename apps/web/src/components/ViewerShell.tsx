@@ -32,6 +32,7 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
 import { formatNumber } from '../lib/model';
 
@@ -39,6 +40,7 @@ interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  measurementAnnotations: MeasurementViewportAnnotation[];
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
@@ -138,6 +140,7 @@ export function ViewerShell({
   projectId,
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -235,6 +238,7 @@ export function ViewerShell({
         key={projectId}
         bodies={bodies}
         sketches={sketches}
+        measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         selectedEdges={selectedEdges}
