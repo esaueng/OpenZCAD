@@ -220,7 +220,26 @@ export async function settleImportSource(deps: {
     return false;
   }
   if (!deps.createdByThisImport && !abandoned.has(checksum)) {
-    // Older than this tab, and possibly backing a project that is not open.
+    // THE OWNERSHIP RULE, and the whole of this module's cross-tab safety.
+    //
+    // A run only ever deletes a key its OWN TAB put there, in an import that is
+    // still running or that ended without a verdict. Note what that makes
+    // unreachable: a tab that did not write these bytes never asks, and it can
+    // never start asking later — `abandoned` is only ever added to BELOW this
+    // guard, so a tab that has not created the key cannot acquire a licence for
+    // it. Two tabs on one device share this store and see none of each other's
+    // marks, open documents or undo stacks, and this is what keeps tab B's
+    // refusal from deleting bytes tab A committed a feature against.
+    //
+    // The cost, stated plainly because it is deliberate: cleanup belongs solely
+    // to the creating tab, so bytes orphaned by a tab that was closed mid-import
+    // are collected by nobody. That is a leak of up to 250 MB per orphaned
+    // import, bounded by how often a window is closed mid-rebuild. It is the
+    // right trade — a leaked blob costs disk, a wrongly deleted one costs
+    // somebody's model — and it is the reason there is no device-wide deletion
+    // walk here. Widening who may delete puts the decision on a scan that
+    // cannot see the one thing that matters: an undone import's redo stack,
+    // which lives only in the memory of the tab that made it.
     return false;
   }
   if (deps.result === 'no-verdict') {
