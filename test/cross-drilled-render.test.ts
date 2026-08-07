@@ -209,9 +209,15 @@ describe('a cross-drilled shaft', () => {
     );
     // And the mesh now removes MORE than the true bore rather than none of it.
     expect(meshVolume).toBeLessThan(EQUAL_RADIUS_TRUE);
-    // Still closed, so nothing objects.
+    // Still closed, so no structural check objects...
     expect(boundaryEdges).toBe(0);
-    expect(warnings).toEqual([]);
+    // ...but the adapter's failed-cut guard does. The tool demonstrably
+    // overlaps the shaft and none of that material went away, which is the
+    // one witness left once validation, closure and volume all pass. Wrong,
+    // but no longer wrong in silence.
+    expect(warnings.join(' ')).toContain(
+      'the tool overlaps this body but the cut did not take'
+    );
   });
 
   /**
@@ -250,7 +256,10 @@ describe('a cross-drilled shaft', () => {
       expect(boundaryEdges).toBe(expected);
       // Partially drilled: less than the stock, more than it should be.
       expect(meshVolume).toBeLessThan(UNDRILLED);
-      expect(warnings).toEqual([]);
+      // Same guard as above: these bores do not take either.
+      expect(warnings.join(' ')).toContain(
+        'the tool overlaps this body but the cut did not take'
+      );
     }
   );
 
