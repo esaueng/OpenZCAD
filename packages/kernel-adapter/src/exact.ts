@@ -38,6 +38,8 @@ import {
   type EdgeReferenceRepair,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
+  type BodyMassProperties,
+  type FaceAreaProvenance,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
   type FaceWitnessV1,
@@ -52,6 +54,7 @@ import {
   type TopologyLineageDiagnostic
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
+import { readBodyMassProperties } from './body-properties';
 import {
   booleanFacetFallbackWarning,
   censusOfSolids,
@@ -286,6 +289,7 @@ interface MeasuredShape {
   topology: BodyTopology;
   faceCount: number;
   volume: number;
+  massProperties?: BodyMassProperties;
   valid: boolean;
   strictValid: boolean;
   meshClosure: TriangleMeshClosure | null;
@@ -975,11 +979,15 @@ function exactUnionOffsetSuggestion(
   ];
   const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
   const format = (value: number) => {
-    const rounded = Number(Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2));
+    const rounded = Number(
+      Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2)
+    );
     return `${rounded > 0 ? '+' : ''}${rounded}`;
   };
   for (const offset of candidates) {
-    const moves = axes.filter((axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON);
+    const moves = axes.filter(
+      (axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON
+    );
     if (moves.length === 0) {
       continue;
     }
@@ -1008,7 +1016,9 @@ function exactUnionOffsetSuggestion(
       continue;
     }
     const described = moves
-      .map((axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`)
+      .map(
+        (axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`
+      )
       .join(', ');
     return `Moving ${mover.name} ${described} clears it.`;
   }
@@ -2470,7 +2480,10 @@ function rederiveCylinderModifierLineage(
       operation
     );
   };
-  const planeAtZ = (candidate: BrepKitTopologyCandidate, z: number): boolean => {
+  const planeAtZ = (
+    candidate: BrepKitTopologyCandidate,
+    z: number
+  ): boolean => {
     const witness = candidate.witness as FaceWitnessV1;
     return witness.surfaceType === 'plane' && witness.centroid?.[2] === z;
   };
@@ -2493,8 +2506,10 @@ function rederiveCylinderModifierLineage(
     return witness.closed && matches(witness.center[2]);
   };
 
-  addRole('face', 'modifier.cylinder.face.wall', (candidate) =>
-    surfaceOf(candidate) === 'cylinder'
+  addRole(
+    'face',
+    'modifier.cylinder.face.wall',
+    (candidate) => surfaceOf(candidate) === 'cylinder'
   );
   addRole('face', 'modifier.cylinder.face.cap.start', (candidate) =>
     planeAtZ(candidate, zMin)
@@ -3134,15 +3149,60 @@ function resolveEdgeModifierEdges(
 }
 
 /** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
+/**
+ * Analytic surface classes whose area comes back as a closed form.
+ *
+ * Measured against closed forms on the pinned build rather than assumed from
+ * the presence of a deflection parameter: cylinder, sphere, cone and torus all
+ * return at machine precision (rel ~1e-16). Anything not listed here is left
+ * unclassified rather than guessed at, because a surface class this build has
+ * not been measured on must not be advertised as exact.
+ */
+const CLOSED_FORM_SURFACES = new Set(['cylinder', 'sphere', 'cone', 'torus']);
+
+/**
+ * Whether the face's area is exact.
+ *
+ * For a plane the answer is decided by its boundary: straight edges give an
+ * exact polygon, convex or not, while ANY curve is inscribed with a fixed
+ * 256-point polygon that no deflection improves. The check therefore stops at
+ * the first curved edge, and only planes pay for it at all.
+ */
+function measureAreaProvenance(
+  kernel: BrepKernel,
+  face: number,
+  surfaceType: string
+): FaceAreaProvenance | undefined {
+  if (CLOSED_FORM_SURFACES.has(surfaceType)) {
+    return 'exact';
+  }
+  if (surfaceType !== 'plane') {
+    return undefined;
+  }
+  try {
+    for (const edge of kernel.getFaceEdges(face)) {
+      if (kernel.getEdgeCurveType(edge) !== 'LINE') {
+        return 'sampled';
+      }
+    }
+  } catch {
+    // A face whose boundary cannot be walked is not one to make claims about.
+    return undefined;
+  }
+  return 'exact';
+}
+
 function measureFaceGeometry(
   kernel: BrepKernel,
   face: number
 ): FaceGeometry | undefined {
   const surfaceType = kernel.getSurfaceType(face);
   const centroid = faceVertexCentroid(kernel, face);
+  const areaProvenance = measureAreaProvenance(kernel, face, surfaceType);
   const geometry: FaceGeometry = {
     surfaceType,
     area: kernel.faceArea(face, MEASUREMENT_DEFLECTION),
+    ...(areaProvenance ? { areaProvenance } : {}),
     center: centroid ?? { x: 0, y: 0, z: 0 }
   };
   if (surfaceType === 'plane') {
@@ -3153,8 +3213,20 @@ function measureFaceGeometry(
         y: normal[1]!,
         z: normal[2]!
       };
+      // The plane's own equation, n·x = d, completed here because it is
+      // arithmetic on two values already in hand rather than a kernel call.
+      // `center` is the mean of the face's vertices and every one of them lies
+      // on the plane, so any affine combination of them does too — which makes
+      // this exact, and makes an exact point-to-plane distance computable
+      // without a kernel round trip.
+      geometry.planeOffset =
+        geometry.normal.x * geometry.center.x +
+        geometry.normal.y * geometry.center.y +
+        geometry.normal.z * geometry.center.z;
     } catch {
-      // NURBS-backed planes have no analytic normal; leave it unset.
+      // NURBS-backed planes have no analytic normal; leave both unset. These
+      // are exactly the imported-STEP faces a raw pick tends to land on, so
+      // the absence is load-bearing rather than incidental.
     }
     return geometry;
   }
@@ -6224,6 +6296,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const meshClosure = strictBooleanValidation
       ? inspectTriangleMeshClosure(vertices, indices)
       : null;
+    // Single-solid bodies only, and deliberately so. Combining moments across
+    // solids means the parallel-axis theorem plus an eigendecomposition to
+    // recover principal axes, and a body made of several solids that reported
+    // the moments of one of them would be worse than reporting none. Absent
+    // is a state consumers already have to render.
+    const massProperties =
+      shape.solids.length === 1
+        ? readBodyMassProperties(kernel, shape.solids[0]!)
+        : null;
     return {
       vertices,
       indices,
@@ -6233,7 +6314,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       valid,
       strictValid,
       meshClosure,
-      bbox
+      bbox,
+      ...(massProperties ? { massProperties } : {})
     };
   }
 
@@ -6333,6 +6415,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           consumed,
           volume: measured.volume,
           bbox: measured.bbox,
+          // One kernel call per solid, inside the pass that already holds it.
+          // Omitted rather than zeroed when it cannot be read, so a consumer
+          // renders an absence instead of a massless part.
+          ...(measured.massProperties
+            ? { massProperties: measured.massProperties }
+            : {}),
           topology: measured.topology
         };
         if (body.exportableStep && !consumed) {

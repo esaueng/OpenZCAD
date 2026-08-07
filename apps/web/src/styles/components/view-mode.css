@@ -804,3 +804,30 @@
     max-height: 40%;
   }
 }
+
+/*
+ * The value a click would record, shown beside the pointer while it is still
+ * over the target.
+ *
+ * Deliberately quieter than `.handle-value-chip`: that one is a control you
+ * click to type an exact value, where this is a read-only preview that
+ * follows the cursor. Giving them the same weight would suggest the preview
+ * is interactive, and a pointer chasing a chip it cannot press is a small
+ * lie repeated on every hover.
+ */
+.measure-preview-chip {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  padding: 2px 7px;
+  color: var(--color-text);
+  background: rgba(8, 18, 30, 0.82);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  /* No transform animation: these are positioned by inline `left`/`top`, and
+     a keyframe touching `transform` would fight that on every pointer move. */
+  pointer-events: none;
+  user-select: none;
+}

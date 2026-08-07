@@ -482,6 +482,11 @@ import type {
  */
 import type * as MeasurementModule from './lib/measurements';
 import {
+  EMPTY_MEASURE_SESSION,
+  edgeRunIsTotalable,
+  nextEdgeRun
+} from './lib/measureSession';
+import {
   loadPanelState,
   savePanelState,
   toggleSidebarSection,
@@ -2665,6 +2670,14 @@ export function App() {
     useState<MeasurementMode>('smart');
   const [measurementDraft, setMeasurementDraft] =
     useState<MeasurementTarget | null>(null);
+  /**
+   * Edges accumulated by Shift+Click for a running total. Owned here rather
+   * than read from `selectedEdges`, which is what let measuring rewrite the
+   * workspace's selection; the rules live in `measureSession.ts`.
+   */
+  const [measurementEdgeRun, setMeasurementEdgeRun] = useState<
+    readonly TopologySelection[]
+  >(EMPTY_MEASURE_SESSION.edgeRun);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(
     null
@@ -2685,7 +2698,7 @@ export function App() {
   useEffect(() => {
     setMeasurements([]);
     setActiveMeasurementId(null);
-    setMeasurementDraft(null);
+    clearMeasurementPicks();
     if (doc) {
       setMeasurementUnit(doc.units);
     }
@@ -2756,54 +2769,136 @@ export function App() {
     setStatus(`${measurement.label} measured.`);
   }
 
+  /**
+   * What measuring this pick WOULD report, without recording anything.
+   *
+   * A tool that only answers after you commit makes you record a row to find
+   * out whether you picked the right thing, then delete it. The preview runs
+   * the SAME derivation the click will run rather than a cheaper estimate that
+   * could disagree with the number that lands.
+   *
+   * Null when there is nothing honest to say, which includes an ambiguous
+   * pick: a hover is not the place to explain ADR-011, and a silent absence
+   * beats a confident wrong number.
+   */
+  function previewMeasurement(
+    selection: TopologySelection,
+    point?: { x: number; y: number; z: number }
+  ): string | null {
+    if (!doc || !viewMode || !measuring || !measurementApi) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      return null;
+    }
+    if (measurementMode === 'smart') {
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      return measurement
+        ? measurementApi.formatMeasurement(measurement, measurementDisplay)
+            .value
+        : null;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      return null;
+    }
+    // The first of two picks has nothing to measure against yet, so it names
+    // the target rather than guessing at a distance.
+    if (!measurementDraft) {
+      return target.label;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    return measurement
+      ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
+      : null;
+  }
+
+  /**
+   * Abandons whatever pick was in progress: the two-pick draft and the running
+   * edge total both. Not called after a measurement is recorded — a run has to
+   * survive that, or a fourth Shift+Click could not extend a total of three.
+   */
+  function clearMeasurementPicks() {
+    setMeasurementDraft(null);
+    setMeasurementEdgeRun(EMPTY_MEASURE_SESSION.edgeRun);
+  }
+
+  /**
+   * Measures a pick, and reports whether it consumed it.
+   *
+   * The return value is the point. This used to be called for its side effects
+   * and fall straight through into sketch entry, direct manipulation, and the
+   * selection update — so measuring an edge in View mode silently replaced
+   * whatever a modelling session had selected, and the two features quietly
+   * shared one piece of state.
+   */
   function handleMeasurementPick(
     selection: TopologySelection,
     additive: boolean,
     detail?: PickDetail
-  ) {
+  ): boolean {
     if (!doc || !viewMode || !measuring) {
-      return;
+      return false;
     }
     // One guard for the whole handler. Dropping a pick that lands before the
     // measurement chunk arrives is better than servicing half of it, and the
-    // window is a frame or two on first entry to View mode only.
+    // window is a frame or two on first entry to View mode only. It still
+    // counts as consumed: falling through to selection would be the very
+    // coupling this seam removes.
     if (!measurementApi) {
       setStatus('Measure is still loading. Try that pick again.');
-      return;
+      return true;
     }
     const body = renderedRepresentations[selection.bodyId];
     if (!body) {
       setStatus(
         'The selected body has no current exact projection to measure.'
       );
-      return;
+      return true;
     }
     const point = detail?.point;
     if (measurementMode === 'smart') {
-      if (selection.kind === 'edge' && additive) {
-        const sameBody = selectedEdges.every(
-          (edge) => edge.bodyId === selection.bodyId
-        );
-        const alreadySelected = selectedEdges.some(
-          (edge) => edge.topologyId === selection.topologyId
-        );
-        const nextEdges =
-          sameBody && alreadySelected
-            ? selectedEdges.filter(
-                (edge) => edge.topologyId !== selection.topologyId
-              )
-            : sameBody
-              ? [...selectedEdges, selection]
-              : [selection];
-        const total = measurementApi.createEdgeTotalMeasurement(
-          viewerBodies,
-          nextEdges,
-          doc.version,
-          doc.units
-        );
-        if (total) {
-          recordMeasurement(total);
-          return;
+      if (selection.kind === 'edge') {
+        // The run lives in the measure session rather than in `selectedEdges`,
+        // which is what let measuring rewrite the workspace's selection.
+        const run = nextEdgeRun(measurementEdgeRun, selection, additive);
+        setMeasurementEdgeRun(run);
+        if (edgeRunIsTotalable(run)) {
+          const total = measurementApi.createEdgeTotalMeasurement(
+            viewerBodies,
+            run,
+            doc.version,
+            doc.units
+          );
+          if (total) {
+            recordMeasurement(total);
+            return true;
+          }
         }
       }
       const measurement = measurementApi.createSmartMeasurement(
@@ -2821,7 +2916,7 @@ export function App() {
             'That selection does not expose a trustworthy measurement.'
         );
       }
-      return;
+      return true;
     }
     const target = measurementApi.measurementTargetFromSelection(
       body,
@@ -2836,12 +2931,12 @@ export function App() {
             ? 'Angle needs a straight edge, circular axis, or measured face direction.'
             : 'That selection does not expose a trustworthy measurement point.')
       );
-      return;
+      return true;
     }
     if (!measurementDraft) {
       setMeasurementDraft(target);
       setStatus(`${target.label} selected · pick the second target.`);
-      return;
+      return true;
     }
     const measurement =
       measurementMode === 'distance'
@@ -2866,6 +2961,7 @@ export function App() {
           : 'Those targets could not produce a stable distance; the first target is still selected.'
       );
     }
+    return true;
   }
 
   const measurementAnnotations = useMemo<
@@ -2890,6 +2986,9 @@ export function App() {
             label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
             selected: true,
             status: 'current' as const,
+            // The first of two picks marks a point; there is no second point
+            // to span to until it lands.
+            graphic: 'anchor' as const,
             anchor: measurementDraft.point,
             segments: []
           }
@@ -6093,7 +6192,12 @@ export function App() {
       );
       return;
     }
-    handleMeasurementPick(selection, additive, detail);
+    // Measuring owns the pick outright. Without this return the same click
+    // went on to arm a sketch, arm a drag handle, and replace the selection —
+    // so an inspection pass rewrote the state a modelling session was holding.
+    if (handleMeasurementPick(selection, additive, detail)) {
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -8324,7 +8428,7 @@ export function App() {
           if (viewMode && measuring) {
             event.preventDefault();
             if (measurementDraft) {
-              setMeasurementDraft(null);
+              clearMeasurementPicks();
               setStatus(
                 `${measurementMode} measurement canceled · pick the first target.`
               );
@@ -8422,7 +8526,7 @@ export function App() {
         event.preventDefault();
         const next = !measuring;
         setMeasuring(next);
-        setMeasurementDraft(null);
+        clearMeasurementPicks();
         setStatus(
           next
             ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
@@ -9081,7 +9185,7 @@ export function App() {
             measuring={measuring}
             onMeasure={(next) => {
               setMeasuring(next);
-              setMeasurementDraft(null);
+              clearMeasurementPicks();
               setStatus(
                 next
                   ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
@@ -9245,6 +9349,7 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            onMeasurePreview={viewMode && measuring ? previewMeasurement : null}
             regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
               viewMode ? (
@@ -9277,7 +9382,7 @@ export function App() {
                       onMode={(mode) => {
                         setMeasuring(true);
                         setMeasurementMode(mode);
-                        setMeasurementDraft(null);
+                        clearMeasurementPicks();
                         setStatus(
                           mode === 'smart'
                             ? 'Smart measure · pick an edge, face, hole, or body.'
@@ -9336,7 +9441,7 @@ export function App() {
                         }
                         setMeasurements([]);
                         setActiveMeasurementId(null);
-                        setMeasurementDraft(null);
+                        clearMeasurementPicks();
                         setStatus('Measurement list cleared.');
                       }}
                       onCopy={(measurement) =>
