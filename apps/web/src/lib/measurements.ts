@@ -120,6 +120,36 @@ export interface MeasurementViewportAnnotation extends MeasurementAnnotation {
   label: string;
   selected: boolean;
   status: MeasurementStatus;
+  /**
+   * What the segments mean, which decides how they are drawn.
+   *
+   * A measured SPAN gets a drawing's dimension — witness ticks standing it off
+   * the geometry, arrowheads whose tips land on the measured points. An angle's
+   * two arms are not a span: they radiate from a shared corner, and putting an
+   * arrowhead on the far end of each would claim the arm length was the
+   * measurement.
+   */
+  graphic: 'span' | 'arms' | 'anchor';
+}
+
+/** Which graphic each measurement kind earns. */
+function annotationGraphic(
+  kind: MeasurementKind
+): MeasurementViewportAnnotation['graphic'] {
+  switch (kind) {
+    case 'distance':
+    case 'edge-length':
+    case 'edge-total':
+      return 'span';
+    case 'angle':
+      return 'arms';
+    // A diameter, an area and a body have a point to label but no span to
+    // draw between: the figure describes a whole face or solid, not a gap.
+    case 'diameter':
+    case 'face-area':
+    case 'body':
+      return 'anchor';
+  }
 }
 
 /** Runtime-only measurement. It never enters the project document/history. */
@@ -1190,6 +1220,7 @@ export function measurementToViewportAnnotation(
     label: formatted.value,
     selected,
     status: measurement.status,
+    graphic: annotationGraphic(measurement.kind),
     anchor: measurement.annotation.anchor,
     segments: measurement.annotation.segments
   };

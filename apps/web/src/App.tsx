@@ -2917,6 +2917,9 @@ export function App() {
             label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
             selected: true,
             status: 'current' as const,
+            // The first of two picks marks a point; there is no second point
+            // to span to until it lands.
+            graphic: 'anchor' as const,
             anchor: measurementDraft.point,
             segments: []
           }
