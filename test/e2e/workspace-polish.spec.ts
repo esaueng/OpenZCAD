@@ -80,6 +80,46 @@ async function findFacePoint(page: Page) {
   throw new Error('no selectable face found');
 }
 
+test('exposes the full measurement workbench in View mode', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Measurement Workbench');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
+  await workspaceMode.getByRole('button', { name: 'View' }).click();
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure' })
+    .click();
+
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench).toBeVisible();
+  await expect(
+    workbench.getByRole('button', { name: 'Smart' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    workbench.getByRole('button', { name: 'Distance' })
+  ).toBeVisible();
+  await expect(
+    workbench.getByRole('button', { name: 'Angle' })
+  ).toBeVisible();
+  await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
+  await expect(
+    workbench.getByLabel('Measurement decimal places')
+  ).toHaveValue('2');
+  await expect(
+    workbench.getByRole('group', { name: 'Radial display' })
+  ).toBeVisible();
+
+  await workbench.getByRole('button', { name: 'Angle' }).click();
+  await expect(
+    workbench.getByText('Pick two straight edges or two planar faces.')
+  ).toBeVisible();
+});
+
 test('lists bodies in the model browser and selects them from the tree', async ({
   page
 }) => {
