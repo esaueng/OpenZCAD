@@ -1839,3 +1839,69 @@ test('clicking a cube corner past its drawn facet snaps to that isometric view',
     expect(Math.abs(Math.abs(component) / distance)).toBeCloseTo(0.5774, 2);
   }
 });
+
+test('the frozen shadow map thaws for a moving body but not for the camera', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Shadow Freeze');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const refreshes = async () =>
+    Number(
+      (await canvas.evaluate(
+        (element) => (element as HTMLElement).dataset.e2eShadowRefreshes
+      )) ?? '0'
+    );
+
+  const settled = await refreshes();
+  expect(settled).toBeGreaterThan(0);
+
+  // The freeze itself. Without this the refresh count below still passes with
+  // three.js re-rendering the map every frame, which is the regression that
+  // would quietly undo the render win.
+  await expect(canvas).toHaveAttribute('data-e2e-shadow-auto-update', 'false');
+
+  // Orbiting must not thaw it. The map is camera-independent, and re-rendering
+  // it every frame is exactly the cost freezing it removed.
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const centre = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2
+  };
+  await page.keyboard.down('Shift');
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 8; step += 1) {
+    await page.mouse.move(centre.x + step * 12, centre.y + step * 6);
+  }
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  expect(await refreshes()).toBe(settled);
+
+  // Moving a body must thaw it, or the shadow stays on the ground where the
+  // body used to be — visible as a dark patch orbiting cannot explain.
+  await page.keyboard.press('m');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  await expect(move).toBeVisible();
+  await move.getByLabel('Move X in mm').fill('40');
+  await expect.poll(refreshes).toBeGreaterThan(settled);
+
+  // And cancelling puts it back: nothing about the document changed, so no
+  // rebuild would otherwise refresh it.
+  const moved = await refreshes();
+  await page.keyboard.press('Escape');
+  await expect(move).toBeHidden();
+  await expect.poll(refreshes).toBeGreaterThan(moved);
+});
