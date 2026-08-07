@@ -817,11 +817,34 @@ export function appendMeasurement(
     };
     return replaced;
   }
-  const appended = [...list, next];
-  return appended.length > MEASUREMENT_LIMIT
-    ? appended.slice(appended.length - MEASUREMENT_LIMIT)
-    : appended;
+  if (!canAppendMeasurement(list, next)) {
+    return list as Measurement[];
+  }
+  return [...list, next];
 }
+
+/**
+ * Whether a new row fits. Re-measuring something already on the list always
+ * does, because that path updates in place rather than growing.
+ *
+ * The cap used to evict the oldest row instead of refusing. That was a
+ * reasonable way to bound a scratch tape, but it is silent data loss the
+ * moment the list outlives the session — someone who measures fifty-one things
+ * would find the first one simply gone, with nothing having said so. A refusal
+ * the caller can report is the version that survives being persisted.
+ */
+export function canAppendMeasurement(
+  list: readonly Measurement[],
+  next: Measurement
+): boolean {
+  return (
+    list.length < MEASUREMENT_LIMIT ||
+    list.some((entry) => entry.id === next.id)
+  );
+}
+
+/** What to tell someone whose measurement did not fit. */
+export const MEASUREMENT_LIMIT_MESSAGE = `Measurement list is full at ${MEASUREMENT_LIMIT}. Delete a row to record another.`;
 
 function resolvedTarget(
   target: MeasurementTarget,
