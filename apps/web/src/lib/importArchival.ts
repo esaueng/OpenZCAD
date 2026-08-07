@@ -56,6 +56,194 @@ export function listLocalOnlyImportSources(
   return sources;
 }
 
+/** Every source checksum the document's imports need in order to rebuild. */
+export function importSourceChecksums(document: ProjectDocument): Set<string> {
+  const checksums = new Set<string>();
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.data.featureKind !== 'imported-step') {
+      continue;
+    }
+    const checksum = feature.data.stepSourceRef?.checksumSha256;
+    if (checksum !== undefined) {
+      checksums.add(checksum);
+    }
+  }
+  return checksums;
+}
+
+/** Answers whether any import is still working with a checksum's bytes. */
+export interface ImportChecksumMarks {
+  has(checksumSha256: string): boolean;
+}
+
+/**
+ * Marks the checksums of imports that are between writing their source bytes
+ * and learning the fate of the feature those bytes belong to.
+ *
+ * It counts rather than merely records, because content addressing puts every
+ * import of one file on ONE key: with a set, two concurrent imports of the same
+ * file produce a single mark, and whichever finishes first erases the
+ * protection of the one still running — after which a refusal on either side
+ * deletes bytes the survivor is about to commit against. The count is the
+ * number of holders, so the mark outlives every release but the last.
+ */
+export interface InFlightImportChecksums extends ImportChecksumMarks {
+  /** Marks the checksum for one holder. Pair with exactly one `release`. */
+  acquire(checksumSha256: string): void;
+  release(checksumSha256: string): void;
+}
+
+export function createInFlightImportChecksums(): InFlightImportChecksums {
+  const holders = new Map<string, number>();
+  return {
+    has: (checksumSha256) => (holders.get(checksumSha256) ?? 0) > 0,
+    acquire(checksumSha256) {
+      holders.set(checksumSha256, (holders.get(checksumSha256) ?? 0) + 1);
+    },
+    release(checksumSha256) {
+      const remaining = (holders.get(checksumSha256) ?? 0) - 1;
+      if (remaining > 0) {
+        holders.set(checksumSha256, remaining);
+      } else {
+        holders.delete(checksumSha256);
+      }
+    }
+  };
+}
+
+/**
+ * Drops the bytes of an import that was refused before it reached history.
+ *
+ * Every guard below exists because the blob store is DEVICE-GLOBAL and
+ * content-addressed: one key holds the bytes of one file, whoever imported it
+ * and from whichever project. Counting references against the one open
+ * document is therefore not enough on its own — deleting on behalf of project
+ * Y can destroy what project X rebuilds from.
+ *
+ * `createdByThisImport` is what makes the deletion sound: this call only ever
+ * removes a key it put there itself, so bytes that predate the import survive
+ * whatever else is true. The alternative — counting across every locally
+ * stored document — is both slower and incomplete, because it would still have
+ * to enumerate undo/redo snapshots and imports mid-flight in other tabs to
+ * reach the same guarantee.
+ *
+ * `pruneUnreferencedSourceBlobs` cannot serve here either: it sweeps every key
+ * outside the set it is handed, which for one document is every other
+ * project's sources.
+ *
+ * A cloud archive of the same bytes is deliberately NOT a reason to keep them.
+ * The rationale it used to carry — that the local copy spares a future
+ * re-upload — is not true of any code path: nothing reads an unreferenced blob,
+ * `archiveLocalOnlyImportSources` only ever loads bytes a *feature* still
+ * points at, and the artifact minted for a refused import is itself
+ * unreferenced. Keeping them was a pure local leak of up to 250 MB that also
+ * disarmed this cleanup for every later import of the same file, since those
+ * bytes then pre-existed and `createdByThisImport` came back false.
+ *
+ * Returns whether the blob was deleted.
+ */
+export async function discardUnreferencedImportSource(deps: {
+  checksumSha256: string;
+  /** False when the blob store already held these bytes; see above. */
+  createdByThisImport: boolean;
+  document: ProjectDocument | null;
+  /**
+   * Checksums of imports still validating. Content addressing means a second
+   * import of the same file lands on the same key, and the first import is
+   * about to commit against it.
+   */
+  inFlightChecksums: ImportChecksumMarks;
+  deleteSourceBlob(checksumSha256: string): Promise<void>;
+}): Promise<boolean> {
+  if (
+    !deps.createdByThisImport ||
+    deps.inFlightChecksums.has(deps.checksumSha256)
+  ) {
+    return false;
+  }
+  if (
+    deps.document &&
+    importSourceChecksums(deps.document).has(deps.checksumSha256)
+  ) {
+    return false;
+  }
+  await deps.deleteSourceBlob(deps.checksumSha256);
+  return true;
+}
+
+/** What a finished import run means for the source bytes it wrote. */
+export type ImportRunResult =
+  /** A feature in document history points at the bytes. */
+  | 'committed'
+  /** The file was judged — by the kernel or by the commit — and refused. */
+  | 'refused'
+  /**
+   * Nothing was decided about the file: the commit lock turned the run away,
+   * or the document kept moving underneath its rebuild. The obvious next step
+   * is the same import again, so the bytes are not garbage.
+   */
+  | 'no-verdict';
+
+/**
+ * Decides what becomes of the source bytes once an import run has ended, and
+ * keeps `abandonedChecksums` — this tab's note of what it wrote and did not
+ * land — in step with that decision.
+ *
+ * The note is what keeps a retry able to clean up after itself. Content
+ * addressing means a retry of the same file writes nothing (the key is already
+ * there), so on its own it would conclude the bytes were not its to delete and
+ * a genuine kernel refusal would keep the full source forever.
+ *
+ * Returns whether the bytes were deleted.
+ */
+export async function settleImportSource(deps: {
+  checksumSha256: string;
+  result: ImportRunResult;
+  /** True when this import's own write is what put the bytes in the store. */
+  createdByThisImport: boolean;
+  /** Checksums this tab wrote for imports that never landed; updated in place. */
+  abandonedChecksums: Set<string>;
+  document: ProjectDocument | null;
+  inFlightChecksums: ImportChecksumMarks;
+  deleteSourceBlob(checksumSha256: string): Promise<void>;
+}): Promise<boolean> {
+  const checksum = deps.checksumSha256;
+  const abandoned = deps.abandonedChecksums;
+  if (
+    deps.result === 'committed' ||
+    (deps.document !== null &&
+      importSourceChecksums(deps.document).has(checksum))
+  ) {
+    // A feature rebuilds from these bytes, so they are nobody's to discard —
+    // including any later run of this tab's.
+    abandoned.delete(checksum);
+    return false;
+  }
+  if (!deps.createdByThisImport && !abandoned.has(checksum)) {
+    // Older than this tab, and possibly backing a project that is not open.
+    return false;
+  }
+  if (deps.result === 'no-verdict') {
+    abandoned.add(checksum);
+    return false;
+  }
+  const deleted = await discardUnreferencedImportSource({
+    checksumSha256: checksum,
+    createdByThisImport: true,
+    document: deps.document,
+    inFlightChecksums: deps.inFlightChecksums,
+    deleteSourceBlob: deps.deleteSourceBlob
+  });
+  if (deleted) {
+    abandoned.delete(checksum);
+  } else {
+    // Another import of the same file is still holding these bytes. The note
+    // stays, so whoever is last out can still clean up after all of them.
+    abandoned.add(checksum);
+  }
+  return deleted;
+}
+
 export interface ArchiveLocalSourcesResult {
   /** Sources uploaded and rewired to their new cloud artifact id. */
   archived: string[];

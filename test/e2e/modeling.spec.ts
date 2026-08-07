@@ -2032,6 +2032,52 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
   expect(consoleErrors).toHaveLength(2);
 });
 
+test('refuses an unparseable STEP file without leaving a feature behind', async ({
+  page
+}) => {
+  // The failure path the success path never covered. An import used to commit
+  // before any geometry ran, so a file BrepKit cannot parse produced a success
+  // toast next to a history row flagged "Feature failed to build", no body,
+  // and a blank viewport that Fit View could not rescue. Nothing enters
+  // history now, and the status bar carries the kernel's own verdict.
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused Import');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  const undo = page.getByRole('button', { name: 'Undo' });
+  await expect(undo).toBeDisabled();
+
+  // A well-formed box whose z-max face points at an entity id that does not
+  // exist: the parser rejects it, the geometry never runs.
+  await page
+    .getByLabel('Import STEP or STL…')
+    .setInputFiles(
+      fileURLToPath(
+        new URL(
+          '../parity/corpus/f-hostile-dangling-reference.step',
+          import.meta.url
+        )
+      )
+    );
+
+  // Verbatim, entity number included — that is the part that says which line
+  // of the file to look at.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'parse error: entity #999999 not found'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Imported editable STEP solid'
+  );
+  await expect(page.locator('.feature-row')).toHaveCount(0);
+  await expect(page.getByText('No features yet.')).toBeVisible();
+  await expectBodyCount(page, 0);
+  await expect(undo).toBeDisabled();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
 test('archives a browser-generated STEP export and lists the stored file', async ({
   page
 }) => {

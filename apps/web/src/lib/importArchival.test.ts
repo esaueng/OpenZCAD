@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findFeature } from '@openzcad/document-core';
 import {
@@ -8,6 +8,8 @@ import {
 } from '@openzcad/shared';
 import {
   archiveLocalOnlyImportSources,
+  createInFlightImportChecksums,
+  discardUnreferencedImportSource,
   listLocalOnlyImportSources
 } from './importArchival';
 
@@ -188,6 +190,60 @@ describe('archiveLocalOnlyImportSources', () => {
     expect(
       listLocalOnlyImportSources(manager.document).map((s) => s.sourceName)
     ).toEqual(['local.step']);
+  });
+});
+
+/**
+ * The mark that stops one import's cleanup from deleting the bytes another is
+ * still working with. Content addressing puts every import of one file on ONE
+ * key, so the mark has to survive until the LAST holder lets go of it.
+ */
+describe('in-flight import checksums', () => {
+  it('stays marked until every holder has released it', () => {
+    const marks = createInFlightImportChecksums();
+    marks.acquire('sha256-frame');
+    marks.acquire('sha256-frame');
+
+    marks.release('sha256-frame');
+    // A set cannot express this: two imports of the same file put one entry in
+    // it, and the first `delete` erases the second import's protection too.
+    expect(marks.has('sha256-frame')).toBe(true);
+
+    marks.release('sha256-frame');
+    expect(marks.has('sha256-frame')).toBe(false);
+  });
+
+  it('tracks each checksum separately and ignores an unheld release', () => {
+    const marks = createInFlightImportChecksums();
+    marks.acquire('sha256-a');
+    expect(marks.has('sha256-b')).toBe(false);
+    marks.release('sha256-b');
+    expect(marks.has('sha256-a')).toBe(true);
+    marks.release('sha256-a');
+    expect(marks.has('sha256-a')).toBe(false);
+  });
+
+  it('keeps the bytes of the import still holding the mark', async () => {
+    // Two imports of the same file, both counted in; the first one to finish
+    // releases and then tries to clean up. With a set its own release would
+    // have erased the other's mark, and it would delete bytes the survivor is
+    // about to commit against.
+    const marks = createInFlightImportChecksums();
+    marks.acquire('sha256-frame');
+    marks.acquire('sha256-frame');
+    marks.release('sha256-frame');
+    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+
+    await expect(
+      discardUnreferencedImportSource({
+        checksumSha256: 'sha256-frame',
+        createdByThisImport: true,
+        document: null,
+        inFlightChecksums: marks,
+        deleteSourceBlob
+      })
+    ).resolves.toBe(false);
+    expect(deleteSourceBlob).not.toHaveBeenCalled();
   });
 });
 

@@ -100,34 +100,65 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
+/** Settles when one request inside an open transaction has its result. */
+function settled<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error ?? new Error('Local project storage failed.'));
+  });
+}
+
+/**
+ * Runs `action` inside ONE transaction and resolves with its value once that
+ * transaction commits.
+ *
+ * `action` may await each request and issue the next from its result: a request
+ * started while an earlier one's success handler is still on the microtask
+ * queue joins the same transaction, so read-then-write stays a single atomic
+ * unit. Splitting it across two transactions would not — every tab and the
+ * geometry worker share these stores, and another writer can land in between.
+ */
+function transactionScope<T>(
+  mode: IDBTransactionMode,
+  action: (store: IDBObjectStore) => Promise<T>,
+  storeName: string = STORE_NAME
+): Promise<T> {
+  return openDatabase().then(async (database) => {
+    const tx = database.transaction(storeName, mode);
+    const committed = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      const fail = () =>
+        reject(tx.error ?? new Error('Local project storage failed.'));
+      tx.onerror = fail;
+      tx.onabort = fail;
+    });
+    // The rejection is reported through the throw below; this only keeps it
+    // from also surfacing as an unhandled rejection when `action` fails first.
+    committed.catch(() => undefined);
+    try {
+      const value = await action(tx.objectStore(storeName));
+      await committed;
+      return value;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+        // Already committed or aborted; the error below is the real report.
+      }
+      throw error;
+    } finally {
+      database.close();
+    }
+  });
+}
+
 function transaction<T>(
   mode: IDBTransactionMode,
   action: (store: IDBObjectStore) => IDBRequest<T>,
   storeName: string = STORE_NAME
 ): Promise<T> {
-  return openDatabase().then(
-    (database) =>
-      new Promise((resolve, reject) => {
-        const tx = database.transaction(storeName, mode);
-        const request = action(tx.objectStore(storeName));
-        let result: T;
-        request.onsuccess = () => {
-          result = request.result;
-        };
-        request.onerror = () =>
-          reject(request.error ?? new Error('Local project storage failed.'));
-        tx.oncomplete = () => {
-          database.close();
-          resolve(result);
-        };
-        const fail = () => {
-          database.close();
-          reject(tx.error ?? new Error('Local project storage failed.'));
-        };
-        tx.onerror = fail;
-        tx.onabort = fail;
-      })
-  );
+  return transactionScope(mode, (store) => settled(action(store)), storeName);
 }
 
 interface SourceBlobRecord {
@@ -144,14 +175,36 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   ).join('');
 }
 
+export interface StoredSourceBlob {
+  ref: ImportedSourceReference;
+  /**
+   * False when the store already held these exact bytes. The store is
+   * device-global and content-addressed, so a key can be reached from several
+   * projects: a caller that may have to undo its write — an import the kernel
+   * might refuse — must not delete bytes that were already there.
+   */
+  created: boolean;
+}
+
 /**
- * Stores source bytes and returns the reference a document should hold. The
- * checksum is computed here — callers cannot store bytes under a wrong
- * identity, so readers never need to re-verify local records.
+ * Stores source bytes and reports whether this call is what created the
+ * record. The checksum is computed here — callers cannot store bytes under a
+ * wrong identity, so readers never need to re-verify local records.
+ *
+ * The "does it exist" question and the write are ONE readwrite transaction.
+ * Asking in a separate transaction would let two importers of the same file
+ * both be told they created the record — and `created` is exactly what
+ * licenses an import to delete those bytes again, so both would then believe
+ * the key was theirs to remove.
+ *
+ * A key that is already present is left untouched rather than rewritten: the
+ * store is content-addressed, so the record there holds these very bytes, and
+ * rewriting it would copy up to 250 MB to disk to change nothing but a
+ * timestamp.
  */
-export async function putSourceBlob(
+export async function putSourceBlobIfAbsent(
   source: Blob | Uint8Array<ArrayBuffer>
-): Promise<ImportedSourceReference> {
+): Promise<StoredSourceBlob> {
   const bytes =
     source instanceof Uint8Array
       ? source
@@ -163,14 +216,34 @@ export async function putSourceBlob(
     logicalBytes: bytes.byteLength,
     createdAt: new Date().toISOString()
   };
-  await transaction('readwrite', (store) => store.put(record), BLOB_STORE_NAME);
+  const created = await transactionScope(
+    'readwrite',
+    async (store) => {
+      if ((await settled(store.count(checksumSha256))) > 0) {
+        return false;
+      }
+      await settled(store.put(record));
+      return true;
+    },
+    BLOB_STORE_NAME
+  );
   return {
-    marker: 'openzcad-source-ref',
-    version: 1,
-    hashAlgorithm: 'sha256',
-    checksumSha256,
-    logicalBytes: bytes.byteLength
+    ref: {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256,
+      logicalBytes: bytes.byteLength
+    },
+    created
   };
+}
+
+/** {@link putSourceBlobIfAbsent} for callers that never delete what they wrote. */
+export async function putSourceBlob(
+  source: Blob | Uint8Array<ArrayBuffer>
+): Promise<ImportedSourceReference> {
+  return (await putSourceBlobIfAbsent(source)).ref;
 }
 
 export async function loadSourceBlob(
@@ -193,6 +266,19 @@ export function hasSourceBlob(checksumSha256: string): Promise<boolean> {
     (store) => store.count(checksumSha256),
     BLOB_STORE_NAME
   ).then((count) => count > 0);
+}
+
+/**
+ * Removes exactly one blob. Content-addressed storage means the key can be
+ * shared, so the caller owns the reference check — see
+ * `discardUnreferencedImportSource`.
+ */
+export function deleteSourceBlob(checksumSha256: string): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.delete(checksumSha256),
+    BLOB_STORE_NAME
+  ).then(() => undefined);
 }
 
 /**
