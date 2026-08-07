@@ -9,6 +9,7 @@ import {
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   composeMoveTransform,
+  moveCalloutAnchor,
   configureEdgeRaycasting,
   computeNormalToFacePose,
   createExtrudePreviewGeometry,
@@ -324,6 +325,67 @@ describe('move gizmo focus', () => {
     expect(outline.visible).toBe(false);
     expect(focused.material.opacity).toBe(0.6);
     expect(competing.material.opacity).toBe(0.95);
+  });
+});
+
+describe('moveCalloutAnchor', () => {
+  it('is a plain offset when there is no rotation', () => {
+    expect(
+      moveCalloutAnchor(
+        { x: 2, y: 3, z: 40 },
+        { x: 0, y: 0, z: 0 },
+        { x: 5, y: -1, z: 0 }
+      )
+    ).toEqual({ x: 7, y: 2, z: 40 });
+  });
+
+  it('rotates the anchor before translating it', () => {
+    // A label 40 above the origin, turned a quarter turn about Y: the anchor
+    // swings onto +X and off Z entirely. Adding the translation alone would
+    // leave it at z = 40, which is the bug this pins.
+    const anchor = moveCalloutAnchor(
+      { x: 0, y: 0, z: 40 },
+      { x: 0, y: 90, z: 0 },
+      { x: 0, y: 0, z: 0 }
+    );
+    expect(anchor.x).toBeCloseTo(40, 6);
+    expect(anchor.y).toBeCloseTo(0, 6);
+    expect(anchor.z).toBeCloseTo(0, 6);
+  });
+
+  it('tracks a body rotated about its own centre', () => {
+    // The case the viewer actually runs: the callout rests directly above the
+    // centre of the bounding box, and the body turns about that centre. The
+    // anchor must land the same distance from the centre, on the far side.
+    const centre = { x: 10, y: 0, z: 5 };
+    const resting = { x: centre.x, y: centre.y, z: centre.z + 12 };
+    const rotationDeg = { x: 0, y: 180, z: 0 };
+    const final = composeMoveTransform(
+      centre,
+      { x: 0, y: 0, z: 0 },
+      rotationDeg
+    );
+    const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+    expect(anchor.x).toBeCloseTo(centre.x, 6);
+    expect(anchor.y).toBeCloseTo(centre.y, 6);
+    // Turned upside down about the centre, 12 above becomes 12 below.
+    expect(anchor.z).toBeCloseTo(centre.z - 12, 6);
+  });
+
+  it('agrees with the transform three.js applies to the mesh', () => {
+    // The mesh is posed with object.rotation = moveEuler(...) and
+    // object.position = final. If this helper ever diverges from that, the
+    // label drifts off the body it names.
+    const rotationDeg = { x: 20, y: -35, z: 50 };
+    const final = { x: 3, y: -7, z: 2 };
+    const resting = { x: 4, y: 11, z: 26 };
+    const expected = new THREE.Vector3(resting.x, resting.y, resting.z)
+      .applyEuler(moveEuler(rotationDeg))
+      .add(new THREE.Vector3(final.x, final.y, final.z));
+    const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+    expect(anchor.x).toBeCloseTo(expected.x, 6);
+    expect(anchor.y).toBeCloseTo(expected.y, 6);
+    expect(anchor.z).toBeCloseTo(expected.z, 6);
   });
 });
 
