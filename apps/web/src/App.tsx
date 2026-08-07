@@ -2770,6 +2770,75 @@ export function App() {
   }
 
   /**
+   * What measuring this pick WOULD report, without recording anything.
+   *
+   * A tool that only answers after you commit makes you record a row to find
+   * out whether you picked the right thing, then delete it. The preview runs
+   * the SAME derivation the click will run rather than a cheaper estimate that
+   * could disagree with the number that lands.
+   *
+   * Null when there is nothing honest to say, which includes an ambiguous
+   * pick: a hover is not the place to explain ADR-011, and a silent absence
+   * beats a confident wrong number.
+   */
+  function previewMeasurement(
+    selection: TopologySelection,
+    point?: { x: number; y: number; z: number }
+  ): string | null {
+    if (!doc || !viewMode || !measuring || !measurementApi) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      return null;
+    }
+    if (measurementMode === 'smart') {
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      return measurement
+        ? measurementApi.formatMeasurement(measurement, measurementDisplay)
+            .value
+        : null;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      return null;
+    }
+    // The first of two picks has nothing to measure against yet, so it names
+    // the target rather than guessing at a distance.
+    if (!measurementDraft) {
+      return target.label;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    return measurement
+      ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
+      : null;
+  }
+
+  /**
    * Abandons whatever pick was in progress: the two-pick draft and the running
    * edge total both. Not called after a measurement is recorded — a run has to
    * survive that, or a fourth Shift+Click could not extend a total of three.
@@ -9280,6 +9349,7 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            onMeasurePreview={viewMode && measuring ? previewMeasurement : null}
             regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
               viewMode ? (

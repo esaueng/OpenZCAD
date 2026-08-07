@@ -162,3 +162,42 @@ test('measuring an edge records it without selecting it', async ({ page }) => {
   await switchWorkspace(page, 'Build');
   await expect(page.locator('.selection-chip-label')).toBeHidden();
 });
+
+test('the preview names exactly what the click then measures', async ({
+  page
+}) => {
+  // Two things could break this. The preview could use a cheaper derivation
+  // than the click and disagree about the number; or — the subtler one — the
+  // preview could ADVANCE the depth cycle, because `cycleDepthPick` treats a
+  // second call within a few pixels as a request for the next candidate down.
+  // Hovering and then clicking one spot would then measure the second thing in
+  // the stack while the chip named the first.
+  await createBox(page, 'Measure Preview');
+  const canvas = page.locator('.viewer-host canvas');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const spot = {
+    x: bounds.x + bounds.width * 0.5,
+    y: bounds.y + bounds.height * 0.4
+  };
+
+  await page.mouse.move(spot.x, spot.y);
+  const chip = page.locator('.measure-preview-chip');
+  await expect(chip).toBeVisible();
+  const previewed = (await chip.textContent())?.trim();
+  expect(previewed).toBeTruthy();
+
+  // Nothing recorded yet: a preview is a look, not a commitment.
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench.getByRole('listitem')).toHaveCount(0);
+
+  await page.mouse.click(spot.x, spot.y);
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  await expect(workbench.getByRole('listitem')).toContainText(previewed!);
+});
