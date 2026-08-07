@@ -2,12 +2,14 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteLocalProject,
   deleteSourceBlob,
   ensureLocalProjectStorage,
   listLocalProjects,
+  loadProjectMeasurements,
+  saveProjectMeasurements,
   loadLocalProject,
   putSourceBlobIfAbsent,
   saveLocalProject,
@@ -17,6 +19,8 @@ import {
 const DATABASE_NAME = 'openzcad-v2';
 const DOCUMENT_STORE = 'projects';
 const SUMMARY_STORE = 'projectSummaries';
+const MEASUREMENT_STORE = 'projectMeasurements';
+const PAST_BLOCKED_GRACE_MS = 10_000;
 
 /** The stores this database had before the shelf projections were added. */
 const LEGACY_STORES = [
@@ -89,6 +93,29 @@ function openLegacyDatabase(): Promise<IDBDatabase> {
     open.onsuccess = () => resolve(open.result);
     open.onerror = () => reject(failed(open.error));
   });
+}
+
+/** A tab still running the schema immediately before measurements shipped. */
+function openPreviousDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(DATABASE_NAME, 6);
+    open.onupgradeneeded = () => {
+      for (const name of [...LEGACY_STORES, SUMMARY_STORE]) {
+        open.result.createObjectStore(name, { keyPath: 'projectId' });
+      }
+      open.result.createObjectStore('sourceBlobs', {
+        keyPath: 'checksumSha256'
+      });
+    };
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(failed(open.error));
+  });
+}
+
+async function settleEventLoop(): Promise<void> {
+  for (let turn = 0; turn < 20; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 /** Seeds documents the way a build without the projections store would have. */
@@ -262,10 +289,41 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   trace?.restore();
   trace = null;
   connections?.restore();
   connections = null;
+});
+
+describe('the measurement-store schema upgrade', () => {
+  it('settles every queued caller when an older tab blocks the upgrade', async () => {
+    const otherTab = await openPreviousDatabase();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const readiness = ensureLocalProjectStorage();
+    const listingError = listLocalProjects().then(
+      () => null,
+      (error: unknown) => error
+    );
+    await settleEventLoop();
+    vi.advanceTimersByTime(PAST_BLOCKED_GRACE_MS);
+
+    expect(await readiness).toBe('blocked');
+    expect(await listingError).toMatchObject({
+      name: 'LocalStorageBlockedError'
+    });
+
+    otherTab.close();
+    vi.useRealTimers();
+    await settleEventLoop();
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    expect(
+      await withStore(MEASUREMENT_STORE, 'readonly', (store) =>
+        store.getAllKeys()
+      )
+    ).toEqual([]);
+  });
 });
 
 /**
@@ -562,5 +620,87 @@ describe('deleteLocalProject', () => {
     );
 
     expect(await listLocalProjects()).toEqual([]);
+  });
+});
+
+describe('project measurements', () => {
+  const projectId = 'project_measured';
+
+  function record(count: number) {
+    return {
+      projectId,
+      version: 1,
+      updatedAt: '2026-08-07T00:00:00Z',
+      display: {
+        unit: 'mm' as const,
+        precision: 2,
+        radialDisplay: 'diameter' as const
+      },
+      measurements: Array.from({ length: count }, (_, index) => ({
+        id: `edge:${index}`,
+        kind: 'edge-length' as const,
+        label: `Edge ${index}`,
+        targets: [],
+        result: { value: index + 1, dimension: 'length' as const },
+        quality: 'exact-kernel' as const,
+        status: 'current' as const,
+        sourceRevision: 1,
+        sourceUnit: 'mm' as const,
+        visible: true
+      }))
+    };
+  }
+
+  it('round-trips a record through its own store', async () => {
+    await saveProjectMeasurements(record(2));
+    const loaded = await loadProjectMeasurements(projectId);
+    expect(loaded?.measurements).toHaveLength(2);
+    expect(loaded?.display.unit).toBe('mm');
+  });
+
+  it('answers null for a project that has never been measured', async () => {
+    expect(await loadProjectMeasurements('project_never')).toBeNull();
+  });
+
+  it('refuses an unreadable record without calling it missing', async () => {
+    const future = { ...record(2), version: 2, futureField: 'keep me' };
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    await withStore(MEASUREMENT_STORE, 'readwrite', (store) =>
+      store.put(future)
+    );
+
+    await expect(loadProjectMeasurements(projectId)).rejects.toThrow(
+      /unsupported or malformed/
+    );
+    expect(
+      await withStore<Record<string, unknown>>(
+        MEASUREMENT_STORE,
+        'readonly',
+        (store) => store.get(projectId) as IDBRequest<Record<string, unknown>>
+      )
+    ).toEqual(future);
+  });
+
+  it('replaces rather than appending on a second write', async () => {
+    await saveProjectMeasurements(record(3));
+    await saveProjectMeasurements(record(1));
+    expect(
+      (await loadProjectMeasurements(projectId))?.measurements
+    ).toHaveLength(1);
+  });
+
+  it('is deleted with its project', async () => {
+    // The orphan hazard, and it is not merely untidy: `adoptProjectDocument`
+    // reuses a project id, so a record left behind would surface under a
+    // DIFFERENT project that later claimed the same id — someone else's
+    // measurements appearing on your part.
+    let document = createProjectDocument('Measured', toUserId('user_m'));
+    document = { ...document, projectId: toProjectId(projectId) };
+    await saveLocalProject(document);
+    await saveProjectMeasurements(record(2));
+    expect(await loadProjectMeasurements(projectId)).not.toBeNull();
+
+    await deleteLocalProject(projectId);
+    expect(await loadProjectMeasurements(projectId)).toBeNull();
   });
 });

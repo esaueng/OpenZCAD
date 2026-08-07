@@ -25,7 +25,10 @@
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import { createBodyFeatureIds } from '@openzcad/document-core';
 import { parseStepMetadata } from '@openzcad/io-step';
-import type { ImportedSourceReference, ProjectDocument } from '@openzcad/shared';
+import type {
+  ImportedSourceReference,
+  ProjectDocument
+} from '@openzcad/shared';
 
 import { errorMessage } from './errors';
 import {
@@ -35,6 +38,7 @@ import {
 import {
   deleteSourceBlob,
   ensureLocalProjectStorage,
+  LOCAL_STORAGE_BLOCKED_MESSAGE,
   putSourceBlobIfAbsent,
   type LocalStorageReadiness,
   type StoredSourceBlob
@@ -207,6 +211,11 @@ export async function runStepImport(
   // commit lock is not one failed import: it is every boolean, fillet and
   // primitive edit in the tab silently doing nothing until it is reloaded.
   const readiness = await store.ensureLocalProjectStorage();
+  if (readiness === 'blocked') {
+    status.setStatus(LOCAL_STORAGE_BLOCKED_MESSAGE);
+    status.setFeatureFormError(LOCAL_STORAGE_BLOCKED_MESSAGE);
+    return declined();
+  }
   // No storage at all is not a refusal on its own — a file small enough to
   // embed in the document needs no blob store, which is exactly how a
   // storage-denied session has always imported. Past that cap there is nowhere
