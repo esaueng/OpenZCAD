@@ -39,7 +39,7 @@ function edge(index: number, value = index * 10): Measurement {
       }
     ],
     result: { value, dimension: 'length' },
-    quality: 'kernel-integrated',
+    quality: 'exact-kernel',
     status: 'current',
     sourceRevision: 1,
     sourceUnit: 'mm',
@@ -158,10 +158,7 @@ describe('measurement workbench records', () => {
 
   it('updates a raw value in place within the same stable identity', () => {
     const list = appendMeasurement(
-      [edge(1, 84), edge(2, 20)].reduce(
-        appendMeasurement,
-        [] as Measurement[]
-      ),
+      [edge(1, 84), edge(2, 20)].reduce(appendMeasurement, [] as Measurement[]),
       edge(1, 90)
     );
     expect(list).toHaveLength(2);
@@ -201,19 +198,20 @@ describe('measurement workbench records', () => {
           kind: 'body',
           label: 'Bracket',
           semantic: 'body-center',
-          quality: 'kernel-integrated'
+          quality: 'exact-kernel'
         }
       ],
       result: {
         value: 14.21,
         dimension: 'volume',
         components: { x: 84, y: 60, z: 35 }
-      }
+      },
+      // A volume is deflection-bounded where an edge length is not, so the two
+      // rows in this one export deliberately carry different tiers.
+      quality: 'tessellated' as const
     };
     const text = measurementsToText([edge(1, 84), body], DISPLAY);
-    expect(text).toContain(
-      'Bracket · Edge 1\t84.00 mm\t\tKernel\tcurrent\t'
-    );
+    expect(text).toContain('Bracket · Edge 1\t84.00 mm\t\tExact\tcurrent\t');
     expect(text).toContain(
       'Bracket\t84.00 × 60.00 × 35.00 mm\tVolume 14.21 mm³\tKernel\tcurrent\tInspection sample'
     );
@@ -229,7 +227,9 @@ describe('measurement workbench records', () => {
     expect(header).toContain('quality,status,source_revision,note');
     expect(row).toContain('"Plate, left · Edge ""A"""');
     expect(row).toContain(',84,mm,');
-    expect(row).toContain(',kernel-integrated,current,1,');
+    // The CSV carries the precise tier, not the collapsed display label, so an
+    // exported figure stays auditable after the row that produced it is gone.
+    expect(row).toContain(',exact-kernel,current,1,');
   });
 
   it('creates exact edge, face-area, diameter, and body inspection records', () => {
@@ -263,7 +263,10 @@ describe('measurement workbench records', () => {
       'mm'
     );
     expect(line?.result.value).toBeCloseTo(10, 10);
-    expect(line?.quality).toBe('kernel-integrated');
+    // An edge length is exact; the face area beside it is not, and the two no
+    // longer share a tier.
+    expect(line?.quality).toBe('exact-kernel');
+    expect(area?.quality).toBe('tessellated');
     expect(area?.result.value).toBeCloseTo(200, 10);
     expect(hole?.result.value).toBeCloseTo(8, 10);
     expect(bounds?.result.components).toEqual({ x: 10, y: 20, z: 30 });
