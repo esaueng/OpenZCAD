@@ -23,11 +23,21 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
   await page.getByLabel('Project name').fill('History Rail Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
+  // The rail rides in the lazily-loaded viewer chunk, so it lands long after
+  // the rest of the workspace: the tool palette is up inside 100 ms, the rail
+  // nearer two seconds, and slower still on a loaded machine. Wait for the
+  // toolbar itself on a budget sized for a chunk load; every assertion after
+  // this keeps the strict default, and a rail that never arrives fails as a
+  // missing rail rather than as an enabled-versus-disabled mismatch.
+  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
+  await expect(rail).toBeVisible({ timeout: 30_000 });
+
+  // Worth asserting only once the workspace is up — before that the top bar
+  // has not rendered at all, so its emptiness proves nothing.
   const topbar = page.locator('.topbar');
   await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
   await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
 
-  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
   const undo = rail.getByRole('button', { name: 'Undo' });
   const redo = rail.getByRole('button', { name: 'Redo' });
   await expect(undo).toBeDisabled();
