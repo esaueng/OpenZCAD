@@ -227,9 +227,17 @@ export async function settleImportSource(deps: {
     // unreachable: a tab that did not write these bytes never asks, and it can
     // never start asking later — `abandoned` is only ever added to BELOW this
     // guard, so a tab that has not created the key cannot acquire a licence for
-    // it. Two tabs on one device share this store and see none of each other's
-    // marks, open documents or undo stacks, and this is what keeps tab B's
-    // refusal from deleting bytes tab A committed a feature against.
+    // it.
+    //
+    // What that does NOT establish, since two tabs on one device share this
+    // store and see none of each other's marks, documents or undo stacks: the
+    // CREATING tab can still delete bytes another tab has since committed a
+    // feature against, when that feature lives in a project this tab does not
+    // have open. The reference check above reads one document — this tab's —
+    // so it cannot see that one. Narrow (it needs the same file imported in two
+    // tabs, the first reaching no verdict and later refusing) but real, and the
+    // deferred per-device claim record is what closes it. Do not read the
+    // ownership rule as a cross-tab guarantee; it is a floor, not a proof.
     //
     // The cost, stated plainly because it is deliberate: cleanup belongs solely
     // to the creating tab, so bytes orphaned by a tab that was closed mid-import
