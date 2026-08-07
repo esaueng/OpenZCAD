@@ -29,6 +29,7 @@ import {
 import {
   deleteSourceBlob,
   ensureLocalProjectStorage,
+  LOCAL_STORAGE_BLOCKED_MESSAGE,
   putSourceBlobIfAbsent,
   type LocalStorageReadiness
 } from '../lib/localProjectStore';
@@ -1604,6 +1605,29 @@ describe('the import orchestration, run rather than read', () => {
 
     expect(outcome?.outcome).toBe('declined');
     expect(statuses).toEqual([STORAGE_UNAVAILABLE_STATUS]);
+    expect(device.blobs.size).toBe(0);
+  });
+
+  it('declines a blocked schema upgrade before taking the commit lock', async () => {
+    const device = createDevice();
+    const { session, statuses } = oneTab(device);
+    const reserve = vi.fn(session.reserve);
+
+    let outcome: StepImportResult | undefined;
+    await act(async () => {
+      outcome = await importOnce(file, {
+        ...session,
+        reserve,
+        readiness: 'blocked',
+        run: () => {
+          throw new Error('the run must not be reached');
+        }
+      });
+    });
+
+    expect(outcome?.outcome).toBe('declined');
+    expect(reserve).not.toHaveBeenCalled();
+    expect(statuses).toEqual([LOCAL_STORAGE_BLOCKED_MESSAGE]);
     expect(device.blobs.size).toBe(0);
   });
 
