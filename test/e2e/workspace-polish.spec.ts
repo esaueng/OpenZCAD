@@ -203,7 +203,12 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   await expect(marker).toHaveAttribute('data-kind', 'vertical');
   await expect(marker).toHaveAttribute('data-label', 'Vertical');
 
-  await page.getByRole('button', { name: 'Finish Sketch' }).click();
+  // Scoped to the rail: the sketch status names this control, and the
+  // activity-log button folds the status into its own accessible name.
+  await page
+    .getByRole('toolbar', { name: 'Sketch tools' })
+    .getByRole('button', { name: 'Finish Sketch' })
+    .click();
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toHaveCount(0);
