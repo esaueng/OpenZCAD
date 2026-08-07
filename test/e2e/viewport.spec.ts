@@ -1601,3 +1601,38 @@ test('the selection callout follows the body it names through a move', async ({
   await expect(overlay).toBeHidden();
   await expect.poll(placement).toBe(resting);
 });
+
+test('the sketch status does not promise an exit Escape will not make', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch Status');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  // Exact: the status message now names this control, so the activity-log
+  // button that echoes the status matches a loose "Finish Sketch" too.
+  const finish = page.getByRole('button', { name: 'Finish Sketch', exact: true });
+  await expect(finish).toBeVisible();
+
+  const status = page.getByRole('contentinfo');
+  // A sketch opens with the Line tool armed, so the first Escape returns to
+  // selection. Saying "Esc exits" here contradicted the live hint next to it.
+  await expect(status).toContainText('Sketching on the XY plane');
+  await expect(status).not.toContainText('Esc exits');
+  await expect(status).toContainText('returns to selection');
+
+  // First Escape: still in the sketch, now on the select tool.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeVisible();
+  await expect(status).toContainText('leaves the sketch');
+
+  // Second Escape leaves, and says so rather than leaving the "Sketching on"
+  // message standing over a workspace the sketch has already been left.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeHidden();
+  await expect(status).toContainText('Sketch closed');
+  await expect(status).not.toContainText('Sketching on');
+});
