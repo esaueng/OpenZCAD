@@ -53,3 +53,4 @@ export * from './scene/objects';
 
 // Labels: screen-space dimension label layout.
 export * from './labels/dimensionLabel';
+export * from './annotation/dimensionGraphic';
