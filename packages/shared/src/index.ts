@@ -672,11 +672,48 @@ export interface FaceTopology {
   geometry?: FaceGeometry;
 }
 
+/**
+ * Whether {@link FaceGeometry.area} is the true area or an approximation.
+ *
+ * `kernel.faceArea` takes a deflection parameter, which reads as "approximate
+ * everywhere". It is not: measured against closed forms on the pinned build
+ * (test/measurement-provenance.test.ts), analytic curved surfaces come back at
+ * machine precision, and so do planar faces bounded entirely by straight
+ * edges — including non-convex ones, where an L-shaped face reads exactly 300.
+ *
+ * A plane bounded by any curve is the exception, and the deflection does not
+ * govern it: the boundary is inscribed with a FIXED 256-point polygon, so the
+ * error is identical at every deflection and every scale. The sign follows
+ * which side the curve bounds — a disc cap reads 1.004e-4 low, while a plate
+ * with a bore reads 5.183e-6 HIGH, because the inscribed hole is smaller than
+ * the true one and leaves more material behind.
+ */
+export type FaceAreaProvenance =
+  /** Closed form or exact polygon; trustworthy to machine precision. */
+  | 'exact'
+  /** A curved boundary inscribed with a fixed point count. */
+  | 'sampled';
+
 export interface FaceGeometry {
   /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
   area: number;
-  /** Exact surface center of mass, used as a topology fingerprint. */
+  /**
+   * How far {@link area} can be trusted. Absent when the surface class is one
+   * this build has not measured, which consumers must treat as "assume
+   * approximate" rather than as "exact".
+   */
+  areaProvenance?: FaceAreaProvenance;
+  /**
+   * The mean of this face's VERTEX positions — not an area centroid, despite
+   * being exactly reproducible and used as a topology fingerprint. For an
+   * L-shaped or trimmed face it is not the centre of the face, and it is not
+   * where a centre-of-mass marker belongs.
+   *
+   * The value is frozen: it is an ADR-011 witness input AND a direct-edit
+   * authorization pin (`sourceCenter`), so changing it would invalidate
+   * persisted topology hashes and refuse edits on documents that already open.
+   */
   center: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;

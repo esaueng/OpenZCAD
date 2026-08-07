@@ -38,6 +38,7 @@ import {
   type EdgeReferenceRepair,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
+  type FaceAreaProvenance,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
   type FaceWitnessV1,
@@ -975,11 +976,15 @@ function exactUnionOffsetSuggestion(
   ];
   const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
   const format = (value: number) => {
-    const rounded = Number(Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2));
+    const rounded = Number(
+      Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2)
+    );
     return `${rounded > 0 ? '+' : ''}${rounded}`;
   };
   for (const offset of candidates) {
-    const moves = axes.filter((axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON);
+    const moves = axes.filter(
+      (axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON
+    );
     if (moves.length === 0) {
       continue;
     }
@@ -1008,7 +1013,9 @@ function exactUnionOffsetSuggestion(
       continue;
     }
     const described = moves
-      .map((axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`)
+      .map(
+        (axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`
+      )
       .join(', ');
     return `Moving ${mover.name} ${described} clears it.`;
   }
@@ -2470,7 +2477,10 @@ function rederiveCylinderModifierLineage(
       operation
     );
   };
-  const planeAtZ = (candidate: BrepKitTopologyCandidate, z: number): boolean => {
+  const planeAtZ = (
+    candidate: BrepKitTopologyCandidate,
+    z: number
+  ): boolean => {
     const witness = candidate.witness as FaceWitnessV1;
     return witness.surfaceType === 'plane' && witness.centroid?.[2] === z;
   };
@@ -2493,8 +2503,10 @@ function rederiveCylinderModifierLineage(
     return witness.closed && matches(witness.center[2]);
   };
 
-  addRole('face', 'modifier.cylinder.face.wall', (candidate) =>
-    surfaceOf(candidate) === 'cylinder'
+  addRole(
+    'face',
+    'modifier.cylinder.face.wall',
+    (candidate) => surfaceOf(candidate) === 'cylinder'
   );
   addRole('face', 'modifier.cylinder.face.cap.start', (candidate) =>
     planeAtZ(candidate, zMin)
@@ -3134,15 +3146,60 @@ function resolveEdgeModifierEdges(
 }
 
 /** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
+/**
+ * Analytic surface classes whose area comes back as a closed form.
+ *
+ * Measured against closed forms on the pinned build rather than assumed from
+ * the presence of a deflection parameter: cylinder, sphere, cone and torus all
+ * return at machine precision (rel ~1e-16). Anything not listed here is left
+ * unclassified rather than guessed at, because a surface class this build has
+ * not been measured on must not be advertised as exact.
+ */
+const CLOSED_FORM_SURFACES = new Set(['cylinder', 'sphere', 'cone', 'torus']);
+
+/**
+ * Whether the face's area is exact.
+ *
+ * For a plane the answer is decided by its boundary: straight edges give an
+ * exact polygon, convex or not, while ANY curve is inscribed with a fixed
+ * 256-point polygon that no deflection improves. The check therefore stops at
+ * the first curved edge, and only planes pay for it at all.
+ */
+function measureAreaProvenance(
+  kernel: BrepKernel,
+  face: number,
+  surfaceType: string
+): FaceAreaProvenance | undefined {
+  if (CLOSED_FORM_SURFACES.has(surfaceType)) {
+    return 'exact';
+  }
+  if (surfaceType !== 'plane') {
+    return undefined;
+  }
+  try {
+    for (const edge of kernel.getFaceEdges(face)) {
+      if (kernel.getEdgeCurveType(edge) !== 'LINE') {
+        return 'sampled';
+      }
+    }
+  } catch {
+    // A face whose boundary cannot be walked is not one to make claims about.
+    return undefined;
+  }
+  return 'exact';
+}
+
 function measureFaceGeometry(
   kernel: BrepKernel,
   face: number
 ): FaceGeometry | undefined {
   const surfaceType = kernel.getSurfaceType(face);
   const centroid = faceVertexCentroid(kernel, face);
+  const areaProvenance = measureAreaProvenance(kernel, face, surfaceType);
   const geometry: FaceGeometry = {
     surfaceType,
     area: kernel.faceArea(face, MEASUREMENT_DEFLECTION),
+    ...(areaProvenance ? { areaProvenance } : {}),
     center: centroid ?? { x: 0, y: 0, z: 0 }
   };
   if (surfaceType === 'plane') {
