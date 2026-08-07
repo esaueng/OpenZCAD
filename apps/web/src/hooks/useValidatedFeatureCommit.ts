@@ -45,6 +45,32 @@ export interface ValidatedFeatureTarget {
   resultBodyId: BodyId;
 }
 
+/**
+ * The commit lock, held before a run exists.
+ *
+ * For callers whose preparation is itself expensive or destructive — an import
+ * hashes and stores up to 250 MB of source bytes before it can validate
+ * anything. Asking `isRunning()` first would not do: that answers about the
+ * instant it was asked, and the write that follows takes seconds to minutes, so
+ * another operation can take the lock while the bytes are going to disk and the
+ * run is then turned away with the write already done. Reserving takes the lock
+ * for real, and {@link ValidatedFeatureRunOptions.reservation} hands it to the
+ * run instead of making it compete for it.
+ */
+export interface ValidatedFeatureReservation {
+  /**
+   * Releases the hold without running anything. Idempotent, and safe to call
+   * after handing the reservation to a run that has already released it — a
+   * caller can simply release in a `finally`.
+   */
+  release(): void;
+}
+
+/** The reservation as this hook holds it; callers only see `release`. */
+interface HeldCommitLock extends ValidatedFeatureReservation {
+  settled: Promise<void>;
+}
+
 export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
   /**
    * Emitted once the result body exists. A function is resolved after
@@ -97,6 +123,16 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
    */
   onFailure?(message: string): void;
   onSuccess?(): void;
+  /**
+   * A lock this caller already holds, from {@link ValidatedFeatureReservation}.
+   * The run adopts it rather than testing whether the lock is free — which is
+   * the point: between reserving and running, the caller did the expensive
+   * preparation that must not be spent on a run the lock would refuse.
+   *
+   * A reservation that is no longer held (already released) is ignored, and the
+   * run competes for the lock as usual.
+   */
+  reservation?: ValidatedFeatureReservation;
 }
 
 export interface ValidatedFeatureTransactionRunOptions {
@@ -150,29 +186,34 @@ export function useValidatedFeatureCommit(
   const optionsRef = useRef(options);
   optionsRef.current = options;
   /**
-   * Serialises validate → commit. Held as the running run's own promise rather
-   * than a boolean so a run that stepped aside for `finalize` can wait for
-   * whoever took its place instead of committing on top of them.
+   * Serialises validate → commit. Held as the holder's own object, carrying the
+   * promise that settles when it lets go, rather than as a boolean: a run that
+   * stepped aside for `finalize` can then wait for whoever took its place
+   * instead of committing on top of them, and a caller holding a reservation
+   * can be recognised as the current holder rather than as a competitor.
    */
-  const inFlight = useRef<Promise<void> | null>(null);
+  const inFlight = useRef<HeldCommitLock | null>(null);
 
-  function takeLock(): () => void {
+  function takeLock(): HeldCommitLock {
     let settle!: () => void;
-    const held = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    inFlight.current = held;
-    return () => {
-      if (inFlight.current === held) {
-        inFlight.current = null;
+    const lock: HeldCommitLock = {
+      settled: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+      release() {
+        if (inFlight.current === lock) {
+          inFlight.current = null;
+        }
+        settle();
       }
-      settle();
     };
+    inFlight.current = lock;
+    return lock;
   }
 
-  async function waitForLock(): Promise<() => void> {
+  async function waitForLock(): Promise<HeldCommitLock> {
     while (inFlight.current) {
-      await inFlight.current;
+      await inFlight.current.settled;
     }
     return takeLock();
   }
@@ -185,6 +226,7 @@ export function useValidatedFeatureCommit(
     onSuccess?(): void;
     onFailure?(message: string): void;
     preview(current: ProjectDocument): ProjectDocument;
+    reservation?: ValidatedFeatureReservation;
     finalize?(): Promise<AnyCommand>;
     commit(
       host: ValidatedFeatureCommitOptions,
@@ -202,7 +244,11 @@ export function useValidatedFeatureCommit(
       host.onFailure?.('Open a project before running an exact operation.');
       return 'busy';
     }
-    if (inFlight.current) {
+    const reserved =
+      input.reservation && inFlight.current === input.reservation
+        ? (input.reservation as HeldCommitLock)
+        : null;
+    if (!reserved && inFlight.current) {
       // Never silent, on either surface: the refusal used to look identical to
       // a tool that had simply done nothing, and the status bar alone leaves
       // an open feature form — the thing the user is actually looking at —
@@ -214,7 +260,10 @@ export function useValidatedFeatureCommit(
       return 'busy';
     }
 
-    let releaseLock = takeLock();
+    // Adopting the reservation rather than taking a fresh lock is what makes it
+    // a reservation: the caller has been holding it since before its own
+    // preparation, so nothing could have slipped in behind it.
+    let lock = reserved ?? takeLock();
     /** The document the candidate in hand was previewed and rebuilt against. */
     let current = manager.document;
     const projectSwitched = (): boolean => host.manager() !== manager;
@@ -283,11 +332,11 @@ export function useValidatedFeatureCommit(
         // silent no-op for minutes. Dropping it and simply carrying on would
         // interleave a concurrent run with the commit below, so the lock is
         // handed back and then re-acquired — waiting for whoever took it.
-        releaseLock();
+        lock.release();
         try {
           finalized = await input.finalize();
         } finally {
-          releaseLock = await waitForLock();
+          lock = await waitForLock();
         }
         host.onBusy(true);
         if (host.manager() !== manager) {
@@ -320,23 +369,23 @@ export function useValidatedFeatureCommit(
       }
       return 'rejected';
     } finally {
-      releaseLock();
+      lock.release();
       host.onBusy(false);
     }
   }
 
   return {
     /**
-     * Whether a run holds the commit lock right now.
+     * Takes the commit lock now, for a caller that must do expensive or
+     * destructive preparation before it can call {@link run}. Null when another
+     * run already holds it.
      *
-     * For callers whose preparation is itself expensive or destructive — an
-     * import writes its source bytes to storage before it can validate
-     * anything — so that work is never spent on a run the lock is about to
-     * refuse. It is a check, not a reservation: a run may still start between
-     * asking and calling {@link run}, which is why `run` reports `busy` too.
+     * Hand the result to `run` as `reservation`, and release it in a `finally`
+     * — releasing twice is harmless, and forgetting to release deadlocks every
+     * later validated operation.
      */
-    isRunning(): boolean {
-      return inFlight.current !== null;
+    reserve(): ValidatedFeatureReservation | null {
+      return inFlight.current ? null : takeLock();
     },
 
     async run(
@@ -354,6 +403,9 @@ export function useValidatedFeatureCommit(
           command.validate(current);
           return command.apply(current);
         },
+        ...(runOptions.reservation
+          ? { reservation: runOptions.reservation }
+          : {}),
         finalize: runOptions.finalize,
         commit: (host, derived, finalized) =>
           host.commit(finalized ?? command, derived),

@@ -1,9 +1,26 @@
 import type { UnitSystem } from '@openzcad/shared';
 import type {
   Measurement,
+  MeasurementDimension,
   MeasurementDisplayOptions,
+  MeasurementKind,
+  MeasurementQuality,
+  MeasurementStatus,
+  MeasurementTarget,
   RadialDisplay
 } from './measurements';
+import {
+  MEASUREMENT_RECORD_MAX_ITEMS,
+  MEASUREMENT_RECORD_VERSION,
+  type StoredMeasurementRecord
+} from './measurementRecord';
+export {
+  buildMeasurementRecord,
+  MEASUREMENT_RECORD_MAX_ITEMS,
+  MEASUREMENT_RECORD_VERSION,
+  persistableMeasurement,
+  type StoredMeasurementRecord
+} from './measurementRecord';
 
 /**
  * Measurements that outlive the session that took them.
@@ -23,39 +40,143 @@ import type {
  * another makes it a lie on the far side.
  */
 
-/**
- * Bumped only when a stored record can no longer be read by the parser below.
- * A reader that meets a HIGHER version refuses rather than guessing — see
- * {@link parseStoredMeasurements}.
- */
-export const MEASUREMENT_RECORD_VERSION = 1;
-
-/**
- * Caps, chosen so a full record stays small enough to hand to a sync route
- * later without a second conversation about size.
- *
- * `MEASUREMENT_LIMIT` in `measurements.ts` already refuses a fifty-first
- * measurement in the session. These are the belt to that brace: a record that
- * arrives over-long from another device, or from a future version, is
- * truncated on READ rather than trusted, because the alternative is a
- * malformed record wedging the app open at a project it cannot load.
- */
-export const MEASUREMENT_RECORD_MAX_ITEMS = 200;
-
-export interface StoredMeasurementRecord {
-  projectId: string;
-  version: number;
-  /** When this device last wrote it, for a human-readable sync decision. */
-  updatedAt: string;
-  measurements: Measurement[];
-  display: MeasurementDisplayOptions;
-}
-
 const UNITS: readonly UnitSystem[] = ['mm', 'cm', 'm', 'inch'];
 const RADIAL: readonly RadialDisplay[] = ['diameter', 'radius'];
+const KINDS: readonly MeasurementKind[] = [
+  'edge-length',
+  'edge-total',
+  'diameter',
+  'face-area',
+  'body',
+  'distance',
+  'angle'
+];
+const QUALITIES: readonly MeasurementQuality[] = [
+  'exact-analytic',
+  'exact-kernel',
+  'tessellated',
+  'sampled',
+  'unavailable'
+];
+const STATUSES: readonly MeasurementStatus[] = [
+  'current',
+  'stale',
+  'unresolved'
+];
+const DIMENSIONS: readonly MeasurementDimension[] = [
+  'length',
+  'area',
+  'volume',
+  'angle'
+];
+const TARGET_KINDS: readonly MeasurementTarget['kind'][] = [
+  'body',
+  'face',
+  'edge'
+];
+const TARGET_SEMANTICS: readonly MeasurementTarget['semantic'][] = [
+  'body-center',
+  'face-center',
+  'circle-center',
+  'edge-midpoint',
+  'pick'
+];
+const REASONS = ['body-missing', 'not-found', 'ambiguous'] as const;
+const ANGLE_CONVENTIONS = [
+  'between-normals',
+  'dihedral',
+  'included',
+  'acute',
+  'line-to-plane'
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isOneOf<T extends string>(
+  value: unknown,
+  allowed: readonly T[]
+): value is T {
+  return typeof value === 'string' && allowed.includes(value as T);
+}
+
+function parseVector(
+  value: unknown
+): { x: number; y: number; z: number } | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const { x, y, z } = value;
+  return typeof x === 'number' &&
+    Number.isFinite(x) &&
+    typeof y === 'number' &&
+    Number.isFinite(y) &&
+    typeof z === 'number' &&
+    Number.isFinite(z)
+    ? { x, y, z }
+    : null;
+}
+
+function parseTarget(value: unknown): MeasurementTarget | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const { bodyId, bodyName, kind, label, semantic, quality } = value;
+  if (
+    typeof bodyId !== 'string' ||
+    bodyId.length === 0 ||
+    typeof bodyName !== 'string' ||
+    !isOneOf(kind, TARGET_KINDS) ||
+    typeof label !== 'string' ||
+    !isOneOf(semantic, TARGET_SEMANTICS) ||
+    !isOneOf(quality, QUALITIES)
+  ) {
+    return null;
+  }
+
+  const target: MeasurementTarget = {
+    bodyId: bodyId as MeasurementTarget['bodyId'],
+    bodyName,
+    kind,
+    label,
+    semantic,
+    quality
+  };
+  if (value.topologyId !== undefined) {
+    if (typeof value.topologyId !== 'string') return null;
+    target.topologyId = value.topologyId;
+  }
+  if (value.hash !== undefined) {
+    if (typeof value.hash !== 'number' || !Number.isFinite(value.hash)) {
+      return null;
+    }
+    target.hash = value.hash;
+  }
+  if (value.reference !== undefined) {
+    if (!isRecord(value.reference)) return null;
+    // The kernel resolver validates the versioned reference's full integrity
+    // before using lineage or fallback. This boundary only ensures an attacker
+    // cannot hand that resolver a primitive.
+    target.reference =
+      value.reference as unknown as MeasurementTarget['reference'];
+  }
+  for (const field of ['point', 'direction'] as const) {
+    if (value[field] === undefined) continue;
+    const vector = parseVector(value[field]);
+    if (!vector) return null;
+    target[field] = vector;
+  }
+  if (value.endpoints !== undefined) {
+    if (!Array.isArray(value.endpoints) || value.endpoints.length !== 2) {
+      return null;
+    }
+    const first = parseVector(value.endpoints[0]);
+    const second = parseVector(value.endpoints[1]);
+    if (!first || !second) return null;
+    target.endpoints = [first, second];
+  }
+  return target;
 }
 
 function parseDisplay(value: unknown): MeasurementDisplayOptions | null {
@@ -97,25 +218,100 @@ function parseMeasurement(value: unknown): Measurement | null {
   if (!isRecord(value)) {
     return null;
   }
-  const { id, kind, label, result, quality, status, targets } = value;
+  const {
+    id,
+    kind,
+    label,
+    result,
+    quality,
+    status,
+    targets,
+    sourceRevision,
+    sourceUnit,
+    visible
+  } = value;
   if (
     typeof id !== 'string' ||
-    typeof kind !== 'string' ||
+    !isOneOf(kind, KINDS) ||
     typeof label !== 'string' ||
-    typeof quality !== 'string' ||
-    typeof status !== 'string' ||
+    !isOneOf(quality, QUALITIES) ||
+    !isOneOf(status, STATUSES) ||
     !Array.isArray(targets) ||
     !isRecord(result) ||
     typeof result.value !== 'number' ||
     !Number.isFinite(result.value) ||
-    typeof result.dimension !== 'string'
+    !isOneOf(result.dimension, DIMENSIONS) ||
+    typeof sourceRevision !== 'number' ||
+    !Number.isInteger(sourceRevision) ||
+    sourceRevision < 0 ||
+    !isOneOf(sourceUnit, UNITS) ||
+    typeof visible !== 'boolean'
   ) {
     return null;
   }
-  // `annotation` is deliberately absent from what is written, so it is absent
-  // here: it is pure derived geometry, the largest term in the payload, and
-  // the next refresh rebuilds it from the resolved targets anyway.
-  return value as unknown as Measurement;
+  const parsedTargets = targets.map(parseTarget);
+  if (parsedTargets.some((target) => target === null)) {
+    return null;
+  }
+
+  const parsedResult: Measurement['result'] = {
+    value: result.value,
+    dimension: result.dimension
+  };
+  if (result.components !== undefined) {
+    const components = parseVector(result.components);
+    if (!components) return null;
+    parsedResult.components = components;
+  }
+  if (result.secondary !== undefined) {
+    if (
+      !isRecord(result.secondary) ||
+      typeof result.secondary.label !== 'string' ||
+      typeof result.secondary.value !== 'number' ||
+      !Number.isFinite(result.secondary.value) ||
+      !isOneOf(result.secondary.dimension, DIMENSIONS)
+    ) {
+      return null;
+    }
+    parsedResult.secondary = {
+      label: result.secondary.label,
+      value: result.secondary.value,
+      dimension: result.secondary.dimension
+    };
+  }
+
+  const parsed: Measurement = {
+    id,
+    kind,
+    label,
+    targets: parsedTargets as MeasurementTarget[],
+    result: parsedResult,
+    quality,
+    status,
+    sourceRevision,
+    sourceUnit,
+    visible
+  };
+  if (value.renamed !== undefined) {
+    if (typeof value.renamed !== 'boolean') return null;
+    parsed.renamed = value.renamed;
+  }
+  if (value.note !== undefined) {
+    if (typeof value.note !== 'string') return null;
+    parsed.note = value.note;
+  }
+  if (value.reason !== undefined) {
+    if (!isOneOf(value.reason, REASONS)) return null;
+    parsed.reason = value.reason;
+  }
+  if (value.angleConvention !== undefined) {
+    if (!isOneOf(value.angleConvention, ANGLE_CONVENTIONS)) return null;
+    parsed.angleConvention = value.angleConvention;
+  }
+  // `annotation` and unknown fields are deliberately not copied. Annotation is
+  // derived world-space geometry, the largest term in the payload, and the
+  // next refresh rebuilds it from these validated targets.
+  return parsed;
 }
 
 /**
@@ -138,6 +334,8 @@ export function parseStoredMeasurements(
     typeof projectId !== 'string' ||
     projectId.length === 0 ||
     typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < 1 ||
     version > MEASUREMENT_RECORD_VERSION ||
     typeof updatedAt !== 'string' ||
     !Array.isArray(measurements)
@@ -167,36 +365,5 @@ export function parseStoredMeasurements(
     updatedAt,
     measurements: parsed,
     display: parsedDisplay
-  };
-}
-
-/**
- * What actually gets written for one measurement.
- *
- * `annotation` is dropped: it is world-space line geometry recomputed from the
- * targets on every refresh, and it is most of the bytes. `result` is kept
- * whole, value included, so a row whose geometry has since vanished can still
- * show what it last read — which is the difference between a record and a
- * receipt.
- */
-export function persistableMeasurement(measurement: Measurement): Measurement {
-  const { annotation: _annotation, ...rest } = measurement;
-  return rest;
-}
-
-export function buildMeasurementRecord(
-  projectId: string,
-  measurements: readonly Measurement[],
-  display: MeasurementDisplayOptions,
-  updatedAt: string
-): StoredMeasurementRecord {
-  return {
-    projectId,
-    version: MEASUREMENT_RECORD_VERSION,
-    updatedAt,
-    measurements: measurements
-      .slice(0, MEASUREMENT_RECORD_MAX_ITEMS)
-      .map(persistableMeasurement),
-    display
   };
 }
