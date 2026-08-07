@@ -201,3 +201,31 @@ test('the preview names exactly what the click then measures', async ({
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   await expect(workbench.getByRole('listitem')).toContainText(previewed!);
 });
+
+test('a hover on an edge snaps to a named point', async ({ page }) => {
+  // Snapping is what makes a measured distance exact rather than "wherever the
+  // cursor happened to be". The glyph naming the kind is half of it: a marker
+  // alone says something happened, where "Endpoint" says the position is now
+  // exact.
+  //
+  // Candidates are scoped by `measureSnapEdges` before anything is projected.
+  // `resolveSnap` projects every candidate it is handed, on every hover frame,
+  // so handing it a whole body is how this becomes a frame-rate problem on an
+  // imported assembly.
+  await createBox(page, 'Measure Snap');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+
+  // The locator hands back a point on a real edge, confirmed pickable through
+  // the live camera — which is also within snap range of that edge's own
+  // midpoint or an end.
+  const edge = await locateEdge(page);
+  await page.mouse.move(edge.x - 60, edge.y - 60);
+  await page.mouse.move(edge.x, edge.y);
+
+  const glyph = page.locator('.snap-glyph');
+  await expect(glyph).toBeVisible();
+  await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
+});
