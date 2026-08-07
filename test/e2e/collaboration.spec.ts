@@ -596,7 +596,15 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
     timeout: 15_000
   });
-  await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible();
+  // "Saving" until the local autosave debounce comes due and the IndexedDB
+  // write lands, which on a loaded runner competing with the kernel's cold
+  // start crosses the 5 s assertion default. Matching the readiness allowance
+  // above waits for that write; it does not excuse one that never happens,
+  // because a project that never reaches storage stays on "Saving" forever and
+  // still fails here.
+  await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible({
+    timeout: 15_000
+  });
   await expect(
     page.getByRole('group', { name: 'Workspace status' })
   ).toContainText('syncLocal only');
