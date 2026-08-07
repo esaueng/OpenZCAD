@@ -147,6 +147,17 @@ describe('refused STEP import', () => {
   }, 60_000);
 });
 
+/**
+ * The import ORCHESTRATION — the order of the storage check, the commit lock,
+ * the write — used to be asserted by reading `App.tsx`'s source text, because it
+ * lived inline in a component no test renders. That is not coverage: independent
+ * mutations of it left every suite green.
+ *
+ * It is now `runStepImport` in `apps/web/src/lib/stepImportRun.ts`, and
+ * `apps/web/src/hooks/useValidatedFeatureCommit.test.tsx` runs the real thing
+ * against a fake device. What is left here is the kernel's own verdict and the
+ * pure cleanup decisions, which is what this file is for.
+ */
 describe('refused import source cleanup', () => {
   function documentReferencing(
     ...refs: ImportedSourceReference[]
