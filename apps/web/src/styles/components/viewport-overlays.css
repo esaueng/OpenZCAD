@@ -400,6 +400,19 @@
   width: 316px;
 }
 
+/* Name and body picker: the two things the retired Move form carried that the
+   gizmo did not (WF-07). They sit above the axis grids, matching the order the
+   feature forms use — identity first, then values. */
+.move-name,
+.move-target {
+  margin-bottom: 10px;
+}
+
+.move-name input,
+.move-target select {
+  width: 100%;
+}
+
 .move-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
