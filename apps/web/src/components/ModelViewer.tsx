@@ -65,6 +65,7 @@ import {
   isSameMoveGizmoFocus,
   makeLabel,
   markExtrudeGizmo,
+  moveCalloutAnchor,
   moveEuler,
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
@@ -1101,12 +1102,8 @@ export function ModelViewer({
         if (child.userData.calloutBodyId !== bodyId || !resting) {
           continue;
         }
-        const anchor = resting.clone().applyEuler(moveEuler(rotationDeg));
-        child.position.set(
-          anchor.x + final.x,
-          anchor.y + final.y,
-          anchor.z + final.z
-        );
+        const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+        child.position.set(anchor.x, anchor.y, anchor.z);
       }
     }
 
