@@ -10,7 +10,8 @@ import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
   discardUnreferencedImportSource,
-  listLocalOnlyImportSources
+  listLocalOnlyImportSources,
+  settleImportSource
 } from './importArchival';
 
 function referenceFor(text: string): ImportedSourceReference {
@@ -244,6 +245,100 @@ describe('in-flight import checksums', () => {
       })
     ).resolves.toBe(false);
     expect(deleteSourceBlob).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Who comes away holding a licence to delete, which is the one thing a run's
+ * own outcome does not show.
+ *
+ * `abandoned` is a standing grant: a checksum in it may be deleted by a LATER
+ * run of this tab even though that run created nothing. So the question a test
+ * has to ask about a refusal is not only "did it delete?" but "did it acquire
+ * the right to delete later?" — and the two can disagree.
+ */
+describe('the licence a finished import leaves behind', () => {
+  const checksum = 'sha256-frame';
+
+  function documentReferencing(reference: ImportedSourceReference) {
+    const manager = new CommandManager(
+      createProjectDocument('Frames', toUserId('user_licence'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Frame',
+        artifactId: 'artifact_local_frame',
+        sourceName: 'frame.step',
+        stepSourceRef: reference
+      })
+    );
+    return manager.document;
+  }
+
+  const frameReference: ImportedSourceReference = {
+    marker: 'openzcad-source-ref',
+    version: 1,
+    hashAlgorithm: 'sha256',
+    checksumSha256: checksum,
+    logicalBytes: 21
+  };
+
+  it('takes no licence for bytes a feature still rebuilds from', async () => {
+    // The run WROTE these bytes — the blob was missing while the feature that
+    // needs it was not, which is any document that arrived by sync, or any
+    // device whose storage was cleared — and then it was refused. So the bytes
+    // are this tab's own by every ownership test, AND they are the source of a
+    // feature in the open document.
+    //
+    // Not deleting them now is the easy half, and the reference check inside
+    // `discardUnreferencedImportSource` would manage that much on its own. The
+    // half that only shows up later is the NOTE: recording these as abandoned
+    // hands this tab a standing licence over bytes it does not own the only
+    // copy of. Delete that feature, re-import the same file, have it refused,
+    // and the licence fires — against a key that may by then be the last copy
+    // backing another project on this device.
+    const abandonedChecksums = new Set<string>();
+    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+
+    await expect(
+      settleImportSource({
+        checksumSha256: checksum,
+        result: 'refused',
+        createdByThisImport: true,
+        abandonedChecksums,
+        document: documentReferencing(frameReference),
+        inFlightChecksums: createInFlightImportChecksums(),
+        deleteSourceBlob
+      })
+    ).resolves.toBe(false);
+
+    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    // The assertion the surviving bytes cannot make on their own.
+    expect(abandonedChecksums.has(checksum)).toBe(false);
+  });
+
+  it('clears a licence it was already holding once a feature claims the bytes', async () => {
+    // The same rule from the other side: this tab wrote these bytes in an
+    // earlier run that reached no verdict, so it does hold a licence over them.
+    // A feature now rebuilds from them, and the licence has to go — otherwise
+    // the note outlives the reason it was taken.
+    const abandonedChecksums = new Set([checksum]);
+    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+
+    await expect(
+      settleImportSource({
+        checksumSha256: checksum,
+        result: 'committed',
+        createdByThisImport: true,
+        abandonedChecksums,
+        document: documentReferencing(frameReference),
+        inFlightChecksums: createInFlightImportChecksums(),
+        deleteSourceBlob
+      })
+    ).resolves.toBe(false);
+
+    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(abandonedChecksums.has(checksum)).toBe(false);
   });
 });
 
