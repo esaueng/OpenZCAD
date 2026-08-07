@@ -237,3 +237,46 @@ describe('the guard on the whole change', () => {
     expect(body.volume).toBe(Math.PI * 100 * 20);
   }, 120_000);
 });
+
+describe('the plane equation', () => {
+  it('completes n·x = d for every planar face, exactly', async () => {
+    // Free to compute and exact: `center` is the mean of the face's vertices,
+    // all of which lie on the plane. Checked against the geometry rather than
+    // against itself — a 20 mm box corner-at-origin has planes at 0 and 20.
+    const body = await bodyOf(
+      primitive('box', { width: 20, height: 20, depth: 20 })
+    );
+    const offsets = facesOf(body, 'plane')
+      // `+ 0` normalises negative zero, which the three faces through the
+      // origin can produce depending on which way their normal points. It is
+      // a float artifact, not a fact about the geometry, and pinning it would
+      // make this test about IEEE 754 rather than about the plane equation.
+      .map((face) => (face.geometry?.planeOffset ?? Number.NaN) + 0)
+      .sort((a, b) => a - b);
+    expect(offsets).toEqual([0, 0, 0, 20, 20, 20]);
+
+    // And it really is the plane equation: every face's own centre satisfies
+    // it, which a constant or a copied field would not.
+    for (const face of facesOf(body, 'plane')) {
+      const { normal, center, planeOffset } = face.geometry!;
+      expect(
+        normal!.x * center.x + normal!.y * center.y + normal!.z * center.z
+      ).toBeCloseTo(planeOffset!, 12);
+    }
+  }, 120_000);
+
+  it('is absent wherever the normal is', async () => {
+    // The two travel together; a plane offset without a normal would be a
+    // half-answer that reads as a plane through the origin.
+    const body = await bodyOf(
+      primitive('cylinder', { radius: 10, height: 20 })
+    );
+    for (const face of body.topology?.faces ?? []) {
+      const geometry = face.geometry;
+      if (!geometry) continue;
+      expect(geometry.planeOffset === undefined).toBe(
+        geometry.normal === undefined
+      );
+    }
+  }, 120_000);
+});
