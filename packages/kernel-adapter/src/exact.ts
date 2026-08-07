@@ -38,6 +38,7 @@ import {
   type EdgeReferenceRepair,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
+  type BodyMassProperties,
   type FaceAreaProvenance,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
@@ -53,6 +54,7 @@ import {
   type TopologyLineageDiagnostic
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
+import { readBodyMassProperties } from './body-properties';
 import {
   booleanFacetFallbackWarning,
   censusOfSolids,
@@ -287,6 +289,7 @@ interface MeasuredShape {
   topology: BodyTopology;
   faceCount: number;
   volume: number;
+  massProperties?: BodyMassProperties;
   valid: boolean;
   strictValid: boolean;
   meshClosure: TriangleMeshClosure | null;
@@ -6281,6 +6284,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const meshClosure = strictBooleanValidation
       ? inspectTriangleMeshClosure(vertices, indices)
       : null;
+    // Single-solid bodies only, and deliberately so. Combining moments across
+    // solids means the parallel-axis theorem plus an eigendecomposition to
+    // recover principal axes, and a body made of several solids that reported
+    // the moments of one of them would be worse than reporting none. Absent
+    // is a state consumers already have to render.
+    const massProperties =
+      shape.solids.length === 1
+        ? readBodyMassProperties(kernel, shape.solids[0]!)
+        : null;
     return {
       vertices,
       indices,
@@ -6290,7 +6302,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       valid,
       strictValid,
       meshClosure,
-      bbox
+      bbox,
+      ...(massProperties ? { massProperties } : {})
     };
   }
 
@@ -6390,6 +6403,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           consumed,
           volume: measured.volume,
           bbox: measured.bbox,
+          // One kernel call per solid, inside the pass that already holds it.
+          // Omitted rather than zeroed when it cannot be read, so a consumer
+          // renders an absence instead of a massless part.
+          ...(measured.massProperties
+            ? { massProperties: measured.massProperties }
+            : {}),
           topology: measured.topology
         };
         if (body.exportableStep && !consumed) {
