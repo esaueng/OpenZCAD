@@ -241,6 +241,7 @@ import {
   edgeLengthMeasurement,
   faceLabel
 } from './lib/topologyLabels';
+import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
@@ -349,9 +350,7 @@ function ViewModeBar(props: ComponentProps<typeof LazyViewModeBar>) {
   );
 }
 
-function MeasurementDock(
-  props: ComponentProps<typeof LazyMeasurementDock>
-) {
+function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
   return (
     <Suspense fallback={null}>
       <LazyMeasurementDock {...props} />
@@ -466,6 +465,7 @@ import {
   createEdgeTotalMeasurement,
   createSmartMeasurement,
   formatMeasurement,
+  measurementSelectionFailure,
   measurementTargetFromSelection,
   measurementToViewportAnnotation,
   measurementsToCsv,
@@ -1033,9 +1033,8 @@ export function App() {
    */
   const backfillThumbnail = useCallback(
     async (project: ProjectSummary): Promise<string | null | undefined> => {
-      const { queuePartThumbnail, renderThumbnailFrame } = await import(
-        './lib/partThumbnail'
-      );
+      const { queuePartThumbnail, renderThumbnailFrame } =
+        await import('./lib/partThumbnail');
       return queuePartThumbnail(async () => {
         const stored = await loadLocalProject(project.projectId).catch(
           () => null
@@ -2553,11 +2552,11 @@ export function App() {
     }
     if (renderedSelectedTopology?.kind === 'face') {
       const body = renderedRepresentations[renderedSelectedTopology.bodyId];
-      const face = body?.topology?.faces.find(
-        (candidate) =>
-          candidate.topologyId === renderedSelectedTopology.topologyId
-      );
-      const geometry = face?.geometry;
+      // Through the shared fail-closed resolver rather than a local `find`, so
+      // the chip cannot print a confident figure for a pick the measurement
+      // tape is simultaneously refusing as ambiguous.
+      const resolved = resolveFace(body, renderedSelectedTopology);
+      const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
         geometry.diameter !== undefined
@@ -2638,8 +2637,7 @@ export function App() {
   );
   const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
   const [measurementPrecision, setMeasurementPrecision] = useState(2);
-  const [radialDisplay, setRadialDisplay] =
-    useState<RadialDisplay>('diameter');
+  const [radialDisplay, setRadialDisplay] = useState<RadialDisplay>('diameter');
   const measurementDisplay = useMemo<MeasurementDisplayOptions>(
     () => ({
       unit: measurementUnit,
@@ -2685,7 +2683,9 @@ export function App() {
     }
     const body = renderedRepresentations[selection.bodyId];
     if (!body) {
-      setStatus('The selected body has no current exact projection to measure.');
+      setStatus(
+        'The selected body has no current exact projection to measure.'
+      );
       return;
     }
     const point = detail?.point;
@@ -2726,7 +2726,10 @@ export function App() {
       if (measurement) {
         recordMeasurement(measurement);
       } else {
-        setStatus('That selection does not expose a trustworthy measurement.');
+        setStatus(
+          measurementSelectionFailure(body, selection) ??
+            'That selection does not expose a trustworthy measurement.'
+        );
       }
       return;
     }
@@ -2738,9 +2741,10 @@ export function App() {
     );
     if (!target?.point) {
       setStatus(
-        measurementMode === 'angle'
-          ? 'Angle needs a straight edge, circular axis, or measured face direction.'
-          : 'That selection does not expose a trustworthy measurement point.'
+        measurementSelectionFailure(body, selection) ??
+          (measurementMode === 'angle'
+            ? 'Angle needs a straight edge, circular axis, or measured face direction.'
+            : 'That selection does not expose a trustworthy measurement point.')
       );
       return;
     }
@@ -2774,37 +2778,29 @@ export function App() {
     }
   }
 
-  const measurementAnnotations = useMemo(
-    () => {
-      const pinned = measurements.flatMap((measurement) => {
-        const annotation = measurementToViewportAnnotation(
-          measurement,
-          measurementDisplay,
-          measurement.id === activeMeasurementId
-        );
-        return annotation ? [annotation] : [];
-      });
-      return measurementDraft?.point
-        ? [
-            ...pinned,
-            {
-              id: 'measurement-draft',
-              label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
-              selected: true,
-              status: 'current' as const,
-              anchor: measurementDraft.point,
-              segments: []
-            }
-          ]
-        : pinned;
-    },
-    [
-      activeMeasurementId,
-      measurementDisplay,
-      measurementDraft,
-      measurements
-    ]
-  );
+  const measurementAnnotations = useMemo(() => {
+    const pinned = measurements.flatMap((measurement) => {
+      const annotation = measurementToViewportAnnotation(
+        measurement,
+        measurementDisplay,
+        measurement.id === activeMeasurementId
+      );
+      return annotation ? [annotation] : [];
+    });
+    return measurementDraft?.point
+      ? [
+          ...pinned,
+          {
+            id: 'measurement-draft',
+            label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
+            selected: true,
+            status: 'current' as const,
+            anchor: measurementDraft.point,
+            segments: []
+          }
+        ]
+      : pinned;
+  }, [activeMeasurementId, measurementDisplay, measurementDraft, measurements]);
   const formattedMeasurements = useMemo(
     () =>
       Object.fromEntries(
@@ -5630,9 +5626,7 @@ export function App() {
     ) {
       return;
     }
-    setStatus(
-      `Archiving ${localOnlySources.length} local import source(s)…`
-    );
+    setStatus(`Archiving ${localOnlySources.length} local import source(s)…`);
     const result = await archiveLocalOnlyImportSources({
       document: doc,
       loadSourceBytes: loadSourceBlob,
@@ -7258,7 +7252,11 @@ export function App() {
     bodyId: BodyId,
     offset: number,
     exact?: ParamValue
-  ): { command: AnyCommand; sourceFeatureId: FeatureId; height: number } | null {
+  ): {
+    command: AnyCommand;
+    sourceFeatureId: FeatureId;
+    height: number;
+  } | null {
     const base = managerRef.current?.document;
     if (!base || Math.abs(offset) <= 1e-9) {
       return null;
@@ -8116,10 +8114,14 @@ export function App() {
             event.preventDefault();
             if (measurementDraft) {
               setMeasurementDraft(null);
-              setStatus(`${measurementMode} measurement canceled · pick the first target.`);
+              setStatus(
+                `${measurementMode} measurement canceled · pick the first target.`
+              );
             } else {
               setMeasuring(false);
-              setStatus('Measure off · pinned results remain in this View session.');
+              setStatus(
+                'Measure off · pinned results remain in this View session.'
+              );
             }
             return;
           }
@@ -9115,7 +9117,9 @@ export function App() {
                       onClear={() => {
                         if (
                           appSettings.general.confirmDestructiveActions &&
-                          !window.confirm('Clear every measurement in this View session?')
+                          !window.confirm(
+                            'Clear every measurement in this View session?'
+                          )
                         ) {
                           return;
                         }
@@ -9304,9 +9308,7 @@ export function App() {
                   hideRotation={movePreview.target === 'sketch'}
                   // A sketch move commits as a sketch translation, not a named
                   // feature, so it gets neither a name nor a body picker.
-                  name={
-                    movePreview.target === 'sketch' ? undefined : moveName
-                  }
+                  name={movePreview.target === 'sketch' ? undefined : moveName}
                   onName={
                     movePreview.target === 'sketch' ? undefined : setMoveName
                   }
@@ -9315,7 +9317,8 @@ export function App() {
                       ? undefined
                       : viewerBodies.map((body) => ({
                           bodyId: body.bodyId,
-                          name: representations[body.bodyId]?.name ?? body.bodyId
+                          name:
+                            representations[body.bodyId]?.name ?? body.bodyId
                         }))
                   }
                   targetBodyId={movePreview.bodyId}
