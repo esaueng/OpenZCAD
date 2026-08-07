@@ -13,6 +13,14 @@ import {
   resolveFace,
   type TopologyResolutionReason
 } from './topologyResolution';
+import {
+  ANGLE_CONVENTION_LABELS,
+  angleBetweenEdges,
+  angleBetweenFaces,
+  angleBetweenLineAndPlane,
+  type AngleConvention,
+  type AngleMeasurement
+} from './measurementGeometry';
 
 export type MeasurementMode = 'smart' | 'distance' | 'angle';
 
@@ -42,6 +50,13 @@ export interface MeasurementTarget {
   label: string;
   point?: Vector3;
   direction?: Vector3;
+  /**
+   * A straight edge's two ends. Carried so two edges can be told apart from
+   * two edges that MEET: only a shared corner makes an included angle over
+   * 0-180 defensible, because an edge's `direction` follows the kernel's
+   * traversal order rather than the geometry. See `measurementGeometry.ts`.
+   */
+  endpoints?: readonly [Vector3, Vector3];
   semantic:
     'body-center' | 'face-center' | 'circle-center' | 'edge-midpoint' | 'pick';
   quality: MeasurementQuality;
@@ -95,6 +110,12 @@ export interface Measurement {
    * repairs, and only the second is fixed by re-picking.
    */
   reason?: TopologyResolutionReason;
+  /**
+   * Which angle was measured, for `kind: 'angle'`. Shown beside the figure
+   * because a bare "30°" between two faces does not say whether it describes
+   * the material or its normals, and those differ by 120.
+   */
+  angleConvention?: AngleConvention;
   sourceRevision: number;
   sourceUnit: UnitSystem;
   visible: boolean;
@@ -324,6 +345,7 @@ export function measurementTargetFromSelection(
         label: `${label} midpoint`,
         point: midpoint(endpoints![0], endpoints![1]),
         direction: lineDirection,
+        endpoints: endpoints!,
         semantic: 'edge-midpoint',
         quality: 'exact-analytic'
       };
@@ -623,6 +645,37 @@ export function createDistanceMeasurement(
   };
 }
 
+/**
+ * Picks the angle convention the pair of picks actually supports.
+ *
+ * A face target carries an outward normal, which is directed; an edge target
+ * carries a traversal direction, which is not. Mixing them without saying so
+ * is how the old `Math.abs` came to fold every angle into 0-90.
+ */
+function angleBetweenTargets(
+  first: MeasurementTarget,
+  second: MeasurementTarget
+): AngleMeasurement | null {
+  const firstIsFace = first.kind === 'face' && first.semantic === 'face-center';
+  const secondIsFace =
+    second.kind === 'face' && second.semantic === 'face-center';
+  if (!first.direction || !second.direction) {
+    return null;
+  }
+  if (firstIsFace && secondIsFace) {
+    return angleBetweenFaces(first.direction, second.direction);
+  }
+  if (firstIsFace !== secondIsFace) {
+    const line = firstIsFace ? second : first;
+    const plane = firstIsFace ? first : second;
+    return angleBetweenLineAndPlane(line.direction!, plane.direction!);
+  }
+  return angleBetweenEdges(
+    { direction: first.direction, endpoints: first.endpoints },
+    { direction: second.direction, endpoints: second.endpoints }
+  );
+}
+
 export function createAngleMeasurement(
   first: MeasurementTarget,
   second: MeasurementTarget,
@@ -636,18 +689,10 @@ export function createAngleMeasurement(
   if (!firstDirection || !secondDirection || !first.point || !second.point) {
     return null;
   }
-  const dot = Math.min(
-    1,
-    Math.max(
-      0,
-      Math.abs(
-        firstDirection.x * secondDirection.x +
-          firstDirection.y * secondDirection.y +
-          firstDirection.z * secondDirection.z
-      )
-    )
-  );
-  const angleDeg = (Math.acos(dot) * 180) / Math.PI;
+  const measured = angleBetweenTargets(first, second);
+  if (!measured) {
+    return null;
+  }
   const separation = distance(first.point, second.point);
   const armLength = separation > 1e-9 ? separation * 0.45 : 10;
   const origin = first.point;
@@ -655,8 +700,9 @@ export function createAngleMeasurement(
     id: `angle:${targetKey(first)}:${targetKey(second)}`,
     kind: 'angle',
     label: `${first.label} ∠ ${second.label}`,
+    angleConvention: measured.convention,
     targets: [first, second],
-    result: { value: angleDeg, dimension: 'angle' },
+    result: { value: measured.degrees, dimension: 'angle' },
     quality: worstQuality([first.quality, second.quality]),
     status: 'current',
     sourceRevision,
@@ -1000,7 +1046,12 @@ export function formatMeasurement(
     options.precision
   )} ${unitLabel(result.dimension, options.unit)}`;
   let detail: string | undefined;
-  if (measurement.kind === 'distance' && result.components) {
+  if (measurement.kind === 'angle' && measurement.angleConvention) {
+    // Never show an angle without naming which one it is: the dihedral of a
+    // 30 degree wedge and the angle between its normals are both true, and
+    // they differ by 120.
+    detail = `Angle ${ANGLE_CONVENTION_LABELS[measurement.angleConvention]}`;
+  } else if (measurement.kind === 'distance' && result.components) {
     const component = (value: number) =>
       fixed(
         convertedValue(value, 'length', measurement.sourceUnit, options.unit),
