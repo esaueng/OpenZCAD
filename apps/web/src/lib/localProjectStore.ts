@@ -5,6 +5,10 @@ import {
   type ProjectOrganization,
   type ProjectSummary
 } from '@openzcad/shared';
+import {
+  parseStoredMeasurements,
+  type StoredMeasurementRecord
+} from './measurementStore';
 
 const DATABASE_NAME = 'openzcad-v2';
 const STORE_NAME = 'projects';
@@ -58,7 +62,23 @@ const THUMBNAIL_STORE_NAME = 'projectThumbnails';
  * other side, exactly as it would for the sync baseline.
  */
 const SUMMARY_STORE_NAME = 'projectSummaries';
-const DATABASE_VERSION = 6;
+/**
+ * Measurements taken in View mode, per project.
+ *
+ * Kept out of the document for the reason `stepText` documents in
+ * `packages/shared`: `syncComparableDocument` exempts only ownership, the
+ * version fence and `derived`, so anything else written into a
+ * `ProjectDocument` that no user typed makes an untouched project read
+ * `diverged`. Measurements are also hashed into `canonicalProjectContentKey`
+ * if they live there, which would invalidate the exact rebuild cache — a full
+ * replay of the model's history — every time somebody measured an edge.
+ *
+ * Separate from the shelf record for the same reason the sync baseline is:
+ * shelf state is this device's arrangement and gets merged with the account's
+ * copy, while this is work the user did to the part.
+ */
+const MEASUREMENT_STORE_NAME = 'projectMeasurements';
+const DATABASE_VERSION = 7;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
@@ -125,6 +145,14 @@ function openDatabase(): Promise<IDBDatabase> {
       // block the app from opening until it finished.
       if (!request.result.objectStoreNames.contains(SUMMARY_STORE_NAME)) {
         request.result.createObjectStore(SUMMARY_STORE_NAME, {
+          keyPath: 'projectId'
+        });
+      }
+      // Absent for every project on an upgraded database, which reads as "no
+      // measurements yet" — the correct answer, since nothing was recorded
+      // before there was anywhere to record it.
+      if (!request.result.objectStoreNames.contains(MEASUREMENT_STORE_NAME)) {
+        request.result.createObjectStore(MEASUREMENT_STORE_NAME, {
           keyPath: 'projectId'
         });
       }
@@ -332,7 +360,8 @@ export async function loadSourceBlob(
 ): Promise<Uint8Array | null> {
   const record = await transaction<SourceBlobRecord | undefined>(
     'readonly',
-    (store) => store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
+    (store) =>
+      store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
     BLOB_STORE_NAME
   );
   if (!record) {
@@ -533,6 +562,41 @@ export function loadProjectThumbnail(
 }
 
 /**
+ * Writes this project's measurements, replacing whatever was there.
+ *
+ * The whole record at once rather than row-by-row: the list is small, it is
+ * always read whole, and a partial write is a state the reader would have to
+ * be taught to distinguish from a genuinely short list.
+ */
+export function saveProjectMeasurements(
+  record: StoredMeasurementRecord
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.put(record),
+    MEASUREMENT_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * This project's measurements, or null when there are none to read.
+ *
+ * Parsed rather than cast. A record from a newer build is refused whole — see
+ * `parseStoredMeasurements` for why reading it partially would be worse than
+ * not reading it — and a single malformed row is dropped without taking the
+ * rest of the list with it.
+ */
+export function loadProjectMeasurements(
+  projectId: string
+): Promise<StoredMeasurementRecord | null> {
+  return transaction<unknown>(
+    'readonly',
+    (store) => store.get(projectId) as IDBRequest<unknown>,
+    MEASUREMENT_STORE_NAME
+  ).then((value) => (value ? parseStoredMeasurements(value) : null));
+}
+
+/**
  * Records that this device and the account now hold the same version of
  * `projectId`. Everything the conflict machinery decides is measured from here.
  */
@@ -605,12 +669,17 @@ export function clearAllLastSyncedVersions(): Promise<void> {
  * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
+  // Every per-project store, in one transaction. A store missing from this
+  // list is not merely untidy: `adoptProjectDocument` reuses a project id, so
+  // an orphaned record would surface under a DIFFERENT project that later
+  // claimed the same id.
   const storeNames = [
     STORE_NAME,
     META_STORE_NAME,
     SYNC_STORE_NAME,
     THUMBNAIL_STORE_NAME,
-    SUMMARY_STORE_NAME
+    SUMMARY_STORE_NAME,
+    MEASUREMENT_STORE_NAME
   ];
   return multiStoreTransaction(storeNames, 'readwrite', (stores) => {
     for (const storeName of storeNames) {
