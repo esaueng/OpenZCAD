@@ -439,6 +439,16 @@ interface ModelViewerProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /**
+   * What measuring the hovered target would report, for the preview chip.
+   * Null when measuring is off or the pick has nothing honest to say.
+   */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
@@ -760,6 +770,7 @@ export function ModelViewer({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   sketchMode,
   onSketchCommit,
@@ -856,6 +867,8 @@ export function ModelViewer({
   onSelectRegionRef.current = onSelectRegion;
   const onHoverRegionRef = useRef(onHoverRegion);
   onHoverRegionRef.current = onHoverRegion;
+  const onMeasurePreviewRef = useRef(onMeasurePreview);
+  onMeasurePreviewRef.current = onMeasurePreview;
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
@@ -1693,6 +1706,15 @@ export function ModelViewer({
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
+    /**
+     * The value a click would record, shown while the pointer is still over
+     * the target. Hidden from assistive technology: the dock's live region
+     * already announces what was measured, and narrating every hover would
+     * bury that under a stream of numbers nobody asked for.
+     */
+    const measurePreviewChip = hud.create('measure-preview-chip', {
+      ariaHidden: true
+    });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
     const handleChipClick = () => {
@@ -2434,6 +2456,49 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(pick(event));
+      updateMeasurePreview(event);
+    }
+
+    /**
+     * Shows what the next click would measure, beside the pointer.
+     *
+     * The candidate comes from the same `pickAll` + depth cycle the click uses,
+     * so the preview cannot name one thing while the click takes another —
+     * but the returned cycle is DISCARDED rather than stored. `cycleDepthPick`
+     * treats a second call within a few pixels as a request for the next
+     * candidate down, so remembering it here would make hovering and then
+     * clicking the same spot select the second thing in the stack. Depth
+     * cycling belongs to clicks.
+     */
+    function updateMeasurePreview(event: PointerEvent) {
+      const preview = onMeasurePreviewRef.current;
+      if (!preview) {
+        hud.hide(measurePreviewChip);
+        return;
+      }
+      const stack = picker.pickAll(event);
+      const wouldPick = cycleDepthPick(
+        stack,
+        depthCycle,
+        event.clientX,
+        event.clientY
+      ).candidate;
+      const selection = wouldPick?.selection;
+      if (!selection) {
+        hud.hide(measurePreviewChip);
+        return;
+      }
+      const label = preview(selection, {
+        x: wouldPick.hit.point.x,
+        y: wouldPick.hit.point.y,
+        z: wouldPick.hit.point.z
+      });
+      if (!label) {
+        hud.hide(measurePreviewChip);
+        return;
+      }
+      measurePreviewChip.textContent = label;
+      hud.showAtPointer(measurePreviewChip, event, 16, -28);
     }
 
     /**
@@ -4371,6 +4436,7 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(null);
+      hud.hide(measurePreviewChip);
     };
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
