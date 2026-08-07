@@ -71,7 +71,7 @@ interface ProjectMetaRecord extends ProjectOrganization {
  */
 type ProjectSummaryRecord = Omit<ProjectSummary, 'organization'>;
 
-interface ProjectThumbnailRecord {
+export interface ProjectThumbnailRecord {
   projectId: string;
   /** `image/webp` data URL, or null for a project with no visible geometry. */
   source: string | null;
