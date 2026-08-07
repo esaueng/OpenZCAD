@@ -698,6 +698,13 @@ export interface EdgeTopology {
   hash: number;
   reference?: EdgeTopologyReferenceV5;
   /**
+   * Length measured by the browser geometry kernel from the edge's exact
+   * curve. Optional for projections produced by older adapters; consumers may
+   * fall back to the sampled display polyline only when they also identify the
+   * result as approximate.
+   */
+  length?: number;
+  /**
    * Periodic B-Rep faces need topological seam edges to close their UV
    * parameterization. They remain available to the kernel for stable topology
    * identity, but are not physical feature edges and stay out of the viewport.

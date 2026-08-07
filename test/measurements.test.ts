@@ -1,22 +1,143 @@
 import { describe, expect, it } from 'vitest';
+import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import {
   appendMeasurement,
+  createAngleMeasurement,
+  createDistanceMeasurement,
+  createSmartMeasurement,
+  formatMeasurement,
+  measurementTargetFromSelection,
   measurementsToCsv,
   measurementsToText,
   MEASUREMENT_LIMIT,
-  type Measurement
+  refreshMeasurements,
+  type Measurement,
+  type MeasurementDisplayOptions
 } from '../apps/web/src/lib/measurements';
 
-function edge(index: number, value = `${index * 10} mm`): Measurement {
+const DISPLAY: MeasurementDisplayOptions = {
+  unit: 'mm',
+  precision: 2,
+  radialDisplay: 'diameter'
+};
+
+function edge(index: number, value = index * 10): Measurement {
   return {
-    key: `edge:body/${index}`,
-    kind: 'edge',
+    id: `edge:body/${index}`,
+    kind: 'edge-length',
     label: `Bracket · Edge ${index}`,
-    value
+    targets: [
+      {
+        bodyId: 'body' as Measurement['targets'][number]['bodyId'],
+        bodyName: 'Bracket',
+        kind: 'edge',
+        topologyId: `edge:${index}`,
+        hash: index,
+        label: `Bracket · Edge ${index}`,
+        semantic: 'edge-midpoint',
+        quality: 'exact-analytic'
+      }
+    ],
+    result: { value, dimension: 'length' },
+    quality: 'kernel-integrated',
+    status: 'current',
+    sourceRevision: 1,
+    sourceUnit: 'mm',
+    visible: true
   };
 }
 
-describe('measurement tape', () => {
+function measuredBody(): BodyRepresentation {
+  return {
+    bodyId: 'body-1' as BodyRepresentation['bodyId'],
+    name: 'Bracket',
+    source: 'primitive',
+    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    faceCount: 2,
+    color: '#fff',
+    exportableStep: true,
+    consumed: false,
+    volume: 6000,
+    bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 30 } },
+    topology: {
+      edges: [
+        {
+          topologyId: 'edge:x',
+          hash: 11,
+          length: 10,
+          curve: { type: 'LINE' },
+          points: [0, 0, 0, 10, 0, 0]
+        },
+        {
+          topologyId: 'edge:y',
+          hash: 12,
+          length: 20,
+          curve: { type: 'LINE' },
+          points: [0, 0, 0, 0, 20, 0]
+        },
+        {
+          topologyId: 'edge:circle',
+          hash: 13,
+          length: Math.PI * 8,
+          curve: {
+            type: 'CIRCLE',
+            circle: {
+              center: { x: 3, y: 4, z: 5 },
+              axis: { x: 0, y: 0, z: 1 },
+              radius: 4
+            }
+          },
+          points: [7, 4, 5, 3, 8, 5, -1, 4, 5, 7, 4, 5]
+        }
+      ],
+      faces: [
+        {
+          topologyId: 'face:top',
+          hash: 21,
+          triangleStart: 0,
+          triangleCount: 2,
+          geometry: {
+            surfaceType: 'plane',
+            area: 200,
+            center: { x: 5, y: 10, z: 30 },
+            normal: { x: 0, y: 0, z: 1 }
+          }
+        },
+        {
+          topologyId: 'face:hole',
+          hash: 22,
+          triangleStart: 2,
+          triangleCount: 8,
+          geometry: {
+            surfaceType: 'cylinder',
+            area: 120,
+            center: { x: 3, y: 4, z: 15 },
+            radius: 4,
+            diameter: 8,
+            axisStart: { x: 3, y: 4, z: 0 },
+            axisEnd: { x: 3, y: 4, z: 30 },
+            featureType: 'through-hole'
+          }
+        }
+      ]
+    }
+  };
+}
+
+function selection(
+  kind: TopologySelection['kind'],
+  topologyId?: string,
+  hash?: number
+): TopologySelection {
+  return {
+    bodyId: 'body-1' as TopologySelection['bodyId'],
+    kind,
+    ...(topologyId ? { topologyId } : {}),
+    ...(hash !== undefined ? { hash } : {})
+  };
+}
+
+describe('measurement workbench records', () => {
   it('appends each new entity in pick order', () => {
     const list = [edge(1), edge(2)].reduce(
       appendMeasurement,
@@ -28,29 +149,24 @@ describe('measurement tape', () => {
     ]);
   });
 
-  it('does not duplicate a re-picked entity', () => {
-    // Clicking an edge again to look at it is normal; a second identical row
-    // for it is not.
+  it('does not duplicate an unchanged re-picked entity', () => {
     const once = appendMeasurement([], edge(1));
     const twice = appendMeasurement(once, edge(1));
     expect(twice).toHaveLength(1);
-    // Unchanged means the same reference, which is what lets the capture
-    // effect run on every render without causing one.
     expect(twice).toBe(once);
   });
 
-  it('updates a row in place when the same entity measures differently', () => {
-    // A rebuild that resizes the edge should correct the tape, not extend it.
+  it('updates a raw value in place within the same stable identity', () => {
     const list = appendMeasurement(
-      [edge(1, '84 mm'), edge(2, '20 mm')].reduce(
+      [edge(1, 84), edge(2, 20)].reduce(
         appendMeasurement,
         [] as Measurement[]
       ),
-      edge(1, '90 mm')
+      edge(1, 90)
     );
     expect(list).toHaveLength(2);
-    expect(list[0]?.value).toBe('90 mm');
-    expect(list[1]?.value).toBe('20 mm');
+    expect(list[0]?.result.value).toBe(90);
+    expect(list[1]?.result.value).toBe(20);
   });
 
   it('drops the oldest rows past the limit', () => {
@@ -62,33 +178,153 @@ describe('measurement tape', () => {
     expect(list[0]?.label).toBe('Bracket · Edge 5');
   });
 
-  it('copies as tab-separated rows', () => {
-    const list = [
-      edge(1, '84 mm'),
-      {
-        key: 'body:b1',
-        kind: 'body' as const,
-        label: 'Bracket',
-        value: '84 × 60 × 35 mm',
-        note: '14.21 mm³'
+  it('formats display units without changing the stored source value', () => {
+    const measurement = edge(1, 25.4);
+    expect(
+      formatMeasurement(measurement, { ...DISPLAY, unit: 'inch', precision: 3 })
+        .value
+    ).toBe('1.000 in');
+    expect(measurement.result.value).toBe(25.4);
+  });
+
+  it('copies formatted rows with provenance and status', () => {
+    const body: Measurement = {
+      ...edge(2, 14.21),
+      id: 'body:b1',
+      kind: 'body',
+      label: 'Bracket',
+      note: 'Inspection sample',
+      targets: [
+        {
+          bodyId: 'b1' as Measurement['targets'][number]['bodyId'],
+          bodyName: 'Bracket',
+          kind: 'body',
+          label: 'Bracket',
+          semantic: 'body-center',
+          quality: 'kernel-integrated'
+        }
+      ],
+      result: {
+        value: 14.21,
+        dimension: 'volume',
+        components: { x: 84, y: 60, z: 35 }
       }
-    ];
-    expect(measurementsToText(list)).toBe(
-      'Bracket · Edge 1\t84 mm\nBracket\t84 × 60 × 35 mm\t14.21 mm³'
+    };
+    const text = measurementsToText([edge(1, 84), body], DISPLAY);
+    expect(text).toContain(
+      'Bracket · Edge 1\t84.00 mm\t\tKernel\tcurrent\t'
+    );
+    expect(text).toContain(
+      'Bracket\t84.00 × 60.00 × 35.00 mm\tVolume 14.21 mm³\tKernel\tcurrent\tInspection sample'
     );
   });
 
-  it('quotes CSV cells that would otherwise break the row', () => {
-    const list: Measurement[] = [
-      {
-        key: 'edge:b1/1',
-        kind: 'edge',
-        label: 'Plate, left · Edge "A"',
-        value: '84 mm'
-      }
-    ];
-    const [header, row] = measurementsToCsv(list).split('\n');
-    expect(header).toBe('kind,label,value,note');
-    expect(row).toBe('edge,"Plate, left · Edge ""A""",84 mm,');
+  it('exports raw structured CSV and quotes unsafe labels', () => {
+    const measurement = {
+      ...edge(1, 84),
+      label: 'Plate, left · Edge "A"'
+    };
+    const [header, row] = measurementsToCsv([measurement], DISPLAY).split('\n');
+    expect(header).toContain('target_a,target_b,value,unit');
+    expect(header).toContain('quality,status,source_revision,note');
+    expect(row).toContain('"Plate, left · Edge ""A"""');
+    expect(row).toContain(',84,mm,');
+    expect(row).toContain(',kernel-integrated,current,1,');
+  });
+
+  it('creates exact edge, face-area, diameter, and body inspection records', () => {
+    const body = measuredBody();
+    const line = createSmartMeasurement(
+      body,
+      selection('edge', 'edge:x', 11),
+      { x: 2, y: 0, z: 0 },
+      4,
+      'mm'
+    );
+    const area = createSmartMeasurement(
+      body,
+      selection('face', 'face:top', 21),
+      { x: 2, y: 3, z: 30 },
+      4,
+      'mm'
+    );
+    const hole = createSmartMeasurement(
+      body,
+      selection('face', 'face:hole', 22),
+      { x: 7, y: 4, z: 10 },
+      4,
+      'mm'
+    );
+    const bounds = createSmartMeasurement(
+      body,
+      selection('body'),
+      undefined,
+      4,
+      'mm'
+    );
+    expect(line?.result.value).toBeCloseTo(10, 10);
+    expect(line?.quality).toBe('kernel-integrated');
+    expect(area?.result.value).toBeCloseTo(200, 10);
+    expect(hole?.result.value).toBeCloseTo(8, 10);
+    expect(bounds?.result.components).toEqual({ x: 10, y: 20, z: 30 });
+  });
+
+  it('measures exact semantic centers and stable entity directions', () => {
+    const body = measuredBody();
+    const circle = measurementTargetFromSelection(
+      body,
+      selection('edge', 'edge:circle', 13),
+      { x: 7, y: 4, z: 5 },
+      'distance'
+    );
+    const bodyTarget = measurementTargetFromSelection(
+      body,
+      selection('body'),
+      undefined,
+      'distance'
+    );
+    expect(circle?.semantic).toBe('circle-center');
+    expect(circle?.point).toEqual({ x: 3, y: 4, z: 5 });
+    const measured = createDistanceMeasurement(circle!, bodyTarget!, 4, 'mm');
+    expect(measured?.result.components).toEqual({ x: 2, y: 6, z: 10 });
+    expect(measured?.result.value).toBeCloseTo(Math.sqrt(140), 10);
+
+    const x = measurementTargetFromSelection(
+      body,
+      selection('edge', 'edge:x', 11),
+      undefined,
+      'angle'
+    );
+    const y = measurementTargetFromSelection(
+      body,
+      selection('edge', 'edge:y', 12),
+      undefined,
+      'angle'
+    );
+    expect(createAngleMeasurement(x!, y!, 4, 'mm')?.result.value).toBeCloseTo(
+      90,
+      10
+    );
+  });
+
+  it('recomputes resolvable topology and fails closed for removed topology', () => {
+    const body = measuredBody();
+    const original = createSmartMeasurement(
+      body,
+      selection('edge', 'edge:x', 11),
+      undefined,
+      4,
+      'mm'
+    )!;
+    const resized = measuredBody();
+    resized.topology!.edges[0]!.length = 12;
+    const refreshed = refreshMeasurements([original], [resized], 5)[0]!;
+    expect(refreshed.status).toBe('current');
+    expect(refreshed.result.value).toBeCloseTo(12, 10);
+
+    resized.topology!.edges = resized.topology!.edges.slice(1);
+    const unresolved = refreshMeasurements([refreshed], [resized], 6)[0]!;
+    expect(unresolved.status).toBe('unresolved');
+    expect(unresolved.result.value).toBeCloseTo(12, 10);
   });
 });
