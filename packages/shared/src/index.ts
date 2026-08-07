@@ -912,6 +912,44 @@ export interface TopologySelection {
  * already in world space (transform features are baked in), so the viewport
  * renders representations without additional placement.
  */
+/**
+ * A solid's distribution of material, integrated over its exact surfaces.
+ *
+ * Deliberately carries no volume. The kernel's mass-properties integrator
+ * returns one, but it is LESS accurate than `BodyRepresentation.volume` — on a
+ * cylinder it lands 1.8e-13 off where the other is 2e-16 off, because the two
+ * share an integrator and only one of them is additionally pinned bit-exact
+ * for analytic bodies. Publishing both would invite a consumer to pick the
+ * wrong one for `mass = density * volume`, so only the better one exists.
+ *
+ * Unit density throughout: these are geometric moments, not physical ones.
+ * Multiplying by a density is the caller's job, and the caller is the only
+ * part of the system that knows what the part is made of.
+ */
+export interface BodyMassProperties {
+  /** Centroid of the enclosed volume, in document units. */
+  centerOfMass: Vector3;
+  /**
+   * `[Ixx, Iyy, Izz, Ixy, Ixz, Iyz]` about the centre of mass, on global axes.
+   * The three products vanish when the body is symmetric about those axes.
+   */
+  inertia: readonly [number, number, number, number, number, number];
+  /** Principal moments, ascending. */
+  principalMoments: readonly [number, number, number];
+  /**
+   * The axis belonging to each principal moment, in the same order.
+   *
+   * The kernel hands these over as a flat row-major nine, which is converted
+   * here rather than downstream: an consumer reading `principalAxes[0]` and
+   * expecting a vector would otherwise get a scalar with no type error.
+   *
+   * Order is a property of the body's proportions, not of the axes. A cylinder
+   * taller than r*sqrt(3) has its spin axis FIRST, so nothing may assume the
+   * last entry is the interesting one — pair each axis with its own moment.
+   */
+  principalAxes: readonly [Vector3, Vector3, Vector3];
+}
+
 export interface BodyRepresentation {
   bodyId: BodyId;
   name: string;
@@ -927,6 +965,13 @@ export interface BodyRepresentation {
   consumed: boolean;
   volume: number;
   bbox: BoundingBox;
+  /**
+   * Absent when the kernel could not integrate this solid — it raises on a
+   * degenerate one where `volume` merely answers zero — or when the projection
+   * predates the field. Consumers must render the absence rather than
+   * substituting zeros, which would read as a massless part.
+   */
+  massProperties?: BodyMassProperties;
   topology?: BodyTopology;
 }
 
