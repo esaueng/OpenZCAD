@@ -7,11 +7,12 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import { edgeLabel, edgeLengthMeasurement, faceLabel } from './topologyLabels';
 import {
-  edgeLabel,
-  edgeLengthMeasurement,
-  faceLabel
-} from './topologyLabels';
+  resolveEdge,
+  resolveFace,
+  type TopologyResolutionReason
+} from './topologyResolution';
 
 export type MeasurementMode = 'smart' | 'distance' | 'angle';
 
@@ -25,10 +26,7 @@ export type MeasurementKind =
   | 'angle';
 
 export type MeasurementQuality =
-  | 'exact-analytic'
-  | 'kernel-integrated'
-  | 'sampled'
-  | 'unavailable';
+  'exact-analytic' | 'kernel-integrated' | 'sampled' | 'unavailable';
 
 export type MeasurementStatus = 'current' | 'stale' | 'unresolved';
 export type MeasurementDimension = 'length' | 'area' | 'volume' | 'angle';
@@ -45,11 +43,7 @@ export interface MeasurementTarget {
   point?: Vector3;
   direction?: Vector3;
   semantic:
-    | 'body-center'
-    | 'face-center'
-    | 'circle-center'
-    | 'edge-midpoint'
-    | 'pick';
+    'body-center' | 'face-center' | 'circle-center' | 'edge-midpoint' | 'pick';
   quality: MeasurementQuality;
 }
 
@@ -95,6 +89,12 @@ export interface Measurement {
   result: MeasurementResult;
   quality: MeasurementQuality;
   status: MeasurementStatus;
+  /**
+   * Why the row stopped resolving, when it has. Kept beside `status` rather
+   * than folded into it because "gone" and "now ambiguous" call for different
+   * repairs, and only the second is fixed by re-picking.
+   */
+  reason?: TopologyResolutionReason;
   sourceRevision: number;
   sourceUnit: UnitSystem;
   visible: boolean;
@@ -134,7 +134,11 @@ function vector(x: number, y: number, z: number): Vector3 {
   return { x, y, z };
 }
 
-function addScaled(origin: Vector3, direction: Vector3, scale: number): Vector3 {
+function addScaled(
+  origin: Vector3,
+  direction: Vector3,
+  scale: number
+): Vector3 {
   return vector(
     origin.x + direction.x * scale,
     origin.y + direction.y * scale,
@@ -163,11 +167,7 @@ function normalized(direction: Vector3): Vector3 | null {
 }
 
 function distance(first: Vector3, second: Vector3): number {
-  return Math.hypot(
-    second.x - first.x,
-    second.y - first.y,
-    second.z - first.z
-  );
+  return Math.hypot(second.x - first.x, second.y - first.y, second.z - first.z);
 }
 
 function bodyCenter(body: BodyRepresentation): Vector3 {
@@ -185,54 +185,50 @@ function edgeEndpoints(edge: EdgeTopology): [Vector3, Vector3] | null {
   ];
 }
 
+/**
+ * Both lookups fail closed through {@link resolveEdge}/{@link resolveFace}:
+ * an identity carried by more than one sub-shape yields nothing rather than
+ * the first candidate, so an ambiguous pick is refused instead of measured
+ * against a guess. See ADR-011 and `topologyResolution.ts` for why the
+ * previous `Array.prototype.find` was a live defect on a plain sphere.
+ */
 function findEdge(
   body: BodyRepresentation,
   selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
 ): EdgeTopology | undefined {
-  const edges = body.topology?.edges ?? [];
-  if (selection.reference?.kind === 'edge') {
-    const lineage = edges.find(
-      (edge) =>
-        edge.reference?.kind === 'edge' &&
-        edge.reference.producingFeatureId ===
-          selection.reference?.producingFeatureId &&
-        edge.reference.lineageName === selection.reference?.lineageName
-    );
-    if (lineage) {
-      return lineage;
-    }
-  }
-  return edges.find(
-    (edge) =>
-      (selection.topologyId !== undefined &&
-        edge.topologyId === selection.topologyId) ||
-      (selection.hash !== undefined && edge.hash === selection.hash)
-  );
+  const found = resolveEdge(body, selection);
+  return found.ok ? found.entry : undefined;
 }
 
 function findFace(
   body: BodyRepresentation,
   selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
 ): FaceTopology | undefined {
-  const faces = body.topology?.faces ?? [];
-  if (selection.reference?.kind === 'face') {
-    const lineage = faces.find(
-      (face) =>
-        face.reference?.kind === 'face' &&
-        face.reference.producingFeatureId ===
-          selection.reference?.producingFeatureId &&
-        face.reference.lineageName === selection.reference?.lineageName
-    );
-    if (lineage) {
-      return lineage;
-    }
+  const found = resolveFace(body, selection);
+  return found.ok ? found.entry : undefined;
+}
+
+/**
+ * Why a target stopped resolving, for the row to explain and for a person to
+ * repair by re-picking. `null` when it resolves.
+ */
+export function measurementTargetFailure(
+  target: MeasurementTarget,
+  bodies: readonly BodyRepresentation[]
+): TopologyResolutionReason | null {
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) {
+    return 'body-missing';
   }
-  return faces.find(
-    (face) =>
-      (selection.topologyId !== undefined &&
-        face.topologyId === selection.topologyId) ||
-      (selection.hash !== undefined && face.hash === selection.hash)
-  );
+  if (target.kind === 'body') {
+    return null;
+  }
+  const identity = selectionForTarget(target);
+  const found =
+    target.kind === 'edge'
+      ? resolveEdge(body, identity)
+      : resolveFace(body, identity);
+  return found.ok ? null : found.reason;
 }
 
 function targetKey(target: MeasurementTarget): string {
@@ -361,13 +357,14 @@ export function measurementTargetFromSelection(
       reference: face.reference,
       label: `${label} center`,
       point: midpoint(geometry.axisStart, geometry.axisEnd),
-      direction: normalized(
-        vector(
-          geometry.axisEnd.x - geometry.axisStart.x,
-          geometry.axisEnd.y - geometry.axisStart.y,
-          geometry.axisEnd.z - geometry.axisStart.z
-        )
-      ) ?? undefined,
+      direction:
+        normalized(
+          vector(
+            geometry.axisEnd.x - geometry.axisStart.x,
+            geometry.axisEnd.y - geometry.axisStart.y,
+            geometry.axisEnd.z - geometry.axisStart.z
+          )
+        ) ?? undefined,
       semantic: 'circle-center',
       quality: 'exact-analytic'
     };
@@ -409,7 +406,9 @@ export function measurementTargetFromSelection(
   };
 }
 
-function annotationForEdge(edge: EdgeTopology): MeasurementAnnotation | undefined {
+function annotationForEdge(
+  edge: EdgeTopology
+): MeasurementAnnotation | undefined {
   const endpoints = edgeEndpoints(edge);
   if (!endpoints) {
     return undefined;
@@ -482,10 +481,7 @@ export function createSmartMeasurement(
   if (!face || !geometry) {
     return null;
   }
-  if (
-    geometry.surfaceType === 'cylinder' &&
-    geometry.diameter !== undefined
-  ) {
+  if (geometry.surfaceType === 'cylinder' && geometry.diameter !== undefined) {
     return {
       ...common,
       id: `diameter:${targetKey(target)}`,
@@ -539,7 +535,9 @@ export function createEdgeTotalMeasurement(
     if (selection.kind !== 'edge') {
       continue;
     }
-    const body = bodies.find((candidate) => candidate.bodyId === selection.bodyId);
+    const body = bodies.find(
+      (candidate) => candidate.bodyId === selection.bodyId
+    );
     if (!body) {
       return null;
     }
@@ -631,9 +629,7 @@ export function createAngleMeasurement(
   sourceRevision: number,
   sourceUnit: UnitSystem
 ): Measurement | null {
-  const firstDirection = first.direction
-    ? normalized(first.direction)
-    : null;
+  const firstDirection = first.direction ? normalized(first.direction) : null;
   const secondDirection = second.direction
     ? normalized(second.direction)
     : null;
@@ -733,22 +729,32 @@ function resolvedTarget(
     );
   }
   const selection = selectionForTarget(target);
-  const topologyExists =
+  const found =
     target.kind === 'edge'
-      ? findEdge(body, selection) !== undefined
-      : findFace(body, selection) !== undefined;
-  if (
-    !topologyExists ||
-    (target.semantic === 'pick' && purpose !== 'smart')
-  ) {
+      ? resolveEdge(body, selection)
+      : resolveFace(body, selection);
+  if (!found.ok) {
     return null;
   }
-  return measurementTargetFromSelection(
-    body,
-    selection,
-    undefined,
-    purpose
-  );
+  // A target anchored to a raw surface pick rather than to a derived centre
+  // used to be discarded outright outside smart mode, which meant a distance
+  // taken from anywhere on a face could never survive a rebuild. It can, but
+  // only on the hash rung: an ADR-011 hash is a fingerprint of quantized
+  // geometry, so its resolving is proof the surface is still where it was and
+  // the stored point still lies on it. A lineage-only answer proves the same
+  // FEATURE, not the same position — ADR-013 keeps lineage across rigid
+  // transforms by design — so the point is dropped rather than carried onto
+  // geometry that may have moved out from under it.
+  const anchor =
+    target.semantic === 'pick'
+      ? found.via === 'hash'
+        ? target.point
+        : undefined
+      : undefined;
+  if (target.semantic === 'pick' && !anchor) {
+    return null;
+  }
+  return measurementTargetFromSelection(body, selection, anchor, purpose);
 }
 
 function retainRowState(
@@ -765,23 +771,22 @@ function retainRowState(
   };
 }
 
-function measurementTopologyStillExists(
+/**
+ * The first reason any of a measurement's targets failed to resolve, or `null`
+ * when all of them still do. Ordered by the targets themselves so the message
+ * names the same target the row lists first.
+ */
+function firstTargetFailure(
   measurement: Measurement,
   bodies: readonly BodyRepresentation[]
-): boolean {
-  return measurement.targets.every((target) => {
-    const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
-    if (!body) {
-      return false;
+): TopologyResolutionReason | null {
+  for (const target of measurement.targets) {
+    const failure = measurementTargetFailure(target, bodies);
+    if (failure) {
+      return failure;
     }
-    if (target.kind === 'body') {
-      return true;
-    }
-    const selection = selectionForTarget(target);
-    return target.kind === 'edge'
-      ? findEdge(body, selection) !== undefined
-      : findFace(body, selection) !== undefined;
-  });
+  }
+  return null;
 }
 
 /** Re-resolve only by authoritative body/topology identity; never proximity. */
@@ -805,19 +810,28 @@ export function refreshMeasurements(
       resolvedTarget(target, bodies, purpose)
     );
     if (targets.some((target) => target === null)) {
-      const status: MeasurementStatus = measurementTopologyStillExists(
-        measurement,
-        bodies
-      )
-        ? 'stale'
-        : 'unresolved';
-      if (measurement.status === status) {
+      // The topology may still be there and merely unusable for this kind of
+      // measurement (`stale`), or genuinely gone/ambiguous (`unresolved`).
+      const failure = firstTargetFailure(measurement, bodies);
+      const status: MeasurementStatus = failure ? 'unresolved' : 'stale';
+      // `sourceRevision` advances even though no value was recomputed. Without
+      // this the row never matches the short-circuit at the top of the loop, so
+      // it re-evaluates on EVERY refresh — including the ones triggered by
+      // merely hiding a body, which is how a once-stale row could go on to
+      // demote itself against a body list it was never meant to be judged by.
+      if (
+        measurement.status === status &&
+        measurement.reason === (failure ?? undefined) &&
+        measurement.sourceRevision === sourceRevision
+      ) {
         return measurement;
       }
       changed = true;
       return {
         ...measurement,
-        status
+        status,
+        sourceRevision,
+        ...(failure ? { reason: failure } : {})
       };
     }
     const resolved = targets as MeasurementTarget[];
@@ -845,7 +859,9 @@ export function refreshMeasurements(
       );
     } else {
       const target = resolved[0]!;
-      const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === target.bodyId
+      );
       if (body) {
         refreshed = createSmartMeasurement(
           body,
@@ -857,9 +873,20 @@ export function refreshMeasurements(
       }
     }
     changed = true;
-    return refreshed
-      ? retainRowState(measurement, refreshed)
-      : { ...measurement, status: 'unresolved' as const };
+    if (refreshed) {
+      // `refreshed` carries no `reason`, so a row that starts resolving again
+      // sheds its explanation rather than keeping a stale one beside a fresh
+      // number.
+      return retainRowState(measurement, refreshed);
+    }
+    // Every target resolved, yet no measurement could be rebuilt from them —
+    // the topology is present but no longer supports this kind of figure.
+    return {
+      ...measurement,
+      status: 'unresolved' as const,
+      sourceRevision,
+      reason: firstTargetFailure(measurement, bodies) ?? 'not-found'
+    };
   });
   return changed ? refreshedList : (list as Measurement[]);
 }
@@ -911,9 +938,7 @@ function formatQuantity(
   )}`;
 }
 
-export function measurementQualityLabel(
-  quality: MeasurementQuality
-): string {
+export function measurementQualityLabel(quality: MeasurementQuality): string {
   switch (quality) {
     case 'exact-analytic':
       return 'Exact';
