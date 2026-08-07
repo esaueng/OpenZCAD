@@ -297,3 +297,34 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await page.mouse.move(center.x + 150, center.y + 120, { steps: 4 });
   await expect(marker).toBeHidden();
 });
+
+test('empty-state copy names the rail the tools are actually in', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Empty Copy');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // Several sections carry a .sidebar-hint; match the History one by text.
+  const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
+  await expect(hint).toContainText('Feature tools rail');
+  // "above" was the original wording and is wrong at every width: the rail is
+  // right of the panel on a wide screen and below it under 620px.
+  await expect(hint).not.toContainText('above');
+
+  // The name it points at has to be the rail's own accessible name, or the
+  // instruction names something the user cannot find.
+  await expect(
+    page.getByRole('navigation', { name: 'Feature tools' })
+  ).toBeVisible();
+
+  // Selecting an edge points at the same place, and neither tool it names has
+  // a keyboard shortcut, so the rail is the only route.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(hint).toHaveCount(0);
+});
