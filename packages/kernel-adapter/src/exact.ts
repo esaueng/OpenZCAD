@@ -949,6 +949,42 @@ interface UnionFuseOperand {
  * general advice it replaces, and this is the same reason
  * `edgeModifierSucceedsSmaller` probes instead of inferring.
  */
+/**
+ * Whether one solid tessellates to a closed, consistently oriented mesh —
+ * the same question the strict union validation asks later, asked early.
+ *
+ * It has to be the same question. The refusal copy is emitted once: here if a
+ * union is unacceptable, and by the strict pass otherwise. If these two
+ * disagree, either a union is refused twice or the proved move never reaches
+ * the sentence it belongs to. Both go through `inspectTriangleMeshClosure`
+ * with the deflection the display pass picks for the body's own extents.
+ */
+function solidMeshIsClosed(kernel: BrepKernel, solid: number): boolean {
+  try {
+    const bounds = kernel.boundingBox(solid);
+    const tessellation = displayTessellationForExtents(
+      bounds[3]! - bounds[0]!,
+      bounds[4]! - bounds[1]!,
+      bounds[5]! - bounds[2]!
+    );
+    const mesh = kernel.tessellateSolidGroupedBinary(
+      solid,
+      tessellation.linearDeflection,
+      tessellation.angularDeflection
+    );
+    try {
+      return isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(mesh.positions, mesh.indices)
+      );
+    } finally {
+      mesh.free();
+    }
+  } catch {
+    // A body that cannot even be tessellated is not one to offer a move for.
+    return false;
+  }
+}
+
 function exactUnionOffsetSuggestion(
   kernel: BrepKernel,
   operands: readonly UnionFuseOperand[],
@@ -998,9 +1034,15 @@ function exactUnionOffsetSuggestion(
         moved,
         transformMatrix(offset, { x: 0, y: 0, z: 0 })
       );
-      candidate = kernel.fuseAll(
-        Uint32Array.from([kernel.copySolid(anchor.solid), moved])
-      );
+      // Through `fuseUniformSolid`, the same call the real union makes, not a
+      // bare `fuseAll`. The unification step it adds is not cosmetic: without
+      // it a candidate can fail the solid check below that the actual edit
+      // would have accepted, and the probe then reports no move exists when
+      // one plainly does.
+      candidate = fuseUniformSolid(kernel, [
+        kernel.copySolid(anchor.solid),
+        moved
+      ]);
     } catch {
       continue;
     }
@@ -1013,6 +1055,20 @@ function exactUnionOffsetSuggestion(
         result: censusOfSolids(kernel, [candidate])
       }) !== null
     ) {
+      continue;
+    }
+    // And it has to be a solid. Faceting is not the only way a tangency
+    // fails, so clearing the facet check alone would let this offer a move
+    // that trades one refusal for the other — worse than the general advice
+    // it replaces, which is the one thing this must never be.
+    try {
+      if (
+        kernel.validateSolid(candidate) !== 0 ||
+        !solidMeshIsClosed(kernel, candidate)
+      ) {
+        continue;
+      }
+    } catch {
       continue;
     }
     const described = moves
@@ -5245,11 +5301,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             );
             let solid: number;
             let unionFuseOperands: UnionFuseOperand[] | null = null;
-            // Where this feature's warnings start, so a proved move can be
-            // attached to the FIRST of them. A refused commit reports one
-            // reason — whichever came first — and a remedy filed behind it is
-            // a remedy the user never reads.
-            const warningsBefore = result.warnings.length;
+            // A disconnected union is a different complaint with its own
+            // remedy and its own warning; it must not also be reported as
+            // non-manifold, nor be offered a move-to-overlap suggestion.
+            let unionDisconnected = false;
             if (feature.data.operation === 'union') {
               const unionOperands = feature.data.targetBodyIds.flatMap(
                 (bodyId, operandIndex) =>
@@ -5323,6 +5378,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 !connectivity.connected &&
                 !isFaceConnectedSolid(kernel, solid)
               ) {
+                unionDisconnected = true;
                 result.warnings.push(
                   `Feature "${feature.name}": ${disconnectedUnionWarning(
                     connectivity,
@@ -5348,27 +5404,62 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               operands: operandCensus,
               result: censusOfSolids(kernel, [solid])
             });
+            // A tangency the fuse cannot resolve exactly does not always come
+            // back faceted. Kernels differ on which way they fail it: one
+            // drops to facets, another returns a body that is not a valid
+            // solid at all. Both are the same complaint to the user, and both
+            // are answered by the same move, so the refusal is classified on
+            // either symptom rather than on faceting alone.
+            const unionNotSolid =
+              unionFuseOperands !== null &&
+              !unionDisconnected &&
+              (kernel.validateSolid(solid) !== 0 ||
+                !solidMeshIsClosed(kernel, solid));
+            // Which warning the proved move belongs to.
+            //
+            // This used to be the index of the feature's FIRST warning, on the
+            // reasoning that a refused commit reports one reason and a remedy
+            // filed behind it never gets read. That is true but it picked the
+            // wrong warning: a dropped-operand or disconnected-union warning
+            // can already sit there, and appending "moving X clears it" to one
+            // of those attaches a remedy to a complaint it does not answer.
+            // Track the refusal actually pushed here instead.
+            let refusalIndex: number | null = null;
             if (facetFallback) {
+              refusalIndex = result.warnings.length;
               result.warnings.push(
                 `Feature "${feature.name}": ${facetFallback}`
+              );
+            } else if (unionNotSolid) {
+              refusalIndex = result.warnings.length;
+              // Deliberately the same sentence the strict validation pass
+              // emits later. Saying it here instead means the proved move can
+              // ride along with it — that pass runs far from the operands,
+              // where they can no longer be probed. It also suppresses the
+              // later copy, which declines once a feature-specific warning
+              // exists.
+              result.warnings.push(
+                `Feature "${feature.name}": Union produced an open, ` +
+                  'non-manifold, or inconsistently oriented result. Adjust ' +
+                  'the overlap or placement and try again.'
               );
             }
             // Naming the move that works is only possible here, where the
             // operands are still addressable; by the time this reaches the
             // panel it is a sentence. Probing costs a fuse per candidate, so
-            // it runs only for the failure it answers — a faceted result.
+            // it runs only for the failures it answers.
             // A disconnected union is a different complaint with its own
             // remedy, and closing that gap by sliding one body to the other's
             // centre is not advice anyone asked for.
-            if (facetFallback && unionFuseOperands) {
+            if (refusalIndex !== null && unionFuseOperands) {
               const suggestion = exactUnionOffsetSuggestion(
                 kernel,
                 unionFuseOperands,
                 document.units
               );
               if (suggestion) {
-                result.warnings[warningsBefore] =
-                  `${result.warnings[warningsBefore]!} ${suggestion}`;
+                result.warnings[refusalIndex] =
+                  `${result.warnings[refusalIndex]!} ${suggestion}`;
               }
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
