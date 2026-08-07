@@ -174,9 +174,11 @@ export type LocalStorageReadiness =
  * then turned away without the lock ever being taken, and the first-run creation
  * of the object stores happens off the lock rather than under it.
  *
- * Deliberately only two answers. Every tab of this build asks for the same
- * schema version, so no open here can be parked behind another tab's upgrade —
- * see {@link DATABASE_VERSION} for what changes the day that stops being true.
+ * Deliberately only two answers. An open is parked only when some other tab is
+ * upgrading to a HIGHER version than the one this open asks for, which nothing
+ * but a version bump can create: every build in flight today asks for the same
+ * number. That is a fact about the schema, not about how carefully anyone
+ * deploys — see {@link DATABASE_VERSION} for what it costs to change it.
  * Reporting a third, "blocked" state would mean writing a recovery path for a
  * condition this build cannot produce, and getting it wrong is worse than not
  * having it: an unsettled open leaves the caller waiting forever.
