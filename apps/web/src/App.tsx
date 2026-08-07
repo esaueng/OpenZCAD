@@ -8987,6 +8987,12 @@ export function App() {
                         plane: sketch.planeRef,
                         sketchId: sketch.sketchId
                       });
+                      // Every other way into a sketch says so; this one left
+                      // whatever the last message was standing over a
+                      // workspace that had just changed underneath it.
+                      setStatus(
+                        `Editing ${sketch.name} · Finish Sketch when done.`
+                      );
                     }
                   }}
                 >
@@ -9425,6 +9431,12 @@ export function App() {
                       plane: sketch.planeRef,
                       sketchId: sketch.sketchId
                     });
+                    // Same reason as the revert pill: entering a sketch from
+                    // the tree changes what every key does, so it should say
+                    // so rather than leaving the previous message in place.
+                    setStatus(
+                      `Editing ${sketch.name} · Finish Sketch when done.`
+                    );
                   }
                 }}
                 onApplyExtrude={(feature, value) => {

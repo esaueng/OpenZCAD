@@ -366,6 +366,35 @@ describe('OrientationWidget pointer lifecycle', () => {
       );
     });
 
+    it('takes the target away with the facet when a corner turns away', () => {
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const facing = visibleCorners(container).map(
+        ({ target }) => target.getAttribute('aria-label') ?? ''
+      );
+      expect(facing.length).toBeGreaterThan(0);
+
+      // Same screen basis, opposite depth: every corner that was turned toward
+      // the camera is now turned away, and vice versa.
+      orientationRef.current?.({
+        x: { ...ISOMETRIC.x, z: -ISOMETRIC.x.z },
+        y: { ...ISOMETRIC.y, z: -ISOMETRIC.y.z },
+        z: { ...ISOMETRIC.z, z: -ISOMETRIC.z.z }
+      });
+
+      // An unpainted triangle left behind over a corner that has turned away
+      // would swallow clicks meant for whatever face now covers that ground,
+      // and being invisible there would be no way to tell why.
+      const stillFacing = visibleCorners(container).map(
+        ({ target }) => target.getAttribute('aria-label') ?? ''
+      );
+      for (const label of facing) {
+        expect(stillFacing).not.toContain(label);
+      }
+      expect(stillFacing.length).toBeGreaterThan(0);
+    });
+
     it('leaves the pointer with the target, not the facet it stands for', () => {
       const { container, orientationRef } = renderWidget();
       orientationRef.current?.(ISOMETRIC);
