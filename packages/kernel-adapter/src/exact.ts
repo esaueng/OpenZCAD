@@ -4023,8 +4023,13 @@ interface CachedImportedStep {
  * the STEP text they came from, so this holds a couple of very large imports —
  * enough for the documents that motivated the cache — while staying bounded,
  * unlike the WASM heap that repeated parsing grows and never returns.
+ *
+ * It is a ceiling on what is retained for documents that are NOT being rebuilt.
+ * The imports the build in progress needs are pinned and exempt: dropping one
+ * mid-sequence would re-read and re-parse a source the same build already
+ * parsed, which is the cost the cache exists to remove.
  */
-const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
+export const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
 
 export interface ExactKernelAdapterOptions {
   /**
@@ -4036,6 +4041,12 @@ export interface ExactKernelAdapterOptions {
     ref: ImportedSourceReference,
     context: { artifactId: ArtifactId; sourceName: string }
   ) => Promise<Uint8Array>;
+  /**
+   * Overrides {@link MAX_IMPORTED_STEP_CACHE_BYTES}. A test pins the parse-once
+   * contract at a budget a corpus file can actually exceed; nothing in the app
+   * sets it.
+   */
+  importedStepCacheBytes?: number;
 }
 
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
@@ -4057,6 +4068,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   private readonly importedStepCache = new Map<string, CachedImportedStep>();
   private importedStepCacheBytes = 0;
 
+  private get maxImportedStepCacheBytes(): number {
+    return this.options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES;
+  }
+
   /**
    * Reference-form import sources, fetched before the synchronous rebuild
    * walks the history. Keyed by checksum; a missing key at rebuild time means
@@ -4065,12 +4080,17 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
    *
    * A checksum already in {@link importedStepCache} is skipped: its bytes
    * would only be parsed into a result the cache already holds, and reading
-   * them is the single largest allocation a rebuild makes.
+   * them is the single largest allocation a rebuild makes. That skip is only
+   * sound because every checksum walked here is returned as `pinned` and
+   * exempt from eviction for the whole build — otherwise a later import in the
+   * same document could evict the entry whose bytes were never read.
    */
-  private async prefetchImportSources(
-    document: ProjectDocument
-  ): Promise<Map<string, Uint8Array>> {
+  private async prefetchImportSources(document: ProjectDocument): Promise<{
+    sources: Map<string, Uint8Array>;
+    pinned: Set<string>;
+  }> {
     const sources = new Map<string, Uint8Array>();
+    const pinned = new Set<string>();
     for (const feature of listFeaturesInOrder(document)) {
       if (
         feature.data.featureKind !== 'imported-step' ||
@@ -4082,6 +4102,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       if (!ref || sources.has(ref.checksumSha256)) {
         continue;
       }
+      pinned.add(ref.checksumSha256);
       if (this.importedStepCache.has(ref.checksumSha256)) {
         continue;
       }
@@ -4100,20 +4121,29 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         // The imported-step case reports the miss with the feature's name.
       }
     }
-    return sources;
+    return { sources, pinned };
   }
 
   /**
-   * Records a parsed import against its checksum, evicting least-recently-used
-   * entries to stay inside the byte budget. Serialisation failure is not fatal:
-   * the rebuild already has its solids, and an uncached import merely costs
-   * what it cost before.
+   * Records a parsed import against its checksum, evicting older entries to
+   * stay inside the byte budget. Serialisation failure is not fatal: the
+   * rebuild already has its solids, and an uncached import merely costs what
+   * it cost before.
+   *
+   * Two entries are never evicted: the one just stored, and any checksum
+   * `pinned` for the build in progress. So an import larger than the whole
+   * budget is still cached — refusing it, as this once did, re-parsed exactly
+   * the largest files on every rebuild — and it survives until a build of some
+   * OTHER document needs the room. Retention is therefore the budget plus what
+   * the open document's own imports come to, which is what parsing each of
+   * them once costs by definition.
    */
   private storeImportedStep(
     checksum: string,
     kernel: BrepKernel,
     solids: number[],
-    diagnostics: ImportedStepDiagnostics
+    diagnostics: ImportedStepDiagnostics,
+    pinned: ReadonlySet<string>
   ): void {
     let serialized: Uint8Array[];
     try {
@@ -4122,16 +4152,13 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       return;
     }
     const bytes = serialized.reduce((sum, blob) => sum + blob.byteLength, 0);
-    if (bytes > MAX_IMPORTED_STEP_CACHE_BYTES) {
-      return;
-    }
     this.importedStepCache.set(checksum, { solids: serialized, diagnostics });
     this.importedStepCacheBytes += bytes;
     for (const [key, entry] of this.importedStepCache) {
-      if (this.importedStepCacheBytes <= MAX_IMPORTED_STEP_CACHE_BYTES) {
+      if (this.importedStepCacheBytes <= this.maxImportedStepCacheBytes) {
         break;
       }
-      if (key === checksum) {
+      if (key === checksum || pinned.has(key)) {
         continue;
       }
       this.importedStepCache.delete(key);
@@ -4656,7 +4683,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   private build(
     kernel: BrepKernel,
     document: ProjectDocument,
-    importSources: ReadonlyMap<string, Uint8Array> = new Map()
+    importSources: ReadonlyMap<string, Uint8Array> = new Map(),
+    /** Import checksums this build reads; see {@link storeImportedStep}. */
+    pinnedImports: ReadonlySet<string> = new Set(importSources.keys())
   ): ExactBuildResult {
     const { scope, errors } = getParameterScope(document);
     const result: ExactBuildResult = {
@@ -4809,7 +4838,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     checksum,
                     kernel,
                     solids,
-                    diagnostics
+                    diagnostics,
+                    pinnedImports
                   );
                 }
               }
@@ -6208,10 +6238,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    const importSources = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document, importSources);
+      const build = this.build(kernel, document, sources, pinned);
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -6328,10 +6358,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const importSources = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document, importSources);
+      const build = this.build(kernel, document, sources, pinned);
       const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
@@ -6366,10 +6396,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const importSources = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document, importSources);
+      const build = this.build(kernel, document, sources, pinned);
       const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
