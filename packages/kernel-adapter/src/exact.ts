@@ -38,6 +38,8 @@ import {
   type EdgeReferenceRepair,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
+  type BodyMassProperties,
+  type FaceAreaProvenance,
   type FaceGeometry,
   type FaceTopologyReferenceV5,
   type FaceWitnessV1,
@@ -52,6 +54,7 @@ import {
   type TopologyLineageDiagnostic
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from './display-tessellation';
+import { readBodyMassProperties } from './body-properties';
 import {
   booleanFacetFallbackWarning,
   censusOfSolids,
@@ -80,7 +83,8 @@ import {
 import { createBrepKitModelingOperations } from './brepkit-modeling-operations';
 import {
   analyzeUnionConnectivity,
-  disconnectedUnionWarning
+  disconnectedUnionWarning,
+  type UnionBounds
 } from './union-connectivity';
 import {
   ambiguousReferenceError,
@@ -285,6 +289,7 @@ interface MeasuredShape {
   topology: BodyTopology;
   faceCount: number;
   volume: number;
+  massProperties?: BodyMassProperties;
   valid: boolean;
   strictValid: boolean;
   meshClosure: TriangleMeshClosure | null;
@@ -805,28 +810,6 @@ function revolveRadialProfile(
   );
 }
 
-/** True when two of the selected edges meet at a shared model vertex. */
-function selectedEdgesShareVertex(
-  kernel: BrepKernel,
-  selectedEdges: number[]
-): boolean {
-  if (selectedEdges.length < 2) {
-    return false;
-  }
-  const seen = new Set<number>();
-  for (const edge of selectedEdges) {
-    // Deduplicate per edge: a closed edge reports the same vertex handle at
-    // both ends, which is not a corner between two selected edges.
-    for (const vertex of new Set(kernel.getEdgeVertexHandles(edge))) {
-      if (seen.has(vertex)) {
-        return true;
-      }
-      seen.add(vertex);
-    }
-  }
-  return false;
-}
-
 /**
  * True when `face` is a rolling-ball blend band rather than a modelled wall.
  *
@@ -939,6 +922,165 @@ function selectionTouchesBlendFace(
   );
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface UnionFuseOperand {
+  solid: number;
+  name: string;
+  bounds: UnionBounds;
+}
+
+/**
+ * A move that turns a faceted union into an exact one, or nothing.
+ *
+ * The fuse facets where the operands meet tangentially, which for the shapes
+ * this workspace makes is almost always an axis or a face sitting exactly in
+ * one of the other operand's face planes. That is where a new primitive
+ * lands: a box is corner-origin and a cylinder is axis-origin, so creating
+ * one of each puts the cylinder's axis on the box's corner edge, and the
+ * repair a user reaches for first — slide it along X — keeps the axis in the
+ * y = 0 plane and fails again.
+ *
+ * So the remedy is worth naming exactly rather than describing. Each
+ * candidate is TRIED, on copies, and only offered once the fuse it produces
+ * is measured exact: a suggestion that does not work is worse than the
+ * general advice it replaces, and this is the same reason
+ * `edgeModifierSucceedsSmaller` probes instead of inferring.
+ */
+/**
+ * Whether one solid tessellates to a closed, consistently oriented mesh —
+ * the same question the strict union validation asks later, asked early.
+ *
+ * It has to be the same question. The refusal copy is emitted once: here if a
+ * union is unacceptable, and by the strict pass otherwise. If these two
+ * disagree, either a union is refused twice or the proved move never reaches
+ * the sentence it belongs to. Both go through `inspectTriangleMeshClosure`
+ * with the deflection the display pass picks for the body's own extents.
+ */
+function solidMeshIsClosed(kernel: BrepKernel, solid: number): boolean {
+  try {
+    const bounds = kernel.boundingBox(solid);
+    const tessellation = displayTessellationForExtents(
+      bounds[3]! - bounds[0]!,
+      bounds[4]! - bounds[1]!,
+      bounds[5]! - bounds[2]!
+    );
+    const mesh = kernel.tessellateSolidGroupedBinary(
+      solid,
+      tessellation.linearDeflection,
+      tessellation.angularDeflection
+    );
+    try {
+      return isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(mesh.positions, mesh.indices)
+      );
+    } finally {
+      mesh.free();
+    }
+  } catch {
+    // A body that cannot even be tessellated is not one to offer a move for.
+    return false;
+  }
+}
+
+function exactUnionOffsetSuggestion(
+  kernel: BrepKernel,
+  operands: readonly UnionFuseOperand[],
+  units: string
+): string | null {
+  if (operands.length !== 2) {
+    return null;
+  }
+  const [anchor, mover] = operands as [UnionFuseOperand, UnionFuseOperand];
+  const centre = (bounds: UnionBounds, axis: 'x' | 'y' | 'z') =>
+    (bounds.min[axis] + bounds.max[axis]) / 2;
+  const axes = ['x', 'y', 'z'] as const;
+  const toCentre = {
+    x: centre(anchor.bounds, 'x') - centre(mover.bounds, 'x'),
+    y: centre(anchor.bounds, 'y') - centre(mover.bounds, 'y'),
+    z: centre(anchor.bounds, 'z') - centre(mover.bounds, 'z')
+  };
+  // One axis first, because a single number is the easiest move to carry out.
+  // A ball or a ring created against the box's corner needs all three before
+  // it sits anywhere clean, so the combined move is tried after them.
+  const candidates: { x: number; y: number; z: number }[] = [
+    ...axes.map((axis) => ({
+      x: axis === 'x' ? toCentre.x : 0,
+      y: axis === 'y' ? toCentre.y : 0,
+      z: axis === 'z' ? toCentre.z : 0
+    })),
+    toCentre
+  ];
+  const operandCensus = censusOfSolids(kernel, [anchor.solid, mover.solid]);
+  const format = (value: number) => {
+    const rounded = Number(
+      Math.abs(value) < 1 ? value.toFixed(3) : value.toFixed(2)
+    );
+    return `${rounded > 0 ? '+' : ''}${rounded}`;
+  };
+  for (const offset of candidates) {
+    const moves = axes.filter(
+      (axis) => Math.abs(offset[axis]) > GEOMETRY_EPSILON
+    );
+    if (moves.length === 0) {
+      continue;
+    }
+    let candidate: number;
+    try {
+      const moved = kernel.copySolid(mover.solid);
+      kernel.transformSolid(
+        moved,
+        transformMatrix(offset, { x: 0, y: 0, z: 0 })
+      );
+      // Through `fuseUniformSolid`, the same call the real union makes, not a
+      // bare `fuseAll`. The unification step it adds is not cosmetic: without
+      // it a candidate can fail the solid check below that the actual edit
+      // would have accepted, and the probe then reports no move exists when
+      // one plainly does.
+      candidate = fuseUniformSolid(kernel, [
+        kernel.copySolid(anchor.solid),
+        moved
+      ]);
+    } catch {
+      continue;
+    }
+    // A candidate that swallows the mover inside the anchor also loses every
+    // curved face, so it fails this same check rather than being offered as a
+    // move that makes the user's new body disappear.
+    if (
+      booleanFacetFallbackWarning({
+        operands: operandCensus,
+        result: censusOfSolids(kernel, [candidate])
+      }) !== null
+    ) {
+      continue;
+    }
+    // And it has to be a solid. Faceting is not the only way a tangency
+    // fails, so clearing the facet check alone would let this offer a move
+    // that trades one refusal for the other — worse than the general advice
+    // it replaces, which is the one thing this must never be.
+    try {
+      if (
+        kernel.validateSolid(candidate) !== 0 ||
+        !solidMeshIsClosed(kernel, candidate)
+      ) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const described = moves
+      .map(
+        (axis) => `${format(offset[axis])} ${units} in ${axis.toUpperCase()}`
+      )
+      .join(', ');
+    return `Moving ${mover.name} ${described} clears it.`;
+  }
+  return null;
+}
+
 /**
  * Run one edge modifier and apply every acceptance rule the adapter ships a
  * result under, returning `null` when the kernel refused or produced a body
@@ -954,7 +1096,9 @@ function applyEdgeModifier(
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
-  size: number
+  size: number,
+  /** Receives the kernel's own refusal text, when it threw one. */
+  reportRefusal?: (message: string) => void
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
@@ -962,13 +1106,19 @@ function applyEdgeModifier(
   if (featureKind === 'fillet') {
     try {
       modified = kernel.fillet(target, handles, size);
-    } catch {
+    } catch (error) {
+      // Keep what the kernel said. It names the edges it could not blend, the
+      // vertex the blend engines gave up on, and how many of the selection
+      // would round on their own — none of which can be recovered by
+      // inspecting the inputs afterwards.
+      reportRefusal?.(errorText(error));
       modified = target;
     }
   } else {
     try {
       modified = kernel.chamfer(target, handles, size);
-    } catch {
+    } catch (error) {
+      reportRefusal?.(errorText(error));
       return null;
     }
   }
@@ -1060,13 +1210,45 @@ function edgeModifierSucceedsSmaller(
  * feature that produced the body is known. It is still reported only after
  * the size ladder has failed, so it never buries a working smaller size.
  */
+/**
+ * Turns the kernel's own blend refusal into the sentence a user can act on.
+ *
+ * The kernel reports how many of the named edges it could not blend and how
+ * many would round on their own. That count is the whole remedy — deselect
+ * the ones it named — and no amount of inspecting the selection afterwards
+ * recovers it, so it is relayed rather than re-derived.
+ */
+function blendSubsetRemedy(
+  reported: string | null,
+  featureKind: 'fillet' | 'chamfer'
+): string | null {
+  if (!reported) {
+    return null;
+  }
+  const refused = /(\d+) of the edges named were not blended/.exec(reported);
+  const roundable = /the (\d+) edge\(s\)[^,]*would round on their own/.exec(
+    reported
+  );
+  if (!refused || !roundable) {
+    return null;
+  }
+  const verb = featureKind === 'fillet' ? 'round' : 'chamfer';
+  return (
+    `${refused[1]} of them cannot be blended where two rounds would meet at a corner, ` +
+    `and the kernel will not quietly drop them. The other ${roundable[1]} ${verb} on their own — ` +
+    `deselect those ${refused[1]} and try again.`
+  );
+}
+
 function edgeModifierFailureMessage(
   kernel: BrepKernel,
   target: number,
   selected: number[],
   featureKind: 'fillet' | 'chamfer',
   size: number,
-  partialRevolveTarget: boolean
+  partialRevolveTarget: boolean,
+  /** What the kernel said when it refused, if it threw. */
+  reported: string | null = null
 ): string {
   const label = featureKind === 'fillet' ? 'Fillet' : 'Chamfer';
   const dimension = featureKind === 'fillet' ? 'radius' : 'distance';
@@ -1088,8 +1270,16 @@ function edgeModifierFailureMessage(
     if (selected.some((edge) => edgeSampleOf(kernel, edge).closed)) {
       return `${prefix} Closed rim edges (such as hole rims) cannot be ${verb} on this body at any ${dimension} — deselect the rim edge and try again.`;
     }
-    if (selectedEdgesShareVertex(kernel, selected)) {
-      return `${prefix} Edges that meet at a shared corner cannot be ${verb} together on this body at any ${dimension} — select edges that do not touch, or apply one edge per feature.`;
+    // Sharing a corner is NOT itself a refusal: all twelve edges of a plain
+    // box meet at corners and round together at every radius tried. Only the
+    // kernel knows which vertices its blend engines gave up on, so this cause
+    // is claimed only when the kernel actually reported it.
+    const subsetRemedy = blendSubsetRemedy(reported, featureKind);
+    if (subsetRemedy) {
+      return `${prefix} ${subsetRemedy}`;
+    }
+    if (reported?.includes('unsupported vertex blend')) {
+      return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected)) {
       return `${prefix} Edges that end on an existing fillet or chamfer usually cannot be ${verb} afterwards — edit that earlier feature and add this edge to it instead. If that also fails, the kernel cannot blend this edge on this body yet.`;
@@ -2346,7 +2536,10 @@ function rederiveCylinderModifierLineage(
       operation
     );
   };
-  const planeAtZ = (candidate: BrepKitTopologyCandidate, z: number): boolean => {
+  const planeAtZ = (
+    candidate: BrepKitTopologyCandidate,
+    z: number
+  ): boolean => {
     const witness = candidate.witness as FaceWitnessV1;
     return witness.surfaceType === 'plane' && witness.centroid?.[2] === z;
   };
@@ -2369,8 +2562,10 @@ function rederiveCylinderModifierLineage(
     return witness.closed && matches(witness.center[2]);
   };
 
-  addRole('face', 'modifier.cylinder.face.wall', (candidate) =>
-    surfaceOf(candidate) === 'cylinder'
+  addRole(
+    'face',
+    'modifier.cylinder.face.wall',
+    (candidate) => surfaceOf(candidate) === 'cylinder'
   );
   addRole('face', 'modifier.cylinder.face.cap.start', (candidate) =>
     planeAtZ(candidate, zMin)
@@ -3010,15 +3205,60 @@ function resolveEdgeModifierEdges(
 }
 
 /** Best-effort analytic measurements surfaced to the UI as FaceGeometry. */
+/**
+ * Analytic surface classes whose area comes back as a closed form.
+ *
+ * Measured against closed forms on the pinned build rather than assumed from
+ * the presence of a deflection parameter: cylinder, sphere, cone and torus all
+ * return at machine precision (rel ~1e-16). Anything not listed here is left
+ * unclassified rather than guessed at, because a surface class this build has
+ * not been measured on must not be advertised as exact.
+ */
+const CLOSED_FORM_SURFACES = new Set(['cylinder', 'sphere', 'cone', 'torus']);
+
+/**
+ * Whether the face's area is exact.
+ *
+ * For a plane the answer is decided by its boundary: straight edges give an
+ * exact polygon, convex or not, while ANY curve is inscribed with a fixed
+ * 256-point polygon that no deflection improves. The check therefore stops at
+ * the first curved edge, and only planes pay for it at all.
+ */
+function measureAreaProvenance(
+  kernel: BrepKernel,
+  face: number,
+  surfaceType: string
+): FaceAreaProvenance | undefined {
+  if (CLOSED_FORM_SURFACES.has(surfaceType)) {
+    return 'exact';
+  }
+  if (surfaceType !== 'plane') {
+    return undefined;
+  }
+  try {
+    for (const edge of kernel.getFaceEdges(face)) {
+      if (kernel.getEdgeCurveType(edge) !== 'LINE') {
+        return 'sampled';
+      }
+    }
+  } catch {
+    // A face whose boundary cannot be walked is not one to make claims about.
+    return undefined;
+  }
+  return 'exact';
+}
+
 function measureFaceGeometry(
   kernel: BrepKernel,
   face: number
 ): FaceGeometry | undefined {
   const surfaceType = kernel.getSurfaceType(face);
   const centroid = faceVertexCentroid(kernel, face);
+  const areaProvenance = measureAreaProvenance(kernel, face, surfaceType);
   const geometry: FaceGeometry = {
     surfaceType,
     area: kernel.faceArea(face, MEASUREMENT_DEFLECTION),
+    ...(areaProvenance ? { areaProvenance } : {}),
     center: centroid ?? { x: 0, y: 0, z: 0 }
   };
   if (surfaceType === 'plane') {
@@ -3029,8 +3269,20 @@ function measureFaceGeometry(
         y: normal[1]!,
         z: normal[2]!
       };
+      // The plane's own equation, n·x = d, completed here because it is
+      // arithmetic on two values already in hand rather than a kernel call.
+      // `center` is the mean of the face's vertices and every one of them lies
+      // on the plane, so any affine combination of them does too — which makes
+      // this exact, and makes an exact point-to-plane distance computable
+      // without a kernel round trip.
+      geometry.planeOffset =
+        geometry.normal.x * geometry.center.x +
+        geometry.normal.y * geometry.center.y +
+        geometry.normal.z * geometry.center.z;
     } catch {
-      // NURBS-backed planes have no analytic normal; leave it unset.
+      // NURBS-backed planes have no analytic normal; leave both unset. These
+      // are exactly the imported-STEP faces a raw pick tends to land on, so
+      // the absence is load-bearing rather than incidental.
     }
     return geometry;
   }
@@ -3877,6 +4129,36 @@ function importStepWithOwnBudget(
   );
 }
 
+/** Diagnostics an imported STEP produces once, at parse time. */
+interface ImportedStepDiagnostics {
+  declaredSolidCount: number;
+  rejections: string[];
+  flagged: string[];
+}
+
+/**
+ * A parsed STEP import held for reuse: the kernel's serialised solids plus the
+ * diagnostics the parse produced, so a cache hit reports exactly what the
+ * original parse reported rather than a silently emptier set.
+ */
+interface CachedImportedStep {
+  solids: Uint8Array[];
+  diagnostics: ImportedStepDiagnostics;
+}
+
+/**
+ * Ceiling on retained import geometry. Serialised solids run well under half
+ * the STEP text they came from, so this holds a couple of very large imports —
+ * enough for the documents that motivated the cache — while staying bounded,
+ * unlike the WASM heap that repeated parsing grows and never returns.
+ *
+ * It is a ceiling on what is retained for documents that are NOT being rebuilt.
+ * The imports the build in progress needs are pinned and exempt: dropping one
+ * mid-sequence would re-read and re-parse a source the same build already
+ * parsed, which is the cost the cache exists to remove.
+ */
+export const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
+
 export interface ExactKernelAdapterOptions {
   /**
    * Produces the raw source bytes for a reference-form import. Absent means
@@ -3887,6 +4169,12 @@ export interface ExactKernelAdapterOptions {
     ref: ImportedSourceReference,
     context: { artifactId: ArtifactId; sourceName: string }
   ) => Promise<Uint8Array>;
+  /**
+   * Overrides {@link MAX_IMPORTED_STEP_CACHE_BYTES}. A test pins the parse-once
+   * contract at a budget a corpus file can actually exceed; nothing in the app
+   * sets it.
+   */
+  importedStepCacheBytes?: number;
 }
 
 export class BrepKitKernelAdapter implements ExactKernelAdapter {
@@ -3895,15 +4183,42 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {}
 
   /**
+   * Imported STEP results, keyed by the source checksum that fully determines
+   * them. An import's geometry depends on nothing else in the document, so a
+   * hit is exact by construction — the checksum names the bytes.
+   *
+   * Entries hold the kernel's own serialised solids, which restore without
+   * re-derivation or tolerance normalisation. That matters twice over: a
+   * rebuild skips parsing the STEP text, and skips reading the source at all,
+   * so editing a document that carries a few-hundred-megabyte import no longer
+   * re-reads and re-parses it on every keystroke.
+   */
+  private readonly importedStepCache = new Map<string, CachedImportedStep>();
+  private importedStepCacheBytes = 0;
+
+  private get maxImportedStepCacheBytes(): number {
+    return this.options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES;
+  }
+
+  /**
    * Reference-form import sources, fetched before the synchronous rebuild
    * walks the history. Keyed by checksum; a missing key at rebuild time means
    * the local blob store and every fallback failed, which each import case
    * reports per-feature rather than failing the whole document.
+   *
+   * A checksum already in {@link importedStepCache} is skipped: its bytes
+   * would only be parsed into a result the cache already holds, and reading
+   * them is the single largest allocation a rebuild makes. That skip is only
+   * sound because every checksum walked here is returned as `pinned` and
+   * exempt from eviction for the whole build — otherwise a later import in the
+   * same document could evict the entry whose bytes were never read.
    */
-  private async prefetchImportSources(
-    document: ProjectDocument
-  ): Promise<Map<string, Uint8Array>> {
+  private async prefetchImportSources(document: ProjectDocument): Promise<{
+    sources: Map<string, Uint8Array>;
+    pinned: Set<string>;
+  }> {
     const sources = new Map<string, Uint8Array>();
+    const pinned = new Set<string>();
     for (const feature of listFeaturesInOrder(document)) {
       if (
         feature.data.featureKind !== 'imported-step' ||
@@ -3913,6 +4228,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       }
       const ref = feature.data.stepSourceRef;
       if (!ref || sources.has(ref.checksumSha256)) {
+        continue;
+      }
+      pinned.add(ref.checksumSha256);
+      if (this.importedStepCache.has(ref.checksumSha256)) {
         continue;
       }
       if (!this.options.resolveSourceBytes) {
@@ -3930,7 +4249,52 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
         // The imported-step case reports the miss with the feature's name.
       }
     }
-    return sources;
+    return { sources, pinned };
+  }
+
+  /**
+   * Records a parsed import against its checksum, evicting older entries to
+   * stay inside the byte budget. Serialisation failure is not fatal: the
+   * rebuild already has its solids, and an uncached import merely costs what
+   * it cost before.
+   *
+   * Two entries are never evicted: the one just stored, and any checksum
+   * `pinned` for the build in progress. So an import larger than the whole
+   * budget is still cached — refusing it, as this once did, re-parsed exactly
+   * the largest files on every rebuild — and it survives until a build of some
+   * OTHER document needs the room. Retention is therefore the budget plus what
+   * the open document's own imports come to, which is what parsing each of
+   * them once costs by definition.
+   */
+  private storeImportedStep(
+    checksum: string,
+    kernel: BrepKernel,
+    solids: number[],
+    diagnostics: ImportedStepDiagnostics,
+    pinned: ReadonlySet<string>
+  ): void {
+    let serialized: Uint8Array[];
+    try {
+      serialized = solids.map((solid) => kernel.serializeSolid(solid));
+    } catch {
+      return;
+    }
+    const bytes = serialized.reduce((sum, blob) => sum + blob.byteLength, 0);
+    this.importedStepCache.set(checksum, { solids: serialized, diagnostics });
+    this.importedStepCacheBytes += bytes;
+    for (const [key, entry] of this.importedStepCache) {
+      if (this.importedStepCacheBytes <= this.maxImportedStepCacheBytes) {
+        break;
+      }
+      if (key === checksum || pinned.has(key)) {
+        continue;
+      }
+      this.importedStepCache.delete(key);
+      this.importedStepCacheBytes -= entry.solids.reduce(
+        (sum, blob) => sum + blob.byteLength,
+        0
+      );
+    }
   }
 
   private resolveSketchBasisAtHistory(
@@ -4447,7 +4811,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
   private build(
     kernel: BrepKernel,
     document: ProjectDocument,
-    importSources: ReadonlyMap<string, Uint8Array> = new Map()
+    importSources: ReadonlyMap<string, Uint8Array> = new Map(),
+    /** Import checksums this build reads; see {@link storeImportedStep}. */
+    pinnedImports: ReadonlySet<string> = new Set(importSources.keys())
   ): ExactBuildResult {
     const { scope, errors } = getParameterScope(document);
     const result: ExactBuildResult = {
@@ -4533,54 +4899,79 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           }
           case 'imported-step': {
             if (feature.bodyId) {
-              let sourceBytes: Uint8Array;
-              if (feature.data.stepText !== undefined) {
-                sourceBytes = new TextEncoder().encode(feature.data.stepText);
+              const checksum = feature.data.stepSourceRef?.checksumSha256;
+              const cached = checksum
+                ? this.importedStepCache.get(checksum)
+                : undefined;
+              let solids: number[];
+              let diagnostics: ImportedStepDiagnostics;
+              if (cached) {
+                // The checksum determines the result, so restoring is exact.
+                // Only the handles are new — they belong to this kernel.
+                solids = cached.solids.map((blob) =>
+                  kernel.deserializeSolid(blob)
+                );
+                diagnostics = cached.diagnostics;
               } else {
-                const ref = feature.data.stepSourceRef;
-                const resolved = ref
-                  ? importSources.get(ref.checksumSha256)
-                  : undefined;
-                if (!resolved) {
-                  throw new Error(
-                    `Import source for "${feature.data.sourceName}" is not available on this device.`
+                let sourceBytes: Uint8Array;
+                if (feature.data.stepText !== undefined) {
+                  sourceBytes = new TextEncoder().encode(feature.data.stepText);
+                } else {
+                  const ref = feature.data.stepSourceRef;
+                  const resolved = ref
+                    ? importSources.get(ref.checksumSha256)
+                    : undefined;
+                  if (!resolved) {
+                    throw new Error(
+                      `Import source for "${feature.data.sourceName}" is not available on this device.`
+                    );
+                  }
+                  sourceBytes = resolved;
+                }
+                const declared = Array.from(
+                  importStepWithOwnBudget(kernel, sourceBytes)
+                );
+                if (declared.length === 0) {
+                  throw new Error('STEP file contains no solids.');
+                }
+                // K0.6. A shell that is not closed is not a solid, whatever
+                // volume a divergence integral over its faces happens to
+                // produce. Reject those before they become a body; keep the
+                // rest and say which ones went, because an unreadable solid
+                // that vanishes silently is the worst failure mode the parity
+                // corpus records.
+                const verdicts = declared.map((solid, index) =>
+                  classifyImportedSolid(
+                    diagnoseImportedSolid(kernel, solid, index + 1)
+                  )
+                );
+                solids = declared.filter(
+                  (_, index) => verdicts[index]!.kind !== 'not-a-solid'
+                );
+                const rejections = verdicts.flatMap((verdict) =>
+                  verdict.kind === 'not-a-solid' ? [verdict.reason] : []
+                );
+                if (solids.length === 0) {
+                  throw new Error(importedStepNoSolidError(rejections));
+                }
+                diagnostics = {
+                  declaredSolidCount: declared.length,
+                  rejections,
+                  flagged: verdicts.flatMap((verdict) =>
+                    verdict.kind === 'flagged' ? [verdict.reason] : []
+                  )
+                };
+                if (checksum) {
+                  this.storeImportedStep(
+                    checksum,
+                    kernel,
+                    solids,
+                    diagnostics,
+                    pinnedImports
                   );
                 }
-                sourceBytes = resolved;
               }
-              const declared = Array.from(
-                importStepWithOwnBudget(kernel, sourceBytes)
-              );
-              if (declared.length === 0) {
-                throw new Error('STEP file contains no solids.');
-              }
-              // K0.6. A shell that is not closed is not a solid, whatever
-              // volume a divergence integral over its faces happens to
-              // produce. Reject those before they become a body; keep the
-              // rest and say which ones went, because an unreadable solid
-              // that vanishes silently is the worst failure mode the parity
-              // corpus records.
-              const verdicts = declared.map((solid, index) =>
-                classifyImportedSolid(
-                  diagnoseImportedSolid(kernel, solid, index + 1)
-                )
-              );
-              const solids = declared.filter(
-                (_, index) => verdicts[index]!.kind !== 'not-a-solid'
-              );
-              const rejections = verdicts.flatMap((verdict) =>
-                verdict.kind === 'not-a-solid' ? [verdict.reason] : []
-              );
-              if (solids.length === 0) {
-                throw new Error(importedStepNoSolidError(rejections));
-              }
-              result.importedStepDiagnostics.set(feature.bodyId, {
-                declaredSolidCount: declared.length,
-                rejections,
-                flagged: verdicts.flatMap((verdict) =>
-                  verdict.kind === 'flagged' ? [verdict.reason] : []
-                )
-              });
+              result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
               result.shapes.set(feature.bodyId, {
                 solids,
                 lineage: createBrepKitImportedStepLineage(
@@ -4909,6 +5300,11 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               operands.flatMap((shape) => shape.solids)
             );
             let solid: number;
+            let unionFuseOperands: UnionFuseOperand[] | null = null;
+            // A disconnected union is a different complaint with its own
+            // remedy and its own warning; it must not also be reported as
+            // non-manifold, nor be offered a move-to-overlap suggestion.
+            let unionDisconnected = false;
             if (feature.data.operation === 'union') {
               const unionOperands = feature.data.targetBodyIds.flatMap(
                 (bodyId, operandIndex) =>
@@ -4932,6 +5328,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                     };
                   })
               );
+              unionFuseOperands = unionOperands;
               const unionSolids = unionOperands.map((operand) => operand.solid);
               const connectivity = analyzeUnionConnectivity(
                 unionOperands,
@@ -4955,7 +5352,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               const droppedOperand = droppedUnionOperandWarning({
                 operands: unionOperands.map((operand) => ({
                   name: operand.name,
-                  bounds: operand.bounds
+                  bounds: operand.bounds,
+                  hasCurvedFaces:
+                    censusOfSolids(kernel, [operand.solid]).curvedFaces > 0
                 })),
                 result: {
                   min: {
@@ -4981,6 +5380,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                 !connectivity.connected &&
                 !isFaceConnectedSolid(kernel, solid)
               ) {
+                unionDisconnected = true;
                 result.warnings.push(
                   `Feature "${feature.name}": ${disconnectedUnionWarning(
                     connectivity,
@@ -4990,15 +5390,62 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
             } else {
               solid = collapseShape(kernel, operands[0]!);
+              const subtracting = feature.data.operation === 'subtract';
+              // Measured BEFORE any cutting, because afterwards there is
+              // nothing left to compare against: a cut that silently does
+              // nothing and a cut with nothing to do produce the same body.
+              const volumeBeforeCut = subtracting
+                ? kernel.volume(solid, MEASUREMENT_DEFLECTION)
+                : 0;
+              let sharedWithTools = 0;
               for (const operand of operands.slice(1)) {
                 const tool = collapseShape(kernel, operand);
-                solid =
-                  feature.data.operation === 'subtract'
-                    ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
-                      kernel.cut(solid, tool))
-                    : kernel.intersect(solid, tool);
+                if (subtracting) {
+                  try {
+                    sharedWithTools += kernel.volume(
+                      kernel.intersect(
+                        kernel.copySolid(solid),
+                        kernel.copySolid(tool)
+                      ),
+                      MEASUREMENT_DEFLECTION
+                    );
+                  } catch {
+                    // An intersect that refuses says nothing either way, and
+                    // a guard is not the place to turn that into a claim.
+                  }
+                }
+                solid = subtracting
+                  ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
+                    kernel.cut(solid, tool))
+                  : kernel.intersect(solid, tool);
               }
               solid = unifyBooleanFaces(kernel, solid);
+              // A cut that removes none of the material it demonstrably
+              // overlaps. Measured on the 061c1b2 kernel, a cross-drilled
+              // shaft shares 142.84 mm3 with its bore and the cut removes
+              // 0.19 of it — and the body that comes back is closed, valid,
+              // and reports the undrilled volume. Every structural check
+              // passes; only these two numbers disagree.
+              //
+              // Half is the same deliberately loose bar the pattern-merge
+              // guard uses above, and for the same reason: with several tools
+              // the pairwise total overstates the true correction wherever
+              // two of them overlap each other, so a working cut can remove
+              // less than all of it. Nothing near a working cut removes under
+              // half.
+              //
+              // The body still stands — the user asked for it and it is a
+              // valid solid. Silence is the only outcome ruled out, because
+              // that is exactly how this defect presents.
+              if (subtracting && sharedWithTools > GEOMETRY_EPSILON) {
+                const removed =
+                  volumeBeforeCut - kernel.volume(solid, MEASUREMENT_DEFLECTION);
+                if (removed < sharedWithTools * 0.5) {
+                  result.warnings.push(
+                    `Feature "${feature.name}": the tool overlaps this body but the cut did not take, so the reported volume still counts material the cut should have removed.`
+                  );
+                }
+              }
             }
             // The face-count census. Mesh closure, validation and volume all
             // pass on a silently faceted boolean result; the faces do not.
@@ -5006,10 +5453,63 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               operands: operandCensus,
               result: censusOfSolids(kernel, [solid])
             });
+            // A tangency the fuse cannot resolve exactly does not always come
+            // back faceted. Kernels differ on which way they fail it: one
+            // drops to facets, another returns a body that is not a valid
+            // solid at all. Both are the same complaint to the user, and both
+            // are answered by the same move, so the refusal is classified on
+            // either symptom rather than on faceting alone.
+            const unionNotSolid =
+              unionFuseOperands !== null &&
+              !unionDisconnected &&
+              (kernel.validateSolid(solid) !== 0 ||
+                !solidMeshIsClosed(kernel, solid));
+            // Which warning the proved move belongs to.
+            //
+            // This used to be the index of the feature's FIRST warning, on the
+            // reasoning that a refused commit reports one reason and a remedy
+            // filed behind it never gets read. That is true but it picked the
+            // wrong warning: a dropped-operand or disconnected-union warning
+            // can already sit there, and appending "moving X clears it" to one
+            // of those attaches a remedy to a complaint it does not answer.
+            // Track the refusal actually pushed here instead.
+            let refusalIndex: number | null = null;
             if (facetFallback) {
+              refusalIndex = result.warnings.length;
               result.warnings.push(
                 `Feature "${feature.name}": ${facetFallback}`
               );
+            } else if (unionNotSolid) {
+              refusalIndex = result.warnings.length;
+              // Deliberately the same sentence the strict validation pass
+              // emits later. Saying it here instead means the proved move can
+              // ride along with it — that pass runs far from the operands,
+              // where they can no longer be probed. It also suppresses the
+              // later copy, which declines once a feature-specific warning
+              // exists.
+              result.warnings.push(
+                `Feature "${feature.name}": Union produced an open, ` +
+                  'non-manifold, or inconsistently oriented result. Adjust ' +
+                  'the overlap or placement and try again.'
+              );
+            }
+            // Naming the move that works is only possible here, where the
+            // operands are still addressable; by the time this reaches the
+            // panel it is a sentence. Probing costs a fuse per candidate, so
+            // it runs only for the failures it answers.
+            // A disconnected union is a different complaint with its own
+            // remedy, and closing that gap by sliding one body to the other's
+            // centre is not advice anyone asked for.
+            if (refusalIndex !== null && unionFuseOperands) {
+              const suggestion = exactUnionOffsetSuggestion(
+                kernel,
+                unionFuseOperands,
+                document.units
+              );
+              if (suggestion) {
+                result.warnings[refusalIndex] =
+                  `${result.warnings[refusalIndex]!} ${suggestion}`;
+              }
             }
             feature.data.targetBodyIds.forEach((bodyId) =>
               result.consumed.add(bodyId)
@@ -5051,12 +5551,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             if (size <= GEOMETRY_EPSILON) {
               throw new Error('Edge modifier size must be greater than zero.');
             }
+            let reportedRefusal: string | null = null;
             const modified = applyEdgeModifier(
               kernel,
               target,
               selected,
               feature.data.featureKind,
-              size
+              size,
+              (message) => {
+                reportedRefusal = message;
+              }
             );
             if (modified === null) {
               throw new Error(
@@ -5066,7 +5570,8 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   selected,
                   feature.data.featureKind,
                   size,
-                  result.partialRevolveBodies.has(feature.data.targetBodyId)
+                  result.partialRevolveBodies.has(feature.data.targetBodyId),
+                  reportedRefusal
                 )
               );
             }
@@ -5890,6 +6395,7 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
             topologyId: `edge:${hash}`,
             hash,
             reference: verifiedReference,
+            length: kernel.edgeLength(edge),
             displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
             adjacentFaceHashes: brepAdjacentFaceHashes(
               edge,
@@ -5930,6 +6436,15 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     const meshClosure = strictBooleanValidation
       ? inspectTriangleMeshClosure(vertices, indices)
       : null;
+    // Single-solid bodies only, and deliberately so. Combining moments across
+    // solids means the parallel-axis theorem plus an eigendecomposition to
+    // recover principal axes, and a body made of several solids that reported
+    // the moments of one of them would be worse than reporting none. Absent
+    // is a state consumers already have to render.
+    const massProperties =
+      shape.solids.length === 1
+        ? readBodyMassProperties(kernel, shape.solids[0]!)
+        : null;
     return {
       vertices,
       indices,
@@ -5939,15 +6454,16 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
       valid,
       strictValid,
       meshClosure,
-      bbox
+      bbox,
+      ...(massProperties ? { massProperties } : {})
     };
   }
 
   async syncDocument(document: ProjectDocument): Promise<DerivedState> {
-    const importSources = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document, importSources);
+      const build = this.build(kernel, document, sources, pinned);
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -6039,6 +6555,12 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
           consumed,
           volume: measured.volume,
           bbox: measured.bbox,
+          // One kernel call per solid, inside the pass that already holds it.
+          // Omitted rather than zeroed when it cannot be read, so a consumer
+          // renders an absence instead of a massless part.
+          ...(measured.massProperties
+            ? { massProperties: measured.massProperties }
+            : {}),
           topology: measured.topology
         };
         if (body.exportableStep && !consumed) {
@@ -6064,10 +6586,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const importSources = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document, importSources);
+      const build = this.build(kernel, document, sources, pinned);
       const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
@@ -6102,10 +6624,10 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[]
   ): Promise<string> {
-    const importSources = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(document);
     const kernel = new BrepKernel();
     try {
-      const build = this.build(kernel, document, importSources);
+      const build = this.build(kernel, document, sources, pinned);
       const solids = bodyIds.flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {

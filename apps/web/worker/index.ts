@@ -1095,6 +1095,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!uploadId) {
       throw new HttpError(400, 'Missing uploadId.');
     }
+    const partNumber = Number(partMatch[2]!);
+    if (partNumber > MAX_ARTIFACT_UPLOAD_PARTS) {
+      throw new HttpError(
+        400,
+        `Upload part number cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS}.`
+      );
+    }
     const contentLength = Number(request.headers.get('content-length') ?? '0');
     if (
       Number.isFinite(contentLength) &&

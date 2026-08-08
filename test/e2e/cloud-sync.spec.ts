@@ -386,7 +386,13 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     await expect(
       pageA.getByRole('button', { name: 'Rename project' })
     ).toContainText('Shared Bracket');
-    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible();
+    // A reload is a second cold start, so the save chip passes back through
+    // "Saving" before it settles — the same allowance the first open above
+    // already takes. It does not excuse a save that never lands: a document
+    // that never reaches the account stays on "Saving" and still fails here.
+    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
+      timeout: 10_000
+    });
 
     await pageB.goto('/');
     await pageB
