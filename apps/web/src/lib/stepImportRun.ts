@@ -25,7 +25,10 @@
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import { createBodyFeatureIds } from '@openzcad/document-core';
 import { parseStepMetadata } from '@openzcad/io-step';
-import type { ImportedSourceReference, ProjectDocument } from '@openzcad/shared';
+import type {
+  ImportedSourceReference,
+  ProjectDocument
+} from '@openzcad/shared';
 
 import { errorMessage } from './errors';
 import {
@@ -33,9 +36,11 @@ import {
   type InFlightImportChecksums
 } from './importArchival';
 import {
-  deleteSourceBlob,
+  deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
+  LOCAL_STORAGE_BLOCKED_MESSAGE,
   putSourceBlobIfAbsent,
+  releaseSourceBlobClaim,
   type LocalStorageReadiness,
   type StoredSourceBlob
 } from './localProjectStore';
@@ -72,8 +77,18 @@ function storageUnavailableMessage(maxEmbeddedBytes: number): string {
 /** What this run needs from the device's local source-blob storage. */
 export interface StepImportSourceStore {
   ensureLocalProjectStorage(): Promise<LocalStorageReadiness>;
-  putSourceBlobIfAbsent(source: Blob): Promise<StoredSourceBlob>;
-  deleteSourceBlob(checksumSha256: string): Promise<void>;
+  putSourceBlobIfAbsent(
+    source: Blob,
+    options?: { claimId?: string }
+  ): Promise<StoredSourceBlob>;
+  deleteSourceBlobIfUnreferenced(input: {
+    checksumSha256: string;
+    claimId: string;
+  }): Promise<boolean>;
+  releaseSourceBlobClaim(
+    checksumSha256: string,
+    claimId: string
+  ): Promise<void>;
 }
 
 /**
@@ -89,7 +104,8 @@ export interface StepImportSourceStore {
 export const localStepImportSourceStore: StepImportSourceStore = {
   ensureLocalProjectStorage,
   putSourceBlobIfAbsent,
-  deleteSourceBlob
+  deleteSourceBlobIfUnreferenced,
+  releaseSourceBlobClaim
 };
 
 /** Where a refusal goes. Both surfaces, because either alone has been wrong. */
@@ -198,15 +214,23 @@ export async function runStepImport(
     return declined();
   }
 
+  // Mint before the lock so no failure between reserving and entering the
+  // guarded import body can strand the validated-feature lock. This identity is
+  // written atomically beside the blob and lets other tabs see the hold.
+  const sourceClaimId = deps.newId();
+
   // The `indexedDB.open`, asked for BEFORE the lock rather than under it.
   //
-  // Nothing here can park today — this build's schema version is the one every
-  // device already holds — but the first thing this run does under the commit
-  // lock is a write that opens the database, and a lock held across an open is
-  // a lock held across whatever the browser decides that open costs. A stranded
-  // commit lock is not one failed import: it is every boolean, fillet and
-  // primitive edit in the tab silently doing nothing until it is reloaded.
+  // Version-7 tabs close their live connections on `versionchange`, allowing
+  // the version-8 claim-store upgrade to proceed. Older builds may still block;
+  // the shared schema gate turns that into a settled result before a commit
+  // lock exists.
   const readiness = await store.ensureLocalProjectStorage();
+  if (readiness === 'blocked') {
+    status.setStatus(LOCAL_STORAGE_BLOCKED_MESSAGE);
+    status.setFeatureFormError(LOCAL_STORAGE_BLOCKED_MESSAGE);
+    return declined();
+  }
   // No storage at all is not a refusal on its own — a file small enough to
   // embed in the document needs no blob store, which is exactly how a
   // storage-denied session has always imported. Past that cap there is nowhere
@@ -253,7 +277,9 @@ export async function runStepImport(
     // asking anyway only spends a second failed open to learn the same thing.
     if (readiness !== 'unavailable') {
       try {
-        const stored = await store.putSourceBlobIfAbsent(file);
+        const stored = await store.putSourceBlobIfAbsent(file, {
+          claimId: sourceClaimId
+        });
         sourceRef = stored.ref;
         sourceBlobCreated = stored.created;
         // Marked in-flight in the same tick the bytes become reachable, so no
@@ -391,15 +417,18 @@ export async function runStepImport(
     abandonedChecksums: deps.marks.abandoned,
     document: deps.currentDocument(),
     inFlightChecksums: deps.marks.inFlight,
-    deleteSourceBlob: (checksumSha256) => store.deleteSourceBlob(checksumSha256)
+    deleteSourceBlobIfUnreferenced: (checksumSha256) =>
+      store.deleteSourceBlobIfUnreferenced({
+        checksumSha256,
+        claimId: sourceClaimId
+      }),
+    releaseSourceBlobClaim: () =>
+      store.releaseSourceBlobClaim(settledChecksum, sourceClaimId)
   }).catch(() => {
-    // DELIBERATELY SWALLOWED. Storage failing here leaves the bytes in place,
-    // which is the safe direction: an orphaned blob is a leak that the next
-    // refused import of the same file collects, while a deleted one is the
-    // source of somebody's committed feature. There is also nothing the user
-    // could do about it — the import itself has already succeeded or failed on
-    // its own terms, and saying so here would only contradict the verdict
-    // already on screen.
+    // DELIBERATELY SWALLOWED. Storage failing here leaves the bytes and claim in
+    // place, which is the no-data-loss direction. The import itself has already
+    // reached its user-visible verdict, so a cleanup error must not contradict
+    // it or widen deletion.
     return false;
   });
   return {
