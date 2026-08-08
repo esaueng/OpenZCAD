@@ -250,7 +250,7 @@ test('uses a one-use native ticket for desktop collaboration without exposing a 
         async invoke(command, args) {
           browserWindow.__desktopInvocations.push({ command, args });
           if (command === 'desktop_collaboration_url') {
-            return `wss://zcad.esau.app/api/projects/${String(document.projectId)}/collaboration?ticket=${ticket}`;
+            return `wss://zcad.app/api/projects/${String(document.projectId)}/collaboration?ticket=${ticket}`;
           }
           if (command !== 'desktop_api_request') {
             return 1;
@@ -380,7 +380,7 @@ test('uses a one-use native ticket for desktop collaboration without exposing a 
       )
     )
     .toContain(
-      `wss://zcad.esau.app/api/projects/${document.projectId}/collaboration?ticket=${ticket}`
+      `wss://zcad.app/api/projects/${document.projectId}/collaboration?ticket=${ticket}`
     );
   const invocations = await page.evaluate(
     () =>
