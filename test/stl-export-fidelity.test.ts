@@ -266,10 +266,9 @@ describe('what STL export actually writes', () => {
     120_000
   );
 
-  it('exports a leaking file even when the B-rep is EXACT', async () => {
-    // A ball with its cap cut off. The measurement is right to 1e-14 — this
-    // is not a case of bad geometry producing a bad file. Correct geometry is
-    // simply not sufficient.
+  it('exports a watertight file for an exact capped sphere', async () => {
+    // A ball with its cap cut off exercises tessellation across a spherical
+    // seam and the new planar cap.
     adapter ??= await createExactKernelAdapter();
     let document = createProjectDocument('Ball', toUserId('user_stl'));
     document = addPrimitiveFeature(document, {
@@ -303,10 +302,10 @@ describe('what STL export actually writes', () => {
     expect(
       Math.abs(derived.bodyRepresentations[bodyId]!.volume - CAPPED) / CAPPED
     ).toBeLessThan(1e-12);
-    // The file is not.
+    // The exported mesh stays closed as well.
     const stl = measureStl(await adapter.exportStl(document, [bodyId]));
-    expect(stl.openEdges).toBe(116);
-    expect(stl.facets).toBe(4232);
+    expect(stl.openEdges).toBe(0);
+    expect(stl.facets).toBe(3234);
     expect(derived.warnings).toEqual([]);
   }, 120_000);
 });

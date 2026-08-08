@@ -3,7 +3,10 @@ import {
   listFeaturesInOrder,
   listParameters
 } from '@openzcad/document-core';
-import { isFeatureSuppressed } from '@openzcad/shared';
+import {
+  isFeatureSuppressed,
+  isImportedSourceReference
+} from '@openzcad/shared';
 import type {
   SketchObjectData,
   AxisId,
@@ -248,6 +251,13 @@ export type CadPatchOperation =
       localId?: LocalBodyId;
       modifier: 'fillet' | 'chamfer';
       targetBodyId: BodyRef;
+      /**
+       * A semantic selector is resolved only after the proposal prefix has
+       * produced exact topology. It is deliberately limited to deterministic
+       * whole-body selections; arbitrary edge guesses still require hashes
+       * from the submitted digest.
+       */
+      edgeSelector?: 'all-feature-edges' | 'circular-rims' | null;
       edgeHashes: number[];
       size: ParamValue;
     }
@@ -671,7 +681,11 @@ function compactFeatureData(document: ProjectDocument, data: unknown): unknown {
       artifactId: feature.artifactId,
       sourceName: feature.sourceName,
       sourceBytes:
-        typeof feature.stepText === 'string' ? feature.stepText.length : 0
+        typeof feature.stepText === 'string'
+          ? feature.stepText.length
+          : isImportedSourceReference(feature.stepSourceRef)
+            ? feature.stepSourceRef.logicalBytes
+            : 0
     };
   }
   if (feature.featureKind === 'imported-mesh') {
@@ -1757,9 +1771,20 @@ export const CAD_PATCH_JSON_SCHEMA = {
               targetBodyId: bodyRefSchema,
               edgeHashes: {
                 type: 'array',
-                minItems: 1,
+                minItems: 0,
                 maxItems: 64,
                 items: { type: 'integer', minimum: 1 }
+              },
+              edgeSelector: {
+                anyOf: [
+                  {
+                    type: 'string',
+                    enum: ['all-feature-edges', 'circular-rims']
+                  },
+                  { type: 'null' }
+                ],
+                description:
+                  'Use a semantic selector only for a body created earlier in this proposal. Set null when edgeHashes come from the current digest.'
               },
               size: scalarSchema
             },
@@ -1770,6 +1795,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
               'modifier',
               'targetBodyId',
               'edgeHashes',
+              'edgeSelector',
               'size'
             ]
           },
@@ -2762,16 +2788,26 @@ export function parseCadPatchProposal(
         );
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
-      case 'add_edge_modifier':
+      case 'add_edge_modifier': {
+        const edgeSelector = operation.edgeSelector;
+        const stagedSelector =
+          edgeSelector === 'all-feature-edges' ||
+          edgeSelector === 'circular-rims';
         if (
           typeof operation.name !== 'string' ||
           !['fillet', 'chamfer'].includes(String(operation.modifier)) ||
           typeof operation.targetBodyId !== 'string' ||
           !Array.isArray(operation.edgeHashes) ||
-          operation.edgeHashes.length === 0 ||
           !operation.edgeHashes.every(
             (hash) => Number.isInteger(hash) && Number(hash) > 0
           ) ||
+          (stagedSelector
+            ? operation.edgeHashes.length !== 0 ||
+              !isLocalBodyRef(operation.targetBodyId)
+            : operation.edgeHashes.length === 0) ||
+          (!stagedSelector &&
+            edgeSelector !== null &&
+            edgeSelector !== undefined) ||
           !isScalar(operation.size)
         ) {
           throw new Error('Invalid add_edge_modifier operation.');
@@ -2781,17 +2817,17 @@ export function parseCadPatchProposal(
           declaredBodies,
           'add_edge_modifier targetBodyId'
         );
-        // Edge ordinals come from the derived topology of a body that already
-        // exists. A body created earlier in this same patch has no derived
-        // topology yet, so any ordinal against it would be invented — and it
-        // would persist into the command log and replay wrong forever.
-        if (isLocalBodyRef(String(operation.targetBodyId))) {
+        // A local body has no topology until the exact prefix rebuild. It may
+        // therefore be targeted only through a semantic selector that the
+        // staged preflight resolves to persisted hashes and V5 references.
+        if (isLocalBodyRef(String(operation.targetBodyId)) && !stagedSelector) {
           throw new Error(
-            'add_edge_modifier cannot target a body created in the same proposal, because its edges do not exist yet. Create the body first, then finish its edges in a later request.'
+            'add_edge_modifier cannot target a body created in the same proposal without an exact staged edge selector.'
           );
         }
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
+      }
       case 'add_pattern':
         if (
           typeof operation.name !== 'string' ||
@@ -3061,7 +3097,13 @@ export function describeCadPatchOperation(
     case 'add_solid_offset':
       return `Offset body ${operation.targetBodyId} outward by ${String(operation.distance)}`;
     case 'add_edge_modifier':
-      return `${operation.modifier} ${operation.edgeHashes.length} edges on ${operation.targetBodyId}`;
+      return `${operation.modifier} ${
+        operation.edgeSelector === 'all-feature-edges'
+          ? 'all feature edges'
+          : operation.edgeSelector === 'circular-rims'
+            ? 'all circular rims'
+            : `${operation.edgeHashes.length} edges`
+      } on ${operation.targetBodyId}`;
     case 'add_pattern':
       return `Create ${operation.patternKind} pattern of ${operation.targetBodyId}`;
   }

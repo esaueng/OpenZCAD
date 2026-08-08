@@ -9,6 +9,7 @@ import { ApiError } from '../apps/web/src/lib/api';
 import {
   CloudProjectAutosave,
   PROJECT_AUTOSAVE_IDLE_MS,
+  PROJECT_AUTOSAVE_IDLE_RETRY_MS,
   PROJECT_AUTOSAVE_MAX_WAIT_MS,
   type CloudProjectAutosaveConnectivity,
   type CloudProjectAutosaveStatus
@@ -263,6 +264,23 @@ describe('cloud project autosave — what it declines to do', () => {
     controller.dispose();
   });
 
+  it('recognises the document the account already holds', () => {
+    const { controller } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 2);
+
+    expect(controller.holdsDocument(document)).toBe(true);
+    expect(controller.holdsDocument(documentAt(3, document))).toBe(false);
+    // Same version number, different project: two documents that have both
+    // been edited twice are not the same document.
+    expect(
+      controller.holdsDocument(
+        Object.assign(createProjectDocument('Other', owner), { version: 2 })
+      )
+    ).toBe(false);
+    controller.dispose();
+  });
+
   it('holds edits while offline and sends them on reconnect', async () => {
     const { controller, saves, statuses, setConnectivity } = harness({
       online: false
@@ -397,7 +415,7 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
-  it('retries a transient failure, then gives up rather than spinning', async () => {
+  it('retries a transient failure quickly, then slows down rather than spinning', async () => {
     let attempts = 0;
     const { controller } = harness({
       respond: () => {
@@ -410,11 +428,19 @@ describe('cloud project autosave — refusals', () => {
     controller.schedule(documentAt(3, document));
     await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
     await controller.whenIdle();
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     await controller.whenIdle();
 
-    expect(attempts).toBeGreaterThan(1);
-    expect(attempts).toBeLessThanOrEqual(5);
+    const quickAttempts = attempts;
+    expect(quickAttempts).toBeGreaterThan(1);
+    expect(quickAttempts).toBeLessThanOrEqual(5);
+
+    // The connection never dropped, so no `online` event is coming to restart
+    // this. Without a slow heartbeat the edit would simply stop being offered
+    // to the account for the rest of the session.
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS + 1_000);
+    await controller.whenIdle();
+    expect(attempts).toBeGreaterThan(quickAttempts);
     controller.dispose();
   });
 

@@ -19,7 +19,6 @@ import {
   Settings,
   Trash2,
   TriangleAlert,
-  UserPlus,
   X
 } from 'lucide-react';
 import {
@@ -27,11 +26,11 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   TRASH_RETENTION_DAYS,
-  type BodyRepresentation,
   type ProjectStatus,
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
+import { generateCutePartName } from '../lib/cutePartName';
 import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demos';
@@ -67,8 +66,6 @@ interface StartScreenProps {
    */
   conflictedProjectIds: ReadonlySet<string>;
   signedIn: boolean;
-  collaborationSharingEnabled: boolean;
-  onAcceptInvitation(token: string): Promise<void>;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
   /**
@@ -86,7 +83,18 @@ interface StartScreenProps {
   /** Irreversible: destroys the project outright. */
   onDeleteForever(project: ProjectSummary): void;
   onEmptyTrash(projects: ProjectSummary[]): void;
-  loadThumbnailBodies(project: ProjectSummary): Promise<BodyRepresentation[]>;
+  /**
+   * Reads a cached preview image. Deliberately not a document load: the shelf
+   * must stay usable — openable, deletable — for a project too large to hold in
+   * memory, which is exactly the project whose tile a viewer wants to see.
+   */
+  loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * Renders the preview for a tile the cache could not answer for. Called only
+   * for the tiles on screen, so an unexpanded shelf pays for nine parts rather
+   * than every part the device holds.
+   */
+  backfillThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 /**
@@ -96,6 +104,14 @@ interface StartScreenProps {
  * pushed too far down. Shelves without a create tile get its slot back.
  */
 const COLLAPSED_PROJECT_LIMIT = 9;
+
+function formatLastEdited(updatedAt: string): string {
+  const date = new Date(updatedAt);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  })}`;
+}
 
 const SHELVES: ReadonlyArray<{
   status: ProjectStatus;
@@ -122,8 +138,6 @@ export function StartScreen({
   accountProjectListReached,
   conflictedProjectIds,
   signedIn,
-  collaborationSharingEnabled,
-  onAcceptInvitation,
   onSaveToAccount,
   onSaveAllToAccount,
   syncRun,
@@ -134,9 +148,10 @@ export function StartScreen({
   onReorder,
   onDeleteForever,
   onEmptyTrash,
-  loadThumbnailBodies
+  loadThumbnail,
+  backfillThumbnail
 }: StartScreenProps) {
-  const [name, setName] = useState('New Part');
+  const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
@@ -144,9 +159,6 @@ export function StartScreen({
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
-  const [invitationToken, setInvitationToken] = useState('');
-  const [invitationBusy, setInvitationBusy] = useState(false);
-  const [invitationError, setInvitationError] = useState<string | null>(null);
   const tileRefs = useRef(new Map<string, HTMLDivElement>());
 
   // The server measures the trimmed name, so the form has to agree exactly or
@@ -284,7 +296,11 @@ export function StartScreen({
     const preview = (
       <>
         <span className="start-tile-thumb">
-          <PartThumbnail project={project} loadBodies={loadThumbnailBodies} />
+          <PartThumbnail
+            project={project}
+            loadThumbnail={loadThumbnail}
+            backfillThumbnail={backfillThumbnail}
+          />
           {syncEntry && !trashed ? (
             <span
               className={`start-tile-badge is-sync-${syncEntry.state}`}
@@ -347,13 +363,18 @@ export function StartScreen({
         </span>
         <strong className="start-tile-name">{project.name}</strong>
         <small className="start-tile-meta">
-          {trashed
-            ? daysLeft === 0
-              ? 'deleting shortly'
-              : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`
-            : `rev ${project.revisionCount} · ${new Date(
-                project.updatedAt
-              ).toLocaleDateString()}`}
+          rev {project.revisionCount} ·{' '}
+          <time dateTime={project.updatedAt}>
+            {formatLastEdited(project.updatedAt)}
+          </time>
+          {trashed && (
+            <>
+              {' · '}
+              {daysLeft === 0
+                ? 'deleting shortly'
+                : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`}
+            </>
+          )}
         </small>
       </>
     );
@@ -840,57 +861,6 @@ export function StartScreen({
             )
           )}
 
-          {signedIn && collaborationSharingEnabled && (
-            <form
-              className="start-invitation-bar"
-              aria-label="Join a shared project"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const token = invitationToken.trim();
-                if (!token || invitationBusy) {
-                  return;
-                }
-                setInvitationBusy(true);
-                setInvitationError(null);
-                void onAcceptInvitation(token)
-                  .then(() => setInvitationToken(''))
-                  .catch((caught: unknown) =>
-                    setInvitationError(
-                      caught instanceof Error
-                        ? caught.message
-                        : 'The invitation could not be accepted.'
-                    )
-                  )
-                  .finally(() => setInvitationBusy(false));
-              }}
-            >
-              <UserPlus size={14} aria-hidden="true" />
-              <label htmlFor="project-invitation-token">
-                Join a shared project
-              </label>
-              <input
-                id="project-invitation-token"
-                aria-label="Invitation token"
-                autoComplete="off"
-                placeholder="Paste invitation token"
-                value={invitationToken}
-                onChange={(event) => setInvitationToken(event.target.value)}
-              />
-              <button
-                type="submit"
-                className="start-shelf-action"
-                disabled={invitationBusy || !invitationToken.trim()}
-              >
-                {invitationBusy ? 'Joining…' : 'Join project'}
-              </button>
-              {invitationError && (
-                <span className="start-invitation-error" role="alert">
-                  {invitationError}
-                </span>
-              )}
-            </form>
-          )}
-
           <div className="start-tile-grid">
             {shelf === 'active' && (
               <form
@@ -926,7 +896,6 @@ export function StartScreen({
                   aria-describedby={
                     nameTooLong ? 'project-name-error' : undefined
                   }
-                  onFocus={(event) => event.currentTarget.select()}
                   onChange={(event) => setName(event.target.value)}
                 />
                 {nameTooLong && (
@@ -1020,6 +989,10 @@ export function StartScreen({
                 type="button"
                 className="demo-card"
                 disabled={busy}
+                // Named as one thing, because that is what it is: a card whose
+                // name was otherwise assembled from its heading, its tagline
+                // and three loose revision chips read in sequence.
+                aria-label={`Open demo: ${demo.name.replace('Demo · ', '')} — ${demo.tagline}`}
                 onClick={() => onOpenDemo(demo)}
               >
                 <span className="demo-card-head">

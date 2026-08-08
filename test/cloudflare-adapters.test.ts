@@ -260,7 +260,7 @@ describe('cloudflare adapters', () => {
     // Pinned-first, then manual order: the ordering has to come from SQL,
     // because the list is not re-sorted after it is read.
     expect(prepare.mock.calls[0]?.[0]).toContain(
-      'ORDER BY pinned DESC, sort_order ASC, updated_at DESC'
+      'ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC'
     );
     expect(prepare.mock.calls[0]?.[0]).toContain('project_members');
   });
@@ -359,6 +359,9 @@ describe('cloudflare adapters', () => {
     expect(statements[0]).toContain("status = 'deleted'");
     const destroyed = statements.slice(1).join('\n');
     for (const table of [
+      'project_access_events',
+      'project_invitations',
+      'project_members',
       'upload_sessions',
       'artifacts',
       'revisions',

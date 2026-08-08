@@ -10,6 +10,10 @@ import {
   nativeCadFile,
   protectDesktopClose
 } from './desktopBridge';
+import {
+  CLOUD_FUNCTIONS_STORAGE_KEY,
+  setCloudFunctionsEnabled
+} from './cloudMode';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }));
@@ -48,6 +52,8 @@ function mockDesktopWindow() {
 }
 
 afterEach(() => {
+  setCloudFunctionsEnabled(true);
+  globalThis.localStorage.removeItem(CLOUD_FUNCTIONS_STORAGE_KEY);
   delete (window as Window & { __TAURI_INTERNALS__?: unknown })
     .__TAURI_INTERNALS__;
   vi.mocked(invoke).mockReset();
@@ -57,6 +63,23 @@ afterEach(() => {
 });
 
 describe('desktop bridge', () => {
+  it('does not start browser or native cloud requests in offline mode', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    setCloudFunctionsEnabled(false);
+
+    await expect(desktopFetch('/api/session')).rejects.toThrow(
+      'Cloud features are disabled on this device.'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+
+    markDesktopRuntime();
+    await expect(desktopFetch('/api/session')).rejects.toThrow(
+      'Cloud features are disabled on this device.'
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('detects the Tauri runtime without changing browser behavior', () => {
     expect(isDesktopApp()).toBe(false);
     markDesktopRuntime();

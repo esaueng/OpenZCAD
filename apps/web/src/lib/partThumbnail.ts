@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { BodyRepresentation } from '@openzcad/shared';
 import {
+  VIEW_DIRECTIONS,
   clearGroup,
-  computeFitPose,
   createFatLine,
   createObjectForBody,
   shouldRenderTopologyEdge
@@ -10,15 +10,92 @@ import {
 
 const THUMBNAIL_WIDTH = 360;
 const THUMBNAIL_HEIGHT = 200;
+const THUMBNAIL_FOV = 34;
+/**
+ * How much room the part leaves around itself, as a multiple of the distance
+ * that would have it touch the nearer pair of frustum walls. Just over 1 so a
+ * tile reads as a part on a card rather than a part pressed against its edges.
+ */
+const THUMBNAIL_MARGIN = 1.06;
 
 /**
  * Browsers keep WebGL contexts alive for a while after disposal. Rendering the
  * cards serially prevents an expanded parts grid from briefly creating enough
  * contexts to evict the live CAD viewport.
  */
-let renderQueue: Promise<void> = Promise.resolve();
+let previewQueue: Promise<void> = Promise.resolve();
 
-function renderThumbnailNow(bodies: BodyRepresentation[]): string | null {
+/**
+ * Runs preview work — including whatever the caller has to read to do it — one
+ * job at a time. Loading a project document belongs inside the job rather than
+ * around it: filling an expanded shelf's worth of tiles then costs one document
+ * held at a time instead of one per tile.
+ */
+export function queuePartThumbnail<T>(work: () => Promise<T> | T): Promise<T> {
+  const result = previewQueue.catch(() => undefined).then(work);
+  previewQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
+/**
+ * Poses the card's camera on the part: the same Z-up frame and the same iso
+ * direction the viewport's Fit lands on, so a tile is recognisably the view
+ * the part opens in.
+ */
+export function createThumbnailCamera(
+  bounds: THREE.Box3
+): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(
+    THUMBNAIL_FOV,
+    THUMBNAIL_WIDTH / THUMBNAIL_HEIGHT,
+    0.05,
+    10_000
+  );
+  // Model space is Z-up, so the card's camera has to be too. Three.js cameras
+  // default to Y-up and `lookAt` derives its roll from `up`: left at the
+  // default, every tile came out tipped onto a corner, showing the part in an
+  // orientation the viewport never puts it in.
+  camera.up.set(0, 0, 1);
+
+  const sphere = bounds.isEmpty()
+    ? new THREE.Sphere(new THREE.Vector3(), 1)
+    : bounds.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 0.001);
+  // Frame the bounding sphere against the narrower of the two fields of view,
+  // not the vertical one alone: the card is wider than it is tall, so a part
+  // that clears the top and bottom can still run off the sides.
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const horizontalFov =
+    2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+  const distance =
+    (radius / Math.sin(Math.min(verticalFov, horizontalFov) / 2)) *
+    THUMBNAIL_MARGIN;
+
+  camera.position
+    .copy(sphere.center)
+    .addScaledVector(VIEW_DIRECTIONS.iso, distance);
+  // Both planes scale with the part rather than sitting at fixed millimetre
+  // distances: a part measured in microns would otherwise fall entirely behind
+  // a hard-coded near plane, and the tight ratio this gives buys depth
+  // precision that a 1/1000th near plane spends for nothing.
+  camera.near = Math.max(distance - radius * 2, distance / 1000);
+  camera.far = distance + radius * 4;
+  camera.lookAt(sphere.center);
+  camera.updateProjectionMatrix();
+  return camera;
+}
+
+/**
+ * Draws the card. Synchronous and unqueued so a caller that had to load
+ * something first can hold a single queue slot for the whole job; reach for
+ * {@link renderPartThumbnail} when the meshes are already to hand.
+ */
+export function renderThumbnailFrame(
+  bodies: BodyRepresentation[]
+): string | null {
   const visibleBodies = bodies.filter(
     (body) =>
       !body.consumed &&
@@ -92,22 +169,11 @@ function renderThumbnailNow(bodies: BodyRepresentation[]): string | null {
       bodyGroup.add(object);
     }
 
-    const camera = new THREE.PerspectiveCamera(
-      34,
-      THUMBNAIL_WIDTH / THUMBNAIL_HEIGHT,
-      0.05,
-      10_000
-    );
-    const pose = computeFitPose(camera, bodyGroup.children);
-    const fittedOffset = pose.position
-      .clone()
-      .sub(pose.target)
-      .multiplyScalar(0.68);
-    camera.position.copy(pose.target).add(fittedOffset);
-    camera.near = Math.max(pose.near * 0.5, 0.01);
-    camera.far = pose.far;
-    camera.lookAt(pose.target);
-    camera.updateProjectionMatrix();
+    const bounds = new THREE.Box3();
+    for (const object of bodyGroup.children) {
+      bounds.expandByObject(object);
+    }
+    const camera = createThumbnailCamera(bounds);
 
     renderer.render(scene, camera);
     return renderer.domElement.toDataURL('image/webp', 0.86);
@@ -125,12 +191,5 @@ function renderThumbnailNow(bodies: BodyRepresentation[]): string | null {
 export function renderPartThumbnail(
   bodies: BodyRepresentation[]
 ): Promise<string | null> {
-  const result = renderQueue
-    .catch(() => undefined)
-    .then(() => renderThumbnailNow(bodies));
-  renderQueue = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
+  return queuePartThumbnail(() => renderThumbnailFrame(bodies));
 }

@@ -4,11 +4,21 @@ import {
   arcDimension,
   arcObjectFromPoints,
   arcPreviewPoints,
+  adaptiveGridSpacing,
   axisLockPoint,
+  circleObjectFromDiameter,
+  circleObjectFromThreePoints,
+  circlePreviewPoints,
+  centerInferenceSegments,
+  collectSketchSnapTargets,
   dimensionForInProgress,
   frameFromFace,
   lineObjectFromPoints,
   nearestSnapTarget,
+  nearestCenterGuideTarget,
+  pointAtDistanceAlongDirection,
+  rankSnapTargets,
+  resolveSketchSnap,
   screenRayToPlanePoint,
   sketchEntryPose,
   sketchObjectFromDrag,
@@ -17,12 +27,27 @@ import {
 } from './session';
 
 describe('snapSketchPoint / sketchObjectFromDrag', () => {
+  it('chooses adaptive grid spacing from the 1-2-5 sequence', () => {
+    expect(adaptiveGridSpacing(0.01)).toBe(0.5);
+    expect(adaptiveGridSpacing(0.04)).toBe(2);
+    expect(adaptiveGridSpacing(0.2)).toBe(10);
+  });
+
   it('snaps to the grid step', () => {
     expect(snapSketchPoint({ x: 3.4, y: -2.6 }, 1)).toEqual({ x: 3, y: -3 });
     expect(snapSketchPoint({ x: 3.4, y: -2.6 }, 0.5)).toEqual({
       x: 3.5,
       y: -2.5
     });
+  });
+
+  it('uses a deterministic direction for click-then-type exact entry', () => {
+    expect(
+      pointAtDistanceAlongDirection({ x: 2, y: 3 }, { x: 2, y: 3 }, 25)
+    ).toEqual({ x: 27, y: 3 });
+    expect(
+      pointAtDistanceAlongDirection({ x: 0, y: 0 }, { x: 3, y: 4 }, 10)
+    ).toEqual({ x: 6, y: 8 });
   });
 
   it('builds shapes from drags and rejects slivers', () => {
@@ -44,6 +69,44 @@ describe('snapSketchPoint / sketchObjectFromDrag', () => {
       y2: 6
     });
     expect(lineObjectFromPoints({ x: 1, y: 1 }, { x: 1.1, y: 1 })).toBeNull();
+  });
+
+  it('builds circles from opposite diameter endpoints', () => {
+    expect(circleObjectFromDiameter({ x: -4, y: 2 }, { x: 6, y: 2 })).toEqual({
+      objectKind: 'circle',
+      radius: 5,
+      centerX: 1,
+      centerY: 2
+    });
+    expect(
+      circleObjectFromDiameter({ x: 0, y: 0 }, { x: 0.2, y: 0 })
+    ).toBeNull();
+  });
+
+  it('builds a unique three-point circle and rejects collinear input', () => {
+    const circle = circleObjectFromThreePoints(
+      { x: 5, y: 0 },
+      { x: 0, y: 5 },
+      { x: -5, y: 0 }
+    );
+    expect(circle).toMatchObject({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 5
+    });
+    expect(
+      circleObjectFromThreePoints(
+        { x: 0, y: 0 },
+        { x: 5, y: 0 },
+        { x: 10, y: 1e-12 }
+      )
+    ).toBeNull();
+    expect(
+      circle && circle.objectKind === 'circle'
+        ? circlePreviewPoints(circle, 32)
+        : []
+    ).toHaveLength(32);
   });
 
   it('builds center-start-end arcs with a positive sweep', () => {
@@ -212,13 +275,14 @@ describe('sketch entity snapping', () => {
     expect(targets).toHaveLength(9);
   });
 
-  it('collects circle and arc centers plus arc endpoints', () => {
-    expect(
-      snapTargetsForObject(
-        { objectKind: 'circle', radius: 5, centerX: 3, centerY: -2 },
-        identity
-      )
-    ).toEqual([{ x: 3, y: -2, kind: 'center' }]);
+  it('collects circle centers and quadrants plus arc endpoints', () => {
+    const circleTargets = snapTargetsForObject(
+      { objectKind: 'circle', radius: 5, centerX: 3, centerY: -2 },
+      identity
+    );
+    expect(circleTargets).toContainEqual({ x: 3, y: -2, kind: 'center' });
+    expect(circleTargets).toContainEqual({ x: 8, y: -2, kind: 'quadrant' });
+    expect(circleTargets).toHaveLength(5);
 
     const arcTargets = snapTargetsForObject(
       {
@@ -257,5 +321,88 @@ describe('sketch entity snapping', () => {
       kind: 'midpoint'
     });
     expect(nearestSnapTarget({ x: 2, y: 2 }, targets, 0.5)).toBeNull();
+  });
+
+  it('ranks semantic specificity before distance and cycles deterministically', () => {
+    const targets = [
+      { id: 'mid', x: 0, y: 0.1, kind: 'midpoint' as const },
+      { id: 'end', x: 0, y: 0.4, kind: 'endpoint' as const }
+    ];
+    expect(rankSnapTargets({ x: 0, y: 0 }, targets, 1)[0]?.target.id).toBe(
+      'end'
+    );
+    expect(
+      resolveSketchSnap({ x: 0, y: 0 }, targets, 1, { cycle: 1 })?.target.id
+    ).toBe('mid');
+  });
+
+  it('holds a snap through the hysteresis radius', () => {
+    const targets = [
+      { id: 'a', x: 0, y: 0, kind: 'endpoint' as const },
+      { id: 'b', x: 0.9, y: 0, kind: 'endpoint' as const }
+    ];
+    expect(
+      resolveSketchSnap({ x: 0.8, y: 0 }, targets, 1, { lockedId: 'a' })?.target
+        .id
+    ).toBe('a');
+    expect(
+      resolveSketchSnap({ x: 1.6, y: 0 }, targets, 1, { lockedId: 'a' })?.target
+        .id
+    ).toBe('b');
+  });
+
+  it('collects the sketch origin and exact crossings', () => {
+    const targets = collectSketchSnapTargets(
+      [
+        {
+          id: 'horizontal',
+          data: { objectKind: 'line', x1: -5, y1: 0, x2: 5, y2: 0 }
+        },
+        {
+          id: 'vertical',
+          data: { objectKind: 'line', x1: 2, y1: -5, x2: 2, y2: 5 }
+        }
+      ],
+      identity
+    );
+    expect(targets).toContainEqual({
+      id: 'sketch-origin',
+      x: 0,
+      y: 0,
+      kind: 'origin'
+    });
+    expect(targets).toContainEqual(
+      expect.objectContaining({ x: 2, y: 0, kind: 'intersection' })
+    );
+  });
+
+  it('previews the nearest center without changing the snap tolerance', () => {
+    const targets = [
+      { id: 'origin', x: 0, y: 0, kind: 'origin' as const },
+      { id: 'rect-center', x: 8, y: 0, kind: 'center' as const },
+      { id: 'endpoint', x: 6, y: 0, kind: 'endpoint' as const }
+    ];
+    expect(nearestCenterGuideTarget({ x: 6.5, y: 0 }, targets, 4)?.id).toBe(
+      'rect-center'
+    );
+    expect(nearestCenterGuideTarget({ x: 6.5, y: 0 }, targets, 1)).toBeNull();
+  });
+
+  it('builds orthogonal center guides only for exact center targets', () => {
+    expect(
+      centerInferenceSegments({ x: 4, y: -2, kind: 'center' }, 10)
+    ).toEqual([
+      [
+        { x: -6, y: -2 },
+        { x: 14, y: -2 }
+      ],
+      [
+        { x: 4, y: -12 },
+        { x: 4, y: 8 }
+      ]
+    ]);
+    expect(centerInferenceSegments({ x: 4, y: -2, kind: 'grid' }, 10)).toEqual(
+      []
+    );
   });
 });

@@ -93,6 +93,26 @@ afterEach(() => {
 });
 
 describe('useCollaboration lease ordering', () => {
+  it('does not open a room while cloud functions are disabled', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_offline_owner');
+    const document = createProjectDocument('Offline work', owner);
+    const onRemoteDocument = vi.fn();
+    const onConflict = vi.fn();
+
+    renderHook(() =>
+      useCollaboration({
+        enabled: false,
+        document,
+        session: session(owner),
+        onRemoteDocument,
+        onConflict
+      })
+    );
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it('submits a divergent local editor document only after the lease grant', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const owner = toUserId('user_offline_owner');
@@ -111,6 +131,7 @@ describe('useCollaboration lease ordering', () => {
     const onConflict = vi.fn();
     const { unmount } = renderHook(() =>
       useCollaboration({
+        enabled: true,
         document: local,
         session: session(owner),
         onRemoteDocument,
@@ -164,6 +185,67 @@ describe('useCollaboration lease ordering', () => {
     unmount();
   });
 
+  it('raises a conflict rather than adopting a broadcast over unsubmitted work', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_unsent_owner');
+    const base = createProjectDocument('Unsent work', owner);
+    const local = addPrimitiveFeature(base, {
+      name: 'Local box',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 3, depth: 4 }
+    });
+    const roomOne = addPrimitiveFeature(base, {
+      name: 'Room sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 5 }
+    });
+    // The room has to end up ahead of the local version to reach adoption at
+    // all; anything at or behind it is already ignored downstream.
+    const roomTwo = addPrimitiveFeature(roomOne, {
+      name: 'Room cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 1, height: 2 }
+    });
+    const onRemoteDocument = vi.fn();
+    const onConflict = vi.fn();
+    const { result, unmount } = renderHook(() =>
+      useCollaboration({
+        enabled: true,
+        document: local,
+        session: session(owner),
+        onRemoteDocument,
+        onConflict
+      })
+    );
+    const socket = FakeWebSocket.instances[0]!;
+
+    act(() => socket.open());
+    act(() =>
+      socket.receive({
+        type: 'state',
+        members: [],
+        document: roomOne,
+        role: 'editor',
+        lease: null
+      })
+    );
+    // No lease was granted, so this client never submitted its box and is
+    // still holding it when the room moves on without it.
+    act(() =>
+      socket.receive({
+        type: 'document',
+        clientId: 'other-client',
+        document: roomTwo
+      })
+    );
+
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    expect(onConflict).toHaveBeenCalledTimes(1);
+    expect(result.current.conflict).not.toBeNull();
+    expect(result.current.roomVersion).toBe(roomTwo.version);
+    unmount();
+  });
+
   it('lets a viewer adopt room state without requesting a lease', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const owner = toUserId('user_viewer_owner');
@@ -181,6 +263,7 @@ describe('useCollaboration lease ordering', () => {
     const onRemoteDocument = vi.fn();
     const { unmount } = renderHook(() =>
       useCollaboration({
+        enabled: true,
         document: local,
         session: session('user_read_only'),
         onRemoteDocument,
@@ -232,6 +315,7 @@ describe('useCollaboration lease ordering', () => {
     const onConflict = vi.fn();
     const { result, unmount } = renderHook(() =>
       useCollaboration({
+        enabled: true,
         document: local,
         session: session('user_reload_viewer'),
         onRemoteDocument,
@@ -280,6 +364,7 @@ describe('useCollaboration lease ordering', () => {
     });
     const { result, unmount } = renderHook(() =>
       useCollaboration({
+        enabled: true,
         document: local,
         session: session(owner),
         onRemoteDocument: vi.fn(),
@@ -343,6 +428,7 @@ describe('inbound frame validation', () => {
     const onConflict = vi.fn();
     const { result, unmount } = renderHook(() =>
       useCollaboration({
+        enabled: true,
         document: local,
         session: session(owner),
         onRemoteDocument,

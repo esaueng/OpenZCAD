@@ -27,6 +27,7 @@ export class HudLayer {
   create(className: string, options: HudElementOptions = {}): HTMLDivElement {
     const element = document.createElement('div');
     element.className = className;
+    element.setAttribute('data-viewport-hud', '');
     element.hidden = true;
     if (options.ariaHidden) {
       element.setAttribute('aria-hidden', 'true');

@@ -5,6 +5,16 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
 
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
 
+/** Waits on the production workspace summary instead of viewport chrome. */
+export async function expectBodyCount(page: Page, count: number) {
+  const bodyLabel = `${count} ${count === 1 ? 'body' : 'bodies'}`;
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByLabel(new RegExp(` · \\d+ features? · ${bodyLabel}\\. Sync `))
+  ).toBeVisible();
+}
+
 /**
  * The preview server hosts the static SPA without the Worker API, so the
  * handful of API routes the app touches are stubbed here. Everything else —
@@ -27,6 +37,12 @@ export async function stubApi(
   // Object. Keep cloud project tests authenticated while leaving collaboration
   // transport coverage to its focused unit tests.
   await page.addInitScript((role) => {
+    const testWindow = window as typeof window & {
+      __e2eCollaborationOpenSocketCount: number;
+      __e2eCollaborationSocketUrls: string[];
+    };
+    testWindow.__e2eCollaborationOpenSocketCount = 0;
+    testWindow.__e2eCollaborationSocketUrls = [];
     class StaticPreviewWebSocket extends EventTarget {
       static readonly CONNECTING = 0;
       static readonly OPEN = 1;
@@ -38,6 +54,8 @@ export async function stubApi(
       constructor(url: string | URL) {
         super();
         this.url = String(url);
+        testWindow.__e2eCollaborationOpenSocketCount += 1;
+        testWindow.__e2eCollaborationSocketUrls.push(this.url);
         if (role) {
           queueMicrotask(() => {
             this.readyState = StaticPreviewWebSocket.OPEN;
@@ -68,6 +86,10 @@ export async function stubApi(
       }
 
       close(_code?: number, _reason?: string) {
+        if (this.readyState === StaticPreviewWebSocket.CLOSED) {
+          return;
+        }
+        testWindow.__e2eCollaborationOpenSocketCount -= 1;
         this.readyState = StaticPreviewWebSocket.CLOSED;
         this.dispatchEvent(new CloseEvent('close'));
       }
