@@ -82,8 +82,19 @@ import {
 import {
   isAccountErasureReady,
   isDocumentStorageAccountingReady,
+  isProjectMeasurementStorageReady,
   isProjectObjectStorageReady
 } from './readiness';
+import {
+  deleteProjectMeasurements,
+  loadProjectMeasurements,
+  MAX_PROJECT_MEASUREMENT_BYTES,
+  parseDeleteProjectMeasurementsRequest,
+  parseSaveProjectMeasurementsRequest,
+  ProjectMeasurementRequestError,
+  ProjectMeasurementRevisionConflictError,
+  saveProjectMeasurements
+} from './projectMeasurements';
 import {
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -99,6 +110,7 @@ const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
+const projectMeasurementStorageReadyEnvironments = new WeakSet<Env>();
 const collaborationRolloutEnvironments = new WeakMap<Env, Map<string, Env>>();
 
 function assertEditorLeaseEligible(
@@ -117,6 +129,7 @@ const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
+const PROJECT_MEASUREMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/measurements$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_COLLABORATION_TICKET_ROUTE =
   /^\/api\/projects\/([^/]+)\/collaboration\/ticket$/;
@@ -145,6 +158,17 @@ async function projectStorageIsReady(
   const ready = await isProjectObjectStorageReady(env.DB, bucket);
   if (ready) {
     projectStorageReadyEnvironments.add(env);
+  }
+  return ready;
+}
+
+async function projectMeasurementStorageIsReady(env: Env): Promise<boolean> {
+  if (projectMeasurementStorageReadyEnvironments.has(env)) {
+    return true;
+  }
+  const ready = await isProjectMeasurementStorageReady(env.DB);
+  if (ready) {
+    projectMeasurementStorageReadyEnvironments.add(env);
   }
   return ready;
 }
@@ -208,9 +232,12 @@ function json(
   });
 }
 
-async function readJsonBody(request: Request): Promise<unknown> {
+async function readJsonBody(
+  request: Request,
+  maxBytes = MAX_JSON_BODY_BYTES
+): Promise<unknown> {
   const contentLength = Number(request.headers.get('content-length') ?? '0');
-  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new HttpError(413, 'Request body is too large.');
   }
   try {
@@ -228,7 +255,7 @@ async function readJsonBody(request: Request): Promise<unknown> {
           break;
         }
         totalBytes += value.byteLength;
-        if (totalBytes > MAX_JSON_BODY_BYTES) {
+        if (totalBytes > maxBytes) {
           await reader.cancel().catch(() => undefined);
           throw new HttpError(413, 'Request body is too large.');
         }
@@ -308,10 +335,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const [
       documentStorageAccountingReady,
       projectObjectStorageReady,
+      projectMeasurementStorageReady,
       accountErasureReady
     ] = await Promise.all([
       isDocumentStorageAccountingReady(env.DB),
       isProjectObjectStorageReady(env.DB, env.PROJECT_STORAGE ?? env.ARTIFACTS),
+      isProjectMeasurementStorageReady(env.DB),
       isAccountErasureReady(env.DB)
     ]);
     return json({
@@ -320,6 +349,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       time: new Date().toISOString(),
       documentStorageAccountingReady,
       projectObjectStorageReady,
+      projectMeasurementStorageReady,
       accountErasureReady,
       projectErasureReady:
         projectObjectStorageReady &&
@@ -336,6 +366,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       projectPersonalSyncEnabled:
         documentStorageAccountingReady &&
         projectObjectStorageReady &&
+        isCloudflareFeatureEnabled(env, 'PROJECT_PERSONAL_SYNC_ENABLED'),
+      projectMeasurementSyncEnabled:
+        projectMeasurementStorageReady &&
         isCloudflareFeatureEnabled(env, 'PROJECT_PERSONAL_SYNC_ENABLED')
     });
   }
@@ -349,6 +382,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const collaborationMatch = PROJECT_COLLABORATION_ROUTE.exec(pathname);
+  const measurementsMatch = PROJECT_MEASUREMENTS_ROUTE.exec(pathname);
   const collaborationTicketMatch =
     PROJECT_COLLABORATION_TICKET_ROUTE.exec(pathname);
   const sharingMatch = PROJECT_SHARING_ROUTE.exec(pathname);
@@ -697,6 +731,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       501
     );
   }
+  if (
+    measurementsMatch &&
+    (!collaborationRollout.personalSyncEnabled ||
+      !(await projectMeasurementStorageIsReady(env)))
+  ) {
+    return json(
+      {
+        error:
+          'Cloud measurement sync is unavailable. Measurements remain saved on this device.',
+        code: 'MEASUREMENT_SYNC_UNAVAILABLE'
+      },
+      503
+    );
+  }
 
   if (request.method === 'GET' && pathname === '/api/settings') {
     return json(await getAppSettings(userId, env, session.email));
@@ -1023,6 +1071,32 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   const projectMatch = PROJECT_ROUTE.exec(pathname);
+  if (request.method === 'GET' && measurementsMatch) {
+    const projectId = measurementsMatch[1]!;
+    await persistence.requireProjectRead(userId, projectId);
+    return json(await loadProjectMeasurements(env.DB!, projectId));
+  }
+
+  if (request.method === 'PUT' && measurementsMatch) {
+    const projectId = measurementsMatch[1]!;
+    await persistence.requireProjectEdit(userId, projectId);
+    const input = parseSaveProjectMeasurementsRequest(
+      await readJsonBody(request, MAX_PROJECT_MEASUREMENT_BYTES + 16 * 1024),
+      projectId
+    );
+    return json(await saveProjectMeasurements(env.DB!, projectId, input));
+  }
+
+  if (request.method === 'DELETE' && measurementsMatch) {
+    const projectId = measurementsMatch[1]!;
+    await persistence.requireProjectEdit(userId, projectId);
+    const expectedRevision = parseDeleteProjectMeasurementsRequest(
+      await readJsonBody(request, 1024)
+    );
+    await deleteProjectMeasurements(env.DB!, projectId, expectedRevision);
+    return new Response(null, { status: 204 });
+  }
+
   if (request.method === 'GET' && projectMatch) {
     const project = await persistence.loadProject(userId, projectMatch[1]!);
     return project ? json(project) : json({ error: 'Project not found.' }, 404);
@@ -1100,7 +1174,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!uploadId) {
       throw new HttpError(400, 'Missing uploadId.');
     }
-    await persistence.abortMultipartUpload(userId, multipartMatch[1]!, uploadId);
+    await persistence.abortMultipartUpload(
+      userId,
+      multipartMatch[1]!,
+      uploadId
+    );
     return new Response(null, { status: 204 });
   }
 
@@ -1276,6 +1354,19 @@ export default {
             error: error.message,
             code: 'REVISION_CONFLICT',
             currentVersion: error.currentVersion
+          },
+          409
+        );
+      }
+      if (error instanceof ProjectMeasurementRequestError) {
+        return json({ error: error.message }, error.status);
+      }
+      if (error instanceof ProjectMeasurementRevisionConflictError) {
+        return json(
+          {
+            error: error.message,
+            code: 'MEASUREMENT_REVISION_CONFLICT',
+            currentRevision: error.currentRevision
           },
           409
         );
