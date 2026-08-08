@@ -11,7 +11,10 @@ import {
   createInFlightImportChecksums,
   discardUnreferencedImportSource,
   listLocalOnlyImportSources,
-  settleImportSource
+  settleImportSource,
+  sourceBlobClaimExpired,
+  sourceBlobClaimHolds,
+  SOURCE_BLOB_CLAIM_TTL_MS
 } from './importArchival';
 
 function referenceFor(text: string): ImportedSourceReference {
@@ -126,8 +129,7 @@ describe('archiveLocalOnlyImportSources', () => {
     const uploaded: string[] = [];
     const result = await archiveLocalOnlyImportSources({
       document: manager.document,
-      loadSourceBytes: async () =>
-        new TextEncoder().encode('local step bytes'),
+      loadSourceBytes: async () => new TextEncoder().encode('local step bytes'),
       archive: async (input) => {
         uploaded.push(`${input.fileName}:${input.body.size}`);
         return `artifact_cloud_${input.fileName}`;
@@ -176,8 +178,7 @@ describe('archiveLocalOnlyImportSources', () => {
     const manager = managerWithImports();
     const result = await archiveLocalOnlyImportSources({
       document: manager.document,
-      loadSourceBytes: async () =>
-        new TextEncoder().encode('local step bytes'),
+      loadSourceBytes: async () => new TextEncoder().encode('local step bytes'),
       archive: async (input) => {
         if (input.fileName === 'local.step') {
           throw new Error('storage down');
@@ -233,7 +234,7 @@ describe('in-flight import checksums', () => {
     marks.acquire('sha256-frame');
     marks.acquire('sha256-frame');
     marks.release('sha256-frame');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
 
     await expect(
       discardUnreferencedImportSource({
@@ -241,10 +242,49 @@ describe('in-flight import checksums', () => {
         createdByThisImport: true,
         document: null,
         inFlightChecksums: marks,
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(false);
-    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
+  });
+});
+
+describe('source blob claims', () => {
+  const checksumSha256 = 'sha256-frame';
+  const now = Date.parse('2026-08-07T12:00:00.000Z');
+  const claim = (claimId: string, createdAt: string) => ({
+    checksumSha256,
+    claimId,
+    createdAt
+  });
+
+  it('holds for another run but never blocks its owner', () => {
+    const createdAt = new Date(now - 60_000).toISOString();
+    expect(
+      sourceBlobClaimHolds(claim('theirs', createdAt), {
+        checksumSha256,
+        ownClaimId: 'mine',
+        now
+      })
+    ).toBe(true);
+    expect(
+      sourceBlobClaimHolds(claim('mine', createdAt), {
+        checksumSha256,
+        ownClaimId: 'mine',
+        now
+      })
+    ).toBe(false);
+  });
+
+  it('expires abandoned and malformed holds instead of keeping them forever', () => {
+    const justInside = new Date(
+      now - SOURCE_BLOB_CLAIM_TTL_MS + 1
+    ).toISOString();
+    const lapsed = new Date(now - SOURCE_BLOB_CLAIM_TTL_MS).toISOString();
+
+    expect(sourceBlobClaimExpired(claim('live', justInside), now)).toBe(false);
+    expect(sourceBlobClaimExpired(claim('lapsed', lapsed), now)).toBe(true);
+    expect(sourceBlobClaimExpired(claim('bad', 'not-a-date'), now)).toBe(true);
   });
 });
 
@@ -298,7 +338,8 @@ describe('the licence a finished import leaves behind', () => {
     // and the licence fires — against a key that may by then be the last copy
     // backing another project on this device.
     const abandonedChecksums = new Set<string>();
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
+    const releaseSourceBlobClaim = vi.fn(() => Promise.resolve());
 
     await expect(
       settleImportSource({
@@ -308,11 +349,13 @@ describe('the licence a finished import leaves behind', () => {
         abandonedChecksums,
         document: documentReferencing(frameReference),
         inFlightChecksums: createInFlightImportChecksums(),
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced,
+        releaseSourceBlobClaim
       })
     ).resolves.toBe(false);
 
-    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
+    expect(releaseSourceBlobClaim).toHaveBeenCalledOnce();
     // The assertion the surviving bytes cannot make on their own.
     expect(abandonedChecksums.has(checksum)).toBe(false);
   });
@@ -323,7 +366,8 @@ describe('the licence a finished import leaves behind', () => {
     // A feature now rebuilds from them, and the licence has to go — otherwise
     // the note outlives the reason it was taken.
     const abandonedChecksums = new Set([checksum]);
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
+    const releaseSourceBlobClaim = vi.fn(() => Promise.resolve());
 
     await expect(
       settleImportSource({
@@ -333,11 +377,13 @@ describe('the licence a finished import leaves behind', () => {
         abandonedChecksums,
         document: documentReferencing(frameReference),
         inFlightChecksums: createInFlightImportChecksums(),
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced,
+        releaseSourceBlobClaim
       })
     ).resolves.toBe(false);
 
-    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
+    expect(releaseSourceBlobClaim).not.toHaveBeenCalled();
     expect(abandonedChecksums.has(checksum)).toBe(false);
   });
 });
