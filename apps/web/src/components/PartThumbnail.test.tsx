@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ProjectSummary } from '@openzcad/shared';
+import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import { PartThumbnail } from './PartThumbnail';
 
 function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
@@ -124,5 +124,37 @@ describe('PartThumbnail', () => {
 
     await waitFor(() => expect(backfillThumbnail).toHaveBeenCalled());
     expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  it('retries a miss when the same project listing gains a cloud artifact', async () => {
+    const project = summary();
+    const loadThumbnail = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce('data:image/webp;base64,CC');
+    const backfillThumbnail = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={loadThumbnail}
+        backfillThumbnail={backfillThumbnail}
+      />
+    );
+    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <PartThumbnail
+        project={{
+          ...project,
+          thumbnailArtifactId: toArtifactId('artifact_thumbnail')
+        }}
+        loadThumbnail={loadThumbnail}
+        backfillThumbnail={backfillThumbnail}
+      />
+    );
+
+    const image = await screen.findByRole('presentation', { hidden: true });
+    expect(image).toHaveAttribute('src', 'data:image/webp;base64,CC');
+    expect(loadThumbnail).toHaveBeenCalledTimes(2);
   });
 });
