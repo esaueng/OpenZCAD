@@ -37,10 +37,11 @@ describe('placement is pure', () => {
   });
 
   it('anchors an edge handle at the polyline midpoint, pointing outward', () => {
-    const placement = edgeHandlePlacement(
-      [0, 0, 0, 10, 0, 0, 20, 0, 0],
-      { x: 10, y: 0, z: -5 }
-    );
+    const placement = edgeHandlePlacement([0, 0, 0, 10, 0, 0, 20, 0, 0], {
+      x: 10,
+      y: 0,
+      z: -5
+    });
     expect(placement?.origin).toEqual({ x: 10, y: 0, z: 0 });
     expect(placement?.direction).toEqual({ x: 0, y: 0, z: 1 });
   });
@@ -50,10 +51,11 @@ describe('placement is pure', () => {
   });
 
   it('falls back to +Z when the edge sits on the body centre', () => {
-    const placement = edgeHandlePlacement(
-      [0, 0, 0, 1, 0, 0, 2, 0, 0],
-      { x: 1, y: 0, z: 0 }
-    );
+    const placement = edgeHandlePlacement([0, 0, 0, 1, 0, 0, 2, 0, 0], {
+      x: 1,
+      y: 0,
+      z: 0
+    });
     expect(placement?.direction).toEqual({ x: 0, y: 0, z: 1 });
   });
 });
@@ -138,10 +140,18 @@ describe('the cylinder-radius rig', () => {
       direction: { x: 0, y: 1, z: 0 },
       originalRadius: 5
     });
-    expect(rig.worldGroup.children).toHaveLength(3);
-    expect(rig.worldGroup.children[0]?.type).toBe('Line2');
-    expect(rig.worldGroup.children[1]?.type).toBe('Mesh');
-    expect(rig.worldGroup.children[2]?.type).toBe('Mesh');
+    // One nested graphic rather than three loose children: the renderer moved
+    // out so the measurement tape draws the same dimension rather than a
+    // second one that would drift from this.
+    expect(rig.worldGroup.children).toHaveLength(1);
+    const dimension = rig.worldGroup.children[0]!;
+    expect(dimension.name).toBe('dimension-graphic');
+    // Still a dashed line and two arrowheads, and still no face ghost.
+    expect(dimension.children.map((child) => child.type)).toEqual([
+      'Line2',
+      'Mesh',
+      'Mesh'
+    ]);
   });
 
   it('anchors the value chip on the dimension line inside the cylinder', () => {
