@@ -171,11 +171,11 @@ describe('desktop bridge', () => {
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};
     vi.mocked(invoke).mockResolvedValue(
-      `wss://zcad.esau.app/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
+      `wss://zcad.app/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
     );
 
     await expect(desktopCollaborationUrl('proj_native')).resolves.toBe(
-      `wss://zcad.esau.app/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
+      `wss://zcad.app/api/projects/proj_native/collaboration?ticket=${'t'.repeat(43)}`
     );
     expect(invoke).toHaveBeenCalledWith('desktop_collaboration_url', {
       projectId: 'proj_native'
