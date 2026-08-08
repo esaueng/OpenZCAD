@@ -88,6 +88,18 @@ const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 const projectStorageReadyEnvironments = new WeakSet<Env>();
 const collaborationRolloutEnvironments = new WeakMap<Env, Map<string, Env>>();
 
+function assertEditorLeaseEligible(
+  env: Env,
+  email: string | null | undefined,
+  message: string
+): void {
+  if (
+    !projectCollaborationRollout(env, email ?? undefined).editLeasesEnforced
+  ) {
+    throw new SharingRequestError(409, 'EDIT_LEASE_REQUIRED', message);
+  }
+}
+
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
@@ -687,11 +699,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const payload = await readJsonBody(request);
     const invitation = parseCreateInvitation(payload);
     const role = invitation.role;
-    if (role === 'editor' && !collaborationRollout.editLeasesEnforced) {
-      throw new SharingRequestError(
-        409,
-        'EDIT_LEASE_REQUIRED',
-        'Editor invitations require project edit lease enforcement.'
+    if (role === 'editor') {
+      assertEditorLeaseEligible(
+        env,
+        invitation.email,
+        'Editor invitations require project edit lease enforcement for the invited account.'
       );
     }
     if (
@@ -734,17 +746,28 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         ? (payload as Record<string, unknown>).role
         : undefined
     );
-    if (role === 'editor' && !collaborationRollout.editLeasesEnforced) {
-      throw new SharingRequestError(
-        409,
-        'EDIT_LEASE_REQUIRED',
-        'Editor access requires project edit lease enforcement.'
+    const memberUserId = toUserId(memberMatch[2]!);
+    if (role === 'editor') {
+      const sharing = await persistence.listProjectSharing(
+        userId,
+        memberMatch[1]!,
+        now
       );
+      const member = sharing.members.find(
+        (candidate) => candidate.userId === memberUserId
+      );
+      if (member) {
+        assertEditorLeaseEligible(
+          env,
+          member.email,
+          'Editor access requires project edit lease enforcement for the member account.'
+        );
+      }
     }
     await persistence.updateProjectMemberRole(
       userId,
       memberMatch[1]!,
-      toUserId(memberMatch[2]!),
+      memberUserId,
       role,
       now
     );
