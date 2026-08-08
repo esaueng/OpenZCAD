@@ -124,6 +124,7 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   // Absent from settings written before cloud autosave was configurable, which
   // reads as the defaults rather than as "off".
   const files = record(root.files);
+  const collaboration = record(root.collaboration);
   const assistant = record(root.assistant);
   const experiments = record(root.experiments);
   return {
@@ -185,9 +186,21 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       )
     },
     sketching: {
+      gridVisible: boolean(
+        sketching.gridVisible,
+        defaults.sketching.gridVisible
+      ),
       snapEnabled: boolean(
         sketching.snapEnabled,
         defaults.sketching.snapEnabled
+      ),
+      geometrySnapEnabled: boolean(
+        sketching.geometrySnapEnabled,
+        defaults.sketching.geometrySnapEnabled
+      ),
+      inferenceEnabled: boolean(
+        sketching.inferenceEnabled,
+        defaults.sketching.inferenceEnabled
       ),
       linearSnap: boundedNumber(
         sketching.linearSnap,
@@ -200,6 +213,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         defaults.sketching.angleSnap,
         1,
         90
+      ),
+      snapTolerancePx: boundedNumber(
+        sketching.snapTolerancePx,
+        defaults.sketching.snapTolerancePx,
+        4,
+        24
       )
     },
     files: {
@@ -208,6 +227,9 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         files.cloudAutosaveDelaySeconds,
         CLOUD_AUTOSAVE_DELAY_BOUNDS
       )
+    },
+    collaboration: {
+      enabled: boolean(collaboration.enabled, defaults.collaboration.enabled)
     },
     assistant: {
       enabled: boolean(assistant.enabled, defaults.assistant.enabled),

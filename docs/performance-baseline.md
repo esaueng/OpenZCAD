@@ -166,6 +166,54 @@ and shader compilation:
 three.js    29 ms   <- all application JS combined
 ```
 
+### Wave 3 confirmation, and what the drag probe does *not* measure (2026-08-07)
+
+Re-run on the M5 SwiftShader environment described above, after the whole
+edge-consolidation and selection-rebuild programme had landed:
+
+| Metric          | 2026-07-28 baseline | 2026-08-07 | Change |
+| --------------- | ------------------: | ---------: | -----: |
+| Frame time p50  |             24.9 ms |    16.6 ms |   −33% |
+| Frame time p95  |             33.8 ms |    17.6 ms |   −48% |
+| Mean draw calls |              133.12 |      11.59 |   −91% |
+| Mean triangles  |            5,513.75 |   2,801.19 |   −49% |
+
+Mean draw calls was the agreed acceptance signal for edge consolidation, and
+at 11.59 it has met it. The idle topology edges now render as the merged
+`LineSegments2` batches in `packages/viewport/src/render/edgeOverlay.ts`, and
+the selection-click rebuild is guarded behind `bodiesChanged`, so a
+selection-only change reuses the existing objects instead of rebuilding them.
+
+#### `frameIntervalMs` in the cylinder-radius probe is input-paced
+
+The second probe reports something that reads alarming and is not a defect:
+
+```
+frameIntervalMs: { p50: 44.2, p95: 182.6, max: 195 }
+```
+
+That is not render throughput. The probe deliberately sleeps between synthetic
+pointer moves, so the interval between rendered proxy frames is bounded below
+by how fast the harness delivers input. Removing only that sleep, changing
+nothing in the application:
+
+| Metric               | With 10 ms sleep | With 0 ms sleep |
+| -------------------- | ---------------: | --------------: |
+| Frame interval p50   |          44.2 ms |         33.2 ms |
+| Frame interval p95   |         182.6 ms |         58.3 ms |
+| Input-to-frame p50   |           0.6 ms |          0.8 ms |
+| Rendered proxy frames |              40 |              40 |
+
+The residual 33.2 ms is two frames at this environment's 16.6 ms, with 40
+frames produced from 80 moves — one render per animation frame, which is
+exactly what the rAF coalescing is supposed to do.
+
+**Use `inputToFrameMs` as this probe's signal, not `frameIntervalMs`.** At
+0.6–0.8 ms p50 it says the drag is responsive; the interval figure mostly
+describes Playwright's pacing. Recorded here because the p95 of 182 ms is
+misleading enough to have already sent one investigation looking for a stall
+that does not exist.
+
 ### P-02 — "cold project creation exceeds 1 s"
 
 Real, but it is not project creation. Across five runs, cold creation was

@@ -7,6 +7,7 @@ import {
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { preloadDocumentFonts } from '../lib/textFonts';
+import { loadSourceBlob, putSourceBlob } from '../lib/localProjectStore';
 
 export type GeometryWorkerRequest =
   | { type: 'sync'; document: ProjectDocument; requestId?: string }
@@ -83,13 +84,46 @@ let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
 let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
 
+/**
+ * Produces bytes for reference-form imports: the local blob store first, then
+ * the artifact archived at import time. A cloud fetch is written back to the
+ * blob store so the next rebuild is local. `putSourceBlob` hashes what it
+ * stores, so a corrupted or wrong download can never satisfy the reference.
+ */
+async function resolveSourceBytes(
+  ref: { checksumSha256: string },
+  context: { artifactId: string; sourceName: string }
+): Promise<Uint8Array> {
+  const local = await loadSourceBlob(ref.checksumSha256);
+  if (local) {
+    return local;
+  }
+  if (!context.artifactId.startsWith('artifact_local_')) {
+    const response = await fetch(
+      `/api/artifacts/${context.artifactId}/download`
+    );
+    if (response.ok) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const stored = await putSourceBlob(bytes);
+      if (stored.checksumSha256 === ref.checksumSha256) {
+        return bytes;
+      }
+    }
+  }
+  throw new Error(
+    `Import source for "${context.sourceName}" is not in local storage and could not be fetched.`
+  );
+}
+
 function loadExactKernel(): Promise<ExactKernel | null> {
   if (exactKernelPromise) {
     return exactKernelPromise;
   }
   exactKernelStatus = 'loading';
   exactKernelPromise = import('@openzcad/kernel-adapter/exact')
-    .then(({ createExactKernelAdapter }) => createExactKernelAdapter())
+    .then(({ createExactKernelAdapter }) =>
+      createExactKernelAdapter({ resolveSourceBytes })
+    )
     .then(
       (adapter) => {
         exactKernelStatus = 'ready';

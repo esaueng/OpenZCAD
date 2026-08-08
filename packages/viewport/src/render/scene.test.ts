@@ -3,12 +3,94 @@ import * as THREE from 'three';
 import {
   computeFitPose,
   createAxesGizmo,
+  createBodyMaterial,
+  createGradientBackdrop,
   createStudioGrid,
   shouldShowGroundShadow,
   updateAxesGizmo,
-  updateStudioGrid
+  updateStudioGrid,
+  VIEWPORT_RENDER_ORDER
 } from './scene';
 import { VIEW_DIRECTIONS } from '../camera/views';
+import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
+
+function bodyFixture(
+  overrides: Partial<BodyRepresentation> = {}
+): BodyRepresentation {
+  return {
+    bodyId: toBodyId('body_appearance'),
+    name: 'Appearance body',
+    source: 'primitive',
+    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    faceCount: 0,
+    color: '#4da3ff',
+    exportableStep: true,
+    consumed: false,
+    volume: 0,
+    bbox: {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 1, y: 1, z: 1 }
+    },
+    ...overrides
+  };
+}
+
+describe('createBodyMaterial', () => {
+  it('keeps opaque bodies on the depth-writing path', () => {
+    const material = createBodyMaterial(bodyFixture());
+    expect(material.transparent).toBe(false);
+    expect(material.opacity).toBe(1);
+    expect(material.depthWrite).toBe(true);
+    expect(material.color.getHexString()).toBe('4da3ff');
+  });
+
+  it('treats an explicit opacity of 1 as opaque', () => {
+    const material = createBodyMaterial(bodyFixture({ opacity: 1 }));
+    expect(material.transparent).toBe(false);
+    expect(material.depthWrite).toBe(true);
+  });
+
+  it('blends translucent bodies without writing depth', () => {
+    const material = createBodyMaterial(bodyFixture({ opacity: 0.45 }));
+    expect(material.transparent).toBe(true);
+    expect(material.opacity).toBe(0.45);
+    expect(material.depthWrite).toBe(false);
+  });
+});
+
+describe('createGradientBackdrop', () => {
+  it('dithers the original studio gradient behind scene geometry', () => {
+    const backdrop = createGradientBackdrop();
+    const material = backdrop.material as THREE.ShaderMaterial;
+
+    expect(backdrop.name).toBe('gradient-backdrop');
+    expect(backdrop.renderOrder).toBeLessThan(VIEWPORT_RENDER_ORDER.BODY_FACE);
+    expect(backdrop.frustumCulled).toBe(false);
+    expect(material.depthTest).toBe(false);
+    expect(material.depthWrite).toBe(false);
+    expect(material.transparent).toBe(false);
+    expect(material.toneMapped).toBe(false);
+    expect(material.dithering).toBe(true);
+    expect(
+      (material.uniforms.topColor!.value as THREE.Color).getHexString()
+    ).toBe('131922');
+    expect(
+      (material.uniforms.middleColor!.value as THREE.Color).getHexString()
+    ).toBe('0b0f15');
+    expect(
+      (material.uniforms.bottomColor!.value as THREE.Color).getHexString()
+    ).toBe('05070a');
+    expect(material.uniforms.middleStop!.value).toBe(0.45);
+    expect(material.fragmentShader).toContain(
+      '#include <dithering_pars_fragment>'
+    );
+    expect(material.fragmentShader).toContain('#include <colorspace_fragment>');
+    expect(material.fragmentShader).toContain('#include <dithering_fragment>');
+
+    backdrop.geometry.dispose();
+    material.dispose();
+  });
+});
 
 function cameraLookingFrom(x: number, y: number, z: number) {
   const camera = new THREE.PerspectiveCamera();
@@ -42,6 +124,20 @@ describe('shouldShowGroundShadow', () => {
 });
 
 describe('updateStudioGrid', () => {
+  it('filters unresolved grid directions before they alias', () => {
+    const grid = createStudioGrid();
+    const material = grid.material as THREE.ShaderMaterial;
+    const shader = material.fragmentShader.replace(/\s+/g, ' ');
+
+    expect(shader).toContain('vec2 footprint = max(fwidth(coord)');
+    expect(shader).toContain(
+      'vec2 resolved = 1.0 - smoothstep( vec2(0.25), vec2(0.5), footprint )'
+    );
+    expect(shader).toContain(
+      'max(coverage.x * resolved.x, coverage.y * resolved.y)'
+    );
+  });
+
   it('rescales the lattice a decade at a time as the camera zooms', () => {
     const grid = createStudioGrid();
     const material = grid.material as THREE.ShaderMaterial;
