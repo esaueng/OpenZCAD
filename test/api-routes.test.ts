@@ -38,6 +38,13 @@ interface ProjectObjectStorageReadinessRow {
   pointer_indexes: number;
 }
 
+interface ProjectMeasurementReadinessRow {
+  table_ready: number;
+  columns_ready: number;
+  cascade_ready: number;
+  erasure_triggers: number;
+}
+
 const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
   projects_document_bytes: 1,
   revisions_document_bytes: 1,
@@ -54,6 +61,13 @@ const READY_PROJECT_OBJECT_STORAGE_SCHEMA: ProjectObjectStorageReadinessRow = {
   pointer_indexes: 2
 };
 
+const READY_PROJECT_MEASUREMENT_SCHEMA: ProjectMeasurementReadinessRow = {
+  table_ready: 1,
+  columns_ready: 5,
+  cascade_ready: 1,
+  erasure_triggers: 2
+};
+
 const readyProjectStorageBucket = {
   put: vi.fn(),
   get: vi.fn(),
@@ -63,22 +77,96 @@ const readyProjectStorageBucket = {
 function storageAccountingDb(
   row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
   failure?: Error,
-  projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA
+  projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA,
+  projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA
 ) {
   const prepare = vi.fn((query: string) => ({
     first: vi.fn(async () => {
       if (failure) {
         throw failure;
       }
-      return query.includes('idx_project_document_objects_project_state')
-        ? projectObjectRow
-        : row;
+      if (query.includes('idx_project_document_objects_project_state')) {
+        return projectObjectRow;
+      }
+      if (query.includes("pragma_table_info('project_measurements')")) {
+        return projectMeasurementRow;
+      }
+      if (query.includes('account_erasure_requests')) {
+        return { table_ready: 1, trigger_count: 25 };
+      }
+      return row;
     })
   }));
   return {
     db: { prepare } as unknown as D1Database,
     prepare
   };
+}
+
+function projectMeasurementRouteDb() {
+  let measurement: { payloadJson: string; revision: number } | null = null;
+  const prepare = vi.fn((query: string) => {
+    let values: unknown[] = [];
+    const statement = {
+      bind(...next: unknown[]) {
+        values = next;
+        return statement;
+      },
+      async first() {
+        if (query.includes('idx_project_document_objects_project_state')) {
+          return READY_PROJECT_OBJECT_STORAGE_SCHEMA;
+        }
+        if (query.includes("pragma_table_info('project_measurements')")) {
+          return READY_PROJECT_MEASUREMENT_SCHEMA;
+        }
+        if (query.includes('FROM account_erasure_requests')) {
+          return null;
+        }
+        if (query.includes('user_id AS owner_user_id')) {
+          return { owner_user_id: 'user_beta_dev' };
+        }
+        if (query.includes('SELECT payload_json')) {
+          return measurement
+            ? {
+                payload_json: measurement.payloadJson,
+                revision: measurement.revision
+              }
+            : null;
+        }
+        if (query.includes('SELECT revision')) {
+          return measurement ? { revision: measurement.revision } : null;
+        }
+        return READY_STORAGE_ACCOUNTING_SCHEMA;
+      },
+      async run() {
+        if (query.includes('INSERT INTO project_measurements')) {
+          if (measurement) return { meta: { changes: 0 } };
+          measurement = { payloadJson: String(values[2]), revision: 1 };
+          return { meta: { changes: 1 } };
+        }
+        if (query.includes('UPDATE project_measurements')) {
+          if (!measurement || measurement.revision !== Number(values[5])) {
+            return { meta: { changes: 0 } };
+          }
+          measurement = {
+            payloadJson: String(values[2]),
+            revision: Number(values[1])
+          };
+          return { meta: { changes: 1 } };
+        }
+        if (query.includes('DELETE FROM project_measurements')) {
+          if (!measurement || measurement.revision !== Number(values[1])) {
+            return { meta: { changes: 0 } };
+          }
+          measurement = null;
+          return { meta: { changes: 1 } };
+        }
+        return { meta: { changes: 0 } };
+      }
+    };
+    return statement;
+  });
+  return { prepare } as unknown as D1Database;
 }
 
 function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
@@ -324,7 +412,9 @@ describe('worker api routes', () => {
       documentStorageAccountingReady: false,
       projectSharingEnabled: false,
       projectEditLeasesEnforced: false,
-      projectPersonalSyncEnabled: false
+      projectPersonalSyncEnabled: false,
+      projectMeasurementStorageReady: false,
+      projectMeasurementSyncEnabled: false
     });
   });
 
@@ -2000,14 +2090,87 @@ describe('worker api routes', () => {
       documentStorageAccountingReady: boolean;
       projectObjectStorageReady: boolean;
       projectPersonalSyncEnabled: boolean;
+      projectMeasurementStorageReady: boolean;
+      projectMeasurementSyncEnabled: boolean;
       projectSharingEnabled: boolean;
       projectEditLeasesEnforced: boolean;
     };
     expect(health.documentStorageAccountingReady).toBe(true);
     expect(health.projectObjectStorageReady).toBe(true);
     expect(health.projectPersonalSyncEnabled).toBe(true);
+    expect(health.projectMeasurementStorageReady).toBe(true);
+    expect(health.projectMeasurementSyncEnabled).toBe(true);
     expect(health.projectSharingEnabled).toBe(false);
     expect(health.projectEditLeasesEnforced).toBe(false);
+  });
+
+  it('stores measurements through gated read, write, and delete routes', async () => {
+    const DB = projectMeasurementRouteDb();
+    const routeEnv = {
+      ...env,
+      DB,
+      ARTIFACTS: readyProjectStorageBucket,
+      PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+    };
+    const projectId = 'project_measurement_routes';
+    const path = `/api/projects/${projectId}/measurements`;
+    const empty = await worker.fetch(
+      new Request(`https://example.com${path}`),
+      routeEnv
+    );
+    expect(await empty.json()).toEqual({ revision: 0, record: null });
+
+    const record = {
+      projectId,
+      version: 1,
+      updatedAt: '2026-08-07T16:00:00.000Z',
+      measurements: [],
+      display: { unit: 'mm', precision: 2, radialDisplay: 'diameter' }
+    };
+    const written = await worker.fetch(
+      put(path, { expectedRevision: 0, record }),
+      routeEnv
+    );
+    expect(written.status).toBe(200);
+    await expect(written.json()).resolves.toEqual({ revision: 1, record });
+
+    const deleted = await worker.fetch(
+      new Request(`https://example.com${path}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ expectedRevision: 1 })
+      }),
+      routeEnv
+    );
+    expect(deleted.status).toBe(204);
+    const after = await worker.fetch(
+      new Request(`https://example.com${path}`),
+      routeEnv
+    );
+    await expect(after.json()).resolves.toEqual({ revision: 0, record: null });
+  });
+
+  it('keeps measurement routes local-only until migration 0015 is ready', async () => {
+    const { db } = storageAccountingDb(
+      READY_STORAGE_ACCOUNTING_SCHEMA,
+      undefined,
+      READY_PROJECT_OBJECT_STORAGE_SCHEMA,
+      { ...READY_PROJECT_MEASUREMENT_SCHEMA, erasure_triggers: 1 }
+    );
+    const response = await worker.fetch(
+      new Request(
+        'https://example.com/api/projects/project_local/measurements'
+      ),
+      {
+        ...env,
+        DB: db,
+        ARTIFACTS: readyProjectStorageBucket,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'MEASUREMENT_SYNC_UNAVAILABLE'
+    });
   });
 
   it('fails project routes closed when the R2 schema is not ready', async () => {
