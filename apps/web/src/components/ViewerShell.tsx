@@ -32,15 +32,39 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
-import type { MeasurementViewportAnnotation } from '../lib/measurements';
+import type {
+  Measurement,
+  MeasurementDisplayOptions,
+  MeasurementViewportAnnotation
+} from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
 import { formatNumber } from '../lib/model';
+import {
+  MeasurementCloudSyncAgent,
+  type MeasurementCloudSyncAgentProps
+} from './MeasurementCloudSyncAgent';
+
+type MeasurementCloudSyncState = readonly [
+  projectId: string | undefined,
+  enabled: boolean | undefined,
+  cloudProjectIds: ReadonlySet<string>,
+  hydratedProjectId: string | null,
+  measurements: readonly Measurement[],
+  display: MeasurementDisplayOptions,
+  setMeasurements: MeasurementCloudSyncAgentProps['setMeasurements'],
+  setUnit: MeasurementCloudSyncAgentProps['setUnit'],
+  setPrecision: MeasurementCloudSyncAgentProps['setPrecision'],
+  setRadialDisplay: MeasurementCloudSyncAgentProps['setRadialDisplay'],
+  loadLocal: MeasurementCloudSyncAgentProps['loadLocal'],
+  saveLocal: MeasurementCloudSyncAgentProps['saveLocal']
+];
 
 interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
   measurementAnnotations: MeasurementViewportAnnotation[];
+  measurementCloudSync?: MeasurementCloudSyncState;
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
@@ -148,6 +172,7 @@ export function ViewerShell({
   bodies,
   sketches,
   measurementAnnotations,
+  measurementCloudSync,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -223,6 +248,12 @@ export function ViewerShell({
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
   >(null);
+  const cloudProjectId = measurementCloudSync?.[0];
+  const cloudEnabled =
+    cloudProjectId &&
+    measurementCloudSync[1] &&
+    measurementCloudSync[2].has(cloudProjectId) &&
+    measurementCloudSync[3] === cloudProjectId;
   cylinderRadiusLabelSetterRef.current = (radius) => {
     const label = selectionChipLabelRef.current;
     if (!label || !selectionChip) {
@@ -242,6 +273,19 @@ export function ViewerShell({
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
       aria-label="3D viewport"
     >
+      {cloudEnabled ? (
+        <MeasurementCloudSyncAgent
+          projectId={cloudProjectId}
+          measurements={measurementCloudSync[4]}
+          display={measurementCloudSync[5]}
+          setMeasurements={measurementCloudSync[6]}
+          setUnit={measurementCloudSync[7]}
+          setPrecision={measurementCloudSync[8]}
+          setRadialDisplay={measurementCloudSync[9]}
+          loadLocal={measurementCloudSync[10]}
+          saveLocal={measurementCloudSync[11]}
+        />
+      ) : null}
       <ModelViewer
         key={projectId}
         bodies={bodies}
