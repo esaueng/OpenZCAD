@@ -801,6 +801,37 @@ describe('worker api routes', () => {
     expect(roomFetch).toHaveBeenCalledOnce();
   });
 
+  it('rejects collaboration tickets when the account preference is disabled', async () => {
+    const settings = structuredClone(DEFAULT_APP_SETTINGS);
+    settings.collaboration.enabled = false;
+    const rowFor = (query: string) =>
+      query.includes('FROM user_settings')
+        ? { settings_json: JSON.stringify(settings), revision: 1 }
+        : query.includes('idx_project_document_objects_project_state')
+          ? READY_PROJECT_OBJECT_STORAGE_SCHEMA
+          : READY_STORAGE_ACCOUNTING_SCHEMA;
+    const prepare = vi.fn((query: string) => ({
+      first: vi.fn(async () => rowFor(query)),
+      bind: vi.fn(() => ({ first: vi.fn(async () => rowFor(query)) }))
+    }));
+    const getByName = vi.fn();
+
+    const response = await worker.fetch(
+      post('/api/projects/project_direct/collaboration/ticket', undefined),
+      {
+        ...env,
+        DB: { prepare } as unknown as D1Database,
+        PROJECT_STORAGE: readyProjectStorageBucket,
+        PROJECT_ROOM: { getByName },
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FEATURE_DISABLED' });
+    expect(getByName).not.toHaveBeenCalled();
+  });
+
   it('forwards a ticketed native upgrade without browser credentials or forged identity', async () => {
     const projectId = 'proj_native_ticket';
     const ticket = 't'.repeat(43);
