@@ -152,28 +152,12 @@ describe('a linear pattern whose instances overlap', () => {
     120_000
   );
 
-  /**
-   * Volumes and face counts here are UNCHANGED across the 8733eab -> 061c1b2
-   * kernel move. What moved is the overlap guard, in both directions:
-   *
-   *   spacing 3   no warning -> warns, though the merge plainly took
-   *               (41 faces, not three cylinders' 9, and the volume is far
-   *                below the sum) — a FALSE POSITIVE
-   *   ring of 12  warns -> silent, though the merge still falls short
-   *               (see below) — a FALSE NEGATIVE
-   *
-   * The guard measures shared volume with `kernel.intersect` and
-   * `kernel.volume`, so a small change in either moves cases across its
-   * threshold without any of the geometry changing. Both directions are
-   * recorded rather than smoothed, because a spurious warning teaches users
-   * to ignore the real one.
-   */
   it.each([
-    [3, 1374.228, 41, 1],
-    [0.5, 883.961, 33, 0]
+    [3, 1374.228, 41],
+    [0.5, 883.961, 33]
   ])(
     'merges at spacing %s, and lands short of the closed form',
-    async (spacing, measured, faces, warningCount) => {
+    async (spacing, measured, faces) => {
       const result = await patterned(spacing);
       // The merge took — the face count is no longer three cylinders' worth,
       // and the volume moved a long way off the sum.
@@ -183,13 +167,10 @@ describe('a linear pattern whose instances overlap', () => {
       // But not all the way to the truth. Pinned so a kernel fix moves it
       // and has to say so, rather than being absorbed into a loose bound.
       expect(result.volume).toBeGreaterThan(trueUnion(spacing));
-      // At spacing 0.5 this is correct: the merge DID remove most of the
-      // shared material, what is left is accuracy rather than a failed
-      // operation, and the adapter cannot tell the difference from inside.
-      // At spacing 3 the same reasoning holds and the guard fires anyway —
-      // pinned as a count so the false positive is visible rather than
-      // absorbed into a permissive assertion.
-      expect(result.warnings).toHaveLength(warningCount);
+      // No warning here, correctly: the merge DID remove most of the shared
+      // material. What is left is accuracy, not a failed operation, and the
+      // adapter has no way to tell the difference from the inside.
+      expect(result.warnings).toEqual([]);
     },
     120_000
   );
@@ -278,15 +259,14 @@ describe('a linear pattern whose instances overlap', () => {
     120_000
   );
 
-  it('no longer warns on the twelve-instance ring, though the merge still falls short', async () => {
+  it('warns on the twelve-instance ring, where the merge falls short', async () => {
     // Twelve r5 cylinders on a radius-6 circle put neighbouring centres
     // 2 * 6 * sin(15deg) = 3.106 apart, so every instance overlaps both
     // neighbours heavily and the pairwise shared total is large. The merge
-    // removes less than half of it, which is exactly what the guard is for —
-    // and on 061c1b2 the guard has gone quiet here. This is the false
-    // negative: the case the warning was written for no longer produces it.
+    // removes less than half of it, which is what the guard is for.
     const { warnings } = await circular(12);
-    expect(warnings).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('the merge did not take');
   }, 120_000);
 
   it('leaves the six-instance ring unwarned', async () => {
