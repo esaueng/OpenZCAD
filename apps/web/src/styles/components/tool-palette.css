@@ -44,6 +44,37 @@
   display: none;
 }
 
+/*
+ * Say when there is more below.
+ *
+ * The palette scrolls, but with the scrollbar hidden nothing showed that it
+ * had to: measured at 1280x720 it overflows by 70px, and the two tools that
+ * fall past the fold — Linear and Circular pattern — do not peek even
+ * partially, so the list looks complete and simply is not. Restoring a
+ * classic scrollbar would cost ~15px of a 58px icon column on Windows and
+ * Linux, so the hint is a fade instead, and it appears only while something
+ * is actually cut off.
+ */
+@supports (animation-timeline: scroll()) {
+  .tool-palette {
+    animation: palette-overflow-fade linear;
+    animation-timeline: scroll(self block);
+  }
+
+  @keyframes palette-overflow-fade {
+    from {
+      mask-image: linear-gradient(
+        to bottom,
+        #000 calc(100% - 18px),
+        transparent
+      );
+    }
+    to {
+      mask-image: linear-gradient(to bottom, #000 100%, #000 100%);
+    }
+  }
+}
+
 .palette-head {
   display: flex;
   align-items: center;

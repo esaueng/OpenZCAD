@@ -5,9 +5,18 @@ import {
   type ProjectOrganization,
   type ProjectSummary
 } from '@openzcad/shared';
+import type { StoredMeasurementRecord } from './measurementRecord';
+import type { SourceBlobClaim } from './sourceBlobClaims';
+import {
+  LOCAL_PROJECT_BLOB_STORE,
+  LOCAL_PROJECT_CLAIM_STORE,
+  LOCAL_PROJECT_DATABASE_NAME,
+  LOCAL_PROJECT_DATABASE_VERSION,
+  LOCAL_PROJECT_DOCUMENT_STORE
+} from './localProjectSchema';
 
-const DATABASE_NAME = 'openzcad-v2';
-const STORE_NAME = 'projects';
+const DATABASE_NAME = LOCAL_PROJECT_DATABASE_NAME;
+const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
 /**
  * Shelf state (archive, bin, pin, manual order) lives beside the documents
  * rather than inside them: it describes the owner's desk, not the part, and a
@@ -30,11 +39,89 @@ const SYNC_STORE_NAME = 'projectSync';
  * hash to its checksum. Values are Blobs so the browser can keep hundreds of
  * megabytes on disk instead of in structured-clone memory.
  */
-const BLOB_STORE_NAME = 'sourceBlobs';
-const DATABASE_VERSION = 4;
+const BLOB_STORE_NAME = LOCAL_PROJECT_BLOB_STORE;
+/**
+ * Device-wide holds on source blobs, one per import run.
+ *
+ * The blob store is shared across tabs while each tab's in-flight state and
+ * open document are private. A persisted claim closes that visibility gap: a
+ * refusing import can prove a blob is abandoned instead of inferring it from
+ * only the state in front of that tab.
+ */
+const CLAIM_STORE_NAME = LOCAL_PROJECT_CLAIM_STORE;
+/**
+ * Card-sized preview images, one per project. Kept here rather than derived on
+ * demand because the shelf must never load a ProjectDocument: a part whose
+ * source runs to hundreds of megabytes would otherwise have to be read into
+ * memory in full just to draw a 360×200 tile, which is enough to take the tab
+ * (and the machine) down and leave the user unable to reach their own projects.
+ * Written while the project is open, where the meshes are already in memory.
+ */
+const THUMBNAIL_STORE_NAME = 'projectThumbnails';
+/**
+ * The handful of document fields the shelf actually draws, projected out of
+ * each document when it is saved.
+ *
+ * Same reason the thumbnails store exists: the shelf must never load a
+ * ProjectDocument. Reading the documents store to build these rows means
+ * deserializing every mesh, every command-log entry, and any legacy inline
+ * STEP text on the device at once — a spike that scales with everything the
+ * user has ever imported and can take the tab down before the start screen
+ * paints. A projection is a few hundred bytes and scales with nothing.
+ *
+ * Kept out of {@link META_STORE_NAME} because the two answer different
+ * questions: this is derived from the document, while the shelf record is this
+ * device's own arrangement and gets merged with the account's copy. Folding a
+ * document projection into a record that travels would make it a lie on the
+ * other side, exactly as it would for the sync baseline.
+ */
+const SUMMARY_STORE_NAME = 'projectSummaries';
+/**
+ * Measurements taken in View mode, per project.
+ *
+ * Kept out of the document for the reason `stepText` documents in
+ * `packages/shared`: `syncComparableDocument` exempts only ownership, the
+ * version fence and `derived`, so anything else written into a
+ * `ProjectDocument` that no user typed makes an untouched project read
+ * `diverged`. Measurements are also hashed into `canonicalProjectContentKey`
+ * if they live there, which would invalidate the exact rebuild cache — a full
+ * replay of the model's history — every time somebody measured an edge.
+ *
+ * Separate from the shelf record for the same reason the sync baseline is:
+ * shelf state is this device's arrangement and gets merged with the account's
+ * copy, while this is work the user did to the part.
+ */
+const MEASUREMENT_STORE_NAME = 'projectMeasurements';
+/**
+ * Version 7 shipped the measurement store and, crucially, taught every opened
+ * connection to close on `versionchange`. Version 8 can therefore add claims
+ * without a version-7 tab parking the upgrade: IndexedDB notifies that tab, its
+ * connection closes after any in-flight transaction, and this gate proceeds.
+ *
+ * The shared gate and blocked timeout remain for genuinely older builds that
+ * predate that handler. They turn an otherwise permanent startup hang into one
+ * actionable rejection shared by every queued caller.
+ */
+const DATABASE_VERSION = LOCAL_PROJECT_DATABASE_VERSION;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+}
+
+/**
+ * A stored summary holds only what the document says. Shelf state is merged in
+ * at read time from {@link META_STORE_NAME}, so a device that has never
+ * organised a project still reports "no record" rather than defaults.
+ */
+type ProjectSummaryRecord = Omit<ProjectSummary, 'organization'>;
+
+export interface ProjectThumbnailRecord {
+  projectId: string;
+  /** `image/webp` data URL, or null for a project with no visible geometry. */
+  source: string | null;
+  /** Document version this was rendered from; only used to avoid re-renders. */
+  version: number;
+  updatedAt: string;
 }
 
 interface ProjectSyncRecord {
@@ -42,36 +129,282 @@ interface ProjectSyncRecord {
   lastSyncedVersion: number;
 }
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+export const LOCAL_STORAGE_BLOCKED_MESSAGE =
+  'Another tab has this app open on an older version of its local storage. Close the other tabs of this app, then try again.';
+
+const DATABASE_BLOCKED_TIMEOUT_MS = 3_000;
+
+class LocalStorageBlockedError extends Error {
+  constructor() {
+    super(LOCAL_STORAGE_BLOCKED_MESSAGE);
+    this.name = 'LocalStorageBlockedError';
+  }
+}
+
+export function isLocalStorageBlockedError(
+  error: unknown
+): error is LocalStorageBlockedError {
+  return error instanceof LocalStorageBlockedError;
+}
+
+function createExpectedStores(database: IDBDatabase): void {
+  if (!database.objectStoreNames.contains(STORE_NAME)) {
+    database.createObjectStore(STORE_NAME, { keyPath: 'projectId' });
+  }
+  if (!database.objectStoreNames.contains(META_STORE_NAME)) {
+    database.createObjectStore(META_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  // Absent for every project on an upgraded database, which reads as "no
+  // baseline" — the conservative answer, and the correct one: this device
+  // has genuinely never recorded what it agreed with.
+  if (!database.objectStoreNames.contains(SYNC_STORE_NAME)) {
+    database.createObjectStore(SYNC_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  if (!database.objectStoreNames.contains(BLOB_STORE_NAME)) {
+    database.createObjectStore(BLOB_STORE_NAME, {
+      keyPath: 'checksumSha256'
+    });
+  }
+  // Empty on upgrade: version-7 tabs close before this transaction begins, so
+  // no import from the old schema can still be running without its tab being
+  // reloaded. New imports create their claim atomically with the blob write.
+  if (!database.objectStoreNames.contains(CLAIM_STORE_NAME)) {
+    database.createObjectStore(CLAIM_STORE_NAME, {
+      keyPath: 'claimKey'
+    });
+  }
+  // Absent for every project on an upgraded database, which reads as "no
+  // preview yet" — the shelf draws its placeholder and fills the cache the
+  // next time each project is opened.
+  if (!database.objectStoreNames.contains(THUMBNAIL_STORE_NAME)) {
+    database.createObjectStore(THUMBNAIL_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  // Empty for every project on an upgraded database. Backfilled by
+  // `listLocalProjects` one document at a time rather than here: the upgrade
+  // transaction would have to read every document to fill it, which is the
+  // memory spike this store exists to remove, and it would block the app from
+  // opening until it finished.
+  if (!database.objectStoreNames.contains(SUMMARY_STORE_NAME)) {
+    database.createObjectStore(SUMMARY_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  // Absent for every project on an upgraded database, which reads as "no
+  // measurements yet" — the correct answer, since nothing was recorded before
+  // there was anywhere to record it.
+  if (!database.objectStoreNames.contains(MEASUREMENT_STORE_NAME)) {
+    database.createObjectStore(MEASUREMENT_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+}
+
+let schemaFactory: IDBFactory | null = null;
+let schemaReady: Promise<void> | null = null;
+
+/**
+ * Makes the versioned open one shared gate, so a blocked upgrade settles every
+ * caller rather than leaving later opens queued behind the only `blocked`
+ * event the browser emits.
+ */
+function ensureDatabaseSchema(): Promise<void> {
+  if (schemaFactory !== indexedDB) {
+    // Test environments replace the factory between cases; browsers do not.
+    schemaFactory = indexedDB;
+    schemaReady = null;
+  }
+  if (schemaReady) {
+    return schemaReady;
+  }
+
+  const gate = new Promise<void>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME, { keyPath: 'projectId' });
+    let settled = false;
+    let blockedTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (): boolean => {
+      if (settled) {
+        return false;
       }
-      if (!request.result.objectStoreNames.contains(META_STORE_NAME)) {
-        request.result.createObjectStore(META_STORE_NAME, {
-          keyPath: 'projectId'
-        });
+      settled = true;
+      if (blockedTimer !== undefined) {
+        clearTimeout(blockedTimer);
       }
-      // Absent for every project on an upgraded database, which reads as "no
-      // baseline" — the conservative answer, and the correct one: this device
-      // has genuinely never recorded what it agreed with.
-      if (!request.result.objectStoreNames.contains(SYNC_STORE_NAME)) {
-        request.result.createObjectStore(SYNC_STORE_NAME, {
-          keyPath: 'projectId'
-        });
+      return true;
+    };
+
+    request.onblocked = () => {
+      if (settled || blockedTimer !== undefined) {
+        return;
       }
-      if (!request.result.objectStoreNames.contains(BLOB_STORE_NAME)) {
-        request.result.createObjectStore(BLOB_STORE_NAME, {
-          keyPath: 'checksumSha256'
-        });
+      blockedTimer = setTimeout(() => {
+        if (finish()) {
+          reject(new LocalStorageBlockedError());
+        }
+      }, DATABASE_BLOCKED_TIMEOUT_MS);
+    };
+    request.onupgradeneeded = () => createExpectedStores(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => database.close();
+      database.close();
+      if (finish()) {
+        resolve();
+        return;
+      }
+      // The caller already received the blocked rejection. The old tab has now
+      // let go and this parked request completed, so the next call may retry.
+      if (schemaReady === gate) {
+        schemaReady = null;
       }
     };
+    request.onerror = () => {
+      if (finish()) {
+        reject(request.error ?? new Error('IndexedDB unavailable.'));
+      }
+      if (schemaReady === gate) {
+        schemaReady = null;
+      }
+    };
+  });
+  schemaReady = gate;
+  return gate;
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  return ensureDatabaseSchema().then(
+    () =>
+      new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+        request.onupgradeneeded = () => createExpectedStores(request.result);
+        request.onsuccess = () => {
+          const database = request.result;
+          database.onversionchange = () => database.close();
+          resolve(database);
+        };
+        request.onerror = () =>
+          reject(request.error ?? new Error('IndexedDB unavailable.'));
+      })
+  );
+}
+
+/** Whether this device's local project storage can be used right now. */
+export type LocalStorageReadiness =
+  /** Open, with every store this build expects. */
+  | 'ready'
+  /** Another tab still holds the previous schema open. */
+  | 'blocked'
+  /** No IndexedDB at all — private browsing, or storage denied. */
+  | 'unavailable';
+
+/**
+ * Opens the database once, running any pending schema creation, and lets go.
+ *
+ * For a caller that is about to take a lock it must not still be holding if the
+ * store cannot be opened at all. An import writes up to 250 MB under the commit
+ * lock, so it asks this BEFORE the lock exists: a device that has no storage is
+ * then turned away without the lock ever being taken, and the first-run creation
+ * of the object stores happens off the lock rather than under it.
+ *
+ * The third answer matters during this version bump. It tells the import path
+ * to stop before taking the validated-feature lock, while ordinary store
+ * callers receive the same distinguishable rejection from the shared gate.
+ */
+export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
+  return openDatabase().then(
+    (database) => {
+      database.close();
+      return 'ready' as const;
+    },
+    (error: unknown) =>
+      isLocalStorageBlockedError(error) ? 'blocked' : 'unavailable'
+  );
+}
+
+/** Settles when one request inside an open transaction has its result. */
+function settled<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
-      reject(request.error ?? new Error('IndexedDB unavailable.'));
+      reject(request.error ?? new Error('Local project storage failed.'));
   });
+}
+
+/**
+ * Runs `action` inside ONE transaction over `storeNames` and resolves with its
+ * value once that transaction commits.
+ *
+ * `action` may await each request and issue the next from its result: a request
+ * started while an earlier one's success handler is still on the microtask
+ * queue joins the same transaction, so read-then-write stays a single atomic
+ * unit. Splitting it across two transactions would not — every tab and the
+ * geometry worker share these stores, and another writer can land in between.
+ *
+ * Several stores in one transaction is the same guarantee widened: a document
+ * and the shelf projection derived from it have to move together, or the start
+ * screen describes a version of the project that is not on disk.
+ *
+ * The two lines at the bottom are the whole of the failure contract, and
+ * neither is visible in the records a successful run leaves behind:
+ *
+ * - `tx.abort()` rolls back what `action` already wrote before it threw. A
+ *   request that errors aborts the transaction by itself; a THROW from
+ *   `action`'s own code does not, and without this the writes that preceded it
+ *   commit on behalf of a decision that was never reached.
+ * - `database.close()` gives the connection back on every path. One connection
+ *   per transaction is one leaked per autosave and one per shelf read, and it
+ *   stays invisible until some future schema version cannot upgrade past it.
+ */
+function scopedTransaction<T>(
+  mode: IDBTransactionMode,
+  storeNames: readonly string[],
+  action: (store: (name: string) => IDBObjectStore) => Promise<T>
+): Promise<T> {
+  return openDatabase().then(async (database) => {
+    const tx = database.transaction(
+      storeNames.length === 1 ? storeNames[0]! : [...storeNames],
+      mode
+    );
+    const committed = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      const fail = () =>
+        reject(tx.error ?? new Error('Local project storage failed.'));
+      tx.onerror = fail;
+      tx.onabort = fail;
+    });
+    // The rejection is reported through the throw below; this only keeps it
+    // from also surfacing as an unhandled rejection when `action` fails first.
+    committed.catch(() => undefined);
+    try {
+      const value = await action((name) => tx.objectStore(name));
+      await committed;
+      return value;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+        // Already committed or aborted; the error below is the real report.
+      }
+      throw error;
+    } finally {
+      database.close();
+    }
+  });
+}
+
+function transactionScope<T>(
+  mode: IDBTransactionMode,
+  action: (store: IDBObjectStore) => Promise<T>,
+  storeName: string = STORE_NAME
+): Promise<T> {
+  return scopedTransaction(mode, [storeName], (store) =>
+    action(store(storeName))
+  );
 }
 
 function transaction<T>(
@@ -79,29 +412,28 @@ function transaction<T>(
   action: (store: IDBObjectStore) => IDBRequest<T>,
   storeName: string = STORE_NAME
 ): Promise<T> {
-  return openDatabase().then(
-    (database) =>
-      new Promise((resolve, reject) => {
-        const tx = database.transaction(storeName, mode);
-        const request = action(tx.objectStore(storeName));
-        let result: T;
-        request.onsuccess = () => {
-          result = request.result;
-        };
-        request.onerror = () =>
-          reject(request.error ?? new Error('Local project storage failed.'));
-        tx.oncomplete = () => {
-          database.close();
-          resolve(result);
-        };
-        const fail = () => {
-          database.close();
-          reject(tx.error ?? new Error('Local project storage failed.'));
-        };
-        tx.onerror = fail;
-        tx.onabort = fail;
-      })
-  );
+  return transactionScope(mode, (store) => settled(action(store)), storeName);
+}
+
+/**
+ * Runs `action` against several stores in one transaction, so the records it
+ * touches move together or not at all. `action` may read as well as write; its
+ * requests are awaited by the transaction itself, and the resolved value is
+ * whatever `read` reports once every request has completed.
+ *
+ * The fire-and-continue shape {@link scopedTransaction} does not have: `action`
+ * issues its requests without awaiting them and hands back a `read` closure,
+ * which is called only after the transaction commits. Callers that need to
+ * branch on a result mid-transaction want `scopedTransaction` instead.
+ */
+function multiStoreTransaction<T = void>(
+  storeNames: readonly string[],
+  mode: IDBTransactionMode,
+  action: (stores: Record<string, IDBObjectStore>) => (() => T) | void
+): Promise<T> {
+  return scopedTransaction(mode, storeNames, async (store) =>
+    action(Object.fromEntries(storeNames.map((name) => [name, store(name)])))
+  ).then((read) => (read ? read() : (undefined as T)));
 }
 
 interface SourceBlobRecord {
@@ -111,6 +443,15 @@ interface SourceBlobRecord {
   createdAt: string;
 }
 
+interface SourceBlobClaimRecord extends SourceBlobClaim {
+  /** Both identities in the key make each import run exactly one record. */
+  claimKey: string;
+}
+
+function sourceBlobClaimKey(checksumSha256: string, claimId: string): string {
+  return `${checksumSha256}:${claimId}`;
+}
+
 async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (value) =>
@@ -118,33 +459,127 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   ).join('');
 }
 
+export interface StoredSourceBlob {
+  ref: ImportedSourceReference;
+  /**
+   * False when the store already held these exact bytes. The store is
+   * device-global and content-addressed, so a key can be reached from several
+   * projects: a caller that may have to undo its write — an import the kernel
+   * might refuse — must not delete bytes that were already there.
+   */
+  created: boolean;
+}
+
 /**
- * Stores source bytes and returns the reference a document should hold. The
- * checksum is computed here — callers cannot store bytes under a wrong
- * identity, so readers never need to re-verify local records.
+ * Stores source bytes and reports whether this call is what created the
+ * record. The checksum is computed here — callers cannot store bytes under a
+ * wrong identity, so readers never need to re-verify local records.
+ *
+ * The "does it exist" question and the write are ONE readwrite transaction.
+ * Asking in a separate transaction would let two importers of the same file
+ * both be told they created the record — and `created` is exactly what
+ * licenses an import to delete those bytes again, so both would then believe
+ * the key was theirs to remove.
+ *
+ * A key that is already present is left untouched rather than rewritten: the
+ * store is content-addressed, so the record there holds these very bytes, and
+ * rewriting it would copy up to 250 MB to disk to change nothing but a
+ * timestamp.
  */
-export async function putSourceBlob(
-  source: Blob | Uint8Array<ArrayBuffer>
-): Promise<ImportedSourceReference> {
+export async function putSourceBlobIfAbsent(
+  source: Blob | Uint8Array<ArrayBuffer>,
+  options: { claimId?: string } = {}
+): Promise<StoredSourceBlob> {
   const bytes =
     source instanceof Uint8Array
       ? source
       : new Uint8Array(await source.arrayBuffer());
   const checksumSha256 = await sha256Hex(bytes);
+  const createdAt = new Date().toISOString();
   const record: SourceBlobRecord = {
     checksumSha256,
     body: source instanceof Blob ? source : new Blob([bytes]),
     logicalBytes: bytes.byteLength,
-    createdAt: new Date().toISOString()
+    createdAt
   };
-  await transaction('readwrite', (store) => store.put(record), BLOB_STORE_NAME);
+  const created = await scopedTransaction(
+    'readwrite',
+    [BLOB_STORE_NAME, CLAIM_STORE_NAME],
+    async (store) => {
+      if (options.claimId !== undefined) {
+        const claim: SourceBlobClaimRecord = {
+          claimKey: sourceBlobClaimKey(checksumSha256, options.claimId),
+          checksumSha256,
+          claimId: options.claimId,
+          createdAt
+        };
+        await settled(store(CLAIM_STORE_NAME).put(claim));
+      }
+      const blobs = store(BLOB_STORE_NAME);
+      if ((await settled(blobs.count(checksumSha256))) > 0) {
+        return false;
+      }
+      await settled(blobs.put(record));
+      return true;
+    }
+  );
   return {
-    marker: 'openzcad-source-ref',
-    version: 1,
-    hashAlgorithm: 'sha256',
-    checksumSha256,
-    logicalBytes: bytes.byteLength
+    ref: {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256,
+      logicalBytes: bytes.byteLength
+    },
+    created
   };
+}
+
+/** Gives up one import run's device-wide hold on a checksum. */
+export function releaseSourceBlobClaim(
+  checksumSha256: string,
+  claimId: string
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.delete(sourceBlobClaimKey(checksumSha256, claimId)),
+    CLAIM_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * Deletes one source blob only when the whole device says it is abandoned.
+ *
+ * Claims, every persisted project document, and the delete share one readwrite
+ * transaction. No other tab can land a claim or autosave a document in a gap
+ * between the proof and the deletion. Documents are cursor-walked one at a time
+ * because each can carry large derived meshes; the walk stops on the first
+ * reference.
+ *
+ * The asking run's own claim does not block its cleanup and is removed with the
+ * blob. Expired claims are swept opportunistically. `false` is a safe verdict,
+ * not a storage failure: some live claim or saved document still needs bytes.
+ */
+export interface SourceBlobDeleteInput {
+  checksumSha256: string;
+  claimId?: string;
+  now?: number;
+}
+
+export function deleteSourceBlobIfUnreferenced(
+  input: SourceBlobDeleteInput
+): Promise<boolean> {
+  // Refused-import cleanup is rare and walks persisted project documents. Keep
+  // it off first paint; a failed chunk load is caught by the caller and leaves
+  // bytes in place, which is the no-data-loss direction.
+  return import('./sourceBlobCleanup').then((cleanup) => cleanup.run(input));
+}
+
+/** {@link putSourceBlobIfAbsent} for callers that never delete what they wrote. */
+export async function putSourceBlob(
+  source: Blob | Uint8Array<ArrayBuffer>
+): Promise<ImportedSourceReference> {
+  return (await putSourceBlobIfAbsent(source)).ref;
 }
 
 export async function loadSourceBlob(
@@ -152,7 +587,8 @@ export async function loadSourceBlob(
 ): Promise<Uint8Array | null> {
   const record = await transaction<SourceBlobRecord | undefined>(
     'readonly',
-    (store) => store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
+    (store) =>
+      store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
     BLOB_STORE_NAME
   );
   if (!record) {
@@ -167,6 +603,19 @@ export function hasSourceBlob(checksumSha256: string): Promise<boolean> {
     (store) => store.count(checksumSha256),
     BLOB_STORE_NAME
   ).then((count) => count > 0);
+}
+
+/**
+ * Removes exactly one blob. Content-addressed storage means the key can be
+ * shared, so the caller owns the reference check — see
+ * `discardUnreferencedImportSource`.
+ */
+export function deleteSourceBlob(checksumSha256: string): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.delete(checksumSha256),
+    BLOB_STORE_NAME
+  ).then(() => undefined);
 }
 
 /**
@@ -200,9 +649,39 @@ export async function pruneUnreferencedSourceBlobs(
   return removed;
 }
 
+/**
+ * The shelf's view of a document. The single definition of that projection:
+ * what {@link saveLocalProject} persists and what a backfill reproduces have to
+ * agree, or the start screen shows one thing and opening the project another.
+ */
+export function summarizeProjectDocument(
+  document: ProjectDocument
+): ProjectSummaryRecord {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    documentVersion: document.version
+  };
+}
+
+/**
+ * Stores a document and refreshes its shelf projection in the same
+ * transaction. Split across two, a crash between them leaves the start screen
+ * describing a version of the project that is no longer on disk — and since
+ * nothing else reads the documents store on that path, nothing would ever
+ * notice the disagreement.
+ */
 export function saveLocalProject(document: ProjectDocument): Promise<void> {
-  return transaction('readwrite', (store) => store.put(document)).then(
-    () => undefined
+  return multiStoreTransaction(
+    [STORE_NAME, SUMMARY_STORE_NAME],
+    'readwrite',
+    (stores) => {
+      stores[STORE_NAME]?.put(document);
+      stores[SUMMARY_STORE_NAME]?.put(summarizeProjectDocument(document));
+    }
   );
 }
 
@@ -277,6 +756,92 @@ export function listLocalProjectOrganizations(): Promise<
 }
 
 /**
+ * Stores a project's card preview. Called while the project is open, where the
+ * meshes are already in memory — the shelf itself never renders one, because
+ * doing so would mean loading the document.
+ */
+export function saveProjectThumbnail(
+  projectId: string,
+  thumbnail: { source: string | null; version: number; updatedAt: string }
+): Promise<void> {
+  const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
+  return transaction(
+    'readwrite',
+    (store) => store.put(record),
+    THUMBNAIL_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * The cached preview for one project, or null when this device has never
+ * rendered it. A stale image is deliberately preferred over loading the
+ * document to refresh it: the tile is a recognition aid, not a source of truth.
+ */
+export function loadProjectThumbnail(
+  projectId: string
+): Promise<ProjectThumbnailRecord | null> {
+  return transaction<ProjectThumbnailRecord | undefined>(
+    'readonly',
+    (store) =>
+      store.get(projectId) as IDBRequest<ProjectThumbnailRecord | undefined>,
+    THUMBNAIL_STORE_NAME
+  ).then((record) => record ?? null);
+}
+
+/**
+ * Writes this project's measurements, replacing whatever was there.
+ *
+ * The whole record at once rather than row-by-row: the list is small, it is
+ * always read whole, and a partial write is a state the reader would have to
+ * be taught to distinguish from a genuinely short list.
+ */
+export function saveProjectMeasurements(
+  record: StoredMeasurementRecord
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.put(record),
+    MEASUREMENT_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * This project's measurements, or null when there are none to read.
+ *
+ * Parsed rather than cast. A record from a newer build is refused whole — see
+ * `parseStoredMeasurements` for why reading it partially would be worse than
+ * not reading it — and a single malformed row is dropped without taking the
+ * rest of the list with it.
+ */
+export function loadProjectMeasurements(
+  projectId: string
+): Promise<StoredMeasurementRecord | null> {
+  return transaction<unknown>(
+    'readonly',
+    (store) => store.get(projectId) as IDBRequest<unknown>,
+    MEASUREMENT_STORE_NAME
+  ).then(async (value) => {
+    if (value === undefined) {
+      return null;
+    }
+    // The defensive parser is sizeable and needed only on this read path. Keep
+    // it out of the initial workspace bundle; writes use the small codec in
+    // `measurementRecord` directly.
+    const { parseStoredMeasurements } = await import('./measurementStore');
+    const parsed = parseStoredMeasurements(value);
+    if (!parsed) {
+      // Refusing a future or malformed record is only protective if the caller
+      // cannot mistake it for "there was no record" and immediately write an
+      // empty current-version one over it.
+      throw new Error(
+        'Stored measurements use an unsupported or malformed format.'
+      );
+    }
+    return parsed;
+  });
+}
+
+/**
  * Records that this device and the account now hold the same version of
  * `projectId`. Everything the conflict machinery decides is measured from here.
  */
@@ -337,63 +902,152 @@ export function clearAllLastSyncedVersions(): Promise<void> {
 }
 
 /**
- * Destroys a project's document, its shelf state, and its sync baseline in a
- * single transaction.
+ * Destroys a project's document, its shelf state, its shelf projection, its
+ * cached preview, and its sync baseline in a single transaction.
  *
- * Split across three, a crash between them can leave a baseline behind that
+ * Split across several, a crash between them can leave a baseline behind that
  * describes a document this device no longer holds. Should that project id
  * come back — re-adoption, or a fresh download of the account copy — the
  * surviving baseline is consumed as agreement about a lineage that ended, and
- * reconciliation picks a side instead of reporting the divergence.
+ * reconciliation picks a side instead of reporting the divergence. A surviving
+ * projection is the same failure in the other direction: a start-screen tile
+ * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
-  const storeNames = [STORE_NAME, META_STORE_NAME, SYNC_STORE_NAME];
-  return openDatabase().then(
-    (database) =>
-      new Promise<void>((resolve, reject) => {
-        const tx = database.transaction(storeNames, 'readwrite');
-        for (const storeName of storeNames) {
-          tx.objectStore(storeName).delete(projectId);
-        }
-        tx.oncomplete = () => {
-          database.close();
-          resolve();
-        };
-        const fail = () => {
-          database.close();
-          reject(tx.error ?? new Error('Local project storage failed.'));
-        };
-        tx.onerror = fail;
-        tx.onabort = fail;
-      })
+  // Every per-project store, in one transaction. A store missing from this
+  // list is not merely untidy: `adoptProjectDocument` reuses a project id, so
+  // an orphaned record would surface under a DIFFERENT project that later
+  // claimed the same id.
+  const storeNames = [
+    STORE_NAME,
+    META_STORE_NAME,
+    SYNC_STORE_NAME,
+    THUMBNAIL_STORE_NAME,
+    SUMMARY_STORE_NAME,
+    MEASUREMENT_STORE_NAME
+  ];
+  return multiStoreTransaction(storeNames, 'readwrite', (stores) => {
+    for (const storeName of storeNames) {
+      stores[storeName]?.delete(projectId);
+    }
+  });
+}
+
+/**
+ * Which projects exist and which of them already have a projection, read
+ * together so the two cannot disagree. Only the documents store's *keys* are
+ * read — no document value is deserialized, which is the whole point.
+ */
+function readShelfSnapshot(): Promise<{
+  projectIds: string[];
+  summaries: Map<string, ProjectSummaryRecord>;
+}> {
+  return multiStoreTransaction(
+    [STORE_NAME, SUMMARY_STORE_NAME],
+    'readonly',
+    (stores) => {
+      const keys = stores[STORE_NAME]?.getAllKeys();
+      const records = stores[SUMMARY_STORE_NAME]?.getAll() as
+        IDBRequest<ProjectSummaryRecord[]> | undefined;
+      return () => ({
+        projectIds: (keys?.result ?? []).filter(
+          (key): key is string => typeof key === 'string'
+        ),
+        summaries: new Map(
+          (records?.result ?? []).map((record) => [record.projectId, record])
+        )
+      });
+    }
   );
 }
 
+/**
+ * Writes the shelf projection for one document that predates the projections
+ * store, and returns it. Deliberately one document at a time: holding even a
+ * few of these open at once reintroduces the spike the store exists to avoid,
+ * and this runs at most once per project on the first refresh after upgrading.
+ *
+ * The recheck, document read, and summary write share one transaction. Another
+ * tab may save the project after the shelf snapshot found no summary; without
+ * the recheck it would be needlessly deserialized, and without the shared
+ * transaction a stale backfill could land after that save and replace its newer
+ * projection.
+ */
+function backfillProjectSummary(
+  projectId: string
+): Promise<ProjectSummaryRecord | null> {
+  let record: ProjectSummaryRecord | null = null;
+  return multiStoreTransaction(
+    [STORE_NAME, SUMMARY_STORE_NAME],
+    'readwrite',
+    (stores) => {
+      const documentStore = stores[STORE_NAME];
+      const summaryStore = stores[SUMMARY_STORE_NAME];
+      if (!documentStore || !summaryStore) {
+        throw new Error('Local project storage is incomplete.');
+      }
+
+      const existing = summaryStore.get(projectId) as IDBRequest<
+        ProjectSummaryRecord | undefined
+      >;
+      existing.onsuccess = () => {
+        if (existing.result) {
+          record = existing.result;
+          return;
+        }
+        const document = documentStore.get(projectId) as IDBRequest<
+          ProjectDocument | undefined
+        >;
+        document.onsuccess = () => {
+          if (!document.result) {
+            return;
+          }
+          record = summarizeProjectDocument(document.result);
+          summaryStore.put(record);
+        };
+      };
+      return () => record;
+    }
+  );
+}
+
+/**
+ * The shelf rows for every project on this device, read from the projections
+ * store rather than from the documents themselves. A document is only opened
+ * when it has no projection yet, and then one at a time — see
+ * {@link SUMMARY_STORE_NAME}.
+ */
 export async function listLocalProjects(): Promise<ProjectSummary[]> {
-  const [documents, organizations] = await Promise.all([
-    transaction<ProjectDocument[]>(
-      'readonly',
-      (store) => store.getAll() as IDBRequest<ProjectDocument[]>
-    ),
+  const [snapshot, organizations] = await Promise.all([
+    readShelfSnapshot(),
     listLocalProjectOrganizations().catch(
       () => new Map<string, ProjectOrganization>()
     )
   ]);
-  return documents.map((document) => {
-    const organization = organizations.get(document.projectId);
-    return {
-      projectId: document.projectId,
-      name: document.name,
-      lastRevisionId: document.revisions.at(-1)?.revisionId,
-      updatedAt: document.derived.updatedAt,
-      revisionCount: document.checkpoints.length,
-      documentVersion: document.version,
+  const projects: ProjectSummary[] = [];
+  // Driven by the document keys, not by the projections: a projection whose
+  // document is gone describes a project that cannot be opened, so it is
+  // ignored rather than drawn as a tile that leads nowhere.
+  for (const projectId of snapshot.projectIds) {
+    const summary =
+      snapshot.summaries.get(projectId) ??
+      // A document this device cannot read is skipped rather than allowed to
+      // fail the whole listing, which would empty the shelf over one bad
+      // record. The next refresh tries it again.
+      (await backfillProjectSummary(projectId).catch(() => null));
+    if (!summary) {
+      continue;
+    }
+    const organization = organizations.get(projectId);
+    projects.push({
+      ...summary,
       // Left undefined when this device has never organised the project, so a
       // merge can fall back to whatever the account knows instead of treating
       // "no record" as "active, unpinned, first".
       ...(organization ? { organization } : {})
-    };
-  });
+    });
+  }
+  return projects;
 }
 
 /**

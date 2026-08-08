@@ -68,7 +68,6 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
-import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import type {
   ArtifactKind,
@@ -121,8 +120,14 @@ import { ApiError, api } from './lib/api';
 import { uploadArtifactBody } from './lib/artifactUpload';
 import {
   archiveLocalOnlyImportSources,
+  createInFlightImportChecksums,
   listLocalOnlyImportSources
 } from './lib/importArchival';
+import {
+  LOCAL_AUTOSAVE_FAILED_STATUS,
+  reparkFailedAutosave
+} from './lib/localAutosaveFailure';
+import { runStepImport } from './lib/stepImportRun';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -181,7 +186,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
 import { ToolBar } from './components/ToolBar';
 import { ViewModeRail } from './components/ViewModeRail';
-import { MeasurementDock } from './components/MeasurementDock';
 import { Sidebar } from './components/Sidebar';
 import { Inspector } from './components/Inspector';
 import { ModelingOperationsForm } from './components/forms/ModelingOperationsForm';
@@ -222,6 +226,7 @@ import { ToolCard } from './components/ToolCard';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import {
   IDLE,
+  escapeTarget,
   interactionReducer,
   toolCardFor,
   type FaceTarget
@@ -236,7 +241,12 @@ import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
 } from './lib/faceSketchAttachment';
-import { edgeLabel, edgeLength, faceLabel } from './lib/topologyLabels';
+import {
+  edgeLabel,
+  edgeLengthMeasurement,
+  faceLabel
+} from './lib/topologyLabels';
+import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import {
@@ -307,6 +317,11 @@ const LazyViewModeBar = lazy(() =>
     default: module.ViewModeBar
   }))
 );
+const LazyMeasurementDock = lazy(() =>
+  import('./components/MeasurementDock').then((module) => ({
+    default: module.MeasurementDock
+  }))
+);
 const LazySketchToolRail = lazy(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
@@ -336,6 +351,14 @@ function ViewModeBar(props: ComponentProps<typeof LazyViewModeBar>) {
   return (
     <Suspense fallback={null}>
       <LazyViewModeBar {...props} />
+    </Suspense>
+  );
+}
+
+function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyMeasurementDock {...props} />
     </Suspense>
   );
 }
@@ -385,21 +408,25 @@ import {
   clearAllLastSyncedVersions,
   clearLastSyncedVersion,
   deleteLocalProject,
+  isLocalStorageBlockedError,
   listLocalProjectOrganizations,
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadProjectMeasurements,
+  loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
-  putSourceBlob,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
-  selectProjectDocument,
+  saveProjectMeasurements,
+  saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
 import {
   applyLocalProjectOrganizations,
+  cachedThumbnailSource,
   mergeProjectSummaries
 } from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
@@ -439,12 +466,26 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
-import {
-  appendMeasurement,
-  measurementsToCsv,
-  measurementsToText,
-  type Measurement
+import type {
+  Measurement,
+  MeasurementDisplayOptions,
+  MeasurementMode,
+  MeasurementTarget,
+  MeasurementViewportAnnotation,
+  RadialDisplay
 } from './lib/measurements';
+/**
+ * The measurement module's shape, for the deferred handle below. A type-only
+ * namespace import is erased at build time exactly like the named ones above,
+ * so naming the module here does not pull it back into the eager chunk.
+ */
+import type * as MeasurementModule from './lib/measurements';
+import { buildMeasurementRecord } from './lib/measurementRecord';
+import {
+  EMPTY_MEASURE_SESSION,
+  edgeRunIsTotalable,
+  nextEdgeRun
+} from './lib/measureSession';
 import {
   loadPanelState,
   savePanelState,
@@ -483,18 +524,11 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
 /**
- * Fallback ceiling when the source blob store is unavailable (private
- * browsing, storage denied) and the STEP text must be embedded in the
- * document itself, as every import was before content-addressed references.
+ * How long the document must sit still before the shelf preview is re-rendered.
+ * Long enough that dragging a dimension does not queue a WebGL render per
+ * frame, short enough that leaving for the start screen finds a current tile.
  */
-const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
-/**
- * Reference-form ceiling. The kernel comfortably imports files this size
- * (measured: 283 MB peaks at 1.2 GB wasm memory, ~7 s — see
- * scripts/profile-step-import.mjs); the binding constraint is wasm32 address
- * space, which this leaves 40% headroom against.
- */
-const MAX_SOURCE_IMPORT_BYTES = 250 * 1024 * 1024;
+const SHELF_THUMBNAIL_REFRESH_MS = 4000;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -546,10 +580,21 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const unavailableAs =
+    <T,>(fallback: T) =>
+    (error: unknown): T => {
+      // A device with no IndexedDB is legitimately a device with no local
+      // projects. A blocked schema upgrade is temporary and actionable; calling
+      // it an empty shelf would tell the user their projects disappeared.
+      if (isLocalStorageBlockedError(error)) {
+        throw error;
+      }
+      return fallback;
+    };
   const [local, localOrganizations, remote] = await Promise.all([
-    listLocalProjects().catch(() => []),
+    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
     listLocalProjectOrganizations().catch(
-      () => new Map<string, ProjectOrganization>()
+      unavailableAs(new Map<string, ProjectOrganization>())
     ),
     signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
   ]);
@@ -886,6 +931,12 @@ export function App() {
   extrudePreviewRef.current = extrudePreview;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /**
+   * Name for the Move feature the gizmo is about to create. The gizmo is now
+   * the only way to make one (WF-07), so the name it commits under has to be
+   * editable here rather than in the form this replaced.
+   */
+  const [moveName, setMoveName] = useState('Move');
+  /**
    * A committed Move whose exact rebuild is still in flight. The viewer keeps
    * the body posed at the applied transform until the recomputed meshes land,
    * so the old geometry never flashes at its resting position.
@@ -923,6 +974,12 @@ export function App() {
     cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace'
   );
   const [busy, setBusy] = useState(false);
+  /**
+   * The last refusal from an exact rebuild, shown inside the form that asked
+   * for it. Cleared whenever a panel opens or closes so a stale reason can
+   * never outlive the attempt that produced it.
+   */
+  const [featureFormError, setFeatureFormError] = useState<string | null>(null);
   const {
     projection,
     setProjection,
@@ -951,29 +1008,68 @@ export function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const loadThumbnailBodies = useCallback(
-    async (project: ProjectSummary): Promise<BodyRepresentation[]> => {
-      const localDocument = await loadLocalProject(project.projectId).catch(
+  /**
+   * The shelf's preview source. This reads a small cached image and nothing
+   * else — deliberately not the project document. Loading documents here is
+   * what made the start screen unreachable for large imports: a part with a
+   * few-hundred-megabyte source had to be pulled into memory in full, per
+   * tile, just to draw a 360×200 card, which could take the tab and the
+   * machine down and leave the owner unable to open or delete their own work.
+   * A project this device has never opened simply shows the placeholder.
+   */
+  const loadThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const cached = await loadProjectThumbnail(project.projectId).catch(
         () => null
       );
-      const localRevisionId = localDocument?.revisions.at(-1)?.revisionId;
-      const localMatchesSummary =
-        localDocument !== null &&
-        (!project.lastRevisionId || localRevisionId === project.lastRevisionId);
-
-      const remoteDocument =
-        cloudFunctionsEnabled && !localMatchesSummary && session
-          ? await api.loadProject(project.projectId).catch(() => null)
-          : null;
-      const thumbnailDocument = selectProjectDocument(
-        localDocument,
-        remoteDocument
-      );
-      return thumbnailDocument
-        ? Object.values(thumbnailDocument.derived.bodyRepresentations)
-        : [];
+      return cachedThumbnailSource(cached, project);
     },
-    [cloudFunctionsEnabled, session]
+    []
+  );
+  /**
+   * Fills the cache for a tile it could not answer for. The cache is only ever
+   * written while a project is open, so every project that predates it — which
+   * on an established shelf is all of them — would otherwise sit behind a
+   * placeholder until it happened to be opened again.
+   *
+   * Two limits keep the reason the cache exists intact. Only what this device
+   * already holds is read, never the network, so a shelf of parts stored only
+   * in the account stays exactly as cheap to draw as it is now. And the load
+   * runs inside the preview queue rather than alongside it, so the tiles on
+   * screen are filled one document at a time instead of all at once.
+   */
+  const backfillThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const { queuePartThumbnail, renderThumbnailFrame } =
+        await import('./lib/partThumbnail');
+      return queuePartThumbnail(async () => {
+        const stored = await loadLocalProject(project.projectId).catch(
+          () => null
+        );
+        if (!stored) {
+          return undefined;
+        }
+        const bodies = Object.values(stored.derived.bodyRepresentations).filter(
+          (body) => !body.consumed
+        );
+        let source: string | null;
+        try {
+          source = renderThumbnailFrame(bodies);
+        } catch {
+          // A device that cannot give us a WebGL context is not going to on the
+          // next tile either. Leave the cache empty rather than recording a
+          // "no geometry" that says more about the browser than the part.
+          return undefined;
+        }
+        await saveProjectThumbnail(project.projectId, {
+          source,
+          version: stored.version,
+          updatedAt: stored.derived.updatedAt
+        }).catch(() => undefined);
+        return source;
+      });
+    },
+    []
   );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
@@ -1225,15 +1321,40 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const { run: executeValidatedFeature } = useValidatedFeatureCommit({
+  // Held whole rather than destructured, because the STEP import hands the
+  // reservation it took back to the run that adopts it: two callbacks pulled
+  // out separately could be wired from different hook instances, and a
+  // reservation the run does not recognise degrades in silence.
+  const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
-    commit: (command, derived) => executeCommand(command, derived),
+    commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
-      executeTransaction(label, commands, derived),
+      executeTransaction(label, commands, derived ?? undefined),
     onBusy: setBusy,
-    onStatus: setStatus
+    onStatus: setStatus,
+    onFailure: setFeatureFormError
   });
+  const executeValidatedFeature = validatedFeature.run;
+  /**
+   * Checksums of imports between their blob write and their commit decision.
+   * Content addressing puts a re-import of the same file on the same key, so
+   * without this a second import's cleanup can delete the bytes the first one
+   * is still validating against.
+   */
+  const inFlightImportChecksums = useRef(createInFlightImportChecksums());
+  /**
+   * Checksums this tab wrote for an import that then ended without a verdict on
+   * the file — the document moved out from under it, or the commit lock had
+   * been taken by the time it asked. The bytes are deliberately kept: they are
+   * exactly what the retry needs, and content addressing makes that retry's
+   * write a no-op instead of another 250 MB.
+   *
+   * Remembering them is what keeps the retry's cleanup armed. Without it the
+   * retry finds the key already present, concludes it is not its to delete, and
+   * a genuine kernel refusal would then keep the whole source forever.
+   */
+  const abandonedImportChecksums = useRef(new Set<string>());
 
   const projectSharingPreferenceEnabled = appSettings.collaboration.enabled;
   const projectSharingEnabled =
@@ -1332,7 +1453,11 @@ export function App() {
   const editDisabledReason = projectOpenElsewhere
     ? 'This project is open in another tab'
     : viewMode
-      ? 'View mode is read-only — switch to Build to edit'
+      ? // "Switch to Build" is only advice worth giving to someone who can.
+        // A read-only share pins the mode to View, so telling a viewer to
+        // switch names a route they will find disabled — say why instead.
+        (buildModeDisabledReason ??
+        'View mode is read-only — switch to Build to edit')
       : sharedProjectDisabled
         ? 'Project sharing is disabled in Settings'
         : !cloudAvailable || !session || !projectSharingEnabled
@@ -1351,11 +1476,19 @@ export function App() {
                     : 'Waiting for the project edit lease'
                   : null;
 
+  // Read through a ref, because an async caller holds the closure of the
+  // render it started in: a STEP import that spends minutes rebuilding and
+  // archiving would otherwise check a permission that was current before View
+  // mode was entered or the project was opened in a second tab.
+  const editDisabledReasonRef = useRef(editDisabledReason);
+  editDisabledReasonRef.current = editDisabledReason;
+
   function ensureCanEdit(action = 'edit this project'): boolean {
-    if (!editDisabledReason) {
+    const reason = editDisabledReasonRef.current;
+    if (!reason) {
       return true;
     }
-    setStatus(`Cannot ${action}: ${editDisabledReason}.`);
+    setStatus(`Cannot ${action}: ${reason}.`);
     return false;
   }
 
@@ -2065,6 +2198,45 @@ export function App() {
     geometry.sync(doc);
   }, [doc]);
 
+  // Refreshes this device's cached shelf preview. Here rather than on the
+  // shelf because this is the one place the meshes are already in memory:
+  // rendering a tile must never be a reason to load a project document. The
+  // delay coalesces editing bursts, and a cache entry already at this version
+  // skips the render entirely, so ordinary modelling pays nothing.
+  useEffect(() => {
+    if (!doc || geometry.state.phase !== 'ready') {
+      return;
+    }
+    const { projectId, version } = doc;
+    const updatedAt = doc.derived.updatedAt;
+    const bodies = Object.values(doc.derived.bodyRepresentations).filter(
+      (body) => !body.consumed
+    );
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const cached = await loadProjectThumbnail(projectId).catch(() => null);
+        if (cancelled || cached?.version === version) {
+          return;
+        }
+        const { renderPartThumbnail } = await import('./lib/partThumbnail');
+        const source = await renderPartThumbnail(bodies).catch(() => null);
+        if (cancelled) {
+          return;
+        }
+        await saveProjectThumbnail(projectId, {
+          source,
+          version,
+          updatedAt
+        }).catch(() => undefined);
+      })();
+    }, SHELF_THUMBNAIL_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [doc, geometry.state.phase]);
+
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
     [doc]
@@ -2360,16 +2532,13 @@ export function App() {
   /**
    * What the current selection is, and the figure that goes with it.
    *
-   * One derivation feeds two surfaces: the bottom-center chip, which shows the
-   * live pick, and View mode's measurement tape, which keeps the ones worth
-   * writing down. `measurement` is absent when a selection carries no number —
-   * a planar face has no length, and a multi-body pick's chip text is a
-   * modeling hint rather than a figure.
+   * This stays a lightweight live readout. The measurement workbench records
+   * explicit pick events below rather than coupling its history to selection
+   * state effects.
    */
   const selectionSummary = useMemo<{
     label: string;
     detail?: string;
-    measurement?: Measurement;
   } | null>(() => {
     if (!doc || tool === 'sketch') {
       return null;
@@ -2377,26 +2546,25 @@ export function App() {
     const units = doc.units;
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
+      let sampled = false;
       const total = selectedEdges.reduce((sum, edge) => {
         const body = renderedRepresentations[edge.bodyId];
-        return sum + (edgeLength(body, edge.hash, edge.topologyId) ?? 0);
+        const measured = edgeLengthMeasurement(
+          body,
+          edge.hash,
+          edge.topologyId
+        );
+        sampled = sampled || measured?.quality === 'sampled';
+        return sum + (measured?.value ?? 0);
       }, 0);
       const label = `${selectedEdges.length} edges`;
-      const value = total > 0 ? `≈ ${round(total)} ${units}` : undefined;
+      const value =
+        total > 0
+          ? `${sampled ? '≈ ' : ''}${round(total)} ${units}`
+          : undefined;
       return {
         label,
-        detail: value,
-        measurement: value
-          ? {
-              key: `edges:${selectedEdges
-                .map((edge) => `${edge.bodyId}/${edge.topologyId ?? edge.hash}`)
-                .sort()
-                .join(',')}`,
-              kind: 'edge-total',
-              label,
-              value
-            }
-          : undefined
+        detail: value
       };
     }
     if (
@@ -2410,43 +2578,32 @@ export function App() {
       const topologyId =
         selectedEdges[0]?.topologyId ?? renderedSelectedTopology?.topologyId;
       const name = edgeLabel(body, hash, topologyId);
-      const length = edgeLength(body, hash, topologyId);
+      const length = edgeLengthMeasurement(body, hash, topologyId);
       const label = body ? `${body.name} · ${name}` : name;
       const value =
-        length !== null && length > 0 ? `${round(length)} ${units}` : undefined;
+        length && length.value > 0
+          ? `${length.quality === 'sampled' ? '≈ ' : ''}${round(length.value)} ${units}`
+          : undefined;
       return {
         label,
-        detail: value,
-        measurement: value
-          ? {
-              key: `edge:${bodyId ?? '?'}/${topologyId ?? hash}`,
-              kind: 'edge',
-              label,
-              value
-            }
-          : undefined
+        detail: value
       };
     }
     if (renderedSelectedTopology?.kind === 'face') {
       const body = renderedRepresentations[renderedSelectedTopology.bodyId];
-      const face = body?.topology?.faces.find(
-        (candidate) =>
-          candidate.topologyId === renderedSelectedTopology.topologyId
-      );
-      const geometry = face?.geometry;
-      const faceKey = `face:${renderedSelectedTopology.bodyId}/${
-        renderedSelectedTopology.topologyId ?? renderedSelectedTopology.hash
-      }`;
+      // Through the shared fail-closed resolver rather than a local `find`, so
+      // the chip cannot print a confident figure for a pick the measurement
+      // tape is simultaneously refusing as ambiguous.
+      const resolved = resolveFace(body, renderedSelectedTopology);
+      const geometry = resolved.ok ? resolved.entry.geometry : undefined;
       if (
         geometry?.featureType === 'through-hole' &&
         geometry.diameter !== undefined
       ) {
-        const label = body ? `${body.name} · Through hole` : 'Through hole';
         const value = `Ø ${round(geometry.diameter)} ${units}`;
         return {
           label: 'Through hole',
-          detail: value,
-          measurement: { key: faceKey, kind: 'hole', label, value }
+          detail: value
         };
       }
       const name = faceLabel(
@@ -2461,15 +2618,12 @@ export function App() {
         geometry?.surfaceType === 'cylinder' ? geometry.diameter : undefined;
       return {
         label,
-        measurement:
+        detail:
           cylinderDiameter !== undefined
-            ? {
-                key: faceKey,
-                kind: 'diameter',
-                label,
-                value: `Ø ${round(cylinderDiameter)} ${units}`
-              }
-            : undefined
+            ? `Ø ${round(cylinderDiameter)} ${units}`
+            : geometry?.area !== undefined
+              ? `${round(geometry.area)} ${units}²`
+              : undefined
       };
     }
     if (selectedBodyIds.length > 1) {
@@ -2489,14 +2643,7 @@ export function App() {
       const value = `${size.x} × ${size.y} × ${size.z} ${units}`;
       return {
         label: body.name,
-        detail: value,
-        measurement: {
-          key: `body:${body.bodyId}`,
-          kind: 'body',
-          label: body.name,
-          value,
-          note: `${round(body.volume)} ${units}³`
-        }
+        detail: value
       };
     }
     return null;
@@ -2517,32 +2664,443 @@ export function App() {
     [selectionSummary]
   );
 
-  /** View mode's measure tool: off until asked for, and only ever in View. */
+  /** View-only measurement session. None of this enters document/history. */
   const [measuring, setMeasuring] = useState(false);
+  const [measurementMode, setMeasurementMode] =
+    useState<MeasurementMode>('smart');
+  const [measurementDraft, setMeasurementDraft] =
+    useState<MeasurementTarget | null>(null);
+  /**
+   * Edges accumulated by Shift+Click for a running total. Owned here rather
+   * than read from `selectedEdges`, which is what let measuring rewrite the
+   * workspace's selection; the rules live in `measureSession.ts`.
+   */
+  const [measurementEdgeRun, setMeasurementEdgeRun] = useState<
+    readonly TopologySelection[]
+  >(EMPTY_MEASURE_SESSION.edgeRun);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
-  const capturedMeasurement =
-    viewMode && measuring ? selectionSummary?.measurement : undefined;
-  // Recording is a side effect of picking rather than a second gesture: with
-  // the tool on, whatever you select and can measure lands on the tape.
-  // `appendMeasurement` returns the list unchanged when nothing is new, and an
-  // unchanged reference is a state update React drops.
+  const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(
+    null
+  );
+  const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
+  const [measurementPrecision, setMeasurementPrecision] = useState(2);
+  const [radialDisplay, setRadialDisplay] = useState<RadialDisplay>('diameter');
+  /**
+   * The project whose stored list has been answered, including the answer
+   * "none". Until this matches the open project, writes stay disabled: an
+   * empty initial render must never outrun a slow read and erase the record it
+   * was still loading.
+   */
+  const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
+    useState<string | null>(null);
+  const measurementDisplay = useMemo<MeasurementDisplayOptions>(
+    () => ({
+      unit: measurementUnit,
+      precision: measurementPrecision,
+      radialDisplay
+    }),
+    [measurementPrecision, measurementUnit, radialDisplay]
+  );
+
+  // A measurement session belongs to one open project, not the application.
+  //
+  // The list is cleared first and then restored from storage, so a project
+  // with no stored measurements lands empty rather than inheriting the last
+  // project's. The restore is deliberately not awaited before clearing: an
+  // in-flight read for the PREVIOUS project must not be able to land on this
+  // one, which the id check inside the effect prevents.
   useEffect(() => {
-    if (!capturedMeasurement) {
+    setMeasurements([]);
+    setActiveMeasurementId(null);
+    clearMeasurementPicks();
+    setMeasurementHydratedProjectId(null);
+    if (!doc) {
+      return;
+    }
+    const projectId = doc.projectId;
+    setMeasurementUnit(doc.units);
+    setMeasurementPrecision(2);
+    setRadialDisplay('diameter');
+    let cancelled = false;
+    void loadProjectMeasurements(projectId)
+      .then((record) => {
+        if (cancelled) {
+          return;
+        }
+        if (record) {
+          setMeasurements(record.measurements);
+          setMeasurementUnit(record.display.unit);
+          setMeasurementPrecision(record.display.precision);
+          setRadialDisplay(record.display.radialDisplay);
+        }
+        setMeasurementHydratedProjectId(projectId);
+      })
+      .catch(() => {
+        // Leave writes disabled for this project. Besides unavailable storage,
+        // this includes a record from a newer build: writing the empty v1 list
+        // over fields this build refused to read would be the data loss the
+        // parser's forward-version guard exists to prevent.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [doc?.projectId]);
+
+  /**
+   * Writes the measurement list back, debounced.
+   *
+   * Coalesced rather than written per pick because a Shift+Click run rewrites
+   * the list on every click, and an IndexedDB put per click would serialise
+   * the whole list each time for a result that is superseded a moment later.
+   */
+  useEffect(() => {
+    if (!doc || measurementHydratedProjectId !== doc.projectId) {
+      return;
+    }
+    const projectId = doc.projectId;
+    const timeout = window.setTimeout(() => {
+      void saveProjectMeasurements(
+        buildMeasurementRecord(
+          projectId,
+          measurements,
+          measurementDisplay,
+          new Date().toISOString()
+        )
+      ).catch(() => {
+        // Same as the read: a device that cannot store them still measures.
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    doc?.projectId,
+    measurementHydratedProjectId,
+    measurements,
+    measurementDisplay
+  ]);
+
+  /**
+   * The measurement library, loaded on first entry to View mode.
+   *
+   * It is roughly nine kilobytes of derivation, formatting and export that
+   * only View mode can reach, and importing it at the top of this file put all
+   * of it in the eager entry chunk — which the bundle budget guards precisely
+   * because it is what every visitor downloads before anything renders. Types
+   * are erased at build time, so `import type` above costs nothing; only the
+   * runtime import is deferred.
+   *
+   * Every consumer below therefore has to tolerate `null` for the frame or two
+   * between entering View mode and the chunk arriving. That is a real state
+   * rather than a formality: a fast picker can click before it lands, and the
+   * pick is dropped rather than half-handled.
+   *
+   * This is the interim shape. The measure seam replaces it with a session
+   * that owns this state outright instead of App holding it at arm's length.
+   */
+  const [measurementApi, setMeasurementApi] = useState<
+    typeof MeasurementModule | null
+  >(null);
+
+  useEffect(() => {
+    if (!viewMode || measurementApi) {
+      return;
+    }
+    let cancelled = false;
+    void import('./lib/measurements').then((module) => {
+      if (!cancelled) {
+        setMeasurementApi(module);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, measurementApi]);
+
+  useEffect(() => {
+    if (!doc || !exactGeometryReady || !measurementApi) {
       return;
     }
     setMeasurements((current) =>
-      appendMeasurement(current, capturedMeasurement)
+      measurementApi.refreshMeasurements(current, viewerBodies, doc.version)
     );
-  }, [capturedMeasurement]);
+  }, [doc?.version, exactGeometryReady, viewerBodies, measurementApi]);
 
-  async function copyMeasurements() {
-    if (measurements.length === 0) {
+  function recordMeasurement(measurement: Measurement) {
+    // Checked before the state update rather than inside it, so the refusal can
+    // be reported. The list is capped rather than self-trimming: dropping the
+    // oldest row to make room is data loss nobody was told about.
+    if (!measurementApi) {
+      return;
+    }
+    if (!measurementApi.canAppendMeasurement(measurements, measurement)) {
+      setStatus(measurementApi.MEASUREMENT_LIMIT_MESSAGE);
+      return;
+    }
+    setMeasurements((current) =>
+      measurementApi.appendMeasurement(current, measurement)
+    );
+    setActiveMeasurementId(measurement.id);
+    setMeasurementDraft(null);
+    setStatus(`${measurement.label} measured.`);
+  }
+
+  /**
+   * What measuring this pick WOULD report, without recording anything.
+   *
+   * A tool that only answers after you commit makes you record a row to find
+   * out whether you picked the right thing, then delete it. The preview runs
+   * the SAME derivation the click will run rather than a cheaper estimate that
+   * could disagree with the number that lands.
+   *
+   * Null when there is nothing honest to say, which includes an ambiguous
+   * pick: a hover is not the place to explain ADR-011, and a silent absence
+   * beats a confident wrong number.
+   */
+  function previewMeasurement(
+    selection: TopologySelection,
+    point?: { x: number; y: number; z: number }
+  ): string | null {
+    if (!doc || !viewMode || !measuring || !measurementApi) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      return null;
+    }
+    if (measurementMode === 'smart') {
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      return measurement
+        ? measurementApi.formatMeasurement(measurement, measurementDisplay)
+            .value
+        : null;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      return null;
+    }
+    // The first of two picks has nothing to measure against yet, so it names
+    // the target rather than guessing at a distance.
+    if (!measurementDraft) {
+      return target.label;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    return measurement
+      ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
+      : null;
+  }
+
+  /**
+   * Abandons whatever pick was in progress: the two-pick draft and the running
+   * edge total both. Not called after a measurement is recorded — a run has to
+   * survive that, or a fourth Shift+Click could not extend a total of three.
+   */
+  function clearMeasurementPicks() {
+    setMeasurementDraft(null);
+    setMeasurementEdgeRun(EMPTY_MEASURE_SESSION.edgeRun);
+  }
+
+  /**
+   * Measures a pick, and reports whether it consumed it.
+   *
+   * The return value is the point. This used to be called for its side effects
+   * and fall straight through into sketch entry, direct manipulation, and the
+   * selection update — so measuring an edge in View mode silently replaced
+   * whatever a modelling session had selected, and the two features quietly
+   * shared one piece of state.
+   */
+  function handleMeasurementPick(
+    selection: TopologySelection,
+    additive: boolean,
+    detail?: PickDetail
+  ): boolean {
+    if (!doc || !viewMode || !measuring) {
+      return false;
+    }
+    // One guard for the whole handler. Dropping a pick that lands before the
+    // measurement chunk arrives is better than servicing half of it, and the
+    // window is a frame or two on first entry to View mode only. It still
+    // counts as consumed: falling through to selection would be the very
+    // coupling this seam removes.
+    if (!measurementApi) {
+      setStatus('Measure is still loading. Try that pick again.');
+      return true;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      setStatus(
+        'The selected body has no current exact projection to measure.'
+      );
+      return true;
+    }
+    const point = detail?.point;
+    if (measurementMode === 'smart') {
+      if (selection.kind === 'edge') {
+        // The run lives in the measure session rather than in `selectedEdges`,
+        // which is what let measuring rewrite the workspace's selection.
+        const run = nextEdgeRun(measurementEdgeRun, selection, additive);
+        setMeasurementEdgeRun(run);
+        if (edgeRunIsTotalable(run)) {
+          const total = measurementApi.createEdgeTotalMeasurement(
+            viewerBodies,
+            run,
+            doc.version,
+            doc.units
+          );
+          if (total) {
+            recordMeasurement(total);
+            return true;
+          }
+        }
+      }
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      if (measurement) {
+        recordMeasurement(measurement);
+      } else {
+        setStatus(
+          measurementApi.measurementSelectionFailure(body, selection) ??
+            'That selection does not expose a trustworthy measurement.'
+        );
+      }
+      return true;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      setStatus(
+        measurementApi.measurementSelectionFailure(body, selection) ??
+          (measurementMode === 'angle'
+            ? 'Angle needs a straight edge, circular axis, or measured face direction.'
+            : 'That selection does not expose a trustworthy measurement point.')
+      );
+      return true;
+    }
+    if (!measurementDraft) {
+      setMeasurementDraft(target);
+      setStatus(`${target.label} selected · pick the second target.`);
+      return true;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    if (measurement) {
+      recordMeasurement(measurement);
+    } else {
+      setStatus(
+        measurementMode === 'angle'
+          ? 'Those targets do not provide two stable directions; the first target is still selected.'
+          : 'Those targets could not produce a stable distance; the first target is still selected.'
+      );
+    }
+    return true;
+  }
+
+  const measurementAnnotations = useMemo<
+    MeasurementViewportAnnotation[]
+  >(() => {
+    if (!measurementApi) {
+      return [];
+    }
+    const pinned = measurements.flatMap((measurement) => {
+      const annotation = measurementApi.measurementToViewportAnnotation(
+        measurement,
+        measurementDisplay,
+        measurement.id === activeMeasurementId
+      );
+      return annotation ? [annotation] : [];
+    });
+    return measurementDraft?.point
+      ? [
+          ...pinned,
+          {
+            id: 'measurement-draft',
+            label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
+            selected: true,
+            status: 'current' as const,
+            // The first of two picks marks a point; there is no second point
+            // to span to until it lands.
+            graphic: 'anchor' as const,
+            anchor: measurementDraft.point,
+            segments: []
+          }
+        ]
+      : pinned;
+  }, [
+    activeMeasurementId,
+    measurementDisplay,
+    measurementDraft,
+    measurements,
+    measurementApi
+  ]);
+  const formattedMeasurements = useMemo(
+    () =>
+      measurementApi
+        ? Object.fromEntries(
+            measurements.map((measurement) => [
+              measurement.id,
+              measurementApi.formatMeasurement(measurement, measurementDisplay)
+            ])
+          )
+        : {},
+    [measurementDisplay, measurements, measurementApi]
+  );
+
+  async function copyMeasurements(measurement?: Measurement) {
+    const selected = measurement ? [measurement] : measurements;
+    if (selected.length === 0 || !measurementApi) {
       return;
     }
     try {
-      await navigator.clipboard.writeText(measurementsToText(measurements));
+      await navigator.clipboard.writeText(
+        measurementApi.measurementsToText(selected, measurementDisplay)
+      );
       setStatus(
-        `Copied ${measurements.length} measurement${measurements.length === 1 ? '' : 's'}.`
+        `Copied ${selected.length} measurement${selected.length === 1 ? '' : 's'}.`
       );
     } catch {
       setStatus('Could not reach the clipboard. Export CSV instead.');
@@ -2550,11 +3108,15 @@ export function App() {
   }
 
   function exportMeasurements() {
-    if (!doc || measurements.length === 0) {
+    if (!doc || measurements.length === 0 || !measurementApi) {
       return;
     }
     const fileName = `${exportFileStem(doc.name)}.measurements.csv`;
-    downloadText(fileName, `${measurementsToCsv(measurements)}\n`, 'text/csv');
+    downloadText(
+      fileName,
+      `${measurementApi.measurementsToCsv(measurements, measurementDisplay)}\n`,
+      'text/csv'
+    );
     setStatus(`Exported ${measurements.length} measurements to ${fileName}.`);
   }
 
@@ -2762,8 +3324,19 @@ export function App() {
         controller.schedule(pending);
       }
     } catch {
+      // The document goes back in the queue rather than on the floor. It was
+      // taken out of the ref above so a write that LANDS is not repeated, but a
+      // write that did not land leaves this closure holding the only copy of
+      // those edits — and simply returning loses them outright.
+      const repark = reparkFailedAutosave({
+        pending,
+        queued: pendingLocalSaveRef.current
+      });
+      if (repark) {
+        pendingLocalSaveRef.current = repark;
+      }
       setSaveState('offline');
-      setStatus('Local autosave failed. Export your model before closing.');
+      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
     }
   }
 
@@ -3098,6 +3671,7 @@ export function App() {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
     }
+    setFeatureFormError(null);
     // A toolbar command owns the next gesture. Preserve the body selection
     // that pre-fills Move/boolean forms, but disarm any selection-first face or
     // edge handle so two manipulators can never claim the same pointer.
@@ -3160,12 +3734,20 @@ export function App() {
         );
         return;
       }
-      // Prefer the gizmo flow when a target body is unambiguous; the classic
-      // form remains for multi-body documents with nothing selected.
+      // WF-07 (resolved): Move used to be two UIs for one command, and which
+      // one you got was decided by document state rather than by what you
+      // asked for — the gizmo had a live preview, the form had a Name field
+      // and a body picker, and they committed through differently labelled
+      // buttons. The gizmo now carries both, so it is the only Move UI. With
+      // nothing selected in a multi-body document it opens on the first body
+      // and the picker changes it, which is what the form's picker was for.
+      // `.at(-1)`, not `[0]`: the retired form defaulted to the last live body
+      // — the one you most likely just made — and changing which body an
+      // unselected Move lands on would silently rewrite existing flows.
       const targetBodyId =
-        selectedBodyIds.at(-1) ??
-        (viewerBodies.length === 1 ? viewerBodies[0]!.bodyId : null);
+        selectedBodyIds.at(-1) ?? viewerBodies.at(-1)?.bodyId ?? null;
       if (targetBodyId) {
+        setMoveName('Move');
         setExtrudePreview(null);
         setSelectedBodyIds([targetBodyId]);
         setMovePreview({
@@ -3199,6 +3781,7 @@ export function App() {
   }
 
   function cancelPanel() {
+    setFeatureFormError(null);
     const sketchReturn =
       tool === 'extrude' || extrudePreview
         ? extrudeSketchReturnRef.current
@@ -3332,7 +3915,9 @@ export function App() {
     setMovePreview(null);
     const created = createFeature(
       commandFactories.transformBody({
-        name: 'Move',
+        // Whatever the gizmo's Name field holds, falling back to the default
+        // rather than committing a feature with a blank name.
+        name: moveName.trim() || 'Move',
         targetBodyId: preview.bodyId as BodyId,
         translation: {
           x: round(translation.x),
@@ -5163,7 +5748,9 @@ export function App() {
       throw new Error('No project is open.');
     }
     if (!ensureCanEdit('upload a project artifact')) {
-      throw new Error(editDisabledReason ?? 'Project editing is unavailable.');
+      throw new Error(
+        editDisabledReasonRef.current ?? 'Project editing is unavailable.'
+      );
     }
     const { session: upload } = await api.createUploadSession({
       projectId: doc.projectId,
@@ -5255,65 +5842,20 @@ export function App() {
       return;
     }
 
-    if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-      setStatus('STEP import is limited to 250 MB.');
-      return;
-    }
-
-    try {
-      // Content-addressed storage first: the document carries a checksum
-      // reference and the bytes live in the browser's blob store (and the
-      // artifact archive, once uploaded). Embedding the text in the document
-      // is the fallback for storage-denied contexts, at the old 12 MB cap.
-      let sourceRef = null;
-      try {
-        sourceRef = await putSourceBlob(file);
-      } catch {
-        if (file.size > MAX_EMBEDDED_STEP_BYTES) {
-          setStatus(
-            'STEP import over 12 MB needs browser storage, which is unavailable in this session.'
-          );
-          return;
-        }
-      }
-      const stepText = await file.text();
-      const metadata = parseStepMetadata(file.name, stepText);
-      const productName = metadata.products[0]?.trim();
-      let artifactId = `artifact_local_${crypto.randomUUID()}`;
-      let archived = false;
-      try {
-        artifactId = await archiveArtifact({
-          fileName: file.name,
-          contentType,
-          kind: 'step-import',
-          body: file,
-          metadata: { source: 'direct-upload' }
-        });
-        archived = true;
-      } catch {
-        // The source stays in the local blob store (or embedded); rebuilds
-        // remain deterministic and offline either way.
-      }
-
-      const imported = executeCommand(
-        commandFactories.importStep({
-          name: productName || file.name.replace(/\.(step|stp)$/i, ''),
-          artifactId,
-          sourceName: file.name,
-          ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
-        })
-      );
-      if (imported) {
-        setStatus(
-          `Imported editable STEP solid from ${file.name}` +
-            (archived
-              ? '.'
-              : ' (cloud archive unavailable; source saved locally).')
-        );
-      }
-    } catch (error) {
-      setStatus(errorMessage(error, 'STEP import failed.'));
-    }
+    await runStepImport({
+      file,
+      contentType,
+      archive: archiveArtifact,
+      validatedFeature,
+      status: { setStatus, setFeatureFormError },
+      marks: {
+        inFlight: inFlightImportChecksums.current,
+        abandoned: abandonedImportChecksums.current
+      },
+      currentDocument: () => managerRef.current?.document ?? null,
+      editDisabledReason: () => editDisabledReasonRef.current,
+      newId: () => crypto.randomUUID()
+    });
   }
 
   /**
@@ -5330,9 +5872,7 @@ export function App() {
     ) {
       return;
     }
-    setStatus(
-      `Archiving ${localOnlySources.length} local import source(s)…`
-    );
+    setStatus(`Archiving ${localOnlySources.length} local import source(s)…`);
     const result = await archiveLocalOnlyImportSources({
       document: doc,
       loadSourceBytes: loadSourceBlob,
@@ -5555,7 +6095,11 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setTool(null);
-    setStatus('Sketching on the selected face. Esc exits.');
+    // Not "Esc exits": a sketch opens with the Line tool armed, so the first
+    // Escape returns to selection and only the second leaves. The live hint
+    // beside this message already names the rung you are actually on, and two
+    // contradictory promises on one status bar is worse than one honest one.
+    setStatus('Sketching on the selected face · Finish Sketch when done.');
     return true;
   }
 
@@ -5582,6 +6126,12 @@ export function App() {
       setStatus(
         'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
       );
+      return;
+    }
+    // Measuring owns the pick outright. Without this return the same click
+    // went on to arm a sketch, arm a drag handle, and replace the selection —
+    // so an inspection pass rewrote the state a modelling session was holding.
+    if (handleMeasurementPick(selection, additive, detail)) {
       return;
     }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
@@ -5808,6 +6358,21 @@ export function App() {
   function handleBoxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
       return;
+    }
+    // A move in flight owns the drag. The gizmo answers within about 15 px of
+    // its arrow, so a grab that slips a little further lands on empty space
+    // and used to arrive here as an empty box selection — which cleared the
+    // selection out from under the Move panel, leaving the panel and the
+    // gizmo on screen still naming a body that was no longer selected. The
+    // near miss should cost nothing, not the selection.
+    if (movePreview && bodyIds.length === 0) {
+      return;
+    }
+    // A sweep that does pick something is a change of intent, so the move goes
+    // rather than staying armed on a body the user has just selected away from.
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
     }
     // A box selection replaces the active topology selection. Any direct-
     // manipulation target belongs to that old face or edge, so retaining it
@@ -6938,7 +7503,11 @@ export function App() {
     bodyId: BodyId,
     offset: number,
     exact?: ParamValue
-  ): { command: AnyCommand; sourceFeatureId: FeatureId; height: number } | null {
+  ): {
+    command: AnyCommand;
+    sourceFeatureId: FeatureId;
+    height: number;
+  } | null {
     const base = managerRef.current?.document;
     if (!base || Math.abs(offset) <= 1e-9) {
       return null;
@@ -7655,18 +8224,40 @@ export function App() {
       }
 
       if (tool === 'sketch') {
-        // The focused sketch workspace owns drawing shortcuts and Escape.
+        // `tool` is only 'sketch' while the plane prompt is up: choosing a
+        // plane clears it and hands the keys to the sketch session, which is
+        // matched by `interaction.mode` below. Drawing shortcuts stay reserved
+        // here so a stray letter cannot launch a primitive over the prompt,
+        // but Escape has to keep working — the prompt has no other way out,
+        // and the workspace promises Escape is always a way back.
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelPanel();
+          setStatus('Sketch canceled · no plane was chosen.');
+        }
         return;
       }
       if (tool === 'extrude') {
         if (event.key === 'Escape') {
           event.preventDefault();
           cancelPanel();
-        } else if (event.key === 'Enter' && !typing) {
+          return;
+        }
+        if (event.key === 'Enter' && !typing) {
           event.preventDefault();
           void confirmExtrude();
+          return;
         }
-        return;
+        // Everything else used to stop here, which took the view keys with it.
+        // Profile picking asks the user to click a region it has not framed —
+        // the camera returns to the solid, and the profiles can be off-screen
+        // entirely — so F, the standard views, the grid and the display mode
+        // are exactly what someone reaches for, and exactly what did nothing.
+        // Only the letters that would launch another tool mid-pick stay
+        // reserved.
+        if (SHORTCUT_TO_TOOL[event.key.toLowerCase()]) {
+          return;
+        }
       }
       if (movePreview) {
         if (event.key === 'Escape') {
@@ -7770,6 +8361,21 @@ export function App() {
       }
       switch (event.key) {
         case 'Escape':
+          if (viewMode && measuring) {
+            event.preventDefault();
+            if (measurementDraft) {
+              clearMeasurementPicks();
+              setStatus(
+                `${measurementMode} measurement canceled · pick the first target.`
+              );
+            } else {
+              setMeasuring(false);
+              setStatus(
+                'Measure off · pinned results remain in this View session.'
+              );
+            }
+            return;
+          }
           if (interaction.mode !== 'idle') {
             event.preventDefault();
             if (
@@ -7790,7 +8396,15 @@ export function App() {
               edgePreview.clear();
             }
             if (!cancelledPointer) {
+              // Read the rung before climbing it. Escape out of a sketch left
+              // the "Sketching on ..." message standing over a workspace the
+              // sketch had already been left — only Finish Sketch said
+              // anything. Both dispatch the same exit, so both can say so.
+              const leftSketch = escapeTarget(interaction) === 'exit-sketch';
               dispatchInteraction({ type: 'escape' });
+              if (leftSketch) {
+                setStatus('Sketch closed · sketch edits preserved.');
+              }
             }
           } else if (tool || selectedFeatureNodeId) {
             cancelPanel();
@@ -7801,6 +8415,16 @@ export function App() {
         case 'Delete':
         case 'Backspace':
           if (viewMode) {
+            if (activeMeasurementId) {
+              event.preventDefault();
+              setMeasurements((current) =>
+                current.filter(
+                  (measurement) => measurement.id !== activeMeasurementId
+                )
+              );
+              setActiveMeasurementId(null);
+              setStatus('Measurement removed.');
+            }
             return;
           }
           if (selectedFeature) {
@@ -7834,6 +8458,18 @@ export function App() {
       }
 
       const key = event.key.toLowerCase();
+      if (key === 'm' && viewMode) {
+        event.preventDefault();
+        const next = !measuring;
+        setMeasuring(next);
+        clearMeasurementPicks();
+        setStatus(
+          next
+            ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+            : 'Measure off · pinned results stay available in this View session.'
+        );
+        return;
+      }
       if (key === 'f') {
         setFitSignal((value) => value + 1);
         return;
@@ -7995,7 +8631,8 @@ export function App() {
             void handleDeleteProjectForever(project)
           }
           onEmptyTrash={(trashed) => void handleEmptyTrash(trashed)}
-          loadThumbnailBodies={loadThumbnailBodies}
+          loadThumbnail={loadThumbnail}
+          backfillThumbnail={backfillThumbnail}
         />
         {settingsOverlay}
       </>
@@ -8038,7 +8675,13 @@ export function App() {
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
   const viewModeHint = measuring
-    ? 'Click an edge, hole or cylinder to record it · Shift+Click totals edges'
+    ? measurementDraft
+      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
+      : measurementMode === 'smart'
+        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
+        : measurementMode === 'distance'
+          ? 'Distance · pick the first target · centers resolve automatically'
+          : 'Angle · pick a straight edge or measured face direction'
     : selectedTopology?.kind === 'face'
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0
@@ -8067,7 +8710,9 @@ export function App() {
                 : selectedTopology?.kind === 'face'
                   ? 'Face selected — Space faces it head-on'
                   : selectedTopology?.kind === 'edge'
-                    ? 'Edge selected — Fillet or Chamfer from the toolbar'
+                    ? // Neither tool has a shortcut, so the rail is the only
+                      // route: name it the way the rail names itself.
+                      'Edge selected — Fillet or Chamfer in Feature tools'
                     : selectedFeature
                       ? 'Edit in the panel · Del deletes · Esc closes'
                       : viewerBodies.length > 0
@@ -8476,10 +9121,11 @@ export function App() {
             measuring={measuring}
             onMeasure={(next) => {
               setMeasuring(next);
+              clearMeasurementPicks();
               setStatus(
                 next
-                  ? 'Measure: every edge, hole or cylinder you pick is recorded.'
-                  : 'Measure off · the list is kept until you clear it.'
+                  ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+                  : 'Measure off · pinned results stay available in this View session.'
               );
             }}
             onFit={() => setFitSignal((value) => value + 1)}
@@ -8564,6 +9210,7 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             bodies={viewerBodies}
+            measurementAnnotations={measurementAnnotations}
             sketches={
               // Region-based rendering (sketchViews) supersedes the legacy
               // single-profile overlays under direct manipulation.
@@ -8638,6 +9285,7 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            onMeasurePreview={viewMode && measuring ? previewMeasurement : null}
             regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
               viewMode ? (
@@ -8661,11 +9309,80 @@ export function App() {
                   {(measuring || measurements.length > 0) && (
                     <MeasurementDock
                       measurements={measurements}
+                      formattedMeasurements={formattedMeasurements}
+                      enabled={measuring}
+                      activeMeasurementId={activeMeasurementId}
+                      mode={measurementMode}
+                      draftTargetLabel={measurementDraft?.label ?? null}
+                      display={measurementDisplay}
+                      onMode={(mode) => {
+                        setMeasuring(true);
+                        setMeasurementMode(mode);
+                        clearMeasurementPicks();
+                        setStatus(
+                          mode === 'smart'
+                            ? 'Smart measure · pick an edge, face, hole, or body.'
+                            : mode === 'distance'
+                              ? 'Distance · pick the first target.'
+                              : 'Angle · pick the first straight edge or measured face direction.'
+                        );
+                      }}
+                      onUnit={setMeasurementUnit}
+                      onPrecision={setMeasurementPrecision}
+                      onRadialDisplay={setRadialDisplay}
+                      onSelect={setActiveMeasurementId}
+                      onToggleVisibility={(id) =>
+                        setMeasurements((current) =>
+                          current.map((measurement) =>
+                            measurement.id === id
+                              ? {
+                                  ...measurement,
+                                  visible: !measurement.visible
+                                }
+                              : measurement
+                          )
+                        )
+                      }
+                      onRename={(id, label, note) =>
+                        setMeasurements((current) =>
+                          current.map((measurement) =>
+                            measurement.id === id
+                              ? {
+                                  ...measurement,
+                                  label,
+                                  note: note || undefined,
+                                  renamed: true
+                                }
+                              : measurement
+                          )
+                        )
+                      }
+                      onDelete={(id) => {
+                        setMeasurements((current) =>
+                          current.filter((measurement) => measurement.id !== id)
+                        );
+                        setActiveMeasurementId((current) =>
+                          current === id ? null : current
+                        );
+                        setStatus('Measurement removed.');
+                      }}
                       onClear={() => {
+                        if (
+                          appSettings.general.confirmDestructiveActions &&
+                          !window.confirm(
+                            'Clear every measurement in this View session?'
+                          )
+                        ) {
+                          return;
+                        }
                         setMeasurements([]);
+                        setActiveMeasurementId(null);
+                        clearMeasurementPicks();
                         setStatus('Measurement list cleared.');
                       }}
-                      onCopy={() => void copyMeasurements()}
+                      onCopy={(measurement) =>
+                        void copyMeasurements(measurement)
+                      }
                       onExport={exportMeasurements}
                     />
                   )}
@@ -8819,6 +9536,12 @@ export function App() {
                         plane: sketch.planeRef,
                         sketchId: sketch.sketchId
                       });
+                      // Every other way into a sketch says so; this one left
+                      // whatever the last message was standing over a
+                      // workspace that had just changed underneath it.
+                      setStatus(
+                        `Editing ${sketch.name} · Finish Sketch when done.`
+                      );
                     }
                   }}
                 >
@@ -8835,6 +9558,39 @@ export function App() {
                         'Selected body')
                   }
                   hideRotation={movePreview.target === 'sketch'}
+                  // A sketch move commits as a sketch translation, not a named
+                  // feature, so it gets neither a name nor a body picker.
+                  name={movePreview.target === 'sketch' ? undefined : moveName}
+                  onName={
+                    movePreview.target === 'sketch' ? undefined : setMoveName
+                  }
+                  targets={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : viewerBodies.map((body) => ({
+                          bodyId: body.bodyId,
+                          name:
+                            representations[body.bodyId]?.name ?? body.bodyId
+                        }))
+                  }
+                  targetBodyId={movePreview.bodyId}
+                  onTargetBody={(bodyId) => {
+                    setSelectedBodyIds([bodyId as BodyId]);
+                    setMoveSnap(null);
+                    setMovePreview((current) =>
+                      current
+                        ? {
+                            ...current,
+                            bodyId,
+                            // Values are relative to the body's own centre, so
+                            // carrying them to a different body would apply a
+                            // move nobody asked for.
+                            translation: { x: 0, y: 0, z: 0 },
+                            rotationDeg: { x: 0, y: 0, z: 0 }
+                          }
+                        : current
+                    );
+                  }}
                   values={{
                     translation: movePreview.translation,
                     rotationDeg: movePreview.rotationDeg
@@ -8876,13 +9632,32 @@ export function App() {
                           });
                           setTool(null);
                           setStatus(
-                            `Sketching on the ${plane} plane. Esc exits.`
+                            // Keep the plane id here rather than PLANE_LABELS:
+                            // the e2e test that pins the label-to-plane
+                            // mapping reads this line precisely because it is
+                            // derived from the id, so a rename that only edits
+                            // strings cannot keep it green. Only the "Esc
+                            // exits" claim goes — the armed Line tool makes it
+                            // untrue on the first press.
+                            `Sketching on the ${plane} plane · Finish Sketch when done.`
                           );
                         }}
                       >
                         {PLANE_LABELS[plane]}
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      className="sketch-plane-dismiss"
+                      aria-label="Cancel sketch"
+                      title="Cancel sketch (Esc)"
+                      onClick={() => {
+                        cancelPanel();
+                        setStatus('Sketch canceled · no plane was chosen.');
+                      }}
+                    >
+                      ×
+                    </button>
                   </span>
                 </div>
               ) : extrudePreview && selectedSketchProfileName ? (
@@ -9010,6 +9785,7 @@ export function App() {
             ) : (
               <Inspector
                 tool={tool}
+                commitError={featureFormError}
                 selectedFeature={selectedFeature}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
@@ -9203,6 +9979,12 @@ export function App() {
                       plane: sketch.planeRef,
                       sketchId: sketch.sketchId
                     });
+                    // Same reason as the revert pill: entering a sketch from
+                    // the tree changes what every key does, so it should say
+                    // so rather than leaving the previous message in place.
+                    setStatus(
+                      `Editing ${sketch.name} · Finish Sketch when done.`
+                    );
                   }
                 }}
                 onApplyExtrude={(feature, value) => {
