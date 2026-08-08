@@ -38,37 +38,24 @@ import {
  * THE HEADLINE, and it is worth stating in user terms rather than in
  * millimetres. Drill a shaft with an equal-radius cross bore and export it:
  *
- *   the UI prints             848.040   (WRONG — Steinmetz says 704.230)
- *   the STL file encloses     652.318   (-23.1% against what the UI printed)
+ *   the UI prints             704.263   (correct — Steinmetz says 704.230)
+ *   the STL file encloses     831.109   (+18.0% of material that is not there)
  *   the STL is watertight     0 open edges
  *
  * The file is valid. A slicer will accept it without complaint and print a
- * part that matches neither the design nor the number the UI showed. Nothing
- * anywhere says so — not a warning, not a validation error, not the file
- * itself. Watertight is exactly what makes it dangerous: the one check a
- * slicer does perform, it passes.
+ * shaft that is 18% heavier than the part the user designed, with the hole
+ * missing. Nothing anywhere says so — not a warning, not a validation error,
+ * not the file itself. Watertight is exactly what makes it dangerous: the one
+ * check a slicer does perform, it passes.
  *
- * WHAT CHANGED ON THE 061c1b2 KERNEL, because the shape of this defect
- * inverted and the old table is misleading if read as still current.
- *
- * The UI figure used to be RIGHT and the file wrong by +18%. Now the UI
- * figure is wrong: 848.040 is the undrilled stock, and it is the same number
- * at every bore radius — the measurement no longer sees the bore at all (see
- * cross-drilled-render.test.ts, which pins that directly). The file
- * meanwhile under-encloses rather than over-encloses. The two errors used to
- * point the same way and now point apart.
- *
- * Leakage improved a great deal in the same move, so this is not a uniform
- * regression: open edges at r=2 went 60 -> 2 and at r=1 went 120 -> 15.
+ * At smaller bore radii the hole IS drawn and the file leaks instead, which a
+ * slicer may or may not repair silently:
  *
  *   bore r | UI prints | STL encloses |  error  | facets | STL open edges
  *   -------|-----------|--------------|---------|--------|----------------
- *      3   |  848.040  |   652.318    | -23.1%  |  3256  |   0
- *      2   |  848.040  |   657.540    | -22.5%  |   662  |   2
- *      1   |  848.040  |   328.084    | -61.3%  |   722  |  15
- *
- * (was, on 8733eab: 704.263/831.109/+18.0%/68/0, 750.652/804.284/+7.1%/210/60,
- * 802.579/818.248/+2.0%/266/120)
+ *      3   |  704.263  |   831.109    | +18.0%  |    68  |   0
+ *      2   |  750.652  |   804.284    |  +7.1%  |   210  |  60
+ *      1   |  802.579  |   818.248    |  +2.0%  |   266  | 120
  *
  * And a body whose B-REP IS EXACT still exports a leaking file — a ball with
  * its cap cut off measures 3534.2917 against a closed form of 3534.2917, and
@@ -246,29 +233,25 @@ describe('what STL export actually writes', () => {
     120_000
   );
 
-  it('instead exports a watertight file that matches neither the design nor the printed figure', async () => {
+  it('instead exports a watertight file of a shaft with no hole', async () => {
     // The headline. This is the dangerous one precisely BECAUSE the file is
     // well formed: zero open edges means a slicer accepts it and prints it,
     // and the only thing wrong is that it is the wrong solid.
     const { printed, stl, warnings } = await drillAndExport(3);
-    // 848.040 is the undrilled stock. The bore is absent from the measurement.
-    expect(printed).toBeCloseTo(848.04, 2);
-    expect(stl.volume).toBeCloseTo(652.318, 2);
-    // The file now encloses 23% LESS than the app said, where it used to
-    // enclose 18% more. The sign of this error is the thing that flipped.
-    expect((stl.volume - printed) / printed).toBeLessThan(-0.22);
-    // Nor is it the true drilled body: it under-cuts that too.
-    expect(stl.volume).toBeLessThan(704.23);
+    expect(printed).toBeCloseTo(704.263, 2);
+    expect(stl.volume).toBeCloseTo(831.109, 2);
+    // 18% more material than the app said the part contains.
+    expect((stl.volume - printed) / printed).toBeGreaterThan(0.17);
+    // And most of the way back to the undrilled stock.
+    expect(stl.volume / UNDRILLED).toBeGreaterThan(0.97);
     expect(stl.openEdges).toBe(0);
-    expect(stl.facets).toBe(3256);
+    expect(stl.facets).toBe(68);
     expect(warnings).toEqual([]);
   }, 120_000);
 
-  // Leakage is much better here — 60 -> 2 and 120 -> 15 open edges — while the
-  // printed figure is the same undrilled stock at both radii.
   it.each([
-    [2, 848.04, 657.54, 662, 2],
-    [1, 848.04, 328.084, 722, 15]
+    [2, 750.652, 804.284, 210, 60],
+    [1, 802.579, 818.248, 266, 120]
   ])(
     'exports a leaking file at bore radius %s',
     async (boreRadius, printed, enclosed, facets, openEdges) => {

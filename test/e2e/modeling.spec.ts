@@ -2520,19 +2520,13 @@ test('a refused boolean explains itself inside the panel that asked', async ({
 
   // The refusal is readable where the user is looking. Before this it reached
   // only the status bar, clipped mid-sentence, leaving Create looking inert.
-  // THAT is what this test is for, and it still holds.
-  //
-  // What the refusal SAYS got worse on the 061c1b2 kernel, and the loss is
-  // recorded here rather than hidden. This body used to come back faceted, and
-  // the facet copy named the consequence ("will export that way") and offered
-  // a route that works ("subtract instead"). It now fails validation instead,
-  // and that message only says to adjust the overlap and try again. Same
-  // refusal, less help.
   const refusal = inspector.getByRole('alert');
-  await expect(refusal).toContainText(
-    'open, non-manifold, or inconsistently oriented'
-  );
-  await expect(refusal).toContainText('Adjust the overlap or placement');
+  await expect(refusal).toContainText('faceted approximation');
+  // It states only what was measured. No single cause is asserted: measured
+  // on a box and a cylinder, repositioning clears this for a small round
+  // operand and clears nothing for one wider than the box it meets.
+  await expect(refusal).toContainText('will export that way');
+  await expect(refusal).toContainText('subtract instead');
 
   // Refused means refused: history is untouched and the form stays open with
   // its picks intact, ready for another operation.
