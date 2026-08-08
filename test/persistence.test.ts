@@ -424,6 +424,44 @@ describe('project shelves', () => {
     );
   });
 
+  it('lists only the latest thumbnail and exposes it on the project summary', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Previewed' });
+    const projectId = created.document.projectId;
+    const artifactIds: string[] = [];
+
+    for (const bytes of ['first', 'second']) {
+      const { session } = await service.createUploadSession(userId, {
+        projectId,
+        fileName: 'thumbnail.webp',
+        contentType: 'image/webp',
+        kind: 'thumbnail'
+      });
+      await service.putUpload(
+        userId,
+        session.uploadSessionId,
+        new TextEncoder().encode(bytes).buffer
+      );
+      await service.finalizeArtifact(userId, {
+        projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      });
+      artifactIds.push(session.artifactId);
+    }
+
+    const artifacts = await service.listArtifacts(userId, projectId);
+    expect(artifacts.artifacts.map(({ artifactId }) => artifactId)).toEqual([
+      artifactIds[1]
+    ]);
+    expect((await service.listProjects(userId)).projects[0]).toMatchObject({
+      thumbnailArtifactId: artifactIds[1]
+    });
+    await expect(
+      service.getArtifactMetadata(userId, artifactIds[0]!)
+    ).resolves.toEqual({ artifact: null });
+  });
+
   it('orders pinned projects first and honours a manual reorder', async () => {
     const service = new InMemoryPersistenceService();
     const first = await service.createProject(userId, { name: 'First' });
