@@ -638,14 +638,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const persistence = createPersistenceService(
     envForCollaborationRollout(env, collaborationRollout)
   );
-  const requiresSharingPreference =
-    (request.method === 'POST' &&
-      (Boolean(invitationsMatch) || pathname === INVITATION_ACCEPT_ROUTE)) ||
-    (request.method === 'PATCH' && Boolean(memberMatch)) ||
-    Boolean(collaborationMatch || collaborationTicketMatch);
+  const requiresActorSharingPreference =
+    (request.method === 'POST' && Boolean(invitationsMatch)) ||
+    (request.method === 'PATCH' && Boolean(memberMatch));
 
   if (
-    requiresSharingPreference &&
+    requiresActorSharingPreference &&
     !(await isProjectSharingPreferenceEnabled(userId, env))
   ) {
     return json(
@@ -957,6 +955,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'POST' && collaborationTicketMatch) {
     const projectId = collaborationTicketMatch[1]!;
     const access = await persistence.requireProjectRead(userId, projectId);
+    if (!(await isProjectSharingPreferenceEnabled(access.ownerUserId, env))) {
+      return json(
+        {
+          error: 'Project sharing is disabled for this account.',
+          code: 'FEATURE_DISABLED'
+        },
+        403
+      );
+    }
     const headers = new Headers({
       'x-openzcad-internal-ticket-request': 'v1',
       'x-openzcad-user-id': userId,
@@ -992,6 +999,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     assertSameOrigin(request);
     const projectId = collaborationMatch[1]!;
     const access = await persistence.requireProjectRead(userId, projectId);
+    if (!(await isProjectSharingPreferenceEnabled(access.ownerUserId, env))) {
+      return json(
+        {
+          error: 'Project sharing is disabled for this account.',
+          code: 'FEATURE_DISABLED'
+        },
+        403
+      );
+    }
     const headers = new Headers(request.headers);
     headers.set('x-openzcad-user-id', userId);
     headers.set('x-openzcad-display-name', session.displayName);
