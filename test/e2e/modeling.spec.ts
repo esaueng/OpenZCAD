@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   test,
   expect,
+  expectBodyCount,
   openAssistant,
   shiftSelectTwoVisibleBoxEdges,
   stubApi
@@ -28,17 +29,17 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
       .getByRole('button', { name: /^Create/ })
       .click();
   }
-  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await expectBodyCount(page, 2);
 
   const box = page.locator('.feature-row', { hasText: /^Box/ });
   const cylinder = page.locator('.feature-row', { hasText: /^Cylinder/ });
   await box.getByRole('button', { name: 'Suppress Box' }).click();
   await expect(box).toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   await box.getByRole('button', { name: 'Resume Box' }).click();
   await expect(box).not.toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await expectBodyCount(page, 2);
 
   const rollback = box.getByRole('button', {
     name: 'Roll back history after Box'
@@ -46,30 +47,26 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   await rollback.click();
   await expect(rollback).toHaveAttribute('aria-pressed', 'true');
   await expect(cylinder).toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect(cylinder).not.toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('2 bodies');
+  await expectBodyCount(page, 2);
   await page.getByRole('button', { name: 'Redo' }).click();
   await expect(cylinder).toContainText('suppressed');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
 
 test('resizes a cylinder wall concentrically with one undoable radius edit', async ({
   page
 }) => {
-  // Five gestures on one body, each of which the kernel has to answer
-  // exactly: create, drag the wall out, undo/redo, drag and cancel, then
-  // offset the cap. A trace of a passing run spends ~6 s on the first tool
-  // click alone (viewer cold start behind a software rasteriser) and ~7 s
-  // more inside the two drags, because every intermediate pointermove
-  // rebuilds the exact preview and repaints. That is ~30 s of real work on a
-  // CI runner with no GPU, which leaves the 30 s default with no margin at
-  // all — the same budget the multi-region extrude test already raises.
+  // Five gestures on one body: create, drag the wall out, undo/redo, drag and
+  // cancel, then offset the cap. The wall drag uses a disposable viewport
+  // projection and performs one exact kernel validation on release.
   test.setTimeout(90_000);
   await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -84,9 +81,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
   const selectCylinderSurface = async (surface: 'wall' | 'cap') => {
     await canvas.evaluate((element, requestedSurface) => {
       element.dispatchEvent(
@@ -149,6 +147,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByRole('region', { name: '3D viewport' })).toContainText(
     'Cylindrical face Ø36'
   );
+  await expect(canvas).toHaveAttribute('data-e2e-cylinder-proxy-radius', '18');
   await page.mouse.up();
 
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -159,12 +158,24 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
   await expect(page.getByLabel('Height', { exact: true })).toHaveValue('28');
   await expect(page.locator('.panel-body')).toContainText('36 × 36 × 28 mm');
+  await expect(canvas).not.toHaveAttribute(
+    'data-e2e-cylinder-proxy-radius',
+    /.+/
+  );
 
-  await page.getByRole('button', { name: 'Undo' }).click();
-  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await page
+    .getByRole('button', { name: 'Undo' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('14');
-  await page.getByRole('button', { name: 'Redo' }).click();
-  await page.locator('.feature-row-main', { hasText: 'Cylinder' }).click();
+  await page
+    .getByRole('button', { name: 'Redo' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
 
   await selectCylinderSurface('wall');
@@ -193,6 +204,10 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
+  await expect(canvas).not.toHaveAttribute(
+    'data-e2e-cylinder-proxy-radius',
+    /.+/
+  );
   await page.mouse.up();
 
   await selectCylinderSurface('cap');
@@ -257,8 +272,8 @@ test('resizes a literal box by dragging an exact face', async ({ page }) => {
   await expect(page.getByRole('contentinfo')).toContainText('Resize Box');
   const dimensions = await Promise.all([
     page.getByLabel('Width (X)').inputValue(),
-    page.getByLabel('Height (Y)').inputValue(),
-    page.getByLabel('Depth (Z)').inputValue()
+    page.getByLabel('Depth (Y)').inputValue(),
+    page.getByLabel('Height (Z)').inputValue()
   ]);
   expect(dimensions).not.toEqual(['40', '18', '24']);
 });
@@ -445,7 +460,14 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
   expect(consoleErrors).toEqual([]);
 });
 
-test('refuses a new face sketch after a hash-only direct edit', async ({
+// Until the kernel adapter re-derived primitive lineage on direct-edit
+// results, this scenario pinned a REFUSAL: the offset box face lost its
+// reference and sketching on it was blocked. The box is still a box after a
+// face offset, so its roles — and the face reference — now survive, and the
+// sketch attaches associatively. The reference-less refusal itself stays
+// pinned in faceSketchAttachment.test.ts and capabilities.test.ts, where
+// non-primitive bodies still exercise it.
+test('keeps face sketching available after a primitive direct edit', async ({
   page
 }) => {
   test.setTimeout(60_000);
@@ -503,23 +525,13 @@ test('refuses a new face sketch after a hash-only direct edit', async ({
   const offsetCard = page.getByRole('region', {
     name: 'Offset Face operation'
   });
-  const sketchAction = offsetCard.getByRole('tab', {
-    name: /Sketch: This edited face has no stable topology reference/
-  });
-  await expect(sketchAction).toBeDisabled();
-  await expect(sketchAction).toHaveAttribute(
-    'title',
-    /no stable topology reference/
-  );
-
-  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.mouse.click(editedFacePoint!.x, editedFacePoint!.y);
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'This edited face has no stable topology reference'
-  );
+  await expect(offsetCard).toBeVisible();
+  const sketchAction = offsetCard.getByRole('tab', { name: 'Sketch' });
+  await expect(sketchAction).toBeEnabled();
+  await sketchAction.click();
   await expect(
-    page.locator('.feature-row-main', { hasText: /^Sketch/ })
-  ).toHaveCount(0);
+    page.getByRole('region', { name: 'Sketch operation' })
+  ).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
@@ -538,7 +550,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   await expect(
     page.getByText('Pick a sketch plane', { exact: true })
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
   await sketchTools.getByRole('button', { name: /^Circle/ }).click();
@@ -561,7 +573,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
 
   await sketchTools.getByRole('button', { name: 'Extrude' }).click();
   await page.getByRole('button', { name: 'Apply Extrude' }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -676,7 +688,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -739,7 +751,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   );
   await expect(extrude).toContainText('1 selected');
   await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude 1' })
   ).toBeVisible();
@@ -750,8 +762,10 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude 1');
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Undo' }).click();
-  await page.getByRole('button', { name: 'Redo' }).click();
+  // The feature inspector intentionally floats over the rail at this viewport.
+  // Exercise the same history commands through their supported shortcuts.
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+Shift+z');
   await expect(page.getByRole('contentinfo')).toContainText('Redo');
   await page.locator('.feature-row-main', { hasText: 'Extrude 1' }).click();
   await expect(
@@ -760,6 +774,55 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
       .getByRole('textbox', { name: /^Distance/ })
   ).toHaveValue('32');
   expect(consoleErrors).toEqual([]);
+});
+
+test('resolves a negative free-plane extrude preview', async ({ page }) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Negative Extrude Preview');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const center = {
+    x: bounds!.x + bounds!.width * 0.65,
+    y: bounds!.y + bounds!.height * 0.65
+  };
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 40, center.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketch 01 started.'
+  );
+
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  const extrude = page.getByRole('form', { name: 'Extrude controls' });
+  await expect(extrude).toContainText('1 selected');
+  await extrude.getByRole('spinbutton').fill('-24');
+  await expect(extrude).toContainText('Opposite side');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '1 profile selected · exact preview ready · New Body',
+    { timeout: 20_000 }
+  );
+  await expect(
+    extrude.getByRole('button', { name: 'Apply Extrude' })
+  ).toBeEnabled();
 });
 
 test('infers and stores an additive extrude from exact overlap', async ({
@@ -786,7 +849,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await sketchTools.getByRole('button', { name: /^Circle/ }).click();
   const bounds = await canvas.boundingBox();
@@ -810,7 +873,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
     'exact preview ready · Add to Box Body',
     { timeout: 20_000 }
   );
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await extrude.getByRole('button', { name: 'Apply Extrude' }).click();
 
   const extrudeFeature = page.getByRole('button', {
@@ -829,7 +892,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
     'add'
   );
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -874,6 +937,111 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   expect(consoleErrors).toEqual([]);
 });
 
+test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('One Body Radius');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  // Stated rather than inherited: this test drags the radius by a fixed screen
+  // distance and asserts where it lands, so it owns its starting size.
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const selectCylinderSurface = async (surface: 'wall' | 'cap') => {
+    await canvas.evaluate((element, requestedSurface) => {
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-cylinder', {
+          detail: { surface: requestedSurface }
+        })
+      );
+    }, surface);
+  };
+
+  // A cap offset, recorded exactly as the direct-manipulation flow records
+  // it — the in-chain direct edit that used to force every later radius
+  // change onto the single-face path.
+  await selectCylinderSurface('cap');
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
+  await page.getByTestId('direct-manipulation-value').click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  await offsetKeypad.getByRole('textbox').fill('4');
+  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Offset face by 4 mm.'
+  );
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('1');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const offsetRow = page.locator('.feature-row', { hasText: 'Offset face' });
+  const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
+  await expect(fillet).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  // Drag the wall. The parametric ancestry now crosses the referenced cap
+  // offset, so this must edit the Cylinder's radius parameter — one body —
+  // instead of appending a Resize Cylinder Radius direct edit that would
+  // move the wall and leave the offset cap behind.
+  await selectCylinderSurface('wall');
+  await expect(
+    page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
+  ).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = await canvas.boundingBox();
+  const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 4,
+    start.y + handle.dy * handle.pixelsPerUnit * 4,
+    { steps: 8 }
+  );
+  await expect(page.getByTestId('live-cylinder-radius')).toHaveText('18 mm');
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Adjusted cylinder radius to R 18 mm.'
+  );
+
+  // Parametric, not stacked: the Cylinder feature carries the new radius, no
+  // Resize feature was appended, and the whole chain rebuilt warning-free.
+  await expect(
+    page.locator('.feature-row', { hasText: 'Resize Cylinder Radius' })
+  ).toHaveCount(0);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(offsetRow.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
+  await page
+    .locator('.feature-row-main', { hasText: 'Cylinder' })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
+  expect(consoleErrors).toEqual([]);
+});
+
 test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async ({
   page
 }) => {
@@ -905,7 +1073,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   const fillet = page.locator('.feature-row', { hasText: /^Fillet/ });
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
 
   await cylinder.locator('.feature-row-main').click();
@@ -913,7 +1081,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Cylinder');
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
 
   // A radius smaller than the stored 1 mm fillet is invalid. Exact preflight
@@ -929,20 +1097,20 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
     '6.4'
   );
 
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.keyboard.press('Control+z');
   await cylinder.locator('.feature-row-main').click();
   await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
     '4.6'
   );
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Redo' }).click();
+  await page.keyboard.press('Control+Shift+z');
   await cylinder.locator('.feature-row-main').click();
   await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
     '6.4'
   );
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -955,6 +1123,7 @@ for (const modifier of [
   }) => {
     test.setTimeout(90_000);
     await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const consoleErrors: string[] = [];
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -986,11 +1155,12 @@ for (const modifier of [
     });
     await expect(blend).toBeVisible();
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+    await expect(page.getByRole('button', { name: 'Bodies 2' })).toBeVisible();
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
 
     const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toBeVisible({ timeout: 120_000 });
     await canvas.evaluate((element) => {
       element.dispatchEvent(
         new CustomEvent('openzcad:e2e-select-cylinder', {
@@ -1033,6 +1203,10 @@ for (const modifier of [
       await expect(page.getByTestId('live-cylinder-radius')).toHaveText(
         '6.4 mm'
       );
+      await expect(canvas).not.toHaveAttribute(
+        'data-e2e-cylinder-proxy-radius',
+        /.+/
+      );
       await page.mouse.up();
     } finally {
       await page.keyboard.up('Shift');
@@ -1043,7 +1217,7 @@ for (const modifier of [
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+    await expect(page.getByRole('button', { name: 'Bodies 2' })).toBeVisible();
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();
     await expect
@@ -1054,14 +1228,22 @@ for (const modifier of [
       )
       .toBeCloseTo(6.4, 5);
 
-    await page.getByRole('button', { name: 'Undo' }).click();
-    await cylinder.locator('.feature-row-main').click();
+    await page
+      .getByRole('button', { name: 'Undo' })
+      .evaluate((element) => (element as HTMLButtonElement).click());
+    await cylinder
+      .locator('.feature-row-main')
+      .evaluate((element) => (element as HTMLButtonElement).click());
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '4.6'
     );
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Redo' }).click();
-    await cylinder.locator('.feature-row-main').click();
+    await page
+      .getByRole('button', { name: 'Redo' })
+      .evaluate((element) => (element as HTMLButtonElement).click());
+    await cylinder
+      .locator('.feature-row-main')
+      .evaluate((element) => (element as HTMLButtonElement).click());
     await expect
       .poll(async () =>
         Number(
@@ -1106,7 +1288,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
     page.locator('.feature-row-main', { hasText: 'Shell' })
   ).toBeVisible();
   await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
 });
@@ -1255,8 +1437,65 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
     'Applied'
   );
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(consoleErrors).toEqual([]);
+});
+
+test('shows a stable failure when the assistant completes with invalid structured output', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'invalid-output-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      headers: {
+        'x-openzcad-request-id': '019fcf75-2cc4-7832-befc-50ae06c9e985'
+      },
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: 'I could not return the requested JSON object.'
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    })
+  );
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('AI Failure Handling');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+  await page
+    .getByLabel('CAD change request')
+    .fill('Create a simple bottle bumper');
+  await page.getByLabel('CAD change request').press('Enter');
+
+  const failure = page.locator('.assistant-card.message.error');
+  await expect(failure).toContainText(
+    'The provider returned invalid structured output.'
+  );
+  await expect(failure).toContainText(
+    'Reference: 019fcf75-2cc4-7832-befc-50ae06c9e985.'
+  );
+  await expect(failure).not.toContainText('JSON.parse');
+  await expect(
+    failure.getByRole('button', { name: 'Try again' })
+  ).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
@@ -1450,23 +1689,19 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await inspector.getByLabel('Name').fill('Separate upper');
-  await inspector.getByLabel('Move Z').fill('32');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const separateMove = page.getByRole('form', { name: 'Move controls' });
+  await separateMove.getByLabel('Name').fill('Separate upper');
+  await separateMove.getByLabel('Move Z in mm').fill('32');
+  await separateMove.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByLabel('CAD change request').fill('Union the two bodies');
   await page.getByLabel('CAD change request').press('Enter');
-  const proposal = page.locator('.assistant-card.proposal.open');
-  await expect(proposal).toContainText('Union the two separated bodies.');
-  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
-
+  const failure = page.locator('.assistant-card.message.error');
+  await expect(failure).toContainText('did not pass exact geometry preflight');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Union does not fill empty space.'
   );
-  await expect(proposal).toContainText('Proposed change');
-  await expect(
-    proposal.getByRole('button', { name: 'Apply', exact: true })
-  ).toBeEnabled();
+  await expect(page.locator('.assistant-card.proposal.open')).toHaveCount(0);
   await expect(
     page.locator('.feature-row', { hasText: 'AI disconnected Union' })
   ).toHaveCount(0);
@@ -1477,6 +1712,9 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
     .click();
   await inspector.getByLabel('Move Z').fill('24');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
+  await failure.getByRole('button', { name: 'Try again' }).click();
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText('Union the two separated bodies.');
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
 
   await expect(
@@ -1487,6 +1725,71 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   );
   await expect(page.locator('.body-row.consumed')).toHaveCount(2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('preflights and applies the verified chamfered-shaft suggestion without an AI provider', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { assistantEnabled: true });
+  const consoleErrors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text());
+    }
+  });
+  let providerRequests = 0;
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: false,
+        provider: 'openrouter',
+        model: 'not-needed-for-verified-recipes',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  await page.route('**/api/assistant/proposals', (route) => {
+    providerRequests += 1;
+    return route.abort();
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Verified Chamfered Shaft');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await openAssistant(page);
+
+  await page
+    .getByRole('button', {
+      name: /Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends/
+    })
+    .click();
+  const request = page.getByLabel('CAD change request');
+  await expect(request).toHaveValue(
+    'Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends'
+  );
+  await request.press('Enter');
+
+  const proposal = page.locator('.assistant-card.proposal.open');
+  await expect(proposal).toContainText(
+    'A Ø30 × 60 mm shaft will be created with 1 mm chamfers'
+  );
+  await expect(proposal.getByText('in the viewport')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(providerRequests).toBe(0);
+
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(
+    page.locator('.feature-row', { hasText: 'Chamfered Shaft' })
+  ).toBeVisible();
+  await expectBodyCount(page, 1);
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Applied'
+  );
+
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expectBodyCount(page, 0);
+  expect(consoleErrors).toEqual([]);
 });
 
 test('grounds all cylinder edges onto its two visible rims', async ({
@@ -1539,7 +1842,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
     );
     const proposal = {
       proposalId: 'proposal_cylinder_rims_e2e',
-      summary: 'Fillet the cylinder top and bottom rims by 1 mm.',
+      summary: 'Fillet the cylinder top and bottom rims by 2 mm.',
       assumptions: [],
       operations: [
         {
@@ -1551,7 +1854,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
           // Deliberately wrong: client grounding must replace it with the two
           // modifier candidates and must not include the periodic seam.
           edgeHashes: [999],
-          size: 1
+          size: 2
         }
       ]
     };
@@ -1587,7 +1890,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
 
   await page
     .getByLabel('CAD change request')
-    .fill('Add a 1 mm fillet to all the edges');
+    .fill('Round every outside edge by 2 mm');
   await page.getByLabel('CAD change request').press('Enter');
 
   const assistantRequest = await assistantRequestPromise;
@@ -1614,7 +1917,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   ).toEqual([body?.bbox?.min.z, body?.bbox?.max.z]);
 
   await expect(page.locator('.assistant-card.proposal.open')).toContainText(
-    'Fillet the cylinder top and bottom rims by 1 mm.',
+    'Fillet the cylinder top and bottom rims by 2 mm.',
     { timeout: 15_000 }
   );
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
@@ -1673,7 +1976,7 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
     0
   );
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   // The kernel measured the imported solid, not a mesh approximation of it.
   await importedRow.locator('.feature-row-main').click();
@@ -1728,6 +2031,52 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
     []
   );
   expect(consoleErrors).toHaveLength(2);
+});
+
+test('refuses an unparseable STEP file without leaving a feature behind', async ({
+  page
+}) => {
+  // The failure path the success path never covered. An import used to commit
+  // before any geometry ran, so a file BrepKit cannot parse produced a success
+  // toast next to a history row flagged "Feature failed to build", no body,
+  // and a blank viewport that Fit View could not rescue. Nothing enters
+  // history now, and the status bar carries the kernel's own verdict.
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused Import');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+
+  const undo = page.getByRole('button', { name: 'Undo' });
+  await expect(undo).toBeDisabled();
+
+  // A well-formed box whose z-max face points at an entity id that does not
+  // exist: the parser rejects it, the geometry never runs.
+  await page
+    .getByLabel('Import STEP or STL…')
+    .setInputFiles(
+      fileURLToPath(
+        new URL(
+          '../parity/corpus/f-hostile-dangling-reference.step',
+          import.meta.url
+        )
+      )
+    );
+
+  // Verbatim, entity number included — that is the part that says which line
+  // of the file to look at.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'parse error: entity #999999 not found'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Imported editable STEP solid'
+  );
+  await expect(page.locator('.feature-row')).toHaveCount(0);
+  await expect(page.getByText('No features yet.')).toBeVisible();
+  await expectBodyCount(page, 0);
+  await expect(undo).toBeDisabled();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
 test('archives a browser-generated STEP export and lists the stored file', async ({
@@ -1817,7 +2166,7 @@ test('archives a browser-generated STEP export and lists the stored file', async
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();
@@ -1879,8 +2228,15 @@ test('models a parametric part and exports a true STEP file', async ({
   );
   await page.keyboard.press('Escape'); // back to the tool launcher
 
-  // Second body and a subtract that consumes both inputs.
+  // Second body and a subtract that consumes both inputs. Radius 14 is set
+  // here rather than taken from the form: the faceted-cut finding asserted
+  // below is a property of a cylinder wider than the box is deep, and the
+  // shipped default is now 6, which cuts cleanly.
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByLabel('Radius', { exact: true })
+    .fill('14');
   await page
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
@@ -1892,12 +2248,10 @@ test('models a parametric part and exports a true STEP file', async ({
   // Move the cutter into the box instead of leaving it tangent to the box's
   // origin corner, which is a deliberately degenerate boolean setup.
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  const moveInspector = page.getByRole('region', {
-    name: 'Feature inspector'
-  });
-  await moveInspector.getByLabel('Move X').fill('30');
-  await moveInspector.getByLabel('Move Y').fill('9');
-  await moveInspector.getByRole('button', { name: /^Create/ }).click();
+  const moveOverlay = page.getByRole('form', { name: 'Move controls' });
+  await moveOverlay.getByLabel('Move X in mm').fill('30');
+  await moveOverlay.getByLabel('Move Y in mm').fill('9');
+  await moveOverlay.getByRole('button', { name: /Apply move/ }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Move' })
   ).toBeVisible();
@@ -2046,21 +2400,22 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByLabel('Name').fill('Lower');
   await inspector.getByLabel('Width (X)').fill('10');
-  await inspector.getByLabel('Height (Y)').fill('10');
-  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByLabel('Depth (Y)').fill('10');
+  await inspector.getByLabel('Height (Z)').fill('10');
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await inspector.getByLabel('Name').fill('Upper');
   await inspector.getByLabel('Width (X)').fill('10');
-  await inspector.getByLabel('Height (Y)').fill('10');
-  await inspector.getByLabel('Depth (Z)').fill('10');
+  await inspector.getByLabel('Depth (Y)').fill('10');
+  await inspector.getByLabel('Height (Z)').fill('10');
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await inspector.getByLabel('Name').fill('Lift upper');
-  await inspector.getByLabel('Move Z').fill('12');
-  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const liftMove = page.getByRole('form', { name: 'Move controls' });
+  await liftMove.getByLabel('Name').fill('Lift upper');
+  await liftMove.getByLabel('Move Z in mm').fill('12');
+  await liftMove.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
   await expect(inspector).toContainText(
@@ -2134,4 +2489,370 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     1
   );
+});
+
+test('a refused boolean explains itself inside the panel that asked', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refusal Copy');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // A box and a cylinder overlapping at the origin. The exact kernel cannot
+  // fuse the curved operand without dropping to facets, so this union is
+  // refused — the same two bodies subtract exactly, and an all-planar union is
+  // unaffected, which is what the message has to say.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  // Radius 14 is wider than the box is deep, which is the case whose facet
+  // census is the first thing the union has to report; the shipped default of
+  // 6 reports a dropped-operand tangency first instead.
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // The refusal is readable where the user is looking. Before this it reached
+  // only the status bar, clipped mid-sentence, leaving Create looking inert.
+  const refusal = inspector.getByRole('alert');
+  await expect(refusal).toContainText('faceted approximation');
+  // It states only what was measured. No single cause is asserted: measured
+  // on a box and a cylinder, repositioning clears this for a small round
+  // operand and clears nothing for one wider than the box it meets.
+  await expect(refusal).toContainText('will export that way');
+  await expect(refusal).toContainText('subtract instead');
+
+  // Refused means refused: history is untouched and the form stays open with
+  // its picks intact, ready for another operation.
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+  await expect(page.locator('.body-row.consumed')).toHaveCount(0);
+  await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
+
+  // Starting a different operation clears the stale reason.
+  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await expect(inspector.getByRole('alert')).toHaveCount(0);
+});
+
+test('a union that facets at a tangency succeeds once the overlap moves off it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Tangent Union');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // Default placement is the kernel's worst case and nothing about the UI says
+  // so: a box is corner-origin and a cylinder is axis-origin, so a new
+  // cylinder's axis lands exactly on the box's corner edge — a tangency the
+  // fuse cannot resolve exactly.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByLabel('Radius').fill('6');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  // Moving along X keeps the axis in the y = 0 face plane, so it still fails —
+  // which is why "move the overlap" needs a direction to be useful advice.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const shiftX = page.getByRole('form', { name: 'Move controls' });
+  await shiftX.getByLabel('Move X in mm').fill('15');
+  await shiftX.getByRole('button', { name: /Apply move/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  // Either facet check can be the one that fires — a smaller round operand
+  // facets into too few faces to trip the count test — so assert the remedy
+  // they share. Here the adapter has proved a move that works, so it names it.
+  await expect(inspector.getByRole('alert')).toContainText('clears it');
+  await expect(page.locator('.feature-row', { hasText: 'Union' })).toHaveCount(
+    0
+  );
+
+  // Offset into the solid instead and the same union is exact.
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const shiftY = page.getByRole('form', { name: 'Move controls' });
+  await shiftY.getByLabel('Move Y in mm').fill('9');
+  await shiftY.getByRole('button', { name: /Apply move/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  const union = page.locator('.feature-row', { hasText: 'Union' });
+  await expect(union).toBeVisible();
+  await expect(union.getByTitle('Feature failed to build')).toHaveCount(0);
+  await expect(page.locator('.body-row.consumed')).toHaveCount(2);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('the panel refuses a zero extrude and keeps a boolean name honest', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Panel Guards');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // WF-10: a name nobody typed should say what the feature does. Switching the
+  // operation used to leave "Union" on a subtract, so the history row, the body
+  // and the panel heading all named an operation that never ran.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await expect(inspector.getByLabel('Name')).toHaveValue('Union');
+  await inspector.getByLabel('Operation').selectOption('subtract');
+  await expect(inspector.getByLabel('Name')).toHaveValue('Subtract');
+  // A name the user wrote is theirs and must survive the switch.
+  await inspector.getByLabel('Name').fill('Pocket');
+  await inspector.getByLabel('Operation').selectOption('intersect');
+  await expect(inspector.getByLabel('Name')).toHaveValue('Pocket');
+  await page.keyboard.press('Escape');
+
+  // WF-09: zero distance builds nothing. It used to commit, delete the body and
+  // explain itself only in a sidebar diagnostic.
+  const canvas = page.locator('.viewer-host canvas');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const centre = {
+    x: bounds!.x + bounds!.width * 0.62,
+    y: bounds!.y + bounds!.height * 0.76
+  };
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 38, centre.y, { steps: 6 });
+  await page.mouse.up();
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  ).toBeVisible();
+
+  // Leave the extrude flow before selecting its feature: the panel stays out
+  // of the way while a viewport command owns the screen.
+  await page.keyboard.press('Escape');
+  await page
+    .locator('.feature-row-main', { hasText: 'Extrude' })
+    .first()
+    .click();
+  const distance = inspector.getByLabel('Distance');
+  await distance.fill('0');
+  await expect(inspector.getByText('Distance cannot be zero')).toBeVisible();
+  await expect(
+    inspector.getByRole('button', { name: /^Apply/ })
+  ).toBeDisabled();
+
+  // Negative is documented as valid — extrude below the plane — so the guard
+  // must not swallow it.
+  await distance.fill('-8');
+  await expect(inspector.getByText('Distance cannot be zero')).toHaveCount(0);
+  await expect(
+    inspector.getByRole('button', { name: /^Apply/ })
+  ).toBeEnabled();
+});
+
+test('each sketch plane label names the plane it actually opens', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Plane Names');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const canvas = page.locator('.viewer-host canvas');
+  const status = page.getByRole('contentinfo');
+
+  // These labels were Y-up names on Z-up planes, so each named the wrong one:
+  // measured before the fix, "Ground (XZ)" built an upright wall and
+  // "Front (XY)" built a slab lying on the grid. The status line is derived
+  // from the plane id rather than from the label, so asserting it here pins
+  // the label-to-plane mapping that was wrong — a rename that only edits
+  // strings cannot keep this green.
+  for (const [label, plane] of [
+    ['Top (XY)', 'XY'],
+    ['Front (XZ)', 'XZ'],
+    ['Right (YZ)', 'YZ']
+  ] as const) {
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await expect(page.getByText('Pick a sketch plane')).toBeVisible();
+    await page.getByRole('button', { name: label }).click();
+    await expect(status).toContainText(`Sketching on the ${plane} plane`);
+    // Finish rather than Escape: leaving an empty sketch by Escape parks the
+    // workspace in a state where the plane prompt will not re-open.
+    await page
+      .getByRole('toolbar', { name: 'Sketch tools' })
+      .getByRole('button', { name: /Finish Sketch/ })
+      .click();
+    await expect(
+      page.getByRole('toolbar', { name: 'Sketch tools' })
+    ).toHaveCount(0);
+  }
+
+  // And an anchor in geometry for the one the app calls Top: a profile drawn
+  // there extrudes upward, so the result is thinnest in Z.
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const centre = {
+    x: bounds.x + bounds.width * 0.55,
+    y: bounds.y + bounds.height * 0.55
+  };
+  await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await page.mouse.move(centre.x + 150, centre.y, { steps: 10 });
+  await page.mouse.up();
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
+  if (!triple) {
+    throw new Error(`no size in selection chip: ${chip}`);
+  }
+  const [width, depth, height] = [
+    Number(triple[1]),
+    Number(triple[2]),
+    Number(triple[3])
+  ];
+  expect(height).toBeLessThan(width);
+  expect(height).toBeLessThan(depth);
+});
+
+test('Move is one UI: the gizmo names the feature and picks the body', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('One Move UI');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // Two bodies and nothing selected — the case that used to open a different
+  // Move UI from the one a selection would have opened (WF-07).
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Lower');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Upper');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.keyboard.press('Escape');
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  const move = page.getByRole('form', { name: 'Move controls' });
+  await expect(move).toBeVisible();
+  // The feature inspector must not offer a second, differently-labelled Move.
+  await expect(inspector).toHaveCount(0);
+
+  // Both things the retired form carried now live here: a Name and a body
+  // picker. Choosing a body from the picker is what the form existed for.
+  await move.getByLabel('Body').selectOption({ label: 'Upper Body' });
+  await move.getByLabel('Name').fill('Lift upper');
+  await move.getByLabel('Move Z in mm').fill('40');
+  await move.getByRole('button', { name: /Apply move/ }).click();
+
+  // The name reaches the document, which is the capability whose loss kept
+  // this unification unshipped.
+  await expect(
+    page.locator('.feature-row', { hasText: 'Lift upper' })
+  ).toBeVisible();
+
+  // And it moved the body the picker chose, not the one that happened to be
+  // selected: Upper is the one now standing 40mm clear of the origin.
+  await page.locator('.feature-row', { hasText: 'Lift upper' }).click();
+  await expect(inspector.getByLabel('Move Z')).toHaveValue('40');
+});
+
+test('types an exact rectangle while drawing it', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Exact Rectangle');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
+  // Screen-space clicks must wait for the head-on entry tween to settle.
+  await page.waitForTimeout(800);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const corner = {
+    x: bounds.x + bounds.width * 0.4,
+    y: bounds.y + bounds.height * 0.6
+  };
+
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  // Click-click, not press-drag: a single click plants the first corner and
+  // leaves the pointer free, which is the window numeric entry lives in.
+  await page.mouse.click(corner.x, corner.y);
+  await page.mouse.move(corner.x + 120, corner.y - 80, { steps: 5 });
+
+  // Width, Tab, height, Enter. Tab swaps sides rather than converting, because
+  // a rectangle's two sides are independent.
+  await page.keyboard.type('40');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Width: 40');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('20');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Height: 20');
+  await expect(page.locator('.sketch-dim-label')).toContainText('Width: 40');
+  await page.keyboard.press('Enter');
+
+  // Extruding is the honest check that the typed numbers reached the geometry:
+  // on Top (XY) the width lands on X and the height on Y.
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await canvas.dispatchEvent('openzcad:e2e-select-profile', {
+    detail: { index: 0 }
+  });
+  await page
+    .getByRole('form', { name: 'Extrude controls' })
+    .getByRole('button', { name: /Apply Extrude/ })
+    .click();
+
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
+  if (!triple) {
+    throw new Error(`no size in selection chip: ${chip}`);
+  }
+  expect(Number(triple[1])).toBeCloseTo(40, 1);
+  expect(Number(triple[2])).toBeCloseTo(20, 1);
 });

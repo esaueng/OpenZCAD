@@ -19,6 +19,7 @@ import {
   desktopFetch,
   isDesktopApp
 } from './desktopBridge';
+import { cloudFunctionsAreEnabled } from './cloudMode';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -33,6 +34,7 @@ export type CollaborationStatus =
   | 'update-required';
 
 interface CollaborationOptions {
+  enabled: boolean;
   document: ProjectDocument | null;
   session: AuthSession | null;
   onRemoteDocument(document: ProjectDocument): void;
@@ -206,6 +208,7 @@ function clientId(): string {
 }
 
 export function useCollaboration({
+  enabled,
   document,
   session,
   onRemoteDocument,
@@ -237,12 +240,14 @@ export function useCollaboration({
   const displayName = session?.displayName ?? null;
 
   useEffect(() => {
-    if (!projectId || !userId || !displayName) {
+    if (!enabled || !projectId || !userId || !displayName) {
       setStatus('offline');
       setMembers([]);
       setRole(null);
       setLease(null);
       setRoomVersion(null);
+      conflictRef.current = null;
+      setConflict(null);
       return;
     }
     conflictRef.current = null;
@@ -530,10 +535,30 @@ export function useCollaboration({
           if (rejectsNewerSchema(message.document)) {
             return;
           }
-          lastSentVersionRef.current = message.document.version;
+          const local = documentRef.current;
+          // Work this client never managed to submit is work the room has
+          // never seen — an editor can edit without holding the lease, and
+          // then has nowhere to send it. Letting a broadcast replace it is how
+          // the losing side disappears without anyone being asked, so the
+          // divergence goes to the conflict flow instead. Only a broadcast
+          // that is genuinely ahead can do that damage; one at or behind the
+          // local version is this client's own work coming back to it.
+          const divergesFromRoom =
+            local !== null &&
+            local.projectId === message.document.projectId &&
+            lastSentVersionRef.current !== local.version &&
+            message.document.version > local.version;
           serverVersionRef.current = message.document.version;
           setRoomVersion(message.document.version);
+          if (divergesFromRoom) {
+            retainConflict(message.document, true);
+            return;
+          }
+          lastSentVersionRef.current = message.document.version;
           if (!retainConflict(message.document)) {
+            // Keeps a second broadcast arriving before the adoption has been
+            // rendered from reading this client as divergent.
+            documentRef.current = message.document;
             remoteHandlerRef.current(message.document);
           }
           return;
@@ -627,6 +652,7 @@ export function useCollaboration({
       }
       window.clearInterval(leaseRenewTimer);
       if (
+        cloudFunctionsAreEnabled() &&
         socketRef.current?.readyState === WebSocket.OPEN &&
         leaseIdRef.current
       ) {
@@ -647,10 +673,11 @@ export function useCollaboration({
       setRole(null);
       setMembers([]);
     };
-  }, [displayName, projectId, userId]);
+  }, [displayName, enabled, projectId, userId]);
 
   useEffect(() => {
     if (
+      !enabled ||
       !document ||
       conflictRef.current ||
       readUnresolvedConflict(document.projectId) ||
@@ -734,7 +761,7 @@ export function useCollaboration({
       lastSentVersionRef.current = document.version;
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [document?.projectId, document?.version]);
+  }, [document?.projectId, document?.version, enabled]);
 
   const useRemoteVersion = useCallback(
     (expectedRemoteVersion: number): boolean => {

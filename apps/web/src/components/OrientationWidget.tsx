@@ -27,6 +27,20 @@ const SCALE = 21;
 /** Fraction of a half-edge cut off each corner for the isometric facets. */
 const BEVEL = 0.42;
 /**
+ * The same cut, taken deeper, for the corners' invisible click target.
+ *
+ * A drawn bevel facet is tiny: measured on the running widget the corner
+ * turned most toward the camera covers ~67 px² and the glancing ones ~21 px²,
+ * against ~960 px² for a face — a 14:1 ratio, so the isometric views are the
+ * hardest thing on the cube to hit and the easiest to miss. Growing the drawn
+ * bevel to fix that would restyle the cube, so only the target grows: the hit
+ * facet is the same triangle cut deeper, concentric with the visible one and
+ * roughly 2.5x its area. Deeper cuts stay disjoint between corners for any
+ * bevel below 1, so no two corners can ever compete for the same pixel; the
+ * area comes off the faces instead, which can spare it.
+ */
+const CORNER_HIT_BEVEL = 0.66;
+/**
  * The triad is anchored on the cube corner the model origin projects to, and
  * its arms run along the cube edges — through the far corners at 2 half-edges
  * — before overhanging into free space, letters at the tips.
@@ -125,22 +139,35 @@ interface CornerSpec {
   corner: CubeCorner;
   normal: Vec3;
   points: readonly Vec3[];
+  /** Same facet cut deeper — the click target, never painted. */
+  hitPoints: readonly Vec3[];
   label: string;
+}
+
+/** The triangle left when `bevel` of each half-edge is cut off one corner. */
+function cornerFacet(
+  sx: number,
+  sy: number,
+  sz: number,
+  bevel: number
+): readonly Vec3[] {
+  const b = 1 - bevel;
+  return [
+    [sx * b, sy, sz],
+    [sx, sy * b, sz],
+    [sx, sy, sz * b]
+  ];
 }
 
 const CORNERS: CornerSpec[] = ([-1, 1] as const).flatMap((sx) =>
   ([-1, 1] as const).flatMap((sy) =>
     ([-1, 1] as const).map((sz): CornerSpec => {
-      const b = 1 - BEVEL;
       const n = 1 / Math.sqrt(3);
       return {
         corner: [sx, sy, sz],
         normal: [sx * n, sy * n, sz * n],
-        points: [
-          [sx * b, sy, sz],
-          [sx, sy * b, sz],
-          [sx, sy, sz * b]
-        ],
+        points: cornerFacet(sx, sy, sz, BEVEL),
+        hitPoints: cornerFacet(sx, sy, sz, CORNER_HIT_BEVEL),
         // "isometric" between the octant and "view" keeps every corner name
         // distinct from the face names under substring accessible-name
         // matching: "top front right view" would otherwise contain "right
@@ -242,6 +269,7 @@ export function OrientationWidget({
   const faceRefs = useRef<(SVGPolygonElement | null)[]>([]);
   const faceLabelRefs = useRef<(SVGTextElement | null)[]>([]);
   const cornerRefs = useRef<(SVGPolygonElement | null)[]>([]);
+  const cornerHitRefs = useRef<(SVGPolygonElement | null)[]>([]);
   /** What clicking each face does right now (flips when head-on). */
   const faceActions = useRef<StandardView[]>(FACES.map((face) => face.view));
   const dragRef = useRef<CubeDragState | null>(null);
@@ -372,17 +400,24 @@ export function OrientationWidget({
 
       CORNERS.forEach((corner, index) => {
         const polygon = cornerRefs.current[index];
-        if (!polygon) {
+        const hit = cornerHitRefs.current[index];
+        if (!polygon || !hit) {
           return;
         }
         const facing = depth(corner.normal);
         if (facing < FACING_EPSILON) {
           polygon.style.display = 'none';
+          // The target hides with its facet: an invisible triangle over a
+          // corner that has turned away would swallow clicks meant for the
+          // face now covering that ground.
+          hit.style.display = 'none';
           return;
         }
         polygon.style.display = '';
+        hit.style.display = '';
         polygon.setAttribute('points', outline(corner.points));
         polygon.setAttribute('fill', shade(facing));
+        hit.setAttribute('points', outline(corner.hitPoints));
       });
 
       for (const key of ['x', 'y', 'z'] as const) {
@@ -590,26 +625,45 @@ export function OrientationWidget({
           </g>
         ))}
         {CORNERS.map((corner, index) => (
-          <polygon
+          // The painted facet and the deeper cut that widens it. The click
+          // lives on the group, so the target is the union of the two: the
+          // deeper cut is scaled about the corner's projected apex, and at a
+          // glancing angle that apex falls outside it — a target that was
+          // only the deeper cut would drop part of the facet you can actually
+          // see. Hover and focus are styled off the group too, so the drawn
+          // triangle lights up from anywhere in the union.
+          <g
+            className="cube-corner-target"
             key={corner.label}
-            ref={(element) => {
-              cornerRefs.current[index] = element;
-            }}
-            className="cube-corner"
-            style={{ display: 'none' }}
-            role="button"
-            tabIndex={0}
-            aria-label={corner.label}
             onClick={() => {
               selectFacet({ corner: corner.corner });
             }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                onSelectView({ corner: corner.corner });
-              }
-            }}
-          />
+          >
+            <polygon
+              ref={(element) => {
+                cornerRefs.current[index] = element;
+              }}
+              className="cube-corner"
+              style={{ display: 'none' }}
+              aria-hidden="true"
+            />
+            <polygon
+              ref={(element) => {
+                cornerHitRefs.current[index] = element;
+              }}
+              className="cube-corner-hit"
+              style={{ display: 'none' }}
+              role="button"
+              tabIndex={0}
+              aria-label={corner.label}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onSelectView({ corner: corner.corner });
+                }
+              }}
+            />
+          </g>
         ))}
         <g className="orientation-triad" ref={overLayerRef} />
       </svg>
