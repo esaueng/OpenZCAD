@@ -6,9 +6,17 @@ import {
   type ProjectSummary
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
+import type { SourceBlobClaim } from './sourceBlobClaims';
+import {
+  LOCAL_PROJECT_BLOB_STORE,
+  LOCAL_PROJECT_CLAIM_STORE,
+  LOCAL_PROJECT_DATABASE_NAME,
+  LOCAL_PROJECT_DATABASE_VERSION,
+  LOCAL_PROJECT_DOCUMENT_STORE
+} from './localProjectSchema';
 
-const DATABASE_NAME = 'openzcad-v2';
-const STORE_NAME = 'projects';
+const DATABASE_NAME = LOCAL_PROJECT_DATABASE_NAME;
+const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
 /**
  * Shelf state (archive, bin, pin, manual order) lives beside the documents
  * rather than inside them: it describes the owner's desk, not the part, and a
@@ -31,7 +39,16 @@ const SYNC_STORE_NAME = 'projectSync';
  * hash to its checksum. Values are Blobs so the browser can keep hundreds of
  * megabytes on disk instead of in structured-clone memory.
  */
-const BLOB_STORE_NAME = 'sourceBlobs';
+const BLOB_STORE_NAME = LOCAL_PROJECT_BLOB_STORE;
+/**
+ * Device-wide holds on source blobs, one per import run.
+ *
+ * The blob store is shared across tabs while each tab's in-flight state and
+ * open document are private. A persisted claim closes that visibility gap: a
+ * refusing import can prove a blob is abandoned instead of inferring it from
+ * only the state in front of that tab.
+ */
+const CLAIM_STORE_NAME = LOCAL_PROJECT_CLAIM_STORE;
 /**
  * Card-sized preview images, one per project. Kept here rather than derived on
  * demand because the shelf must never load a ProjectDocument: a part whose
@@ -76,29 +93,16 @@ const SUMMARY_STORE_NAME = 'projectSummaries';
  */
 const MEASUREMENT_STORE_NAME = 'projectMeasurements';
 /**
- * Bumping this is not the small change it looks like, and that is why the
- * hardening around it does not.
+ * Version 7 shipped the measurement store and, crucially, taught every opened
+ * connection to close on `versionchange`. Version 8 can therefore add claims
+ * without a version-7 tab parking the upgrade: IndexedDB notifies that tab, its
+ * connection closes after any in-flight transaction, and this gate proceeds.
  *
- * A device with the app open in two tabs runs both on the OLD version. The tab
- * that reloads into a NEW one issues an upgrade that the other tab's live
- * connection blocks, and that upgrade parks — indefinitely, since the other tab
- * has no reason to close. Every `openDatabase` below then queues behind the
- * parked upgrade and never settles, so calls into this module HANG rather than
- * fail: the start screen never paints, autosave never returns, and an import
- * stops with the commit lock still held.
- *
- * `request.onblocked` is not a way out on its own. It fires for at most one
- * queued upgrade at a time. Every caller therefore shares one schema gate:
- * either that gate upgrades once, or every caller receives the same actionable
- * rejection. No second open is allowed to queue invisibly behind it.
- *
- * Successful connections also close on `versionchange`, so this build cannot
- * become the blocker for the next schema. An older build cannot be taught that
- * after it shipped; when it holds version 6 open, the gate settles with an
- * instruction to close that tab instead of hanging the shelf, autosave, or the
- * validated-feature lock forever.
+ * The shared gate and blocked timeout remain for genuinely older builds that
+ * predate that handler. They turn an otherwise permanent startup hang into one
+ * actionable rejection shared by every queued caller.
  */
-const DATABASE_VERSION = 7;
+const DATABASE_VERSION = LOCAL_PROJECT_DATABASE_VERSION;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
@@ -163,6 +167,14 @@ function createExpectedStores(database: IDBDatabase): void {
   if (!database.objectStoreNames.contains(BLOB_STORE_NAME)) {
     database.createObjectStore(BLOB_STORE_NAME, {
       keyPath: 'checksumSha256'
+    });
+  }
+  // Empty on upgrade: version-7 tabs close before this transaction begins, so
+  // no import from the old schema can still be running without its tab being
+  // reloaded. New imports create their claim atomically with the blob write.
+  if (!database.objectStoreNames.contains(CLAIM_STORE_NAME)) {
+    database.createObjectStore(CLAIM_STORE_NAME, {
+      keyPath: 'claimKey'
     });
   }
   // Absent for every project on an upgraded database, which reads as "no
@@ -431,6 +443,15 @@ interface SourceBlobRecord {
   createdAt: string;
 }
 
+interface SourceBlobClaimRecord extends SourceBlobClaim {
+  /** Both identities in the key make each import run exactly one record. */
+  claimKey: string;
+}
+
+function sourceBlobClaimKey(checksumSha256: string, claimId: string): string {
+  return `${checksumSha256}:${claimId}`;
+}
+
 async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (value) =>
@@ -466,29 +487,41 @@ export interface StoredSourceBlob {
  * timestamp.
  */
 export async function putSourceBlobIfAbsent(
-  source: Blob | Uint8Array<ArrayBuffer>
+  source: Blob | Uint8Array<ArrayBuffer>,
+  options: { claimId?: string } = {}
 ): Promise<StoredSourceBlob> {
   const bytes =
     source instanceof Uint8Array
       ? source
       : new Uint8Array(await source.arrayBuffer());
   const checksumSha256 = await sha256Hex(bytes);
+  const createdAt = new Date().toISOString();
   const record: SourceBlobRecord = {
     checksumSha256,
     body: source instanceof Blob ? source : new Blob([bytes]),
     logicalBytes: bytes.byteLength,
-    createdAt: new Date().toISOString()
+    createdAt
   };
-  const created = await transactionScope(
+  const created = await scopedTransaction(
     'readwrite',
+    [BLOB_STORE_NAME, CLAIM_STORE_NAME],
     async (store) => {
-      if ((await settled(store.count(checksumSha256))) > 0) {
+      if (options.claimId !== undefined) {
+        const claim: SourceBlobClaimRecord = {
+          claimKey: sourceBlobClaimKey(checksumSha256, options.claimId),
+          checksumSha256,
+          claimId: options.claimId,
+          createdAt
+        };
+        await settled(store(CLAIM_STORE_NAME).put(claim));
+      }
+      const blobs = store(BLOB_STORE_NAME);
+      if ((await settled(blobs.count(checksumSha256))) > 0) {
         return false;
       }
-      await settled(store.put(record));
+      await settled(blobs.put(record));
       return true;
-    },
-    BLOB_STORE_NAME
+    }
   );
   return {
     ref: {
@@ -500,6 +533,46 @@ export async function putSourceBlobIfAbsent(
     },
     created
   };
+}
+
+/** Gives up one import run's device-wide hold on a checksum. */
+export function releaseSourceBlobClaim(
+  checksumSha256: string,
+  claimId: string
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.delete(sourceBlobClaimKey(checksumSha256, claimId)),
+    CLAIM_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * Deletes one source blob only when the whole device says it is abandoned.
+ *
+ * Claims, every persisted project document, and the delete share one readwrite
+ * transaction. No other tab can land a claim or autosave a document in a gap
+ * between the proof and the deletion. Documents are cursor-walked one at a time
+ * because each can carry large derived meshes; the walk stops on the first
+ * reference.
+ *
+ * The asking run's own claim does not block its cleanup and is removed with the
+ * blob. Expired claims are swept opportunistically. `false` is a safe verdict,
+ * not a storage failure: some live claim or saved document still needs bytes.
+ */
+export interface SourceBlobDeleteInput {
+  checksumSha256: string;
+  claimId?: string;
+  now?: number;
+}
+
+export function deleteSourceBlobIfUnreferenced(
+  input: SourceBlobDeleteInput
+): Promise<boolean> {
+  // Refused-import cleanup is rare and walks persisted project documents. Keep
+  // it off first paint; a failed chunk load is caught by the caller and leaves
+  // bytes in place, which is the no-data-loss direction.
+  return import('./sourceBlobCleanup').then((cleanup) => cleanup.run(input));
 }
 
 /** {@link putSourceBlobIfAbsent} for callers that never delete what they wrote. */

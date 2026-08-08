@@ -273,6 +273,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     base: isDesktop ? './' : '/',
     plugins,
     define: {
+      'import.meta.env.VITE_E2E': JSON.stringify(process.env.VITE_E2E ?? ''),
       'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
       'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),

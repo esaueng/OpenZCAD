@@ -1,5 +1,14 @@
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { FeatureId, ProjectDocument } from '@openzcad/shared';
+import { importSourceChecksums } from './sourceBlobClaims';
+
+export {
+  importSourceChecksums,
+  SOURCE_BLOB_CLAIM_TTL_MS,
+  sourceBlobClaimExpired,
+  sourceBlobClaimHolds,
+  type SourceBlobClaim
+} from './sourceBlobClaims';
 
 /**
  * Artifact ids minted when an import's cloud archival failed (or storage was
@@ -56,21 +65,6 @@ export function listLocalOnlyImportSources(
   return sources;
 }
 
-/** Every source checksum the document's imports need in order to rebuild. */
-export function importSourceChecksums(document: ProjectDocument): Set<string> {
-  const checksums = new Set<string>();
-  for (const feature of listFeaturesInOrder(document)) {
-    if (feature.data.featureKind !== 'imported-step') {
-      continue;
-    }
-    const checksum = feature.data.stepSourceRef?.checksumSha256;
-    if (checksum !== undefined) {
-      checksums.add(checksum);
-    }
-  }
-  return checksums;
-}
-
 /** Answers whether any import is still working with a checksum's bytes. */
 export interface ImportChecksumMarks {
   has(checksumSha256: string): boolean;
@@ -114,18 +108,9 @@ export function createInFlightImportChecksums(): InFlightImportChecksums {
 /**
  * Drops the bytes of an import that was refused before it reached history.
  *
- * Every guard below exists because the blob store is DEVICE-GLOBAL and
- * content-addressed: one key holds the bytes of one file, whoever imported it
- * and from whichever project. Counting references against the one open
- * document is therefore not enough on its own — deleting on behalf of project
- * Y can destroy what project X rebuilds from.
- *
- * `createdByThisImport` is what makes the deletion sound: this call only ever
- * removes a key it put there itself, so bytes that predate the import survive
- * whatever else is true. The alternative — counting across every locally
- * stored document — is both slower and incomplete, because it would still have
- * to enumerate undo/redo snapshots and imports mid-flight in other tabs to
- * reach the same guarantee.
+ * The guards here are the cheap tab-local ones. The final verdict belongs to
+ * `deleteSourceBlobIfUnreferenced`, which checks every persisted document and
+ * every live device-wide claim in the same transaction as the delete.
  *
  * `pruneUnreferencedSourceBlobs` cannot serve here either: it sweeps every key
  * outside the set it is handed, which for one document is every other
@@ -153,7 +138,7 @@ export async function discardUnreferencedImportSource(deps: {
    * about to commit against it.
    */
   inFlightChecksums: ImportChecksumMarks;
-  deleteSourceBlob(checksumSha256: string): Promise<void>;
+  deleteSourceBlobIfUnreferenced(checksumSha256: string): Promise<boolean>;
 }): Promise<boolean> {
   if (
     !deps.createdByThisImport ||
@@ -167,8 +152,7 @@ export async function discardUnreferencedImportSource(deps: {
   ) {
     return false;
   }
-  await deps.deleteSourceBlob(deps.checksumSha256);
-  return true;
+  return deps.deleteSourceBlobIfUnreferenced(deps.checksumSha256);
 }
 
 /** What a finished import run means for the source bytes it wrote. */
@@ -186,8 +170,8 @@ export type ImportRunResult =
 
 /**
  * Decides what becomes of the source bytes once an import run has ended, and
- * keeps `abandonedChecksums` — this tab's note of what it wrote and did not
- * land — in step with that decision.
+ * keeps both ownership notes in step with that decision: this tab's
+ * `abandonedChecksums` set and this run's device-wide claim.
  *
  * The note is what keeps a retry able to clean up after itself. Content
  * addressing means a retry of the same file writes nothing (the key is already
@@ -205,22 +189,31 @@ export async function settleImportSource(deps: {
   abandonedChecksums: Set<string>;
   document: ProjectDocument | null;
   inFlightChecksums: ImportChecksumMarks;
-  deleteSourceBlob(checksumSha256: string): Promise<void>;
+  deleteSourceBlobIfUnreferenced(checksumSha256: string): Promise<boolean>;
+  /** Gives up this run's device-wide hold on the bytes. */
+  releaseSourceBlobClaim(): Promise<void>;
 }): Promise<boolean> {
   const checksum = deps.checksumSha256;
   const abandoned = deps.abandonedChecksums;
-  if (
-    deps.result === 'committed' ||
-    (deps.document !== null &&
-      importSourceChecksums(deps.document).has(checksum))
-  ) {
-    // A feature rebuilds from these bytes, so they are nobody's to discard —
-    // including any later run of this tab's.
+  if (deps.result === 'committed') {
+    // Keep the claim until it lapses. Between commit and autosave it is the only
+    // device-wide evidence that a feature already rebuilds from these bytes.
     abandoned.delete(checksum);
     return false;
   }
+  if (
+    deps.document !== null &&
+    importSourceChecksums(deps.document).has(checksum)
+  ) {
+    // An earlier import of the same file is already in this document. This
+    // run's claim is redundant and must not become a stale hold.
+    abandoned.delete(checksum);
+    await deps.releaseSourceBlobClaim();
+    return false;
+  }
   if (!deps.createdByThisImport && !abandoned.has(checksum)) {
-    // THE OWNERSHIP RULE, and the whole of this module's cross-tab safety.
+    // THE OWNERSHIP RULE, and the reason cleanup remains narrower than the
+    // device-wide check behind it.
     //
     // A run only ever deletes a key its OWN TAB put there, in an import that is
     // still running or that ended without a verdict. Note what that makes
@@ -229,29 +222,15 @@ export async function settleImportSource(deps: {
     // guard, so a tab that has not created the key cannot acquire a licence for
     // it.
     //
-    // What that does NOT establish, since two tabs on one device share this
-    // store and see none of each other's marks, documents or undo stacks: the
-    // CREATING tab can still delete bytes another tab has since committed a
-    // feature against, when that feature lives in a project this tab does not
-    // have open. The reference check above reads one document — this tab's —
-    // so it cannot see that one. Narrow (it needs the same file imported in two
-    // tabs, the first reaching no verdict and later refusing) but real, and the
-    // deferred per-device claim record is what closes it. Do not read the
-    // ownership rule as a cross-tab guarantee; it is a floor, not a proof.
-    //
-    // The cost, stated plainly because it is deliberate: cleanup belongs solely
-    // to the creating tab, so bytes orphaned by a tab that was closed mid-import
-    // are collected by nobody. That is a leak of up to 250 MB per orphaned
-    // import, bounded by how often a window is closed mid-rebuild. It is the
-    // right trade — a leaked blob costs disk, a wrongly deleted one costs
-    // somebody's model — and it is the reason there is no device-wide deletion
-    // walk here. Widening who may delete puts the decision on a scan that
-    // cannot see the one thing that matters: an undone import's redo stack,
-    // which lives only in the memory of the tab that made it.
+    // Undo/redo stacks remain tab-local. A tab that never created or remembered
+    // abandonment of a key is not allowed to acquire a deletion licence merely
+    // by encountering it later, even after another run's claim lapses.
+    await deps.releaseSourceBlobClaim();
     return false;
   }
   if (deps.result === 'no-verdict') {
     abandoned.add(checksum);
+    await deps.releaseSourceBlobClaim();
     return false;
   }
   const deleted = await discardUnreferencedImportSource({
@@ -259,7 +238,7 @@ export async function settleImportSource(deps: {
     createdByThisImport: true,
     document: deps.document,
     inFlightChecksums: deps.inFlightChecksums,
-    deleteSourceBlob: deps.deleteSourceBlob
+    deleteSourceBlobIfUnreferenced: deps.deleteSourceBlobIfUnreferenced
   });
   if (deleted) {
     abandoned.delete(checksum);
@@ -268,6 +247,7 @@ export async function settleImportSource(deps: {
     // stays, so whoever is last out can still clean up after all of them.
     abandoned.add(checksum);
   }
+  await deps.releaseSourceBlobClaim();
   return deleted;
 }
 
