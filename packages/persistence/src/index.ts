@@ -1015,6 +1015,17 @@ export class InMemoryPersistenceService implements PersistenceService {
       createdAt: nowIso(),
       metadata: upload.metadata
     };
+    if (artifact.kind === 'thumbnail') {
+      for (const [artifactId, existing] of this.artifacts) {
+        if (
+          existing.projectId === artifact.projectId &&
+          existing.kind === 'thumbnail'
+        ) {
+          this.artifacts.delete(artifactId);
+          this.uploadBodies.delete(existing.objectKey);
+        }
+      }
+    }
     this.artifacts.set(artifact.artifactId, artifact);
     return artifact;
   }
@@ -1066,8 +1077,14 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   private summarize(document: ProjectDocument): ProjectSummary {
+    const thumbnail = Array.from(this.artifacts.values()).find(
+      (artifact) =>
+        artifact.projectId === document.projectId &&
+        artifact.kind === 'thumbnail'
+    );
     return {
       ...summarizeDocument(document),
+      ...(thumbnail ? { thumbnailArtifactId: thumbnail.artifactId } : {}),
       organization: this.organizationOf(document.projectId)
     };
   }
