@@ -22,7 +22,7 @@
     "PRODUCTION_GUARD": "enabled",
     "AUTH_EMAIL_FROM": "noreply@zcad.esau.app",
     "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app",
-    "PUBLIC_APP_ORIGIN": "https://zcad.esau.app",
+    "PUBLIC_APP_ORIGIN": "https://zcad.app",
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
