@@ -2693,6 +2693,15 @@ export function App() {
    */
   const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
     useState<string | null>(null);
+  /** Keeps a hydrated record's write time stable until its visible content changes. */
+  const measurementRecordIdentityRef = useRef<{
+    projectId: string;
+    contentKey: string;
+    updatedAt: string;
+  } | null>(null);
+  const measurementCloudPushRef = useRef<
+    ((record: ReturnType<typeof buildMeasurementRecord>) => void) | null
+  >(null);
   const measurementDisplay = useMemo<MeasurementDisplayOptions>(
     () => ({
       unit: measurementUnit,
@@ -2700,6 +2709,27 @@ export function App() {
       radialDisplay
     }),
     [measurementPrecision, measurementUnit, radialDisplay]
+  );
+  const applyMeasurementRecord = useCallback(
+    (projectId: string, record: ReturnType<typeof buildMeasurementRecord>) => {
+      const contentKey = JSON.stringify({ ...record, updatedAt: '' });
+      const previous = measurementRecordIdentityRef.current;
+      measurementRecordIdentityRef.current = {
+        projectId,
+        contentKey,
+        updatedAt: record.updatedAt
+      };
+      if (
+        previous?.projectId !== projectId ||
+        previous.contentKey !== contentKey
+      ) {
+        setMeasurements(record.measurements);
+        setMeasurementUnit(record.display.unit);
+        setMeasurementPrecision(record.display.precision);
+        setRadialDisplay(record.display.radialDisplay);
+      }
+    },
+    []
   );
 
   // A measurement session belongs to one open project, not the application.
@@ -2714,6 +2744,7 @@ export function App() {
     setActiveMeasurementId(null);
     clearMeasurementPicks();
     setMeasurementHydratedProjectId(null);
+    measurementRecordIdentityRef.current = null;
     if (!doc) {
       return;
     }
@@ -2728,10 +2759,7 @@ export function App() {
           return;
         }
         if (record) {
-          setMeasurements(record.measurements);
-          setMeasurementUnit(record.display.unit);
-          setMeasurementPrecision(record.display.precision);
-          setRadialDisplay(record.display.radialDisplay);
+          applyMeasurementRecord(projectId, record);
         }
         setMeasurementHydratedProjectId(projectId);
       })
@@ -2744,7 +2772,56 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [doc?.projectId]);
+  }, [applyMeasurementRecord, doc?.projectId]);
+
+  const measurementCloudProjectId =
+    cloudFunctionsEnabled &&
+    deploymentHealth?.projectMeasurementSyncEnabled &&
+    doc &&
+    cloudProjectIds.has(doc.projectId)
+      ? doc.projectId
+      : null;
+
+  /**
+   * Reconciles the local sibling record only after local hydration finishes.
+   * Failure never blocks that local answer; focus/online and a quiet poll retry
+   * so a project opened offline catches up without being reopened.
+   */
+  useEffect(() => {
+    const projectId = measurementCloudProjectId;
+    if (!projectId || measurementHydratedProjectId !== projectId) {
+      return;
+    }
+    let cancelled = false;
+    let stopWatching: (() => void) | undefined;
+    void import('./lib/measurementCloudSync').then(
+      ({ watchProjectMeasurements }) => {
+        if (cancelled) return;
+        const watcher = watchProjectMeasurements({
+          api,
+          projectId,
+          loadLocal: () => loadProjectMeasurements(projectId),
+          saveLocal: saveProjectMeasurements,
+          onResult: (result) => {
+            if (result.record) {
+              applyMeasurementRecord(projectId, result.record);
+            }
+          }
+        });
+        measurementCloudPushRef.current = watcher.push;
+        stopWatching = watcher.stop;
+      }
+    );
+    return () => {
+      cancelled = true;
+      measurementCloudPushRef.current = null;
+      stopWatching?.();
+    };
+  }, [
+    applyMeasurementRecord,
+    measurementCloudProjectId,
+    measurementHydratedProjectId
+  ]);
 
   /**
    * Writes the measurement list back, debounced.
@@ -2759,16 +2836,28 @@ export function App() {
     }
     const projectId = doc.projectId;
     const timeout = window.setTimeout(() => {
-      void saveProjectMeasurements(
-        buildMeasurementRecord(
-          projectId,
-          measurements,
-          measurementDisplay,
-          new Date().toISOString()
-        )
-      ).catch(() => {
-        // Same as the read: a device that cannot store them still measures.
+      const draft = buildMeasurementRecord(
+        projectId,
+        measurements,
+        measurementDisplay,
+        ''
+      );
+      const contentKey = JSON.stringify(draft);
+      const previous = measurementRecordIdentityRef.current;
+      const updatedAt =
+        previous?.projectId === projectId && previous.contentKey === contentKey
+          ? previous.updatedAt
+          : new Date().toISOString();
+      const record = { ...draft, updatedAt };
+      measurementRecordIdentityRef.current = {
+        projectId,
+        contentKey,
+        updatedAt
+      };
+      void saveProjectMeasurements(record).catch(() => {
+        // A device that cannot store them still measures.
       });
+      measurementCloudPushRef.current?.(record);
     }, 400);
     return () => {
       window.clearTimeout(timeout);

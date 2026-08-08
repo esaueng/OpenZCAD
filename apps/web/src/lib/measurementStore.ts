@@ -338,6 +338,7 @@ export function parseStoredMeasurements(
     version < 1 ||
     version > MEASUREMENT_RECORD_VERSION ||
     typeof updatedAt !== 'string' ||
+    !Number.isFinite(Date.parse(updatedAt)) ||
     !Array.isArray(measurements)
   ) {
     return null;
