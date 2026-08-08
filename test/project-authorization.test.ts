@@ -11,6 +11,7 @@ interface MockStatement {
   bindings: unknown[];
   bind(...values: unknown[]): MockStatement;
   first<T>(): Promise<T | null>;
+  run(): Promise<{ meta: { changes: number } }>;
 }
 
 function createAuthorizationDb(options?: { batchChanges?: number }): {
@@ -43,7 +44,8 @@ function createAuthorizationDb(options?: { batchChanges?: number }): {
           ) as T;
         }
         return null;
-      }
+      },
+      run: async () => ({ meta: { changes: options?.batchChanges ?? 1 } })
     });
     const statement = makeStatement([]);
     prepared.push(statement);
@@ -127,6 +129,37 @@ describe('project authorization', () => {
     expect(update?.bindings[6]).toBe(owner);
     expect(revision?.bindings.at(-1)).toBe(editor);
     expect(revision?.sql).toContain('author_user_id');
+  });
+
+  it('blocks editor REST persistence writes when edit leases are enforced', async () => {
+    const { db, batched } = createAuthorizationDb();
+    const service = new D1R2PersistenceService({
+      DB: db,
+      PROJECT_SHARING_ENABLED: 'true',
+      PROJECT_EDIT_LEASES_ENFORCED: 'true'
+    });
+    const owner = toUserId('user_d1_owner');
+    const editor = toUserId('user_d1_editor');
+    const document = createProjectDocument('D1 lease protected', owner);
+
+    await expect(
+      service.saveRevision(editor, {
+        projectId: document.projectId,
+        reason: 'Bypass revision',
+        expectedVersion: document.version,
+        document: { ...document, name: 'Bypassed revision' }
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+
+    await expect(
+      service.saveDocument(editor, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document: { ...document, name: 'Bypassed document' }
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+
+    expect(batched).toHaveLength(0);
   });
 
   it('rejects an editor-authored document that changes the owner', async () => {
