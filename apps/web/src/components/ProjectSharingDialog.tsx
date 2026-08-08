@@ -4,7 +4,8 @@ import type {
   ProjectAccessRole,
   ProjectEditLease,
   ProjectMemberRole,
-  ProjectSharingResponse
+  ProjectSharingResponse,
+  UserId
 } from '@openzcad/shared';
 import {
   resolveProjectConflict,
@@ -27,6 +28,7 @@ export interface ProjectSharingDialogProps {
   collaborationStatus: CollaborationStatus;
   lease: ProjectEditLease | null;
   liveMembers?: readonly CollaborationMember[];
+  currentUserId?: UserId | null;
   conflict?: ProjectConflict | null;
   conflictHandlers?: ConflictResolutionHandlers;
   client?: ProjectSharingClient;
@@ -70,6 +72,7 @@ export function ProjectSharingDialog({
   collaborationStatus,
   lease,
   liveMembers = [],
+  currentUserId = null,
   conflict = null,
   conflictHandlers,
   client = defaultClient,
@@ -80,8 +83,7 @@ export function ProjectSharingDialog({
   const [sharing, setSharing] = useState<ProjectSharingResponse | null>(null);
   const [email, setEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
-  const [invitationToken, setInvitationToken] = useState<string | null>(null);
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
@@ -262,13 +264,13 @@ export function ProjectSharingDialog({
                   onSubmit={(event) => {
                     event.preventDefault();
                     void mutate('invite', async () => {
+                      setInvitationSentTo(null);
                       const created = await client.createInvitation(
                         projectId,
                         email,
                         inviteRole
                       );
-                      setInvitationToken(created.token);
-                      setCopyStatus(null);
+                      setInvitationSentTo(created.invitation.email);
                       setEmail('');
                       await refresh();
                     });
@@ -302,44 +304,13 @@ export function ProjectSharingDialog({
                     className="primary"
                     disabled={busy !== null}
                   >
-                    Create invitation
+                    Send invite
                   </button>
                 </form>
-                {invitationToken && (
-                  <div className="sharing-token-row">
-                    <output aria-label="Invitation token">
-                      Copy this token now; it is shown once: {invitationToken}
-                    </output>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy !== null}
-                      onClick={() => {
-                        setCopyStatus(null);
-                        if (!navigator.clipboard) {
-                          setCopyStatus(
-                            'Copy is unavailable. Select the token and copy it manually.'
-                          );
-                          return;
-                        }
-                        void navigator.clipboard
-                          .writeText(invitationToken)
-                          .then(() => setCopyStatus('Invitation token copied.'))
-                          .catch(() =>
-                            setCopyStatus(
-                              'Copy failed. Select the token and copy it manually.'
-                            )
-                          );
-                      }}
-                    >
-                      Copy invitation token
-                    </button>
-                    {copyStatus && (
-                      <span className="sharing-copy-status" role="status">
-                        {copyStatus}
-                      </span>
-                    )}
-                  </div>
+                {invitationSentTo && (
+                  <p className="sharing-invite-sent" role="status">
+                    Invitation sent to {invitationSentTo}.
+                  </p>
                 )}
               </section>
             </>
@@ -365,6 +336,7 @@ export function ProjectSharingDialog({
                     </span>
                     <span className="sharing-member-id">
                       {member.displayName}
+                      {member.userId === currentUserId ? ' (you)' : ''}
                     </span>
                     <span
                       className="sharing-presence"

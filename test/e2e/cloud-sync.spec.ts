@@ -11,7 +11,7 @@ import {
   type SaveProjectDocumentRequest,
   type UnitSystem
 } from '@openzcad/shared';
-import { expect, test } from './openzcad-fixtures';
+import { createProject, expect, stubApi, test } from './openzcad-fixtures';
 
 const accountUserId = toUserId('user_cloud_sync_e2e');
 
@@ -208,6 +208,156 @@ async function renameProject(page: Page, name: string): Promise<void> {
   ).toContainText(name);
 }
 
+/** The names this device has actually committed to IndexedDB. */
+async function storedProjectNames(page: Page): Promise<string[]> {
+  return page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open('openzcad-v2');
+        open.onerror = () =>
+          reject(new Error(open.error?.message ?? 'IndexedDB unavailable.'));
+        open.onsuccess = () => {
+          const database = open.result;
+          if (!database.objectStoreNames.contains('projects')) {
+            database.close();
+            resolve([]);
+            return;
+          }
+          const all = database
+            .transaction('projects', 'readonly')
+            .objectStore('projects')
+            .getAll();
+          all.onerror = () =>
+            reject(new Error(all.error?.message ?? 'Project read failed.'));
+          all.onsuccess = () => {
+            resolve((all.result as { name: string }[]).map(({ name }) => name));
+            database.close();
+          };
+        };
+      })
+  );
+}
+
+/**
+ * The device write is the save, so it has to survive the tab going away while
+ * an edit is still inside the 450 ms local-save debounce.
+ *
+ * Timers are frozen before the edit so that debounce provably cannot fire on
+ * its own, which leaves the page-hide flush as the only thing that can reach
+ * IndexedDB. Freezing has to wait for the app to go quiet first: a real timer
+ * armed before the fake clock is installed stays scheduled, and when it lands
+ * it stores whatever edit is pending by then — which looks exactly like the
+ * behaviour under test. The mid-test assertion that the old name is still
+ * stored is what keeps this honest; if the freeze ever stops working, the test
+ * fails there instead of passing for the wrong reason.
+ */
+test('stores an edit made inside the autosave debounce when the tab goes away', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Debounce Window');
+  await expect
+    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .toContain('Debounce Window');
+  // Outlasts the trailing debounce that follows the first derived rebuild.
+  await page.waitForTimeout(1500);
+
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now());
+  await renameProject(page, 'Saved On Page Hide');
+  expect(await storedProjectNames(page)).toEqual(['Debounce Window']);
+
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await expect
+    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .toContain('Saved On Page Hide');
+});
+
+/**
+ * Reopening a project is an adoption, not an edit. The account already holds
+ * exactly this version, so mirroring it back is a write nobody asked for — and
+ * on the collaboration path, where every inbound frame arrives the same way, it
+ * is a write per frame fenced against a version the room may not have persisted
+ * yet, which surfaces as a conflict the user never caused.
+ */
+/**
+ * Two tabs autosaving one project write the whole document to the same key, so
+ * the slower one lands last and the other tab's work stops existing. The second
+ * tab opens read-only instead of competing.
+ */
+test('opens a project read-only when another tab already has it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Two Tabs');
+  await expect
+    .poll(() => storedProjectNames(page), { timeout: 10_000 })
+    .toContain('Two Tabs');
+
+  // A second tab restores the same active project on its own.
+  const second = await page.context().newPage();
+  await stubApi(second);
+  await second.goto('/');
+  await expect(
+    second.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Two Tabs');
+
+  await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled(
+    { timeout: 10_000 }
+  );
+  // And settles on saying so, rather than leaving up a save that is never
+  // going to happen. Claiming the project is asynchronous, so the indicator
+  // reads as saving until the answer arrives.
+  await expect(
+    second.getByRole('group', { name: 'Workspace status', exact: true })
+  ).toContainText('syncLocal only', { timeout: 15_000 });
+
+  // The tab that owns it keeps editing.
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
+
+  // Handing the project back promotes the tab that was waiting for it.
+  await page.goto('about:blank');
+  await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
+    timeout: 10_000
+  });
+  await second.close();
+});
+
+test('does not write to the account when a project is only reopened', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+  let documentWrites = 0;
+  page.on('request', (request) => {
+    if (
+      /\/api\/projects\/[^/]+\/document$/.test(new URL(request.url()).pathname)
+    ) {
+      documentWrites += 1;
+    }
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Reopen Echo');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('group', { name: 'Workspace status', exact: true })
+  ).toContainText('syncSynced', { timeout: 10_000 });
+
+  documentWrites = 0;
+  await page.reload();
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Reopen Echo');
+  await expect(
+    page.getByRole('group', { name: 'Workspace status', exact: true })
+  ).toContainText('syncSynced', { timeout: 10_000 });
+  // Outlasts this fixture's 1 s cloud-autosave delay, so a queued mirror of the
+  // adopted document would have been sent by now.
+  await page.waitForTimeout(3000);
+  expect(documentWrites).toBe(0);
+});
+
 test('syncs across two devices and preserves the losing side of a conflict', async ({
   browser
 }) => {
@@ -229,14 +379,20 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
       timeout: 10_000
     });
     await expect(
-      pageA.getByRole('group', { name: 'Workspace status' })
+      pageA.getByRole('group', { name: 'Workspace status', exact: true })
     ).toContainText('syncSynced');
 
     await pageA.reload();
     await expect(
       pageA.getByRole('button', { name: 'Rename project' })
     ).toContainText('Shared Bracket');
-    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible();
+    // A reload is a second cold start, so the save chip passes back through
+    // "Saving" before it settles — the same allowance the first open above
+    // already takes. It does not excuse a save that never lands: a document
+    // that never reaches the account stays on "Saving" and still fails here.
+    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
+      timeout: 10_000
+    });
 
     await pageB.goto('/');
     await pageB
@@ -277,9 +433,17 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     });
     await expect(conflict).toBeVisible({ timeout: 10_000 });
     await expect(pageB.locator('.status-groups')).toContainText('syncConflict');
+    // A lower overlay may mount after async conflict detection. The account
+    // dialog remains painted above it and must not become inert just because
+    // the lower overlay registered its focus trap later.
+    await pageB.keyboard.press('?');
+    await expect(
+      pageB.locator('.conflict-dialog').locator('..')
+    ).not.toHaveAttribute('inert', '');
     await conflict
       .getByRole('button', { name: 'Use my account’s version' })
       .click();
+    await pageB.keyboard.press('Escape');
     await expect(
       pageB.getByRole('button', { name: 'Rename project' })
     ).toContainText('Device A account edit');

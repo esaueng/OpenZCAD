@@ -59,6 +59,31 @@ describe('controls reference', () => {
     expect(pointerItem('middle-drag')?.detail).toContain('Viewport settings');
   });
 
+  it('documents the View-mode keys, including M meaning two things', () => {
+    // The reference disagreed with the app: M was documented only as Move,
+    // while in View mode it arms Measure, and Ctrl+Shift+M switched workspace
+    // with no entry at all. Neither is a runtime collision — both handlers are
+    // gated on the mode — but a reference that omits half of a key's meaning
+    // is how someone concludes the feature does not exist.
+    expect(keyboardItem('measure')?.keys).toEqual(['M']);
+    expect(keyboardItem('measure')?.detail).toContain('View mode');
+    expect(keyboardItem('workspace-mode')?.keys).toEqual([
+      'Ctrl',
+      'Shift',
+      'M'
+    ]);
+    // And Move now says which mode it belongs to, so the shared key reads as
+    // deliberate rather than as a contradiction.
+    expect(keyboardItem('move')?.detail).toContain('View');
+
+    // Still exactly nine modelling tools: the View keys went in their own
+    // group rather than being smuggled into that pinned list.
+    expect(
+      KEYBOARD_CONTROL_GROUPS.find((group) => group.id === 'modeling-tools')
+        ?.items
+    ).toHaveLength(9);
+  });
+
   it('keeps every reference item id unique', () => {
     const ids = [...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].flatMap(
       (group) => group.items.map((item) => item.id)

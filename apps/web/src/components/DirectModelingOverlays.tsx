@@ -219,6 +219,21 @@ interface MoveOverlayProps {
   onCancel(): void;
   /** Sketch moves translate only; the rotation grid and copy are hidden. */
   hideRotation?: boolean;
+  /**
+   * The Move feature's name. Omitted for a sketch move, which commits as a
+   * sketch translation rather than a named feature, so there is nothing to
+   * call. Present for a body move: this overlay is now the only way to make
+   * one, so naming at creation has to live here (WF-07).
+   */
+  name?: string;
+  onName?(value: string): void;
+  /**
+   * Every body the move could target, so choosing one no longer means backing
+   * out to a second UI. Omitted when there is nothing to choose between.
+   */
+  targets?: readonly { bodyId: string; name: string }[];
+  targetBodyId?: string;
+  onTargetBody?(bodyId: string): void;
 }
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
@@ -231,7 +246,12 @@ export function MoveOverlay({
   onChange,
   onConfirm,
   onCancel,
-  hideRotation
+  hideRotation,
+  name,
+  onName,
+  targets,
+  targetBodyId,
+  onTargetBody
 }: MoveOverlayProps) {
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
@@ -289,7 +309,32 @@ export function MoveOverlay({
             <X size={15} aria-hidden="true" />
           </button>
         </div>
-        <p>{bodyName}</p>
+        {name !== undefined && onName ? (
+          <label className="field move-name">
+            <span>Name</span>
+            <input
+              value={name}
+              onChange={(event) => onName(event.target.value)}
+            />
+          </label>
+        ) : null}
+        {targets && targets.length > 1 && onTargetBody ? (
+          <label className="field move-target">
+            <span>Body</span>
+            <select
+              value={targetBodyId ?? ''}
+              onChange={(event) => onTargetBody(event.target.value)}
+            >
+              {targets.map((target) => (
+                <option key={target.bodyId} value={target.bodyId}>
+                  {target.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <p>{bodyName}</p>
+        )}
         <div className="move-grid" role="group" aria-label="Translation">
           {MOVE_AXES.map((axis) => (
             <label key={`t-${axis}`}>

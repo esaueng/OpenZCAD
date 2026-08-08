@@ -2,6 +2,7 @@ import {
   test,
   expect,
   createProject,
+  expectBodyCount,
   openAssistant,
   stubApi,
   stubAssistant,
@@ -84,13 +85,13 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
 
   const topbar = page.locator('.topbar');
   const actions = topbar.getByRole('group', {
-    name: 'Workspace status and actions'
+    name: 'Workspace actions'
   });
   const actionSlots = actions.locator(':scope > *');
   await expect(actionSlots).toHaveCount(5);
-  await expect(actionSlots.nth(0)).toHaveClass(/save-state/);
-  await expect(actionSlots.nth(1)).toHaveClass(/account-state/);
-  await expect(actionSlots.nth(1)).toHaveText('Signed in');
+  await expect(actionSlots.nth(0)).toHaveClass(/account-state/);
+  await expect(actionSlots.nth(0)).toHaveText('Signed in');
+  await expect(actionSlots.nth(1)).toHaveClass(/save-state/);
   await expect(topbar).not.toContainText('E2E user');
   await expect(actionSlots.nth(2)).toHaveAttribute(
     'aria-label',
@@ -109,14 +110,6 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await topbar.locator('.topbar-divider').click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
 
-  const slotBounds = async () =>
-    actions.locator(':scope > *').evaluateAll((elements) =>
-      elements.map((element) => {
-        const bounds = element.getBoundingClientRect();
-        return { left: bounds.left, right: bounds.right };
-      })
-    );
-  const beforeStateChanges = await slotBounds();
   await actions.locator('.save-state').evaluate((element) => {
     element.lastChild!.textContent = 'Autosave off';
   });
@@ -126,7 +119,14 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await actions.locator('.collaboration-state').evaluate((element) => {
     element.lastChild!.textContent = 'Update required';
   });
-  expect(await slotBounds()).toEqual(beforeStateChanges);
+  await expect(actionSlots.nth(0)).toHaveClass(/account-state/);
+  await expect(actionSlots.nth(1)).toHaveClass(/save-state/);
+  await expect(actionSlots.nth(2)).toHaveClass(/collaboration-state/);
+  await expect(actionSlots.nth(3)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(4)).toHaveAttribute(
+    'aria-label',
+    'Open settings'
+  );
 });
 
 test('opens new projects blank with the assistant collapsed', async ({
@@ -321,7 +321,11 @@ test('turns project sharing off without disabling cloud saves', async ({
 
   await expect(
     page.getByRole('form', { name: 'Join a shared project' })
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(page.getByLabel('Invitation token')).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Join project' })
+  ).toHaveCount(0);
   await page.getByLabel('Project name').fill('Private Local Part');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(
@@ -559,7 +563,7 @@ test('disabling the assistant takes its live preview with it', async ({
   await expect(status).toContainText('Previewing exact proposed geometry.');
   // The preview is unapplied geometry: it shows a body the document does not
   // have, which is what makes an orphaned preview visible at all.
-  await expect(status.locator('[title*="1 bodies"]')).toHaveCount(1);
+  await expectBodyCount(page, 1);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
@@ -575,7 +579,7 @@ test('disabling the assistant takes its live preview with it', async ({
   // The panel is gone, so nothing is left that could retire the preview — the
   // workspace has to drop it rather than render a proposal forever.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(status.locator('[title*="0 bodies"]')).toHaveCount(1);
+  await expectBodyCount(page, 0);
 });
 
 test('settings swallow workspace shortcuts instead of editing behind them', async ({

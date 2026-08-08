@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  type AccountDeletionScope,
   type AccountStorageUsage,
   type AppSettings,
   type AppSettingsResponse,
@@ -81,6 +82,7 @@ import {
   type ControlReferenceGroup
 } from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
+import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -117,6 +119,8 @@ interface SettingsPageProps {
   busy: boolean;
   message: string;
   initialSection?: SectionId;
+  projectInvitationPending?: boolean;
+  projectInvitationError?: string | null;
   desktopAuthorizationAttempt?: string | null;
   desktopAuthorizationApproved?: boolean;
   desktopAuthorizationCode?: string;
@@ -135,8 +139,13 @@ interface SettingsPageProps {
   onDesktopAuthorizationCodeChange(code: string): void;
   onApproveDesktopLogin(): Promise<void>;
   onLogout(): Promise<void>;
+  onDeleteCloudData(
+    scope: AccountDeletionScope,
+    confirmation: string
+  ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
+  onDismissProjectInvitation(): void;
   onClose(): void;
 }
 
@@ -476,6 +485,8 @@ export function SettingsPage({
   busy,
   message,
   initialSection,
+  projectInvitationPending = false,
+  projectInvitationError = null,
   desktopAuthorizationAttempt = null,
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
@@ -491,8 +502,10 @@ export function SettingsPage({
   onDesktopAuthorizationCodeChange,
   onApproveDesktopLogin,
   onLogout,
+  onDeleteCloudData,
   onReset,
   onApplyViewportDefaults,
+  onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
   const [initialViewState] = useState(loadSettingsViewState);
@@ -515,6 +528,8 @@ export function SettingsPage({
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
     null
   );
+  const [deletionScope, setDeletionScope] =
+    useState<AccountDeletionScope | null>(null);
   const contentRef = useRef<HTMLElement>(null);
   const scrollTopRef = useRef(
     initialSection === undefined ? initialViewState.scrollTop : 0
@@ -708,11 +723,20 @@ export function SettingsPage({
             )}
             <span>
               <strong>
+                {/*
+                  Being signed in is not the same as being reachable. This read
+                  only `session` and so announced "Cloud profile connected"
+                  while the header of the same screen said the profile was
+                  unavailable — two claims about one thing, on screen together.
+                  Reachability decides first.
+                */}
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
-                  : session
-                    ? 'Cloud profile connected'
-                    : 'Device only'}
+                  : authConfigStatus === 'unavailable'
+                    ? 'Cloud unreachable'
+                    : session
+                      ? 'Cloud profile connected'
+                      : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
             </span>
@@ -1582,6 +1606,28 @@ export function SettingsPage({
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
+              {projectInvitationPending ? (
+                <div
+                  className="settings-warning settings-sign-in-warning"
+                  role={projectInvitationError ? 'alert' : 'status'}
+                >
+                  <span>
+                    {projectInvitationError ??
+                      'Project invitation ready. Sign in with the email address that received the link and the project will open automatically.'}
+                    {projectInvitationError && session
+                      ? ' Sign out below to try a different email address.'
+                      : ''}
+                  </span>
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy}
+                    onClick={onDismissProjectInvitation}
+                  >
+                    Not now
+                  </button>
+                </div>
+              ) : null}
               <SettingRow
                 title="Project sharing"
                 description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
@@ -1911,7 +1957,7 @@ export function SettingsPage({
           {active === 'privacy' && (
             <Section
               title="Privacy & data"
-              intro="Device preferences are separate from canonical project documents, exports, and collaboration messages."
+              intro="Review and permanently remove device or cloud data from one place. Local and cloud copies remain separate."
             >
               <SettingRow
                 title="Reset application settings"
@@ -1928,12 +1974,84 @@ export function SettingsPage({
                 </button>
               </SettingRow>
               <SettingRow
-                title="Project data"
-                description="Local projects remain in IndexedDB until a dedicated project deletion flow is used."
-                scope="Protected"
+                title="Local project data"
+                description="Local projects remain in IndexedDB. The cloud actions below never delete projects or settings from this device."
+                scope="This device"
               >
                 <ShieldCheck size={17} aria-hidden="true" />
               </SettingRow>
+              {session ? (
+                <>
+                  <SettingRow
+                    title="Delete all cloud projects"
+                    description="Permanently delete every cloud project you own, including revisions, imports, generated files, and collaboration state. Your cloud profile stays active."
+                    scope="Cloud only"
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.projectErasureReady !== true}
+                      onClick={() => setDeletionScope('projects')}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete projects
+                    </button>
+                  </SettingRow>
+                  <SettingRow
+                    title="Delete cloud profile"
+                    description="Delete your email profile, synchronized settings, personal AI credential, and all sessions. Owned projects remain under a minimal anonymous ownership record."
+                    scope="All devices"
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.accountErasureReady !== true}
+                      onClick={() => setDeletionScope('profile')}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete profile
+                    </button>
+                  </SettingRow>
+                  <div className="settings-cloud-delete-all">
+                    <SettingRow
+                      title="Delete all cloud data"
+                      description="Permanently delete your cloud profile and every project you own. Collaborators lose access immediately. This is the complete cloud-data deletion action."
+                      scope="Cannot undo"
+                    >
+                      <button
+                        className="secondary danger"
+                        type="button"
+                        disabled={busy || health?.projectErasureReady !== true}
+                        onClick={() => setDeletionScope('all')}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
+                        Delete all data
+                      </button>
+                    </SettingRow>
+                  </div>
+                  {health?.accountErasureReady !== true ? (
+                    <div className="settings-warning" role="status">
+                      Cloud data deletion is unavailable until migration 0014
+                      and its write-safety checks are ready. No data can be
+                      deleted from this screen yet.
+                    </div>
+                  ) : health?.projectErasureReady !== true ? (
+                    <div className="settings-warning" role="status">
+                      Cloud project deletion is unavailable until private object
+                      storage and collaboration cleanup pass their readiness
+                      checks. Profile-only deletion remains available.
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <SettingRow
+                  title="Cloud data"
+                  description="Sign in before reviewing or deleting cloud profile and project data."
+                  scope="Signed out"
+                >
+                  <ShieldCheck size={17} aria-hidden="true" />
+                </SettingRow>
+              )}
             </Section>
           )}
 
@@ -1992,6 +2110,16 @@ export function SettingsPage({
           )}
         </main>
       </div>
+      {deletionScope ? (
+        <CloudDataDeletionDialog
+          scope={deletionScope}
+          onConfirm={async (scope, confirmation) => {
+            await onDeleteCloudData(scope, confirmation);
+            setDeletionScope(null);
+          }}
+          onClose={() => setDeletionScope(null)}
+        />
+      ) : null}
     </div>
   );
 }

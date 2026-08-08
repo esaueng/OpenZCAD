@@ -9,6 +9,20 @@ import { normalizeEmail } from './auth';
 export const PROJECT_INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const encoder = new TextEncoder();
 
+export interface ProjectInvitationEmailConfig {
+  sender: string;
+  publicAppOrigin: string;
+}
+
+export interface ProjectInvitationEmailDetails {
+  recipientEmail: string;
+  inviterLabel: string;
+  projectName: string;
+  role: ProjectMemberRole;
+  expiresAt: number;
+  token: string;
+}
+
 function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) {
@@ -33,6 +47,109 @@ export async function hashProjectInvitationToken(
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0')
   ).join('');
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>'"]/g, (character) => {
+    switch (character) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case "'":
+        return '&#39;';
+      default:
+        return '&quot;';
+    }
+  });
+}
+
+export function projectInvitationUrl(
+  publicAppOrigin: string,
+  token: string
+): string {
+  let origin: URL;
+  try {
+    origin = new URL(publicAppOrigin);
+  } catch {
+    throw new SharingRequestError(
+      503,
+      'INVITATION_EMAIL_UNAVAILABLE',
+      'Project invitation email is not configured.'
+    );
+  }
+  const localDevelopmentOrigin =
+    origin.protocol === 'http:' &&
+    (origin.hostname === 'localhost' || origin.hostname === '127.0.0.1');
+  if (
+    (origin.protocol !== 'https:' && !localDevelopmentOrigin) ||
+    origin.username ||
+    origin.password ||
+    origin.pathname !== '/' ||
+    origin.search ||
+    origin.hash
+  ) {
+    throw new SharingRequestError(
+      503,
+      'INVITATION_EMAIL_UNAVAILABLE',
+      'Project invitation email is not configured.'
+    );
+  }
+  origin.hash = `invite=${encodeURIComponent(token)}`;
+  return origin.toString();
+}
+
+export function buildProjectInvitationEmail(
+  config: ProjectInvitationEmailConfig,
+  details: ProjectInvitationEmailDetails
+): EmailMessageBuilder {
+  const invitationUrl = projectInvitationUrl(
+    config.publicAppOrigin,
+    details.token
+  );
+  const roleLabel = details.role === 'editor' ? 'Editor' : 'Viewer';
+  const expiresAt = new Date(details.expiresAt * 1_000).toUTCString();
+  const escapedProjectName = escapeHtml(details.projectName);
+  const escapedInviter = escapeHtml(details.inviterLabel);
+  const escapedRole = escapeHtml(roleLabel);
+  const escapedExpiry = escapeHtml(expiresAt);
+  const escapedUrl = escapeHtml(invitationUrl);
+  return {
+    to: details.recipientEmail,
+    from: { email: config.sender, name: 'OpenZCAD' },
+    subject: 'You are invited to an OpenZCAD project',
+    text: [
+      `${details.inviterLabel} invited you to the OpenZCAD project “${details.projectName}” as a ${roleLabel.toLowerCase()}.`,
+      '',
+      `Open the project: ${invitationUrl}`,
+      '',
+      `Sign in with the email address that received this invitation. The link expires ${expiresAt}.`,
+      '',
+      'If you were not expecting this invitation, you can ignore this email.'
+    ].join('\n'),
+    html: [
+      '<!doctype html><html><body style="margin:0;background:#f5f7fa;color:#172033;font-family:Arial,sans-serif">',
+      '<div style="max-width:560px;margin:0 auto;padding:32px 20px">',
+      '<div style="background:#fff;border:1px solid #dfe4ec;border-radius:12px;padding:28px">',
+      '<p style="margin:0 0 8px;font-size:13px;color:#667085">OpenZCAD project invitation</p>',
+      `<h1 style="margin:0 0 18px;font-size:24px">${escapedProjectName}</h1>`,
+      `<p style="margin:0 0 18px;line-height:1.55"><strong>${escapedInviter}</strong> invited you as a <strong>${escapedRole}</strong>.</p>`,
+      `<p style="margin:0 0 22px"><a href="${escapedUrl}" style="display:inline-block;padding:11px 18px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600">Open project</a></p>`,
+      '<p style="margin:0 0 8px;font-size:13px;line-height:1.5;color:#667085">Sign in with the email address that received this invitation.</p>',
+      `<p style="margin:0;font-size:13px;line-height:1.5;color:#667085">This link expires ${escapedExpiry}. If you were not expecting it, you can ignore this email.</p>`,
+      '</div></div></body></html>'
+    ].join('')
+  };
+}
+
+export async function sendProjectInvitationEmail(
+  email: SendEmail,
+  config: ProjectInvitationEmailConfig,
+  details: ProjectInvitationEmailDetails
+): Promise<void> {
+  await email.send(buildProjectInvitationEmail(config, details));
 }
 
 export function parseProjectMemberRole(value: unknown): ProjectMemberRole {

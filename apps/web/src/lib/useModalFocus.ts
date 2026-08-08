@@ -33,8 +33,10 @@ interface ModalRegistration {
 }
 
 // Async conflict detection can open a dialog while another modal is mounted.
-// Only the top registration may inert siblings; otherwise the two backdrops
-// inert each other and neither dialog can receive pointer or keyboard events.
+// Only the visually top registration may inert siblings; otherwise one
+// backdrop can make the dialog painted above it reject pointer and keyboard
+// events. Registration order is not enough because an earlier DOM sibling may
+// mount after a later one.
 const modalStack: ModalRegistration[] = [];
 let activeModal: ModalRegistration | null = null;
 let stackOpener: HTMLElement | null = null;
@@ -120,14 +122,26 @@ function deactivateModal(registration: ModalRegistration): void {
 
 function refreshActiveModal(): void {
   let next: ModalRegistration | null = null;
-  for (let index = modalStack.length - 1; index >= 0; index -= 1) {
-    const candidate = modalStack[index];
-    if (candidate?.dialog.isConnected) {
+  for (const candidate of modalStack) {
+    if (!candidate.dialog.isConnected) {
+      continue;
+    }
+    if (
+      !next ||
+      next.dialog.compareDocumentPosition(candidate.dialog) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ) {
       next = candidate;
-      break;
     }
   }
   if (next === activeModal) {
+    // A lower registration can mount or unmount without changing which dialog
+    // is on top. Refresh its inert snapshot so the new sibling cannot keep
+    // receiving input behind the active modal.
+    if (next) {
+      deactivateModal(next);
+      activateModal(next);
+    }
     return;
   }
 

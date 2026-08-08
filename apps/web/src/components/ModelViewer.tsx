@@ -29,7 +29,7 @@ import {
   SNAP_RADIUS_PX,
   isBoxSelectDrag,
   rectFromDrag,
-  edgeRunFrom,
+  edgeRunSelections,
   edgeHandlePlacement,
   offsetHandlePlacement,
   GestureRouter,
@@ -49,10 +49,12 @@ import {
   createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
+  createDimensionGraphic,
   createFatLine,
+  measureSnapEdges,
   createFatLineMaterial,
   createFatLineSegments,
-  createGradientBackground,
+  createGradientBackdrop,
   createObjectForBody,
   createShadowCatcher,
   createStudioEnvironment,
@@ -65,6 +67,7 @@ import {
   isSameMoveGizmoFocus,
   makeLabel,
   markExtrudeGizmo,
+  moveCalloutAnchor,
   moveEuler,
   moveGizmoHandleLabel,
   moveGizmoWorldScale,
@@ -106,11 +109,13 @@ import {
   type ViewerBodyMaterial,
   type ViewerSettings,
   type FatLineResolution,
-  type BodyEdgeOverlay
+  type BodyEdgeOverlay,
+  type DimensionGraphic
 } from '@openzcad/viewport';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
   type SketchModeRig
@@ -323,6 +328,8 @@ export interface NormalToFaceRequest {
 interface ModelViewerProps {
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  /** Runtime-only View-mode measurements rendered above exact geometry. */
+  measurementAnnotations: MeasurementViewportAnnotation[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
@@ -433,6 +440,16 @@ interface ModelViewerProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /**
+   * What measuring the hovered target would report, for the preview chip.
+   * Null when measuring is off or the pick has nothing honest to say.
+   */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
@@ -500,12 +517,30 @@ export interface SceneContext {
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg']
   ): void;
+  /** Returns selection callouts to the pose their bodies rest at. */
+  restSelectionCallouts(): void;
+  /**
+   * Marks the frozen shadow map dirty for exactly one frame. The map is
+   * camera-independent, so orbiting must never call this — that freeze is
+   * where most of the render win lives — but anything that moves a caster
+   * must, or its shadow stays where the caster used to be.
+   */
+  refreshShadowMap(): void;
   grid: THREE.Object3D;
   shadowCatcher: THREE.Object3D;
   keyLight: THREE.DirectionalLight;
   raycaster: THREE.Raycaster;
   objectsByBodyId: Map<string, THREE.Object3D>;
   edgeOverlaysByBodyId: Map<string, BodyEdgeOverlay>;
+  /**
+   * The body projection currently installed in `bodyGroup`, used to skip the
+   * mesh rebuild on selection-only renders. It belongs to the context rather
+   * than the component because it describes what this scene holds: a context
+   * that is torn down and rebuilt (React Strict Mode's double mount, a dev
+   * hot update) starts empty and must rebuild even though the props never
+   * changed.
+   */
+  renderedBodies: readonly BodyRepresentation[] | null;
   hasFitCamera: boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
@@ -690,6 +725,7 @@ const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 export function ModelViewer({
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -735,6 +771,7 @@ export function ModelViewer({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   sketchMode,
   onSketchCommit,
@@ -780,8 +817,6 @@ export function ModelViewer({
   sketchesRef.current = sketches;
   const bodiesRef = useRef(bodies);
   bodiesRef.current = bodies;
-  /** Last body projection installed in Three.js; selection-only renders reuse it. */
-  const renderedBodiesRef = useRef<readonly BodyRepresentation[] | null>(null);
   const cylinderRadiusHandleRef = useRef(cylinderRadiusHandle);
   cylinderRadiusHandleRef.current = cylinderRadiusHandle;
   const onContextMenuRef = useRef(onContextMenu);
@@ -833,11 +868,29 @@ export function ModelViewer({
   onSelectRegionRef.current = onSelectRegion;
   const onHoverRegionRef = useRef(onHoverRegion);
   onHoverRegionRef.current = onHoverRegion;
+  const onMeasurePreviewRef = useRef(onMeasurePreview);
+  onMeasurePreviewRef.current = onMeasurePreview;
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
+  /** Separate from direct-edit overlays so body rebuilds do not erase it. */
+  const measurementGroupRef = useRef<THREE.Group | null>(null);
+  /**
+   * Live dimension graphics with the world points they span.
+   *
+   * Held outside React because the animation loop resizes them every frame:
+   * their arrowheads and witness ticks are pixel-sized, and the world size of
+   * a pixel changes with a zoom that never touches the camera's orientation.
+   */
+  const measurementDimensionsRef = useRef<
+    {
+      graphic: DimensionGraphic;
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+    }[]
+  >([]);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -907,8 +960,11 @@ export function ModelViewer({
     let firstFrame = true;
     let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
-    const gradientBackground = createGradientBackground();
-    scene.background = gradientBackground;
+    // Solid clear colour stays behind the clip-space gradient as a safe first
+    // frame/context-recovery fallback.
+    scene.background = new THREE.Color('#05070a');
+    const gradientBackdrop = createGradientBackdrop();
+    scene.add(gradientBackdrop);
 
     const renderer = timed(
       'viewer.renderer',
@@ -925,6 +981,26 @@ export function ModelViewer({
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.autoUpdate = false;
+    /**
+     * The single place that thaws the frozen shadow map, counting refreshes on
+     * the canvas so a test can assert both halves of the contract: orbiting
+     * must not refresh it, moving a body must. Declared here rather than
+     * beside its callers because the light rig calls it during setup, and a
+     * `let` read before its declaration is a dead-zone throw that takes the
+     * whole viewer down.
+     */
+    let shadowRefreshes = 0;
+    function refreshShadowMap() {
+      renderer.shadowMap.needsUpdate = true;
+      shadowRefreshes += 1;
+      renderer.domElement.dataset.e2eShadowRefreshes = String(shadowRefreshes);
+      // The freeze itself, not just the thaws: a refresh count alone cannot
+      // tell that three.js has gone back to updating the map every frame,
+      // which is the regression that would quietly undo the render win.
+      renderer.domElement.dataset.e2eShadowAutoUpdate = String(
+        renderer.shadowMap.autoUpdate
+      );
+    }
     // PCF is the soft one now: three r185 deprecated PCFSoftShadowMap and
     // silently substitutes this, warning on every renderer. Its sampler spreads
     // five Vogel-disk taps over `light.shadow.radius`, tuned in
@@ -982,7 +1058,10 @@ export function ModelViewer({
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     tuneShadowFrustum(keyLight, 120);
-    renderer.shadowMap.needsUpdate = true;
+    // Through the helper like every other site, so the refresh count on the
+    // canvas starts from a known value rather than being absent until the
+    // first thaw.
+    refreshShadowMap();
     scene.add(keyLight);
     scene.add(keyLight.target);
     // Left, behind, slightly above — cool rim for edge separation.
@@ -1022,6 +1101,11 @@ export function ModelViewer({
     const overlayGroup = new THREE.Group();
     overlayGroup.name = 'overlays';
     scene.add(overlayGroup);
+
+    const measurementGroup = new THREE.Group();
+    measurementGroup.name = 'measurements';
+    scene.add(measurementGroup);
+    measurementGroupRef.current = measurementGroup;
 
     const gizmoGroup = new THREE.Group();
     gizmoGroup.name = 'direct-modeling-gizmo';
@@ -1072,6 +1156,38 @@ export function ModelViewer({
             : 'default'
     });
 
+    /**
+     * Poses the named body's selection callout under the same rotate-then-
+     * translate the mesh just took. At most one callout carries a body id —
+     * the effect that builds them names only the primary selection.
+     */
+    function poseSelectionCallout(
+      bodyId: MovePreview['bodyId'],
+      rotationDeg: MovePreview['rotationDeg'],
+      final: { x: number; y: number; z: number }
+    ) {
+      for (const child of context.overlayGroup.children) {
+        const resting = child.userData.calloutRestingPosition as
+          THREE.Vector3 | undefined;
+        if (child.userData.calloutBodyId !== bodyId || !resting) {
+          continue;
+        }
+        const anchor = moveCalloutAnchor(resting, rotationDeg, final);
+        child.position.set(anchor.x, anchor.y, anchor.z);
+      }
+    }
+
+    /** Returns every selection callout to the pose its body rests at. */
+    function restSelectionCallouts() {
+      for (const child of context.overlayGroup.children) {
+        const resting = child.userData.calloutRestingPosition as
+          THREE.Vector3 | undefined;
+        if (resting) {
+          child.position.copy(resting);
+        }
+      }
+    }
+
     function applyMovePreview(
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
@@ -1099,6 +1215,18 @@ export function ModelViewer({
           const final = composeMoveTransform(center, translation, rotationDeg);
           object.rotation.copy(moveEuler(rotationDeg));
           object.position.set(final.x, final.y, final.z);
+          // The mesh rotates about its own origin and then translates, so the
+          // callout's anchor has to take the same two steps to stay over the
+          // body — adding the translation alone would drift it off under any
+          // rotation.
+          poseSelectionCallout(preview.bodyId, rotationDeg, final);
+          // The shadow map is frozen (`autoUpdate = false`) so camera-only
+          // frames reuse it — that is where most of the render win came from.
+          // A body moving under the light is one of the few things that
+          // genuinely invalidates it, and leaving it stale strands the body's
+          // shadow on the ground where the body used to be. Bounded to the
+          // drag: it re-freezes as soon as the preview ends.
+          refreshShadowMap();
         }
       }
       moveGizmoGroup.position.set(
@@ -1153,12 +1281,15 @@ export function ModelViewer({
       gizmoGroup,
       moveGizmoGroup,
       applyMovePreview,
+      restSelectionCallouts,
+      refreshShadowMap,
       grid,
       shadowCatcher,
       keyLight,
       raycaster: picker.raycaster,
       objectsByBodyId,
       edgeOverlaysByBodyId,
+      renderedBodies: null,
       hasFitCamera: false,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
@@ -1296,7 +1427,7 @@ export function ModelViewer({
       cylinderRadiusLabelSetterRef.current?.(null);
       delete renderer.domElement.dataset.e2eCylinderProxyRadius;
       cylinderRadiusProxy = null;
-      renderer.shadowMap.needsUpdate = true;
+      refreshShadowMap();
       requestRender();
     }
 
@@ -1395,7 +1526,15 @@ export function ModelViewer({
     let latestSketchPointerEvent: PointerEvent | null = null;
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
-    let sketchNumericKind: 'radius' | 'diameter' | 'length' = 'length';
+    let sketchNumericKind:
+      'radius' | 'diameter' | 'length' | 'width' | 'height' = 'length';
+    /**
+     * The rectangle's other side while you type this one. A rectangle is the
+     * only shape here with two independent numbers, so Tab parks the value you
+     * finished and swaps which side you are editing; whichever side you never
+     * type keeps whatever the drag was showing.
+     */
+    let sketchNumericOther: string | null = null;
     cancelDirectManipulationRef.current = () => {
       let cancelled = false;
       if (cylinderRadiusDrag) {
@@ -1476,6 +1615,55 @@ export function ModelViewer({
       // `resolved.screen` is already host-local: it was projected against the
       // canvas size, which is what the overlay is positioned within.
       hud.showAt(snapGlyph, resolved.screen.x, resolved.screen.y);
+    }
+
+    /**
+     * The snap point a measuring pointer is asking for, or null.
+     *
+     * Scoped by `measureSnapEdges` before anything is projected. A move drag
+     * collects snaps body-wide, which it can afford because it does so once at
+     * drag start; this runs on every hover frame, and handing `resolveSnap` a
+     * whole imported assembly would be six figures of matrix work per frame.
+     */
+    function resolveMeasureSnap(
+      event: PointerEvent,
+      candidate: PickCandidate
+    ): SnapResolution | null {
+      const bodyId = candidate.selection?.bodyId;
+      const body = bodiesRef.current.find(
+        (entry) => entry.bodyId === bodyId && !entry.consumed
+      );
+      const edges = body?.topology?.edges;
+      if (!edges) {
+        return null;
+      }
+      const selection = candidate.selection;
+      const hoveredEdge =
+        selection?.kind === 'edge'
+          ? (edges.find((entry) => entry.hash === selection.hash) ?? null)
+          : null;
+      const scoped = measureSnapEdges(edges, {
+        edge: hoveredEdge,
+        faceHash: selection?.kind === 'face' ? (selection.hash ?? null) : null
+      });
+      if (scoped.length === 0) {
+        return null;
+      }
+      const local = hud.toLocal(event.clientX, event.clientY);
+      if (!local) {
+        return null;
+      }
+      return resolveSnap(
+        snapsFromEdges(scoped, { label: body?.name }),
+        local,
+        (point) =>
+          projectToScreen(
+            new THREE.Vector3(point.x, point.y, point.z),
+            context.activeCamera,
+            renderer.domElement.clientWidth,
+            renderer.domElement.clientHeight
+          )
+      );
     }
 
     /** Snap candidates from every body except the one being moved. */
@@ -1568,6 +1756,15 @@ export function ModelViewer({
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
+    /**
+     * The value a click would record, shown while the pointer is still over
+     * the target. Hidden from assistive technology: the dock's live region
+     * already announces what was measured, and narrating every hover would
+     * bury that under a stream of numbers nobody asked for.
+     */
+    const measurePreviewChip = hud.create('measure-preview-chip', {
+      ariaHidden: true
+    });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
     const handleChipClick = () => {
@@ -2129,9 +2326,18 @@ export function ModelViewer({
         onSelectSketchProfileRef.current(result.sketchId);
         return;
       }
+      // Recompute from THIS click's candidate and coordinates. Reusing the last
+      // rAF-coalesced hover result can record a point from the previous pointer
+      // position when a move and click arrive before the next animation frame.
+      // Confined to measuring: a modelling pick still wants the point the
+      // pointer was actually on.
+      const snapped =
+        result && onMeasurePreviewRef.current
+          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: {
+            point: snapped ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -2309,6 +2515,63 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(pick(event));
+      updateMeasurePreview(event);
+    }
+
+    /**
+     * Shows what the next click would measure, beside the pointer.
+     *
+     * The candidate comes from the same `pickAll` + depth cycle the click uses,
+     * so the preview cannot name one thing while the click takes another —
+     * but the returned cycle is DISCARDED rather than stored. `cycleDepthPick`
+     * treats a second call within a few pixels as a request for the next
+     * candidate down, so remembering it here would make hovering and then
+     * clicking the same spot select the second thing in the stack. Depth
+     * cycling belongs to clicks.
+     */
+    function updateMeasurePreview(event: PointerEvent) {
+      const preview = onMeasurePreviewRef.current;
+      if (!preview) {
+        hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
+        return;
+      }
+      const stack = picker.pickAll(event);
+      const wouldPick = cycleDepthPick(
+        stack,
+        depthCycle,
+        event.clientX,
+        event.clientY
+      ).candidate;
+      const selection = wouldPick?.selection;
+      if (!selection) {
+        hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
+        return;
+      }
+      const snapped = resolveMeasureSnap(event, wouldPick);
+      if (snapped) {
+        showSnapGlyph(snapped);
+      } else {
+        hud.hide(snapGlyph);
+      }
+      const label = preview(
+        selection,
+        // The snapped position when there is one, so the preview reports the
+        // number the click will actually record rather than the one under the
+        // raw cursor.
+        snapped?.candidate.point ?? {
+          x: wouldPick.hit.point.x,
+          y: wouldPick.hit.point.y,
+          z: wouldPick.hit.point.z
+        }
+      );
+      if (!label) {
+        hud.hide(measurePreviewChip);
+        return;
+      }
+      measurePreviewChip.textContent = label;
+      hud.showAtPointer(measurePreviewChip, event, 16, -28);
     }
 
     /**
@@ -2648,20 +2911,36 @@ export function ModelViewer({
       }
     }
 
+    const SKETCH_NUMERIC_LABELS = {
+      radius: 'Radius',
+      diameter: 'Diameter',
+      length: 'Length',
+      width: 'Width',
+      height: 'Height'
+    } as const;
+
     function renderSketchNumericHud(event: PointerEvent) {
-      const label =
-        sketchNumericKind === 'radius'
-          ? 'Radius'
-          : sketchNumericKind === 'diameter'
-            ? 'Diameter'
-            : 'Length';
-      sketchDimLabel.textContent = `${label}: ${sketchNumericRaw || '…'} ${unitsRef.current} · Enter`;
+      const label = SKETCH_NUMERIC_LABELS[sketchNumericKind];
+      const units = unitsRef.current;
+      // A rectangle shows both sides at once, so it is clear which one Tab is
+      // about to take you to and what the other already holds.
+      const text =
+        sketchNumericKind === 'width' || sketchNumericKind === 'height'
+          ? (() => {
+              const other = sketchNumericKind === 'width' ? 'Height' : 'Width';
+              return `${label}: ${sketchNumericRaw || '…'} ${units} · ${other}: ${
+                sketchNumericOther || 'drag'
+              } · Tab · Enter`;
+            })()
+          : `${label}: ${sketchNumericRaw || '…'} ${units} · Enter`;
+      sketchDimLabel.textContent = text;
       sketchDimLabel.dataset.editing = 'true';
       hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }
 
     function finishSketchNumericEntry() {
       sketchNumericRaw = null;
+      sketchNumericOther = null;
       sketchDimLabel.dataset.editing = 'false';
       hideSketchDimLabel();
     }
@@ -2717,6 +2996,47 @@ export function ModelViewer({
         requestRender();
         return true;
       }
+      if (mode.tool === 'rectangle' && gesture.dragStart) {
+        // Whichever side was not typed keeps the size the drag is showing, so
+        // typing one number pins that side and leaves the other under the
+        // pointer rather than refusing the whole entry.
+        const live = latestSketchPoint ?? gesture.dragStart;
+        const typedOther = Number(sketchNumericOther);
+        const otherValue =
+          sketchNumericOther !== null &&
+          sketchNumericOther !== '' &&
+          Number.isFinite(typedOther) &&
+          typedOther > 0
+            ? typedOther
+            : null;
+        const width =
+          sketchNumericKind === 'width'
+            ? value
+            : (otherValue ?? Math.abs(live.x - gesture.dragStart.x));
+        const height =
+          sketchNumericKind === 'height'
+            ? value
+            : (otherValue ?? Math.abs(live.y - gesture.dragStart.y));
+        // Keep the corner the drag is heading toward: an exact 40x20 typed
+        // while dragging up and left must not flip to down and right.
+        const signX = live.x < gesture.dragStart.x ? -1 : 1;
+        const signY = live.y < gesture.dragStart.y ? -1 : 1;
+        const rectangle = sketchObjectFromDrag('rectangle', gesture.dragStart, {
+          x: gesture.dragStart.x + signX * width,
+          y: gesture.dragStart.y + signY * height
+        });
+        if (!rectangle) {
+          return false;
+        }
+        onSketchCommitRef.current(rectangle);
+        gesture.dragStart = null;
+        gesture.awaitingSecondPoint = false;
+        sketchRigRef.current?.setInProgress(null, false);
+        onSketchDrawingChangeRef.current(false);
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
       if (mode.tool === 'line' && gesture.chainAnchor) {
         const end = pointAtDistanceAlongDirection(
           gesture.chainAnchor,
@@ -2744,6 +3064,7 @@ export function ModelViewer({
         ((mode.tool === 'circle' &&
           mode.circleMode !== 'three-point' &&
           gesture.dragStart !== null) ||
+          (mode.tool === 'rectangle' && gesture.dragStart !== null) ||
           (mode.tool === 'line' && gesture.chainAnchor !== null));
       if (!supported) {
         return false;
@@ -2764,6 +3085,19 @@ export function ModelViewer({
               sketchNumericKind === 'diameter' ? numeric * 2 : numeric / 2
             );
           }
+          if (latestSketchPointerEvent) {
+            renderSketchNumericHud(latestSketchPointerEvent);
+          }
+        }
+        if (mode.tool === 'rectangle') {
+          // Park this side and edit the other. Tab is a swap, not a
+          // conversion: a rectangle's two sides are independent, unlike a
+          // circle's radius and diameter.
+          const parked = sketchNumericRaw;
+          sketchNumericRaw = sketchNumericOther ?? '';
+          sketchNumericOther = parked;
+          sketchNumericKind =
+            sketchNumericKind === 'width' ? 'height' : 'width';
           if (latestSketchPointerEvent) {
             renderSketchNumericHud(latestSketchPointerEvent);
           }
@@ -2790,8 +3124,11 @@ export function ModelViewer({
               ? mode.circleMode === 'two-point-diameter'
                 ? 'diameter'
                 : 'radius'
-              : 'length';
+              : mode.tool === 'rectangle'
+                ? 'width'
+                : 'length';
           sketchNumericRaw = '';
+          sketchNumericOther = null;
         }
         if (event.key !== '.' || !sketchNumericRaw.includes('.')) {
           sketchNumericRaw += event.key;
@@ -4172,6 +4509,8 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(null);
+      hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
     };
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
@@ -4185,22 +4524,13 @@ export function ModelViewer({
         );
         const edges = body?.topology?.edges;
         if (edges) {
-          const chain = edgeRunFrom(edges, picked.selection.topologyId);
+          const chain = edgeRunSelections(
+            edges,
+            picked.selection.topologyId,
+            picked.selection.bodyId
+          );
           if (chain.length > 1) {
-            const byId = new Map(
-              edges.map((edgeTopology) => [
-                edgeTopology.topologyId,
-                edgeTopology
-              ])
-            );
-            onSelectEdgeChainRef.current(
-              chain.map((topologyId) => ({
-                bodyId: picked.selection!.bodyId,
-                kind: 'edge' as const,
-                topologyId,
-                hash: byId.get(topologyId)?.hash
-              }))
-            );
+            onSelectEdgeChainRef.current(chain);
             return;
           }
         }
@@ -4336,6 +4666,18 @@ export function ModelViewer({
           material.opacity = target;
           context.fadeIns.delete(material);
         }
+      }
+      // Dimensions are resized on every drawn frame, not behind a guard keyed
+      // on the camera's orientation: a wheel-zoom changes the world size of a
+      // pixel without rotating anything, and a rotation guard would leave the
+      // arrowheads frozen at their pre-zoom size. The loop is already
+      // on-demand, so this costs nothing on a still frame.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.update(
+          entry.start,
+          entry.end,
+          moveGizmoWorldScale(worldPerPixelAt(entry.start)) * 0.55
+        );
       }
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
@@ -4524,15 +4866,19 @@ export function ModelViewer({
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
+      clearGroup(measurementGroup);
       clearGroup(gizmoGroup);
       clearGroup(moveGizmoGroup);
-      for (const disposable of [grid, shadowCatcher] as THREE.Mesh[]) {
+      for (const disposable of [
+        gradientBackdrop,
+        grid,
+        shadowCatcher
+      ] as THREE.Mesh[]) {
         disposable.geometry.dispose();
         (disposable.material as THREE.Material).dispose();
       }
       selection.dispose();
       environment.dispose();
-      gradientBackground.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
       renderer.dispose();
@@ -4541,6 +4887,12 @@ export function ModelViewer({
       offsetChip.removeEventListener('click', handleChipClick);
       radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
+      // Dimension graphics own their own geometries and materials; clearing
+      // the group they sit in would orphan those on the GPU.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.dispose();
+      }
+      measurementDimensionsRef.current = [];
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
@@ -4556,6 +4908,101 @@ export function ModelViewer({
     };
   }, []);
 
+  // Measurements are session-owned overlays. They use their own group so an
+  // exact body refresh cannot remove a pinned result between React commits.
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = measurementGroupRef.current;
+    if (!context || !group) {
+      return;
+    }
+    for (const entry of measurementDimensionsRef.current) {
+      entry.graphic.dispose();
+    }
+    measurementDimensionsRef.current = [];
+    clearGroup(group);
+    const resolution = context.fatLineResolution();
+    for (const annotation of measurementAnnotations) {
+      const stale = annotation.status !== 'current';
+      const color = stale
+        ? 0xf59e0b
+        : annotation.selected
+          ? 0x9bd3ff
+          : 0x7cc0ff;
+      // A measured span is drawn as a drawing's dimension rather than as a
+      // bare line: witness ticks stand it off the geometry, and the arrowheads
+      // say which two points the number is between. Angle arms are not a span,
+      // so they keep the plain line — an arrowhead on the far end of an arm
+      // would claim the arm's length was the measurement.
+      if (annotation.graphic === 'span') {
+        for (const segment of annotation.segments) {
+          const dimension = createDimensionGraphic({ witnessLines: true });
+          const start = new THREE.Vector3(
+            segment.start.x,
+            segment.start.y,
+            segment.start.z
+          );
+          const end = new THREE.Vector3(
+            segment.end.x,
+            segment.end.y,
+            segment.end.z
+          );
+          dimension.object.renderOrder =
+            VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+          dimension.object.traverse((child) => {
+            child.raycast = () => undefined;
+          });
+          group.add(dimension.object);
+          measurementDimensionsRef.current.push({
+            graphic: dimension,
+            start,
+            end
+          });
+        }
+      }
+      for (const segment of annotation.graphic === 'span'
+        ? []
+        : annotation.segments) {
+        const line = createFatLine(
+          [
+            new THREE.Vector3(
+              segment.start.x,
+              segment.start.y,
+              segment.start.z
+            ),
+            new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
+          ],
+          {
+            color,
+            linewidth: annotation.selected ? 2.4 : 1.6,
+            opacity: stale ? 0.55 : 0.92,
+            depthTest: false,
+            resolution
+          }
+        );
+        line.name = 'measurement-witness';
+        line.raycast = () => undefined;
+        line.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+        group.add(line);
+      }
+      const label = makeLabel(
+        `selection-callout direct-edit-callout measurement-callout${
+          annotation.selected ? ' selected' : ''
+        }${stale ? ' stale' : ''}`,
+        annotation.label
+      );
+      label.name = 'measurement-label';
+      label.position.set(
+        annotation.anchor.x,
+        annotation.anchor.y,
+        annotation.anchor.z
+      );
+      label.element.setAttribute('role', 'status');
+      group.add(label);
+    }
+    context.requestRender();
+  }, [measurementAnnotations]);
+
   // Body geometry is rebuilt only when the derived body projection changes.
   // Selection-only renders reuse the installed meshes, materials, edge
   // batches, and frozen shadow map while refreshing lightweight overlays.
@@ -4565,7 +5012,7 @@ export function ModelViewer({
       return;
     }
 
-    const bodiesChanged = renderedBodiesRef.current !== bodies;
+    const bodiesChanged = context.renderedBodies !== bodies;
     if (bodiesChanged) {
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
@@ -4835,8 +5282,8 @@ export function ModelViewer({
       }
       // Bodies are the only dynamic shadow casters; camera and selection-only
       // frames reuse this map until geometry or the light rig changes again.
-      context.renderer.shadowMap.needsUpdate = true;
-      renderedBodiesRef.current = bodies;
+      context.refreshShadowMap();
+      context.renderedBodies = bodies;
     }
 
     // Name callout on the primary (last picked) selected body.
@@ -4874,6 +5321,12 @@ export function ModelViewer({
             `${body.name}${suffix}${count}`
           );
           label.position.copy(top);
+          // The callout lives in the overlay group, not under the body, so a
+          // move preview would leave the name behind while its body slid out
+          // from under it. Record which body it names and where it rests, and
+          // `applyMovePreview` carries it along under the same transform.
+          label.userData.calloutBodyId = primaryId;
+          label.userData.calloutRestingPosition = top.clone();
           context.overlayGroup.add(label);
         }
       }
@@ -4944,6 +5397,11 @@ export function ModelViewer({
         object.position.set(0, 0, 0);
         object.rotation.set(0, 0, 0);
       }
+      context.restSelectionCallouts();
+      // Nothing about the document changed, so no rebuild will refresh the
+      // shadow map — without this the shadow stays where the cancelled move
+      // had dragged it.
+      context.refreshShadowMap();
       const overlay = regionGroupRef.current;
       if (overlay) {
         for (const child of overlay.children) {
@@ -5929,14 +6387,22 @@ export function ModelViewer({
 
   useEffect(() => {
     const context = contextRef.current;
-    if (
-      !context ||
-      fitSignal === 0 ||
-      context.bodyGroup.children.length === 0
-    ) {
+    // Fit has to include the sketch layer, not just the solids. While a
+    // profile pick is open the app asks the user to click a shaded region it
+    // has not framed — the camera sits on the model, and a sketch drawn away
+    // from it can be off-screen entirely — so fitting to bodies alone answers
+    // the wrong question at the one moment fit is most needed.
+    if (!context || fitSignal === 0) {
       return;
     }
-    const pose = computeFitPose(context.camera, context.bodyGroup.children);
+    const fitTargets = [
+      ...context.bodyGroup.children,
+      ...(regionGroupRef.current?.children ?? [])
+    ].filter((child) => child.visible);
+    if (fitTargets.length === 0) {
+      return;
+    }
+    const pose = computeFitPose(context.camera, fitTargets);
     context.startCameraTween(pose, () => {
       if (context.projection === 'orthographic') {
         context.syncOrthographic(true);
