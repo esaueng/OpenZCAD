@@ -280,6 +280,20 @@ export class D1R2PersistenceService implements PersistenceService {
     return access;
   }
 
+  private async requireRestProjectWrite(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    const access = await this.requireProjectEdit(userId, projectId);
+    if (
+      access.role === 'editor' &&
+      projectCollaborationRollout(this.env).editLeasesEnforced
+    ) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
   async requireProjectOwner(
     userId: UserId,
     projectId: string
@@ -946,7 +960,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireRestProjectWrite(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -1168,7 +1185,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveDocument(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireRestProjectWrite(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
