@@ -8,7 +8,12 @@ import {
   ProjectCollaborationRoom,
   resolveCollaborationDocument
 } from '@openzcad/cloudflare-adapters';
-import { toUserId } from '@openzcad/shared';
+import {
+  toArtifactId,
+  toProjectId,
+  toUploadSessionId,
+  toUserId
+} from '@openzcad/shared';
 import {
   addPrimitiveFeature,
   createProjectDocument
@@ -290,7 +295,8 @@ describe('cloudflare adapters', () => {
           pinned: 1,
           sort_order: 4,
           deleted_at: '2026-01-01T00:00:00.000Z',
-          archived_at: null
+          archived_at: null,
+          thumbnail_artifact_id: 'artifact_thumbnail'
         }
       ]
     }));
@@ -307,12 +313,77 @@ describe('cloudflare adapters', () => {
       sortOrder: 4,
       deletedAt: '2026-01-01T00:00:00.000Z'
     });
+    expect(listed.projects[0]?.thumbnailArtifactId).toBe('artifact_thumbnail');
     // Pinned-first, then manual order: the ordering has to come from SQL,
     // because the list is not re-sorted after it is read.
     expect(prepare.mock.calls[0]?.[0]).toContain(
       'ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC'
     );
     expect(prepare.mock.calls[0]?.[0]).toContain('project_members');
+  });
+
+  it('replaces a finalized D1 thumbnail and deletes its superseded object', async () => {
+    const owner = toUserId('user_thumbnail_owner');
+    const projectId = toProjectId('project_thumbnail');
+    const artifactId = toArtifactId('artifact_thumbnail_new');
+    const uploadSessionId = toUploadSessionId('upload_thumbnail_new');
+    const queries: string[] = [];
+    const batch = vi.fn(async () => []);
+    const prepare = vi.fn((query: string) => ({
+      bind: (..._values: unknown[]) => {
+        queries.push(query);
+        return {
+          first: async () => {
+            if (query.includes('SELECT user_id AS owner_user_id')) {
+              return { owner_user_id: owner };
+            }
+            if (query.includes('SELECT artifact_id, object_key')) {
+              return {
+                artifact_id: artifactId,
+                object_key: 'project_thumbnail/uploads/new.webp',
+                project_id: projectId,
+                file_name: 'thumbnail.webp',
+                content_type: 'image/webp',
+                kind: 'thumbnail',
+                metadata_json: '{}',
+                expires_at: '2099-01-01T00:00:00.000Z'
+              };
+            }
+            return null;
+          },
+          all: async () => ({
+            results: query.includes('SELECT object_key FROM artifacts')
+              ? [{ object_key: 'project_thumbnail/uploads/old.webp' }]
+              : []
+          })
+        };
+      }
+    }));
+    const deleteObject = vi.fn().mockResolvedValue(undefined);
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      ARTIFACTS: {
+        head: vi.fn().mockResolvedValue({ size: 123 }),
+        delete: deleteObject
+      } as unknown as R2Bucket
+    });
+
+    await expect(
+      service.finalizeArtifact(owner, {
+        projectId,
+        uploadSessionId,
+        artifactId
+      })
+    ).resolves.toMatchObject({ artifactId, kind: 'thumbnail', bytes: 123 });
+    expect(queries).toContainEqual(
+      expect.stringContaining(
+        "DELETE FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'"
+      )
+    );
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(deleteObject).toHaveBeenCalledWith(
+      'project_thumbnail/uploads/old.webp'
+    );
   });
 
   it('duplicates from D1 without requiring disabled sharing schema', async () => {

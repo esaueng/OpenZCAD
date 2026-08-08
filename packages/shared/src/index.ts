@@ -1144,6 +1144,12 @@ export interface ProjectSummary {
   projectId: ProjectId;
   name: string;
   lastRevisionId?: RevisionId;
+  /**
+   * The latest small cloud preview, when one has been published. Keeping the
+   * reference in the listing lets a shelf fetch only image bytes instead of
+   * loading every canonical project document to discover its geometry.
+   */
+  thumbnailArtifactId?: ArtifactId;
   revisionCount: number;
   updatedAt: string;
   /**

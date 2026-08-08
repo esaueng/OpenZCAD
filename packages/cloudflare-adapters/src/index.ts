@@ -744,7 +744,10 @@ export class D1R2PersistenceService implements PersistenceService {
       ? this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
                   p.document_version, p.last_revision_id, p.revision_count,
-                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at,
+                  (SELECT a.id FROM artifacts a
+                    WHERE a.project_id = p.id AND a.kind = 'thumbnail'
+                    ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id
            FROM projects p
            LEFT JOIN project_members pm
              ON pm.project_id = p.id
@@ -769,7 +772,10 @@ export class D1R2PersistenceService implements PersistenceService {
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
                   p.document_version, p.last_revision_id, p.revision_count,
-                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at,
+                  (SELECT a.id FROM artifacts a
+                    WHERE a.project_id = p.id AND a.kind = 'thumbnail'
+                    ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id
            FROM projects p
            WHERE p.user_id = ?
            ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC`
@@ -1660,10 +1666,26 @@ export class D1R2PersistenceService implements PersistenceService {
       metadata: JSON.parse(upload.metadata_json) as ArtifactRecord['metadata']
     };
 
-    await this.env.DB.batch([
+    const supersededThumbnails =
+      artifact.kind === 'thumbnail'
+        ? await this.env.DB.prepare(
+            `SELECT object_key FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'`
+          )
+            .bind(artifact.projectId)
+            .all<{ object_key: string }>()
+        : { results: [] as Array<{ object_key: string }> };
+
+    const statements = [
       this.env.DB.prepare(
         `DELETE FROM upload_sessions WHERE id = ? AND artifact_id = ?`
       ).bind(request.uploadSessionId, request.artifactId),
+      ...(artifact.kind === 'thumbnail'
+        ? [
+            this.env.DB.prepare(
+              `DELETE FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'`
+            ).bind(artifact.projectId)
+          ]
+        : []),
       this.env.DB.prepare(
         `INSERT INTO artifacts (id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
@@ -1677,7 +1699,21 @@ export class D1R2PersistenceService implements PersistenceService {
         JSON.stringify(artifact.metadata),
         artifact.createdAt
       )
-    ]);
+    ];
+    await this.env.DB.batch(statements);
+
+    if (artifact.kind === 'thumbnail') {
+      await Promise.all(
+        (supersededThumbnails.results ?? []).map((previous) =>
+          this.env.ARTIFACTS!.delete(previous.object_key).catch((error) => {
+            console.error(
+              'Could not remove a superseded thumbnail object.',
+              error
+            );
+          })
+        )
+      );
+    }
 
     return artifact;
   }
@@ -2363,7 +2399,7 @@ function projectObjectEnvelope(
  * and single-row reads cannot drift apart and hand `summaryFromRow` a shape it
  * does not expect.
  */
-const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at`;
+const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
 
 interface ProjectRow {
   id: string;
@@ -2378,6 +2414,7 @@ interface ProjectRow {
   sort_order: number | null;
   deleted_at: string | null;
   archived_at: string | null;
+  thumbnail_artifact_id?: string | null;
 }
 
 interface ProjectDocumentObjectRow {
@@ -2424,6 +2461,9 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       ...(row.last_revision_id
         ? { lastRevisionId: toRevisionId(row.last_revision_id) }
         : {}),
+      ...(row.thumbnail_artifact_id
+        ? { thumbnailArtifactId: toArtifactId(row.thumbnail_artifact_id) }
+        : {}),
       revisionCount: row.revision_count,
       updatedAt: row.updated_at,
       documentVersion: row.document_version,
@@ -2438,6 +2478,9 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       projectId: document.projectId,
       name: row.name,
       lastRevisionId: document.revisions.at(-1)?.revisionId,
+      ...(row.thumbnail_artifact_id
+        ? { thumbnailArtifactId: toArtifactId(row.thumbnail_artifact_id) }
+        : {}),
       revisionCount: document.revisions.length,
       updatedAt: row.updated_at,
       // Read from the document rather than the row's `document_version` so the
