@@ -114,6 +114,13 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /** What measuring the hovered target would report; null when measure is off. */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -197,6 +204,7 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -288,6 +296,7 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
