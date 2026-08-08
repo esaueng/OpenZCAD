@@ -10,7 +10,7 @@ use std::{
 use tauri::State;
 use tokio::sync::Mutex as AsyncMutex;
 
-const API_ORIGIN: &str = "https://zcad.esau.app";
+const API_ORIGIN: &str = "https://zcad.app";
 const DESKTOP_CLIENT_ID: &str = "openzcad-macos";
 const KEYCHAIN_SERVICE: &str = "app.esau.openzcad";
 const KEYCHAIN_ACCOUNT: &str = "desktop-refresh";
@@ -684,7 +684,7 @@ mod tests {
     fn pins_native_requests_to_the_beta_api() {
         assert_eq!(
             api_url("/api/session").unwrap().as_str(),
-            "https://zcad.esau.app/api/session"
+            "https://zcad.app/api/session"
         );
         assert!(api_url("https://attacker.example/api/session").is_err());
         assert!(api_url("//attacker.example/api/session").is_err());
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn pins_the_system_browser_handoff() {
         assert!(approved_browser_url(
-            "https://zcad.esau.app/?desktopAuth=attempt-123456",
+            "https://zcad.app/?desktopAuth=attempt-123456",
             "attempt-123456"
         )
         .is_ok());
@@ -718,14 +718,14 @@ mod tests {
             collaboration_api_url("proj_desktop-1", true)
                 .unwrap()
                 .as_str(),
-            "https://zcad.esau.app/api/projects/proj_desktop-1/collaboration/ticket"
+            "https://zcad.app/api/projects/proj_desktop-1/collaboration/ticket"
         );
         assert_eq!(
             collaboration_socket_url("proj_desktop-1", &"t".repeat(43))
                 .unwrap()
                 .as_str(),
             format!(
-                "wss://zcad.esau.app/api/projects/proj_desktop-1/collaboration?ticket={}",
+                "wss://zcad.app/api/projects/proj_desktop-1/collaboration?ticket={}",
                 "t".repeat(43)
             )
         );
