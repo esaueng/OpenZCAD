@@ -313,7 +313,7 @@ describe('settings privacy and data section', () => {
     expect(onDeleteCloudData).toHaveBeenCalledWith('all', 'PERSON@example.com');
   });
 
-  it('fails closed when migration 0014 is not ready', () => {
+  it('fails closed when the erasure migrations are not ready', () => {
     renderSettings(
       {
         ...readyHealth,
@@ -325,7 +325,7 @@ describe('settings privacy and data section', () => {
     expect(
       screen.getByRole('button', { name: 'Delete projects' })
     ).toBeDisabled();
-    expect(screen.getByText(/migration 0014/)).toBeVisible();
+    expect(screen.getByText(/migrations 0014/)).toBeVisible();
   });
 
   it('keeps profile deletion available when project object storage is unavailable', () => {
