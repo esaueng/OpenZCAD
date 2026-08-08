@@ -2031,9 +2031,9 @@ export function SettingsPage({
                   </div>
                   {health?.accountErasureReady !== true ? (
                     <div className="settings-warning" role="status">
-                      Cloud data deletion is unavailable until migration 0014
-                      and its write-safety checks are ready. No data can be
-                      deleted from this screen yet.
+                      Cloud data deletion is unavailable until migrations 0014
+                      and 0015 and their write-safety checks are ready. No data
+                      can be deleted from this screen yet.
                     </div>
                   ) : health?.projectErasureReady !== true ? (
                     <div className="settings-warning" role="status">
