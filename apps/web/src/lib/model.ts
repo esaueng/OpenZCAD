@@ -90,9 +90,21 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   'imported-mesh': 'Imported mesh'
 };
 
+/**
+ * Sketch plane names, in the Z-up terms the rest of the app already uses.
+ *
+ * These were Y-up and had never been swapped when the app became Z-up, so they
+ * named the wrong planes: measured by extruding the same rectangle on each,
+ * "Ground (XZ)" built an upright wall and "Front (XY)" built a slab lying on
+ * the grid. The app already contradicted them — its Front view looks down -Y
+ * and its face labels call the +Z face "Top face" — so the fix is to say what
+ * the standard views and face names have been saying all along. PLANE_BASES
+ * gives XY the +Z normal (horizontal, hence Top) and XZ the +Y normal
+ * (vertical, hence Front).
+ */
 export const PLANE_LABELS: Record<PlaneId, string> = {
-  XZ: 'Ground (XZ)',
-  XY: 'Front (XY)',
+  XZ: 'Front (XZ)',
+  XY: 'Top (XY)',
   YZ: 'Right (YZ)'
 };
 

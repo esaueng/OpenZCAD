@@ -243,6 +243,9 @@ test('cylinder radius proxy probe', async ({ page }) => {
       start.x + handle.dx * handle.pixelsPerUnit * radialDelta,
       start.y + handle.dy * handle.pixelsPerUnit * radialDelta
     );
+    // Paces the drag so the proxy has frames to coalesce into. It also puts a
+    // floor under `frameIntervalMs`, which is why that figure is not a
+    // throughput signal — see the note where it is reported.
     await page.waitForTimeout(10);
   }
 
@@ -278,6 +281,12 @@ test('cylinder radius proxy probe', async ({ page }) => {
             p95: round(percentile(latencies, 0.95)),
             max: round(Math.max(...latencies))
           },
+          // Input-paced, not render throughput: the loop above sleeps
+          // between synthetic moves, so this is bounded below by how fast the
+          // harness delivers input. Dropping the sleep alone takes p95 from
+          // ~183ms to ~58ms with nothing changed in the app. Read
+          // `inputToFrameMs` for responsiveness; see the "what the drag probe
+          // does not measure" section of docs/performance-baseline.md.
           frameIntervalMs: {
             p50: round(percentile(frameIntervals, 0.5)),
             p95: round(percentile(frameIntervals, 0.95)),

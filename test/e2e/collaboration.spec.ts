@@ -154,17 +154,42 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
     name: 'Open project sharing'
   });
   await expect(sharingButton).toContainText('read-only');
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled();
+  // A viewer is held in View mode — `viewMode` is true whenever there is a
+  // buildModeDisabledReason, and being a viewer is one — so the whole Feature
+  // tools rail is gone rather than present-but-disabled. This assertion used
+  // to look for a disabled Box button, which stopped being reachable when View
+  // mode landed; the lock it was checking is now one rung further out.
+  const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
+  await expect(
+    workspaceMode.getByRole('button', { name: 'Build' })
+  ).toBeDisabled();
+  await expect(
+    workspaceMode.getByRole('button', { name: 'View' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page.getByRole('navigation', { name: 'Feature tools' })
+  ).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toHaveCount(0);
 
-  await page.getByLabel('New parameter name').fill('viewerLength');
-  await page.getByLabel('New parameter expression').fill('25 mm');
-  await page.getByRole('button', { name: 'Add parameter' }).click();
+  // The parameter field this used to type into is gone with the rest of the
+  // build UI, so exercise the guard the hidden UI is backed by: a keyboard
+  // shortcut is refused at the same choke point, and it names the reason a
+  // viewer can act on rather than telling them to switch to a Build mode
+  // their role will never offer.
+  await page.keyboard.press('b');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Cannot run this command: This shared project is read-only.'
+    'Cannot use Box: This shared project is read-only.'
+  );
+  await expect(page.locator('.feature-row')).toHaveCount(0);
+
+  // Asking for Build outright says the same thing.
+  await page.keyboard.press('Meta+Shift+m');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'This shared project is read-only'
   );
   await expect(
-    page.locator('.param-row', { hasText: 'viewerLength' })
-  ).toHaveCount(0);
+    workspaceMode.getByRole('button', { name: 'View' })
+  ).toHaveAttribute('aria-pressed', 'true');
 
   await sharingButton.click();
   const dialog = page.getByRole('dialog', { name: 'Project sharing' });
@@ -571,7 +596,15 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
     timeout: 15_000
   });
-  await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible();
+  // "Saving" until the local autosave debounce comes due and the IndexedDB
+  // write lands, which on a loaded runner competing with the kernel's cold
+  // start crosses the 5 s assertion default. Matching the readiness allowance
+  // above waits for that write; it does not excuse one that never happens,
+  // because a project that never reaches storage stays on "Saving" forever and
+  // still fails here.
+  await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible({
+    timeout: 15_000
+  });
   await expect(
     page.getByRole('group', { name: 'Workspace status' })
   ).toContainText('syncLocal only');
