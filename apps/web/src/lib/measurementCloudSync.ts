@@ -1,4 +1,5 @@
 import type { StoredMeasurementRecord } from './measurementRecord';
+import { desktopFetch } from './desktopBridge';
 
 export interface ProjectMeasurementSnapshot {
   revision: number;
@@ -35,8 +36,62 @@ export interface ProjectMeasurementWatcher {
 
 const MAX_CONFLICT_RETRIES = 3;
 
-function contentKey(record: StoredMeasurementRecord): string {
-  return JSON.stringify({ ...record, updatedAt: '' });
+async function requestProjectMeasurements<T>(
+  input: RequestInfo,
+  init?: RequestInit
+): Promise<T> {
+  const response = await desktopFetch(input, {
+    ...init,
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/json',
+      ...(init?.headers ?? {})
+    }
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text;
+    let code: string | undefined;
+    try {
+      const payload = JSON.parse(text) as Record<string, unknown>;
+      if (typeof payload.error === 'string') message = payload.error;
+      if (typeof payload.code === 'string') code = payload.code;
+    } catch {
+      // Keep a plain-text refusal useful when the endpoint has no JSON body.
+    }
+    throw Object.assign(
+      new Error(message || `${response.status} ${response.statusText}`),
+      { code }
+    );
+  }
+  return (await response.json()) as T;
+}
+
+/** Kept in this View-only module so cloud measurement code stays lazy. */
+export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
+  loadProjectMeasurements: (projectId) =>
+    requestProjectMeasurements<ProjectMeasurementSnapshot>(
+      `/api/projects/${encodeURIComponent(projectId)}/measurements`
+    ),
+  saveProjectMeasurements: ({ projectId, expectedRevision, record }) =>
+    requestProjectMeasurements<ProjectMeasurementSnapshot>(
+      `/api/projects/${encodeURIComponent(projectId)}/measurements`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ expectedRevision, record })
+      }
+    )
+};
+
+export function measurementRecordContentKey(
+  record: StoredMeasurementRecord
+): string {
+  return JSON.stringify({
+    projectId: record.projectId,
+    version: record.version,
+    measurements: record.measurements,
+    display: record.display
+  });
 }
 
 /**
@@ -60,7 +115,11 @@ export async function syncProjectMeasurements(
         source: remote.record ? 'cloud' : 'none'
       };
     }
-    if (remote.record && contentKey(local) === contentKey(remote.record)) {
+    if (
+      remote.record &&
+      measurementRecordContentKey(local) ===
+        measurementRecordContentKey(remote.record)
+    ) {
       return { ...remote, source: 'cloud' };
     }
     if (

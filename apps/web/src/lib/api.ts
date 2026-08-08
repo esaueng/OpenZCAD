@@ -37,8 +37,6 @@ import type {
 } from '@openzcad/shared';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import { desktopFetch } from './desktopBridge';
-import type { ProjectMeasurementSnapshot } from './measurementCloudSync';
-import type { StoredMeasurementRecord } from './measurementRecord';
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -247,25 +245,6 @@ export const api = {
       {
         method: 'PUT',
         body: JSON.stringify(payload)
-      }
-    ),
-  loadProjectMeasurements: (projectId: string) =>
-    requestJson<ProjectMeasurementSnapshot>(
-      `/api/projects/${projectId}/measurements`
-    ),
-  saveProjectMeasurements: (payload: {
-    projectId: string;
-    expectedRevision: number;
-    record: StoredMeasurementRecord;
-  }) =>
-    requestJson<ProjectMeasurementSnapshot>(
-      `/api/projects/${payload.projectId}/measurements`,
-      {
-        method: 'PUT',
-        body: JSON.stringify({
-          expectedRevision: payload.expectedRevision,
-          record: payload.record
-        })
       }
     ),
   createUploadSession: (payload: CreateUploadSessionRequest) =>
