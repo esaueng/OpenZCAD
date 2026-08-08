@@ -57,6 +57,7 @@ import {
 import {
   deleteAssistantCredential,
   getAppSettings,
+  isProjectSharingPreferenceEnabled,
   markAssistantCredentialValidated,
   parseAssistantCredential,
   parseUpdateAppSettingsRequest,
@@ -579,6 +580,24 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const persistence = createPersistenceService(
     envForCollaborationRollout(env, collaborationRollout)
   );
+  const requiresSharingPreference =
+    (request.method === 'POST' &&
+      (Boolean(invitationsMatch) || pathname === INVITATION_ACCEPT_ROUTE)) ||
+    (request.method === 'PATCH' && Boolean(memberMatch)) ||
+    Boolean(collaborationMatch || collaborationTicketMatch);
+
+  if (
+    requiresSharingPreference &&
+    !(await isProjectSharingPreferenceEnabled(userId, env))
+  ) {
+    return json(
+      {
+        error: 'Project sharing is disabled for this account.',
+        code: 'FEATURE_DISABLED'
+      },
+      403
+    );
+  }
 
   if (
     (request.method === 'GET' || request.method === 'POST') &&
