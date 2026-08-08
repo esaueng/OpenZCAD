@@ -1,4 +1,10 @@
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  expectBodyCount,
+  stubApi,
+  WORKSPACE_SESSION_STORAGE_KEY
+} from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 
 /**
@@ -10,6 +16,48 @@ async function selectRailView(page: Page, name: RegExp | string) {
   await page.getByRole('button', { name: 'Standard views' }).click();
   await page.getByRole('button', { name }).click();
 }
+
+test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('History Rail Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // The rail rides in the lazily-loaded viewer chunk, so it lands long after
+  // the rest of the workspace: the tool palette is up inside 100 ms, the rail
+  // nearer two seconds, and slower still on a loaded machine. Wait for the
+  // toolbar itself on a budget sized for a chunk load; every assertion after
+  // this keeps the strict default, and a rail that never arrives fails as a
+  // missing rail rather than as an enabled-versus-disabled mismatch.
+  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
+  await expect(rail).toBeVisible({ timeout: 30_000 });
+
+  // Worth asserting only once the workspace is up — before that the top bar
+  // has not rendered at all, so its emptiness proves nothing.
+  const topbar = page.locator('.topbar');
+  await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+  await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
+
+  const undo = rail.getByRole('button', { name: 'Undo' });
+  const redo = rail.getByRole('button', { name: 'Redo' });
+  await expect(undo).toBeDisabled();
+  await expect(redo).toBeDisabled();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await expect(undo).toBeEnabled();
+
+  await undo.click();
+  await expectBodyCount(page, 0);
+  await expect(redo).toBeEnabled();
+
+  await redo.click();
+  await expectBodyCount(page, 1);
+});
 
 test('viewport context menu hides a body and the sidebar eye restores it', async ({
   page
@@ -61,6 +109,17 @@ test('P toggles the camera projection', async ({ page }) => {
   await page.getByLabel('Project name').fill('Projection Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
+  // The projection control ships inside the lazily imported viewer shell, so
+  // wait for the viewport rather than for the workspace around it. The feature
+  // rail renders while `Loading 3D viewport…` is still standing in for the
+  // shell, which makes it a gate that lets this test through too early: on a
+  // loaded runner the chunk can still be arriving, and the failure then reads
+  // as "the ortho button says nothing about its projection" when the button
+  // does not exist yet. Waiting on the canvas waits for the thing under test.
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 15_000
+  });
+
   const orthoButton = page.getByRole('button', { name: /Ortho/ });
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('p');
@@ -70,6 +129,90 @@ test('P toggles the camera projection', async ({ page }) => {
   );
   await orthoButton.click();
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('Space centres and faces an exact planar selection head-on', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Normal Face View');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const cylinderFeature = page.locator('.feature-row-main', {
+    hasText: 'Cylinder'
+  });
+  await expect(cylinderFeature).toBeVisible();
+  await cylinderFeature.click();
+  const radiusInput = inspector.getByLabel('Radius', { exact: true });
+  const radiusBefore = await radiusInput.inputValue();
+  await radiusInput.click();
+  await expect(radiusInput).toBeFocused();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await canvas.evaluate((element) => {
+    element.dispatchEvent(
+      new CustomEvent('openzcad:e2e-select-cylinder', {
+        detail: { surface: 'cap' }
+      })
+    );
+  });
+  const faceOperation = page.getByRole('region', {
+    name: 'Offset Face operation'
+  });
+  await expect(faceOperation).toBeVisible();
+  await expect(
+    faceOperation.getByRole('tab', { name: 'Sketch' })
+  ).toBeVisible();
+  // The viewport pick does not steal focus from the inspector. Space still
+  // needs to work here without replacing the selected expression value.
+  await expect(radiusInput).toBeFocused();
+
+  const cameraPose = async () =>
+    page.evaluate((storageKey) => {
+      const raw = localStorage.getItem(storageKey);
+      const views = raw
+        ? (
+            JSON.parse(raw) as {
+              views?: Record<
+                string,
+                { camera: { position: number[]; target: number[] } }
+              >;
+            }
+          ).views
+        : undefined;
+      return views ? (Object.values(views)[0]?.camera ?? null) : null;
+    }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  await expect.poll(cameraPose).not.toBeNull();
+  await page.keyboard.press('Space');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'viewing normal to face'
+  );
+  await page.waitForTimeout(900);
+
+  const pose = await cameraPose();
+  expect(pose).not.toBeNull();
+  const direction = pose!.position.map(
+    (value, axis) => value - pose!.target[axis]!
+  );
+  const distance = Math.hypot(...direction);
+  expect(Math.abs(direction[2]! / distance)).toBeGreaterThan(0.999999);
+  expect(Math.abs(direction[0]! / distance)).toBeLessThan(0.001);
+  expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
+
+  await expect(radiusInput).toHaveValue(radiusBefore);
+  await expect(faceOperation).toBeVisible();
+  await expect(page.locator('.selection-chip')).toContainText(/face/i);
+  await expect(
+    page.getByRole('button', { name: /projection \(P\).*perspective/i })
+  ).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
 });
 
 test('the wheel zooms toward the pointer, and the preference turns it off', async ({
@@ -87,7 +230,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const canvas = page.locator('.viewer-host canvas');
   const box = await canvas.boundingBox();
@@ -169,7 +312,7 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const view = async () =>
     page.evaluate(() => {
@@ -464,7 +607,7 @@ test('the middle-button drag preference changes what a middle drag does', async 
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
 
   const camera = async () =>
     page.evaluate(() => {
@@ -625,7 +768,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
   const filters = page.getByRole('group', { name: 'Selection filter' });
@@ -777,7 +920,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
     .click();
-  await expect(page.locator('.vp-hud-bl')).toContainText('1 body');
+  await expectBodyCount(page, 1);
   await page.keyboard.press('Escape');
 
   const filters = page.getByRole('group', { name: 'Selection filter' });
@@ -1227,4 +1370,559 @@ test('releasing an orbit eases out instead of stopping dead', async ({
   expect(result.settleMs).toBeGreaterThan(60);
   // …but decisive, not a map viewer's coast past the chosen framing.
   expect(result.settleMs).toBeLessThan(1_200);
+});
+
+test('Escape backs out of the sketch plane prompt', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Plane Escape');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const prompt = page.getByText('Pick a sketch plane');
+  const status = page.getByRole('contentinfo');
+  // Keyboard shortcuts are ignored until the document exists, so wait for the
+  // workspace rather than racing it.
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+
+  // `tool` is 'sketch' only while this prompt is up, and the prompt owns the
+  // viewport: without Escape there is no way back to selection except by
+  // committing to a plane, which is the one thing the user has declined to do.
+  await page.keyboard.press('s');
+  await expect(prompt).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(prompt).toBeHidden();
+  await expect(status).toContainText('Sketch canceled');
+
+  // Escape landed on idle rather than another rung: the tool is released, so
+  // the next plain keystroke is a workspace shortcut again.
+  await page.keyboard.press('b');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  // The close button is the same exit for the pointer.
+  await page.keyboard.press('s');
+  await expect(prompt).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel sketch' }).click();
+  await expect(prompt).toBeHidden();
+  await expect(status).toContainText('Sketch canceled');
+});
+
+test('a shortcut still fires when a panel opened because you selected something', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Shortcut Focus');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // The create dialog is the case where landing in the field is right: the user
+  // just asked for it, and typing a size is the next thing they mean to do.
+  await expect(inspector.getByLabel('Width (X)')).toBeFocused();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.body-row')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+
+  // Selecting a body opens the same form for a different reason. Nobody asked
+  // to type here, and the documented shortcuts have to keep working.
+  await page.getByRole('button', { name: /^Box Body/ }).click();
+  const width = inspector.getByLabel('Width (X)');
+  await expect(width).toBeVisible();
+  await expect(width).not.toBeFocused();
+
+  // W cycles the display mode and leaves the panel up, so it can show both
+  // halves at once: the shortcut fired, and the letter did not land in the
+  // field. Autofocus made the second half worse than it sounds — focus selects
+  // the value, so the first letter REPLACED the dimension rather than appending.
+  const displayButton = page.getByRole('button', { name: /^Display mode \(W\)/ });
+  const before = await displayButton.getAttribute('aria-label');
+  await page.keyboard.press('w');
+  await expect(displayButton).not.toHaveAttribute('aria-label', before ?? '');
+  await expect(width).toHaveValue('30');
+
+  // And a tool shortcut still launches its tool.
+  await page.keyboard.press('m');
+  await expect(
+    page.getByRole('form', { name: 'Move controls' })
+  ).toBeVisible();
+});
+
+test('view keys still work while a profile pick is waiting for a click', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Profile Keys');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const canvas = page.locator('.viewer-host canvas');
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const centre = {
+    x: bounds.x + bounds.width * 0.55,
+    y: bounds.y + bounds.height * 0.55
+  };
+  // Two profiles, so the pick genuinely waits for a click: a lone profile is
+  // selected automatically and the mode moves straight past the state under test.
+  for (const dx of [-140, 140]) {
+    await sketchTools.getByRole('button', { name: /^Circle/ }).click();
+    await page.mouse.move(centre.x + dx, centre.y);
+    await page.mouse.down();
+    await page.mouse.move(centre.x + dx + 55, centre.y, { steps: 6 });
+    await page.mouse.up();
+  }
+
+  // Profile picking asks for a click on a region it has not framed, so the
+  // navigation keys are exactly what a stranded user reaches for. They used to
+  // be swallowed wholesale by the mode.
+  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'valid profiles available'
+  );
+
+  const displayButton = page.getByRole('button', { name: /^Display mode \(W\)/ });
+  const displayBefore = await displayButton.getAttribute('aria-label');
+  await page.keyboard.press('w');
+  await expect(displayButton).not.toHaveAttribute(
+    'aria-label',
+    displayBefore ?? ''
+  );
+
+  const gridButton = page.getByRole('button', { name: /^Toggle grid/ });
+  const gridBefore = await gridButton.getAttribute('aria-pressed');
+  await page.keyboard.press('g');
+  await expect(gridButton).not.toHaveAttribute('aria-pressed', gridBefore ?? '');
+
+  // …and the pick is still live, not cancelled by the navigation. The status
+  // message itself is now the display-mode one, which is the point; the mode's
+  // standing hint is what says the pick survived.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Click a shaded closed profile'
+  );
+
+  // A letter that would launch another tool stays reserved.
+  await page.keyboard.press('b');
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+});
+
+test('the control reference shows the mouse bindings, not just the keys', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Controls Sheet');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+
+  await page.keyboard.press('?');
+  const sheet = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  await expect(sheet).toBeVisible();
+
+  // Orbit is Shift+drag and pan is right-drag. Neither is guessable, and the
+  // obvious gesture — left-drag on empty space — box-selects instead, so a new
+  // user who reaches for it clears their selection rather than turning the
+  // model. The sheet was keyboard-only, so nothing in the product said so.
+  await expect(sheet).toContainText('Orbit');
+  await expect(sheet).toContainText('Shift + left-drag');
+  await expect(sheet).toContainText('Pan');
+});
+
+test('controls announce themselves as what they are', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+
+  // The demo cards were three unnamed buttons whose names were assembled from
+  // a heading, a tagline and three loose revision chips read in sequence.
+  await expect(
+    page.getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+  ).toBeVisible();
+
+  await page.getByLabel('Project name').fill('Names');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+
+  // The keycap glyph was part of the button's name: "Create ↵".
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await expect(
+    inspector.getByRole('button', { name: 'Create', exact: true })
+  ).toBeVisible();
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.locator('.body-row')).toHaveCount(1);
+
+  // The row's accessible NAME comes from its content, so it was always the
+  // feature's name — the claim that every row announced the same thing was
+  // wrong. Its tooltip was the generic part, and that is what changed.
+  await expect(page.locator('.feature-row-main').first()).toHaveAttribute(
+    'title',
+    'Box — Primitive, click to edit'
+  );
+});
+
+test('the selection callout follows the body it names through a move', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Callout Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  // Selecting the body raises the name callout over it.
+  await page
+    .getByRole('list', { name: 'Bodies' })
+    .getByRole('button', { name: /^Box/ })
+    .click();
+  const callout = page.locator('.selection-callout');
+  await expect(callout).toHaveCount(1);
+
+  // Read the CSS transform, not the page rect: the callout is placed in the
+  // viewer's own pixels, and opening or closing a panel shifts the whole
+  // viewer without the callout having moved over its body at all.
+  const placement = async () =>
+    callout.evaluate((element) => (element as HTMLElement).style.transform);
+  const resting = await placement();
+  expect(resting).toContain('translate(');
+
+  await page.keyboard.press('m');
+  await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+
+  // The callout lives in the overlay group rather than under the body, so it
+  // used to sit still while the body slid out from under its own name.
+  await overlay.getByLabel('Move X in mm').fill('40');
+  await expect.poll(placement).not.toBe(resting);
+  const moved = await placement();
+
+  // Rotation turns the anchor about the body's centre, so the callout has to
+  // take that step too rather than only the translation. It must be Y or X:
+  // the anchor sits directly above the centre of the bounding box, which is on
+  // the Z axis of the rotation, and a Z turn leaves a point on its own axis
+  // exactly where it was.
+  await overlay.getByLabel('Rotate Y in degrees').fill('90');
+  await expect.poll(placement).not.toBe(moved);
+
+  // Cancelling restores the resting pose for the callout, not just the mesh.
+  await page.keyboard.press('Escape');
+  await expect(overlay).toBeHidden();
+  await expect.poll(placement).toBe(resting);
+});
+
+test('the sketch status does not promise an exit Escape will not make', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch Status');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  // Exact: the status message now names this control, so the activity-log
+  // button that echoes the status matches a loose "Finish Sketch" too.
+  const finish = page.getByRole('button', { name: 'Finish Sketch', exact: true });
+  await expect(finish).toBeVisible();
+
+  const status = page.getByRole('contentinfo');
+  // A sketch opens with the Line tool armed, so the first Escape returns to
+  // selection. Saying "Esc exits" here contradicted the live hint next to it.
+  await expect(status).toContainText('Sketching on the XY plane');
+  await expect(status).not.toContainText('Esc exits');
+  await expect(status).toContainText('returns to selection');
+
+  // First Escape: still in the sketch, now on the select tool.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeVisible();
+  await expect(status).toContainText('leaves the sketch');
+
+  // Second Escape leaves, and says so rather than leaving the "Sketching on"
+  // message standing over a workspace the sketch has already been left.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeHidden();
+  await expect(status).toContainText('Sketch closed');
+  await expect(status).not.toContainText('Sketching on');
+});
+
+test('a viewport callout keeps its position while it animates in', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Callout Entrance');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await page
+    .getByRole('list', { name: 'Bodies' })
+    .getByRole('button', { name: /^Box/ })
+    .click();
+
+  const callout = page.locator('.selection-callout').first();
+  await expect(callout).toBeVisible();
+
+  // These elements are positioned by CSS2DRenderer writing an inline
+  // `transform`, and a CSS animation outranks inline style — so an entrance
+  // that touches `transform` drops the placement for its whole duration. That
+  // is a flash at the container origin for a callout shown once, and permanent
+  // for the extrude value pill, which is rebuilt on every pointer move and
+  // restarts the animation every frame (FB-04).
+  const entrance = await callout.evaluate((element) => {
+    const name = getComputedStyle(element).animationName;
+    const animated: string[] = [];
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules: CSSRuleList;
+      try {
+        rules = sheet.cssRules;
+      } catch {
+        continue; // cross-origin sheet
+      }
+      for (const rule of Array.from(rules)) {
+        if (
+          rule instanceof CSSKeyframesRule &&
+          rule.name === name &&
+          !animated.length
+        ) {
+          for (const frame of Array.from(rule.cssRules)) {
+            const style = (frame as CSSKeyframeRule).style;
+            for (const property of Array.from(style)) {
+              if (!animated.includes(property)) {
+                animated.push(property);
+              }
+            }
+          }
+        }
+      }
+    }
+    return { name, animated };
+  });
+
+  expect(entrance.name).not.toBe('none');
+  expect(entrance.animated.length).toBeGreaterThan(0);
+  expect(entrance.animated).not.toContain('transform');
+
+  // And the placement it must not lose is a real one, not the origin.
+  const placed = await callout.evaluate(
+    (element) => getComputedStyle(element).transform
+  );
+  const offsets = /matrix\(1, 0, 0, 1, ([-\d.]+), ([-\d.]+)\)/.exec(placed);
+  expect(offsets).not.toBeNull();
+  expect(Math.abs(Number(offsets![1]))).toBeGreaterThan(1);
+});
+
+test('clicking a cube corner past its drawn facet snaps to that isometric view', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Cube Corner');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  // Start somewhere that is definitely not isometric, so arriving there is
+  // the click's doing and not the default camera. The cube's own Front facet
+  // does it without opening the rail flyout, which carries a button of the
+  // same name.
+  await page.getByRole('button', { name: 'Front view', exact: true }).click();
+  await page.waitForTimeout(900);
+
+  // Find a point inside the corner's target but outside the triangle you can
+  // see — the margin the deeper cut adds. Only a real browser can answer this:
+  // it needs the stylesheet's pointer-events and real hit-testing, neither of
+  // which exists in the unit environment.
+  const probe = await page.evaluate(() => {
+    const svg = document.querySelector('.orientation-cube');
+    if (!svg) {
+      return { error: 'no cube' } as const;
+    }
+    const box = svg.getBoundingClientRect();
+    const points = (element: Element) =>
+      (element.getAttribute('points') ?? '')
+        .trim()
+        .split(/\s+/)
+        .map((pair) => pair.split(',').map(Number) as [number, number]);
+    const area = (poly: [number, number][]) => {
+      let sum = 0;
+      for (let i = 0; i < poly.length; i += 1) {
+        const a = poly[i]!;
+        const b = poly[(i + 1) % poly.length]!;
+        sum += a[0] * b[1] - b[0] * a[1];
+      }
+      return Math.abs(sum) / 2;
+    };
+    const inside = (poly: [number, number][], x: number, y: number) => {
+      let hit = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i]!;
+        const [xj, yj] = poly[j]!;
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+          hit = !hit;
+        }
+      }
+      return hit;
+    };
+    const groups = [...svg.querySelectorAll('.cube-corner-target')]
+      .map((group) => ({
+        drawn: group.querySelector('.cube-corner')!,
+        target: group.querySelector('.cube-corner-hit')!
+      }))
+      .filter((pair) => pair.drawn.getAttribute('points'));
+    // The corner most turned toward the camera is the one worth aiming at, and
+    // foreshortening makes it the largest.
+    const best = groups.sort(
+      (a, b) => area(points(b.drawn)) - area(points(a.drawn))
+    )[0];
+    if (!best) {
+      return { error: 'no visible corner' } as const;
+    }
+    const drawn = points(best.drawn);
+    const target = points(best.target);
+    const cx = target.reduce((sum, p) => sum + p[0], 0) / target.length;
+    const cy = target.reduce((sum, p) => sum + p[1], 0) / target.length;
+    for (const vertex of target) {
+      for (let t = 0.05; t < 0.95; t += 0.05) {
+        const x = vertex[0] + (cx - vertex[0]) * t;
+        const y = vertex[1] + (cy - vertex[1]) * t;
+        if (inside(target, x, y) && !inside(drawn, x, y)) {
+          const clientX = box.left + x;
+          const clientY = box.top + y;
+          const top = document.elementFromPoint(clientX, clientY);
+          return {
+            x: clientX,
+            y: clientY,
+            owner: top?.getAttribute('class') ?? null,
+            label: top?.getAttribute('aria-label') ?? null,
+            targetArea: Math.round(area(target)),
+            drawnArea: Math.round(area(drawn))
+          } as const;
+        }
+      }
+    }
+    return { error: 'no margin point' } as const;
+  });
+
+  if ('error' in probe) {
+    throw new Error(`corner probe failed: ${probe.error}`);
+  }
+  // The margin exists, belongs to the corner, and is more than the facet.
+  expect(probe.owner).toBe('cube-corner-hit');
+  expect(probe.label).toMatch(/isometric view$/);
+  expect(probe.targetArea).toBeGreaterThan(probe.drawnArea * 2);
+
+  await page.mouse.click(probe.x, probe.y);
+  await page.waitForTimeout(900);
+
+  const pose = await page.evaluate((storageKey) => {
+    const raw = localStorage.getItem(storageKey);
+    const views = raw
+      ? (
+          JSON.parse(raw) as {
+            views?: Record<
+              string,
+              { camera: { position: number[]; target: number[] } }
+            >;
+          }
+        ).views
+      : undefined;
+    return views ? (Object.values(views)[0]?.camera ?? null) : null;
+  }, WORKSPACE_SESSION_STORAGE_KEY);
+
+  expect(pose).not.toBeNull();
+  const direction = pose!.position.map(
+    (value, axis) => value - pose!.target[axis]!
+  );
+  const distance = Math.hypot(...direction);
+  // An isometric view looks down a cube diagonal: all three components equal.
+  for (const component of direction) {
+    expect(Math.abs(Math.abs(component) / distance)).toBeCloseTo(0.5774, 2);
+  }
+});
+
+test('the frozen shadow map thaws for a moving body but not for the camera', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Shadow Freeze');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const refreshes = async () =>
+    Number(
+      (await canvas.evaluate(
+        (element) => (element as HTMLElement).dataset.e2eShadowRefreshes
+      )) ?? '0'
+    );
+
+  const settled = await refreshes();
+  expect(settled).toBeGreaterThan(0);
+
+  // The freeze itself. Without this the refresh count below still passes with
+  // three.js re-rendering the map every frame, which is the regression that
+  // would quietly undo the render win.
+  await expect(canvas).toHaveAttribute('data-e2e-shadow-auto-update', 'false');
+
+  // Orbiting must not thaw it. The map is camera-independent, and re-rendering
+  // it every frame is exactly the cost freezing it removed.
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  const centre = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2
+  };
+  await page.keyboard.down('Shift');
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 8; step += 1) {
+    await page.mouse.move(centre.x + step * 12, centre.y + step * 6);
+  }
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  expect(await refreshes()).toBe(settled);
+
+  // Moving a body must thaw it, or the shadow stays on the ground where the
+  // body used to be — visible as a dark patch orbiting cannot explain.
+  await page.keyboard.press('m');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  await expect(move).toBeVisible();
+  await move.getByLabel('Move X in mm').fill('40');
+  await expect.poll(refreshes).toBeGreaterThan(settled);
+
+  // And cancelling puts it back: nothing about the document changed, so no
+  // rebuild would otherwise refresh it.
+  const moved = await refreshes();
+  await page.keyboard.press('Escape');
+  await expect(move).toBeHidden();
+  await expect.poll(refreshes).toBeGreaterThan(moved);
 });

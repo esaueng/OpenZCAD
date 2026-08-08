@@ -251,27 +251,10 @@ describe('a sphere under boolean and offset', () => {
   });
 
   /**
-   * The cost of the fix, pinned rather than left as a note.
-   *
-   * Keeping the sphere analytic through a boolean is a strict win when the
-   * tool is disjoint. When the tool OVERLAPS it exposes a tessellation gap
-   * the old faceted path was hiding: the B-rep is now right and the MESH is
-   * now wrong, where before both were consistently a little wrong.
-   *
-   * brepkit#65 landed it that way deliberately — a correct B-rep is the more
-   * fundamental of the two, and the tessellation gap is localised and
-   * independently fixable. The lever if that judgement is ever revisited is
-   * one command, `git checkout main -- crates/algo/src/builder/`, which
-   * restores the old overlapping-cut behaviour while LEAVING the disjoint-cut
-   * identity above in place. The two halves are separable.
-   *
-   * What this pin protects: volume, STEP export and every exact measurement
-   * read the B-rep and are correct. `body.mesh` is what is broken, and that
-   * is what the viewport, STL export and mesh booleans consume. When someone
-   * fixes the tessellation this goes red and should be flipped, exactly as
-   * the tests above just were.
+   * Keep the former overlapping-sphere tessellation regression pinned. Both
+   * the exact B-rep and its viewport mesh must remain correct and closed.
    */
-  describe('the cost: an OVERLAPPING cut is measured right and drawn wrong', () => {
+  describe('an overlapping cut remains exact and watertight', () => {
     const overlappingCut = async () => {
       adapter ??= await createExactKernelAdapter();
       let document = createProjectDocument('Overlap', toUserId('user_sph'));
@@ -315,32 +298,15 @@ describe('a sphere under boolean and offset', () => {
       expect(warnings).toEqual([]);
     }, 120_000);
 
-    it.fails(
-      'draws a closed surface for it',
-      async () => {
-        const { openEdges } = await overlappingCut();
-        expect(openEdges).toBe(0);
-      },
-      120_000
-    );
-
-    it('instead hands the viewport a mesh with 408 open edges, silently', async () => {
-      // The companion, recording the specific wrong value so a change that
-      // merely perturbs it stays distinguishable from one that fixes it.
+    it('hands the viewport a closed mesh', async () => {
       const { openEdges, triangles, warnings } = await overlappingCut();
-      expect(openEdges).toBe(408);
-      expect(triangles).toBe(86_932);
-      // Nothing tells the user. The B-rep is valid, the volume is right, and
-      // only the triangles are wrong — precisely the class of defect that no
-      // measurement can catch.
+      expect(openEdges).toBe(0);
+      expect(triangles).toBe(65_792);
       expect(warnings).toEqual([]);
     }, 120_000);
 
     it('does not leak vertices into the removed region', async () => {
-      // Worth pinning separately because it BOUNDS the defect. The mesh is
-      // open, but it is not drawing material that was cut away: no vertex
-      // sits above the cut plane. So this is a seam that fails to close, not
-      // a boolean that failed to remove.
+      // The boolean must not leave any tessellated material above the cut.
       const { mesh } = await overlappingCut();
       let above = 0;
       for (let i = 0; i < mesh.vertices.length; i += 3) {

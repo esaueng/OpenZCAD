@@ -24,6 +24,23 @@ interface InertState {
   ariaHidden: string | null;
 }
 
+interface ModalRegistration {
+  dialog: HTMLElement;
+  autoFocus: boolean;
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  restoreBackground?: () => void;
+  removeKeyListener?: () => void;
+}
+
+// Async conflict detection can open a dialog while another modal is mounted.
+// Only the visually top registration may inert siblings; otherwise one
+// backdrop can make the dialog painted above it reject pointer and keyboard
+// events. Registration order is not enough because an earlier DOM sibling may
+// mount after a later one.
+const modalStack: ModalRegistration[] = [];
+let activeModal: ModalRegistration | null = null;
+let stackOpener: HTMLElement | null = null;
+
 function inertBackground(dialog: HTMLElement): () => void {
   const changed: InertState[] = [];
   let branch: HTMLElement | null = dialog;
@@ -57,6 +74,93 @@ function inertBackground(dialog: HTMLElement): () => void {
   };
 }
 
+function activateModal(registration: ModalRegistration): void {
+  const { dialog, autoFocus, initialFocusRef } = registration;
+  registration.restoreBackground = inertBackground(dialog);
+
+  if (autoFocus && !dialog.contains(document.activeElement)) {
+    const first = dialog.querySelector<HTMLElement>(FOCUSABLE);
+    (initialFocusRef?.current ?? first ?? dialog).focus();
+  }
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Tab') {
+      return;
+    }
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
+    );
+    if (focusable.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    const current = document.activeElement;
+    const outside = !dialog.contains(current);
+    if (event.shiftKey && (current === first || outside)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (current === last || outside)) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  // Capture phase so the trap wins over the workspace's own key handling.
+  document.addEventListener('keydown', onKeyDown, true);
+  registration.removeKeyListener = () =>
+    document.removeEventListener('keydown', onKeyDown, true);
+}
+
+function deactivateModal(registration: ModalRegistration): void {
+  registration.removeKeyListener?.();
+  registration.removeKeyListener = undefined;
+  registration.restoreBackground?.();
+  registration.restoreBackground = undefined;
+}
+
+function refreshActiveModal(): void {
+  let next: ModalRegistration | null = null;
+  for (const candidate of modalStack) {
+    if (!candidate.dialog.isConnected) {
+      continue;
+    }
+    if (
+      !next ||
+      next.dialog.compareDocumentPosition(candidate.dialog) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ) {
+      next = candidate;
+    }
+  }
+  if (next === activeModal) {
+    // A lower registration can mount or unmount without changing which dialog
+    // is on top. Refresh its inert snapshot so the new sibling cannot keep
+    // receiving input behind the active modal.
+    if (next) {
+      deactivateModal(next);
+      activateModal(next);
+    }
+    return;
+  }
+
+  const previous = activeModal;
+  if (previous) {
+    deactivateModal(previous);
+  }
+  activeModal = next;
+
+  if (next) {
+    activateModal(next);
+  } else if (stackOpener?.isConnected) {
+    stackOpener.focus();
+  }
+  if (modalStack.length === 0) {
+    stackOpener = null;
+  }
+}
+
 /**
  * Gives a modal dialog the focus behaviour its `aria-modal` promises: focus
  * starts inside, Tab cannot escape to the workspace behind it, and whatever was
@@ -74,46 +178,23 @@ export function useModalFocus(
     if (!dialog) {
       return;
     }
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const restoreBackground = inertBackground(dialog);
-
-    if (autoFocus && !dialog.contains(document.activeElement)) {
-      const first = dialog.querySelector<HTMLElement>(FOCUSABLE);
-      (initialFocusRef?.current ?? first ?? dialog).focus();
+    if (modalStack.length === 0) {
+      stackOpener = document.activeElement as HTMLElement | null;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !dialog) {
-        return;
-      }
-      const focusable = Array.from(
-        dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
-      );
-      if (focusable.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      const current = document.activeElement;
-      const outside = !dialog.contains(current);
-      if (event.shiftKey && (current === first || outside)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (current === last || outside)) {
-        event.preventDefault();
-        first.focus();
-      }
+    const registration: ModalRegistration = {
+      dialog,
+      autoFocus,
+      initialFocusRef
     };
+    modalStack.push(registration);
+    refreshActiveModal();
 
-    // Capture phase so the trap wins over the workspace's own key handling.
-    document.addEventListener('keydown', onKeyDown, true);
     return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
-      restoreBackground();
-      if (previouslyFocused?.isConnected) {
-        previouslyFocused.focus();
+      const index = modalStack.indexOf(registration);
+      if (index !== -1) {
+        modalStack.splice(index, 1);
       }
+      refreshActiveModal();
     };
   }, [autoFocus, enabled, initialFocusRef, ref]);
 }
