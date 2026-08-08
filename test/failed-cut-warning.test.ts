@@ -9,17 +9,11 @@ import { toUserId, type BodyId } from '@openzcad/shared';
 import { createExactKernelAdapter } from '../packages/kernel-adapter/src/exact';
 
 /**
- * A cut that removes nothing, on a kernel that reports success.
- *
- * The 061c1b2 kernel returns a cross-drilled shaft whose measured volume is
- * the UNDRILLED stock — identical at every bore radius — while the body it
- * hands back is closed, valid and watertight. Every structural check the
- * adapter runs passes. The only witness is that the tool demonstrably
- * overlapped the target and none of that material went away.
- *
- * See test/cross-drilled-render.test.ts for the measurement itself. This file
- * is about the guard: the number is still wrong, but it is no longer wrong in
- * silence.
+ * The corrupting 061c1b2 kernel returned an undrilled shaft from this cut and
+ * relied on the adapter's failed-cut guard to keep that corruption from being
+ * silent. The vetted kernel restored by the rollback removes the bore again,
+ * so the same operation must now stay warning-free and report the drilled
+ * volume.
  */
 const user = toUserId('user_failed_cut');
 
@@ -58,12 +52,14 @@ async function crossDrill(boreRadius: number) {
   }
 }
 
-describe('a cut that does not take says so', { timeout: 120_000 }, () => {
-  it('warns when the tool overlaps but nothing is removed', async () => {
+describe('subtractive cuts after the kernel rollback', { timeout: 120_000 }, () => {
+  it('stays quiet when the restored kernel removes the cross-drilled bore', async () => {
     const derived = await crossDrill(3);
-    expect(derived.warnings).toContain(
-      'Feature "Drilled": the tool overlaps this body but the cut did not take, so the reported volume still counts material the cut should have removed.'
+    expect(derived.warnings).toEqual([]);
+    const body = Object.values(derived.bodyRepresentations).find(
+      (candidate) => !candidate.consumed
     );
+    expect(body?.volume).toBeCloseTo(704.23, 1);
   });
 
   it('stays quiet for a cut that works', async () => {
