@@ -12,6 +12,7 @@ export interface FakeRoomStorage {
       get<T>(key: string): Promise<T | undefined>;
       put(keyOrEntries: unknown, value?: unknown): Promise<void>;
       delete(keyOrKeys: string | string[]): Promise<boolean | number>;
+      deleteAll(): Promise<void>;
     };
     blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
   };
@@ -49,6 +50,9 @@ export function createRoomContext(
             }
           }
           return deleted;
+        },
+        async deleteAll() {
+          values.clear();
         }
       },
       async blockConcurrencyWhile<T>(callback: () => Promise<T>) {

@@ -23,6 +23,13 @@
   inset: 0;
 }
 
+/* HudLayer owns imperative canvas overlays whose class styles may select a
+   layout display mode. The hidden state always wins so transient markers and
+   labels cannot survive after their interaction mode exits. */
+[data-viewport-hud][hidden] {
+  display: none !important;
+}
+
 /* Top-right orientation widget. The utility rail used to stack beneath it;
    it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {
@@ -67,7 +74,7 @@
   border-radius: var(--radius-sm);
 }
 
-.rail-button:hover,
+.rail-button:hover:not(:disabled),
 .rail-button.open {
   color: var(--color-text);
   background: var(--color-surface-2);
@@ -161,6 +168,31 @@
   will-change: transform;
 }
 
+.selection-callout.measurement-callout {
+  padding: 4px 8px;
+  color: rgba(225, 242, 255, 0.96);
+  background: rgba(9, 24, 40, 0.82);
+  border-color: rgba(124, 192, 255, 0.58);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.selection-callout.measurement-callout.selected {
+  color: white;
+  border-color: rgba(155, 211, 255, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(155, 211, 255, 0.32),
+    0 5px 16px rgba(0, 0, 0, 0.32);
+}
+
+.selection-callout.measurement-callout.stale {
+  color: #f7c76f;
+  border-color: rgba(245, 158, 11, 0.58);
+}
+
 /* Editable dimension pill: drag the face, or click the value to type. */
 .selection-callout.direct-edit-callout.editable {
   padding: 0;
@@ -243,44 +275,6 @@
 .selection-chip-clear:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
-}
-
-/* Viewport HUD: ghost stat chips bottom-left; the rail covers view/display
-   state top-right. */
-.vp-hud {
-  position: absolute;
-  z-index: var(--z-viewer-overlay);
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  pointer-events: none;
-}
-
-.vp-hud-bl {
-  bottom: 10px;
-  left: 10px;
-}
-
-.vp-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 16px;
-  padding: 1px 6px;
-  color: var(--color-text-muted);
-  background: rgba(17, 24, 33, 0.82);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  line-height: 1.4;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.vp-chip-sel {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
 }
 
 /* Snap glyph: a marker on the point a drag locked onto, with the kind named

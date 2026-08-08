@@ -1,11 +1,13 @@
-import type { MutableRefObject } from 'react';
+import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
+  type BodyAppearancePreview,
   type ExtrudePreview,
   type FaceResizeCommit,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
+  type NormalToFaceRequest,
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
@@ -22,7 +24,6 @@ import type {
   ViewerSettings,
   ViewTarget
 } from '@openzcad/viewport';
-import { useRef, type ReactNode } from 'react';
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
@@ -31,18 +32,22 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
+import { formatNumber } from '../lib/model';
 
 interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  measurementAnnotations: MeasurementViewportAnnotation[];
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
   settings: ViewerSettings;
   fitSignal: number;
   viewRequest: { view: ViewTarget; nonce: number } | null;
+  normalToFaceRequest: NormalToFaceRequest | null;
   rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
@@ -50,11 +55,23 @@ interface ViewerShellProps {
   movePreview: MovePreview | null;
   /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
   moveCommitHold: MovePreview | null;
+  /** Drag-phase body appearance patch; forwarded to the viewer's material. */
+  appearancePreview: BodyAppearancePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
+  /**
+   * View mode drops the utility rail — its controls move to the floating view
+   * bar, and undo/redo have nothing to act on — but keeps the orientation cube,
+   * which is navigation rather than editing.
+   */
+  viewMode?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo(): void;
+  onRedo(): void;
   projection: ProjectionMode;
   initialView: ViewportCameraState | null;
   onViewChange(view: ViewportCameraState): void;
@@ -75,8 +92,8 @@ interface ViewerShellProps {
   >;
   offsetSetterRef: MutableRefObject<((offset: number) => void) | null>;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
-  onCylinderRadiusPreview(radius: number): void;
-  onCylinderRadiusCommit(radius: number): void;
+  onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
+  onCylinderRadiusCommit(radius: number): boolean;
   onCylinderRadiusCancel(): void;
   onOpenCylinderRadiusKeypad(radius: number): void;
   cancelDirectManipulationRef: MutableRefObject<(() => boolean) | null>;
@@ -97,6 +114,13 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /** What measuring the hovered target would report; null when measure is off. */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -123,22 +147,30 @@ export function ViewerShell({
   projectId,
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
   settings,
   fitSignal,
   viewRequest,
+  normalToFaceRequest,
   rotateRequest,
   units,
   editableBodyIds,
   extrudePreview,
   movePreview,
   moveCommitHold,
+  appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  viewMode = false,
   selectionChip,
   onClearSelection,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   projection,
   initialView,
   onViewChange,
@@ -172,6 +204,7 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -186,25 +219,48 @@ export function ViewerShell({
   onToggleProjection
 }: ViewerShellProps) {
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
+  const cylinderRadiusLabelSetterRef = useRef<
+    ((radius: number | null) => void) | null
+  >(null);
+  cylinderRadiusLabelSetterRef.current = (radius) => {
+    const label = selectionChipLabelRef.current;
+    if (!label || !selectionChip) {
+      return;
+    }
+    label.textContent =
+      radius === null
+        ? selectionChip.label
+        : selectionChip.label.replace(
+            /(Cylindrical face Ø)[^ ·]+/,
+            `$1${formatNumber(radius * 2)}`
+          );
+  };
 
   return (
-    <section className="viewer-shell" aria-label="3D viewport">
+    <section
+      className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
+      aria-label="3D viewport"
+    >
       <ModelViewer
         key={projectId}
         bodies={bodies}
         sketches={sketches}
+        measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         selectedEdges={selectedEdges}
         settings={settings}
         fitSignal={fitSignal}
         viewRequest={viewRequest}
+        normalToFaceRequest={normalToFaceRequest}
         rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
         extrudePreview={extrudePreview}
         movePreview={movePreview}
         moveCommitHold={moveCommitHold}
+        appearancePreview={appearancePreview}
         projection={projection}
         initialView={initialView}
         onViewChange={onViewChange}
@@ -220,6 +276,7 @@ export function ViewerShell({
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
+        cylinderRadiusLabelSetterRef={cylinderRadiusLabelSetterRef}
         onCylinderRadiusPreview={onCylinderRadiusPreview}
         onCylinderRadiusCommit={onCylinderRadiusCommit}
         onCylinderRadiusCancel={onCylinderRadiusCancel}
@@ -239,6 +296,7 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
@@ -260,20 +318,28 @@ export function ViewerShell({
               onDragEnd={() => orientationDragRef.current?.end()}
             />
           </div>
-          <ViewerToolbar
-            settings={settings}
-            projection={projection}
-            onToggleGrid={onToggleGrid}
-            onFit={onFit}
-            onView={onView}
-            onCycleDisplayMode={onCycleDisplayMode}
-            onToggleProjection={onToggleProjection}
-          />
+          {!viewMode && (
+            <ViewerToolbar
+              settings={settings}
+              projection={projection}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onToggleGrid={onToggleGrid}
+              onFit={onFit}
+              onView={onView}
+              onCycleDisplayMode={onCycleDisplayMode}
+              onToggleProjection={onToggleProjection}
+            />
+          )}
         </>
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">
-          <span className="selection-chip-label">{selectionChip.label}</span>
+          <span ref={selectionChipLabelRef} className="selection-chip-label">
+            {selectionChip.label}
+          </span>
           {selectionChip.detail && (
             <span className="selection-chip-detail">
               {selectionChip.detail}
@@ -291,17 +357,6 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      <div className="vp-hud vp-hud-bl" aria-hidden="true">
-        <span className="vp-chip">{units}</span>
-        <span className="vp-chip">
-          {bodies.length} {bodies.length === 1 ? 'body' : 'bodies'}
-        </span>
-        {sketches.length > 0 && (
-          <span className="vp-chip">
-            {sketches.length} {sketches.length === 1 ? 'sketch' : 'sketches'}
-          </span>
-        )}
-      </div>
     </section>
   );
 }

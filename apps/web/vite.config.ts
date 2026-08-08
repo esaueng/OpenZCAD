@@ -273,6 +273,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     base: isDesktop ? './' : '/',
     plugins,
     define: {
+      'import.meta.env.VITE_E2E': JSON.stringify(process.env.VITE_E2E ?? ''),
       'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
       'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),
@@ -295,10 +296,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         // of the entry bundle. Reaching it through the geometry index would
         // not split — that index is statically imported all over the app.
         '@openzcad/geometry/text-loader': fileURLToPath(
-          new URL(
-            '../../packages/geometry/src/text/loader.ts',
-            import.meta.url
-          )
+          new URL('../../packages/geometry/src/text/loader.ts', import.meta.url)
         ),
         '@openzcad/kernel-adapter/exact': fileURLToPath(
           new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
@@ -351,6 +349,16 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             }
             if (id.includes('/node_modules/lucide-react/')) {
               return 'icons';
+            }
+            // Sketch geometry, shared by the eager workspace and by lazily
+            // loaded features. Without a name it becomes an anonymous `src-*`
+            // chunk, which `report-bundle-sizes` rejects when the launcher
+            // preloads it — the pattern exists to catch app code leaking into
+            // first paint, and an unnamed chunk makes that impossible to tell
+            // apart from a deliberate shared dependency. This one is
+            // deliberate: Build mode needs it immediately.
+            if (id.includes('/packages/geometry/')) {
+              return 'geometry';
             }
             return undefined;
           }

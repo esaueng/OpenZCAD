@@ -37,7 +37,11 @@ function dimensionList(
   return parts.length > 0 ? parts.join(' · ') : 'no dimensions';
 }
 
-function vector(input: { x: ParamValue; y: ParamValue; z: ParamValue }): string {
+function vector(input: {
+  x: ParamValue;
+  y: ParamValue;
+  z: ParamValue;
+}): string {
   return `${value(input.x)}, ${value(input.y)}, ${value(input.z)}`;
 }
 
@@ -83,7 +87,13 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — ${describeBodyRef(operation.targetBodyId)}: ${moves.length > 0 ? moves.join(', ') : 'no change'}`;
     }
     case 'add_edge_modifier':
-      return `${operation.name} — ${operation.modifier} ${operation.edgeHashes.length} edge${operation.edgeHashes.length === 1 ? '' : 's'} at ${value(operation.size)} on ${describeBodyRef(operation.targetBodyId)}`;
+      return `${operation.name} — ${operation.modifier} ${
+        operation.edgeSelector === 'all-feature-edges'
+          ? 'all feature edges'
+          : operation.edgeSelector === 'circular-rims'
+            ? 'all circular rims'
+            : `${operation.edgeHashes.length} edge${operation.edgeHashes.length === 1 ? '' : 's'}`
+      } at ${value(operation.size)} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'add_pattern':
       return `${operation.name} — ${operation.patternKind} pattern of ${describeBodyRef(operation.targetBodyId)}, ${value(operation.count)} along ${operation.axis}`;
     default:

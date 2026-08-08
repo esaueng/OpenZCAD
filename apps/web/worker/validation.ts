@@ -1,4 +1,5 @@
 import {
+  MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_PROJECT_NAME_LENGTH,
   persistedDocumentBytes,
@@ -8,6 +9,7 @@ import {
   toProjectId,
   toUploadSessionId,
   type ArtifactKind,
+  type CompleteMultipartUploadRequest,
   type CreateProjectRequest,
   type CreateUploadSessionRequest,
   type DuplicateProjectRequest,
@@ -372,6 +374,41 @@ export function parseFinalizeImportRequest(
       requireString(record, 'artifactId', MAX_NAME_LENGTH)
     )
   };
+}
+
+export function parseCompleteMultipartUploadRequest(
+  body: unknown
+): CompleteMultipartUploadRequest {
+  const record = asRecord(body, 'Request body');
+  const uploadId = requireString(record, 'uploadId', MAX_NAME_LENGTH);
+  if (!Array.isArray(record.parts) || record.parts.length === 0) {
+    throw badRequest('"parts" must be a non-empty array.');
+  }
+  if (record.parts.length > MAX_ARTIFACT_UPLOAD_PARTS) {
+    throw badRequest(
+      `"parts" cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS} entries.`
+    );
+  }
+  const seen = new Set<number>();
+  const parts = record.parts.map((part) => {
+    const partRecord = asRecord(part, 'Upload part');
+    const partNumber = partRecord.partNumber;
+    if (
+      typeof partNumber !== 'number' ||
+      !Number.isInteger(partNumber) ||
+      partNumber < 1 ||
+      partNumber > MAX_ARTIFACT_UPLOAD_PARTS ||
+      seen.has(partNumber)
+    ) {
+      throw badRequest('"partNumber" must be a unique integer in range.');
+    }
+    seen.add(partNumber);
+    return {
+      partNumber,
+      etag: requireString(partRecord, 'etag', MAX_NAME_LENGTH)
+    };
+  });
+  return { uploadId, parts };
 }
 
 /**

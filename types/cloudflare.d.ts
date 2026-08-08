@@ -34,6 +34,19 @@ declare interface R2ObjectBody extends R2Object {
   arrayBuffer(): Promise<ArrayBuffer>;
 }
 
+declare interface R2UploadedPart {
+  partNumber: number;
+  etag: string;
+}
+
+declare interface R2MultipartUpload {
+  readonly key: string;
+  readonly uploadId: string;
+  uploadPart(partNumber: number, value: ArrayBuffer): Promise<R2UploadedPart>;
+  abort(): Promise<void>;
+  complete(uploadedParts: R2UploadedPart[]): Promise<R2Object>;
+}
+
 declare interface R2Bucket {
   put(
     key: string,
@@ -43,6 +56,11 @@ declare interface R2Bucket {
   head(key: string): Promise<R2Object | null>;
   get(key: string): Promise<R2ObjectBody | null>;
   delete(key: string): Promise<void>;
+  createMultipartUpload(
+    key: string,
+    options?: { httpMetadata?: { contentType?: string } }
+  ): Promise<R2MultipartUpload>;
+  resumeMultipartUpload(key: string, uploadId: string): R2MultipartUpload;
 }
 
 declare interface Queue<T = unknown> {

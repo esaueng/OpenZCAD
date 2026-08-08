@@ -46,6 +46,10 @@ export function StatusBar({
   const logPanelId = useId();
   const [logOpen, setLogOpen] = useState(false);
   const statusButtonRef = useRef<HTMLButtonElement | null>(null);
+  const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
+  const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
+  const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
+  const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
   const closeLog = useCallback((restoreFocus: boolean) => {
     setLogOpen(false);
     if (restoreFocus) {
@@ -69,7 +73,18 @@ export function StatusBar({
           onClick={() => setLogOpen((open) => !open)}
         >
           <i />
-          <span>{status}</span>
+          {/* The status bar is where this app says what just happened —
+              refusals, what a command did, which rung of the Escape ladder you
+              are on — and it was the one major surface with no live region, so
+              none of it reached a screen reader unless you happened to focus
+              this button. Settings, the sharing dialog and tool cards all
+              announce; this now does too. `aria-live` rather than
+              `role="status"` so the button's own semantics are untouched, and
+              `aria-atomic` so a changed message is read whole rather than
+              diffed word by word. */}
+          <span aria-live="polite" aria-atomic="true">
+            {status}
+          </span>
           <span className="status-log-caret" aria-hidden="true">
             {logOpen ? '▾' : '▴'}
           </span>
@@ -132,10 +147,11 @@ export function StatusBar({
             {documentVersion ?? '—'}
           </span>
           <span
-            title={`${projectName ?? 'Project'} · ${featureCount} features · ${bodyCount} bodies`}
+            title={workspaceSummary}
+            aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
           >
             <b>sync</b>
-            {WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel}
+            {syncLabel}
           </span>
         </div>
       </footer>

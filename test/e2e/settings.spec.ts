@@ -2,11 +2,57 @@ import {
   test,
   expect,
   createProject,
+  expectBodyCount,
   openAssistant,
   stubApi,
   stubAssistant,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
+
+test('suggests a fresh part name without selecting it', async ({ page }) => {
+  await page.addInitScript(() => {
+    const storageKey = '__openzcad_e2e_cute_name_seed';
+    const seed = Number(window.sessionStorage.getItem(storageKey) ?? '0') + 1;
+    window.sessionStorage.setItem(storageKey, String(seed));
+    const getRandomValues: Crypto['getRandomValues'] =
+      window.crypto.getRandomValues.bind(window.crypto);
+    Object.defineProperty(window.crypto, 'getRandomValues', {
+      configurable: true,
+      value: <T extends ArrayBufferView>(array: T): T => {
+        if (array instanceof Uint32Array && array.length === 1) {
+          array[0] = seed;
+          return array;
+        }
+        return getRandomValues(array);
+      }
+    });
+  });
+  await stubApi(page);
+  await page.goto('/');
+
+  const projectName = page.getByLabel('Project name');
+  await expect(projectName).toBeFocused();
+  await expect(projectName).not.toHaveValue('New Part');
+  const initialName = await projectName.inputValue();
+  const initialSelection = await projectName.evaluate(
+    (input: HTMLInputElement) => ({
+      start: input.selectionStart,
+      end: input.selectionEnd
+    })
+  );
+  expect(initialSelection.start).toBe(initialSelection.end);
+
+  await page.reload();
+  await expect(projectName).toBeFocused();
+  await expect(projectName).not.toHaveValue(initialName);
+  const reloadedSelection = await projectName.evaluate(
+    (input: HTMLInputElement) => ({
+      start: input.selectionStart,
+      end: input.selectionEnd
+    })
+  );
+  expect(reloadedSelection.start).toBe(reloadedSelection.end);
+});
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
   page
@@ -28,7 +74,7 @@ test('keeps command names visible at the compact desktop breakpoint', async ({
   ).toBeVisible();
 });
 
-test('keeps settings at the far right and dismisses the file menu outside', async ({
+test('keeps the top-bar order fixed and dismisses the file menu outside', async ({
   page
 }) => {
   await stubApi(page);
@@ -38,7 +84,21 @@ test('keeps settings at the far right and dismisses the file menu outside', asyn
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
   const topbar = page.locator('.topbar');
-  await expect(topbar.locator(':scope > :last-child')).toHaveAttribute(
+  const actions = topbar.getByRole('group', {
+    name: 'Workspace actions'
+  });
+  const actionSlots = actions.locator(':scope > *');
+  await expect(actionSlots).toHaveCount(5);
+  await expect(actionSlots.nth(0)).toHaveClass(/account-state/);
+  await expect(actionSlots.nth(0)).toHaveText('Signed in');
+  await expect(actionSlots.nth(1)).toHaveClass(/save-state/);
+  await expect(topbar).not.toContainText('E2E user');
+  await expect(actionSlots.nth(2)).toHaveAttribute(
+    'aria-label',
+    'Open project sharing'
+  );
+  await expect(actionSlots.nth(3)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(4)).toHaveAttribute(
     'aria-label',
     'Open settings'
   );
@@ -49,6 +109,24 @@ test('keeps settings at the far right and dismisses the file menu outside', asyn
 
   await topbar.locator('.topbar-divider').click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
+
+  await actions.locator('.save-state').evaluate((element) => {
+    element.lastChild!.textContent = 'Autosave off';
+  });
+  await actions.locator('.account-state').evaluate((element) => {
+    element.lastChild!.textContent = 'Unavailable';
+  });
+  await actions.locator('.collaboration-state').evaluate((element) => {
+    element.lastChild!.textContent = 'Update required';
+  });
+  await expect(actionSlots.nth(0)).toHaveClass(/account-state/);
+  await expect(actionSlots.nth(1)).toHaveClass(/save-state/);
+  await expect(actionSlots.nth(2)).toHaveClass(/collaboration-state/);
+  await expect(actionSlots.nth(3)).toHaveClass(/file-menu/);
+  await expect(actionSlots.nth(4)).toHaveAttribute(
+    'aria-label',
+    'Open settings'
+  );
 });
 
 test('opens new projects blank with the assistant collapsed', async ({
@@ -235,6 +313,71 @@ test('settings name their sections and search individual settings', async ({
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
+test('turns project sharing off without disabling cloud saves', async ({
+  page
+}) => {
+  await stubApi(page, { collaborationRole: 'owner' });
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('form', { name: 'Join a shared project' })
+  ).toHaveCount(0);
+  await expect(page.getByLabel('Invitation token')).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Join project' })
+  ).toHaveCount(0);
+  await page.getByLabel('Project name').fill('Private Local Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing' })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __e2eCollaborationSocketUrls: string[];
+            }
+          ).__e2eCollaborationSocketUrls.length
+      )
+    )
+    .toBe(1);
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Project sharing' }).uncheck();
+  await page
+    .getByRole('button', { name: 'Files & autosave', exact: true })
+    .click();
+  await expect(
+    page.getByRole('checkbox', { name: 'Cloud autosave' })
+  ).toBeChecked();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing' })
+  ).toHaveCount(0);
+  await expect(page.locator('.save-state')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              __e2eCollaborationOpenSocketCount: number;
+            }
+          ).__e2eCollaborationOpenSocketCount
+      )
+    )
+    .toBe(0);
+
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.getByRole('form', { name: 'Join a shared project' })
+  ).toHaveCount(0);
+});
+
 test('settings restore the exact non-sensitive view after reload', async ({
   page
 }) => {
@@ -412,21 +555,31 @@ test('disabling the assistant takes its live preview with it', async ({
     'Add a 10 mm cube.'
   );
 
-  await page.getByRole('button', { name: 'Preview', exact: true }).click();
   const status = page.getByRole('contentinfo');
+  // Exact-valid patches are previewed before an Apply action is ever offered.
+  await expect(
+    page.getByRole('button', { name: 'Hide preview', exact: true })
+  ).toBeVisible();
   await expect(status).toContainText('Previewing exact proposed geometry.');
   // The preview is unapplied geometry: it shows a body the document does not
   // have, which is what makes an orphaned preview visible at all.
-  await expect(status.locator('[title*="1 bodies"]')).toHaveCount(1);
+  await expectBodyCount(page, 1);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
   await page.getByRole('checkbox', { name: 'AI assistant' }).uncheck();
+  await expect(
+    page.getByRole('heading', { level: 2, name: 'AI Assistant' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', { name: 'AI assistant' })
+  ).not.toBeChecked();
   await page.getByRole('button', { name: 'Back to workspace' }).click();
 
   // The panel is gone, so nothing is left that could retire the preview — the
   // workspace has to drop it rather than render a proposal forever.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(status.locator('[title*="0 bodies"]')).toHaveCount(1);
+  await expectBodyCount(page, 0);
 });
 
 test('settings swallow workspace shortcuts instead of editing behind them', async ({
