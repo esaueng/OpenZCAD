@@ -26,7 +26,6 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   TRASH_RETENTION_DAYS,
-  type BodyRepresentation,
   type ProjectStatus,
   type ProjectSummary,
   type UnitSystem
@@ -84,7 +83,18 @@ interface StartScreenProps {
   /** Irreversible: destroys the project outright. */
   onDeleteForever(project: ProjectSummary): void;
   onEmptyTrash(projects: ProjectSummary[]): void;
-  loadThumbnailBodies(project: ProjectSummary): Promise<BodyRepresentation[]>;
+  /**
+   * Reads a cached preview image. Deliberately not a document load: the shelf
+   * must stay usable — openable, deletable — for a project too large to hold in
+   * memory, which is exactly the project whose tile a viewer wants to see.
+   */
+  loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * Renders the preview for a tile the cache could not answer for. Called only
+   * for the tiles on screen, so an unexpanded shelf pays for nine parts rather
+   * than every part the device holds.
+   */
+  backfillThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
 /**
@@ -138,7 +148,8 @@ export function StartScreen({
   onReorder,
   onDeleteForever,
   onEmptyTrash,
-  loadThumbnailBodies
+  loadThumbnail,
+  backfillThumbnail
 }: StartScreenProps) {
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
@@ -285,7 +296,11 @@ export function StartScreen({
     const preview = (
       <>
         <span className="start-tile-thumb">
-          <PartThumbnail project={project} loadBodies={loadThumbnailBodies} />
+          <PartThumbnail
+            project={project}
+            loadThumbnail={loadThumbnail}
+            backfillThumbnail={backfillThumbnail}
+          />
           {syncEntry && !trashed ? (
             <span
               className={`start-tile-badge is-sync-${syncEntry.state}`}
@@ -974,6 +989,10 @@ export function StartScreen({
                 type="button"
                 className="demo-card"
                 disabled={busy}
+                // Named as one thing, because that is what it is: a card whose
+                // name was otherwise assembled from its heading, its tagline
+                // and three loose revision chips read in sequence.
+                aria-label={`Open demo: ${demo.name.replace('Demo · ', '')} — ${demo.tagline}`}
                 onClick={() => onOpenDemo(demo)}
               >
                 <span className="demo-card-head">

@@ -32,6 +32,7 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
 import { formatNumber } from '../lib/model';
 
@@ -39,6 +40,7 @@ interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  measurementAnnotations: MeasurementViewportAnnotation[];
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
@@ -112,6 +114,13 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /** What measuring the hovered target would report; null when measure is off. */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -138,6 +147,7 @@ export function ViewerShell({
   projectId,
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -194,6 +204,7 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -235,6 +246,7 @@ export function ViewerShell({
         key={projectId}
         bodies={bodies}
         sketches={sketches}
+        measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         selectedEdges={selectedEdges}
@@ -284,6 +296,7 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findFeature } from '@openzcad/document-core';
 import {
@@ -8,7 +8,13 @@ import {
 } from '@openzcad/shared';
 import {
   archiveLocalOnlyImportSources,
-  listLocalOnlyImportSources
+  createInFlightImportChecksums,
+  discardUnreferencedImportSource,
+  listLocalOnlyImportSources,
+  settleImportSource,
+  sourceBlobClaimExpired,
+  sourceBlobClaimHolds,
+  SOURCE_BLOB_CLAIM_TTL_MS
 } from './importArchival';
 
 function referenceFor(text: string): ImportedSourceReference {
@@ -43,6 +49,16 @@ function managerWithImports(): CommandManager {
   );
   manager.execute(
     commandFactories.importStep({
+      name: 'Second local import',
+      artifactId: 'artifact_local_ghi',
+      sourceName: 'local2.step',
+      stepSourceRef: referenceFor('local2')
+    })
+  );
+  // Rebuildable everywhere from the document itself, so it must stay out of
+  // every list and every upload below.
+  manager.execute(
+    commandFactories.importStep({
       name: 'Embedded import',
       artifactId: 'artifact_local_def',
       sourceName: 'embedded.step',
@@ -53,20 +69,32 @@ function managerWithImports(): CommandManager {
 }
 
 describe('listLocalOnlyImportSources', () => {
-  it('lists only STEP imports with an artifact_local_ reference', () => {
+  it('lists reference-form imports whose bytes were never archived', () => {
     const sources = listLocalOnlyImportSources(managerWithImports().document);
     expect(sources.map((source) => source.sourceName)).toEqual([
       'local.step',
-      'embedded.step'
+      'local2.step'
     ]);
-    expect(sources[0]).toMatchObject({
-      checksumSha256: 'checksum-local',
-      stepText: null
-    });
-    expect(sources[1]).toMatchObject({
-      checksumSha256: null,
-      stepText: 'ISO-10303-21;'
-    });
+    expect(sources[0]).toMatchObject({ checksumSha256: 'checksum-local' });
+  });
+
+  it('does not report an embedded-text import as local-only', () => {
+    // `stepText` travels inside the document, which syncs, and the kernel
+    // rebuilds straight from it — so every device can already open this
+    // project. Listing it would raise "other devices cannot rebuild it" over a
+    // project that is fine, and only the original upload is missing.
+    const manager = new CommandManager(
+      createProjectDocument('Embedded only', toUserId('user_archival'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Embedded import',
+        artifactId: 'artifact_local_def',
+        sourceName: 'embedded.step',
+        stepText: 'ISO-10303-21;'
+      })
+    );
+    expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
   });
 
   it('is empty for a fully archived document', () => {
@@ -96,15 +124,12 @@ describe('archiveLocalOnlyImportSources', () => {
       );
   }
 
-  it('uploads blob-store and embedded sources and rewires the features', async () => {
+  it('uploads blob-store sources and rewires the features', async () => {
     const manager = managerWithImports();
     const uploaded: string[] = [];
     const result = await archiveLocalOnlyImportSources({
       document: manager.document,
-      loadSourceBytes: async (checksum) =>
-        checksum === 'checksum-local'
-          ? new TextEncoder().encode('local step bytes')
-          : null,
+      loadSourceBytes: async () => new TextEncoder().encode('local step bytes'),
       archive: async (input) => {
         uploaded.push(`${input.fileName}:${input.body.size}`);
         return `artifact_cloud_${input.fileName}`;
@@ -112,14 +137,12 @@ describe('archiveLocalOnlyImportSources', () => {
       applyArtifactId: applyViaManager(manager) as never
     });
     expect(result).toEqual({
-      archived: ['local.step', 'embedded.step'],
+      archived: ['local.step', 'local2.step'],
       missing: [],
       failed: []
     });
-    expect(uploaded).toEqual([
-      'local.step:16',
-      'embedded.step:13'
-    ]);
+    // The embedded import is never uploaded: it was never a local-only source.
+    expect(uploaded).toEqual(['local.step:16', 'local2.step:16']);
     expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
     // The content-addressed reference survives the rewire, so local
     // rebuilds keep resolving from the blob store.
@@ -146,10 +169,8 @@ describe('archiveLocalOnlyImportSources', () => {
         throw new Error('should not edit anything');
       }
     });
-    // The blob-backed source has no bytes → missing; the embedded source
-    // still has bytes but its upload throws here → failed.
-    expect(result.missing).toEqual(['local.step']);
-    expect(result.failed).toEqual(['embedded.step']);
+    expect(result.missing).toEqual(['local.step', 'local2.step']);
+    expect(result.failed).toEqual([]);
     expect(manager.document).toBe(before);
   });
 
@@ -157,21 +178,213 @@ describe('archiveLocalOnlyImportSources', () => {
     const manager = managerWithImports();
     const result = await archiveLocalOnlyImportSources({
       document: manager.document,
-      loadSourceBytes: async () =>
-        new TextEncoder().encode('local step bytes'),
+      loadSourceBytes: async () => new TextEncoder().encode('local step bytes'),
       archive: async (input) => {
         if (input.fileName === 'local.step') {
           throw new Error('storage down');
         }
-        return 'artifact_cloud_embedded';
+        return 'artifact_cloud_local2';
       },
       applyArtifactId: applyViaManager(manager) as never
     });
     expect(result.failed).toEqual(['local.step']);
-    expect(result.archived).toEqual(['embedded.step']);
+    expect(result.archived).toEqual(['local2.step']);
     expect(
       listLocalOnlyImportSources(manager.document).map((s) => s.sourceName)
     ).toEqual(['local.step']);
+  });
+});
+
+/**
+ * The mark that stops one import's cleanup from deleting the bytes another is
+ * still working with. Content addressing puts every import of one file on ONE
+ * key, so the mark has to survive until the LAST holder lets go of it.
+ */
+describe('in-flight import checksums', () => {
+  it('stays marked until every holder has released it', () => {
+    const marks = createInFlightImportChecksums();
+    marks.acquire('sha256-frame');
+    marks.acquire('sha256-frame');
+
+    marks.release('sha256-frame');
+    // A set cannot express this: two imports of the same file put one entry in
+    // it, and the first `delete` erases the second import's protection too.
+    expect(marks.has('sha256-frame')).toBe(true);
+
+    marks.release('sha256-frame');
+    expect(marks.has('sha256-frame')).toBe(false);
+  });
+
+  it('tracks each checksum separately and ignores an unheld release', () => {
+    const marks = createInFlightImportChecksums();
+    marks.acquire('sha256-a');
+    expect(marks.has('sha256-b')).toBe(false);
+    marks.release('sha256-b');
+    expect(marks.has('sha256-a')).toBe(true);
+    marks.release('sha256-a');
+    expect(marks.has('sha256-a')).toBe(false);
+  });
+
+  it('keeps the bytes of the import still holding the mark', async () => {
+    // Two imports of the same file, both counted in; the first one to finish
+    // releases and then tries to clean up. With a set its own release would
+    // have erased the other's mark, and it would delete bytes the survivor is
+    // about to commit against.
+    const marks = createInFlightImportChecksums();
+    marks.acquire('sha256-frame');
+    marks.acquire('sha256-frame');
+    marks.release('sha256-frame');
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
+
+    await expect(
+      discardUnreferencedImportSource({
+        checksumSha256: 'sha256-frame',
+        createdByThisImport: true,
+        document: null,
+        inFlightChecksums: marks,
+        deleteSourceBlobIfUnreferenced
+      })
+    ).resolves.toBe(false);
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
+  });
+});
+
+describe('source blob claims', () => {
+  const checksumSha256 = 'sha256-frame';
+  const now = Date.parse('2026-08-07T12:00:00.000Z');
+  const claim = (claimId: string, createdAt: string) => ({
+    checksumSha256,
+    claimId,
+    createdAt
+  });
+
+  it('holds for another run but never blocks its owner', () => {
+    const createdAt = new Date(now - 60_000).toISOString();
+    expect(
+      sourceBlobClaimHolds(claim('theirs', createdAt), {
+        checksumSha256,
+        ownClaimId: 'mine',
+        now
+      })
+    ).toBe(true);
+    expect(
+      sourceBlobClaimHolds(claim('mine', createdAt), {
+        checksumSha256,
+        ownClaimId: 'mine',
+        now
+      })
+    ).toBe(false);
+  });
+
+  it('expires abandoned and malformed holds instead of keeping them forever', () => {
+    const justInside = new Date(
+      now - SOURCE_BLOB_CLAIM_TTL_MS + 1
+    ).toISOString();
+    const lapsed = new Date(now - SOURCE_BLOB_CLAIM_TTL_MS).toISOString();
+
+    expect(sourceBlobClaimExpired(claim('live', justInside), now)).toBe(false);
+    expect(sourceBlobClaimExpired(claim('lapsed', lapsed), now)).toBe(true);
+    expect(sourceBlobClaimExpired(claim('bad', 'not-a-date'), now)).toBe(true);
+  });
+});
+
+/**
+ * Who comes away holding a licence to delete, which is the one thing a run's
+ * own outcome does not show.
+ *
+ * `abandoned` is a standing grant: a checksum in it may be deleted by a LATER
+ * run of this tab even though that run created nothing. So the question a test
+ * has to ask about a refusal is not only "did it delete?" but "did it acquire
+ * the right to delete later?" — and the two can disagree.
+ */
+describe('the licence a finished import leaves behind', () => {
+  const checksum = 'sha256-frame';
+
+  function documentReferencing(reference: ImportedSourceReference) {
+    const manager = new CommandManager(
+      createProjectDocument('Frames', toUserId('user_licence'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Frame',
+        artifactId: 'artifact_local_frame',
+        sourceName: 'frame.step',
+        stepSourceRef: reference
+      })
+    );
+    return manager.document;
+  }
+
+  const frameReference: ImportedSourceReference = {
+    marker: 'openzcad-source-ref',
+    version: 1,
+    hashAlgorithm: 'sha256',
+    checksumSha256: checksum,
+    logicalBytes: 21
+  };
+
+  it('takes no licence for bytes a feature still rebuilds from', async () => {
+    // The run WROTE these bytes — the blob was missing while the feature that
+    // needs it was not, which is any document that arrived by sync, or any
+    // device whose storage was cleared — and then it was refused. So the bytes
+    // are this tab's own by every ownership test, AND they are the source of a
+    // feature in the open document.
+    //
+    // Not deleting them now is the easy half, and the reference check inside
+    // `discardUnreferencedImportSource` would manage that much on its own. The
+    // half that only shows up later is the NOTE: recording these as abandoned
+    // hands this tab a standing licence over bytes it does not own the only
+    // copy of. Delete that feature, re-import the same file, have it refused,
+    // and the licence fires — against a key that may by then be the last copy
+    // backing another project on this device.
+    const abandonedChecksums = new Set<string>();
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
+    const releaseSourceBlobClaim = vi.fn(() => Promise.resolve());
+
+    await expect(
+      settleImportSource({
+        checksumSha256: checksum,
+        result: 'refused',
+        createdByThisImport: true,
+        abandonedChecksums,
+        document: documentReferencing(frameReference),
+        inFlightChecksums: createInFlightImportChecksums(),
+        deleteSourceBlobIfUnreferenced,
+        releaseSourceBlobClaim
+      })
+    ).resolves.toBe(false);
+
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
+    expect(releaseSourceBlobClaim).toHaveBeenCalledOnce();
+    // The assertion the surviving bytes cannot make on their own.
+    expect(abandonedChecksums.has(checksum)).toBe(false);
+  });
+
+  it('clears a licence it was already holding once a feature claims the bytes', async () => {
+    // The same rule from the other side: this tab wrote these bytes in an
+    // earlier run that reached no verdict, so it does hold a licence over them.
+    // A feature now rebuilds from them, and the licence has to go — otherwise
+    // the note outlives the reason it was taken.
+    const abandonedChecksums = new Set([checksum]);
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
+    const releaseSourceBlobClaim = vi.fn(() => Promise.resolve());
+
+    await expect(
+      settleImportSource({
+        checksumSha256: checksum,
+        result: 'committed',
+        createdByThisImport: true,
+        abandonedChecksums,
+        document: documentReferencing(frameReference),
+        inFlightChecksums: createInFlightImportChecksums(),
+        deleteSourceBlobIfUnreferenced,
+        releaseSourceBlobClaim
+      })
+    ).resolves.toBe(false);
+
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
+    expect(releaseSourceBlobClaim).not.toHaveBeenCalled();
+    expect(abandonedChecksums.has(checksum)).toBe(false);
   });
 });
 

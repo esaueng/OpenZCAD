@@ -7,7 +7,7 @@ authoritative dependency inventory.
 
 ## Geometry kernels
 
-- **BrepKit / `brepkit-wasm` 2.129.0** — Copyright its contributors; MIT OR
+- **BrepKit / `brepkit-wasm` 3.0.0** — Copyright its contributors; MIT OR
   Apache-2.0. Source and license texts:
   <https://github.com/esaueng/brepkit>.
 - **`occt-wasm` 3.8.0 build tooling and TypeScript wrapper** — Copyright its

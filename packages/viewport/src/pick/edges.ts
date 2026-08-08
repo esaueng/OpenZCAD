@@ -21,11 +21,19 @@ export function idleEdgeColor(edge: THREE.Object3D): number {
 }
 
 /**
- * Extra screen-space width used only for edge picking. Line2 adds this to the
- * rendered width before testing the pointer, so an idle edge has a 3 px pick
- * radius without that radius changing as the camera zooms.
+ * Extra screen-space width used only for edge picking. Line2 tests the pointer
+ * against `(material.linewidth + threshold) * 0.5`, so the pick radius in CSS
+ * pixels is half the sum — it does not change as the camera zooms.
+ *
+ * At the original padding of 4 an idle edge answered within (1.4 + 4) / 2 ≈
+ * 2.7 px. That is inside the jitter of an ordinary mouse drag-and-release, so
+ * edges read as unpickable in hand testing even though picking worked: a
+ * measured horizontal sweep found bands only 3–5 px wide. Padding 8 gives
+ * (1.4 + 8) / 2 ≈ 4.7 px, comparable to desktop CAD, while staying far enough
+ * below the face it bounds that surfaces are still easy to hit away from
+ * their boundary.
  */
-const EDGE_PICK_PADDING_PX = 4;
+const EDGE_PICK_PADDING_PX = 8;
 
 /**
  * Edge and face intersections for the same topological boundary can differ by

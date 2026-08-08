@@ -27,7 +27,7 @@ The implementation intentionally preserves the OpenZCAD application chrome and v
 
 ## Functional verification
 
-- Drew a snapped closed circle on the Front (XY) plane and finished it into canonical document history.
+- Drew a snapped closed circle on the Top (XY) plane and finished it into canonical document history.
 - Selected the filled profile directly and launched Extrude from the contextual action.
 - Dragged to -34.5 mm on the opposite side, crossed through the sketch plane, and reached +3 mm on the positive side.
 - Confirmed `Extrude 1`; the exact kernel returned one live body, 2412.743 mm³ volume, three faces, and zero workspace warnings.

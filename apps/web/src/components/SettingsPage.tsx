@@ -723,11 +723,20 @@ export function SettingsPage({
             )}
             <span>
               <strong>
+                {/*
+                  Being signed in is not the same as being reachable. This read
+                  only `session` and so announced "Cloud profile connected"
+                  while the header of the same screen said the profile was
+                  unavailable — two claims about one thing, on screen together.
+                  Reachability decides first.
+                */}
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
-                  : session
-                    ? 'Cloud profile connected'
-                    : 'Device only'}
+                  : authConfigStatus === 'unavailable'
+                    ? 'Cloud unreachable'
+                    : session
+                      ? 'Cloud profile connected'
+                      : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
             </span>
