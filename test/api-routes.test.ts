@@ -821,7 +821,7 @@ describe('worker api routes', () => {
 
     const response = await worker.fetch(
       new Request(
-        `https://zcad.esau.app/api/projects/${projectId}/collaboration?ticket=${ticket}`,
+        `https://zcad.app/api/projects/${projectId}/collaboration?ticket=${ticket}`,
         {
           headers: {
             origin: 'tauri://localhost',
@@ -897,7 +897,7 @@ describe('worker api routes', () => {
       ...env,
       PROJECT_SHARING_ENABLED: 'true',
       PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
-      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.app',
       EMAIL: { send: emailSend }
     };
     const createdResponse = await worker.fetch(
@@ -936,7 +936,7 @@ describe('worker api routes', () => {
       subject: 'You are invited to an OpenZCAD project'
     });
     expect(emailSend.mock.calls[0]![0].text).toContain(
-      `https://zcad.esau.app/#invite=${invitation.token}`
+      `https://zcad.app/#invite=${invitation.token}`
     );
     expect(emailSend.mock.calls[0]![0].html).toContain('Sharing routes');
 
@@ -994,7 +994,7 @@ describe('worker api routes', () => {
       ...env,
       PROJECT_SHARING_ENABLED: 'true',
       PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
-      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.app',
       EMAIL: {
         send: vi.fn(async (_message: EmailMessageBuilder) =>
           Promise.reject(deliveryError)
