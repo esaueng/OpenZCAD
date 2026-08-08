@@ -71,35 +71,34 @@
   border-bottom: var(--border-thin);
 }
 
-.assistant-mark {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: 50%;
+.assistant-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .assistant-title {
+  flex: 0 0 auto;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
+.assistant-model,
 .assistant-turn-count {
-  flex: 1;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
 
-/* Without a count the title still has to take the free space. */
-.assistant-title:last-of-type {
-  flex: 1;
+.assistant-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .assistant-icon-button {
@@ -296,17 +295,6 @@
   line-height: 1.55;
 }
 
-.assistant-empty-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: 50%;
-}
-
 .assistant-empty p {
   margin: 0;
 }
@@ -332,6 +320,10 @@
 .assistant-suggestion {
   width: 100%;
   padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
   color: var(--color-text);
   background: var(--color-surface-2);
   border: var(--border-thin);
@@ -354,6 +346,18 @@
 
 .assistant-suggestion:disabled {
   opacity: 0.5;
+}
+
+.assistant-suggestion-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  color: var(--color-accent);
+  background: var(--color-accent-soft, var(--color-surface-raised));
+  border: 1px solid var(--color-accent-border);
+  border-radius: 999px;
+  font-size: var(--fs-mini);
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 /* ── Turns ──────────────────────────────────────────────── */
@@ -1128,10 +1132,11 @@
 
 .assistant-prompt textarea {
   width: 100%;
-  min-height: 24px;
-  max-height: 128px;
+  min-height: 64px;
+  max-height: 180px;
   padding: 2px 0;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
   color: var(--color-text);
   background: transparent;
   border: 0;

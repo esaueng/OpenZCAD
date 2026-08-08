@@ -18,6 +18,7 @@ import {
   HttpError,
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
+  parseCompleteMultipartUploadRequest,
   parseCreateUploadSessionRequest,
   parseDuplicateProjectRequest,
   parseFinalizeImportRequest,
@@ -26,6 +27,12 @@ import {
   parseSaveRevisionRequest,
   parseUpdateProjectRequest
 } from './validation';
+import {
+  AccountDeletionError,
+  accountDeletionPreview,
+  assertAccountNotErasing,
+  deleteAccountData
+} from './accountDeletion';
 import {
   getAssistantStatus,
   HttpAssistantConfigurationError,
@@ -69,13 +76,19 @@ import {
   createInvitation,
   parseCreateInvitation,
   parseProjectMemberRole,
+  sendProjectInvitationEmail,
   SharingRequestError
 } from './sharing';
 import {
+  isAccountErasureReady,
   isDocumentStorageAccountingReady,
   isProjectObjectStorageReady
 } from './readiness';
-import { toUserId } from '@openzcad/shared';
+import {
+  MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_PARTS,
+  toUserId
+} from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -115,6 +128,10 @@ const PROJECT_MEMBER_ROUTE = /^\/api\/projects\/([^/]+)\/members\/([^/]+)$/;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
+const UPLOAD_MULTIPART_ROUTE = /^\/api\/uploads\/([^/]+)\/multipart$/;
+const UPLOAD_MULTIPART_COMPLETE_ROUTE =
+  /^\/api\/uploads\/([^/]+)\/multipart\/complete$/;
+const UPLOAD_PART_ROUTE = /^\/api\/uploads\/([^/]+)\/parts\/([1-9]\d{0,3})$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 
@@ -256,23 +273,58 @@ async function notifyProjectRoleChange(
   }
 }
 
+function projectInvitationEmailConfig(env: Env): {
+  email: SendEmail;
+  sender: string;
+  publicAppOrigin: string;
+} {
+  const sender = env.PROJECT_INVITATION_EMAIL_FROM?.trim();
+  const publicAppOrigin = env.PUBLIC_APP_ORIGIN?.trim();
+  if (!env.EMAIL || !sender || !publicAppOrigin) {
+    throw new SharingRequestError(
+      503,
+      'INVITATION_EMAIL_UNAVAILABLE',
+      'Project invitation email is temporarily unavailable.'
+    );
+  }
+  return { email: env.EMAIL, sender, publicAppOrigin };
+}
+
+function emailDeliveryErrorCode(error: unknown): string {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return 'UNKNOWN';
+  }
+  const code = error.code;
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)
+    ? code
+    : 'UNKNOWN';
+}
+
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const { pathname } = url;
 
   if (request.method === 'GET' && pathname === '/api/health') {
-    const documentStorageAccountingReady =
-      await isDocumentStorageAccountingReady(env.DB);
-    const projectObjectStorageReady = await isProjectObjectStorageReady(
-      env.DB,
-      env.PROJECT_STORAGE ?? env.ARTIFACTS
-    );
+    const [
+      documentStorageAccountingReady,
+      projectObjectStorageReady,
+      accountErasureReady
+    ] = await Promise.all([
+      isDocumentStorageAccountingReady(env.DB),
+      isProjectObjectStorageReady(env.DB, env.PROJECT_STORAGE ?? env.ARTIFACTS),
+      isAccountErasureReady(env.DB)
+    ]);
     return json({
       status: 'ok',
       environment: env.ENVIRONMENT ?? 'beta',
       time: new Date().toISOString(),
       documentStorageAccountingReady,
       projectObjectStorageReady,
+      accountErasureReady,
+      projectErasureReady:
+        projectObjectStorageReady &&
+        accountErasureReady &&
+        Boolean(env.PROJECT_ROOM),
       projectSharingEnabled: isCloudflareFeatureEnabled(
         env,
         'PROJECT_SHARING_ENABLED'
@@ -356,6 +408,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const requiresArtifactStorage =
     (request.method === 'POST' && pathname === '/api/uploads') ||
     (request.method === 'PUT' && UPLOAD_CONTENT_ROUTE.test(pathname)) ||
+    (request.method === 'POST' && UPLOAD_MULTIPART_ROUTE.test(pathname)) ||
+    (request.method === 'DELETE' && UPLOAD_MULTIPART_ROUTE.test(pathname)) ||
+    (request.method === 'POST' &&
+      UPLOAD_MULTIPART_COMPLETE_ROUTE.test(pathname)) ||
+    (request.method === 'PUT' && UPLOAD_PART_ROUTE.test(pathname)) ||
     (request.method === 'POST' &&
       (pathname === '/api/artifacts/finalize' ||
         pathname === '/api/imports/finalize')) ||
@@ -545,6 +602,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const identity = await identifyAssistantIdentity(request, env);
     const userId = identity.userId;
+    await assertAccountNotErasing(env.DB, userId);
     const payload = parseAssistantProposalRequest(await readJsonBody(request));
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
@@ -591,6 +649,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const persistence = createPersistenceService(
     envForCollaborationRollout(env, collaborationRollout)
   );
+
+  const isAccountDeletionRoute =
+    pathname === '/api/account/deletion-preview' ||
+    pathname === '/api/account/delete-data';
+  if (
+    !isAccountDeletionRoute &&
+    !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
+  ) {
+    await assertAccountNotErasing(env.DB, userId);
+  }
 
   if (
     (request.method === 'GET' || request.method === 'POST') &&
@@ -675,6 +743,36 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(await persistence.getStorageUsage(userId));
   }
 
+  if (
+    request.method === 'GET' &&
+    pathname === '/api/account/deletion-preview'
+  ) {
+    return json(
+      await accountDeletionPreview(
+        session,
+        url.searchParams.get('scope'),
+        env,
+        persistence
+      )
+    );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/account/delete-data') {
+    const deleted = await deleteAccountData(
+      session,
+      await readJsonBody(request),
+      env,
+      persistence
+    );
+    return json(
+      deleted,
+      200,
+      deleted.signedOut
+        ? { 'set-cookie': await destroyEmailSession(request, env) }
+        : undefined
+    );
+  }
+
   if (request.method === 'GET' && pathname === '/api/projects') {
     // Listing is the one call every client makes on arrival, which makes it
     // the natural place to collect the bin: retention is measured in days, so
@@ -717,16 +815,66 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         'During the collaboration canary, invitations can be sent only to allowlisted accounts.'
       );
     }
-    return json(
-      await createInvitation(
-        persistence,
-        userId,
-        invitationsMatch[1]!,
-        payload,
-        now
-      ),
-      201
+    const projectId = invitationsMatch[1]!;
+    await persistence.requireProjectOwner(userId, projectId);
+    const project = await persistence.loadProject(userId, projectId);
+    if (!project) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    const emailConfig = projectInvitationEmailConfig(env);
+    const created = await createInvitation(
+      persistence,
+      userId,
+      projectId,
+      payload,
+      now
     );
+    try {
+      await sendProjectInvitationEmail(
+        emailConfig.email,
+        {
+          sender: emailConfig.sender,
+          publicAppOrigin: emailConfig.publicAppOrigin
+        },
+        {
+          recipientEmail: created.invitation.email,
+          inviterLabel: session.email ?? session.displayName,
+          projectName: project.name,
+          role: created.invitation.role,
+          expiresAt: created.invitation.expiresAt,
+          token: created.token
+        }
+      );
+    } catch (error) {
+      try {
+        await persistence.revokeProjectInvitation(
+          userId,
+          projectId,
+          created.invitation.invitationId,
+          now
+        );
+      } catch {
+        console.error(
+          JSON.stringify({
+            event: 'project_invitation_email_revoke_failed',
+            invitationId: created.invitation.invitationId
+          })
+        );
+      }
+      console.error(
+        JSON.stringify({
+          event: 'project_invitation_email_failed',
+          invitationId: created.invitation.invitationId,
+          errorCode: emailDeliveryErrorCode(error)
+        })
+      );
+      throw new SharingRequestError(
+        503,
+        'INVITATION_EMAIL_UNAVAILABLE',
+        'Project invitation email is temporarily unavailable. Try again.'
+      );
+    }
+    return json(created, 201);
   }
 
   if (request.method === 'DELETE' && invitationMatch) {
@@ -940,6 +1088,75 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 204 });
   }
 
+  const multipartMatch = UPLOAD_MULTIPART_ROUTE.exec(pathname);
+  if (request.method === 'POST' && multipartMatch) {
+    return json(
+      await persistence.createMultipartUpload(userId, multipartMatch[1]!),
+      201
+    );
+  }
+  if (request.method === 'DELETE' && multipartMatch) {
+    const uploadId = new URL(request.url).searchParams.get('uploadId');
+    if (!uploadId) {
+      throw new HttpError(400, 'Missing uploadId.');
+    }
+    await persistence.abortMultipartUpload(userId, multipartMatch[1]!, uploadId);
+    return new Response(null, { status: 204 });
+  }
+
+  const partMatch = UPLOAD_PART_ROUTE.exec(pathname);
+  if (request.method === 'PUT' && partMatch) {
+    const uploadId = new URL(request.url).searchParams.get('uploadId');
+    if (!uploadId) {
+      throw new HttpError(400, 'Missing uploadId.');
+    }
+    const partNumber = Number(partMatch[2]!);
+    if (partNumber > MAX_ARTIFACT_UPLOAD_PARTS) {
+      throw new HttpError(
+        400,
+        `Upload part number cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS}.`
+      );
+    }
+    const contentLength = Number(request.headers.get('content-length') ?? '0');
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_ARTIFACT_PART_BYTES
+    ) {
+      throw new HttpError(413, 'Upload part is too large.');
+    }
+    const body = await request.arrayBuffer();
+    if (body.byteLength === 0 || body.byteLength > MAX_ARTIFACT_PART_BYTES) {
+      throw new HttpError(
+        body.byteLength === 0 ? 400 : 413,
+        body.byteLength === 0
+          ? 'Upload part is empty.'
+          : 'Upload part is too large.'
+      );
+    }
+    return json(
+      await persistence.putUploadPart(
+        userId,
+        partMatch[1]!,
+        uploadId,
+        partNumber,
+        body
+      )
+    );
+  }
+
+  const multipartCompleteMatch = UPLOAD_MULTIPART_COMPLETE_ROUTE.exec(pathname);
+  if (request.method === 'POST' && multipartCompleteMatch) {
+    const payload = parseCompleteMultipartUploadRequest(
+      await readJsonBody(request)
+    );
+    await persistence.completeMultipartUpload(
+      userId,
+      multipartCompleteMatch[1]!,
+      payload
+    );
+    return new Response(null, { status: 204 });
+  }
+
   if (
     request.method === 'POST' &&
     (pathname === '/api/artifacts/finalize' ||
@@ -1022,6 +1239,9 @@ export default {
             : undefined
         );
       }
+      if (error instanceof AccountDeletionError) {
+        return json({ error: error.message, code: error.code }, error.status);
+      }
       if (error instanceof ProjectNotFoundError) {
         return json({ error: error.message }, 404);
       }
@@ -1065,6 +1285,18 @@ export default {
       }
       if (error instanceof ArtifactStorageError) {
         return json({ error: error.message }, 503);
+      }
+      if (
+        error instanceof Error &&
+        error.message.includes('ACCOUNT_ERASURE_IN_PROGRESS')
+      ) {
+        return json(
+          {
+            error: 'Cloud data deletion is already in progress.',
+            code: 'ACCOUNT_ERASURE_IN_PROGRESS'
+          },
+          409
+        );
       }
       console.error('Unhandled API error.', request.method, pathname, error);
       return json({ error: 'Internal error' }, 500);

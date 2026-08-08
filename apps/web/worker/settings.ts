@@ -267,6 +267,11 @@ export function parseUpdateAppSettingsRequest(
   // Optional in the payload so a client from before cloud autosave was
   // configurable keeps saving instead of being rejected.
   const files = asRecord(settings.files ?? {}, '"settings.files"');
+  // Optional so clients from before the user-facing sharing switch keep saving.
+  const collaboration = asRecord(
+    settings.collaboration ?? {},
+    '"settings.collaboration"'
+  );
   const assistant = asRecord(settings.assistant, '"settings.assistant"');
   // Experiments are optional in the payload so older clients keep saving.
   const experiments = asRecord(
@@ -323,9 +328,25 @@ export function parseUpdateAppSettingsRequest(
         middleDrag: optionalMember(viewport, 'middleDrag', MIDDLE_DRAGS, 'pan')
       },
       sketching: {
+        gridVisible:
+          typeof sketching.gridVisible === 'boolean'
+            ? sketching.gridVisible
+            : DEFAULT_APP_SETTINGS.sketching.gridVisible,
         snapEnabled: requiredBoolean(sketching, 'snapEnabled'),
+        geometrySnapEnabled:
+          typeof sketching.geometrySnapEnabled === 'boolean'
+            ? sketching.geometrySnapEnabled
+            : DEFAULT_APP_SETTINGS.sketching.geometrySnapEnabled,
+        inferenceEnabled:
+          typeof sketching.inferenceEnabled === 'boolean'
+            ? sketching.inferenceEnabled
+            : DEFAULT_APP_SETTINGS.sketching.inferenceEnabled,
         linearSnap: requiredNumber(sketching, 'linearSnap', 0.001, 10_000),
-        angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90)
+        angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90),
+        snapTolerancePx:
+          typeof sketching.snapTolerancePx === 'number'
+            ? requiredNumber(sketching, 'snapTolerancePx', 4, 24)
+            : DEFAULT_APP_SETTINGS.sketching.snapTolerancePx
       },
       files: {
         cloudAutosave:
@@ -337,6 +358,12 @@ export function parseUpdateAppSettingsRequest(
           files.cloudAutosaveDelaySeconds,
           CLOUD_AUTOSAVE_DELAY_BOUNDS
         )
+      },
+      collaboration: {
+        enabled:
+          typeof collaboration.enabled === 'boolean'
+            ? collaboration.enabled
+            : DEFAULT_APP_SETTINGS.collaboration.enabled
       },
       assistant: {
         enabled: requiredBoolean(assistant, 'enabled'),
