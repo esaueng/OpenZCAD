@@ -31,10 +31,9 @@ class FakeRequest<T> {
   onerror: (() => void) | null = null;
 }
 
-/** One store's data plus the queue that serialises transactions over it. */
+/** One object store's records. */
 class FakeStoreData {
   readonly records = new Map<string, FakeRecord>();
-  readonly queue: FakeTransaction[] = [];
 }
 
 class FakeObjectStore {
@@ -82,12 +81,15 @@ class FakeTransaction {
 
   constructor(
     private readonly database: FakeDatabase,
-    readonly storeName: string
+    readonly storeNames: readonly string[]
   ) {
     this.database.schedule(this);
   }
 
   objectStore(name: string): FakeObjectStore {
+    if (!this.storeNames.includes(name)) {
+      throw new Error(`Store ${name} is outside this transaction.`);
+    }
     return new FakeObjectStore(this, this.database.storeData(name));
   }
 
@@ -147,6 +149,7 @@ class FakeTransaction {
  */
 class FakeDatabase {
   private readonly stores = new Map<string, FakeStoreData>();
+  private readonly queue: FakeTransaction[] = [];
 
   storeData(name: string): FakeStoreData {
     let data = this.stores.get(name);
@@ -166,20 +169,18 @@ class FakeDatabase {
   }
 
   schedule(tx: FakeTransaction): void {
-    const queue = this.storeData(tx.storeName).queue;
-    queue.push(tx);
-    if (queue.length === 1) {
+    this.queue.push(tx);
+    if (this.queue.length === 1) {
       setTimeout(() => tx.start(), 0);
     }
   }
 
   finish(tx: FakeTransaction): void {
-    const queue = this.storeData(tx.storeName).queue;
-    const index = queue.indexOf(tx);
+    const index = this.queue.indexOf(tx);
     if (index >= 0) {
-      queue.splice(index, 1);
+      this.queue.splice(index, 1);
     }
-    const next = queue[0];
+    const next = this.queue[0];
     if (next) {
       setTimeout(() => next.start(), 0);
     }
@@ -191,7 +192,11 @@ const database = new FakeDatabase();
 const connection = {
   objectStoreNames: { contains: () => true },
   createObjectStore: () => undefined,
-  transaction: (storeName: string) => new FakeTransaction(database, storeName),
+  transaction: (storeNames: string | string[]) =>
+    new FakeTransaction(
+      database,
+      typeof storeNames === 'string' ? [storeNames] : storeNames
+    ),
   close: () => undefined
 };
 
@@ -204,8 +209,12 @@ const connection = {
   }
 };
 
-const { putSourceBlobIfAbsent, hasSourceBlob, loadSourceBlob, deleteSourceBlob } =
-  await import('../apps/web/src/lib/localProjectStore');
+const {
+  putSourceBlobIfAbsent,
+  hasSourceBlob,
+  loadSourceBlob,
+  deleteSourceBlob
+} = await import('../apps/web/src/lib/localProjectStore');
 
 const BLOB_STORE = 'sourceBlobs';
 

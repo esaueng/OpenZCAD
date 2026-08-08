@@ -5,9 +5,18 @@ import {
   type ProjectOrganization,
   type ProjectSummary
 } from '@openzcad/shared';
+import type { StoredMeasurementRecord } from './measurementRecord';
+import type { SourceBlobClaim } from './sourceBlobClaims';
+import {
+  LOCAL_PROJECT_BLOB_STORE,
+  LOCAL_PROJECT_CLAIM_STORE,
+  LOCAL_PROJECT_DATABASE_NAME,
+  LOCAL_PROJECT_DATABASE_VERSION,
+  LOCAL_PROJECT_DOCUMENT_STORE
+} from './localProjectSchema';
 
-const DATABASE_NAME = 'openzcad-v2';
-const STORE_NAME = 'projects';
+const DATABASE_NAME = LOCAL_PROJECT_DATABASE_NAME;
+const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
 /**
  * Shelf state (archive, bin, pin, manual order) lives beside the documents
  * rather than inside them: it describes the owner's desk, not the part, and a
@@ -30,7 +39,16 @@ const SYNC_STORE_NAME = 'projectSync';
  * hash to its checksum. Values are Blobs so the browser can keep hundreds of
  * megabytes on disk instead of in structured-clone memory.
  */
-const BLOB_STORE_NAME = 'sourceBlobs';
+const BLOB_STORE_NAME = LOCAL_PROJECT_BLOB_STORE;
+/**
+ * Device-wide holds on source blobs, one per import run.
+ *
+ * The blob store is shared across tabs while each tab's in-flight state and
+ * open document are private. A persisted claim closes that visibility gap: a
+ * refusing import can prove a blob is abandoned instead of inferring it from
+ * only the state in front of that tab.
+ */
+const CLAIM_STORE_NAME = LOCAL_PROJECT_CLAIM_STORE;
 /**
  * Card-sized preview images, one per project. Kept here rather than derived on
  * demand because the shelf must never load a ProjectDocument: a part whose
@@ -59,29 +77,32 @@ const THUMBNAIL_STORE_NAME = 'projectThumbnails';
  */
 const SUMMARY_STORE_NAME = 'projectSummaries';
 /**
- * Bumping this is not the small change it looks like, and that is why the
- * hardening around it does not.
+ * Measurements taken in View mode, per project.
  *
- * A device with the app open in two tabs runs both on the OLD version. The tab
- * that reloads into a NEW one issues an upgrade that the other tab's live
- * connection blocks, and that upgrade parks — indefinitely, since the other tab
- * has no reason to close. Every `openDatabase` below then queues behind the
- * parked upgrade and never settles, so calls into this module HANG rather than
- * fail: the start screen never paints, autosave never returns, and an import
- * stops with the commit lock still held.
+ * Kept out of the document for the reason `stepText` documents in
+ * `packages/shared`: `syncComparableDocument` exempts only ownership, the
+ * version fence and `derived`, so anything else written into a
+ * `ProjectDocument` that no user typed makes an untouched project read
+ * `diverged`. Measurements are also hashed into `canonicalProjectContentKey`
+ * if they live there, which would invalidate the exact rebuild cache — a full
+ * replay of the model's history — every time somebody measured an edge.
  *
- * `request.onblocked` is not a way out on its own. It fires for at most one
- * queued upgrade at a time, so opens issued after the first are never told
- * anything — a grace period armed from it rescues the first caller and abandons
- * every one behind it. Measured in Chromium 148 and in fake-indexeddb.
- *
- * So a version bump needs a real cross-tab story: `versionchange` closing the
- * old connection, the other tab reloading or degrading deliberately, and a
- * settled answer for every open that arrives while an upgrade is parked. That
- * is its own change, designed and tested on its own. Adding the store is the
- * easy half.
+ * Separate from the shelf record for the same reason the sync baseline is:
+ * shelf state is this device's arrangement and gets merged with the account's
+ * copy, while this is work the user did to the part.
  */
-const DATABASE_VERSION = 6;
+const MEASUREMENT_STORE_NAME = 'projectMeasurements';
+/**
+ * Version 7 shipped the measurement store and, crucially, taught every opened
+ * connection to close on `versionchange`. Version 8 can therefore add claims
+ * without a version-7 tab parking the upgrade: IndexedDB notifies that tab, its
+ * connection closes after any in-flight transaction, and this gate proceeds.
+ *
+ * The shared gate and blocked timeout remain for genuinely older builds that
+ * predate that handler. They turn an otherwise permanent startup hang into one
+ * actionable rejection shared by every queued caller.
+ */
+const DATABASE_VERSION = LOCAL_PROJECT_DATABASE_VERSION;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
@@ -108,60 +129,176 @@ interface ProjectSyncRecord {
   lastSyncedVersion: number;
 }
 
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+export const LOCAL_STORAGE_BLOCKED_MESSAGE =
+  'Another tab has this app open on an older version of its local storage. Close the other tabs of this app, then try again.';
+
+const DATABASE_BLOCKED_TIMEOUT_MS = 3_000;
+
+class LocalStorageBlockedError extends Error {
+  constructor() {
+    super(LOCAL_STORAGE_BLOCKED_MESSAGE);
+    this.name = 'LocalStorageBlockedError';
+  }
+}
+
+export function isLocalStorageBlockedError(
+  error: unknown
+): error is LocalStorageBlockedError {
+  return error instanceof LocalStorageBlockedError;
+}
+
+function createExpectedStores(database: IDBDatabase): void {
+  if (!database.objectStoreNames.contains(STORE_NAME)) {
+    database.createObjectStore(STORE_NAME, { keyPath: 'projectId' });
+  }
+  if (!database.objectStoreNames.contains(META_STORE_NAME)) {
+    database.createObjectStore(META_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  // Absent for every project on an upgraded database, which reads as "no
+  // baseline" — the conservative answer, and the correct one: this device
+  // has genuinely never recorded what it agreed with.
+  if (!database.objectStoreNames.contains(SYNC_STORE_NAME)) {
+    database.createObjectStore(SYNC_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  if (!database.objectStoreNames.contains(BLOB_STORE_NAME)) {
+    database.createObjectStore(BLOB_STORE_NAME, {
+      keyPath: 'checksumSha256'
+    });
+  }
+  // Empty on upgrade: version-7 tabs close before this transaction begins, so
+  // no import from the old schema can still be running without its tab being
+  // reloaded. New imports create their claim atomically with the blob write.
+  if (!database.objectStoreNames.contains(CLAIM_STORE_NAME)) {
+    database.createObjectStore(CLAIM_STORE_NAME, {
+      keyPath: 'claimKey'
+    });
+  }
+  // Absent for every project on an upgraded database, which reads as "no
+  // preview yet" — the shelf draws its placeholder and fills the cache the
+  // next time each project is opened.
+  if (!database.objectStoreNames.contains(THUMBNAIL_STORE_NAME)) {
+    database.createObjectStore(THUMBNAIL_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  // Empty for every project on an upgraded database. Backfilled by
+  // `listLocalProjects` one document at a time rather than here: the upgrade
+  // transaction would have to read every document to fill it, which is the
+  // memory spike this store exists to remove, and it would block the app from
+  // opening until it finished.
+  if (!database.objectStoreNames.contains(SUMMARY_STORE_NAME)) {
+    database.createObjectStore(SUMMARY_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+  // Absent for every project on an upgraded database, which reads as "no
+  // measurements yet" — the correct answer, since nothing was recorded before
+  // there was anywhere to record it.
+  if (!database.objectStoreNames.contains(MEASUREMENT_STORE_NAME)) {
+    database.createObjectStore(MEASUREMENT_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+  }
+}
+
+let schemaFactory: IDBFactory | null = null;
+let schemaReady: Promise<void> | null = null;
+
+/**
+ * Makes the versioned open one shared gate, so a blocked upgrade settles every
+ * caller rather than leaving later opens queued behind the only `blocked`
+ * event the browser emits.
+ */
+function ensureDatabaseSchema(): Promise<void> {
+  if (schemaFactory !== indexedDB) {
+    // Test environments replace the factory between cases; browsers do not.
+    schemaFactory = indexedDB;
+    schemaReady = null;
+  }
+  if (schemaReady) {
+    return schemaReady;
+  }
+
+  const gate = new Promise<void>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME, { keyPath: 'projectId' });
+    let settled = false;
+    let blockedTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (): boolean => {
+      if (settled) {
+        return false;
       }
-      if (!request.result.objectStoreNames.contains(META_STORE_NAME)) {
-        request.result.createObjectStore(META_STORE_NAME, {
-          keyPath: 'projectId'
-        });
+      settled = true;
+      if (blockedTimer !== undefined) {
+        clearTimeout(blockedTimer);
       }
-      // Absent for every project on an upgraded database, which reads as "no
-      // baseline" — the conservative answer, and the correct one: this device
-      // has genuinely never recorded what it agreed with.
-      if (!request.result.objectStoreNames.contains(SYNC_STORE_NAME)) {
-        request.result.createObjectStore(SYNC_STORE_NAME, {
-          keyPath: 'projectId'
-        });
+      return true;
+    };
+
+    request.onblocked = () => {
+      if (settled || blockedTimer !== undefined) {
+        return;
       }
-      if (!request.result.objectStoreNames.contains(BLOB_STORE_NAME)) {
-        request.result.createObjectStore(BLOB_STORE_NAME, {
-          keyPath: 'checksumSha256'
-        });
+      blockedTimer = setTimeout(() => {
+        if (finish()) {
+          reject(new LocalStorageBlockedError());
+        }
+      }, DATABASE_BLOCKED_TIMEOUT_MS);
+    };
+    request.onupgradeneeded = () => createExpectedStores(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => database.close();
+      database.close();
+      if (finish()) {
+        resolve();
+        return;
       }
-      // Absent for every project on an upgraded database, which reads as "no
-      // preview yet" — the shelf draws its placeholder and fills the cache the
-      // next time each project is opened.
-      if (!request.result.objectStoreNames.contains(THUMBNAIL_STORE_NAME)) {
-        request.result.createObjectStore(THUMBNAIL_STORE_NAME, {
-          keyPath: 'projectId'
-        });
-      }
-      // Empty for every project on an upgraded database. Backfilled by
-      // `listLocalProjects` one document at a time rather than here: the
-      // upgrade transaction would have to read every document to fill it,
-      // which is the memory spike this store exists to remove, and it would
-      // block the app from opening until it finished.
-      if (!request.result.objectStoreNames.contains(SUMMARY_STORE_NAME)) {
-        request.result.createObjectStore(SUMMARY_STORE_NAME, {
-          keyPath: 'projectId'
-        });
+      // The caller already received the blocked rejection. The old tab has now
+      // let go and this parked request completed, so the next call may retry.
+      if (schemaReady === gate) {
+        schemaReady = null;
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
-      reject(request.error ?? new Error('IndexedDB unavailable.'));
+    request.onerror = () => {
+      if (finish()) {
+        reject(request.error ?? new Error('IndexedDB unavailable.'));
+      }
+      if (schemaReady === gate) {
+        schemaReady = null;
+      }
+    };
   });
+  schemaReady = gate;
+  return gate;
+}
+
+function openDatabase(): Promise<IDBDatabase> {
+  return ensureDatabaseSchema().then(
+    () =>
+      new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+        request.onupgradeneeded = () => createExpectedStores(request.result);
+        request.onsuccess = () => {
+          const database = request.result;
+          database.onversionchange = () => database.close();
+          resolve(database);
+        };
+        request.onerror = () =>
+          reject(request.error ?? new Error('IndexedDB unavailable.'));
+      })
+  );
 }
 
 /** Whether this device's local project storage can be used right now. */
 export type LocalStorageReadiness =
   /** Open, with every store this build expects. */
   | 'ready'
+  /** Another tab still holds the previous schema open. */
+  | 'blocked'
   /** No IndexedDB at all — private browsing, or storage denied. */
   | 'unavailable';
 
@@ -174,14 +311,9 @@ export type LocalStorageReadiness =
  * then turned away without the lock ever being taken, and the first-run creation
  * of the object stores happens off the lock rather than under it.
  *
- * Deliberately only two answers. An open is parked only when some other tab is
- * upgrading to a HIGHER version than the one this open asks for, which nothing
- * but a version bump can create: every build in flight today asks for the same
- * number. That is a fact about the schema, not about how carefully anyone
- * deploys — see {@link DATABASE_VERSION} for what it costs to change it.
- * Reporting a third, "blocked" state would mean writing a recovery path for a
- * condition this build cannot produce, and getting it wrong is worse than not
- * having it: an unsettled open leaves the caller waiting forever.
+ * The third answer matters during this version bump. It tells the import path
+ * to stop before taking the validated-feature lock, while ordinary store
+ * callers receive the same distinguishable rejection from the shared gate.
  */
 export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
   return openDatabase().then(
@@ -189,7 +321,8 @@ export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
       database.close();
       return 'ready' as const;
     },
-    () => 'unavailable' as const
+    (error: unknown) =>
+      isLocalStorageBlockedError(error) ? 'blocked' : 'unavailable'
   );
 }
 
@@ -310,6 +443,15 @@ interface SourceBlobRecord {
   createdAt: string;
 }
 
+interface SourceBlobClaimRecord extends SourceBlobClaim {
+  /** Both identities in the key make each import run exactly one record. */
+  claimKey: string;
+}
+
+function sourceBlobClaimKey(checksumSha256: string, claimId: string): string {
+  return `${checksumSha256}:${claimId}`;
+}
+
 async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (value) =>
@@ -345,29 +487,41 @@ export interface StoredSourceBlob {
  * timestamp.
  */
 export async function putSourceBlobIfAbsent(
-  source: Blob | Uint8Array<ArrayBuffer>
+  source: Blob | Uint8Array<ArrayBuffer>,
+  options: { claimId?: string } = {}
 ): Promise<StoredSourceBlob> {
   const bytes =
     source instanceof Uint8Array
       ? source
       : new Uint8Array(await source.arrayBuffer());
   const checksumSha256 = await sha256Hex(bytes);
+  const createdAt = new Date().toISOString();
   const record: SourceBlobRecord = {
     checksumSha256,
     body: source instanceof Blob ? source : new Blob([bytes]),
     logicalBytes: bytes.byteLength,
-    createdAt: new Date().toISOString()
+    createdAt
   };
-  const created = await transactionScope(
+  const created = await scopedTransaction(
     'readwrite',
+    [BLOB_STORE_NAME, CLAIM_STORE_NAME],
     async (store) => {
-      if ((await settled(store.count(checksumSha256))) > 0) {
+      if (options.claimId !== undefined) {
+        const claim: SourceBlobClaimRecord = {
+          claimKey: sourceBlobClaimKey(checksumSha256, options.claimId),
+          checksumSha256,
+          claimId: options.claimId,
+          createdAt
+        };
+        await settled(store(CLAIM_STORE_NAME).put(claim));
+      }
+      const blobs = store(BLOB_STORE_NAME);
+      if ((await settled(blobs.count(checksumSha256))) > 0) {
         return false;
       }
-      await settled(store.put(record));
+      await settled(blobs.put(record));
       return true;
-    },
-    BLOB_STORE_NAME
+    }
   );
   return {
     ref: {
@@ -379,6 +533,46 @@ export async function putSourceBlobIfAbsent(
     },
     created
   };
+}
+
+/** Gives up one import run's device-wide hold on a checksum. */
+export function releaseSourceBlobClaim(
+  checksumSha256: string,
+  claimId: string
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.delete(sourceBlobClaimKey(checksumSha256, claimId)),
+    CLAIM_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * Deletes one source blob only when the whole device says it is abandoned.
+ *
+ * Claims, every persisted project document, and the delete share one readwrite
+ * transaction. No other tab can land a claim or autosave a document in a gap
+ * between the proof and the deletion. Documents are cursor-walked one at a time
+ * because each can carry large derived meshes; the walk stops on the first
+ * reference.
+ *
+ * The asking run's own claim does not block its cleanup and is removed with the
+ * blob. Expired claims are swept opportunistically. `false` is a safe verdict,
+ * not a storage failure: some live claim or saved document still needs bytes.
+ */
+export interface SourceBlobDeleteInput {
+  checksumSha256: string;
+  claimId?: string;
+  now?: number;
+}
+
+export function deleteSourceBlobIfUnreferenced(
+  input: SourceBlobDeleteInput
+): Promise<boolean> {
+  // Refused-import cleanup is rare and walks persisted project documents. Keep
+  // it off first paint; a failed chunk load is caught by the caller and leaves
+  // bytes in place, which is the no-data-loss direction.
+  return import('./sourceBlobCleanup').then((cleanup) => cleanup.run(input));
 }
 
 /** {@link putSourceBlobIfAbsent} for callers that never delete what they wrote. */
@@ -393,7 +587,8 @@ export async function loadSourceBlob(
 ): Promise<Uint8Array | null> {
   const record = await transaction<SourceBlobRecord | undefined>(
     'readonly',
-    (store) => store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
+    (store) =>
+      store.get(checksumSha256) as IDBRequest<SourceBlobRecord | undefined>,
     BLOB_STORE_NAME
   );
   if (!record) {
@@ -594,6 +789,59 @@ export function loadProjectThumbnail(
 }
 
 /**
+ * Writes this project's measurements, replacing whatever was there.
+ *
+ * The whole record at once rather than row-by-row: the list is small, it is
+ * always read whole, and a partial write is a state the reader would have to
+ * be taught to distinguish from a genuinely short list.
+ */
+export function saveProjectMeasurements(
+  record: StoredMeasurementRecord
+): Promise<void> {
+  return transaction(
+    'readwrite',
+    (store) => store.put(record),
+    MEASUREMENT_STORE_NAME
+  ).then(() => undefined);
+}
+
+/**
+ * This project's measurements, or null when there are none to read.
+ *
+ * Parsed rather than cast. A record from a newer build is refused whole — see
+ * `parseStoredMeasurements` for why reading it partially would be worse than
+ * not reading it — and a single malformed row is dropped without taking the
+ * rest of the list with it.
+ */
+export function loadProjectMeasurements(
+  projectId: string
+): Promise<StoredMeasurementRecord | null> {
+  return transaction<unknown>(
+    'readonly',
+    (store) => store.get(projectId) as IDBRequest<unknown>,
+    MEASUREMENT_STORE_NAME
+  ).then(async (value) => {
+    if (value === undefined) {
+      return null;
+    }
+    // The defensive parser is sizeable and needed only on this read path. Keep
+    // it out of the initial workspace bundle; writes use the small codec in
+    // `measurementRecord` directly.
+    const { parseStoredMeasurements } = await import('./measurementStore');
+    const parsed = parseStoredMeasurements(value);
+    if (!parsed) {
+      // Refusing a future or malformed record is only protective if the caller
+      // cannot mistake it for "there was no record" and immediately write an
+      // empty current-version one over it.
+      throw new Error(
+        'Stored measurements use an unsupported or malformed format.'
+      );
+    }
+    return parsed;
+  });
+}
+
+/**
  * Records that this device and the account now hold the same version of
  * `projectId`. Everything the conflict machinery decides is measured from here.
  */
@@ -666,12 +914,17 @@ export function clearAllLastSyncedVersions(): Promise<void> {
  * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
+  // Every per-project store, in one transaction. A store missing from this
+  // list is not merely untidy: `adoptProjectDocument` reuses a project id, so
+  // an orphaned record would surface under a DIFFERENT project that later
+  // claimed the same id.
   const storeNames = [
     STORE_NAME,
     META_STORE_NAME,
     SYNC_STORE_NAME,
     THUMBNAIL_STORE_NAME,
-    SUMMARY_STORE_NAME
+    SUMMARY_STORE_NAME,
+    MEASUREMENT_STORE_NAME
   ];
   return multiStoreTransaction(storeNames, 'readwrite', (stores) => {
     for (const storeName of storeNames) {

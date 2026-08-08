@@ -5352,7 +5352,9 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               const droppedOperand = droppedUnionOperandWarning({
                 operands: unionOperands.map((operand) => ({
                   name: operand.name,
-                  bounds: operand.bounds
+                  bounds: operand.bounds,
+                  hasCurvedFaces:
+                    censusOfSolids(kernel, [operand.solid]).curvedFaces > 0
                 })),
                 result: {
                   min: {
@@ -5388,15 +5390,62 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               }
             } else {
               solid = collapseShape(kernel, operands[0]!);
+              const subtracting = feature.data.operation === 'subtract';
+              // Measured BEFORE any cutting, because afterwards there is
+              // nothing left to compare against: a cut that silently does
+              // nothing and a cut with nothing to do produce the same body.
+              const volumeBeforeCut = subtracting
+                ? kernel.volume(solid, MEASUREMENT_DEFLECTION)
+                : 0;
+              let sharedWithTools = 0;
               for (const operand of operands.slice(1)) {
                 const tool = collapseShape(kernel, operand);
-                solid =
-                  feature.data.operation === 'subtract'
-                    ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
-                      kernel.cut(solid, tool))
-                    : kernel.intersect(solid, tool);
+                if (subtracting) {
+                  try {
+                    sharedWithTools += kernel.volume(
+                      kernel.intersect(
+                        kernel.copySolid(solid),
+                        kernel.copySolid(tool)
+                      ),
+                      MEASUREMENT_DEFLECTION
+                    );
+                  } catch {
+                    // An intersect that refuses says nothing either way, and
+                    // a guard is not the place to turn that into a claim.
+                  }
+                }
+                solid = subtracting
+                  ? (tryExactCoaxialCylinderCut(kernel, solid, tool) ??
+                    kernel.cut(solid, tool))
+                  : kernel.intersect(solid, tool);
               }
               solid = unifyBooleanFaces(kernel, solid);
+              // A cut that removes none of the material it demonstrably
+              // overlaps. Measured on the 061c1b2 kernel, a cross-drilled
+              // shaft shares 142.84 mm3 with its bore and the cut removes
+              // 0.19 of it — and the body that comes back is closed, valid,
+              // and reports the undrilled volume. Every structural check
+              // passes; only these two numbers disagree.
+              //
+              // Half is the same deliberately loose bar the pattern-merge
+              // guard uses above, and for the same reason: with several tools
+              // the pairwise total overstates the true correction wherever
+              // two of them overlap each other, so a working cut can remove
+              // less than all of it. Nothing near a working cut removes under
+              // half.
+              //
+              // The body still stands — the user asked for it and it is a
+              // valid solid. Silence is the only outcome ruled out, because
+              // that is exactly how this defect presents.
+              if (subtracting && sharedWithTools > GEOMETRY_EPSILON) {
+                const removed =
+                  volumeBeforeCut - kernel.volume(solid, MEASUREMENT_DEFLECTION);
+                if (removed < sharedWithTools * 0.5) {
+                  result.warnings.push(
+                    `Feature "${feature.name}": the tool overlaps this body but the cut did not take, so the reported volume still counts material the cut should have removed.`
+                  );
+                }
+              }
             }
             // The face-count census. Mesh closure, validation and volume all
             // pass on a silently faceted boolean result; the faces do not.
