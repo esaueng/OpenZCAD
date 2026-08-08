@@ -14,6 +14,7 @@ import {
   Box,
   ChevronLeft,
   CircleUserRound,
+  CloudOff,
   Database,
   Eye,
   FileCog,
@@ -35,6 +36,7 @@ import {
 } from 'lucide-react';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  type AccountDeletionScope,
   type AccountStorageUsage,
   type AppSettings,
   type AppSettingsResponse,
@@ -80,6 +82,7 @@ import {
   type ControlReferenceGroup
 } from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
+import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -107,6 +110,7 @@ type SectionId = SettingsSectionId;
 
 interface SettingsPageProps {
   settings: AppSettings;
+  cloudFunctionsEnabled: boolean;
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
   authConfigStatus: AuthConfigStatus;
@@ -115,10 +119,13 @@ interface SettingsPageProps {
   busy: boolean;
   message: string;
   initialSection?: SectionId;
+  projectInvitationPending?: boolean;
+  projectInvitationError?: string | null;
   desktopAuthorizationAttempt?: string | null;
   desktopAuthorizationApproved?: boolean;
   desktopAuthorizationCode?: string;
   onChange(settings: AppSettings): void;
+  onCloudFunctionsEnabledChange(enabled: boolean): void;
   onSaveCredential(token: string): void;
   onDeleteCredential(): void;
   onTestAssistant(): void;
@@ -132,8 +139,13 @@ interface SettingsPageProps {
   onDesktopAuthorizationCodeChange(code: string): void;
   onApproveDesktopLogin(): Promise<void>;
   onLogout(): Promise<void>;
+  onDeleteCloudData(
+    scope: AccountDeletionScope,
+    confirmation: string
+  ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
+  onDismissProjectInvitation(): void;
   onClose(): void;
 }
 
@@ -184,10 +196,12 @@ function SettingRow({
 function Toggle({
   checked,
   label,
+  disabled = false,
   onChange
 }: {
   checked: boolean;
   label: string;
+  disabled?: boolean;
   onChange(checked: boolean): void;
 }) {
   return (
@@ -195,6 +209,7 @@ function Toggle({
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         aria-label={label}
         onChange={(event) => onChange(event.target.checked)}
       />
@@ -461,6 +476,7 @@ function TurnstileWidget({
 
 export function SettingsPage({
   settings,
+  cloudFunctionsEnabled,
   accountState,
   authConfig,
   authConfigStatus,
@@ -469,10 +485,13 @@ export function SettingsPage({
   busy,
   message,
   initialSection,
+  projectInvitationPending = false,
+  projectInvitationError = null,
   desktopAuthorizationAttempt = null,
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
   onChange,
+  onCloudFunctionsEnabledChange,
   onSaveCredential,
   onDeleteCredential,
   onTestAssistant,
@@ -483,8 +502,10 @@ export function SettingsPage({
   onDesktopAuthorizationCodeChange,
   onApproveDesktopLogin,
   onLogout,
+  onDeleteCloudData,
   onReset,
   onApplyViewportDefaults,
+  onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
   const [initialViewState] = useState(loadSettingsViewState);
@@ -507,6 +528,8 @@ export function SettingsPage({
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
     null
   );
+  const [deletionScope, setDeletionScope] =
+    useState<AccountDeletionScope | null>(null);
   const contentRef = useRef<HTMLElement>(null);
   const scrollTopRef = useRef(
     initialSection === undefined ? initialViewState.scrollTop : 0
@@ -527,7 +550,7 @@ export function SettingsPage({
   // Fetched only when the panel that shows it is open, and dropped on sign-out
   // so one account's totals never linger in front of another.
   useEffect(() => {
-    if (active !== 'files' || !session) {
+    if (active !== 'files' || !session || !cloudFunctionsEnabled) {
       setStorageUsage(null);
       return;
     }
@@ -543,7 +566,7 @@ export function SettingsPage({
     return () => {
       cancelled = true;
     };
-  }, [active, session]);
+  }, [active, cloudFunctionsEnabled, session]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -592,10 +615,13 @@ export function SettingsPage({
     };
   }, []);
 
-  const assistantEnabled = settings.assistant.enabled;
   const visibleSections = useMemo(
-    () => visibleSettingsSections({ assistantEnabled, query }),
-    [assistantEnabled, query]
+    () =>
+      visibleSettingsSections({
+        cloudFunctionsEnabled,
+        query
+      }),
+    [cloudFunctionsEnabled, query]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -620,6 +646,8 @@ export function SettingsPage({
 
   const patch = (next: Partial<AppSettings>) =>
     onChange({ ...settings, ...next });
+  const patchCollaboration = (next: Partial<AppSettings['collaboration']>) =>
+    patch({ collaboration: { ...settings.collaboration, ...next } });
   const patchAssistant = (next: Partial<AppSettings['assistant']>) =>
     patch({ assistant: { ...settings.assistant, ...next } });
 
@@ -688,10 +716,27 @@ export function SettingsPage({
             )}
           </nav>
           <div className="settings-nav-status">
-            <Database size={13} aria-hidden="true" />
+            {cloudFunctionsEnabled ? (
+              <Database size={13} aria-hidden="true" />
+            ) : (
+              <CloudOff size={13} aria-hidden="true" />
+            )}
             <span>
               <strong>
-                {session ? 'Cloud profile connected' : 'Device only'}
+                {/*
+                  Being signed in is not the same as being reachable. This read
+                  only `session` and so announced "Cloud profile connected"
+                  while the header of the same screen said the profile was
+                  unavailable — two claims about one thing, on screen together.
+                  Reachability decides first.
+                */}
+                {!cloudFunctionsEnabled
+                  ? 'Offline mode'
+                  : authConfigStatus === 'unavailable'
+                    ? 'Cloud unreachable'
+                    : session
+                      ? 'Cloud profile connected'
+                      : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
             </span>
@@ -767,21 +812,15 @@ export function SettingsPage({
                   }
                 />
               </SettingRow>
-              {/*
-                The assistant's master switch lives here rather than in the AI
-                section, because turning it off removes that whole section from
-                the nav — a toggle inside it would take itself away with it and
-                leave no way back.
-              */}
               <SettingRow
-                title="AI assistant"
-                description="When off, the assistant is removed from the workspace and its provider settings are hidden. The server also refuses assistant requests."
-                scope="All devices"
+                title="Cloud features"
+                description="When off, OpenZCAD blocks account, sync, collaboration, artifact archive, and AI requests. Local modeling, autosave, imports, and exports keep working."
+                scope="This device"
               >
                 <Toggle
-                  checked={settings.assistant.enabled}
-                  label="AI assistant"
-                  onChange={(enabled) => patchAssistant({ enabled })}
+                  checked={cloudFunctionsEnabled}
+                  label="Cloud features"
+                  onChange={onCloudFunctionsEnabledChange}
                 />
               </SettingRow>
             </Section>
@@ -975,19 +1014,67 @@ export function SettingsPage({
           {active === 'sketching' && (
             <Section
               title="Sketching & snapping"
-              intro="Snapping affects pointer input only. Stored dimensions remain exact document values."
+              intro="Grid placement, geometry snapping, and temporary inferencing are independent. Stored dimensions remain exact document values."
             >
               <SettingRow
-                title="Snap sketch input"
-                description="Quantize sketch points to the configured linear increment."
+                title="Show sketch grid"
+                description="Display an adaptive grid on the active sketch plane."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.gridVisible}
+                  label="Show sketch grid"
+                  onChange={(gridVisible) =>
+                    patch({
+                      sketching: { ...settings.sketching, gridVisible }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Snap to sketch grid"
+                description="Quantize sketch points to the configured linear increment. Geometry snaps still take priority."
                 scope="This device"
               >
                 <Toggle
                   checked={settings.sketching.snapEnabled}
-                  label="Snap sketch input"
+                  label="Snap to sketch grid"
                   onChange={(snapEnabled) =>
                     patch({
                       sketching: { ...settings.sketching, snapEnabled }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Geometry snapping"
+                description="Snap to exact origins, endpoints, midpoints, centers, quadrants, and intersections."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.geometrySnapEnabled}
+                  label="Geometry snapping"
+                  onChange={(geometrySnapEnabled) =>
+                    patch({
+                      sketching: {
+                        ...settings.sketching,
+                        geometrySnapEnabled
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
+                title="Automatic inferencing"
+                description="Offer horizontal and vertical alignment while drawing. Hold Shift to suppress it temporarily."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.sketching.inferenceEnabled}
+                  label="Automatic inferencing"
+                  onChange={(inferenceEnabled) =>
+                    patch({
+                      sketching: { ...settings.sketching, inferenceEnabled }
                     })
                   }
                 />
@@ -1021,6 +1108,35 @@ export function SettingsPage({
                     }
                   }}
                 />
+              </SettingRow>
+              <SettingRow
+                title="Snap tolerance"
+                description="Screen-space radius around exact sketch candidates."
+                scope="This device"
+              >
+                <div className="settings-unit-input">
+                  <input
+                    className="settings-number"
+                    type="number"
+                    min="4"
+                    max="24"
+                    step="1"
+                    value={settings.sketching.snapTolerancePx}
+                    aria-label="Sketch snap tolerance"
+                    onChange={(event) => {
+                      const value = event.currentTarget.valueAsNumber;
+                      if (Number.isFinite(value) && value >= 4 && value <= 24) {
+                        patch({
+                          sketching: {
+                            ...settings.sketching,
+                            snapTolerancePx: value
+                          }
+                        });
+                      }
+                    }}
+                  />
+                  <span>px</span>
+                </div>
               </SettingRow>
               <SettingRow
                 title="Angular snap"
@@ -1092,6 +1208,7 @@ export function SettingsPage({
                 <Toggle
                   label="Cloud autosave"
                   checked={settings.files.cloudAutosave}
+                  disabled={!cloudFunctionsEnabled}
                   onChange={(cloudAutosave) =>
                     onChange({
                       ...settings,
@@ -1108,7 +1225,9 @@ export function SettingsPage({
                 <input
                   type="number"
                   aria-label="Cloud autosave delay in seconds"
-                  disabled={!settings.files.cloudAutosave}
+                  disabled={
+                    !cloudFunctionsEnabled || !settings.files.cloudAutosave
+                  }
                   min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
                   max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
                   step={1}
@@ -1131,11 +1250,17 @@ export function SettingsPage({
                 description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint. Autosave does not add to this history."
                 scope="Current project"
               >
-                <span className="settings-state">Manual</span>
+                <span className="settings-state">
+                  {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
+                </span>
               </SettingRow>
               <SettingRow
                 title="Account storage"
-                description={storageDescription(storageUsage)}
+                description={
+                  cloudFunctionsEnabled
+                    ? storageDescription(storageUsage)
+                    : 'Account storage is not contacted while cloud features are disabled.'
+                }
                 scope="Account"
               >
                 <span className="settings-state">
@@ -1156,11 +1281,22 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'assistant' && assistantEnabled && (
+          {active === 'assistant' && cloudFunctionsEnabled && (
             <Section
               title="AI Assistant"
-              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied. Turn the assistant off entirely under General."
+              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied."
             >
+              <SettingRow
+                title="AI assistant"
+                description="When off, the assistant is removed from the workspace and the server refuses assistant requests."
+                scope="All devices"
+              >
+                <Toggle
+                  checked={settings.assistant.enabled}
+                  label="AI assistant"
+                  onChange={(enabled) => patchAssistant({ enabled })}
+                />
+              </SettingRow>
               <SettingRow
                 title="Credential source"
                 description="Deployment credentials are managed by the operator; personal tokens are owner-scoped."
@@ -1465,11 +1601,44 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'account' && (
+          {active === 'account' && cloudFunctionsEnabled && (
             <Section
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
+              {projectInvitationPending ? (
+                <div
+                  className="settings-warning settings-sign-in-warning"
+                  role={projectInvitationError ? 'alert' : 'status'}
+                >
+                  <span>
+                    {projectInvitationError ??
+                      'Project invitation ready. Sign in with the email address that received the link and the project will open automatically.'}
+                    {projectInvitationError && session
+                      ? ' Sign out below to try a different email address.'
+                      : ''}
+                  </span>
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={busy}
+                    onClick={onDismissProjectInvitation}
+                  >
+                    Not now
+                  </button>
+                </div>
+              ) : null}
+              <SettingRow
+                title="Project sharing"
+                description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
+                scope="Account preference"
+              >
+                <Toggle
+                  checked={settings.collaboration.enabled}
+                  label="Project sharing"
+                  onChange={(enabled) => patchCollaboration({ enabled })}
+                />
+              </SettingRow>
               {session ? (
                 <>
                   <SettingRow
@@ -1788,7 +1957,7 @@ export function SettingsPage({
           {active === 'privacy' && (
             <Section
               title="Privacy & data"
-              intro="Device preferences are separate from canonical project documents, exports, and collaboration messages."
+              intro="Review and permanently remove device or cloud data from one place. Local and cloud copies remain separate."
             >
               <SettingRow
                 title="Reset application settings"
@@ -1805,12 +1974,84 @@ export function SettingsPage({
                 </button>
               </SettingRow>
               <SettingRow
-                title="Project data"
-                description="Local projects remain in IndexedDB until a dedicated project deletion flow is used."
-                scope="Protected"
+                title="Local project data"
+                description="Local projects remain in IndexedDB. The cloud actions below never delete projects or settings from this device."
+                scope="This device"
               >
                 <ShieldCheck size={17} aria-hidden="true" />
               </SettingRow>
+              {session ? (
+                <>
+                  <SettingRow
+                    title="Delete all cloud projects"
+                    description="Permanently delete every cloud project you own, including revisions, imports, generated files, and collaboration state. Your cloud profile stays active."
+                    scope="Cloud only"
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.projectErasureReady !== true}
+                      onClick={() => setDeletionScope('projects')}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete projects
+                    </button>
+                  </SettingRow>
+                  <SettingRow
+                    title="Delete cloud profile"
+                    description="Delete your email profile, synchronized settings, personal AI credential, and all sessions. Owned projects remain under a minimal anonymous ownership record."
+                    scope="All devices"
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.accountErasureReady !== true}
+                      onClick={() => setDeletionScope('profile')}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete profile
+                    </button>
+                  </SettingRow>
+                  <div className="settings-cloud-delete-all">
+                    <SettingRow
+                      title="Delete all cloud data"
+                      description="Permanently delete your cloud profile and every project you own. Collaborators lose access immediately. This is the complete cloud-data deletion action."
+                      scope="Cannot undo"
+                    >
+                      <button
+                        className="secondary danger"
+                        type="button"
+                        disabled={busy || health?.projectErasureReady !== true}
+                        onClick={() => setDeletionScope('all')}
+                      >
+                        <Trash2 size={14} aria-hidden="true" />
+                        Delete all data
+                      </button>
+                    </SettingRow>
+                  </div>
+                  {health?.accountErasureReady !== true ? (
+                    <div className="settings-warning" role="status">
+                      Cloud data deletion is unavailable until migration 0014
+                      and its write-safety checks are ready. No data can be
+                      deleted from this screen yet.
+                    </div>
+                  ) : health?.projectErasureReady !== true ? (
+                    <div className="settings-warning" role="status">
+                      Cloud project deletion is unavailable until private object
+                      storage and collaboration cleanup pass their readiness
+                      checks. Profile-only deletion remains available.
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <SettingRow
+                  title="Cloud data"
+                  description="Sign in before reviewing or deleting cloud profile and project data."
+                  scope="Signed out"
+                >
+                  <ShieldCheck size={17} aria-hidden="true" />
+                </SettingRow>
+              )}
             </Section>
           )}
 
@@ -1869,6 +2110,16 @@ export function SettingsPage({
           )}
         </main>
       </div>
+      {deletionScope ? (
+        <CloudDataDeletionDialog
+          scope={deletionScope}
+          onConfirm={async (scope, confirmation) => {
+            await onDeleteCloudData(scope, confirmation);
+            setDeletionScope(null);
+          }}
+          onClose={() => setDeletionScope(null)}
+        />
+      ) : null}
     </div>
   );
 }

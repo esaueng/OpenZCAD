@@ -67,6 +67,94 @@
   border-color: var(--color-border-strong);
 }
 
+.cloud-deletion-dialog {
+  width: min(560px, 100%);
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid color-mix(in srgb, var(--color-error) 55%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.cloud-deletion-dialog > header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-3);
+  color: var(--color-error);
+}
+
+.cloud-deletion-dialog h2,
+.cloud-deletion-dialog p {
+  margin: 0;
+}
+
+.cloud-deletion-dialog h2 {
+  font-size: var(--fs-lg);
+}
+
+.cloud-deletion-dialog header p,
+.cloud-deletion-impact p,
+.cloud-deletion-impact small,
+.cloud-deletion-loading {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.cloud-deletion-impact {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: color-mix(in srgb, var(--color-error) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-error) 24%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.cloud-deletion-impact > strong,
+.cloud-deletion-error {
+  color: var(--color-error);
+}
+
+.cloud-deletion-confirmation {
+  display: grid;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.cloud-deletion-confirmation input {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.cloud-deletion-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.cloud-deletion-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.cloud-deletion-confirm {
+  min-height: 32px;
+  padding: 6px 11px;
+  color: white;
+  background: var(--color-error);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.cloud-deletion-confirm:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
 .palette {
   width: min(520px, 100%);
   display: flex;
@@ -193,21 +281,339 @@
   font-weight: var(--fw-medium);
 }
 
-.sharing-token-row {
-  display: grid;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
+/* ── Project sharing dialog ────────────────────────────────
+   Compact "command bar" treatment: a palette-style invite bar
+   pinned to the top of the body, grouped compact rows below. ── */
+
+.sharing-card {
+  width: min(460px, 100%);
+  border-radius: var(--radius-md);
 }
 
-.sharing-token-row output {
-  overflow-wrap: anywhere;
+.sharing-header {
+  padding: 10px var(--sp-3);
+}
+
+.sharing-header h2 {
+  font-size: var(--fs-base);
+}
+
+.sharing-header-text {
+  display: grid;
+  gap: 2px;
+}
+
+.sharing-meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   color: var(--color-text-muted);
-  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.sharing-meta strong {
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sharing-meta-item + .sharing-meta-item::before {
+  content: '';
+  width: 3px;
+  height: 3px;
+  margin: 0 var(--sp-2);
+  border-radius: 50%;
+  background: var(--color-border-strong);
+}
+
+.sharing-room-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-subtle);
+}
+
+.sharing-room-dot[data-state='live'] {
+  background: var(--color-success);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.45);
+}
+
+.sharing-room-dot[data-state='connecting'] {
+  background: var(--color-warning);
+}
+
+.sharing-room-dot[data-state='conflict'],
+.sharing-room-dot[data-state='oversize'],
+.sharing-room-dot[data-state='rejected'] {
+  background: var(--color-error);
+}
+
+/* No flex gap here: the empty status line must take no space, so
+   separation comes from sibling margins it can opt out of. */
+.sharing-body {
+  padding: 0 var(--sp-3) var(--sp-3);
+  overflow-y: auto;
+}
+
+.sharing-body > * + * {
+  margin-top: var(--sp-3);
+}
+
+.sharing-status-line {
+  margin: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+/* Height, not display: the region has to stay in the accessibility
+   tree or later error/busy insertions are never announced. */
+.sharing-status-line:empty {
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+
+.sharing-status-line:not(:empty) {
+  padding: 6px var(--sp-2);
+}
+
+.sharing-status-line[data-tone='error'] {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.sharing-status-line[data-tone='busy'] {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+}
+
+/* The invite bar sits flush against the body's top edge and spans its
+   full width, so it reads as part of the dialog chrome, not a form. */
+.sharing-cmd-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 calc(-1 * var(--sp-3));
+  padding: 2px var(--sp-3);
+  border-bottom: var(--border-thin);
+}
+
+.sharing-cmd-icon {
+  color: var(--color-text-subtle);
   font-size: var(--fs-sm);
 }
 
-.sharing-token-row button {
-  justify-self: start;
+.sharing-cmd-bar input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: var(--fs-md);
+}
+
+.sharing-cmd-bar input:focus {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+
+.sharing-cmd-bar select {
+  height: 24px;
+  padding: 1px 4px;
+  font-size: var(--fs-xs);
+  background: transparent;
+  border-color: transparent;
+}
+
+.sharing-cmd-bar select:hover,
+.sharing-cmd-bar select:focus {
+  border-color: var(--color-border);
+}
+
+.sharing-cmd-bar .primary {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
+.sharing-invite-sent {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px dashed var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-dim);
+}
+
+.sharing-group-label {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0 var(--sp-1);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.sharing-count {
+  letter-spacing: normal;
+}
+
+.sharing-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sharing-list > li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 28px;
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-md);
+}
+
+.sharing-list > li:hover {
+  background: var(--color-surface-hover);
+}
+
+.sharing-avatar {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-accent-dim);
+  color: var(--color-accent-hi);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+}
+
+.sharing-member-id {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+
+.sharing-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sharing-presence::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-subtle);
+}
+
+.sharing-presence[data-status='active']::before {
+  background: var(--color-success);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.45);
+}
+
+.sharing-role-select {
+  height: 24px;
+  padding: 1px 4px;
+  font-size: var(--fs-xs);
+  background: transparent;
+  border-color: transparent;
+}
+
+.sharing-role-select:hover,
+.sharing-role-select:focus {
+  border-color: var(--color-border);
+}
+
+.sharing-kind {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+/* Row actions reveal on hover; keyboard focus and coarse pointers
+   always see them. */
+.sharing-row-action {
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  opacity: 0;
+}
+
+.sharing-list > li:hover .sharing-row-action,
+.sharing-row-action:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .sharing-row-action {
+    opacity: 1;
+  }
+}
+
+.sharing-row-action:hover:not(:disabled) {
+  color: var(--color-error);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.sharing-empty {
+  margin: 0;
+  padding: 0 var(--sp-1);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.sharing-conflict {
+  padding: var(--sp-2) var(--sp-2) var(--sp-3);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.sharing-conflict h3 {
+  margin: 0 0 var(--sp-1);
+  color: var(--color-warning);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-conflict p {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.sharing-conflict .conflict-dialog-actions {
+  margin-top: var(--sp-2);
+}
+
+.sharing-conflict-note {
+  margin-top: var(--sp-2);
 }
 
 .shortcuts-grid {
@@ -231,7 +637,12 @@
 }
 
 .shortcut-row dt {
-  flex: 0 0 96px;
+  /*
+   * Wide enough for a pointer binding. The keyboard half fits in 96px, but the
+   * mouse gestures now listed here do not — "Shift + left-drag" and
+   * "Ctrl/Cmd + right-drag" clip at that width.
+   */
+  flex: 0 0 148px;
 }
 
 .shortcut-key-sequence {

@@ -349,10 +349,17 @@ export function syncFatLineResolution(
  * across tessellation triangles.
  */
 export function createBodyMaterial(body: BodyRepresentation) {
+  const opacity = body.opacity ?? 1;
+  const translucent = opacity < 1;
   return new THREE.MeshPhongMaterial({
     color: body.color,
     shininess: 38,
     specular: '#667487',
+    transparent: translucent,
+    opacity,
+    // Translucent walls must not write depth or back faces and interior
+    // features hidden behind them would be culled instead of showing through.
+    depthWrite: !translucent,
     // Push only the disposable face rasterization back by the smallest
     // practical depth-buffer bias. GL line materials ignore polygonOffset;
     // keeping the bias on the faces lets depth-tested edge/sketch overlays sit
@@ -438,21 +445,70 @@ export function createStudioHemisphereLight(): THREE.HemisphereLight {
   return light;
 }
 
-/** Vertical engineering-studio gradient: graphite above, near-black below. */
-export function createGradientBackground(): THREE.Texture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 4;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d')!;
-  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, '#131922');
-  gradient.addColorStop(0.45, '#0b0f15');
-  gradient.addColorStop(1, '#05070a');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+/**
+ * Vertical engineering-studio gradient: graphite above, near-black below.
+ *
+ * A CanvasTexture quantises these near-black stops before WebGL sees them.
+ * Screen capture then exaggerates the broad flat bands into rectangular codec
+ * blocks. Owning the backdrop material lets Three apply its fragment-level
+ * dithering after output colour conversion, where it can actually break up
+ * those bands without changing the intended gradient.
+ */
+export function createGradientBackdrop(): THREE.Mesh {
+  const geometry = new THREE.PlaneGeometry(2, 2);
+  const material = new THREE.ShaderMaterial({
+    depthTest: false,
+    depthWrite: false,
+    dithering: true,
+    fog: false,
+    toneMapped: false,
+    uniforms: {
+      topColor: { value: new THREE.Color('#131922') },
+      middleColor: { value: new THREE.Color('#0b0f15') },
+      bottomColor: { value: new THREE.Color('#05070a') },
+      middleStop: { value: 0.45 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 viewportUv;
+
+      void main() {
+        viewportUv = uv;
+        gl_Position = vec4(position.xy, 1.0, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <dithering_pars_fragment>
+
+      varying vec2 viewportUv;
+      uniform vec3 topColor;
+      uniform vec3 middleColor;
+      uniform vec3 bottomColor;
+      uniform float middleStop;
+
+      void main() {
+        float distanceFromTop = 1.0 - viewportUv.y;
+        float topMix = clamp(distanceFromTop / middleStop, 0.0, 1.0);
+        float bottomMix = clamp(
+          (distanceFromTop - middleStop) / (1.0 - middleStop),
+          0.0,
+          1.0
+        );
+        vec3 color = distanceFromTop <= middleStop
+          ? mix(topColor, middleColor, topMix)
+          : mix(middleColor, bottomColor, bottomMix);
+        gl_FragColor = vec4(color, 1.0);
+        #include <colorspace_fragment>
+        #include <dithering_fragment>
+      }
+    `
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'gradient-backdrop';
+  mesh.renderOrder = -1;
+  mesh.frustumCulled = false;
+  mesh.raycast = () => undefined;
+  return mesh;
 }
 
 /**
@@ -474,8 +530,9 @@ const GRID_CELLS_PER_VIEW = 60;
  * feeds the shader a power-of-ten step derived from the visible extent. Four
  * nested decades render at once with weights chosen so a decade rollover is
  * seamless — the tier a line leaves and the tier it joins meet at the same
- * alpha, and line colour is a function of that alpha alone. fwidth-based
- * antialiasing keeps every line one crisp screen-space stroke at any zoom.
+ * alpha, and line colour is a function of that alpha alone. Derivative-based
+ * filtering keeps every resolved line crisp, then removes a tier before its
+ * cells collapse into sub-pixel moire in a receding perspective view.
  */
 export function createStudioGrid(): THREE.Mesh {
   const geometry = new THREE.PlaneGeometry(2, 2);
@@ -510,8 +567,23 @@ export function createStudioGrid(): THREE.Mesh {
 
       float gridLine(vec2 p, float step) {
         vec2 coord = p / step;
-        vec2 grid = abs(fract(coord - 0.5) - 0.5) / fwidth(coord);
-        return 1.0 - min(min(grid.x, grid.y), 1.0);
+        vec2 footprint = max(fwidth(coord), vec2(1e-6));
+        vec2 distanceToLine = abs(fract(coord - 0.5) - 0.5);
+        vec2 coverage = 1.0 - smoothstep(
+          vec2(0.0),
+          footprint,
+          distanceToLine
+        );
+        // footprint is grid cells per pixel. Fade from four pixels per cell
+        // to the two-pixel Nyquist limit; coarser decades remain visible.
+        // Filter X and Y independently because one direction foreshortens
+        // sooner than the other in an oblique perspective view.
+        vec2 resolved = 1.0 - smoothstep(
+          vec2(0.25),
+          vec2(0.5),
+          footprint
+        );
+        return max(coverage.x * resolved.x, coverage.y * resolved.y);
       }
 
       void main() {
