@@ -27,10 +27,11 @@ import {
   importSourceChecksums
 } from '../lib/importArchival';
 import {
-  deleteSourceBlob,
+  deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
   LOCAL_STORAGE_BLOCKED_MESSAGE,
   putSourceBlobIfAbsent,
+  releaseSourceBlobClaim,
   type LocalStorageReadiness
 } from '../lib/localProjectStore';
 import {
@@ -1101,12 +1102,17 @@ describe('an unrelated edit while a run validates', () => {
  */
 interface SharedDevice {
   blobs: Map<string, string>;
+  claims: Map<string, Set<string>>;
   /** Every delete the store was ever asked for, whoever asked. */
   deleteRequests: string[];
 }
 
 function createDevice(): SharedDevice {
-  return { blobs: new Map<string, string>(), deleteRequests: [] };
+  return {
+    blobs: new Map<string, string>(),
+    claims: new Map<string, Set<string>>(),
+    deleteRequests: []
+  };
 }
 
 /** A file as the fake store keys it: the test names the checksum, not SHA-256. */
@@ -1151,7 +1157,7 @@ function deviceStore(
 ): StepImportSourceStore {
   return {
     ensureLocalProjectStorage: async () => options.readiness ?? 'ready',
-    putSourceBlobIfAbsent: async () => {
+    putSourceBlobIfAbsent: async (_source, claimOptions) => {
       // Not instant: hashing and storing up to 250 MB is the whole window the
       // commit lock has to be reserved across.
       await options.storing;
@@ -1160,6 +1166,11 @@ function deviceStore(
       }
       const created = !device.blobs.has(file.checksum);
       device.blobs.set(file.checksum, file.bytes);
+      if (claimOptions?.claimId) {
+        const claims = device.claims.get(file.checksum) ?? new Set<string>();
+        claims.add(claimOptions.claimId);
+        device.claims.set(file.checksum, claims);
+      }
       return {
         ref: {
           marker: 'openzcad-source-ref',
@@ -1171,9 +1182,22 @@ function deviceStore(
         created
       };
     },
-    deleteSourceBlob: async (checksumSha256) => {
+    deleteSourceBlobIfUnreferenced: async ({ checksumSha256, claimId }) => {
       device.deleteRequests.push(checksumSha256);
+      const claims = device.claims.get(checksumSha256) ?? new Set<string>();
+      if ([...claims].some((candidate) => candidate !== claimId)) {
+        return false;
+      }
+      claims.delete(claimId);
       device.blobs.delete(checksumSha256);
+      return true;
+    },
+    releaseSourceBlobClaim: async (checksumSha256, claimId) => {
+      const claims = device.claims.get(checksumSha256);
+      claims?.delete(claimId);
+      if (claims?.size === 0) {
+        device.claims.delete(checksumSha256);
+      }
     }
   };
 }
@@ -1414,7 +1438,12 @@ describe('the import orchestration, run rather than read', () => {
     expect(localStepImportSourceStore.putSourceBlobIfAbsent).toBe(
       putSourceBlobIfAbsent
     );
-    expect(localStepImportSourceStore.deleteSourceBlob).toBe(deleteSourceBlob);
+    expect(localStepImportSourceStore.deleteSourceBlobIfUnreferenced).toBe(
+      deleteSourceBlobIfUnreferenced
+    );
+    expect(localStepImportSourceStore.releaseSourceBlobClaim).toBe(
+      releaseSourceBlobClaim
+    );
   });
 
   it('leaves the commit lock free on every path that never reaches a run', async () => {
@@ -1816,7 +1845,7 @@ describe('the import orchestration, run rather than read', () => {
         contentType: 'model/step',
         store: {
           ...deviceStore(device, file),
-          deleteSourceBlob: () => {
+          deleteSourceBlobIfUnreferenced: () => {
             throw new Error('IndexedDB unavailable.');
           }
         },
@@ -2411,6 +2440,56 @@ describe('two tabs importing one file', () => {
     );
     return { device, managerA, managerB };
   }
+
+  it('keeps a second tab commit safe from the creating tab later refusing', async () => {
+    // The hole sourceBlobClaims exists to close. Tab A created the key but
+    // reached no verdict, so its tab-local abandoned note licenses a retry to
+    // clean it up. Tab B then commits the same file before autosave persists its
+    // document. Its device-wide claim is the only evidence visible to tab A.
+    const { device, managerA, managerB } = twoTabs();
+    const tabA = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerA, acceptsEverything()))
+    );
+    const tabB = renderHook(() =>
+      useValidatedFeatureCommit(tabHost(managerB, acceptsEverything()))
+    );
+    const sessionA = importSession(device, managerA, () =>
+      tabA.result.current.reserve()
+    );
+    const sessionB = importSession(device, managerB, () =>
+      tabB.result.current.reserve()
+    );
+
+    let noVerdict: StepImportResult | undefined;
+    let committed: StepImportResult | undefined;
+    let refusedRetry: StepImportResult | undefined;
+    await act(async () => {
+      noVerdict = await importOnce(file, {
+        ...sessionA,
+        run: async () => 'superseded'
+      });
+      committed = await importOnce(file, {
+        ...sessionB,
+        run: async () => 'committed'
+      });
+      refusedRetry = await importOnce(file, {
+        ...sessionA,
+        run: async () => 'rejected'
+      });
+    });
+
+    expect(noVerdict?.outcome).toBe('superseded');
+    expect(sessionA.marks.abandoned.has(file.checksum)).toBe(true);
+    expect(committed?.outcome).toBe('committed');
+    expect(refusedRetry?.outcome).toBe('rejected');
+    expect(refusedRetry?.sourceDeleted).toBe(false);
+    // Tab A did ask, and the shared store refused because tab B's claim still
+    // bridges its commit to autosave. This distinguishes the new subsystem from
+    // the older created:false guard, which does not apply to tab A's retry.
+    expect(device.deleteRequests).toEqual([file.checksum]);
+    expect(device.blobs.get(file.checksum)).toBe(file.bytes);
+    expect(device.claims.get(file.checksum)?.size).toBe(1);
+  });
 
   it('never deletes bytes it did not write, however free they look', async () => {
     // The load-bearing test. Tab A imported this file and committed a feature
