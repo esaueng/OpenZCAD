@@ -27,7 +27,9 @@ import type {
 import { ViewerToolbar } from './ViewerToolbar';
 import { OrientationWidget } from './OrientationWidget';
 import type {
+  ArtifactId,
   BodyRepresentation,
+  ProjectId,
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
@@ -43,6 +45,9 @@ import {
   MeasurementCloudSyncAgent,
   type MeasurementCloudSyncAgentProps
 } from './MeasurementCloudSyncAgent';
+import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
+import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
+import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
 
 type MeasurementCloudSyncState = readonly [
   projectId: string | undefined,
@@ -59,12 +64,32 @@ type MeasurementCloudSyncState = readonly [
   saveLocal: MeasurementCloudSyncAgentProps['saveLocal']
 ];
 
+type ProjectThumbnailSyncState = readonly [
+  projectId: ProjectId,
+  version: number,
+  updatedAt: string,
+  bodyRepresentations: Record<string, BodyRepresentation>,
+  publishToCloud: boolean,
+  transport: ThumbnailCloudTransport,
+  loadThumbnail: (projectId: string) => Promise<ProjectThumbnailRecord | null>,
+  saveThumbnail: (
+    projectId: string,
+    thumbnail: {
+      source: string | null;
+      artifactId?: ArtifactId;
+      version: number;
+      updatedAt: string;
+    }
+  ) => Promise<void>
+];
+
 interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
   measurementAnnotations: MeasurementViewportAnnotation[];
   measurementCloudSync?: MeasurementCloudSyncState;
+  projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
@@ -173,6 +198,7 @@ export function ViewerShell({
   sketches,
   measurementAnnotations,
   measurementCloudSync,
+  projectThumbnailSync,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -273,6 +299,18 @@ export function ViewerShell({
       className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
       aria-label="3D viewport"
     >
+      {projectThumbnailSync ? (
+        <ProjectThumbnailSyncAgent
+          projectId={projectThumbnailSync[0]}
+          version={projectThumbnailSync[1]}
+          updatedAt={projectThumbnailSync[2]}
+          bodyRepresentations={projectThumbnailSync[3]}
+          publishToCloud={projectThumbnailSync[4]}
+          transport={projectThumbnailSync[5]}
+          loadThumbnail={projectThumbnailSync[6]}
+          saveThumbnail={projectThumbnailSync[7]}
+        />
+      ) : null}
       {cloudEnabled ? (
         <MeasurementCloudSyncAgent
           projectId={cloudProjectId}

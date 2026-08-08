@@ -29,6 +29,13 @@ export function cachedThumbnailSource(
   if (!cached) {
     return undefined;
   }
+  if (
+    project.thumbnailArtifactId &&
+    cached.artifactId !== project.thumbnailArtifactId &&
+    (cached.artifactId !== undefined || cached.source === null)
+  ) {
+    return undefined;
+  }
   if (cached.source === null && cached.updatedAt !== project.updatedAt) {
     return undefined;
   }
@@ -55,8 +62,11 @@ export function mergeProjectSummaries(
     }
     const newest = project.updatedAt > existing.updatedAt ? project : existing;
     const organization = existing.organization ?? project.organization;
+    const thumbnailArtifactId =
+      project.thumbnailArtifactId ?? existing.thumbnailArtifactId;
     merged.set(project.projectId, {
       ...newest,
+      ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
       ...(organization ? { organization } : {})
     });
   }
