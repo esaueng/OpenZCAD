@@ -2,14 +2,19 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteLocalProject,
   deleteSourceBlob,
+  deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
+  hasSourceBlob,
   listLocalProjects,
+  loadProjectMeasurements,
+  saveProjectMeasurements,
   loadLocalProject,
   putSourceBlobIfAbsent,
+  releaseSourceBlobClaim,
   saveLocalProject,
   saveLocalProjectOrganization
 } from './localProjectStore';
@@ -17,6 +22,9 @@ import {
 const DATABASE_NAME = 'openzcad-v2';
 const DOCUMENT_STORE = 'projects';
 const SUMMARY_STORE = 'projectSummaries';
+const MEASUREMENT_STORE = 'projectMeasurements';
+const CLAIM_STORE = 'sourceBlobClaims';
+const PAST_BLOCKED_GRACE_MS = 10_000;
 
 /** The stores this database had before the shelf projections were added. */
 const LEGACY_STORES = [
@@ -89,6 +97,54 @@ function openLegacyDatabase(): Promise<IDBDatabase> {
     open.onsuccess = () => resolve(open.result);
     open.onerror = () => reject(failed(open.error));
   });
+}
+
+/** A tab predating `onversionchange`, used to pin the shared blocked fallback. */
+function openBlockingLegacyDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(DATABASE_NAME, 6);
+    open.onupgradeneeded = () => {
+      for (const name of [...LEGACY_STORES, SUMMARY_STORE]) {
+        open.result.createObjectStore(name, { keyPath: 'projectId' });
+      }
+      open.result.createObjectStore('sourceBlobs', {
+        keyPath: 'checksumSha256'
+      });
+    };
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(failed(open.error));
+  });
+}
+
+/** The shipped version-7 schema, whose live connections close for upgrades. */
+function openPreviousDatabase(
+  onVersionChange: () => void = () => undefined
+): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(DATABASE_NAME, 7);
+    open.onupgradeneeded = () => {
+      for (const name of [...LEGACY_STORES, SUMMARY_STORE, MEASUREMENT_STORE]) {
+        open.result.createObjectStore(name, { keyPath: 'projectId' });
+      }
+      open.result.createObjectStore('sourceBlobs', {
+        keyPath: 'checksumSha256'
+      });
+    };
+    open.onsuccess = () => {
+      open.result.onversionchange = () => {
+        onVersionChange();
+        open.result.close();
+      };
+      resolve(open.result);
+    };
+    open.onerror = () => reject(failed(open.error));
+  });
+}
+
+async function settleEventLoop(): Promise<void> {
+  for (let turn = 0; turn < 20; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 /** Seeds documents the way a build without the projections store would have. */
@@ -262,10 +318,141 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   trace?.restore();
   trace = null;
   connections?.restore();
   connections = null;
+});
+
+describe('the source-claim schema upgrade', () => {
+  it('notifies and closes a version-7 tab instead of trapping startup', async () => {
+    let versionChanges = 0;
+    const otherTab = await openPreviousDatabase(() => {
+      versionChanges += 1;
+    });
+
+    await expect(ensureLocalProjectStorage()).resolves.toBe('ready');
+
+    expect(versionChanges).toBe(1);
+    expect(
+      await withStore(CLAIM_STORE, 'readonly', (store) => store.getAllKeys())
+    ).toEqual([]);
+    otherTab.close();
+  });
+
+  it('settles every queued caller when an older tab blocks the upgrade', async () => {
+    const otherTab = await openBlockingLegacyDatabase();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const readiness = ensureLocalProjectStorage();
+    const listingError = listLocalProjects().then(
+      () => null,
+      (error: unknown) => error
+    );
+    await settleEventLoop();
+    vi.advanceTimersByTime(PAST_BLOCKED_GRACE_MS);
+
+    expect(await readiness).toBe('blocked');
+    expect(await listingError).toMatchObject({
+      name: 'LocalStorageBlockedError'
+    });
+
+    otherTab.close();
+    vi.useRealTimers();
+    await settleEventLoop();
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    expect(
+      await withStore(CLAIM_STORE, 'readonly', (store) => store.getAllKeys())
+    ).toEqual([]);
+  });
+});
+
+describe('device-wide source blob claims', () => {
+  const source = new TextEncoder().encode(
+    'ISO-10303-21; /* one file shared across tabs */'
+  );
+
+  it('writes every tab claim atomically even when the blob already exists', async () => {
+    const first = await putSourceBlobIfAbsent(source, { claimId: 'tab-a' });
+    const second = await putSourceBlobIfAbsent(source, { claimId: 'tab-b' });
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(
+      await withStore(CLAIM_STORE, 'readonly', (store) => store.getAllKeys())
+    ).toEqual([
+      `${first.ref.checksumSha256}:tab-a`,
+      `${first.ref.checksumSha256}:tab-b`
+    ]);
+  });
+
+  it('keeps bytes while another tab has a live claim', async () => {
+    const stored = await putSourceBlobIfAbsent(source, { claimId: 'tab-a' });
+    await putSourceBlobIfAbsent(source, { claimId: 'tab-b' });
+
+    await expect(
+      deleteSourceBlobIfUnreferenced({
+        checksumSha256: stored.ref.checksumSha256,
+        claimId: 'tab-a'
+      })
+    ).resolves.toBe(false);
+    expect(await hasSourceBlob(stored.ref.checksumSha256)).toBe(true);
+
+    await releaseSourceBlobClaim(stored.ref.checksumSha256, 'tab-b');
+    await expect(
+      deleteSourceBlobIfUnreferenced({
+        checksumSha256: stored.ref.checksumSha256,
+        claimId: 'tab-a'
+      })
+    ).resolves.toBe(true);
+    expect(await hasSourceBlob(stored.ref.checksumSha256)).toBe(false);
+  });
+
+  it('keeps bytes referenced by any saved project, not only the open tab', async () => {
+    const stored = await putSourceBlobIfAbsent(source, { claimId: 'tab-a' });
+    const imported = importStepBody(projectDocument('Other tab', 'proj-b'), {
+      name: 'Shared frame',
+      artifactId: 'artifact_local_shared',
+      sourceName: 'frame.step',
+      stepSourceRef: stored.ref
+    }).document;
+    await saveLocalProject(imported);
+
+    await expect(
+      deleteSourceBlobIfUnreferenced({
+        checksumSha256: stored.ref.checksumSha256,
+        claimId: 'tab-a'
+      })
+    ).resolves.toBe(false);
+    expect(await hasSourceBlob(stored.ref.checksumSha256)).toBe(true);
+
+    await releaseSourceBlobClaim(stored.ref.checksumSha256, 'tab-a');
+    await deleteLocalProject(imported.projectId);
+    await expect(
+      deleteSourceBlobIfUnreferenced({
+        checksumSha256: stored.ref.checksumSha256
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('sweeps a lapsed claim before reclaiming genuinely abandoned bytes', async () => {
+    const stored = await putSourceBlobIfAbsent(source, {
+      claimId: 'closed-tab'
+    });
+    const afterClaimLapses = Date.now() + 25 * 60 * 60 * 1000;
+
+    await expect(
+      deleteSourceBlobIfUnreferenced({
+        checksumSha256: stored.ref.checksumSha256,
+        now: afterClaimLapses
+      })
+    ).resolves.toBe(true);
+    expect(await hasSourceBlob(stored.ref.checksumSha256)).toBe(false);
+    expect(
+      await withStore(CLAIM_STORE, 'readonly', (store) => store.getAllKeys())
+    ).toEqual([]);
+  });
 });
 
 /**
@@ -562,5 +749,87 @@ describe('deleteLocalProject', () => {
     );
 
     expect(await listLocalProjects()).toEqual([]);
+  });
+});
+
+describe('project measurements', () => {
+  const projectId = 'project_measured';
+
+  function record(count: number) {
+    return {
+      projectId,
+      version: 1,
+      updatedAt: '2026-08-07T00:00:00Z',
+      display: {
+        unit: 'mm' as const,
+        precision: 2,
+        radialDisplay: 'diameter' as const
+      },
+      measurements: Array.from({ length: count }, (_, index) => ({
+        id: `edge:${index}`,
+        kind: 'edge-length' as const,
+        label: `Edge ${index}`,
+        targets: [],
+        result: { value: index + 1, dimension: 'length' as const },
+        quality: 'exact-kernel' as const,
+        status: 'current' as const,
+        sourceRevision: 1,
+        sourceUnit: 'mm' as const,
+        visible: true
+      }))
+    };
+  }
+
+  it('round-trips a record through its own store', async () => {
+    await saveProjectMeasurements(record(2));
+    const loaded = await loadProjectMeasurements(projectId);
+    expect(loaded?.measurements).toHaveLength(2);
+    expect(loaded?.display.unit).toBe('mm');
+  });
+
+  it('answers null for a project that has never been measured', async () => {
+    expect(await loadProjectMeasurements('project_never')).toBeNull();
+  });
+
+  it('refuses an unreadable record without calling it missing', async () => {
+    const future = { ...record(2), version: 2, futureField: 'keep me' };
+    expect(await ensureLocalProjectStorage()).toBe('ready');
+    await withStore(MEASUREMENT_STORE, 'readwrite', (store) =>
+      store.put(future)
+    );
+
+    await expect(loadProjectMeasurements(projectId)).rejects.toThrow(
+      /unsupported or malformed/
+    );
+    expect(
+      await withStore<Record<string, unknown>>(
+        MEASUREMENT_STORE,
+        'readonly',
+        (store) => store.get(projectId) as IDBRequest<Record<string, unknown>>
+      )
+    ).toEqual(future);
+  });
+
+  it('replaces rather than appending on a second write', async () => {
+    await saveProjectMeasurements(record(3));
+    await saveProjectMeasurements(record(1));
+    expect(
+      (await loadProjectMeasurements(projectId))?.measurements
+    ).toHaveLength(1);
+  });
+
+  it('is deleted with its project', async () => {
+    // The orphan hazard, and it is not merely untidy: `adoptProjectDocument`
+    // reuses a project id, so a record left behind would surface under a
+    // DIFFERENT project that later claimed the same id — someone else's
+    // measurements appearing on your part.
+    let document = createProjectDocument('Measured', toUserId('user_m'));
+    document = { ...document, projectId: toProjectId(projectId) };
+    await saveLocalProject(document);
+    await saveProjectMeasurements(record(2));
+    expect(await loadProjectMeasurements(projectId)).not.toBeNull();
+
+    await deleteLocalProject(projectId);
+    expect(await loadProjectMeasurements(projectId)).toBeNull();
   });
 });

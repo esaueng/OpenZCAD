@@ -201,3 +201,105 @@ test('the preview names exactly what the click then measures', async ({
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   await expect(workbench.getByRole('listitem')).toContainText(previewed!);
 });
+
+test('a hover on an edge snaps to a named point', async ({ page }) => {
+  // Snapping is what makes a measured distance exact rather than "wherever the
+  // cursor happened to be". The glyph naming the kind is half of it: a marker
+  // alone says something happened, where "Endpoint" says the position is now
+  // exact.
+  //
+  // Candidates are scoped by `measureSnapEdges` before anything is projected.
+  // `resolveSnap` projects every candidate it is handed, on every hover frame,
+  // so handing it a whole body is how this becomes a frame-rate problem on an
+  // imported assembly.
+  await createBox(page, 'Measure Snap');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+
+  // The locator hands back a point on a real edge, confirmed pickable through
+  // the live camera — which is also within snap range of that edge's own
+  // midpoint or an end.
+  const edge = await locateEdge(page);
+  await page.mouse.move(edge.x - 60, edge.y - 60);
+  await page.mouse.move(edge.x, edge.y);
+
+  const glyph = page.locator('.snap-glyph');
+  await expect(glyph).toBeVisible();
+  await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
+});
+
+test('a measurement survives a reload', async ({ page }) => {
+  // The whole promise of persisting them. Measurements belong to the project,
+  // not to the tab: someone who measures a part, closes the laptop and comes
+  // back to check a figure should find it.
+  //
+  // They are stored in their own per-project IndexedDB record rather than in
+  // the document, because anything written into a ProjectDocument that no user
+  // typed makes an untouched project read `diverged` and invalidates the exact
+  // rebuild cache.
+  await createBox(page, 'Measure Durability');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  const recorded = await workbench.getByRole('listitem').textContent();
+  expect(recorded).toBeTruthy();
+
+  // The write is debounced, so give it the chance the app gives it.
+  await page.waitForTimeout(700);
+  await page.reload();
+
+  // Back in View mode with the measurement still listed. Measure has to be
+  // re-armed — that is session state, and arming a tool is not a measurement.
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await expect(
+    page.getByLabel('Measurement workbench').getByRole('listitem')
+  ).toHaveCount(1);
+  await expect(
+    page.getByLabel('Measurement workbench').getByRole('listitem')
+  ).toHaveText(recorded!);
+});
+
+test('measurements stay with their own project across a switch', async ({
+  page
+}) => {
+  await createBox(page, 'Measured First Project');
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page.getByRole('button', { name: 'Edge', exact: true }).click();
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+
+  const firstWorkbench = page.getByLabel('Measurement workbench');
+  const recorded = await firstWorkbench.getByRole('listitem').textContent();
+  expect(recorded).toBeTruthy();
+  await page.waitForTimeout(700);
+
+  await page.getByTitle('Back to projects').click();
+  await page.getByLabel('Project name').fill('Unmeasured Second Project');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await expect(
+    page.getByLabel('Measurement workbench').getByRole('listitem')
+  ).toHaveCount(0);
+
+  await page.getByTitle('Back to projects').click();
+  await page
+    .locator('.start-tile-open', { hasText: 'Measured First Project' })
+    .click();
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await expect(
+    page.getByLabel('Measurement workbench').getByRole('listitem')
+  ).toHaveText(recorded!);
+});

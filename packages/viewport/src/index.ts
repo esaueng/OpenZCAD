@@ -28,6 +28,7 @@ export * from './pick/edges';
 // Snapping: what a pointer can lock onto, and the candidates topology gives.
 export * from './snap/SnapEngine';
 export * from './snap/topologySnaps';
+export * from './snap/measureSnaps';
 
 // Selection: hover/preselect state and its overlays.
 export * from './selection/SelectionManager';

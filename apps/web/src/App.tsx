@@ -408,16 +408,19 @@ import {
   clearAllLastSyncedVersions,
   clearLastSyncedVersion,
   deleteLocalProject,
+  isLocalStorageBlockedError,
   listLocalProjectOrganizations,
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
+  saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
@@ -477,6 +480,7 @@ import type {
  * so naming the module here does not pull it back into the eager chunk.
  */
 import type * as MeasurementModule from './lib/measurements';
+import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   EMPTY_MEASURE_SESSION,
   edgeRunIsTotalable,
@@ -576,10 +580,21 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const unavailableAs =
+    <T,>(fallback: T) =>
+    (error: unknown): T => {
+      // A device with no IndexedDB is legitimately a device with no local
+      // projects. A blocked schema upgrade is temporary and actionable; calling
+      // it an empty shelf would tell the user their projects disappeared.
+      if (isLocalStorageBlockedError(error)) {
+        throw error;
+      }
+      return fallback;
+    };
   const [local, localOrganizations, remote] = await Promise.all([
-    listLocalProjects().catch(() => []),
+    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
     listLocalProjectOrganizations().catch(
-      () => new Map<string, ProjectOrganization>()
+      unavailableAs(new Map<string, ProjectOrganization>())
     ),
     signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
   ]);
@@ -2670,6 +2685,14 @@ export function App() {
   const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
   const [measurementPrecision, setMeasurementPrecision] = useState(2);
   const [radialDisplay, setRadialDisplay] = useState<RadialDisplay>('diameter');
+  /**
+   * The project whose stored list has been answered, including the answer
+   * "none". Until this matches the open project, writes stay disabled: an
+   * empty initial render must never outrun a slow read and erase the record it
+   * was still loading.
+   */
+  const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
+    useState<string | null>(null);
   const measurementDisplay = useMemo<MeasurementDisplayOptions>(
     () => ({
       unit: measurementUnit,
@@ -2680,14 +2703,82 @@ export function App() {
   );
 
   // A measurement session belongs to one open project, not the application.
+  //
+  // The list is cleared first and then restored from storage, so a project
+  // with no stored measurements lands empty rather than inheriting the last
+  // project's. The restore is deliberately not awaited before clearing: an
+  // in-flight read for the PREVIOUS project must not be able to land on this
+  // one, which the id check inside the effect prevents.
   useEffect(() => {
     setMeasurements([]);
     setActiveMeasurementId(null);
     clearMeasurementPicks();
-    if (doc) {
-      setMeasurementUnit(doc.units);
+    setMeasurementHydratedProjectId(null);
+    if (!doc) {
+      return;
     }
+    const projectId = doc.projectId;
+    setMeasurementUnit(doc.units);
+    setMeasurementPrecision(2);
+    setRadialDisplay('diameter');
+    let cancelled = false;
+    void loadProjectMeasurements(projectId)
+      .then((record) => {
+        if (cancelled) {
+          return;
+        }
+        if (record) {
+          setMeasurements(record.measurements);
+          setMeasurementUnit(record.display.unit);
+          setMeasurementPrecision(record.display.precision);
+          setRadialDisplay(record.display.radialDisplay);
+        }
+        setMeasurementHydratedProjectId(projectId);
+      })
+      .catch(() => {
+        // Leave writes disabled for this project. Besides unavailable storage,
+        // this includes a record from a newer build: writing the empty v1 list
+        // over fields this build refused to read would be the data loss the
+        // parser's forward-version guard exists to prevent.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [doc?.projectId]);
+
+  /**
+   * Writes the measurement list back, debounced.
+   *
+   * Coalesced rather than written per pick because a Shift+Click run rewrites
+   * the list on every click, and an IndexedDB put per click would serialise
+   * the whole list each time for a result that is superseded a moment later.
+   */
+  useEffect(() => {
+    if (!doc || measurementHydratedProjectId !== doc.projectId) {
+      return;
+    }
+    const projectId = doc.projectId;
+    const timeout = window.setTimeout(() => {
+      void saveProjectMeasurements(
+        buildMeasurementRecord(
+          projectId,
+          measurements,
+          measurementDisplay,
+          new Date().toISOString()
+        )
+      ).catch(() => {
+        // Same as the read: a device that cannot store them still measures.
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    doc?.projectId,
+    measurementHydratedProjectId,
+    measurements,
+    measurementDisplay
+  ]);
 
   /**
    * The measurement library, loaded on first entry to View mode.
