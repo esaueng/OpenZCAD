@@ -148,6 +148,56 @@ describe('cloudflare adapters', () => {
     ).toBe(true);
   });
 
+  it("requires an owner's sharing preference for member project access", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        first: vi.fn(async () => {
+          expect(query).toContain('LEFT JOIN user_settings owner_settings');
+          expect(query).toContain("'$.collaboration.enabled'");
+          return null;
+        })
+      }))
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+
+    await expect(
+      service.requireProjectRead(
+        toUserId('user_member'),
+        'project_disabled_by_owner'
+      )
+    ).rejects.toMatchObject({ name: 'ProjectNotFoundError' });
+  });
+
+  it("requires an owner's sharing preference when accepting invitations", async () => {
+    const batch = vi.fn();
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        first: vi.fn(async () => {
+          expect(query).toContain('LEFT JOIN user_settings owner_settings');
+          expect(query).toContain("'$.collaboration.enabled'");
+          return null;
+        })
+      }))
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+
+    await expect(
+      service.acceptProjectInvitation(
+        toUserId('user_invitee'),
+        'invitee@example.com',
+        'token-hash',
+        1_800_000_000
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+    expect(batch).not.toHaveBeenCalled();
+  });
+
   it('rejects stale R2 saves before writing project objects', async () => {
     const userId = toUserId('user_stale_save');
     const document = createProjectDocument('Stale save', userId);
