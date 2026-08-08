@@ -20,6 +20,17 @@ export const PROJECT_AUTOSAVE_MAX_WAIT_MS = 60_000;
 export const PROJECT_AUTOSAVE_RETRY_DELAY_MS = 5_000;
 
 /**
+ * How long to wait between attempts once the quick retries are used up.
+ *
+ * The quick ones exist to ride out a blip; a failure that outlasts them is
+ * usually a deployment having a bad few minutes, and the browser fires no
+ * `online` event for that because the network never went away. Without a slow
+ * heartbeat the edit simply stops being offered to the account for the rest of
+ * the session, which reads as "offline" on a working connection.
+ */
+export const PROJECT_AUTOSAVE_IDLE_RETRY_MS = 60_000;
+
+/**
  * What the account knows relative to this device.
  *
  * `local` is not a failure — it is a project the account does not have, which
@@ -41,9 +52,15 @@ export type CloudProjectSyncState =
 /**
  * What the workspace shows. `saving` is the device write, which the controller
  * never sees — it is over in milliseconds and is the only one of these that
- * means "not yet safe anywhere".
+ * means "not yet safe anywhere". `local-source` is derived by the workspace,
+ * never emitted here: the document itself synced, but it references an import
+ * source that was never archived, so other devices cannot rebuild it and a
+ * plain "Synced" would be a lie.
  */
-export type WorkspaceSaveState = CloudProjectSyncState | 'saving';
+export type WorkspaceSaveState =
+  | CloudProjectSyncState
+  | 'saving'
+  | 'local-source';
 
 export interface CloudProjectAutosaveStatus {
   state: CloudProjectSyncState;
@@ -69,6 +86,7 @@ export interface CloudProjectAutosaveOptions {
   idleDelayMs?: number;
   maxWaitMs?: number;
   retryDelayMs?: number;
+  idleRetryDelayMs?: number;
   maxAutomaticRetries?: number;
   now?: () => number;
   onStatus?: (status: CloudProjectAutosaveStatus) => void;
@@ -143,6 +161,7 @@ export class CloudProjectAutosave {
   #enabled = true;
   readonly #maxWaitMs: number;
   readonly #retryDelayMs: number;
+  readonly #idleRetryDelayMs: number;
   readonly #maxAutomaticRetries: number;
   readonly #now: () => number;
 
@@ -171,6 +190,8 @@ export class CloudProjectAutosave {
     this.#maxWaitMs = options.maxWaitMs ?? PROJECT_AUTOSAVE_MAX_WAIT_MS;
     this.#retryDelayMs =
       options.retryDelayMs ?? PROJECT_AUTOSAVE_RETRY_DELAY_MS;
+    this.#idleRetryDelayMs =
+      options.idleRetryDelayMs ?? PROJECT_AUTOSAVE_IDLE_RETRY_MS;
     this.#maxAutomaticRetries = options.maxAutomaticRetries ?? 3;
     this.#now = options.now ?? (() => Date.now());
     this.#unsubscribeConnectivity = this.#connectivity.subscribe((online) =>
@@ -189,6 +210,23 @@ export class CloudProjectAutosave {
 
   get isHalted(): boolean {
     return this.#halted !== null;
+  }
+
+  /**
+   * Whether the account is already known to hold exactly this document.
+   *
+   * Distinguishes adopting a document from editing one. Reopening a project,
+   * pulling a newer copy, and receiving a collaboration frame all arrive as a
+   * document this device did not author, and mirroring one straight back is a
+   * write nobody asked for — fenced, on the collaboration path, against a
+   * version the room may not have persisted yet.
+   */
+  holdsDocument(document: ProjectDocument): boolean {
+    return (
+      this.#project !== null &&
+      this.#project.projectId === document.projectId &&
+      this.#project.version === document.version
+    );
   }
 
   /**
@@ -484,13 +522,21 @@ export class CloudProjectAutosave {
       return;
     }
     if (
-      result.state === 'failed' &&
-      this.#pending &&
-      this.#connectivity.isOnline() &&
-      this.#automaticRetries <= this.#maxAutomaticRetries
+      result.state !== 'failed' ||
+      !this.#pending ||
+      !this.#connectivity.isOnline()
     ) {
-      this.#armTimer(this.#retryDelayMs);
+      return;
     }
+    // Quick retries first, then a slow heartbeat rather than silence. Giving
+    // up entirely would leave the edit unoffered for the rest of the session
+    // on a connection that never dropped, so no `online` event is coming to
+    // restart it.
+    this.#armTimer(
+      this.#automaticRetries <= this.#maxAutomaticRetries
+        ? this.#retryDelayMs
+        : this.#idleRetryDelayMs
+    );
   }
 
   /**
@@ -565,7 +611,7 @@ export class CloudProjectAutosave {
  * The account's version out of a conflict response. The server sends it so the
  * client can say how far behind it is without a second round trip.
  */
-function currentVersionOf(error: ApiError): number | null {
+export function currentVersionOf(error: ApiError): number | null {
   const candidate = error.details?.currentVersion;
   return typeof candidate === 'number' ? candidate : null;
 }

@@ -424,6 +424,16 @@ export interface ToolCardModel {
   error?: string;
 }
 
+/**
+ * A stale stored selection fails at EVERY value, so "try again" advice would
+ * send the user in circles; the error text carries its own repair guidance.
+ */
+export function isStaleSelectionError(
+  error: string | null | undefined
+): boolean {
+  return /no longer exists/.test(error ?? '');
+}
+
 function lifecycleHint(
   state: Extract<InteractionState, { mode: 'face' | 'edges' | 'region' }>,
   armedHint: string
@@ -437,7 +447,9 @@ function lifecycleHint(
   if (state.phase === 'failed') {
     return {
       phase: state.phase,
-      hint: 'Adjust the value and try again.',
+      hint: isStaleSelectionError(state.error)
+        ? 'Esc closes the tool.'
+        : 'Adjust the value and try again.',
       error: state.error ?? 'The exact operation was rejected.'
     };
   }

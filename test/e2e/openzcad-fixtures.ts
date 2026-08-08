@@ -5,6 +5,16 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
 
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
 
+/** Waits on the production workspace summary instead of viewport chrome. */
+export async function expectBodyCount(page: Page, count: number) {
+  const bodyLabel = `${count} ${count === 1 ? 'body' : 'bodies'}`;
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByLabel(new RegExp(` · \\d+ features? · ${bodyLabel}\\. Sync `))
+  ).toBeVisible();
+}
+
 /**
  * The preview server hosts the static SPA without the Worker API, so the
  * handful of API routes the app touches are stubbed here. Everything else —

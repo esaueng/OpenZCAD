@@ -232,7 +232,11 @@ export function unresolvedReferenceError(
         `${kind === 'edge' ? 's' : '(s)'} and re-create this feature.`
     );
   }
-  return new Error(`A selected ${kind} no longer exists.`);
+  // This feature was saved without stable references, so no parameter value
+  // can bring the orphaned hash back — say what actually repairs it.
+  return new Error(
+    `A selected ${kind} no longer exists. Re-select the ${kind}${kind === 'edge' ? 's' : '(s)'} and re-create this feature.`
+  );
 }
 
 export function ambiguousReferenceError(kind: 'edge' | 'face'): Error {

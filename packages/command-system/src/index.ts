@@ -1621,6 +1621,23 @@ export class CommandManager {
     return this.document;
   }
 
+  /**
+   * Executes a document normalization — a repair the rebuild proved, not a
+   * user edit. It persists like any command (log entry, revision, version
+   * bump) but creates no history entry, so undo/redo keep targeting the
+   * user's own actions. Interleaving stays consistent because history
+   * entries restore whole-document snapshots; a normalization undone as part
+   * of a snapshot swap is simply re-proven and reapplied by the next rebuild.
+   */
+  normalize(command: AnyCommand): ProjectDocument {
+    command.validate(this.document);
+    let next = command.apply(this.document);
+    next.commandLog.push(command.serialize());
+    next = appendRevision(next, command.label);
+    this.document = next;
+    return this.document;
+  }
+
   undo(): ProjectDocument {
     const entry = this.undoStack.pop();
     if (!entry) {

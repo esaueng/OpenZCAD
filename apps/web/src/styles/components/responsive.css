@@ -30,6 +30,24 @@
   }
 }
 
+/* The mode switch takes room out of the middle of the bar, so the two status
+   chips drop to their icons here rather than at 620px — the project name is
+   worth more than the words "Signed in". */
+@media (max-width: 1000px) {
+  .account-state,
+  .collaboration-state {
+    width: 28px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+    font-size: 0;
+  }
+
+  .topbar-actions {
+    grid-template-columns: 28px 128px 28px 28px 28px;
+  }
+}
+
 @media (max-width: 820px) {
   .workspace {
     grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
@@ -66,8 +84,10 @@
     display: none;
   }
 
+  /* No middle left to hold: the name takes whatever the actions leave. */
   .breadcrumb {
     flex: 1 1 auto;
+    max-width: none;
   }
 
   .project-title-button {

@@ -207,6 +207,26 @@ export interface BooleanFaceCensus {
 const FACET_FALLBACK_FACTOR = 4;
 const FACET_FALLBACK_SLACK = 32;
 
+const FACET_FALLBACK_LEAD =
+  'The boolean returned a faceted approximation';
+
+/**
+ * What to say when no specific remedy has been proved.
+ *
+ * Naming a single cause here was a mistake worth not repeating: measured on a
+ * box and a cylinder, repositioning clears the fallback for a small round
+ * operand and clears nothing at all for one wider than the box it meets, so
+ * "this is a tangency, move it" is confidently wrong half the time. The caller
+ * appends a concrete move only when it has fused that exact move and measured
+ * the result exact; this text covers the rest without pretending to a
+ * diagnosis, and points at the operation that is known to stay exact on the
+ * same operands.
+ */
+const FACET_FALLBACK_REMEDY =
+  'The result is watertight, but its curved surfaces are now planar facets and will ' +
+  'export that way. Repositioning the overlap sometimes clears it; otherwise keep the ' +
+  'bodies separate, or subtract instead — the same operands still cut exactly.';
+
 export interface FaceCensusSubject {
   getSolidFaces(solid: number): ArrayLike<number>;
   getSurfaceType(face: number): string;
@@ -260,16 +280,14 @@ export function booleanFacetFallbackWarning(
     `${census.result.faces} result faces (${census.result.curvedFaces} curved)`
   ].join(' became ');
   if (lostCurvature && exploded) {
-    return (
-      `The boolean returned a faceted approximation instead of exact surfaces: ${detail}. ` +
-      'This happens on sliver or near-tangent contacts; move or thicken the overlap and try again.'
-    );
+    return `${FACET_FALLBACK_LEAD} instead of exact surfaces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
   if (lostCurvature) {
-    return (
-      `The boolean replaced every curved surface with planar faces: ${detail}. ` +
-      'Curved geometry will export faceted.'
-    );
+    // Same fallback, caught by the curvature test alone because a smaller
+    // round operand facets into too few faces to trip the count test. It
+    // earns the same remedy: without one this reads as a property of the
+    // result rather than as something the user can act on.
+    return `The boolean replaced every curved surface with planar faces: ${detail}. ${FACET_FALLBACK_REMEDY}`;
   }
   return (
     `The boolean produced far more faces than its operands: ${detail}. ` +
@@ -280,6 +298,12 @@ export function booleanFacetFallbackWarning(
 export interface UnionOperandBounds {
   name: string;
   bounds: UnionBounds;
+  /**
+   * Whether this operand has any non-planar face. Only a curved boundary can
+   * be inscribed inside its own exact AABB by an approximated result, so only
+   * a curved operand earns the approximation allowance below.
+   */
+  hasCurvedFaces?: boolean;
 }
 
 export interface UnionExtentValidation {
@@ -346,12 +370,22 @@ export function droppedUnionOperandWarning(
     for (const axis of ['x', 'y', 'z'] as const) {
       const operandSpan = operand.bounds.max[axis] - operand.bounds.min[axis];
       // A rejected faceted fallback can inscribe a curved operand slightly
-      // inside its exact AABB. Ignore at most 0.1% of that operand's own span,
-      // capped by the kernel's configured approximation deflection. The M4
-      // drop loses half the boss height, far outside either bound.
+      // inside its exact AABB. How far is bounded by the deflection the
+      // kernel tessellates to — that IS the maximum chord deviation — so a
+      // curved operand is allowed the full approximation tolerance.
+      //
+      // Capping that at 0.1% of the operand's own span, as this once did,
+      // is tighter than the geometry permits for anything under ~80 mm: a
+      // 12 mm cylinder got 0.012 mm of slack against a real facet sag of
+      // 0.0123 mm and was reported as "dropped geometry", advising the user
+      // to move a body over a third of a micron. A PLANAR operand keeps the
+      // tight bound: its corners survive faceting exactly, so any loss there
+      // is real. The M4 drop loses half the boss height, far outside either.
       const tolerance = Math.max(
         numericTolerance,
-        Math.min(approximationTolerance, Math.abs(operandSpan) * 1e-3)
+        operand.hasCurvedFaces === true
+          ? approximationTolerance
+          : Math.min(approximationTolerance, Math.abs(operandSpan) * 1e-3)
       );
       const minimumMissing = input.result.min[axis] - operand.bounds.min[axis];
       if (minimumMissing > tolerance) {

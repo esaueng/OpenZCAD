@@ -23,7 +23,8 @@
 }
 
 .cube-face,
-.cube-corner {
+.cube-corner,
+.cube-corner-hit {
   pointer-events: auto;
   touch-action: none;
   cursor: grab;
@@ -39,26 +40,40 @@
   stroke-width: 1.8;
 }
 
+/* The half of the target that reaches past the drawn facet: the same corner
+   cut deeper, never painted. It sits over the faces it overhangs and wins the
+   click there, which is the point — near a corner you are aiming for the
+   isometric view. Both halves share one handler on the parent group, so the
+   target is their union and can never be smaller than what is drawn. */
+.cube-corner-hit {
+  fill: transparent;
+  stroke: transparent;
+  /* `all` rather than the SVG default: hit-testing must not depend on the
+     facet being painted, since this one deliberately is not. */
+  pointer-events: all;
+}
+
 .orientation-cube:active .cube-face,
-.orientation-cube:active .cube-corner {
+.orientation-cube:active .cube-corner,
+.orientation-cube:active .cube-corner-hit {
   cursor: grabbing;
 }
 
 /* A CSS rule outranks the presentation attribute the frame loop writes. */
 .cube-face:hover,
-.cube-corner:hover {
+.cube-corner-target:hover .cube-corner {
   fill: #37527a;
 }
 
 /* Clicking a facet leaves it focused; never let the browser draw its native
    focus ring around the cube. Keyboard focus keeps the accent stroke below. */
 .cube-face:focus,
-.cube-corner:focus {
+.cube-corner-hit:focus {
   outline: none;
 }
 
 .cube-face:focus-visible,
-.cube-corner:focus-visible {
+.cube-corner-target:has(.cube-corner-hit:focus-visible) .cube-corner {
   stroke: var(--color-accent);
   stroke-width: 1.5;
 }
@@ -383,6 +398,19 @@
 
 .move-controller {
   width: 316px;
+}
+
+/* Name and body picker: the two things the retired Move form carried that the
+   gizmo did not (WF-07). They sit above the axis grids, matching the order the
+   feature forms use — identity first, then values. */
+.move-name,
+.move-target {
+  margin-bottom: 10px;
+}
+
+.move-name input,
+.move-target select {
+  width: 100%;
 }
 
 .move-grid {

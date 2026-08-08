@@ -52,8 +52,15 @@
   background: var(--color-border);
 }
 
+/*
+  Sized to its content rather than greedy, so the mode switch after it can take
+  the middle of the bar instead of being pushed against the actions. The cap
+  stops a long project name from claiming that middle back; narrow screens hand
+  the growth back in responsive.css, where there is no middle left to hold.
+*/
 .breadcrumb {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  max-width: 40%;
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -333,12 +340,15 @@
 }
 
 /*
- * Only the two states that need a decision are coloured. The rest — including
+ * Only the states that need a decision are coloured. The rest — including
  * "saved on this device only" — are ordinary outcomes, and tinting them would
  * suggest work is at risk when it is sitting safely in IndexedDB.
+ * `local-source` is a decision state: an import source exists only in this
+ * browser, and only the user can trigger the re-archive.
  */
 .save-state.is-conflict,
-.save-state.is-refused {
+.save-state.is-refused,
+.save-state.is-local-source {
   color: var(--color-warning);
   border-color: currentcolor;
 }

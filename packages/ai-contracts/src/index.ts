@@ -3,7 +3,10 @@ import {
   listFeaturesInOrder,
   listParameters
 } from '@openzcad/document-core';
-import { isFeatureSuppressed } from '@openzcad/shared';
+import {
+  isFeatureSuppressed,
+  isImportedSourceReference
+} from '@openzcad/shared';
 import type {
   SketchObjectData,
   AxisId,
@@ -678,7 +681,11 @@ function compactFeatureData(document: ProjectDocument, data: unknown): unknown {
       artifactId: feature.artifactId,
       sourceName: feature.sourceName,
       sourceBytes:
-        typeof feature.stepText === 'string' ? feature.stepText.length : 0
+        typeof feature.stepText === 'string'
+          ? feature.stepText.length
+          : isImportedSourceReference(feature.stepSourceRef)
+            ? feature.stepSourceRef.logicalBytes
+            : 0
     };
   }
   if (feature.featureKind === 'imported-mesh') {

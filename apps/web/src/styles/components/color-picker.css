@@ -1,0 +1,110 @@
+/* ── In-app color picker (saturation/value pad, hue, hex, presets) ── */
+
+.color-picker {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 10px;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.color-picker-sv {
+  position: relative;
+  height: 128px;
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker-sv-white,
+.color-picker-sv-black {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+}
+
+.color-picker-sv-white {
+  background: linear-gradient(to right, #ffffff, rgba(255, 255, 255, 0));
+}
+
+.color-picker-sv-black {
+  background: linear-gradient(to top, #000000, rgba(0, 0, 0, 0));
+}
+
+.color-picker-hue {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  cursor: crosshair;
+  touch-action: none;
+  background: linear-gradient(
+    to right,
+    #ff0000 0%,
+    #ffff00 17%,
+    #00ff00 33%,
+    #00ffff 50%,
+    #0000ff 67%,
+    #ff00ff 83%,
+    #ff0000 100%
+  );
+}
+
+.color-picker-cursor {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker-hue .color-picker-cursor {
+  top: 50%;
+}
+
+.color-picker-hex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.color-picker-hex input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.color-picker-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.color-picker-presets button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.color-picker-presets button:hover {
+  border-color: var(--color-border-strong);
+}
+
+.color-picker-presets button.active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}

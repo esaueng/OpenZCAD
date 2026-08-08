@@ -241,4 +241,188 @@ describe('OrientationWidget pointer lifecycle', () => {
     expect(onSelectView).toHaveBeenNthCalledWith(1, 'right');
     expect(onSelectView).toHaveBeenNthCalledWith(2, 'right');
   });
+
+  describe('isometric corner targets', () => {
+    /**
+     * A true isometric basis with the +X+Y+Z corner turned toward the camera:
+     * screen-right is (1,-1,0)/√2, screen-up is (-1,-1,2)/√6 negated for SVG's
+     * downward y, and every axis is equally foreshortened in depth.
+     */
+    const ISOMETRIC = {
+      x: { x: 0.70711, y: 0.40825, z: 0.57735 },
+      y: { x: -0.70711, y: 0.40825, z: 0.57735 },
+      z: { x: 0, y: -0.8165, z: 0.57735 }
+    };
+
+    type Point = readonly [number, number];
+
+    function polygonPoints(element: SVGPolygonElement): Point[] {
+      const raw = element.getAttribute('points');
+      if (!raw) {
+        throw new Error('facet was rendered without any points');
+      }
+      return raw
+        .trim()
+        .split(/\s+/)
+        .map((pair): Point => {
+          const [x, y] = pair.split(',').map(Number);
+          return [x ?? Number.NaN, y ?? Number.NaN];
+        });
+    }
+
+    /** Unsigned shoelace area, so winding direction does not matter. */
+    function area(points: Point[]): number {
+      let sum = 0;
+      for (let i = 0; i < points.length; i += 1) {
+        const [x1, y1] = points[i] ?? [0, 0];
+        const [x2, y2] = points[(i + 1) % points.length] ?? [0, 0];
+        sum += x1 * y2 - x2 * y1;
+      }
+      return Math.abs(sum) / 2;
+    }
+
+    function contains(polygon: Point[], [x, y]: Point): boolean {
+      let inside = false;
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        const [xi, yi] = polygon[i] ?? [0, 0];
+        const [xj, yj] = polygon[j] ?? [0, 0];
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+          inside = !inside;
+        }
+      }
+      return inside;
+    }
+
+    function visibleCorners(container: HTMLElement) {
+      return [...container.querySelectorAll('.cube-corner-target')]
+        .map((group) => ({
+          drawn: group.querySelector<SVGPolygonElement>('.cube-corner'),
+          target: group.querySelector<SVGPolygonElement>('.cube-corner-hit')
+        }))
+        .filter(
+          (pair): pair is { drawn: SVGPolygonElement; target: SVGPolygonElement } =>
+            pair.drawn !== null &&
+            pair.target !== null &&
+            pair.target.style.display !== 'none'
+        );
+    }
+
+    it('gives every drawn corner a target that reaches past it', () => {
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const corners = visibleCorners(container);
+      expect(corners.length).toBeGreaterThan(0);
+
+      for (const { drawn, target } of corners) {
+        // The deeper cut is more than twice the facet it widens, on every
+        // corner and not just the one turned toward the camera.
+        expect(area(polygonPoints(target))).toBeGreaterThan(
+          area(polygonPoints(drawn)) * 2
+        );
+      }
+    });
+
+    it('never lets the target fall short of the facet you can see', () => {
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const corners = visibleCorners(container);
+      const glancing = corners.filter(
+        ({ drawn, target }) =>
+          !polygonPoints(drawn).every((vertex) =>
+            contains(polygonPoints(target), vertex)
+          )
+      );
+      // The deeper cut is the drawn facet scaled about the corner's projected
+      // apex, and at a glancing angle that apex lies outside it — so on those
+      // corners the deeper cut does NOT contain the facet. This is the whole
+      // reason the click sits on the group rather than on that cut: the target
+      // is the union of both, which cannot be smaller than what is drawn.
+      expect(glancing.length).toBeGreaterThan(0);
+      for (const { drawn, target } of glancing) {
+        expect(drawn.parentElement).toBe(target.parentElement);
+        expect(drawn.parentElement).toHaveClass('cube-corner-target');
+      }
+    });
+
+    it('takes the click from the drawn facet as well as the deeper cut', () => {
+      const { container, orientationRef, onSelectView } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const [corner] = visibleCorners(container);
+      if (!corner) {
+        throw new Error('no corner facet was visible in the isometric view');
+      }
+      // Both halves reach the same handler on the group. If this only worked
+      // from the deeper cut, the glancing corners above would have lost part
+      // of their visible facet to whatever sits behind the widget.
+      fireEvent.click(corner.drawn);
+      fireEvent.click(corner.target);
+
+      expect(onSelectView).toHaveBeenCalledTimes(2);
+      expect(onSelectView.mock.calls[0]?.[0]).toEqual(
+        onSelectView.mock.calls[1]?.[0]
+      );
+    });
+
+    it('takes the target away with the facet when a corner turns away', () => {
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const facing = visibleCorners(container).map(
+        ({ target }) => target.getAttribute('aria-label') ?? ''
+      );
+      expect(facing.length).toBeGreaterThan(0);
+
+      // Same screen basis, opposite depth: every corner that was turned toward
+      // the camera is now turned away, and vice versa.
+      orientationRef.current?.({
+        x: { ...ISOMETRIC.x, z: -ISOMETRIC.x.z },
+        y: { ...ISOMETRIC.y, z: -ISOMETRIC.y.z },
+        z: { ...ISOMETRIC.z, z: -ISOMETRIC.z.z }
+      });
+
+      // An unpainted triangle left behind over a corner that has turned away
+      // would swallow clicks meant for whatever face now covers that ground,
+      // and being invisible there would be no way to tell why.
+      const stillFacing = visibleCorners(container).map(
+        ({ target }) => target.getAttribute('aria-label') ?? ''
+      );
+      for (const label of facing) {
+        expect(stillFacing).not.toContain(label);
+      }
+      expect(stillFacing.length).toBeGreaterThan(0);
+    });
+
+    it('leaves the pointer with the target, not the facet it stands for', () => {
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const [corner] = visibleCorners(container);
+      expect(corner).toBeDefined();
+      // Only one of the pair may answer to a click, or the two could disagree
+      // about which corner the pointer is over.
+      expect(corner?.drawn.getAttribute('aria-hidden')).toBe('true');
+      expect(corner?.drawn.getAttribute('role')).toBeNull();
+      expect(corner?.target.getAttribute('role')).toBe('button');
+      expect(corner?.target.getAttribute('aria-label')).toMatch(
+        /isometric view$/
+      );
+    });
+
+    it('selects the isometric view from the target', () => {
+      const { container, orientationRef, onSelectView } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const [corner] = visibleCorners(container);
+      if (!corner) {
+        throw new Error('no corner facet was visible in the isometric view');
+      }
+      fireEvent.click(corner.target);
+
+      expect(onSelectView).toHaveBeenCalledOnce();
+      expect(onSelectView.mock.calls[0]?.[0]).toHaveProperty('corner');
+    });
+  });
 });
