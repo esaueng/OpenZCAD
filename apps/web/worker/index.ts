@@ -84,7 +84,11 @@ import {
   isDocumentStorageAccountingReady,
   isProjectObjectStorageReady
 } from './readiness';
-import { MAX_ARTIFACT_PART_BYTES, toUserId } from '@openzcad/shared';
+import {
+  MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_PARTS,
+  toUserId
+} from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
@@ -115,7 +119,7 @@ const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
 const UPLOAD_MULTIPART_ROUTE = /^\/api\/uploads\/([^/]+)\/multipart$/;
 const UPLOAD_MULTIPART_COMPLETE_ROUTE =
   /^\/api\/uploads\/([^/]+)\/multipart\/complete$/;
-const UPLOAD_PART_ROUTE = /^\/api\/uploads\/([^/]+)\/parts\/([1-9]\d{0,3})$/;
+const UPLOAD_PART_ROUTE = /^\/api\/uploads\/([^/]+)\/parts\/([1-9]\d*)$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 
@@ -1073,12 +1077,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!uploadId) {
       throw new HttpError(400, 'Missing uploadId.');
     }
-    await persistence.abortMultipartUpload(userId, multipartMatch[1]!, uploadId);
+    await persistence.abortMultipartUpload(
+      userId,
+      multipartMatch[1]!,
+      uploadId
+    );
     return new Response(null, { status: 204 });
   }
 
   const partMatch = UPLOAD_PART_ROUTE.exec(pathname);
   if (request.method === 'PUT' && partMatch) {
+    const partNumber = Number(partMatch[2]!);
+    if (partNumber > MAX_ARTIFACT_UPLOAD_PARTS) {
+      throw new HttpError(400, 'Upload part number is out of range.');
+    }
     const uploadId = new URL(request.url).searchParams.get('uploadId');
     if (!uploadId) {
       throw new HttpError(400, 'Missing uploadId.');
@@ -1104,7 +1116,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         userId,
         partMatch[1]!,
         uploadId,
-        Number(partMatch[2]!),
+        partNumber,
         body
       )
     );
