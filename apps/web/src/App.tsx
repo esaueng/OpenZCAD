@@ -41,7 +41,6 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import {
-  createBodyFeatureIds,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -69,7 +68,6 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
-import { parseStepMetadata } from '@openzcad/io-step';
 import { parseStl } from '@openzcad/io-stl';
 import type {
   ArtifactKind,
@@ -115,7 +113,6 @@ import type {
   AuthConfigResponse,
   AuthSession,
   HealthResponse,
-  ImportedSourceReference,
   ProjectCollaborationCapabilitiesResponse
 } from '@openzcad/shared';
 import { toArtifactId, toUserId } from '@openzcad/shared';
@@ -124,9 +121,13 @@ import { uploadArtifactBody } from './lib/artifactUpload';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
-  listLocalOnlyImportSources,
-  settleImportSource
+  listLocalOnlyImportSources
 } from './lib/importArchival';
+import {
+  LOCAL_AUTOSAVE_FAILED_STATUS,
+  reparkFailedAutosave
+} from './lib/localAutosaveFailure';
+import { runStepImport } from './lib/stepImportRun';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
   cancelDesktopSignIn,
@@ -407,23 +408,25 @@ import {
   clearAllLastSyncedVersions,
   clearLastSyncedVersion,
   deleteLocalProject,
-  deleteSourceBlob,
+  isLocalStorageBlockedError,
   listLocalProjectOrganizations,
   listLocalProjects,
   loadLastSyncedVersion,
   loadLocalProject,
+  loadProjectMeasurements,
   loadProjectThumbnail,
   loadSourceBlob,
   purgeExpiredLocalProjects,
-  putSourceBlobIfAbsent,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
   saveLocalProjectOrganization,
+  saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject
 } from './lib/localProjectStore';
 import {
   applyLocalProjectOrganizations,
+  cachedThumbnailSource,
   mergeProjectSummaries
 } from './lib/projectShelf';
 import { LivePreview } from './lib/livePreview';
@@ -432,11 +435,7 @@ import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
-import {
-  useValidatedFeatureCommit,
-  VALIDATED_FEATURE_BUSY_STATUS,
-  type ValidatedFeatureOutcome
-} from './hooks/useValidatedFeatureCommit';
+import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
 import { affectedFeatureTargets } from './lib/affectedFeatureTargets';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
@@ -481,6 +480,12 @@ import type {
  * so naming the module here does not pull it back into the eager chunk.
  */
 import type * as MeasurementModule from './lib/measurements';
+import { buildMeasurementRecord } from './lib/measurementRecord';
+import {
+  EMPTY_MEASURE_SESSION,
+  edgeRunIsTotalable,
+  nextEdgeRun
+} from './lib/measureSession';
 import {
   loadPanelState,
   savePanelState,
@@ -518,19 +523,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-/**
- * Fallback ceiling when the source blob store is unavailable (private
- * browsing, storage denied) and the STEP text must be embedded in the
- * document itself, as every import was before content-addressed references.
- */
-const MAX_EMBEDDED_STEP_BYTES = 12 * 1024 * 1024;
-/**
- * Reference-form ceiling. The kernel comfortably imports files this size
- * (measured: 283 MB peaks at 1.2 GB wasm memory, ~7 s — see
- * scripts/profile-step-import.mjs); the binding constraint is wasm32 address
- * space, which this leaves 40% headroom against.
- */
-const MAX_SOURCE_IMPORT_BYTES = 250 * 1024 * 1024;
 /**
  * How long the document must sit still before the shelf preview is re-rendered.
  * Long enough that dragging a dimension does not queue a WebGL render per
@@ -588,10 +580,21 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const unavailableAs =
+    <T,>(fallback: T) =>
+    (error: unknown): T => {
+      // A device with no IndexedDB is legitimately a device with no local
+      // projects. A blocked schema upgrade is temporary and actionable; calling
+      // it an empty shelf would tell the user their projects disappeared.
+      if (isLocalStorageBlockedError(error)) {
+        throw error;
+      }
+      return fallback;
+    };
   const [local, localOrganizations, remote] = await Promise.all([
-    listLocalProjects().catch(() => []),
+    listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
     listLocalProjectOrganizations().catch(
-      () => new Map<string, ProjectOrganization>()
+      unavailableAs(new Map<string, ProjectOrganization>())
     ),
     signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
   ]);
@@ -1019,7 +1022,7 @@ export function App() {
       const cached = await loadProjectThumbnail(project.projectId).catch(
         () => null
       );
-      return cached ? cached.source : undefined;
+      return cachedThumbnailSource(cached, project);
     },
     []
   );
@@ -1318,10 +1321,11 @@ export function App() {
     onBusy: setBusy,
     onStatus: setStatus
   });
-  const {
-    run: executeValidatedFeature,
-    isRunning: validatedFeatureRunning
-  } = useValidatedFeatureCommit({
+  // Held whole rather than destructured, because the STEP import hands the
+  // reservation it took back to the run that adopts it: two callbacks pulled
+  // out separately could be wired from different hook instances, and a
+  // reservation the run does not recognise degrades in silence.
+  const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => geometry.syncOnce(document),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
@@ -1331,6 +1335,7 @@ export function App() {
     onStatus: setStatus,
     onFailure: setFeatureFormError
   });
+  const executeValidatedFeature = validatedFeature.run;
   /**
    * Checksums of imports between their blob write and their commit decision.
    * Content addressing puts a re-import of the same file on the same key, so
@@ -2665,6 +2670,14 @@ export function App() {
     useState<MeasurementMode>('smart');
   const [measurementDraft, setMeasurementDraft] =
     useState<MeasurementTarget | null>(null);
+  /**
+   * Edges accumulated by Shift+Click for a running total. Owned here rather
+   * than read from `selectedEdges`, which is what let measuring rewrite the
+   * workspace's selection; the rules live in `measureSession.ts`.
+   */
+  const [measurementEdgeRun, setMeasurementEdgeRun] = useState<
+    readonly TopologySelection[]
+  >(EMPTY_MEASURE_SESSION.edgeRun);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(
     null
@@ -2672,6 +2685,14 @@ export function App() {
   const [measurementUnit, setMeasurementUnit] = useState<UnitSystem>('mm');
   const [measurementPrecision, setMeasurementPrecision] = useState(2);
   const [radialDisplay, setRadialDisplay] = useState<RadialDisplay>('diameter');
+  /**
+   * The project whose stored list has been answered, including the answer
+   * "none". Until this matches the open project, writes stay disabled: an
+   * empty initial render must never outrun a slow read and erase the record it
+   * was still loading.
+   */
+  const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
+    useState<string | null>(null);
   const measurementDisplay = useMemo<MeasurementDisplayOptions>(
     () => ({
       unit: measurementUnit,
@@ -2682,14 +2703,82 @@ export function App() {
   );
 
   // A measurement session belongs to one open project, not the application.
+  //
+  // The list is cleared first and then restored from storage, so a project
+  // with no stored measurements lands empty rather than inheriting the last
+  // project's. The restore is deliberately not awaited before clearing: an
+  // in-flight read for the PREVIOUS project must not be able to land on this
+  // one, which the id check inside the effect prevents.
   useEffect(() => {
     setMeasurements([]);
     setActiveMeasurementId(null);
-    setMeasurementDraft(null);
-    if (doc) {
-      setMeasurementUnit(doc.units);
+    clearMeasurementPicks();
+    setMeasurementHydratedProjectId(null);
+    if (!doc) {
+      return;
     }
+    const projectId = doc.projectId;
+    setMeasurementUnit(doc.units);
+    setMeasurementPrecision(2);
+    setRadialDisplay('diameter');
+    let cancelled = false;
+    void loadProjectMeasurements(projectId)
+      .then((record) => {
+        if (cancelled) {
+          return;
+        }
+        if (record) {
+          setMeasurements(record.measurements);
+          setMeasurementUnit(record.display.unit);
+          setMeasurementPrecision(record.display.precision);
+          setRadialDisplay(record.display.radialDisplay);
+        }
+        setMeasurementHydratedProjectId(projectId);
+      })
+      .catch(() => {
+        // Leave writes disabled for this project. Besides unavailable storage,
+        // this includes a record from a newer build: writing the empty v1 list
+        // over fields this build refused to read would be the data loss the
+        // parser's forward-version guard exists to prevent.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [doc?.projectId]);
+
+  /**
+   * Writes the measurement list back, debounced.
+   *
+   * Coalesced rather than written per pick because a Shift+Click run rewrites
+   * the list on every click, and an IndexedDB put per click would serialise
+   * the whole list each time for a result that is superseded a moment later.
+   */
+  useEffect(() => {
+    if (!doc || measurementHydratedProjectId !== doc.projectId) {
+      return;
+    }
+    const projectId = doc.projectId;
+    const timeout = window.setTimeout(() => {
+      void saveProjectMeasurements(
+        buildMeasurementRecord(
+          projectId,
+          measurements,
+          measurementDisplay,
+          new Date().toISOString()
+        )
+      ).catch(() => {
+        // Same as the read: a device that cannot store them still measures.
+      });
+    }, 400);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    doc?.projectId,
+    measurementHydratedProjectId,
+    measurements,
+    measurementDisplay
+  ]);
 
   /**
    * The measurement library, loaded on first entry to View mode.
@@ -2756,54 +2845,136 @@ export function App() {
     setStatus(`${measurement.label} measured.`);
   }
 
+  /**
+   * What measuring this pick WOULD report, without recording anything.
+   *
+   * A tool that only answers after you commit makes you record a row to find
+   * out whether you picked the right thing, then delete it. The preview runs
+   * the SAME derivation the click will run rather than a cheaper estimate that
+   * could disagree with the number that lands.
+   *
+   * Null when there is nothing honest to say, which includes an ambiguous
+   * pick: a hover is not the place to explain ADR-011, and a silent absence
+   * beats a confident wrong number.
+   */
+  function previewMeasurement(
+    selection: TopologySelection,
+    point?: { x: number; y: number; z: number }
+  ): string | null {
+    if (!doc || !viewMode || !measuring || !measurementApi) {
+      return null;
+    }
+    const body = renderedRepresentations[selection.bodyId];
+    if (!body) {
+      return null;
+    }
+    if (measurementMode === 'smart') {
+      const measurement = measurementApi.createSmartMeasurement(
+        body,
+        selection,
+        point,
+        doc.version,
+        doc.units
+      );
+      return measurement
+        ? measurementApi.formatMeasurement(measurement, measurementDisplay)
+            .value
+        : null;
+    }
+    const target = measurementApi.measurementTargetFromSelection(
+      body,
+      selection,
+      point,
+      measurementMode
+    );
+    if (!target?.point) {
+      return null;
+    }
+    // The first of two picks has nothing to measure against yet, so it names
+    // the target rather than guessing at a distance.
+    if (!measurementDraft) {
+      return target.label;
+    }
+    const measurement =
+      measurementMode === 'distance'
+        ? measurementApi.createDistanceMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          )
+        : measurementApi.createAngleMeasurement(
+            measurementDraft,
+            target,
+            doc.version,
+            doc.units
+          );
+    return measurement
+      ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
+      : null;
+  }
+
+  /**
+   * Abandons whatever pick was in progress: the two-pick draft and the running
+   * edge total both. Not called after a measurement is recorded — a run has to
+   * survive that, or a fourth Shift+Click could not extend a total of three.
+   */
+  function clearMeasurementPicks() {
+    setMeasurementDraft(null);
+    setMeasurementEdgeRun(EMPTY_MEASURE_SESSION.edgeRun);
+  }
+
+  /**
+   * Measures a pick, and reports whether it consumed it.
+   *
+   * The return value is the point. This used to be called for its side effects
+   * and fall straight through into sketch entry, direct manipulation, and the
+   * selection update — so measuring an edge in View mode silently replaced
+   * whatever a modelling session had selected, and the two features quietly
+   * shared one piece of state.
+   */
   function handleMeasurementPick(
     selection: TopologySelection,
     additive: boolean,
     detail?: PickDetail
-  ) {
+  ): boolean {
     if (!doc || !viewMode || !measuring) {
-      return;
+      return false;
     }
     // One guard for the whole handler. Dropping a pick that lands before the
     // measurement chunk arrives is better than servicing half of it, and the
-    // window is a frame or two on first entry to View mode only.
+    // window is a frame or two on first entry to View mode only. It still
+    // counts as consumed: falling through to selection would be the very
+    // coupling this seam removes.
     if (!measurementApi) {
       setStatus('Measure is still loading. Try that pick again.');
-      return;
+      return true;
     }
     const body = renderedRepresentations[selection.bodyId];
     if (!body) {
       setStatus(
         'The selected body has no current exact projection to measure.'
       );
-      return;
+      return true;
     }
     const point = detail?.point;
     if (measurementMode === 'smart') {
-      if (selection.kind === 'edge' && additive) {
-        const sameBody = selectedEdges.every(
-          (edge) => edge.bodyId === selection.bodyId
-        );
-        const alreadySelected = selectedEdges.some(
-          (edge) => edge.topologyId === selection.topologyId
-        );
-        const nextEdges =
-          sameBody && alreadySelected
-            ? selectedEdges.filter(
-                (edge) => edge.topologyId !== selection.topologyId
-              )
-            : sameBody
-              ? [...selectedEdges, selection]
-              : [selection];
-        const total = measurementApi.createEdgeTotalMeasurement(
-          viewerBodies,
-          nextEdges,
-          doc.version,
-          doc.units
-        );
-        if (total) {
-          recordMeasurement(total);
-          return;
+      if (selection.kind === 'edge') {
+        // The run lives in the measure session rather than in `selectedEdges`,
+        // which is what let measuring rewrite the workspace's selection.
+        const run = nextEdgeRun(measurementEdgeRun, selection, additive);
+        setMeasurementEdgeRun(run);
+        if (edgeRunIsTotalable(run)) {
+          const total = measurementApi.createEdgeTotalMeasurement(
+            viewerBodies,
+            run,
+            doc.version,
+            doc.units
+          );
+          if (total) {
+            recordMeasurement(total);
+            return true;
+          }
         }
       }
       const measurement = measurementApi.createSmartMeasurement(
@@ -2821,7 +2992,7 @@ export function App() {
             'That selection does not expose a trustworthy measurement.'
         );
       }
-      return;
+      return true;
     }
     const target = measurementApi.measurementTargetFromSelection(
       body,
@@ -2836,12 +3007,12 @@ export function App() {
             ? 'Angle needs a straight edge, circular axis, or measured face direction.'
             : 'That selection does not expose a trustworthy measurement point.')
       );
-      return;
+      return true;
     }
     if (!measurementDraft) {
       setMeasurementDraft(target);
       setStatus(`${target.label} selected · pick the second target.`);
-      return;
+      return true;
     }
     const measurement =
       measurementMode === 'distance'
@@ -2866,6 +3037,7 @@ export function App() {
           : 'Those targets could not produce a stable distance; the first target is still selected.'
       );
     }
+    return true;
   }
 
   const measurementAnnotations = useMemo<
@@ -2890,6 +3062,9 @@ export function App() {
             label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
             selected: true,
             status: 'current' as const,
+            // The first of two picks marks a point; there is no second point
+            // to span to until it lands.
+            graphic: 'anchor' as const,
             anchor: measurementDraft.point,
             segments: []
           }
@@ -3149,8 +3324,19 @@ export function App() {
         controller.schedule(pending);
       }
     } catch {
+      // The document goes back in the queue rather than on the floor. It was
+      // taken out of the ref above so a write that LANDS is not repeated, but a
+      // write that did not land leaves this closure holding the only copy of
+      // those edits — and simply returning loses them outright.
+      const repark = reparkFailedAutosave({
+        pending,
+        queued: pendingLocalSaveRef.current
+      });
+      if (repark) {
+        pendingLocalSaveRef.current = repark;
+      }
       setSaveState('offline');
-      setStatus('Local autosave failed. Export your model before closing.');
+      setStatus(LOCAL_AUTOSAVE_FAILED_STATUS);
     }
   }
 
@@ -5656,170 +5842,19 @@ export function App() {
       return;
     }
 
-    if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-      setStatus('STEP import is limited to 250 MB.');
-      return;
-    }
-
-    // Asked BEFORE anything is written: a run that cannot proceed must not
-    // leave up to 250 MB of source bytes behind it. Nothing sweeps unreferenced
-    // blobs, so those bytes would be permanent — and their mere presence would
-    // then disarm the cleanup of every later refused import of the same file,
-    // which sees a key it did not create.
-    if (validatedFeatureRunning()) {
-      setStatus(VALIDATED_FEATURE_BUSY_STATUS);
-      setFeatureFormError(VALIDATED_FEATURE_BUSY_STATUS);
-      return;
-    }
-
-    // Content-addressed storage first: the document carries a checksum
-    // reference and the bytes live in the browser's blob store (and the
-    // artifact archive, once uploaded). Embedding the text in the document
-    // is the fallback for storage-denied contexts, at the old 12 MB cap.
-    let sourceRef: ImportedSourceReference | null = null;
-    // Only what this import created may be deleted again: the store is
-    // device-global, so the same key can already be backing another project.
-    // Bytes an earlier run of this tab wrote and abandoned count as this
-    // import's own — nothing else can be pointing at them.
-    let sourceBlobCreated = false;
-    let archived = false;
-    // `threw` is the import failing before it ever reached the kernel; its
-    // bytes are as abandoned as a refusal's.
-    let outcome: ValidatedFeatureOutcome | 'threw' = 'threw';
-    try {
-      try {
-        const stored = await putSourceBlobIfAbsent(file);
-        sourceRef = stored.ref;
-        sourceBlobCreated = stored.created;
-        // Marked in-flight in the same tick the bytes become reachable, so no
-        // window exists in which a concurrent import of the same file sees a
-        // blob it could prune.
-        inFlightImportChecksums.current.acquire(sourceRef.checksumSha256);
-      } catch {
-        if (file.size > MAX_EMBEDDED_STEP_BYTES) {
-          setStatus(
-            'STEP import over 12 MB needs browser storage, which is unavailable in this session.'
-          );
-          return;
-        }
-      }
-      const stepText = await file.text();
-      const metadata = parseStepMetadata(file.name, stepText);
-      const productName = metadata.products[0]?.trim();
-      const name = productName || file.name.replace(/\.(step|stp)$/i, '');
-      // Pre-assigned so the pre-flight can ask about THIS body, and reused
-      // verbatim by the finalized command: the candidate that was accepted and
-      // the command that lands must name the same feature and body, or the
-      // acceptance check proved nothing about what is in history.
-      const ids = createBodyFeatureIds();
-      const payload = {
-        name,
-        ids,
-        sourceName: file.name,
-        ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
-      };
-      // The artifact id is geometry-inert: the worker resolves source bytes by
-      // checksum from the local blob store and reaches for the archive only as
-      // a fallback. So a candidate validated against a provisional local id
-      // rebuilds identically once the finalized id replaces it.
-      const localArtifactId = `artifact_local_${crypto.randomUUID()}`;
-      outcome = await executeValidatedFeature(
-        commandFactories.importStep({
-          ...payload,
-          artifactId: localArtifactId
-        }),
-        {
-          featureName: name,
-          resultBodyId: ids.bodyId,
-          validatingMessage: `Rebuilding ${file.name} with the exact geometry kernel…`,
-          // The workspace stays live while this rebuilds, and rebuilding a
-          // large assembly takes minutes: renaming a feature or nudging a body
-          // in that time must not destroy the import. The candidate is simply
-          // rebuilt against the moved document instead — an import appends a
-          // feature that reads nothing but its own source bytes, so the second
-          // pass can only reach the same verdict, and the parsed source is
-          // cached by checksum so it costs no re-parse.
-          revalidateOnDocumentMove: true,
-          // Archiving ahead of the rebuild spends a transfer of up to 250 MB
-          // on a file the kernel may be about to refuse, and leaves an
-          // artifact nothing references. Best-effort, as before: the source
-          // stays in the local blob store (or embedded) and rebuilds remain
-          // deterministic and offline either way.
-          finalize: async () => {
-            // Edit permission can flip during a rebuild that takes minutes
-            // (View mode, or the project opened in a second tab). Refusing
-            // here costs nothing and keeps the upload from producing an
-            // artifact the commit is then not allowed to reference. The
-            // window it leaves is the upload itself, which is why the local
-            // bytes survive an archive that outran its permission.
-            const blockedReason = editDisabledReasonRef.current;
-            if (blockedReason) {
-              throw new Error(`Cannot import geometry: ${blockedReason}.`);
-            }
-            let artifactId = localArtifactId;
-            try {
-              artifactId = await archiveArtifact({
-                fileName: file.name,
-                contentType,
-                kind: 'step-import',
-                body: file,
-                metadata: { source: 'direct-upload' }
-              });
-              archived = true;
-            } catch {
-              // Local-only, and listed in the File menu for a later retry.
-            }
-            return commandFactories.importStep({ ...payload, artifactId });
-          },
-          // Two separate facts: the source is stored, and the exact kernel
-          // rebuilt a body from it. Claiming the second before the rebuild ran
-          // is what left a success toast next to an empty viewport.
-          successMessage: () =>
-            `Imported editable STEP solid from ${file.name}: ` +
-            (archived
-              ? 'exact body rebuilt, source archived.'
-              : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
-          onFailure: () => {
-            // The kernel's verdict is already in the status bar. The host sink
-            // renders inline in whichever feature form is open, and an import
-            // has none of its own — routing it there would show a STEP parse
-            // error as the refusal of an unrelated operation.
-          }
-        }
-      );
-    } catch (error) {
-      setStatus(errorMessage(error, 'STEP import failed.'));
-    } finally {
-      if (sourceRef) {
-        inFlightImportChecksums.current.release(sourceRef.checksumSha256);
-      }
-    }
-    if (!sourceRef) {
-      return;
-    }
-    if (outcome === 'superseded') {
-      // The kernel never disagreed with the file; the user's own concurrent
-      // edits are why this stopped. Say so, and say what it costs to try again:
-      // the bytes are still stored, so the retry re-runs the rebuild and
-      // nothing else.
-      setStatus(
-        `${file.name} was not imported: the model kept changing while it rebuilt. ` +
-          'Its source is still stored, so importing it again costs only the rebuild.'
-      );
-    }
-    await settleImportSource({
-      checksumSha256: sourceRef.checksumSha256,
-      result:
-        outcome === 'committed'
-          ? 'committed'
-          : outcome === 'busy' || outcome === 'superseded'
-            ? 'no-verdict'
-            : 'refused',
-      createdByThisImport: sourceBlobCreated,
-      abandonedChecksums: abandonedImportChecksums.current,
-      document: managerRef.current?.document ?? null,
-      inFlightChecksums: inFlightImportChecksums.current,
-      deleteSourceBlob
+    await runStepImport({
+      file,
+      contentType,
+      archive: archiveArtifact,
+      validatedFeature,
+      status: { setStatus, setFeatureFormError },
+      marks: {
+        inFlight: inFlightImportChecksums.current,
+        abandoned: abandonedImportChecksums.current
+      },
+      currentDocument: () => managerRef.current?.document ?? null,
+      editDisabledReason: () => editDisabledReasonRef.current,
+      newId: () => crypto.randomUUID()
     });
   }
 
@@ -6093,7 +6128,12 @@ export function App() {
       );
       return;
     }
-    handleMeasurementPick(selection, additive, detail);
+    // Measuring owns the pick outright. Without this return the same click
+    // went on to arm a sketch, arm a drag handle, and replace the selection —
+    // so an inspection pass rewrote the state a modelling session was holding.
+    if (handleMeasurementPick(selection, additive, detail)) {
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -8324,7 +8364,7 @@ export function App() {
           if (viewMode && measuring) {
             event.preventDefault();
             if (measurementDraft) {
-              setMeasurementDraft(null);
+              clearMeasurementPicks();
               setStatus(
                 `${measurementMode} measurement canceled · pick the first target.`
               );
@@ -8422,7 +8462,7 @@ export function App() {
         event.preventDefault();
         const next = !measuring;
         setMeasuring(next);
-        setMeasurementDraft(null);
+        clearMeasurementPicks();
         setStatus(
           next
             ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
@@ -9081,7 +9121,7 @@ export function App() {
             measuring={measuring}
             onMeasure={(next) => {
               setMeasuring(next);
-              setMeasurementDraft(null);
+              clearMeasurementPicks();
               setStatus(
                 next
                   ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
@@ -9245,6 +9285,7 @@ export function App() {
             profileSelectionMode={tool === 'extrude'}
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
+            onMeasurePreview={viewMode && measuring ? previewMeasurement : null}
             regionHandle={viewMode ? null : regionHandleTarget}
             modeOverlay={
               viewMode ? (
@@ -9277,7 +9318,7 @@ export function App() {
                       onMode={(mode) => {
                         setMeasuring(true);
                         setMeasurementMode(mode);
-                        setMeasurementDraft(null);
+                        clearMeasurementPicks();
                         setStatus(
                           mode === 'smart'
                             ? 'Smart measure · pick an edge, face, hole, or body.'
@@ -9336,7 +9377,7 @@ export function App() {
                         }
                         setMeasurements([]);
                         setActiveMeasurementId(null);
-                        setMeasurementDraft(null);
+                        clearMeasurementPicks();
                         setStatus('Measurement list cleared.');
                       }}
                       onCopy={(measurement) =>

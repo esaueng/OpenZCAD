@@ -49,7 +49,9 @@ import {
   createBodyEdgeOverlay,
   createAxesGizmo,
   createExtrudePreviewGeometry,
+  createDimensionGraphic,
   createFatLine,
+  measureSnapEdges,
   createFatLineMaterial,
   createFatLineSegments,
   createGradientBackdrop,
@@ -107,7 +109,8 @@ import {
   type ViewerBodyMaterial,
   type ViewerSettings,
   type FatLineResolution,
-  type BodyEdgeOverlay
+  type BodyEdgeOverlay,
+  type DimensionGraphic
 } from '@openzcad/viewport';
 import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -437,6 +440,16 @@ interface ModelViewerProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /**
+   * What measuring the hovered target would report, for the preview chip.
+   * Null when measuring is off or the pick has nothing honest to say.
+   */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
@@ -758,6 +771,7 @@ export function ModelViewer({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   sketchMode,
   onSketchCommit,
@@ -854,6 +868,8 @@ export function ModelViewer({
   onSelectRegionRef.current = onSelectRegion;
   const onHoverRegionRef = useRef(onHoverRegion);
   onHoverRegionRef.current = onHoverRegion;
+  const onMeasurePreviewRef = useRef(onMeasurePreview);
+  onMeasurePreviewRef.current = onMeasurePreview;
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
@@ -861,6 +877,20 @@ export function ModelViewer({
   const regionGroupRef = useRef<THREE.Group | null>(null);
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
+  /**
+   * Live dimension graphics with the world points they span.
+   *
+   * Held outside React because the animation loop resizes them every frame:
+   * their arrowheads and witness ticks are pixel-sized, and the world size of
+   * a pixel changes with a zoom that never touches the camera's orientation.
+   */
+  const measurementDimensionsRef = useRef<
+    {
+      graphic: DimensionGraphic;
+      start: THREE.Vector3;
+      end: THREE.Vector3;
+    }[]
+  >([]);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
@@ -1138,8 +1168,7 @@ export function ModelViewer({
     ) {
       for (const child of context.overlayGroup.children) {
         const resting = child.userData.calloutRestingPosition as
-          | THREE.Vector3
-          | undefined;
+          THREE.Vector3 | undefined;
         if (child.userData.calloutBodyId !== bodyId || !resting) {
           continue;
         }
@@ -1152,8 +1181,7 @@ export function ModelViewer({
     function restSelectionCallouts() {
       for (const child of context.overlayGroup.children) {
         const resting = child.userData.calloutRestingPosition as
-          | THREE.Vector3
-          | undefined;
+          THREE.Vector3 | undefined;
         if (resting) {
           child.position.copy(resting);
         }
@@ -1499,11 +1527,7 @@ export function ModelViewer({
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
     let sketchNumericKind:
-      | 'radius'
-      | 'diameter'
-      | 'length'
-      | 'width'
-      | 'height' = 'length';
+      'radius' | 'diameter' | 'length' | 'width' | 'height' = 'length';
     /**
      * The rectangle's other side while you type this one. A rectangle is the
      * only shape here with two independent numbers, so Tab parks the value you
@@ -1591,6 +1615,55 @@ export function ModelViewer({
       // `resolved.screen` is already host-local: it was projected against the
       // canvas size, which is what the overlay is positioned within.
       hud.showAt(snapGlyph, resolved.screen.x, resolved.screen.y);
+    }
+
+    /**
+     * The snap point a measuring pointer is asking for, or null.
+     *
+     * Scoped by `measureSnapEdges` before anything is projected. A move drag
+     * collects snaps body-wide, which it can afford because it does so once at
+     * drag start; this runs on every hover frame, and handing `resolveSnap` a
+     * whole imported assembly would be six figures of matrix work per frame.
+     */
+    function resolveMeasureSnap(
+      event: PointerEvent,
+      candidate: PickCandidate
+    ): SnapResolution | null {
+      const bodyId = candidate.selection?.bodyId;
+      const body = bodiesRef.current.find(
+        (entry) => entry.bodyId === bodyId && !entry.consumed
+      );
+      const edges = body?.topology?.edges;
+      if (!edges) {
+        return null;
+      }
+      const selection = candidate.selection;
+      const hoveredEdge =
+        selection?.kind === 'edge'
+          ? (edges.find((entry) => entry.hash === selection.hash) ?? null)
+          : null;
+      const scoped = measureSnapEdges(edges, {
+        edge: hoveredEdge,
+        faceHash: selection?.kind === 'face' ? (selection.hash ?? null) : null
+      });
+      if (scoped.length === 0) {
+        return null;
+      }
+      const local = hud.toLocal(event.clientX, event.clientY);
+      if (!local) {
+        return null;
+      }
+      return resolveSnap(
+        snapsFromEdges(scoped, { label: body?.name }),
+        local,
+        (point) =>
+          projectToScreen(
+            new THREE.Vector3(point.x, point.y, point.z),
+            context.activeCamera,
+            renderer.domElement.clientWidth,
+            renderer.domElement.clientHeight
+          )
+      );
     }
 
     /** Snap candidates from every body except the one being moved. */
@@ -1683,6 +1756,15 @@ export function ModelViewer({
 
     // Value chip for the offset handle: tracks the arrow tip every frame.
     // Tapping it opens exact numeric entry, per the drag-or-type contract.
+    /**
+     * The value a click would record, shown while the pointer is still over
+     * the target. Hidden from assistive technology: the dock's live region
+     * already announces what was measured, and narrating every hover would
+     * bury that under a stream of numbers nobody asked for.
+     */
+    const measurePreviewChip = hud.create('measure-preview-chip', {
+      ariaHidden: true
+    });
     const offsetChip = hud.create('handle-value-chip');
     offsetChip.dataset.testid = 'direct-manipulation-value';
     const handleChipClick = () => {
@@ -2244,9 +2326,18 @@ export function ModelViewer({
         onSelectSketchProfileRef.current(result.sketchId);
         return;
       }
+      // Recompute from THIS click's candidate and coordinates. Reusing the last
+      // rAF-coalesced hover result can record a point from the previous pointer
+      // position when a move and click arrive before the next animation frame.
+      // Confined to measuring: a modelling pick still wants the point the
+      // pointer was actually on.
+      const snapped =
+        result && onMeasurePreviewRef.current
+          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: {
+            point: snapped ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -2424,6 +2515,63 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(pick(event));
+      updateMeasurePreview(event);
+    }
+
+    /**
+     * Shows what the next click would measure, beside the pointer.
+     *
+     * The candidate comes from the same `pickAll` + depth cycle the click uses,
+     * so the preview cannot name one thing while the click takes another —
+     * but the returned cycle is DISCARDED rather than stored. `cycleDepthPick`
+     * treats a second call within a few pixels as a request for the next
+     * candidate down, so remembering it here would make hovering and then
+     * clicking the same spot select the second thing in the stack. Depth
+     * cycling belongs to clicks.
+     */
+    function updateMeasurePreview(event: PointerEvent) {
+      const preview = onMeasurePreviewRef.current;
+      if (!preview) {
+        hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
+        return;
+      }
+      const stack = picker.pickAll(event);
+      const wouldPick = cycleDepthPick(
+        stack,
+        depthCycle,
+        event.clientX,
+        event.clientY
+      ).candidate;
+      const selection = wouldPick?.selection;
+      if (!selection) {
+        hud.hide(measurePreviewChip);
+        hud.hide(snapGlyph);
+        return;
+      }
+      const snapped = resolveMeasureSnap(event, wouldPick);
+      if (snapped) {
+        showSnapGlyph(snapped);
+      } else {
+        hud.hide(snapGlyph);
+      }
+      const label = preview(
+        selection,
+        // The snapped position when there is one, so the preview reports the
+        // number the click will actually record rather than the one under the
+        // raw cursor.
+        snapped?.candidate.point ?? {
+          x: wouldPick.hit.point.x,
+          y: wouldPick.hit.point.y,
+          z: wouldPick.hit.point.z
+        }
+      );
+      if (!label) {
+        hud.hide(measurePreviewChip);
+        return;
+      }
+      measurePreviewChip.textContent = label;
+      hud.showAtPointer(measurePreviewChip, event, 16, -28);
     }
 
     /**
@@ -2779,8 +2927,7 @@ export function ModelViewer({
       const text =
         sketchNumericKind === 'width' || sketchNumericKind === 'height'
           ? (() => {
-              const other =
-                sketchNumericKind === 'width' ? 'Height' : 'Width';
+              const other = sketchNumericKind === 'width' ? 'Height' : 'Width';
               return `${label}: ${sketchNumericRaw || '…'} ${units} · ${other}: ${
                 sketchNumericOther || 'drag'
               } · Tab · Enter`;
@@ -4362,6 +4509,8 @@ export function ModelViewer({
       }
       clearMoveGizmoHover();
       applyHover(null);
+      hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
     };
     const handleDoubleClick = (event: MouseEvent) => {
       depthCycle = null;
@@ -4517,6 +4666,18 @@ export function ModelViewer({
           material.opacity = target;
           context.fadeIns.delete(material);
         }
+      }
+      // Dimensions are resized on every drawn frame, not behind a guard keyed
+      // on the camera's orientation: a wheel-zoom changes the world size of a
+      // pixel without rotating anything, and a rotation guard would leave the
+      // arrowheads frozen at their pre-zoom size. The loop is already
+      // on-demand, so this costs nothing on a still frame.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.update(
+          entry.start,
+          entry.end,
+          moveGizmoWorldScale(worldPerPixelAt(entry.start)) * 0.55
+        );
       }
       if (moveGizmoGroup.children.length > 0) {
         const baseScale = Math.max(
@@ -4726,6 +4887,12 @@ export function ModelViewer({
       offsetChip.removeEventListener('click', handleChipClick);
       radiusLabelChip.removeEventListener('click', handleChipClick);
       hud.dispose();
+      // Dimension graphics own their own geometries and materials; clearing
+      // the group they sit in would orphan those on the GPU.
+      for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.dispose();
+      }
+      measurementDimensionsRef.current = [];
       offsetChipRef.current = null;
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
@@ -4749,6 +4916,10 @@ export function ModelViewer({
     if (!context || !group) {
       return;
     }
+    for (const entry of measurementDimensionsRef.current) {
+      entry.graphic.dispose();
+    }
+    measurementDimensionsRef.current = [];
     clearGroup(group);
     const resolution = context.fatLineResolution();
     for (const annotation of measurementAnnotations) {
@@ -4758,10 +4929,47 @@ export function ModelViewer({
         : annotation.selected
           ? 0x9bd3ff
           : 0x7cc0ff;
-      for (const segment of annotation.segments) {
+      // A measured span is drawn as a drawing's dimension rather than as a
+      // bare line: witness ticks stand it off the geometry, and the arrowheads
+      // say which two points the number is between. Angle arms are not a span,
+      // so they keep the plain line — an arrowhead on the far end of an arm
+      // would claim the arm's length was the measurement.
+      if (annotation.graphic === 'span') {
+        for (const segment of annotation.segments) {
+          const dimension = createDimensionGraphic({ witnessLines: true });
+          const start = new THREE.Vector3(
+            segment.start.x,
+            segment.start.y,
+            segment.start.z
+          );
+          const end = new THREE.Vector3(
+            segment.end.x,
+            segment.end.y,
+            segment.end.z
+          );
+          dimension.object.renderOrder =
+            VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH + 1;
+          dimension.object.traverse((child) => {
+            child.raycast = () => undefined;
+          });
+          group.add(dimension.object);
+          measurementDimensionsRef.current.push({
+            graphic: dimension,
+            start,
+            end
+          });
+        }
+      }
+      for (const segment of annotation.graphic === 'span'
+        ? []
+        : annotation.segments) {
         const line = createFatLine(
           [
-            new THREE.Vector3(segment.start.x, segment.start.y, segment.start.z),
+            new THREE.Vector3(
+              segment.start.x,
+              segment.start.y,
+              segment.start.z
+            ),
             new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
           ],
           {
