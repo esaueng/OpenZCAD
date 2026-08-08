@@ -9211,6 +9211,20 @@ export function App() {
             projectId={doc.projectId}
             bodies={viewerBodies}
             measurementAnnotations={measurementAnnotations}
+            measurementCloudSync={[
+              doc.projectId,
+              deploymentHealth?.projectMeasurementSyncEnabled,
+              cloudProjectIds,
+              measurementHydratedProjectId,
+              measurements,
+              measurementDisplay,
+              setMeasurements,
+              setMeasurementUnit,
+              setMeasurementPrecision,
+              setRadialDisplay,
+              loadProjectMeasurements,
+              saveProjectMeasurements
+            ]}
             sketches={
               // Region-based rendering (sketchViews) supersedes the legacy
               // single-profile overlays under direct manipulation.
