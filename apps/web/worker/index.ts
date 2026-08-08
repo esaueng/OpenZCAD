@@ -1087,10 +1087,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const partMatch = UPLOAD_PART_ROUTE.exec(pathname);
   if (request.method === 'PUT' && partMatch) {
-    const partNumber = Number(partMatch[2]!);
-    if (partNumber > MAX_ARTIFACT_UPLOAD_PARTS) {
-      throw new HttpError(400, 'Upload part number is out of range.');
-    }
     const uploadId = new URL(request.url).searchParams.get('uploadId');
     if (!uploadId) {
       throw new HttpError(400, 'Missing uploadId.');
