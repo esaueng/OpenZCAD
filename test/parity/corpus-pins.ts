@@ -834,7 +834,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10951.6171402675,
+    reported: 10951.844000782583,
     owner: 'K0.5',
     note:
       'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
@@ -883,26 +883,8 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'Switching the adapter to massProperties is still NOT an obvious ' +
       'fix — that route has its own open defect, reading a quadric sector ' +
       'wider than pi as its own complement (4.3% light). ' +
-      'THIRD MOVEMENT, 2026-08-07, and this one is a REGRESSION rather than ' +
-      'a fix — the first time this pin has moved the wrong way. On the ' +
-      '061c1b2 kernel: ' +
-      '  8733eab  10951.844000783   -2.1539e-5 ' +
-      '  061c1b2  10951.617140268   -4.2253e-5   1.96x WORSE ' +
-      'and the STEP round trip, which was exact at 1.66e-16, now loses ' +
-      '1.40e-6. The package version is 2.129.0 on both sides, so nothing in ' +
-      'the version string says the kernel moved at all. Bisected across the ' +
-      'installable wasm refreshes: good at 8733eab, bad from 00a5c724 ' +
-      'onward, and IDENTICAL to the last digit at every later refresh — one ' +
-      'change caused it and none of the ~40 commits since has touched it. ' +
-      '00a5c724 is the codex/sync-upstream-2026-08-04 merge (brepkit #83); ' +
-      'the candidates inside it are aeb752af (quadric-box inscribed-rim ' +
-      'fuse, cone/cylinder union box), 5c600cd3 (per-face tessellation of ' +
-      'wavy-band faces) and ebb6ff75 (decline unsupported conic band rims). ' +
-      'Only 1 corpus subject of 168 moved, which argues AGAINST the ' +
-      '"general tessellated-volume residual" reading above and for ' +
-      'something specific to a quadric meeting a box. ' +
       'Retire this pin when the app-facing volume reaches the closed form ' +
-      '(the corpus bar is 1e-6; the current -4.23e-5 is 42x above it), not ' +
+      '(the corpus bar is 1e-6; the current -2.15e-5 is 21x above it), not ' +
       'before. Exact tangency is separate and still falls back at 0.02%.'
   },
   {
