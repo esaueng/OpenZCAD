@@ -11,6 +11,7 @@ import {
   type SaveProjectDocumentRequest,
   type UnitSystem
 } from '@openzcad/shared';
+import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
 import { createProject, expect, stubApi, test } from './openzcad-fixtures';
 
 const accountUserId = toUserId('user_cloud_sync_e2e');
@@ -22,6 +23,8 @@ function projectIdFrom(url: string): string {
 
 class SharedCloudProjectApi {
   project: ProjectDocument | null = null;
+  measurement: { revision: number; record: StoredMeasurementRecord } | null =
+    null;
 
   async install(page: Page): Promise<void> {
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
@@ -67,7 +70,9 @@ class SharedCloudProjectApi {
           time: new Date().toISOString(),
           projectSharingEnabled: false,
           projectEditLeasesEnforced: false,
-          projectPersonalSyncEnabled: false
+          projectPersonalSyncEnabled: false,
+          projectMeasurementStorageReady: true,
+          projectMeasurementSyncEnabled: true
         }
       })
     );
@@ -83,6 +88,7 @@ class SharedCloudProjectApi {
           payload.units ?? 'mm'
         );
         this.project = withoutDerivedProjection(document);
+        this.measurement = null;
         return route.fulfill({
           status: 201,
           json: {
@@ -148,6 +154,40 @@ class SharedCloudProjectApi {
       });
       return route.fulfill({ json: this.project });
     });
+    await page.route('**/api/projects/*/measurements', async (route) => {
+      const projectId = projectIdFrom(route.request().url());
+      if (!this.project || projectId !== this.project.projectId) {
+        return route.fulfill({ status: 404, json: { error: 'Not found.' } });
+      }
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          json: this.measurement ?? { revision: 0, record: null }
+        });
+      }
+      if (route.request().method() === 'PUT') {
+        const payload = route.request().postDataJSON() as {
+          expectedRevision: number;
+          record: StoredMeasurementRecord;
+        };
+        const currentRevision = this.measurement?.revision ?? 0;
+        if (payload.expectedRevision !== currentRevision) {
+          return route.fulfill({
+            status: 409,
+            json: {
+              error: 'The account has newer measurements.',
+              code: 'MEASUREMENT_REVISION_CONFLICT',
+              currentRevision
+            }
+          });
+        }
+        this.measurement = {
+          revision: currentRevision + 1,
+          record: structuredClone(payload.record)
+        };
+        return route.fulfill({ json: this.measurement });
+      }
+      return route.fulfill({ status: 405, json: { error: 'Unsupported.' } });
+    });
     await page.route('**/api/projects/*/artifacts', (route) =>
       route.fulfill({ json: { artifacts: [] } })
     );
@@ -197,6 +237,41 @@ class SharedCloudProjectApi {
       updatedAt: document.derived.updatedAt
     };
   }
+}
+
+async function switchWorkspace(page: Page, to: 'View' | 'Build') {
+  await page
+    .getByRole('group', { name: 'Workspace mode' })
+    .getByRole('button', { name: to })
+    .click();
+}
+
+async function armMeasure(page: Page) {
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure' })
+    .click();
+}
+
+async function locateEdge(page: Page) {
+  const canvas = page.locator('.viewer-host canvas');
+  let found: { x: number; y: number } | null = null;
+  await expect
+    .poll(async () => {
+      found = await canvas.evaluate(
+        (element) =>
+          new Promise<{ x: number; y: number } | null>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-locate-edge', {
+                detail: { resolve }
+              })
+            );
+          })
+      );
+      return found !== null;
+    })
+    .toBe(true);
+  return found!;
 }
 
 async function renameProject(page: Page, name: string): Promise<void> {
@@ -356,6 +431,65 @@ test('does not write to the account when a project is only reopened', async ({
   // adopted document would have been sent by now.
   await page.waitForTimeout(3000);
   expect(documentWrites).toBe(0);
+});
+
+test('syncs View measurements to a second device without changing the CAD document', async ({
+  browser
+}) => {
+  test.setTimeout(60_000);
+  const api = new SharedCloudProjectApi();
+  const deviceA = await browser.newContext();
+  const deviceB = await browser.newContext();
+  const pageA = await deviceA.newPage();
+  const pageB = await deviceB.newPage();
+
+  try {
+    await api.install(pageA);
+    await api.install(pageB);
+
+    await pageA.goto('/');
+    await pageA.getByLabel('Project name').fill('Measured Across Devices');
+    await pageA.getByRole('button', { name: 'Create project' }).click();
+    await pageA.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await pageA
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
+      timeout: 10_000
+    });
+    const canonicalBeforeMeasurement = structuredClone(api.project);
+
+    await switchWorkspace(pageA, 'View');
+    await armMeasure(pageA);
+    await pageA.getByRole('button', { name: 'Edge', exact: true }).click();
+    const edge = await locateEdge(pageA);
+    await pageA.mouse.click(edge.x, edge.y);
+    const measured = await pageA
+      .getByLabel('Measurement workbench')
+      .getByRole('listitem')
+      .textContent();
+    expect(measured).toBeTruthy();
+    await expect
+      .poll(() => api.measurement?.record.measurements.length, {
+        timeout: 10_000
+      })
+      .toBe(1);
+    expect(api.project).toEqual(canonicalBeforeMeasurement);
+
+    await pageB.goto('/');
+    await pageB
+      .locator('.start-tile-open', { hasText: 'Measured Across Devices' })
+      .click();
+    await switchWorkspace(pageB, 'View');
+    await armMeasure(pageB);
+    await expect(
+      pageB.getByLabel('Measurement workbench').getByRole('listitem')
+    ).toHaveText(measured!);
+  } finally {
+    await deviceA.close();
+    await deviceB.close();
+  }
 });
 
 test('syncs across two devices and preserves the losing side of a conflict', async ({
