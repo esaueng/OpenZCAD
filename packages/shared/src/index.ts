@@ -1430,7 +1430,9 @@ export interface HealthResponse {
   documentStorageAccountingReady?: boolean;
   /** Whether migration 0011 and private R2 project storage are available. */
   projectObjectStorageReady?: boolean;
-  /** Whether migration 0014 installed resumable account-erasure fencing. */
+  /** Whether migration 0015 installed isolated measurement storage and fencing. */
+  projectMeasurementStorageReady?: boolean;
+  /** Whether migrations through 0015 installed resumable account-erasure fencing. */
   accountErasureReady?: boolean;
   /** Whether R2, D1 fencing, and collaboration-room erasure are all ready. */
   projectErasureReady?: boolean;
@@ -1443,6 +1445,8 @@ export interface HealthResponse {
    * sharing: this being on says nothing about invitations, roles, or leases.
    */
   projectPersonalSyncEnabled?: boolean;
+  /** Whether this deployment can sync project measurements between devices. */
+  projectMeasurementSyncEnabled?: boolean;
 }
 
 /** Authenticated collaboration capabilities for the current account. */
