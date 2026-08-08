@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
@@ -31,8 +30,6 @@ function renderStartScreen(
       accountProjectListReached={true}
       conflictedProjectIds={new Set()}
       signedIn={true}
-      collaborationSharingEnabled={false}
-      onAcceptInvitation={vi.fn().mockResolvedValue(undefined)}
       onSaveToAccount={vi.fn()}
       onSaveAllToAccount={vi.fn()}
       syncRun={null}
@@ -43,7 +40,8 @@ function renderStartScreen(
       onReorder={vi.fn()}
       onDeleteForever={vi.fn()}
       onEmptyTrash={vi.fn()}
-      loadThumbnailBodies={vi.fn().mockResolvedValue([])}
+      loadThumbnail={vi.fn().mockResolvedValue(undefined)}
+      backfillThumbnail={vi.fn().mockResolvedValue(undefined)}
       {...overrides}
     />
   );
@@ -122,24 +120,11 @@ describe('StartScreen cloud project status', () => {
     ).toBeNull();
   });
 
-  it('accepts a pasted invitation only for an enabled signed-in account', async () => {
-    const onAcceptInvitation = vi.fn().mockResolvedValue(undefined);
-    const user = userEvent.setup();
-    renderStartScreen({
-      collaborationSharingEnabled: true,
-      onAcceptInvitation
-    });
+  it('does not expose the retired invitation token paste flow', () => {
+    renderStartScreen();
 
-    await user.type(
-      screen.getByLabelText('Invitation token'),
-      ' invite_token '
-    );
-    await user.click(screen.getByRole('button', { name: 'Join project' }));
-
-    await waitFor(() =>
-      expect(onAcceptInvitation).toHaveBeenCalledWith('invite_token')
-    );
-    expect(screen.getByLabelText('Invitation token')).toHaveValue('');
+    expect(screen.queryByLabelText('Invitation token')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Join project' })).toBeNull();
   });
 });
 
@@ -163,5 +148,32 @@ describe('StartScreen collapsed project grid', () => {
     expect(
       screen.getByRole('button', { name: 'Show fewer parts' })
     ).toBeInTheDocument();
+  });
+
+  it('bounds cold-cache thumbnail backfill to the visible nine tiles', async () => {
+    const projects = Array.from({ length: 26 }, (_, index) => ({
+      projectId: toProjectId(`bounded_project_${index + 1}`),
+      name: `Part ${index + 1}`,
+      revisionCount: index + 1,
+      updatedAt: '2026-08-04T12:00:00.000Z'
+    }));
+    const backfillThumbnail = vi
+      .fn<(project: ProjectSummary) => Promise<string | null | undefined>>()
+      .mockResolvedValue(undefined);
+
+    renderStartScreen({
+      projects,
+      signedIn: false,
+      backfillThumbnail
+    });
+
+    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(9));
+    expect(
+      backfillThumbnail.mock.calls.map(([project]) => project.name)
+    ).toEqual(projects.slice(0, 9).map((project) => project.name));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 17 more parts' }));
+
+    await waitFor(() => expect(backfillThumbnail).toHaveBeenCalledTimes(26));
   });
 });

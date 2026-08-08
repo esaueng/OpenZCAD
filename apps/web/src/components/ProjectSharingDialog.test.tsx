@@ -105,6 +105,45 @@ function recoveryHandlers(calls: string[] = []): ConflictResolutionHandlers {
 }
 
 describe('ProjectSharingDialog', () => {
+  it('labels every live session belonging to the signed-in user', () => {
+    const base = createProjectDocument('Shared sessions', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="viewer"
+        collaborationStatus="live"
+        lease={null}
+        currentUserId={owner}
+        liveMembers={[
+          {
+            clientId: 'client_owner_one',
+            userId: owner,
+            displayName: 'peter',
+            status: 'active'
+          },
+          {
+            clientId: 'client_owner_two',
+            userId: owner,
+            displayName: 'peter',
+            status: 'active'
+          },
+          {
+            clientId: 'client_member',
+            userId: member,
+            displayName: 'alex',
+            status: 'idle'
+          }
+        ]}
+        client={client()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByText('peter (you)')).toHaveLength(2);
+    expect(screen.getByText('alex')).toBeVisible();
+    expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
+  });
+
   it('exposes an accessible owner dialog and typed invitation/member controls', async () => {
     const sharingClient = client();
     const base = createProjectDocument('Shared', owner);
@@ -139,7 +178,7 @@ describe('ProjectSharingDialog', () => {
       screen.getByLabelText('Role', { selector: 'select' }),
       'editor'
     );
-    await user.click(screen.getByRole('button', { name: 'Create invitation' }));
+    await user.click(screen.getByRole('button', { name: 'Send invite' }));
 
     await waitFor(() =>
       expect(sharingClient.createInvitation).toHaveBeenCalledWith(
@@ -148,22 +187,13 @@ describe('ProjectSharingDialog', () => {
         'editor'
       )
     );
-    expect(screen.getByLabelText('Invitation token')).toHaveTextContent(
-      'one-time-token'
-    );
-
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(globalThis.navigator, 'clipboard', {
-      value: { writeText },
-      configurable: true
-    });
-    await user.click(
-      screen.getByRole('button', { name: 'Copy invitation token' })
-    );
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith('one-time-token')
-    );
-    expect(screen.getByText('Invitation token copied.')).toBeVisible();
+    expect(
+      screen.getByText('Invitation sent to new@example.com.')
+    ).toBeVisible();
+    expect(screen.queryByText('one-time-token')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /copy invitation/i })
+    ).not.toBeInTheDocument();
   });
 
   it('keeps editor assignment unavailable when lease enforcement is off', async () => {

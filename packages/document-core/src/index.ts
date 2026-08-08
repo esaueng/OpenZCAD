@@ -25,6 +25,7 @@ import {
   type ExtrudeOperation,
   type FeatureId,
   type FeatureNode,
+  type ImportedSourceReference,
   type ParameterId,
   type ParameterNode,
   type ParametricVector3,
@@ -295,7 +296,13 @@ export interface ImportedStepInput {
   name: string;
   artifactId: string;
   sourceName: string;
-  stepText: string;
+  /**
+   * Embedded form, still written when blob storage is unavailable rather than
+   * only by old imports. Exactly one of `stepText`/`stepSourceRef`.
+   */
+  stepText?: string;
+  /** Content-addressed form; the bytes live in the source blob store. */
+  stepSourceRef?: ImportedSourceReference;
   ids?: BodyFeatureIds;
 }
 
@@ -1385,6 +1392,11 @@ export function importStepBody(
   document: ProjectDocument,
   input: ImportedStepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  if ((input.stepText === undefined) === (input.stepSourceRef === undefined)) {
+    throw new Error(
+      'A STEP import needs exactly one of stepText and stepSourceRef.'
+    );
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -1402,7 +1414,9 @@ export function importStepBody(
       featureKind: 'imported-step',
       artifactId: toArtifactId(input.artifactId),
       sourceName: input.sourceName,
-      stepText: input.stepText
+      ...(input.stepText !== undefined
+        ? { stepText: input.stepText }
+        : { stepSourceRef: input.stepSourceRef })
     }
   };
 
@@ -1817,7 +1831,10 @@ export function attachDerivedState(
 ): ProjectDocument {
   // Derived state is a disposable projection; attaching it intentionally does
   // not bump `version`, so consumers can tell model edits from re-derivation.
-  return { ...document, derived };
+  // Reference repairs are advice to the session that computed them; stripping
+  // them here keeps stale repair lists out of saved and replayed documents.
+  const { referenceRepairs: _referenceRepairs, ...persisted } = derived;
+  return { ...document, derived: persisted };
 }
 
 export function getLatestSketchId(

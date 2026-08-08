@@ -80,6 +80,46 @@ async function findFacePoint(page: Page) {
   throw new Error('no selectable face found');
 }
 
+test('exposes the full measurement workbench in View mode', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Measurement Workbench');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  const workspaceMode = page.getByRole('group', { name: 'Workspace mode' });
+  await workspaceMode.getByRole('button', { name: 'View' }).click();
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure' })
+    .click();
+
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench).toBeVisible();
+  await expect(
+    workbench.getByRole('button', { name: 'Smart' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    workbench.getByRole('button', { name: 'Distance' })
+  ).toBeVisible();
+  await expect(
+    workbench.getByRole('button', { name: 'Angle' })
+  ).toBeVisible();
+  await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
+  await expect(
+    workbench.getByLabel('Measurement decimal places')
+  ).toHaveValue('2');
+  await expect(
+    workbench.getByRole('group', { name: 'Radial display' })
+  ).toBeVisible();
+
+  await workbench.getByRole('button', { name: 'Angle' }).click();
+  await expect(
+    workbench.getByText('Pick two straight edges or two planar faces.')
+  ).toBeVisible();
+});
+
 test('lists bodies in the model browser and selects them from the tree', async ({
   page
 }) => {
@@ -138,7 +178,7 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await page.getByLabel('Project name').fill('Continuous Line Chain');
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-  await page.getByRole('button', { name: 'Front (XY)' }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
     page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
   ).toBeVisible();
@@ -168,6 +208,53 @@ test('keeps a chained line anchored across committed sketch entities', async ({
   await expect(
     page.getByRole('form', { name: 'Extrude controls' })
   ).toContainText('1 bounded cell', { timeout: 20_000 });
+});
+
+test('clears every transient sketch HUD overlay when finishing a sketch', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sketch HUD Cleanup');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('region', { name: 'Editing Sketch: New Sketch operation' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
+  if (await gridSnap.isChecked()) {
+    await gridSnap.uncheck();
+  }
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  const start = {
+    x: bounds!.x + bounds!.width / 2 + 100,
+    y: bounds!.y + bounds!.height / 2 + 100
+  };
+
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.move(start.x + 2, start.y - 200);
+  const marker = page.locator('.sketch-snap-marker');
+  await expect(marker).toBeVisible();
+  await expect(marker).toHaveAttribute('data-kind', 'vertical');
+  await expect(marker).toHaveAttribute('data-label', 'Vertical');
+
+  // Scoped to the rail: the sketch status names this control, and the
+  // activity-log button folds the status into its own accessible name.
+  await page
+    .getByRole('toolbar', { name: 'Sketch tools' })
+    .getByRole('button', { name: 'Finish Sketch' })
+    .click();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toHaveCount(0);
+  await expect(marker).toBeHidden();
+  await expect(page.locator('.sketch-dim-label')).toBeHidden();
+  await expect(page.locator('.sketch-center-target')).toBeHidden();
 });
 
 test('snaps sketch drawing to existing endpoints', async ({ page }) => {
@@ -209,4 +296,35 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await page.mouse.click(center.x - 60, center.y - 40);
   await page.mouse.move(center.x + 150, center.y + 120, { steps: 4 });
   await expect(marker).toBeHidden();
+});
+
+test('empty-state copy names the rail the tools are actually in', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Empty Copy');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  // Several sections carry a .sidebar-hint; match the History one by text.
+  const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
+  await expect(hint).toContainText('Feature tools rail');
+  // "above" was the original wording and is wrong at every width: the rail is
+  // right of the panel on a wide screen and below it under 620px.
+  await expect(hint).not.toContainText('above');
+
+  // The name it points at has to be the rail's own accessible name, or the
+  // instruction names something the user cannot find.
+  await expect(
+    page.getByRole('navigation', { name: 'Feature tools' })
+  ).toBeVisible();
+
+  // Selecting an edge points at the same place, and neither tool it names has
+  // a keyboard shortcut, so the rail is the only route.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(hint).toHaveCount(0);
 });

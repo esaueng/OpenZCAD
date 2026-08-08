@@ -67,6 +67,94 @@
   border-color: var(--color-border-strong);
 }
 
+.cloud-deletion-dialog {
+  width: min(560px, 100%);
+  display: grid;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid color-mix(in srgb, var(--color-error) 55%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.cloud-deletion-dialog > header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-3);
+  color: var(--color-error);
+}
+
+.cloud-deletion-dialog h2,
+.cloud-deletion-dialog p {
+  margin: 0;
+}
+
+.cloud-deletion-dialog h2 {
+  font-size: var(--fs-lg);
+}
+
+.cloud-deletion-dialog header p,
+.cloud-deletion-impact p,
+.cloud-deletion-impact small,
+.cloud-deletion-loading {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.cloud-deletion-impact {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: color-mix(in srgb, var(--color-error) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-error) 24%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.cloud-deletion-impact > strong,
+.cloud-deletion-error {
+  color: var(--color-error);
+}
+
+.cloud-deletion-confirmation {
+  display: grid;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.cloud-deletion-confirmation input {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.cloud-deletion-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.cloud-deletion-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.cloud-deletion-confirm {
+  min-height: 32px;
+  padding: 6px 11px;
+  color: white;
+  background: var(--color-error);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.cloud-deletion-confirm:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
 .palette {
   width: min(520px, 100%);
   display: flex;
@@ -356,33 +444,14 @@
   font-size: var(--fs-xs);
 }
 
-.sharing-token-row {
-  display: grid;
-  gap: var(--sp-2);
+.sharing-invite-sent {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
   margin-top: var(--sp-2);
   padding: var(--sp-2);
   border: 1px dashed var(--color-accent-border);
   border-radius: var(--radius-md);
   background: var(--color-accent-dim);
-}
-
-.sharing-token-row output {
-  overflow-wrap: anywhere;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
-.sharing-token-row .secondary {
-  justify-self: start;
-  min-height: 26px;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-}
-
-.sharing-copy-status {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
 }
 
 .sharing-group-label {
@@ -568,7 +637,12 @@
 }
 
 .shortcut-row dt {
-  flex: 0 0 96px;
+  /*
+   * Wide enough for a pointer binding. The keyboard half fits in 96px, but the
+   * mouse gestures now listed here do not — "Shift + left-drag" and
+   * "Ctrl/Cmd + right-drag" clip at that width.
+   */
+  flex: 0 0 148px;
 }
 
 .shortcut-key-sequence {

@@ -445,21 +445,70 @@ export function createStudioHemisphereLight(): THREE.HemisphereLight {
   return light;
 }
 
-/** Vertical engineering-studio gradient: graphite above, near-black below. */
-export function createGradientBackground(): THREE.Texture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 4;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d')!;
-  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  gradient.addColorStop(0, '#131922');
-  gradient.addColorStop(0.45, '#0b0f15');
-  gradient.addColorStop(1, '#05070a');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+/**
+ * Vertical engineering-studio gradient: graphite above, near-black below.
+ *
+ * A CanvasTexture quantises these near-black stops before WebGL sees them.
+ * Screen capture then exaggerates the broad flat bands into rectangular codec
+ * blocks. Owning the backdrop material lets Three apply its fragment-level
+ * dithering after output colour conversion, where it can actually break up
+ * those bands without changing the intended gradient.
+ */
+export function createGradientBackdrop(): THREE.Mesh {
+  const geometry = new THREE.PlaneGeometry(2, 2);
+  const material = new THREE.ShaderMaterial({
+    depthTest: false,
+    depthWrite: false,
+    dithering: true,
+    fog: false,
+    toneMapped: false,
+    uniforms: {
+      topColor: { value: new THREE.Color('#131922') },
+      middleColor: { value: new THREE.Color('#0b0f15') },
+      bottomColor: { value: new THREE.Color('#05070a') },
+      middleStop: { value: 0.45 }
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 viewportUv;
+
+      void main() {
+        viewportUv = uv;
+        gl_Position = vec4(position.xy, 1.0, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <dithering_pars_fragment>
+
+      varying vec2 viewportUv;
+      uniform vec3 topColor;
+      uniform vec3 middleColor;
+      uniform vec3 bottomColor;
+      uniform float middleStop;
+
+      void main() {
+        float distanceFromTop = 1.0 - viewportUv.y;
+        float topMix = clamp(distanceFromTop / middleStop, 0.0, 1.0);
+        float bottomMix = clamp(
+          (distanceFromTop - middleStop) / (1.0 - middleStop),
+          0.0,
+          1.0
+        );
+        vec3 color = distanceFromTop <= middleStop
+          ? mix(topColor, middleColor, topMix)
+          : mix(middleColor, bottomColor, bottomMix);
+        gl_FragColor = vec4(color, 1.0);
+        #include <colorspace_fragment>
+        #include <dithering_fragment>
+      }
+    `
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'gradient-backdrop';
+  mesh.renderOrder = -1;
+  mesh.frustumCulled = false;
+  mesh.raycast = () => undefined;
+  return mesh;
 }
 
 /**

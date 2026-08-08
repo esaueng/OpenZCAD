@@ -560,9 +560,69 @@ export type FeatureData =
       featureKind: 'imported-step';
       artifactId: ArtifactId;
       sourceName: string;
-      /** ISO 10303-21 source retained for deterministic offline rebuilds. */
-      stepText: string;
+      /**
+       * ISO 10303-21 source embedded in the document, for deterministic
+       * offline rebuilds. Written by imports that predate `stepSourceRef`,
+       * and still by the fallback when this browser denies blob storage —
+       * capped at 12 MB on both paths. The cloud path externalises it into a
+       * project asset and restores it on load, so a document in hand always
+       * carries the text.
+       *
+       * Deliberately never migrated into `stepSourceRef`. The embedded form
+       * is the more portable of the two: the document carries everything a
+       * rebuild needs and it syncs, while a reference is only resolvable
+       * where something can produce bytes matching its checksum. Rewriting
+       * one into the other on load would strand the source on whichever
+       * device did it until the bytes were archived, and — being a change to
+       * canonical content that no user made — would leave an untouched
+       * project reading as diverged. See `listLocalOnlyImportSources`.
+       *
+       * Exactly one of the two fields is present.
+       */
+      stepText?: string;
+      /**
+       * Content-addressed alternative to `stepText`, written by imports that
+       * could reach the blob store. This is what keeps a document a few
+       * hundred bytes while its source runs to hundreds of megabytes.
+       */
+      stepSourceRef?: ImportedSourceReference;
     };
+
+/**
+ * A content-addressed pointer to import source bytes held outside the
+ * document — in the browser's blob store locally and in R2 when synced. The
+ * checksum is the identity: any store that can produce bytes hashing to
+ * `checksumSha256` can satisfy the reference, which is what lets a document
+ * stay a few hundred bytes while its source runs to hundreds of megabytes.
+ */
+export interface ImportedSourceReference {
+  marker: 'openzcad-source-ref';
+  version: 1;
+  hashAlgorithm: 'sha256';
+  /** Lowercase hex SHA-256 of the raw source bytes. */
+  checksumSha256: string;
+  /** Byte length of the raw (uncompressed) source. */
+  logicalBytes: number;
+}
+
+export function isImportedSourceReference(
+  value: unknown
+): value is ImportedSourceReference {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.marker === 'openzcad-source-ref' &&
+    record.version === 1 &&
+    record.hashAlgorithm === 'sha256' &&
+    typeof record.checksumSha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(record.checksumSha256) &&
+    typeof record.logicalBytes === 'number' &&
+    Number.isSafeInteger(record.logicalBytes) &&
+    record.logicalBytes >= 0
+  );
+}
 
 export interface FeatureNode extends BaseNode {
   kind: 'feature';
@@ -612,14 +672,61 @@ export interface FaceTopology {
   geometry?: FaceGeometry;
 }
 
+/**
+ * Whether {@link FaceGeometry.area} is the true area or an approximation.
+ *
+ * `kernel.faceArea` takes a deflection parameter, which reads as "approximate
+ * everywhere". It is not: measured against closed forms on the pinned build
+ * (test/measurement-provenance.test.ts), analytic curved surfaces come back at
+ * machine precision, and so do planar faces bounded entirely by straight
+ * edges — including non-convex ones, where an L-shaped face reads exactly 300.
+ *
+ * A plane bounded by any curve is the exception, and the deflection does not
+ * govern it: the boundary is inscribed with a FIXED 256-point polygon, so the
+ * error is identical at every deflection and every scale. The sign follows
+ * which side the curve bounds — a disc cap reads 1.004e-4 low, while a plate
+ * with a bore reads 5.183e-6 HIGH, because the inscribed hole is smaller than
+ * the true one and leaves more material behind.
+ */
+export type FaceAreaProvenance =
+  /** Closed form or exact polygon; trustworthy to machine precision. */
+  | 'exact'
+  /** A curved boundary inscribed with a fixed point count. */
+  | 'sampled';
+
 export interface FaceGeometry {
   /** Underlying surface class (plane, cylinder, cone, B-spline, ...). */
   surfaceType: string;
   area: number;
-  /** Exact surface center of mass, used as a topology fingerprint. */
+  /**
+   * How far {@link area} can be trusted. Absent when the surface class is one
+   * this build has not measured, which consumers must treat as "assume
+   * approximate" rather than as "exact".
+   */
+  areaProvenance?: FaceAreaProvenance;
+  /**
+   * The mean of this face's VERTEX positions — not an area centroid, despite
+   * being exactly reproducible and used as a topology fingerprint. For an
+   * L-shaped or trimmed face it is not the centre of the face, and it is not
+   * where a centre-of-mass marker belongs.
+   *
+   * The value is frozen: it is an ADR-011 witness input AND a direct-edit
+   * authorization pin (`sourceCenter`), so changing it would invalidate
+   * persisted topology hashes and refuse edits on documents that already open.
+   */
   center: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
+  /**
+   * The `d` in the plane's equation `n·x = d`, alongside {@link normal}.
+   *
+   * Present only when `normal` is, which excludes NURBS-backed planes — the
+   * imported-STEP faces a raw pick most often lands on. Its whole purpose is
+   * to make signed point-to-plane distance an exact client-side calculation
+   * rather than a kernel round trip, so a consumer must treat the absence as
+   * "cannot answer" rather than substituting a plane through the origin.
+   */
+  planeOffset?: number;
   /** Present for exact cylindrical surfaces. */
   radius?: number;
   diameter?: number;
@@ -637,6 +744,13 @@ export interface EdgeTopology {
   topologyId: string;
   hash: number;
   reference?: EdgeTopologyReferenceV5;
+  /**
+   * Length measured by the browser geometry kernel from the edge's exact
+   * curve. Optional for projections produced by older adapters; consumers may
+   * fall back to the sampled display polyline only when they also identify the
+   * result as approximate.
+   */
+  length?: number;
   /**
    * Periodic B-Rep faces need topological seam edges to close their UV
    * parameterization. They remain available to the kernel for stable topology
@@ -808,6 +922,44 @@ export interface TopologySelection {
  * already in world space (transform features are baked in), so the viewport
  * renders representations without additional placement.
  */
+/**
+ * A solid's distribution of material, integrated over its exact surfaces.
+ *
+ * Deliberately carries no volume. The kernel's mass-properties integrator
+ * returns one, but it is LESS accurate than `BodyRepresentation.volume` — on a
+ * cylinder it lands 1.8e-13 off where the other is 2e-16 off, because the two
+ * share an integrator and only one of them is additionally pinned bit-exact
+ * for analytic bodies. Publishing both would invite a consumer to pick the
+ * wrong one for `mass = density * volume`, so only the better one exists.
+ *
+ * Unit density throughout: these are geometric moments, not physical ones.
+ * Multiplying by a density is the caller's job, and the caller is the only
+ * part of the system that knows what the part is made of.
+ */
+export interface BodyMassProperties {
+  /** Centroid of the enclosed volume, in document units. */
+  centerOfMass: Vector3;
+  /**
+   * `[Ixx, Iyy, Izz, Ixy, Ixz, Iyz]` about the centre of mass, on global axes.
+   * The three products vanish when the body is symmetric about those axes.
+   */
+  inertia: readonly [number, number, number, number, number, number];
+  /** Principal moments, ascending. */
+  principalMoments: readonly [number, number, number];
+  /**
+   * The axis belonging to each principal moment, in the same order.
+   *
+   * The kernel hands these over as a flat row-major nine, which is converted
+   * here rather than downstream: an consumer reading `principalAxes[0]` and
+   * expecting a vector would otherwise get a scalar with no type error.
+   *
+   * Order is a property of the body's proportions, not of the axes. A cylinder
+   * taller than r*sqrt(3) has its spin axis FIRST, so nothing may assume the
+   * last entry is the interesting one — pair each axis with its own moment.
+   */
+  principalAxes: readonly [Vector3, Vector3, Vector3];
+}
+
 export interface BodyRepresentation {
   bodyId: BodyId;
   name: string;
@@ -823,6 +975,13 @@ export interface BodyRepresentation {
   consumed: boolean;
   volume: number;
   bbox: BoundingBox;
+  /**
+   * Absent when the kernel could not integrate this solid — it raises on a
+   * degenerate one where `volume` merely answers zero — or when the projection
+   * predates the field. Consumers must render the absence rather than
+   * substituting zeros, which would read as a massless part.
+   */
+  massProperties?: BodyMassProperties;
   topology?: BodyTopology;
 }
 
@@ -858,11 +1017,29 @@ export interface ProjectAssetRef {
   createdAt: string;
 }
 
+/**
+ * Kernel-proven v5 references for one legacy hash-only edge modifier. A
+ * closed-edge hash embeds its length, so the only moment a hash-only
+ * fillet/chamfer can be upgraded is while its stored hashes still resolve —
+ * the rebuild that succeeds is the proof. The app persists these onto the
+ * feature so later upstream edits resolve by lineage instead of dying on the
+ * orphaned hashes.
+ */
+export interface EdgeReferenceRepair {
+  featureId: FeatureId;
+  edgeReferences: EdgeTopologyReferenceV5[];
+}
+
 export interface DerivedState {
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
+  /**
+   * Advice to the session that ran this rebuild, not document state:
+   * `attachDerivedState` strips it so it is never persisted or replayed.
+   */
+  referenceRepairs?: EdgeReferenceRepair[];
 }
 
 export interface ProjectDocument {
@@ -1205,6 +1382,32 @@ export interface FinalizeArtifactRequest {
   artifactId: ArtifactId;
 }
 
+/**
+ * Bodies larger than the single-PUT ceiling upload as fixed-size parts.
+ * 16 MiB stays under every Cloudflare plan's request-body cap and R2's
+ * equal-part-size rule; the last part may be smaller. R2's own floor for
+ * non-final parts is 5 MiB.
+ */
+export const ARTIFACT_UPLOAD_PART_BYTES = 16 * 1024 * 1024;
+/** Server-side ceiling for one part body; parts above this are refused. */
+export const MAX_ARTIFACT_PART_BYTES = 32 * 1024 * 1024;
+/** Ceiling on parts per upload (with 16 MiB parts: 1 GiB). */
+export const MAX_ARTIFACT_UPLOAD_PARTS = 64;
+
+export interface CreateMultipartUploadResponse {
+  uploadId: string;
+}
+
+export interface UploadedArtifactPart {
+  partNumber: number;
+  etag: string;
+}
+
+export interface CompleteMultipartUploadRequest {
+  uploadId: string;
+  parts: UploadedArtifactPart[];
+}
+
 /** @deprecated Use FinalizeArtifactRequest. */
 export type FinalizeImportRequest = FinalizeArtifactRequest;
 
@@ -1227,6 +1430,10 @@ export interface HealthResponse {
   documentStorageAccountingReady?: boolean;
   /** Whether migration 0011 and private R2 project storage are available. */
   projectObjectStorageReady?: boolean;
+  /** Whether migration 0014 installed resumable account-erasure fencing. */
+  accountErasureReady?: boolean;
+  /** Whether R2, D1 fencing, and collaboration-room erasure are all ready. */
+  projectErasureReady?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
   projectSharingEnabled?: boolean;
   /** Public rollout capability; absent older Workers are treated as disabled. */
@@ -1681,6 +1888,32 @@ export interface AccountStorageUsage {
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;
+}
+
+/** The three independently confirmed cloud-data deletion operations. */
+export type AccountDeletionScope = 'profile' | 'projects' | 'all';
+
+/** Server-owned inventory and confirmation contract for the deletion dialog. */
+export interface AccountDeletionPreview {
+  confirmationKind: 'email' | 'phrase';
+  confirmationText: string;
+  projectCount: number;
+  documentBytes: number;
+  revisionBytes: number;
+  revisionCount: number;
+  collaboratorCount: number;
+}
+
+export interface DeleteAccountDataRequest {
+  scope: AccountDeletionScope;
+  confirmation: string;
+}
+
+export interface DeleteAccountDataResponse {
+  ok: true;
+  scope: AccountDeletionScope;
+  deletedProjectIds: ProjectId[];
+  signedOut: boolean;
 }
 
 export const identityTransform = (): Transform3D => ({

@@ -43,7 +43,7 @@ STEP/STL buttons send an export request to the existing geometry worker with the
 
 ## Editable STEP lifecycle
 
-The browser reads an imported STEP file (up to 12 MB), records the source text and artifact reference in an `imported-step` feature command, and sends the canonical document to the geometry worker. The kernel imports the exact shape on every replay, honouring the file's own declared length and plane-angle units; later transforms, booleans, finishing, patterns, selection, and export therefore share one exact B-rep path. The Cloudflare Worker archives the source best-effort; replay does not depend on that network artifact.
+The browser reads an imported STEP file (up to 250 MB), stores its bytes in the content-addressed source blob store, and records a SHA-256 reference plus artifact id in an `imported-step` feature command (documents from before references carry the source text embedded, capped at 12 MB, and replay unchanged). The canonical document — now a few hundred bytes per import — goes to the geometry worker, which resolves references from the blob store or the archived artifact before rebuilding. The kernel imports the exact shape on every replay, honouring the file's own declared length and plane-angle units; later transforms, booleans, finishing, patterns, selection, and export therefore share one exact B-rep path. The Cloudflare Worker archives the source best-effort; replay does not depend on that network artifact.
 
 ## Collaboration lifecycle
 

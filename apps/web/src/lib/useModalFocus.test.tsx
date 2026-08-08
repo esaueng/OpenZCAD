@@ -130,4 +130,37 @@ describe('useModalFocus', () => {
       ).toHaveFocus()
     );
   });
+
+  it('keeps the visually top dialog interactive when a lower dialog mounts later', () => {
+    function AsyncStackedHarness({ lowerOpen }: { lowerOpen: boolean }) {
+      return (
+        <>
+          {lowerOpen && (
+            <Modal label="Lower dialog" onClose={() => undefined} />
+          )}
+          <Modal label="Top dialog" onClose={() => undefined} />
+        </>
+      );
+    }
+
+    const { rerender } = render(
+      <StrictMode>
+        <AsyncStackedHarness lowerOpen={false} />
+      </StrictMode>
+    );
+    rerender(
+      <StrictMode>
+        <AsyncStackedHarness lowerOpen />
+      </StrictMode>
+    );
+
+    const lower = screen.getByRole('dialog', {
+      name: 'Lower dialog',
+      hidden: true
+    });
+    const top = screen.getByRole('dialog', { name: 'Top dialog' });
+    expect(lower.parentElement).toHaveAttribute('inert');
+    expect(top.parentElement).not.toHaveAttribute('inert');
+    expect(screen.getByLabelText('Top dialog first field')).toHaveFocus();
+  });
 });

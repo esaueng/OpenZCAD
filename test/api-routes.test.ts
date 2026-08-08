@@ -4,6 +4,7 @@ import { getInMemoryPersistence } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
+  MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_PROJECT_NAME_LENGTH,
   projectOrganization,
   toUserId,
@@ -405,8 +406,10 @@ describe('worker api routes', () => {
       documentStorageAccountingReady: true,
       projectPersonalSyncEnabled: false
     });
-    expect(prepare).toHaveBeenCalledOnce();
-    const query = prepare.mock.calls[0]![0];
+    const query = prepare.mock.calls
+      .map(([statement]) => statement)
+      .find((statement) => statement.includes('idx_revisions_project_bytes'));
+    expect(query).toBeDefined();
     expect(query).toContain("pragma_table_info('projects')");
     expect(query).toContain("pragma_table_info('revisions')");
     expect(query).toContain('idx_revisions_project_bytes');
@@ -918,9 +921,15 @@ describe('worker api routes', () => {
 
   it('creates, lists, and revokes viewer invitations behind the sharing flag', async () => {
     const owner = toUserId('user_sharing_route_owner');
+    const emailSend = vi.fn(async (_message: EmailMessageBuilder) => ({
+      messageId: 'message_sharing'
+    }));
     const sharingEnv = {
       ...env,
-      PROJECT_SHARING_ENABLED: 'true'
+      PROJECT_SHARING_ENABLED: 'true',
+      PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      EMAIL: { send: emailSend }
     };
     const createdResponse = await worker.fetch(
       new Request('https://example.com/api/projects', {
@@ -951,6 +960,16 @@ describe('worker api routes', () => {
     };
     expect(invitation.invitation.email).toBe('viewer@example.com');
     expect(invitation.token).toHaveLength(43);
+    expect(emailSend).toHaveBeenCalledOnce();
+    expect(emailSend.mock.calls[0]![0]).toMatchObject({
+      to: 'viewer@example.com',
+      from: { email: 'noreply@zcad.esau.app', name: 'OpenZCAD' },
+      subject: 'You are invited to an OpenZCAD project'
+    });
+    expect(emailSend.mock.calls[0]![0].text).toContain(
+      `https://zcad.esau.app/#invite=${invitation.token}`
+    );
+    expect(emailSend.mock.calls[0]![0].html).toContain('Sharing routes');
 
     const listed = await worker.fetch(
       new Request(`https://example.com/api/projects/${projectId}/sharing`, {
@@ -982,6 +1001,73 @@ describe('worker api routes', () => {
       sharingEnv
     );
     expect(revoked.status).toBe(204);
+  });
+
+  it('revokes a newly created invitation when email delivery fails', async () => {
+    const owner = toUserId('user_sharing_email_failure_owner');
+    const createdResponse = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: { 'x-openzcad-development-user': owner },
+        body: JSON.stringify({ name: 'Email failure cleanup' })
+      }),
+      env
+    );
+    const created = (await createdResponse.json()) as CreateProjectResponse;
+    const deliveryError = Object.assign(
+      new Error('member@example.com secret-token-value'),
+      { code: 'E_DELIVERY_FAILED' }
+    );
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const failureEnv = {
+      ...env,
+      PROJECT_SHARING_ENABLED: 'true',
+      PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      EMAIL: {
+        send: vi.fn(async (_message: EmailMessageBuilder) =>
+          Promise.reject(deliveryError)
+        )
+      }
+    };
+
+    try {
+      const response = await worker.fetch(
+        new Request(
+          `https://example.com/api/projects/${created.document.projectId}/invitations`,
+          {
+            method: 'POST',
+            headers: { 'x-openzcad-development-user': owner },
+            body: JSON.stringify({
+              email: 'member@example.com',
+              role: 'viewer'
+            })
+          }
+        ),
+        failureEnv
+      );
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toMatchObject({
+        code: 'INVITATION_EMAIL_UNAVAILABLE'
+      });
+
+      const listed = await worker.fetch(
+        new Request(
+          `https://example.com/api/projects/${created.document.projectId}/sharing`,
+          { headers: { 'x-openzcad-development-user': owner } }
+        ),
+        failureEnv
+      );
+      await expect(listed.json()).resolves.toMatchObject({ invitations: [] });
+      const logs = JSON.stringify(consoleError.mock.calls);
+      expect(logs).toContain('E_DELIVERY_FAILED');
+      expect(logs).not.toContain('member@example.com');
+      expect(logs).not.toContain('secret-token-value');
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('lets viewers read shared projects but rejects every revision mutation', async () => {
@@ -1558,6 +1644,42 @@ describe('worker api routes', () => {
       env
     );
     expect(replayed.status).toBe(404);
+  });
+
+  it('rejects multipart part numbers above the upload ceiling', async () => {
+    const created = await createProject('Bounded Multipart Upload');
+    const sessionResponse = await worker.fetch(
+      post('/api/uploads', {
+        projectId: created.project.projectId,
+        fileName: 'large.step',
+        contentType: 'model/step',
+        kind: 'step-import'
+      }),
+      env
+    );
+    const { session } = (await sessionResponse.json()) as {
+      session: { uploadSessionId: string };
+    };
+    const multipartResponse = await worker.fetch(
+      post(`/api/uploads/${session.uploadSessionId}/multipart`, {}),
+      env
+    );
+    const { uploadId } = (await multipartResponse.json()) as {
+      uploadId: string;
+    };
+
+    const rejected = await worker.fetch(
+      new Request(
+        `https://example.com/api/uploads/${session.uploadSessionId}/parts/${MAX_ARTIFACT_UPLOAD_PARTS + 1}?uploadId=${encodeURIComponent(uploadId)}`,
+        { method: 'PUT', body: 'x' }
+      ),
+      env
+    );
+
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({
+      error: `Upload part number cannot exceed ${MAX_ARTIFACT_UPLOAD_PARTS}.`
+    });
   });
 
   it('lists and downloads completed artifacts', async () => {

@@ -23,6 +23,13 @@
   inset: 0;
 }
 
+/* HudLayer owns imperative canvas overlays whose class styles may select a
+   layout display mode. The hidden state always wins so transient markers and
+   labels cannot survive after their interaction mode exits. */
+[data-viewport-hud][hidden] {
+  display: none !important;
+}
+
 /* Top-right orientation widget. The utility rail used to stack beneath it;
    it now sits centred against the right edge as `.viewer-rail`. */
 .viewer-rail-stack {
@@ -159,6 +166,31 @@
     scale(var(--dimension-label-scale, 1));
   transform-origin: center center;
   will-change: transform;
+}
+
+.selection-callout.measurement-callout {
+  padding: 4px 8px;
+  color: rgba(225, 242, 255, 0.96);
+  background: rgba(9, 24, 40, 0.82);
+  border-color: rgba(124, 192, 255, 0.58);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.selection-callout.measurement-callout.selected {
+  color: white;
+  border-color: rgba(155, 211, 255, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(155, 211, 255, 0.32),
+    0 5px 16px rgba(0, 0, 0, 0.32);
+}
+
+.selection-callout.measurement-callout.stale {
+  color: #f7c76f;
+  border-color: rgba(245, 158, 11, 0.58);
 }
 
 /* Editable dimension pill: drag the face, or click the value to type. */

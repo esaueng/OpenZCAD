@@ -1005,6 +1005,25 @@
   background: rgba(77, 163, 255, 0.22);
 }
 
+/*
+ * Mouse parity for the Escape that leaves plane picking. Muted so it reads as
+ * a way out rather than a fourth plane to choose.
+ */
+.sketch-plane-buttons .sketch-plane-dismiss {
+  margin-left: var(--sp-1);
+  padding: 5px 9px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1;
+  background: transparent;
+  border-color: transparent;
+}
+
+.sketch-plane-buttons .sketch-plane-dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised, rgba(255, 255, 255, 0.08));
+}
+
 /* One-click return to the source sketch after a region extrude. */
 .revert-sketch-pill {
   position: absolute;

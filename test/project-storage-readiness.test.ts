@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isProjectObjectStorageReady } from '../apps/web/worker/readiness';
+import {
+  isAccountErasureReady,
+  isProjectObjectStorageReady
+} from '../apps/web/worker/readiness';
 
 const readyRow = {
   project_columns: 3,
@@ -49,5 +52,29 @@ describe('R2 project storage readiness', () => {
       false
     );
     expect(first).not.toHaveBeenCalled();
+  });
+});
+
+describe('account erasure readiness', () => {
+  it('requires the migration 0014 fence and every write-safety trigger', async () => {
+    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 23 }));
+    const prepare = vi.fn((_query: string) => ({ first }));
+    const db = {
+      prepare
+    } as unknown as D1Database;
+
+    await expect(isAccountErasureReady(db)).resolves.toBe(true);
+    const query: string | undefined = prepare.mock.calls[0]?.[0];
+    expect(query).toContain('account_erasure_requests');
+    expect(query).toContain('block_erasing_%');
+  });
+
+  it('fails closed when any erasure trigger is missing', async () => {
+    const db = {
+      prepare: vi.fn(() => ({
+        first: vi.fn(async () => ({ table_ready: 1, trigger_count: 22 }))
+      }))
+    } as unknown as D1Database;
+    await expect(isAccountErasureReady(db)).resolves.toBe(false);
   });
 });

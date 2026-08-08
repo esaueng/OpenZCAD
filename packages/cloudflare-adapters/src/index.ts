@@ -38,6 +38,9 @@ import {
   type AccountStorageUsage,
   type ArtifactMetadataResponse,
   type ArtifactRecord,
+  type CompleteMultipartUploadRequest,
+  type CreateMultipartUploadResponse,
+  type UploadedArtifactPart,
   type CreateProjectRequest,
   type CreateProjectResponse,
   type CreateUploadSessionRequest,
@@ -129,6 +132,8 @@ export interface CloudflareEnv {
   AUTH_EMAIL_FROM?: string;
   /** Sender reserved for transactional project invitation links. */
   PROJECT_INVITATION_EMAIL_FROM?: string;
+  /** Canonical browser origin used to build invitation links. */
+  PUBLIC_APP_ORIGIN?: string;
   AUTH_SESSION_DAYS?: string;
   /** Fail-closed rollout gate for the native PKCE/device authorization flow. */
   DESKTOP_AUTH_ENABLED?: string;
@@ -913,6 +918,23 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.destroyProjects([projectId]);
   }
 
+  async deleteOwnedProjects(userId: UserId): Promise<ProjectId[]> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().deleteOwnedProjects(userId);
+    }
+    const rows = await this.env.DB.prepare(
+      `SELECT id FROM projects WHERE user_id = ? ORDER BY id`
+    )
+      .bind(userId)
+      .all<{ id: string }>();
+    const projectIds = (rows.results ?? []).map((row) => row.id);
+    // Keep statement sizes, bound parameters, and object-deletion fanout small.
+    for (let start = 0; start < projectIds.length; start += 50) {
+      await this.destroyProjects(projectIds.slice(start, start + 50));
+    }
+    return projectIds.map(toProjectId);
+  }
+
   async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {
     if (!this.env.DB) {
       return getInMemoryPersistence().purgeExpiredProjects(userId);
@@ -1371,6 +1393,170 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.env.ARTIFACTS.put(upload.object_key, body, {
       httpMetadata: { contentType: upload.content_type }
     });
+  }
+
+  /**
+   * Loads and authorizes an upload session for a chunked-upload call. Every
+   * part call re-validates: sessions expire mid-upload, and project access
+   * can be revoked between parts.
+   */
+  private async requireUploadSession(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<{
+    objectKey: string;
+    contentType: string;
+    metadata: Record<string, unknown>;
+  }> {
+    const upload = await this.env
+      .DB!.prepare(
+        `SELECT project_id, object_key, content_type, metadata_json, expires_at FROM upload_sessions WHERE id = ?`
+      )
+      .bind(uploadSessionId)
+      .first<{
+        project_id: string;
+        object_key: string;
+        content_type: string;
+        metadata_json: string;
+        expires_at: string;
+      }>();
+    if (!upload || Date.parse(upload.expires_at) < Date.now()) {
+      throw new ArtifactStorageError(
+        'Upload session was not found or expired.'
+      );
+    }
+    await this.requireProjectEdit(userId, upload.project_id);
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    return {
+      objectKey: upload.object_key,
+      contentType: upload.content_type,
+      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>
+    };
+  }
+
+  async createMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string
+  ): Promise<CreateMultipartUploadResponse> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().createMultipartUpload(
+        userId,
+        uploadSessionId
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    const upload = await this.env.ARTIFACTS!.createMultipartUpload(
+      session.objectKey,
+      { httpMetadata: { contentType: session.contentType } }
+    );
+    // Recorded so purgeExpiredUploadSessions can abort an abandoned upload;
+    // R2 keeps incomplete multipart state until an explicit abort.
+    await this.env.DB.prepare(
+      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    )
+      .bind(
+        JSON.stringify({
+          ...session.metadata,
+          [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
+        }),
+        uploadSessionId
+      )
+      .run();
+    return { uploadId: upload.uploadId };
+  }
+
+  async putUploadPart(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: ArrayBuffer
+  ): Promise<UploadedArtifactPart> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().putUploadPart(
+        userId,
+        uploadSessionId,
+        uploadId,
+        partNumber,
+        body
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
+      throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
+      session.objectKey,
+      uploadId
+    );
+    const part = await upload.uploadPart(partNumber, body);
+    return { partNumber: part.partNumber, etag: part.etag };
+  }
+
+  async completeMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    request: CompleteMultipartUploadRequest
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().completeMultipartUpload(
+        userId,
+        uploadSessionId,
+        request
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== request.uploadId) {
+      throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
+      session.objectKey,
+      request.uploadId
+    );
+    await upload.complete(
+      [...request.parts].sort((a, b) => a.partNumber - b.partNumber)
+    );
+    // The upload is now a plain object; drop the abort marker so purge
+    // treats the session like a completed single PUT.
+    const { [MULTIPART_UPLOAD_METADATA_KEY]: _done, ...metadata } =
+      session.metadata;
+    await this.env.DB.prepare(
+      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    )
+      .bind(JSON.stringify(metadata), uploadSessionId)
+      .run();
+  }
+
+  async abortMultipartUpload(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string
+  ): Promise<void> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().abortMultipartUpload(
+        userId,
+        uploadSessionId,
+        uploadId
+      );
+    }
+    const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
+      // Unknown or already completed/aborted: nothing to clean up.
+      return;
+    }
+    await this.env
+      .ARTIFACTS!.resumeMultipartUpload(session.objectKey, uploadId)
+      .abort()
+      .catch(() => undefined);
+    const { [MULTIPART_UPLOAD_METADATA_KEY]: _gone, ...metadata } =
+      session.metadata;
+    await this.env.DB.prepare(
+      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
+    )
+      .bind(JSON.stringify(metadata), uploadSessionId)
+      .run();
   }
 
   async finalizeArtifact(
@@ -1883,11 +2069,10 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /**
-   * Irreversibly removes projects and their stored bytes. Revisions, artifact
-   * rows, and upload sessions cascade from the project row, so only the R2
-   * objects they point at have to be swept by hand — and they are swept first,
-   * because a deleted row would otherwise leave the bytes unreferenced and
-   * unbilled to nobody's knowledge.
+   * Irreversibly removes projects and their stored bytes. R2 objects are swept
+   * first because deleting their index rows first could strand unreferenced
+   * user data. Child rows are then removed explicitly so correctness does not
+   * depend on D1 foreign-key enforcement being enabled on this connection.
    */
   private async destroyProjects(projectIds: string[]): Promise<void> {
     if (projectIds.length === 0) {
@@ -1930,6 +2115,9 @@ export class D1R2PersistenceService implements PersistenceService {
     // leave orphaned revisions behind if it is ever off.
     await this.env.DB!.batch(
       [
+        'DELETE FROM project_access_events WHERE project_id IN',
+        'DELETE FROM project_invitations WHERE project_id IN',
+        'DELETE FROM project_members WHERE project_id IN',
         'DELETE FROM upload_sessions WHERE project_id IN',
         'DELETE FROM artifacts WHERE project_id IN',
         'DELETE FROM revisions WHERE project_id IN',
@@ -2033,16 +2221,37 @@ export class D1R2PersistenceService implements PersistenceService {
       return 0;
     }
     const expired = await this.env.DB.prepare(
-      `SELECT id, object_key FROM upload_sessions WHERE expires_at < ? LIMIT 100`
+      `SELECT id, object_key, metadata_json FROM upload_sessions WHERE expires_at < ? LIMIT 100`
     )
       .bind(nowIso())
-      .all<{ id: string; object_key: string }>();
+      .all<{ id: string; object_key: string; metadata_json: string }>();
     const rows = expired.results ?? [];
     if (rows.length === 0) {
       return 0;
     }
     const deletions = await Promise.allSettled(
-      rows.map((row) => this.env.ARTIFACTS!.delete(row.object_key))
+      rows.map(async (row) => {
+        let metadata: Record<string, unknown> = {};
+        try {
+          metadata = JSON.parse(row.metadata_json) as Record<string, unknown>;
+        } catch {
+          // Absent or malformed metadata reads as "no multipart in flight".
+        }
+        const multipartUploadId = metadata[MULTIPART_UPLOAD_METADATA_KEY];
+        if (typeof multipartUploadId === 'string') {
+          // Abort is idempotent-ish: a completed upload's id is already
+          // removed from metadata, and aborting an unknown id throws, which
+          // allSettled tolerates without blocking the object delete below.
+          await this.env
+            .ARTIFACTS!.resumeMultipartUpload(
+              row.object_key,
+              multipartUploadId
+            )
+            .abort()
+            .catch(() => undefined);
+        }
+        return this.env.ARTIFACTS!.delete(row.object_key);
+      })
     );
     const deletedRows = rows.filter(
       (_row, index) => deletions[index]?.status === 'fulfilled'
@@ -2060,6 +2269,14 @@ export class D1R2PersistenceService implements PersistenceService {
     return deletedRows.length;
   }
 }
+
+/**
+ * Session-metadata key holding the R2 multipart upload id while parts are in
+ * flight. Written at multipart create, removed at complete, and read by the
+ * expired-session purge so an abandoned upload's R2 state is aborted rather
+ * than accumulating forever. Never surfaced on finalized artifacts.
+ */
+const MULTIPART_UPLOAD_METADATA_KEY = '__openzcadMultipartUploadId';
 
 function createUploadSessionRecord(
   request: CreateUploadSessionRequest
@@ -2383,6 +2600,7 @@ interface RoomStorage {
     (key: string): Promise<boolean>;
     (keys: string[]): Promise<number>;
   };
+  deleteAll(): Promise<void>;
 }
 
 function historyKey(version: number): string {
@@ -2413,6 +2631,7 @@ export class ProjectCollaborationRoom extends DurableObject {
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
   private projectId: string | null = null;
+  private erasing = false;
 
   constructor(ctx: unknown, env: unknown) {
     super(ctx, env);
@@ -2493,6 +2712,14 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     await this.ready;
+    if (request.method === 'DELETE') {
+      return this.eraseRoom(request);
+    }
+    if (this.erasing) {
+      return new Response('Cloud project deletion is in progress.', {
+        status: 410
+      });
+    }
     if (request.method === 'PATCH') {
       return this.acceptInternalRoleUpdate(request);
     }
@@ -2571,6 +2798,32 @@ export class ProjectCollaborationRoom extends DurableObject {
     server.addEventListener('close', close);
     server.addEventListener('error', close);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** Internal-only hard deletion used by the account erasure coordinator. */
+  private async eraseRoom(request: Request): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (
+      request.headers.get('x-openzcad-internal-project-erasure') !== 'v1' ||
+      !projectId ||
+      (this.projectId !== null && this.projectId !== projectId)
+    ) {
+      return new Response('Invalid project erasure request.', { status: 403 });
+    }
+    return this.roomContext.blockConcurrencyWhile(async () => {
+      this.erasing = true;
+      for (const socket of this.sockets.keys()) {
+        socket.close(4001, 'Cloud project was permanently deleted.');
+      }
+      this.sockets.clear();
+      this.presence.clear();
+      this.editLease = null;
+      this.latestDocument = null;
+      this.documentHistory.clear();
+      this.projectId = null;
+      await this.roomContext.storage.deleteAll();
+      return new Response(null, { status: 204 });
+    });
   }
 
   private enqueueTicketOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -2687,6 +2940,19 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? claim
         : null;
     }
+    try {
+      const erasure = await this.roomEnv.DB.prepare(
+        `SELECT 1 AS pending FROM account_erasure_requests WHERE user_id = ?`
+      )
+        .bind(claim.userId)
+        .first<{ pending: number }>();
+      if (erasure) {
+        return null;
+      }
+    } catch {
+      // Migration 0014 is independently rolled out. Project access remains on
+      // its existing checks until the account-erasure feature itself is ready.
+    }
     const rollout = projectCollaborationRollout(this.roomEnv, claim.email);
     const owner = await this.roomEnv.DB.prepare(
       `SELECT user_id FROM projects WHERE id = ? AND user_id = ?`
@@ -2719,6 +2985,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     role: SharedProjectAccessRole,
     email?: string
   ): Promise<void> {
+    if (this.erasing) {
+      socket.close(4001, 'Cloud project was permanently deleted.');
+      return;
+    }
     if (typeof raw !== 'string' || raw.length > 950_000) {
       socket.close(1009, 'Collaboration message is too large.');
       return;

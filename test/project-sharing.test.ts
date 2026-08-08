@@ -5,14 +5,51 @@ import {
   ProjectSharingError
 } from '@openzcad/persistence';
 import {
+  buildProjectInvitationEmail,
   createInvitation,
   createProjectInvitationToken,
   hashProjectInvitationToken,
-  PROJECT_INVITATION_TTL_SECONDS
+  PROJECT_INVITATION_TTL_SECONDS,
+  projectInvitationUrl
 } from '../apps/web/worker/sharing';
 import { toUserId } from '@openzcad/shared';
 
 describe('project sharing invitations', () => {
+  it('builds an escaped multipart email with a fragment-only invitation link', () => {
+    const opaqueToken = 'a'.repeat(43);
+    const message = buildProjectInvitationEmail(
+      {
+        sender: 'noreply@zcad.esau.app',
+        publicAppOrigin: 'https://zcad.esau.app'
+      },
+      {
+        recipientEmail: 'member@example.com',
+        inviterLabel: 'owner@example.com',
+        projectName: '<Unsafe & project>',
+        role: 'viewer',
+        expiresAt: 2_000_000_000,
+        token: opaqueToken
+      }
+    );
+
+    expect(message).toMatchObject({
+      to: 'member@example.com',
+      from: { email: 'noreply@zcad.esau.app', name: 'OpenZCAD' },
+      subject: 'You are invited to an OpenZCAD project'
+    });
+    expect(message.text).toContain(
+      `https://zcad.esau.app/#invite=${opaqueToken}`
+    );
+    expect(message.html).toContain('&lt;Unsafe &amp; project&gt;');
+    expect(message.html).not.toContain('<Unsafe & project>');
+    expect(projectInvitationUrl('http://localhost:5173', opaqueToken)).toBe(
+      `http://localhost:5173/#invite=${opaqueToken}`
+    );
+    expect(() =>
+      projectInvitationUrl('https://zcad.esau.app/redirect', opaqueToken)
+    ).toThrow('Project invitation email is not configured.');
+  });
+
   it('uses a 256-bit opaque token and persists only its hash', async () => {
     const service = new InMemoryPersistenceService();
     const owner = toUserId('user_invite_owner');
