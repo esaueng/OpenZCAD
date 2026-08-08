@@ -5,6 +5,35 @@ import {
   type ProjectStatus,
   type ProjectSummary
 } from '@openzcad/shared';
+import type { ProjectThumbnailRecord } from './localProjectStore';
+
+/**
+ * What this device's cached preview may still say about the project the shelf
+ * is listing: the source to show, or undefined for "ask the backfill".
+ *
+ * Serving a stale *image* is deliberate — recognising the part is worth more
+ * than the document load a redraw would cost, which is the entire reason the
+ * cache exists. A stale *null* is not the same trade. It claims the part has
+ * no geometry on the strength of a version that no longer exists, and because
+ * a null is an answer rather than a miss it is the one value that also stops
+ * the backfill from correcting it. A new project left alone long enough for
+ * the shelf refresh to come due while it is still empty records exactly that,
+ * so a part first modelled after such a pause read "No geometry" on its card
+ * until it was next opened and left open long enough to be re-recorded. Send
+ * that one back to the backfill instead.
+ */
+export function cachedThumbnailSource(
+  cached: ProjectThumbnailRecord | null,
+  project: ProjectSummary
+): string | null | undefined {
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.source === null && cached.updatedAt !== project.updatedAt) {
+    return undefined;
+  }
+  return cached.source;
+}
 
 /**
  * Merges the device's projects with the account's. Which record describes the

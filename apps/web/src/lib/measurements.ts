@@ -1,6 +1,7 @@
 import type {
   BodyRepresentation,
   EdgeTopology,
+  FaceAreaProvenance,
   FaceTopology,
   TopologyReferenceV5,
   TopologySelection,
@@ -119,6 +120,36 @@ export interface MeasurementViewportAnnotation extends MeasurementAnnotation {
   label: string;
   selected: boolean;
   status: MeasurementStatus;
+  /**
+   * What the segments mean, which decides how they are drawn.
+   *
+   * A measured SPAN gets a drawing's dimension — witness ticks standing it off
+   * the geometry, arrowheads whose tips land on the measured points. An angle's
+   * two arms are not a span: they radiate from a shared corner, and putting an
+   * arrowhead on the far end of each would claim the arm length was the
+   * measurement.
+   */
+  graphic: 'span' | 'arms' | 'anchor';
+}
+
+/** Which graphic each measurement kind earns. */
+function annotationGraphic(
+  kind: MeasurementKind
+): MeasurementViewportAnnotation['graphic'] {
+  switch (kind) {
+    case 'distance':
+    case 'edge-length':
+    case 'edge-total':
+      return 'span';
+    case 'angle':
+      return 'arms';
+    // A diameter, an area and a body have a point to label but no span to
+    // draw between: the figure describes a whole face or solid, not a gap.
+    case 'diameter':
+    case 'face-area':
+    case 'body':
+      return 'anchor';
+  }
 }
 
 /** Runtime-only measurement. It never enters the project document/history. */
@@ -218,6 +249,21 @@ function normalized(direction: Vector3): Vector3 | null {
 
 function distance(first: Vector3, second: Vector3): number {
   return Math.hypot(second.x - first.x, second.y - first.y, second.z - first.z);
+}
+
+/**
+ * How far a face's published area can be trusted.
+ *
+ * The adapter decides this per face, because only it can see the boundary: a
+ * plane bounded by straight edges is exact where the same plane bounded by a
+ * circle is not, and both arrive here as `surfaceType: 'plane'`. An older
+ * projection carries no verdict at all, which must read as approximate rather
+ * than as exact — absence of evidence is not a promise.
+ */
+function faceAreaQuality(geometry: {
+  areaProvenance?: FaceAreaProvenance;
+}): MeasurementQuality {
+  return geometry.areaProvenance === 'exact' ? 'exact-kernel' : 'tessellated';
 }
 
 function bodyCenter(body: BodyRepresentation): Vector3 {
@@ -598,11 +644,7 @@ export function createSmartMeasurement(
     kind: 'face-area',
     label: target.label,
     result: { value: geometry.area, dimension: 'area' },
-    // A floor rather than a verdict: a box face's area is exact and lands here
-    // too, because nothing published per-face distinguishes it from a disc cap
-    // that reads 1.004e-4 low. Publishing that provenance promotes the exact
-    // ones without ever overclaiming for the sampled ones.
-    quality: 'tessellated',
+    quality: faceAreaQuality(geometry),
     annotation: target.point
       ? { anchor: target.point, segments: [] }
       : undefined
@@ -1178,6 +1220,7 @@ export function measurementToViewportAnnotation(
     label: formatted.value,
     selected,
     status: measurement.status,
+    graphic: annotationGraphic(measurement.kind),
     anchor: measurement.annotation.anchor,
     segments: measurement.annotation.segments
   };

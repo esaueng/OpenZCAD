@@ -42,6 +42,85 @@ describe('boolean result validation', () => {
     );
   });
 
+  it('does not call a curved operand\'s facet sag "dropped geometry"', () => {
+    // The reported case: a 12 mm-diameter cylinder fused to a box came back
+    // faceted, so its polygonal wall inscribed 0.01232764 mm inside the exact
+    // circle. The old bound allowed only 0.1% of the operand's span (0.012 mm)
+    // and warned by a third of a micron, telling the user to move a body.
+    // A faceted boundary may inscribe by up to the tessellation deflection,
+    // which is what the operand is now allowed.
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Cylinder Body',
+            bounds: {
+              min: { x: -6, y: -6, z: 0 },
+              max: { x: 6, y: 6, z: 24 }
+            },
+            hasCurvedFaces: true
+          }
+        ],
+        result: {
+          min: { x: -5.987672, y: -6, z: 0 },
+          max: { x: 6, y: 6, z: 24 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toBeNull();
+  });
+
+  it('still catches a curved operand losing more than the deflection', () => {
+    // The allowance is the deflection, not a blank cheque: a drop an order of
+    // magnitude past it is real geometry loss and must still be reported.
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Cylinder Body',
+            bounds: {
+              min: { x: -6, y: -6, z: 0 },
+              max: { x: 6, y: 6, z: 24 }
+            },
+            hasCurvedFaces: true
+          }
+        ],
+        result: {
+          min: { x: -5.1, y: -6, z: 0 },
+          max: { x: 6, y: 6, z: 24 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toContain('Union dropped geometry from operand "Cylinder Body"');
+  });
+
+  it('keeps the tight bound for a planar operand, whose corners survive faceting', () => {
+    // A box's extremes are vertices; faceting cannot inscribe them. A loss
+    // there is real even when it is smaller than the deflection.
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Box Body',
+            bounds: {
+              min: { x: 0, y: 0, z: 0 },
+              max: { x: 30, y: 18, z: 24 }
+            },
+            hasCurvedFaces: false
+          }
+        ],
+        result: {
+          min: { x: 0.05, y: 0, z: 0 },
+          max: { x: 30, y: 18, z: 24 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toContain('Union dropped geometry from operand "Box Body"');
+  });
+
   it('preserves contained, touching, overlapping, and crossing union extents', () => {
     const result = {
       min: { x: -3, y: 0, z: 0 },
