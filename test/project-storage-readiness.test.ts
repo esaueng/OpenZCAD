@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   isAccountErasureReady,
+  isProjectMeasurementStorageReady,
   isProjectObjectStorageReady
 } from '../apps/web/worker/readiness';
 
@@ -56,8 +57,8 @@ describe('R2 project storage readiness', () => {
 });
 
 describe('account erasure readiness', () => {
-  it('requires the migration 0014 fence and every write-safety trigger', async () => {
-    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 23 }));
+  it('requires the erasure fence and every write-safety trigger through 0015', async () => {
+    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 25 }));
     const prepare = vi.fn((_query: string) => ({ first }));
     const db = {
       prepare
@@ -72,9 +73,49 @@ describe('account erasure readiness', () => {
   it('fails closed when any erasure trigger is missing', async () => {
     const db = {
       prepare: vi.fn(() => ({
-        first: vi.fn(async () => ({ table_ready: 1, trigger_count: 22 }))
+        first: vi.fn(async () => ({ table_ready: 1, trigger_count: 24 }))
       }))
     } as unknown as D1Database;
     await expect(isAccountErasureReady(db)).resolves.toBe(false);
+  });
+});
+
+describe('project measurement storage readiness', () => {
+  const ready = {
+    table_ready: 1,
+    columns_ready: 5,
+    cascade_ready: 1,
+    erasure_triggers: 2
+  };
+
+  it('requires the isolated table, cascade, and both erasure fences', async () => {
+    const first = vi.fn(async () => ready);
+    const prepare = vi.fn((query: string) => ({ first, query }));
+    await expect(
+      isProjectMeasurementStorageReady({ prepare } as unknown as D1Database)
+    ).resolves.toBe(true);
+    const query: string | undefined = prepare.mock.calls[0]?.[0];
+    expect(query).toContain("pragma_table_info('project_measurements')");
+    expect(query).toContain("pragma_foreign_key_list('project_measurements')");
+    expect(query).toContain('block_erasing_measurement_update');
+  });
+
+  it('fails closed for a partial migration or query error', async () => {
+    const partial = {
+      prepare: vi.fn(() => ({
+        first: vi.fn(async () => ({ ...ready, erasure_triggers: 1 }))
+      }))
+    } as unknown as D1Database;
+    await expect(isProjectMeasurementStorageReady(partial)).resolves.toBe(
+      false
+    );
+    const failed = {
+      prepare: vi.fn(() => ({
+        first: vi.fn(async () => {
+          throw new Error('D1 unavailable');
+        })
+      }))
+    } as unknown as D1Database;
+    await expect(isProjectMeasurementStorageReady(failed)).resolves.toBe(false);
   });
 });
