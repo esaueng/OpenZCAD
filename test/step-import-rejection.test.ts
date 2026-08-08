@@ -190,15 +190,17 @@ describe('refused import source cleanup', () => {
 
   it('prunes the blob a rejected import wrote', async () => {
     const ref = referenceFor('ISO-10303-21; /* refused */');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
 
     await expect(
       discardUnreferencedImportSource({
         ...discardable(ref),
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(true);
-    expect(deleteSourceBlob).toHaveBeenCalledWith(ref.checksumSha256);
+    expect(deleteSourceBlobIfUnreferenced).toHaveBeenCalledWith(
+      ref.checksumSha256
+    );
   });
 
   it('keeps a blob an existing feature still rebuilds from', async () => {
@@ -206,16 +208,16 @@ describe('refused import source cleanup', () => {
     // holds lands on the SAME key. Deleting it would break the working
     // feature, which is the whole reason this is reference-counted.
     const shared = referenceFor('ISO-10303-21; /* already imported */');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
 
     await expect(
       discardUnreferencedImportSource({
         ...discardable(shared),
         document: documentReferencing(shared),
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(false);
-    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
   });
 
   it('keeps a blob it did not create, whichever project holds it', async () => {
@@ -224,16 +226,16 @@ describe('refused import source cleanup', () => {
     // rebuilds from — and X's document is not open to be counted against.
     // A blob that predates this import is never this import's to delete.
     const shared = referenceFor('ISO-10303-21; /* imported in project X */');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
 
     await expect(
       discardUnreferencedImportSource({
         ...discardable(shared),
         createdByThisImport: false,
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(false);
-    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
   });
 
   it('keeps a blob another import is still validating against', async () => {
@@ -241,16 +243,16 @@ describe('refused import source cleanup', () => {
     // second is refused (or bounces off the commit lock). Content addressing
     // put both on one key, and the first is about to commit against it.
     const shared = referenceFor('ISO-10303-21; /* imported twice */');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
 
     await expect(
       discardUnreferencedImportSource({
         ...discardable(shared),
         inFlightChecksums: new Set([shared.checksumSha256]),
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(false);
-    expect(deleteSourceBlob).not.toHaveBeenCalled();
+    expect(deleteSourceBlobIfUnreferenced).not.toHaveBeenCalled();
   });
 
   it('prunes a refused import whose bytes already reached the cloud archive', async () => {
@@ -261,15 +263,17 @@ describe('refused import source cleanup', () => {
     // 250 MB *and* left the next import of the same file unable to clean up
     // after itself, having found a key it did not create.
     const ref = referenceFor('ISO-10303-21; /* archived, then refused */');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
 
     await expect(
       discardUnreferencedImportSource({
         ...discardable(ref),
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(true);
-    expect(deleteSourceBlob).toHaveBeenCalledWith(ref.checksumSha256);
+    expect(deleteSourceBlobIfUnreferenced).toHaveBeenCalledWith(
+      ref.checksumSha256
+    );
   });
 
   it('reads every referenced checksum out of the document', () => {
@@ -296,15 +300,17 @@ describe('refused import source cleanup', () => {
 
   it('prunes when there is no document to count against', async () => {
     const ref = referenceFor('ISO-10303-21; /* project closed */');
-    const deleteSourceBlob = vi.fn(() => Promise.resolve());
+    const deleteSourceBlobIfUnreferenced = vi.fn(() => Promise.resolve(true));
     await expect(
       discardUnreferencedImportSource({
         ...discardable(ref),
         document: null,
-        deleteSourceBlob
+        deleteSourceBlobIfUnreferenced
       })
     ).resolves.toBe(true);
-    expect(deleteSourceBlob).toHaveBeenCalledWith(ref.checksumSha256);
+    expect(deleteSourceBlobIfUnreferenced).toHaveBeenCalledWith(
+      ref.checksumSha256
+    );
   });
 });
 
