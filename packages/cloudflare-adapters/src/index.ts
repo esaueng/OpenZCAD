@@ -599,9 +599,20 @@ export class D1R2PersistenceService implements PersistenceService {
       `SELECT i.id, i.project_id, i.role, p.user_id AS owner_user_id
        FROM project_invitations i
        INNER JOIN projects p ON p.id = i.project_id
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
        WHERE i.token_hash = ? AND i.email = ?
          AND i.accepted_at IS NULL AND i.revoked_at IS NULL
-         AND i.expires_at >= ?`
+         AND i.expires_at >= ?
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(
+               owner_settings.settings_json,
+               '$.collaboration.enabled'
+             )
+           END,
+           1
+         ) = 1`
     )
       .bind(tokenHash, email, acceptedAt)
       .first<{
@@ -628,6 +639,22 @@ export class D1R2PersistenceService implements PersistenceService {
          SET accepted_at = ?, accepted_by_user_id = ?
          WHERE id = ? AND token_hash = ? AND email = ?
            AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?
+           AND EXISTS (
+             SELECT 1
+             FROM projects p
+             LEFT JOIN user_settings owner_settings
+               ON owner_settings.user_id = p.user_id
+             WHERE p.id = project_invitations.project_id
+               AND COALESCE(
+                 CASE WHEN json_valid(owner_settings.settings_json)
+                   THEN json_extract(
+                     owner_settings.settings_json,
+                     '$.collaboration.enabled'
+                   )
+                 END,
+                 1
+               ) = 1
+           )
            AND (
              EXISTS (
                SELECT 1 FROM project_members
@@ -703,7 +730,20 @@ export class D1R2PersistenceService implements PersistenceService {
              ON pm.project_id = p.id
             AND pm.user_id = ?
             AND pm.role IN ('editor', 'viewer')
-           WHERE p.user_id = ? OR pm.user_id IS NOT NULL
+           LEFT JOIN user_settings owner_settings
+             ON owner_settings.user_id = p.user_id
+           WHERE p.user_id = ? OR (
+             pm.user_id IS NOT NULL
+             AND COALESCE(
+               CASE WHEN json_valid(owner_settings.settings_json)
+                 THEN json_extract(
+                   owner_settings.settings_json,
+                   '$.collaboration.enabled'
+                 )
+               END,
+               1
+             ) = 1
+           )
            ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC`
         ).bind(userId, userId)
       : this.env.DB.prepare(
@@ -1943,13 +1983,31 @@ export class D1R2PersistenceService implements PersistenceService {
         `SELECT p.user_id AS owner_user_id,
                 CASE
                   WHEN p.user_id = ? THEN 'owner'
-                  WHEN pm.role = 'editor' THEN 'editor'
-                  WHEN pm.role = 'viewer' THEN 'viewer'
+                  WHEN COALESCE(
+                    CASE WHEN json_valid(owner_settings.settings_json)
+                      THEN json_extract(
+                        owner_settings.settings_json,
+                        '$.collaboration.enabled'
+                      )
+                    END,
+                    1
+                  ) = 1 AND pm.role = 'editor' THEN 'editor'
+                  WHEN COALESCE(
+                    CASE WHEN json_valid(owner_settings.settings_json)
+                      THEN json_extract(
+                        owner_settings.settings_json,
+                        '$.collaboration.enabled'
+                      )
+                    END,
+                    1
+                  ) = 1 AND pm.role = 'viewer' THEN 'viewer'
                   ELSE NULL
                 END AS resolved_role
          FROM projects p
          LEFT JOIN project_members pm
            ON pm.project_id = p.id AND pm.user_id = ?
+         LEFT JOIN user_settings owner_settings
+           ON owner_settings.user_id = p.user_id
          WHERE p.id = ?`
       )
       .bind(userId, userId, projectId)
