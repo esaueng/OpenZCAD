@@ -20,7 +20,7 @@ describe('project sharing invitations', () => {
     const message = buildProjectInvitationEmail(
       {
         sender: 'noreply@zcad.esau.app',
-        publicAppOrigin: 'https://zcad.esau.app'
+        publicAppOrigin: 'https://zcad.app'
       },
       {
         recipientEmail: 'member@example.com',
@@ -37,16 +37,14 @@ describe('project sharing invitations', () => {
       from: { email: 'noreply@zcad.esau.app', name: 'OpenZCAD' },
       subject: 'You are invited to an OpenZCAD project'
     });
-    expect(message.text).toContain(
-      `https://zcad.esau.app/#invite=${opaqueToken}`
-    );
+    expect(message.text).toContain(`https://zcad.app/#invite=${opaqueToken}`);
     expect(message.html).toContain('&lt;Unsafe &amp; project&gt;');
     expect(message.html).not.toContain('<Unsafe & project>');
     expect(projectInvitationUrl('http://localhost:5173', opaqueToken)).toBe(
       `http://localhost:5173/#invite=${opaqueToken}`
     );
     expect(() =>
-      projectInvitationUrl('https://zcad.esau.app/redirect', opaqueToken)
+      projectInvitationUrl('https://zcad.app/redirect', opaqueToken)
     ).toThrow('Project invitation email is not configured.');
   });
 
