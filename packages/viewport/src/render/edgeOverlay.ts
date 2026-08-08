@@ -108,6 +108,8 @@ export class BodyEdgeOverlay extends THREE.Group {
   readonly idleEdges: LineSegments2;
   readonly hoverEdges: LineSegments2;
   readonly selectedEdges: LineSegments2;
+  /** Seam-only fallback so an all-seam body still draws in wireframe. */
+  readonly seamEdges: LineSegments2 | null;
   /** Raycast segment index to exact topology identity. */
   readonly ownershipBySegment: readonly EdgeSegmentOwner[];
 
@@ -128,8 +130,18 @@ export class BodyEdgeOverlay extends THREE.Group {
 
     const idlePositions: number[] = [];
     const ownership: EdgeSegmentOwner[] = [];
+    // Seams are construction boundaries, not features, so they stay out of the
+    // shaded view. But a sphere and a torus have NOTHING else — every edge they
+    // own is a seam — so filtering them out left those bodies drawing nothing
+    // at all in wireframe, where the faces are hidden and edges are the only
+    // thing left. Kept aside here and shown only when wireframe would
+    // otherwise be blank.
+    const seamPositions: number[] = [];
     for (const edge of body.topology?.edges ?? []) {
       if (!shouldRenderTopologyEdge(edge)) {
+        if (edge.points.length >= 6) {
+          seamPositions.push(...segmentsFromPolyline(edge.points));
+        }
         continue;
       }
       const owner: EdgeSegmentOwner = {
@@ -193,6 +205,27 @@ export class BodyEdgeOverlay extends THREE.Group {
       Math.max(EMPTY_SEGMENT.length, idlePositions.length),
       resolution
     );
+    // Only built where it is the difference between a wireframe and an empty
+    // patch of grid. It is display-only: not pickable, never selected, and
+    // absent from `ownershipBySegment`, so no seam can be mistaken for a
+    // feature edge by anything downstream.
+    this.seamEdges =
+      idlePositions.length === 0 && seamPositions.length > 0
+        ? createFatLineSegments(seamPositions, {
+            color: EDGE_WIREFRAME_COLOR,
+            linewidth: EDGE_IDLE_WIDTH,
+            opacity: 1,
+            resolution
+          })
+        : null;
+    if (this.seamEdges) {
+      this.seamEdges.name = 'body-edge-seam';
+      this.seamEdges.visible = false;
+      this.seamEdges.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;
+      this.seamEdges.userData = { bodyId: this.bodyId, edgeOverlay: true };
+      this.seamEdges.raycast = () => undefined;
+      this.add(this.seamEdges);
+    }
     this.add(this.idleEdges, this.hoverEdges, this.selectedEdges);
   }
 
@@ -282,7 +315,12 @@ export class BodyEdgeOverlay extends THREE.Group {
 
   /** Keeps all three stable fat-line materials correct after a resize. */
   setResolution(resolution: FatLineResolution) {
-    for (const line of [this.idleEdges, this.hoverEdges, this.selectedEdges]) {
+    for (const line of [
+      this.idleEdges,
+      this.hoverEdges,
+      this.selectedEdges,
+      ...(this.seamEdges ? [this.seamEdges] : [])
+    ]) {
       line.material.resolution.set(
         Math.max(resolution.width, 1),
         Math.max(resolution.height, 1)
@@ -292,6 +330,11 @@ export class BodyEdgeOverlay extends THREE.Group {
 
   private refreshVisibility() {
     const showEdges = this.displayMode !== 'shaded';
+    // Wireframe only: with the faces shown, a seam reads as a line drawn
+    // across a surface for no reason.
+    if (this.seamEdges) {
+      this.seamEdges.visible = this.displayMode === 'wireframe';
+    }
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
     this.selectedEdges.visible = showEdges && this.selectedKeys.size > 0;
     this.hoverEdges.visible =

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
@@ -32,15 +33,30 @@ interface TopBarProps {
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
   saveState: WorkspaceSaveState;
+  /**
+   * Import sources that exist only in this browser because their cloud
+   * archival failed. Nonzero shows the File-menu action that retries the
+   * upload without reimporting.
+   */
+  localOnlySourceCount: number;
   artifacts: ArtifactRecord[];
   session: AuthSession | null;
   accountState: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   collaborationStatus: CollaborationStatus;
   collaboratorCount: number;
   projectSharingEnabled: boolean;
+  workspaceMode: WorkspaceMode;
+  /**
+   * Why Build is unavailable, or null when it is. A read-only share has no
+   * build workspace to switch to, so the control says so rather than offering
+   * a mode that would refuse every edit.
+   */
+  buildModeDisabledReason: string | null;
+  onWorkspaceMode(mode: WorkspaceMode): void;
   onSave(): void;
   onImportFile(file: File): void;
   onExport(format: 'step' | 'stl'): void;
+  onArchiveLocalSources(): void;
   onExportDiagnostics(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
@@ -54,15 +70,20 @@ export function TopBar({
   canExport,
   exportScope,
   saveState,
+  localOnlySourceCount,
   artifacts,
   session,
   accountState,
   collaborationStatus,
   collaboratorCount,
   projectSharingEnabled,
+  workspaceMode,
+  buildModeDisabledReason,
+  onWorkspaceMode,
   onSave,
   onImportFile,
   onExport,
+  onArchiveLocalSources,
   onExportDiagnostics,
   onRenameProject,
   onGoHome,
@@ -184,9 +205,37 @@ export function TopBar({
         {projectName && <span className="mono">{units ?? ''}</span>}
       </div>
       <div
+        className="mode-switch"
+        role="group"
+        aria-label="Workspace mode"
+        title={
+          buildModeDisabledReason
+            ? `View mode · ${buildModeDisabledReason}`
+            : 'Switch between viewing and modeling (Ctrl+Shift+M)'
+        }
+      >
+        {(['view', 'build'] as const).map((mode) => {
+          const disabledReason =
+            mode === 'build' ? buildModeDisabledReason : null;
+          return (
+            <button
+              key={mode}
+              type="button"
+              className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
+              aria-pressed={workspaceMode === mode}
+              disabled={disabledReason !== null}
+              title={disabledReason ?? undefined}
+              onClick={() => onWorkspaceMode(mode)}
+            >
+              {mode === 'view' ? 'View' : 'Build'}
+            </button>
+          );
+        })}
+      </div>
+      <div
         className="topbar-actions"
         role="group"
-        aria-label="Workspace status and actions"
+        aria-label="Workspace actions"
       >
         <span
           className={`account-state is-${accountState}`}
@@ -212,7 +261,9 @@ export function TopBar({
         >
           {saveState === 'saving' || saveState === 'syncing' ? (
             <LoaderCircle className="spin" size={14} aria-hidden="true" />
-          ) : saveState === 'conflict' || saveState === 'refused' ? (
+          ) : saveState === 'conflict' ||
+            saveState === 'refused' ||
+            saveState === 'local-source' ? (
             <TriangleAlert size={14} aria-hidden="true" />
           ) : saveState === 'synced' ? (
             <Check size={14} aria-hidden="true" />
@@ -294,6 +345,21 @@ export function TopBar({
               <span>Export STL</span>
               <small>{exportScope ?? 'all bodies'}</small>
             </button>
+            {localOnlySourceCount > 0 ? (
+              <button
+                type="button"
+                className="topbar-menu-item"
+                title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                onClick={onArchiveLocalSources}
+              >
+                <Upload size={13} aria-hidden="true" />
+                <span>Archive local sources</span>
+                <small>
+                  {localOnlySourceCount} file
+                  {localOnlySourceCount === 1 ? '' : 's'}
+                </small>
+              </button>
+            ) : null}
             <button
               type="button"
               className="topbar-menu-item"

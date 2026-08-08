@@ -32,6 +32,7 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
 import { formatNumber } from '../lib/model';
 
@@ -39,6 +40,7 @@ interface ViewerShellProps {
   projectId: string;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
+  measurementAnnotations: MeasurementViewportAnnotation[];
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
@@ -57,6 +59,12 @@ interface ViewerShellProps {
   appearancePreview: BodyAppearancePreview | null;
   modeOverlay?: ReactNode;
   hideViewerToolbar?: boolean;
+  /**
+   * View mode drops the utility rail — its controls move to the floating view
+   * bar, and undo/redo have nothing to act on — but keeps the orientation cube,
+   * which is navigation rather than editing.
+   */
+  viewMode?: boolean;
   /** Bottom-center summary of the current selection, with a measurement. */
   selectionChip: { label: string; detail?: string } | null;
   onClearSelection(): void;
@@ -106,6 +114,13 @@ interface ViewerShellProps {
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
   onHoverRegion(region: RegionPickData | null): void;
+  /** What measuring the hovered target would report; null when measure is off. */
+  onMeasurePreview?:
+    | ((
+        selection: TopologySelection,
+        point: { x: number; y: number; z: number }
+      ) => string | null)
+    | null;
   regionHandle: RegionHandleTarget | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -132,6 +147,7 @@ export function ViewerShell({
   projectId,
   bodies,
   sketches,
+  measurementAnnotations,
   selectedBodyIds,
   selectedTopology,
   selectedEdges,
@@ -148,6 +164,7 @@ export function ViewerShell({
   appearancePreview,
   modeOverlay,
   hideViewerToolbar = false,
+  viewMode = false,
   selectionChip,
   onClearSelection,
   canUndo,
@@ -187,6 +204,7 @@ export function ViewerShell({
   profileSelectionMode,
   onSelectRegion,
   onHoverRegion,
+  onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -220,11 +238,15 @@ export function ViewerShell({
   };
 
   return (
-    <section className="viewer-shell" aria-label="3D viewport">
+    <section
+      className={`viewer-shell${viewMode ? ' view-mode' : ''}`}
+      aria-label="3D viewport"
+    >
       <ModelViewer
         key={projectId}
         bodies={bodies}
         sketches={sketches}
+        measurementAnnotations={measurementAnnotations}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         selectedEdges={selectedEdges}
@@ -274,6 +296,7 @@ export function ViewerShell({
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
         onHoverRegion={onHoverRegion}
+        onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
@@ -295,19 +318,21 @@ export function ViewerShell({
               onDragEnd={() => orientationDragRef.current?.end()}
             />
           </div>
-          <ViewerToolbar
-            settings={settings}
-            projection={projection}
-            canUndo={canUndo}
-            canRedo={canRedo}
-            onUndo={onUndo}
-            onRedo={onRedo}
-            onToggleGrid={onToggleGrid}
-            onFit={onFit}
-            onView={onView}
-            onCycleDisplayMode={onCycleDisplayMode}
-            onToggleProjection={onToggleProjection}
-          />
+          {!viewMode && (
+            <ViewerToolbar
+              settings={settings}
+              projection={projection}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onToggleGrid={onToggleGrid}
+              onFit={onFit}
+              onView={onView}
+              onCycleDisplayMode={onCycleDisplayMode}
+              onToggleProjection={onToggleProjection}
+            />
+          )}
         </>
       )}
       {selectionChip && (

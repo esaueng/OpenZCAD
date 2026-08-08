@@ -4,7 +4,11 @@ interface AppShellProps {
   topBar: ReactNode;
   /** Floating tool palette (or a mode strip while a direct mode is active). */
   toolBar: ReactNode;
-  sidebar: ReactNode;
+  /**
+   * Feature tree and parameters; null removes the column, which is what View
+   * mode does — there is no history to browse when nothing can be edited.
+   */
+  sidebar: ReactNode | null;
   viewer: ReactNode;
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
@@ -68,6 +72,7 @@ export function AppShell({
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
   );
+  const sidebarDocked = Boolean(sidebar);
   // The widths are custom properties rather than track sizes so the stylesheet
   // keeps the last word: it caps them against the window, and the narrow-screen
   // rules can ignore them entirely when the workspace stacks.
@@ -80,11 +85,13 @@ export function AppShell({
       {topBar}
       <main
         ref={workspaceRef}
-        className={`workspace${assistantDocked ? ' with-assistant' : ''}`}
+        className={`workspace${assistantDocked ? ' with-assistant' : ''}${
+          sidebarDocked ? '' : ' no-sidebar'
+        }`}
         style={widths}
       >
         {sidebar}
-        {sidebarResizer}
+        {sidebarDocked && sidebarResizer}
         <div className="viewer-area">
           {viewer}
           {toolBar && <div className="palette-float">{toolBar}</div>}

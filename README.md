@@ -101,11 +101,19 @@ Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a rea
 - create a managed Turnstile widget allowlisting `zcad.esau.app` and bind its site key as `TURNSTILE_SITE_KEY`;
 - deploy with `pnpm deploy:beta`, which applies the remote D1 migrations before publishing the Worker;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
-- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, and `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app` (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
+- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.esau.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
 - provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. These four are declared in `wrangler.jsonc`, so Wrangler rejects an incomplete deployment;
 - funding AI from the deployment's own provider key is opt-in and needs two more secrets, the provider key itself and `AI_DEPLOYMENT_ALLOWED_EMAILS`. Neither is required to deploy: with the allowlist unset the worker offers no deployment-funded AI, and users supply their own tokens instead.
 
 Login codes are single-use, expire after ten minutes, and sit behind per-email and per-IP rate limits. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
+
+Project invitations are delivered from `noreply@zcad.esau.app` as seven-day,
+single-use links. The opaque token is carried in the URL fragment, scrubbed
+from the address bar on arrival, and kept only in tab-scoped session storage
+while email-code sign-in completes. A failed email send revokes the invitation
+before the API reports failure. The legacy response still includes the one-time
+token for existing clients, but the web UI never displays or asks users to
+paste it.
 
 The checked-in beta configuration enables project sharing, owner-room sync,
 and edit leases for every authenticated account. Project ownership and
@@ -180,7 +188,7 @@ Current assistant limitations and gates:
 
 ## Known limitations
 
-- Editable STEP sources remain embedded in the browser/IndexedDB document (capped at 12 MB) for deterministic offline replay. Cloud saves project them into checksum-verified, content-addressed R2 assets and keep only metadata/pointers in D1; local undo and collaboration frames still clone the self-contained document.
+- Editable STEP sources are stored content-addressed: the document carries a SHA-256 reference and the bytes live in the browser's IndexedDB blob store (imports up to 250 MB), with the archived upload artifact as the cross-device fallback. Documents written before references keep their embedded text (12 MB cap) and replay unchanged; the embedded form is also the fallback when browser storage is denied. Cloud saves project payloads into checksum-verified R2 assets and keep only metadata/pointers in D1.
 - Imported STL builds on the exact kernel through its STL importer, sewn into a shell so it can be mirrored, shelled, and offset. It stays a mesh body: no parametric reconstruction is attempted, and a boolean against an exact body is refused by name rather than approximated.
 - Collaboration rooms store each document under its own Durable Object key (bounded history, atomic index updates, typed rejection frames for oversize or malformed payloads; documents over ~1.5 MB JSON are rejected). Invitations, owner/editor/viewer authorization, a persisted project edit lease, sharing UI, and recovery-copy-first conflict choices are implemented, but both checked-in sharing flags remain `false` pending controlled beta rollout.
 - BrepKit's difficult boolean cases can fall back to mesh-derived topology, and closed-B-spline/NURBS-blend faces are not fingerprint-stable against the corpus reference — they fail closed rather than mis-resolve.
