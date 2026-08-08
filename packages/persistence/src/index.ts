@@ -6,6 +6,7 @@ import {
   isPurgeDue,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
+  MAX_ARTIFACT_UPLOAD_PARTS,
   nowIso,
   persistedDocumentBytes,
   sanitizeFileName,
@@ -361,6 +362,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   private readonly uploadBodies = new Map<string, ArrayBuffer>();
   /** In-flight chunked uploads: `${sessionId}:${uploadId}` → part bodies. */
   private readonly multipartParts = new Map<string, Map<number, ArrayBuffer>>();
+  private readonly activeMultipartUploads = new Map<string, string>();
 
   async requireProjectRead(
     userId: UserId,
@@ -918,8 +920,13 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload session was not found.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
+    const activeUploadId = this.activeMultipartUploads.get(uploadSessionId);
+    if (activeUploadId) {
+      return { uploadId: activeUploadId };
+    }
     const uploadId = `multipart_${crypto.randomUUID()}`;
     this.multipartParts.set(`${uploadSessionId}:${uploadId}`, new Map());
+    this.activeMultipartUploads.set(uploadSessionId, uploadId);
     return { uploadId };
   }
 
@@ -934,6 +941,13 @@ export class InMemoryPersistenceService implements PersistenceService {
     const parts = this.multipartParts.get(`${uploadSessionId}:${uploadId}`);
     if (!upload || !parts) {
       throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    if (
+      !Number.isInteger(partNumber) ||
+      partNumber < 1 ||
+      partNumber > MAX_ARTIFACT_UPLOAD_PARTS
+    ) {
+      throw new ArtifactStorageError('Upload part number is out of range.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
     parts.set(partNumber, body);
@@ -971,6 +985,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     this.uploadBodies.set(upload.objectKey, assembled.buffer);
     this.multipartParts.delete(key);
+    this.activeMultipartUploads.delete(uploadSessionId);
   }
 
   async abortMultipartUpload(
@@ -983,7 +998,11 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload session was not found.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
+    if (this.activeMultipartUploads.get(uploadSessionId) !== uploadId) {
+      return;
+    }
     this.multipartParts.delete(`${uploadSessionId}:${uploadId}`);
+    this.activeMultipartUploads.delete(uploadSessionId);
   }
 
   async finalizeArtifact(
