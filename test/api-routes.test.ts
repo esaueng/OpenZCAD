@@ -808,11 +808,15 @@ describe('worker api routes', () => {
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
     settings.collaboration.enabled = false;
     const rowFor = (query: string) =>
-      query.includes('FROM user_settings')
-        ? { settings_json: JSON.stringify(settings), revision: 1 }
-        : query.includes('idx_project_document_objects_project_state')
-          ? READY_PROJECT_OBJECT_STORAGE_SCHEMA
-          : READY_STORAGE_ACCOUNTING_SCHEMA;
+      query.includes('FROM account_erasure_requests')
+        ? null
+        : query.includes('FROM user_settings')
+          ? { settings_json: JSON.stringify(settings), revision: 1 }
+          : query.includes('FROM projects p')
+            ? { owner_user_id: 'user_beta_dev', resolved_role: 'owner' }
+            : query.includes('idx_project_document_objects_project_state')
+              ? READY_PROJECT_OBJECT_STORAGE_SCHEMA
+              : READY_STORAGE_ACCOUNTING_SCHEMA;
     const prepare = vi.fn((query: string) => ({
       first: vi.fn(async () => rowFor(query)),
       bind: vi.fn(() => ({ first: vi.fn(async () => rowFor(query)) }))
@@ -833,6 +837,62 @@ describe('worker api routes', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'FEATURE_DISABLED' });
     expect(getByName).not.toHaveBeenCalled();
+  });
+
+  it("uses the project owner's sharing preference for collaborator tickets", async () => {
+    const actorSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    actorSettings.collaboration.enabled = false;
+    const ownerSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    ownerSettings.collaboration.enabled = true;
+    const prepare = vi.fn((query: string) => ({
+      first: vi.fn(async () =>
+        query.includes('idx_project_document_objects_project_state')
+          ? READY_PROJECT_OBJECT_STORAGE_SCHEMA
+          : null
+      ),
+      bind: vi.fn((...values: unknown[]) => ({
+        first: vi.fn(async () => {
+          if (query.includes('idx_project_document_objects_project_state')) {
+            return READY_PROJECT_OBJECT_STORAGE_SCHEMA;
+          }
+          if (query.includes('FROM user_settings')) {
+            return {
+              settings_json: JSON.stringify(
+                values[0] === 'owner_shared' ? ownerSettings : actorSettings
+              ),
+              revision: 1
+            };
+          }
+          if (query.includes('FROM projects p')) {
+            return {
+              owner_user_id: 'owner_shared',
+              resolved_role: 'viewer'
+            };
+          }
+          return null;
+        })
+      }))
+    }));
+    const roomFetch = vi.fn(async () =>
+      Response.json({ ticket: 's'.repeat(43), expiresAt: Date.now() + 30_000 })
+    );
+    const getByName = vi.fn(() => ({ fetch: roomFetch }));
+
+    const response = await worker.fetch(
+      post('/api/projects/project_shared/collaboration/ticket', undefined),
+      {
+        ...env,
+        DB: { prepare } as unknown as D1Database,
+        PROJECT_STORAGE: readyProjectStorageBucket,
+        PROJECT_ROOM: { getByName },
+        PROJECT_SHARING_ENABLED: 'true',
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(getByName).toHaveBeenCalledOnce();
+    expect(roomFetch).toHaveBeenCalledOnce();
   });
 
   it('forwards a ticketed native upgrade without browser credentials or forged identity', async () => {
