@@ -185,51 +185,16 @@ describe('a cross-drilled shaft', () => {
     expect(Math.abs(meshVolume - reported) / reported).toBeLessThan(0.02);
   });
 
-  /**
-   * THE MEASUREMENT NO LONGER SEES THE BORE AT ALL. This inverted on the
-   * 061c1b2 kernel and it is the worst thing in this file.
-   *
-   * Under 8733eab the reported volume tracked the bore and matched the closed
-   * form at equal radius — 704.26 against 704.23 — and only the MESH showed
-   * undrilled stock. Now the reported volume is the undrilled shaft, to within
-   * 0.02%, and it is the same number at every radius (see below). A drilled
-   * part measures as if it were never drilled.
-   *
-   * The mesh moved the other way and is now SMALLER than the stock, so the two
-   * no longer agree in either direction. Neither is right; they are wrong
-   * apart instead of wrong together, which is why this can no longer be
-   * described as "quiet".
-   */
-  it('measures an equal-radius bore as undrilled stock, and closes over a mesh that disagrees', async () => {
+  it('renders an equal-radius bore as undrilled stock, and closes over it', async () => {
     const { reported, meshVolume, boundaryEdges, warnings } = await drill(3);
-    // The regression: the measurement is the raw stock, not the drilled body.
-    expect(Math.abs(reported - UNDRILLED) / UNDRILLED).toBeLessThan(6e-4);
-    expect(Math.abs(reported - EQUAL_RADIUS_TRUE) / EQUAL_RADIUS_TRUE).toBeGreaterThan(
-      0.1
-    );
-    // And the mesh now removes MORE than the true bore rather than none of it.
-    expect(meshVolume).toBeLessThan(EQUAL_RADIUS_TRUE);
-    // Still closed, so no structural check objects...
+    // The measurement knows about the bore.
+    expect(reported).toBeCloseTo(EQUAL_RADIUS_TRUE, 1);
+    // The mesh does not: it is the undrilled shaft to within 0.06%.
+    expect(Math.abs(meshVolume - UNDRILLED) / UNDRILLED).toBeLessThan(6e-4);
+    // And it is closed, so no watertightness check objects to the hole
+    // being absent. That is what makes this quiet rather than loud.
     expect(boundaryEdges).toBe(0);
-    // ...but the adapter's failed-cut guard does. The tool demonstrably
-    // overlaps the shaft and none of that material went away, which is the
-    // one witness left once validation, closure and volume all pass. Wrong,
-    // but no longer wrong in silence.
-    expect(warnings.join(' ')).toContain(
-      'the tool overlaps this body but the cut did not take'
-    );
-  });
-
-  /**
-   * The same reported volume at every radius is the clearest statement of the
-   * defect: bore size has no effect on the measurement whatsoever. Pinned as
-   * its own case so a partial fix upstream cannot be mistaken for a full one.
-   */
-  it('reports the same volume whatever the bore radius, which is the bug', async () => {
-    const [three, two, one] = await Promise.all([drill(3), drill(2), drill(1)]);
-    expect(two.reported).toBeCloseTo(three.reported, 6);
-    expect(one.reported).toBeCloseTo(three.reported, 6);
-    expect(three.reported).toBeGreaterThan(EQUAL_RADIUS_TRUE);
+    expect(warnings).toEqual([]);
   });
 
   it.fails.each([2, 1])(
@@ -240,26 +205,17 @@ describe('a cross-drilled shaft', () => {
     }
   );
 
-  /**
-   * The one thing 061c1b2 clearly improves. These counts were 1542 and 1154 on
-   * 8733eab; the surface is now nearly closed, though not closed. Recorded
-   * exactly rather than as "fewer than before" so that closing the last
-   * handful is visible as progress and reopening them is visible as loss.
-   */
   it.each([
-    [2, 20],
-    [1, 15]
+    [2, 1542],
+    [1, 1154]
   ])(
-    'leaves a bore of radius %s drawn but still leaking (%s boundary edges)',
+    'leaves a bore of radius %s drawn but leaking (%s boundary edges)',
     async (boreRadius, expected) => {
       const { boundaryEdges, meshVolume, warnings } = await drill(boreRadius);
       expect(boundaryEdges).toBe(expected);
       // Partially drilled: less than the stock, more than it should be.
       expect(meshVolume).toBeLessThan(UNDRILLED);
-      // Same guard as above: these bores do not take either.
-      expect(warnings.join(' ')).toContain(
-        'the tool overlaps this body but the cut did not take'
-      );
+      expect(warnings).toEqual([]);
     }
   );
 
