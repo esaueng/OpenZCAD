@@ -98,7 +98,7 @@ The exact adapter and BrepKit WASM load lazily inside the geometry worker on the
 Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
 
 - onboard the `zcad.esau.app` sending domain and keep the `EMAIL` binding restricted to `noreply@zcad.esau.app` for sign-in and project invitations;
-- create a managed Turnstile widget allowlisting `zcad.esau.app` and bind its site key as `TURNSTILE_SITE_KEY`;
+- create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
 - deploy with `pnpm deploy:beta`, which applies the remote D1 migrations before publishing the Worker;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
 - set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.esau.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
