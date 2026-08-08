@@ -67,7 +67,7 @@ async function requestProjectMeasurements<T>(
   return (await response.json()) as T;
 }
 
-/** Kept in this View-only module so cloud measurement code stays lazy. */
+/** Kept in the lazy workspace path so cloud measurement code stays off startup. */
 export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
   loadProjectMeasurements: (projectId) =>
     requestProjectMeasurements<ProjectMeasurementSnapshot>(
