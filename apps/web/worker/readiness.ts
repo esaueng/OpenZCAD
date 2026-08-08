@@ -27,6 +27,38 @@ interface DesktopAuthSchema {
   user_code_hash: number;
 }
 
+interface AccountErasureSchema {
+  table_ready: number;
+  trigger_count: number;
+}
+
+/** Whether migration 0014 installed the erasure fence and every write guard. */
+export async function isAccountErasureReady(
+  db: D1Database | undefined
+): Promise<boolean> {
+  if (!db) {
+    return false;
+  }
+  try {
+    const schema = await db
+      .prepare(
+        `SELECT
+          EXISTS (
+            SELECT 1 FROM sqlite_schema
+            WHERE type = 'table' AND name = 'account_erasure_requests'
+          ) AS table_ready,
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'trigger' AND name LIKE 'block_erasing_%'
+          ) AS trigger_count`
+      )
+      .first<AccountErasureSchema>();
+    return schema?.table_ready === 1 && schema.trigger_count === 23;
+  } catch {
+    return false;
+  }
+}
+
 /** Whether migration 0012 installed every native-auth table and lookup index. */
 export async function isDesktopAuthReady(
   db: D1Database | undefined

@@ -299,15 +299,17 @@ try {
     'The application body',
     'return Boolean(document.body && document.body.textContent);'
   );
-  await execute(
+  await waitForScript(
     sessionId,
+    'The Mounting Bracket demo',
     `var button = Array.from(document.querySelectorAll('button')).find(
       function (candidate) {
         return candidate.textContent.includes('Mounting Bracket');
       }
     );
-    if (button) button.click();
-    return Boolean(button);`
+    if (!button) return false;
+    button.click();
+    return true;`
   );
 
   await waitForScript(

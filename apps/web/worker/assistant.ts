@@ -12,6 +12,7 @@ import type {
   AssistantProvider,
   AssistantReasoningEffort
 } from '@openzcad/shared';
+import { observeAssistantResponse } from './assistantStreamDiagnostics';
 
 export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
 export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-sol';
@@ -54,7 +55,7 @@ When earlier turns are present, they are the conversation so far: any question y
 
 Work out, before writing any operation:
 1. The parts. First decide whether the request truly requires more than one independently manufactured, moving, or removable piece. If not, plan ONE LIVE BODY for each physical part and default to one finished physical part. Construction solids are features, not parts.
-2. The features. Which cavities, openings, rims, or holes does each part need? (Fillets and chamfers are the exception: they can only be applied to a body that already exists in the digest, never to one you create in this proposal — see section 8.)
+2. The features. Which cavities, openings, rims, or holes does each part need? Fillets and chamfers on existing bodies use exact edge hashes from the digest. A body created earlier in this proposal may be finished only by a final edge modifier with a supported semantic selector — see section 8.
 3. The relationships. What mates with what, in which direction does it assemble, and what must therefore share a dimension?
 4. The numbers. Overall size, wall thickness, clearances, and offsets — each expressed against the document units in the digest.
 5. The parameters. Every number a user might reasonably want to edit becomes a named parameter, and dependent geometry references it by expression rather than repeating a literal.
@@ -123,6 +124,7 @@ The governing rule for every opening: material must be removed all the way to th
 - The digest's \`bodies\` list reports each built body's liveness and placement. Never target a body marked \`consumed: true\` — a boolean, fillet, chamfer, or pattern already absorbed it, and it is no longer part of the model. Use each body's \`bbox\` to know where it actually sits rather than re-deriving it from the feature history.
 - A live body's \`topology\` is the authoritative exact geometry currently available to the viewport without sending its mesh. \`faces\` report analytic surface measurements; \`edges\` report the stable numeric \`hash\`, whether the sampled exact curve is closed, its length, center, bounds, \`modelingRole\`, and \`modifierCandidate\`. Use those spatial facts to understand terms such as top, bottom, outer, and rim. A primitive cylinder's raw B-rep also has a smooth periodic seam, but its two \`modifierCandidate: true\` edges are the closed circular rims at the minimum and maximum Z bounds.
 - When the user asks for all/every/each edge of a body, do not ask them to select edges. Resolve the named body, the one selected body, or the sole live body; require \`edgeInventoryComplete: true\`; then emit one \`add_edge_modifier\` containing every hash whose \`modifierCandidate\` is true. Never include an edge marked \`modelingRole: "seam"\`: it is a smooth surface parameterization seam, not a user-visible edge to fillet. If the inventory is incomplete, no modifier candidates exist, or more than one body remains ambiguous, ask the user to narrow the target instead of returning a partial operation.
+- A body created earlier in this proposal may be filleted or chamfered only as the FINAL operation. Reference its \`$localId\`, leave \`edgeHashes\` empty, and set \`edgeSelector\` to \`"all-feature-edges"\` for every physical feature edge or \`"circular-rims"\` for all closed circular rims. The application exact-rebuilds the prefix, resolves the selector to V5 lineage references, and validates the final transaction atomically. For every other edge modifier set \`edgeSelector\` to null.
 - The digest's \`selection\` is the authoritative snapshot of what was picked when the user submitted the request. \`featureIds\`, \`bodyIds\`, and \`topologies\` preserve pick order; the last item is the primary selection. Words such as "selected", "this", "these", "those", and "them" refer to that snapshot, not to a feature you infer from proximity or naming.
 - When the user requests a fillet or chamfer on selected edges, emit one \`add_edge_modifier\` targeting their shared \`bodyId\` and copy every selected edge's numeric \`hash\` into \`edgeHashes\` in selection order. Do not drop all but the last edge. Never guess an edge that is not selected.
 - When the user names selected bodies for a boolean, copy \`selection.bodyIds\` in order because the first body is the base. When the user names a selected feature for an edit, use its selected \`featureId\` rather than choosing another feature with a similar name.
@@ -533,10 +535,18 @@ export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
   };
 }
 
-function jsonError(error: string, code: string, status: number): Response {
+function jsonError(
+  error: string,
+  code: string,
+  status: number,
+  requestId?: string
+): Response {
   return new Response(JSON.stringify({ error, code }), {
     status,
-    headers: { 'content-type': 'application/json' }
+    headers: {
+      'content-type': 'application/json',
+      ...(requestId ? { 'x-openzcad-request-id': requestId } : {})
+    }
   });
 }
 
@@ -547,12 +557,15 @@ export async function streamAssistantProposal(
   runtime?: AssistantRuntimeConfig
 ): Promise<Response> {
   const provider = runtime?.provider ?? providerFor(env);
+  const model = runtime?.model ?? modelFor(env, provider);
+  const requestId = crypto.randomUUID();
   const apiKey = runtime?.apiKey ?? apiKeyFor(env, provider);
   if (!apiKey) {
     return jsonError(
       'AI is not configured for this environment.',
       'AI_NOT_CONFIGURED',
-      503
+      503,
+      requestId
     );
   }
 
@@ -561,7 +574,8 @@ export async function streamAssistantProposal(
     return jsonError(
       'AI_BASE_URL is required for a Responses-compatible provider.',
       'AI_PROVIDER_NOT_CONFIGURED',
-      503
+      503,
+      requestId
     );
   }
 
@@ -576,15 +590,14 @@ export async function streamAssistantProposal(
     }
   }
 
-  let upstream: Response;
-  try {
-    upstream = await fetch(upstreamUrl, {
+  const requestUpstream = (requireOpenRouterParameters: boolean) =>
+    fetch(upstreamUrl, {
       method: 'POST',
       redirect: 'manual',
       headers,
       signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
-        model: runtime?.model ?? modelFor(env, provider),
+        model,
         instructions: requestInstructions(
           env,
           runtime,
@@ -607,15 +620,40 @@ export async function streamAssistantProposal(
         max_output_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         store: false,
         stream: true,
+        // Prefer a route that explicitly advertises structured output. The
+        // Responses API can still return 404 when account/provider routing
+        // filters leave no such route, even for a model that supports it. The
+        // caller retries that one pre-generation failure without this routing
+        // constraint; the strict schema and local contract parser still guard
+        // the returned proposal.
+        ...(provider === 'openrouter' && requireOpenRouterParameters
+          ? { provider: { require_parameters: true } }
+          : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
     });
+
+  let upstream: Response;
+  try {
+    upstream = await requestUpstream(true);
+    if (provider === 'openrouter' && upstream.status === 404) {
+      await upstream.body?.cancel();
+      console.warn('AI Responses strict route unavailable; retrying:', {
+        requestId,
+        provider,
+        model,
+        status: upstream.status
+      });
+      upstream = await requestUpstream(false);
+    }
   } catch (error) {
     const timedOut =
       error instanceof DOMException &&
       (error.name === 'TimeoutError' || error.name === 'AbortError');
     console.error('AI Responses provider request failed:', {
+      requestId,
       provider,
+      model,
       reason: timedOut ? 'timeout' : 'network'
     });
     return jsonError(
@@ -623,31 +661,39 @@ export async function streamAssistantProposal(
         ? 'The modeling assistant timed out before producing a patch.'
         : 'The modeling assistant could not reach its provider.',
       timedOut ? 'AI_UPSTREAM_TIMEOUT' : 'AI_UPSTREAM_UNAVAILABLE',
-      timedOut ? 504 : 502
+      timedOut ? 504 : 502,
+      requestId
     );
   }
 
   if (!upstream.ok || !upstream.body) {
     await upstream.body?.cancel();
     console.error('AI Responses provider failed:', {
+      requestId,
       provider,
+      model,
       status: upstream.status
     });
     return jsonError(
       'The modeling assistant could not generate a patch.',
       'AI_UPSTREAM_ERROR',
-      502
+      502,
+      requestId
     );
   }
 
-  return new Response(upstream.body, {
-    status: 200,
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      'x-content-type-options': 'nosniff'
+  return new Response(
+    observeAssistantResponse(upstream.body, { requestId, provider, model }),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        'x-content-type-options': 'nosniff',
+        'x-openzcad-request-id': requestId
+      }
     }
-  });
+  );
 }
 
 export async function testAssistantConnection(

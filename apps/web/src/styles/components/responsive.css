@@ -13,11 +13,38 @@
   .topbar .topbar-action:not(.save-state) {
     font-size: 0;
     gap: 0;
-    padding-inline: 8px;
+    padding-inline: 0;
+  }
+
+  .topbar-actions {
+    grid-template-columns: 104px 128px 126px 28px 28px;
+  }
+
+  .file-menu > summary {
+    width: 100%;
+    min-height: 28px;
   }
 
   .shortcuts-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* The mode switch takes room out of the middle of the bar, so the two status
+   chips drop to their icons here rather than at 620px — the project name is
+   worth more than the words "Signed in". */
+@media (max-width: 1000px) {
+  .account-state,
+  .collaboration-state {
+    width: 28px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+    font-size: 0;
+  }
+
+  .topbar-actions {
+    grid-template-columns: 28px 128px 28px 28px 28px;
   }
 }
 
@@ -53,21 +80,23 @@
 
   .brand .beta-tag,
   .topbar-divider,
-  .breadcrumb .mono,
-  .session-user {
+  .breadcrumb .mono {
     display: none;
   }
 
+  /* No middle left to hold: the name takes whatever the actions leave. */
   .breadcrumb {
     flex: 1 1 auto;
+    max-width: none;
   }
 
   .project-title-button {
     max-width: 100%;
   }
 
-  .topbar-tools {
-    flex: 0 0 auto;
+  .topbar-actions {
+    grid-template-columns: repeat(5, 28px);
+    gap: var(--sp-1);
     margin-left: 0;
   }
 
@@ -80,9 +109,12 @@
     font-size: 0;
   }
 
+  .account-state,
   .collaboration-state {
-    flex: 0 0 auto;
+    width: 28px;
+    justify-content: center;
     gap: 0;
+    padding-inline: 0;
     font-size: 0;
   }
 

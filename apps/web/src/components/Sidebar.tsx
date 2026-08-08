@@ -457,7 +457,12 @@ export function Sidebar({
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
-              No features yet. Pick a tool from the toolbar above.
+              {/* Names the rail, and deliberately does not say where it is:
+                  it sits right of this panel on a wide screen, but under
+                  620px the workspace stacks into one column (responsive.css)
+                  and the rail lands below instead. "Above" was wrong at every
+                  width; a direction would be wrong at one of them. */}
+              No features yet. Pick a tool from the Feature tools rail.
             </p>
           )}
           {features.map((feature, index) => {
@@ -487,7 +492,10 @@ export function Sidebar({
                   type="button"
                   className="feature-row-main"
                   onClick={() => onSelectFeature(feature.id)}
-                  title={`${FEATURE_KIND_LABELS[feature.featureKind]} — click to edit`}
+                  // Every row used to announce the same generic kind label, so
+                  // a history read aloud was a list of identical items. The
+                  // feature's own name comes first, as on screen.
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}, click to edit`}
                 >
                   <span className="feature-icon">{featureIcon(feature)}</span>
                   <span className="feature-name">{feature.name}</span>

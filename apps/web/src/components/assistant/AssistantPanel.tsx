@@ -25,6 +25,7 @@ import {
 import {
   createCadDocumentDigest,
   MAX_ASSISTANT_ATTACHMENTS,
+  parseCadPatchProposal,
   type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
@@ -59,7 +60,10 @@ import {
   readAssistantProgress,
   type AssistantProgress
 } from '../../lib/assistant/progress';
-import { assistantSuggestions } from '../../lib/assistant/suggestions';
+import {
+  assistantSuggestions,
+  type AssistantSuggestion
+} from '../../lib/assistant/suggestions';
 import {
   ACCEPTED_ATTACHMENT_TYPES,
   attachmentDataUrl,
@@ -134,7 +138,7 @@ function roleOf(entry: AssistantEntry): TurnRole {
 }
 
 /**
- * A turn, with who said it and when, wrapped so every row reads the same way.
+ * A turn, with its role and time, wrapped so every row reads the same way.
  *
  * Two turns in a row from the same speaker are one block: the second drops the
  * "Assistant" heading and squares the corner facing the first, which is what
@@ -150,7 +154,7 @@ function Turn({
   children
 }: {
   role: TurnRole;
-  label: string;
+  label?: string;
   at: number | undefined;
   continues: boolean;
   children: ReactNode;
@@ -161,7 +165,9 @@ function Turn({
       className={`assistant-turn ${role}${continues ? ' continues' : ''}`}
       // A continued turn drops the heading that would have carried its time, so
       // the time stays reachable here rather than disappearing.
-      {...(continues && time ? { title: `${label} · ${time}` } : {})}
+      {...(continues && time
+        ? { title: label ? `${label} · ${time}` : time }
+        : {})}
     >
       {!continues && (
         <header className="assistant-turn-meta">
@@ -170,7 +176,7 @@ function Turn({
               <Sparkles size={11} />
             </span>
           )}
-          <span className="assistant-turn-who">{label}</span>
+          {label && <span className="assistant-turn-who">{label}</span>}
           {time && (
             <time className="assistant-turn-time" dateTime={String(at)}>
               {time}
@@ -272,6 +278,16 @@ export function AssistantPanel({
       }),
     [doc.bodyOrder.length, selection]
   );
+  const verifiedPrompt = useMemo(
+    () =>
+      pending.length === 0
+        ? suggestions.find(
+            (suggestion) =>
+              suggestion.proposal && suggestion.label === prompt.trim()
+          )
+        : undefined,
+    [pending.length, prompt, suggestions]
+  );
   /** The last thing the user asked, which is what "try again" repeats. */
   const lastAsk = useMemo(() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -282,6 +298,18 @@ export function AssistantPanel({
     }
     return null;
   }, [entries]);
+
+  // Let the composer grow with the request while keeping enough of the thread
+  // visible to preserve conversational context. Resetting to `auto` first also
+  // lets it shrink again when text is removed or a prompt is sent.
+  useLayoutEffect(() => {
+    const textarea = promptRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [collapsed, prompt]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -426,6 +454,35 @@ export function AssistantPanel({
       });
 
       try {
+        const verifiedSuggestion =
+          attachments.length === 0
+            ? suggestions.find(
+                (suggestion) => suggestion.proposal && suggestion.label === text
+              )
+            : undefined;
+        if (verifiedSuggestion?.proposal) {
+          const proposal = parseCadPatchProposal(
+            structuredClone(verifiedSuggestion.proposal)
+          );
+          if (!(await onPreview(proposal))) {
+            throw new Error(
+              'This verified recipe did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+            );
+          }
+          const entryId = nextEntryId('reply');
+          dispatch({
+            type: 'reply',
+            id: entryId,
+            reply: {
+              kind: 'patch',
+              proposal,
+              readings: []
+            },
+            at: Date.now()
+          });
+          dispatch({ type: 'preview', entryId });
+          return;
+        }
         // One immutable snapshot per turn: if the selection or document changes
         // while the provider is thinking, this turn still means what it meant
         // when it was sent.
@@ -448,12 +505,21 @@ export function AssistantPanel({
             onDelta: (partial) => setProgress(readAssistantProgress(partial))
           }
         );
+        if (reply.kind === 'patch' && !(await onPreview(reply.proposal))) {
+          throw new Error(
+            'The proposed change did not pass exact geometry preflight. Nothing was changed; see the activity log for the exact feature failure.'
+          );
+        }
+        const entryId = nextEntryId('reply');
         dispatch({
           type: 'reply',
-          id: nextEntryId('reply'),
+          id: entryId,
           reply,
           at: Date.now()
         });
+        if (reply.kind === 'patch') {
+          dispatch({ type: 'preview', entryId });
+        }
       } catch (error) {
         if (controller.signal.aborted) {
           dispatch({ type: 'cancel' });
@@ -470,12 +536,22 @@ export function AssistantPanel({
         });
       }
     },
-    [conversation, doc, onPreview, selection]
+    [conversation, doc, onPreview, selection, suggestions]
   );
 
   function submitPrompt() {
     const text = prompt.trim();
-    if ((!text && pending.length === 0) || thinking || !configured) {
+    const verified = Boolean(
+      pending.length === 0 &&
+      suggestions.some(
+        (suggestion) => suggestion.proposal && suggestion.label === text
+      )
+    );
+    if (
+      (!text && pending.length === 0) ||
+      thinking ||
+      (!configured && !verified)
+    ) {
       return;
     }
     const attachments = pending;
@@ -499,10 +575,10 @@ export function AssistantPanel({
     void send(text, [], answers, entry.id);
   }
 
-  function applySuggestion(text: string) {
+  function applySuggestion(suggestion: AssistantSuggestion) {
     // Offered, not sent: the opener is a starting point to edit, and a click
     // that fires a request the user has not read yet is a trap.
-    setPrompt(text);
+    setPrompt(suggestion.label);
     promptRef.current?.focus();
   }
 
@@ -609,13 +685,7 @@ export function AssistantPanel({
   function renderEntry(entry: AssistantEntry, continues: boolean) {
     if (entry.kind === 'user') {
       return (
-        <Turn
-          role="user"
-          label="You"
-          at={entry.at}
-          continues={continues}
-          key={entry.id}
-        >
+        <Turn role="user" at={entry.at} continues={continues} key={entry.id}>
           <div className="assistant-bubble">
             {entry.answers.length > 0 ? (
               <dl className="assistant-answer-list">
@@ -767,6 +837,12 @@ export function AssistantPanel({
   }
 
   const turnCount = entries.filter((entry) => entry.kind === 'user').length;
+  const modelLabel = status?.configured
+    ? `${status.model.slice(status.model.lastIndexOf('/') + 1)} · ${status.reasoningEffort}`
+    : 'Unavailable';
+  const modelDescription = status?.configured
+    ? `${status.model} · ${status.reasoningEffort} reasoning`
+    : 'Assistant unavailable';
 
   return (
     <section
@@ -783,10 +859,16 @@ export function AssistantPanel({
       onDrop={handleDrop}
     >
       <header className="assistant-header">
-        <span className="assistant-mark" aria-hidden="true">
-          <Sparkles size={13} />
-        </span>
-        <span className="assistant-title">Assistant</span>
+        <div className="assistant-heading">
+          <span className="assistant-title">AI Assistant</span>
+          <span
+            className="assistant-model"
+            title={modelDescription}
+            aria-label={modelDescription}
+          >
+            {modelLabel}
+          </span>
+        </div>
         {turnCount > 0 && (
           <span className="assistant-turn-count">
             {turnCount} {turnCount === 1 ? 'ask' : 'asks'}
@@ -829,9 +911,6 @@ export function AssistantPanel({
       >
         {entries.length === 0 && (
           <div className="assistant-empty">
-            <span className="assistant-empty-mark" aria-hidden="true">
-              <Sparkles size={18} />
-            </span>
             <p className="assistant-empty-lead">
               Describe the part you want, or attach a drawing and let the
               assistant read it.
@@ -842,14 +921,19 @@ export function AssistantPanel({
             </p>
             <ul className="assistant-suggestions">
               {suggestions.map((suggestion) => (
-                <li key={suggestion}>
+                <li key={suggestion.id}>
                   <button
                     type="button"
                     className="assistant-suggestion"
-                    disabled={!configured}
+                    disabled={!configured && !suggestion.proposal}
                     onClick={() => applySuggestion(suggestion)}
                   >
-                    {suggestion}
+                    <span>{suggestion.label}</span>
+                    {suggestion.proposal && (
+                      <span className="assistant-suggestion-badge">
+                        Verified
+                      </span>
+                    )}
                   </button>
                 </li>
               ))}
@@ -954,14 +1038,14 @@ export function AssistantPanel({
           <textarea
             ref={promptRef}
             value={prompt}
-            rows={1}
+            rows={3}
             placeholder={
               selectionSummary
                 ? `Ask about ${selectionSummary}…`
                 : 'Describe a part, or attach a drawing…'
             }
             aria-label="CAD change request"
-            disabled={!configured}
+            disabled={!configured && !verifiedPrompt}
             onChange={(event) => setPrompt(event.target.value)}
             onPaste={(event) => {
               const files = Array.from(event.clipboardData?.files ?? []);
@@ -991,7 +1075,10 @@ export function AssistantPanel({
             <button
               type="button"
               className="assistant-submit"
-              disabled={!configured || (!prompt.trim() && pending.length === 0)}
+              disabled={
+                (!configured && !verifiedPrompt) ||
+                (!prompt.trim() && pending.length === 0)
+              }
               onClick={submitPrompt}
               aria-label="Send to the assistant"
               title="Send (Enter)"
@@ -1000,12 +1087,13 @@ export function AssistantPanel({
             </button>
           )}
         </div>
-        <p className="assistant-foot">
-          {status?.configured
-            ? `${status.model} · ${status.reasoningEffort} reasoning`
-            : 'Assistant unavailable'}
-          {pending.length > 0 && ' · drawings are sent to your AI provider'}
-        </p>
+        {(verifiedPrompt || pending.length > 0) && (
+          <p className="assistant-foot">
+            {verifiedPrompt
+              ? 'Verified exact recipe · no AI provider request'
+              : 'Drawings are sent to your AI provider'}
+          </p>
+        )}
         <input
           ref={fileInputRef}
           type="file"

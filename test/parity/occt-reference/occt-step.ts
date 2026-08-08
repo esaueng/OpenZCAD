@@ -1466,6 +1466,11 @@ export class OcctStepKernelAdapter {
             break;
           case 'imported-step':
             if (feature.bodyId) {
+              if (feature.data.stepText === undefined) {
+                throw new Error(
+                  'Parity corpus documents embed STEP text; the OCCT reference does not resolve source references.'
+                );
+              }
               const imported = this.kernel.importStep(feature.data.stepText);
               // OCCT normalizes STEP length units to millimetres. The
               // canonical document stores coordinates in document units, so

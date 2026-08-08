@@ -20,6 +20,19 @@ const defaultProps = {
 };
 
 describe('StatusBar activity log', () => {
+  it('exposes a stable, correctly pluralized workspace summary', () => {
+    const { rerender } = render(<StatusBar {...defaultProps} />);
+
+    expect(
+      screen.getByLabelText('Test project · 2 features · 1 body. Sync Synced.')
+    ).toBeVisible();
+
+    rerender(<StatusBar {...defaultProps} featureCount={1} bodyCount={2} />);
+    expect(
+      screen.getByLabelText('Test project · 1 feature · 2 bodies. Sync Synced.')
+    ).toBeVisible();
+  });
+
   it('shows the same local-only state as the workspace top bar', () => {
     render(<StatusBar {...defaultProps} saveState="local" />);
 
@@ -96,5 +109,39 @@ describe('StatusBar activity log', () => {
     } finally {
       window.removeEventListener('keydown', workspaceKeyDown);
     }
+  });
+});
+
+describe('StatusBar announcements', () => {
+  it('announces the status politely when it changes', () => {
+    const { rerender } = render(<StatusBar {...defaultProps} />);
+
+    const live = screen.getByText('Workspace ready.');
+    // Polite, not assertive: modelling feedback should queue behind whatever
+    // the user is already being told, never interrupt it.
+    expect(live).toHaveAttribute('aria-live', 'polite');
+    // Atomic, so a changed message is read whole rather than diffed into
+    // whichever words happen to differ from the last one.
+    expect(live).toHaveAttribute('aria-atomic', 'true');
+
+    // The same node carries the new message, which is what makes it an
+    // announcement rather than a second thing to find.
+    rerender(
+      <StatusBar {...defaultProps} status="Union does not fill empty space." />
+    );
+    expect(live).toHaveTextContent('Union does not fill empty space.');
+    expect(live).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('keeps the announcement out of the log button it sits in', () => {
+    render(<StatusBar {...defaultProps} />);
+
+    // The button names itself; the live region must not become a second,
+    // separately-focusable thing, or every status change adds a tab stop.
+    const button = screen.getByRole('button', {
+      name: /Open activity log\. Current status: Workspace ready\./
+    });
+    expect(button).toBeVisible();
+    expect(screen.getByText('Workspace ready.')).not.toHaveAttribute('tabindex');
   });
 });

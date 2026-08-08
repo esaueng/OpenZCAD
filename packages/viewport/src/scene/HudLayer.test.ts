@@ -58,6 +58,7 @@ describe('creating overlays', () => {
 
     const chip = layer.create('handle-value-chip');
     expect(chip.className).toBe('handle-value-chip');
+    expect(chip.getAttribute('data-viewport-hud')).toBe('');
     expect(chip.hidden).toBe(true);
     expect(children).toHaveLength(1);
     restore();

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FaceTopologyReferenceV5, FeatureId } from '@openzcad/shared';
+import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
 import { preferredCapability, selectionCapabilities } from './capabilities';
 
 const reference = (currentHash: number): FaceTopologyReferenceV5 => ({
@@ -43,8 +44,12 @@ describe('selectionCapabilities', () => {
       action: 'sketch-on-face',
       enabled: false
     });
-    expect(capabilities[1]?.disabledReason).toContain(
-      'no stable topology reference'
+    // Compare against the constant, not a phrase from it: the wording is
+    // user-facing copy and has already been rewritten once underneath these
+    // assertions.
+    expect(capabilities[1]?.disabledReason).toBe(UNSTABLE_FACE_SKETCH_REASON);
+    expect(capabilities[1]?.disabledReason).toMatch(
+      /sketch on a principal plane/i
     );
   });
 

@@ -119,7 +119,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
         id: 'move',
         keys: ['M'],
         action: 'Move',
-        detail: 'Translate or rotate a body.'
+        detail: 'Translate or rotate a body. Build mode; in View, M measures.'
       }
     ]
   },
@@ -159,6 +159,12 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Frame all visible model geometry.'
       },
       {
+        id: 'normal-to-face',
+        keys: ['Space'],
+        action: 'Normal to selected face',
+        detail: 'Centres and frames an exact planar face head-on.'
+      },
+      {
         id: 'toggle-grid',
         keys: ['G'],
         action: 'Toggle the grid',
@@ -175,6 +181,34 @@ export const KEYBOARD_CONTROL_GROUPS = [
         keys: ['P'],
         action: 'Toggle projection',
         detail: 'Switch between perspective and orthographic projection.'
+      }
+    ]
+  },
+  {
+    id: 'view-mode',
+    title: 'View mode',
+    description:
+      'Read a model without being able to change it. M and Move share a key without colliding, because each is only live in one mode.',
+    items: [
+      {
+        id: 'workspace-mode',
+        keys: ['Ctrl', 'Shift', 'M'],
+        action: 'Switch between View and Build',
+        detail:
+          'A shared project you can only read stays in View, and says why.'
+      },
+      {
+        id: 'measure',
+        keys: ['M'],
+        action: 'Measure',
+        detail:
+          'In View mode only. Records what you pick; Escape stops recording and keeps the results.'
+      },
+      {
+        id: 'measure-delete',
+        keys: ['Delete'],
+        action: 'Delete the selected measurement',
+        detail: 'In View mode, where there is no feature to delete instead.'
       }
     ]
   },
