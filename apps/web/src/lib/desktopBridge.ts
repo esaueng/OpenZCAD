@@ -24,8 +24,8 @@ interface NativeApiResponse {
   body: number[];
 }
 
-const CLOUD_API_ORIGIN = 'https://zcad.esau.app';
-const CLOUD_SOCKET_ORIGIN = 'wss://zcad.esau.app';
+const CLOUD_API_ORIGIN = 'https://zcad.app';
+const CLOUD_SOCKET_ORIGIN = 'wss://zcad.app';
 
 export interface DesktopAuthPollResult {
   status: 'pending' | 'authorized';

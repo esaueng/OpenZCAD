@@ -23,6 +23,7 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   nowIso,
@@ -274,6 +275,20 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const access = await this.resolveProjectAccess(userId, projectId);
     if (access.role === 'viewer') {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
+  private async requireRestProjectWrite(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    const access = await this.requireProjectEdit(userId, projectId);
+    if (
+      access.role === 'editor' &&
+      projectCollaborationRollout(this.env).editLeasesEnforced
+    ) {
       throw new ProjectNotFoundError(projectId);
     }
     return access;
@@ -951,7 +966,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireRestProjectWrite(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -1173,7 +1191,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveDocument(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireRestProjectWrite(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -1373,6 +1394,7 @@ export class D1R2PersistenceService implements PersistenceService {
     objectKey: string;
     contentType: string;
     metadata: Record<string, unknown>;
+    metadataJson: string;
   }> {
     const upload = await this.env
       .DB!.prepare(
@@ -1398,7 +1420,8 @@ export class D1R2PersistenceService implements PersistenceService {
     return {
       objectKey: upload.object_key,
       contentType: upload.content_type,
-      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>
+      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>,
+      metadataJson: upload.metadata_json
     };
   }
 
@@ -1413,23 +1436,44 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const session = await this.requireUploadSession(userId, uploadSessionId);
+    const activeUploadId = session.metadata[MULTIPART_UPLOAD_METADATA_KEY];
+    if (typeof activeUploadId === 'string') {
+      return { uploadId: activeUploadId };
+    }
     const upload = await this.env.ARTIFACTS!.createMultipartUpload(
       session.objectKey,
       { httpMetadata: { contentType: session.contentType } }
     );
     // Recorded so purgeExpiredUploadSessions can abort an abandoned upload;
     // R2 keeps incomplete multipart state until an explicit abort.
-    await this.env.DB.prepare(
-      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
-    )
-      .bind(
-        JSON.stringify({
-          ...session.metadata,
-          [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
-        }),
-        uploadSessionId
+    let changes: number | undefined;
+    try {
+      const result = await this.env.DB.prepare(
+        `UPDATE upload_sessions SET metadata_json = ? WHERE id = ? AND metadata_json = ?`
       )
-      .run();
+        .bind(
+          JSON.stringify({
+            ...session.metadata,
+            [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
+          }),
+          uploadSessionId,
+          session.metadataJson
+        )
+        .run();
+      changes = result.meta?.changes;
+    } catch (error) {
+      await upload.abort().catch(() => undefined);
+      throw error;
+    }
+    if (changes === 0) {
+      await upload.abort().catch(() => undefined);
+      const current = await this.requireUploadSession(userId, uploadSessionId);
+      const winner = current.metadata[MULTIPART_UPLOAD_METADATA_KEY];
+      if (typeof winner === 'string') {
+        return { uploadId: winner };
+      }
+      throw new ArtifactStorageError('Multipart upload could not be created.');
+    }
     return { uploadId: upload.uploadId };
   }
 
@@ -1452,6 +1496,13 @@ export class D1R2PersistenceService implements PersistenceService {
     const session = await this.requireUploadSession(userId, uploadSessionId);
     if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
       throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    if (
+      !Number.isInteger(partNumber) ||
+      partNumber < 1 ||
+      partNumber > MAX_ARTIFACT_UPLOAD_PARTS
+    ) {
+      throw new ArtifactStorageError('Upload part number is out of range.');
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
@@ -2221,10 +2272,7 @@ export class D1R2PersistenceService implements PersistenceService {
           // removed from metadata, and aborting an unknown id throws, which
           // allSettled tolerates without blocking the object delete below.
           await this.env
-            .ARTIFACTS!.resumeMultipartUpload(
-              row.object_key,
-              multipartUploadId
-            )
+            .ARTIFACTS!.resumeMultipartUpload(row.object_key, multipartUploadId)
             .abort()
             .catch(() => undefined);
         }
