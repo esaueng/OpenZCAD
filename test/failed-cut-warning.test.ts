@@ -9,13 +9,11 @@ import { toUserId, type BodyId } from '@openzcad/shared';
 import { createExactKernelAdapter } from '../packages/kernel-adapter/src/exact';
 
 /**
- * A cut that removes too little, on a kernel that reports success.
- *
- * BrepKit 3.0.1 repairs most of the historical cross-drilled-shaft family,
- * but the r=2.5 bore still returns a result that adds 1.12 mm³ even though an
- * exact intersect proves 2.27 mm³ of positive-volume overlap. The result is
- * structurally acceptable, so the overlap/removal contract is the only
- * witness that the confirmed subtract did not take.
+ * The corrupting 061c1b2 kernel returned an undrilled shaft from this cut and
+ * relied on the adapter's failed-cut guard to keep that corruption from being
+ * silent. The vetted kernel restored by the rollback removes the bore again,
+ * so the same operation must now stay warning-free and report the drilled
+ * volume. The guard remains fail-closed if a future kernel regresses.
  */
 const user = toUserId('user_failed_cut');
 
@@ -59,69 +57,72 @@ async function crossDrill(boreRadius: number) {
   }
 }
 
-describe('a cut that does not take fails closed', { timeout: 120_000 }, () => {
-  it('refuses the cross-drilled shaft with measured overlap and removal', async () => {
-    const { derived, resultBodyId, shaftBodyId, toolBodyId } =
-      await crossDrill(2.5);
-    expect(derived.warnings).toEqual([
-      'Feature "Drilled": Subtract refused: the tool overlaps the target by 2.27475 mm³, but the kernel removed -1.121515 mm³; the accepted minimum is 1.137375 mm³ (50% of measured overlap). The target and tools were left unchanged.'
-    ]);
-    expect(derived.bodyRepresentations[resultBodyId]).toBeUndefined();
-    expect(derived.bodyRepresentations[shaftBodyId]?.consumed).toBe(false);
-    expect(derived.bodyRepresentations[toolBodyId]?.consumed).toBe(false);
-    expect(derived.exportableBodyIds).toEqual(
-      expect.arrayContaining([shaftBodyId, toolBodyId])
-    );
-  });
-
-  it('keeps a valid multi-tool bore subtract unchanged', async () => {
-    // The control, and the assertion that makes the one above mean something:
-    // without it the guard would pass just as happily if it fired on every
-    // subtract. Two disjoint bores also prove the existing sequential
-    // multi-tool semantics still cut every tool from the evolving target.
-    let doc = addPrimitiveFeature(createProjectDocument('Clean', user), {
-      name: 'Block',
-      primitiveKind: 'box',
-      dimensions: { width: 40, height: 40, depth: 20 }
-    });
-    const block = doc.bodyOrder[0] as BodyId;
-    doc = addPrimitiveFeature(doc, {
-      name: 'Hole A',
-      primitiveKind: 'cylinder',
-      dimensions: { radius: 5, height: 40 }
-    });
-    const placedA = transformBody(doc, {
-      name: 'Place A',
-      targetBodyId: doc.bodyOrder[1] as BodyId,
-      translation: { x: 12, y: 20, z: -10 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-    doc = addPrimitiveFeature(placedA.document, {
-      name: 'Hole B',
-      primitiveKind: 'cylinder',
-      dimensions: { radius: 5, height: 40 }
-    });
-    const placedB = transformBody(doc, {
-      name: 'Place B',
-      targetBodyId: doc.bodyOrder.at(-1) as BodyId,
-      translation: { x: 28, y: 20, z: -10 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    });
-    const cut = booleanBodies(placedB.document, {
-      name: 'Bored',
-      operation: 'subtract',
-      targetBodyIds: [block, placedA.bodyId, placedB.bodyId]
-    });
-    const adapter = await createExactKernelAdapter();
-    try {
-      const derived = await adapter.syncDocument(cut.document);
+describe(
+  'subtractive cut validation after the kernel rollback',
+  { timeout: 120_000 },
+  () => {
+    it('stays quiet when the restored kernel removes the cross-drilled bore', async () => {
+      const { derived, resultBodyId, shaftBodyId, toolBodyId } =
+        await crossDrill(3);
       expect(derived.warnings).toEqual([]);
-      const body = derived.bodyRepresentations[cut.bodyId];
-      // And both bores really cut: 40*40*20 less two full-depth r5 bores.
-      expect(body?.volume).toBeCloseTo(32000 - 2 * Math.PI * 25 * 20, 1);
-      expect(derived.exportableBodyIds).toEqual([cut.bodyId]);
-    } finally {
-      adapter.dispose();
-    }
-  });
-});
+      expect(derived.bodyRepresentations[resultBodyId]?.volume).toBeCloseTo(
+        704.23,
+        1
+      );
+      expect(derived.bodyRepresentations[shaftBodyId]?.consumed).toBe(true);
+      expect(derived.bodyRepresentations[toolBodyId]?.consumed).toBe(true);
+      expect(derived.exportableBodyIds).toEqual([resultBodyId]);
+    });
+
+    it('keeps a valid multi-tool bore subtract unchanged', async () => {
+      // The control, and the assertion that makes the one above mean something:
+      // without it the guard would pass just as happily if it fired on every
+      // subtract. Two disjoint bores also prove the existing sequential
+      // multi-tool semantics still cut every tool from the evolving target.
+      let doc = addPrimitiveFeature(createProjectDocument('Clean', user), {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 20 }
+      });
+      const block = doc.bodyOrder[0] as BodyId;
+      doc = addPrimitiveFeature(doc, {
+        name: 'Hole A',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 5, height: 40 }
+      });
+      const placedA = transformBody(doc, {
+        name: 'Place A',
+        targetBodyId: doc.bodyOrder[1] as BodyId,
+        translation: { x: 12, y: 20, z: -10 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      });
+      doc = addPrimitiveFeature(placedA.document, {
+        name: 'Hole B',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 5, height: 40 }
+      });
+      const placedB = transformBody(doc, {
+        name: 'Place B',
+        targetBodyId: doc.bodyOrder.at(-1) as BodyId,
+        translation: { x: 28, y: 20, z: -10 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      });
+      const cut = booleanBodies(placedB.document, {
+        name: 'Bored',
+        operation: 'subtract',
+        targetBodyIds: [block, placedA.bodyId, placedB.bodyId]
+      });
+      const adapter = await createExactKernelAdapter();
+      try {
+        const derived = await adapter.syncDocument(cut.document);
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[cut.bodyId];
+        // And both bores really cut: 40*40*20 less two full-depth r5 bores.
+        expect(body?.volume).toBeCloseTo(32000 - 2 * Math.PI * 25 * 20, 1);
+        expect(derived.exportableBodyIds).toEqual([cut.bodyId]);
+      } finally {
+        adapter.dispose();
+      }
+    });
+  }
+);

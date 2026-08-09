@@ -70,86 +70,16 @@ function handleMap(value: unknown, label: string): Record<string, number[]> {
   return result;
 }
 
-/**
- * Fold a `FaceEvolutionPayloadV1` into the flat shape the decoder below
- * checks, so both kernels' returns meet the same set-equality assertion.
- *
- * V1 moves the result handle under `result.solid` and turns `modified` and
- * `generated` from `{source: results}` maps into `{source, results}[]` arrays.
- * It also splits doubt into `unresolvedResults` and `unresolvedSources`, where
- * the old contract had one `unresolved` map — the source-side list is the one
- * that answers "which input face did we lose track of", so it maps across, and
- * the result-side list is checked separately by the caller.
- */
-function normalizeV1Payload(
-  root: Record<string, unknown>
-): Record<string, unknown> {
-  if (!Number.isInteger(root.schemaVersion)) {
-    return root;
-  }
-  if (root.schemaVersion !== 1) {
-    throw new Error(`Unsupported evolution schemaVersion ${String(root.schemaVersion)}.`);
-  }
-  const result = root.result as { solid?: unknown } | undefined;
-  const claims = root.evolution as Record<string, unknown> | undefined;
-  if (!result || !claims) {
-    throw new Error('V1 evolution payload has no result or evolution record.');
-  }
-  const relationMap = (value: unknown, label: string): Record<string, number[]> => {
-    if (!Array.isArray(value)) {
-      throw new Error(`${label} must be an array of relations.`);
-    }
-    const map: Record<string, number[]> = {};
-    for (const entry of value) {
-      const relation = entry as { source?: unknown; results?: unknown };
-      if (!Number.isInteger(relation.source)) {
-        throw new Error(`${label} has a relation with no source handle.`);
-      }
-      map[String(relation.source)] = integerArray(
-        relation.results,
-        `${label}.${String(relation.source)}`
-      );
-    }
-    return map;
-  };
-  return {
-    solid: result.solid,
-    evolution: {
-      modified: relationMap(claims.modified, 'modified'),
-      generated: relationMap(claims.generated, 'generated'),
-      deleted: claims.deleted,
-      unresolved: Array.isArray(claims.unresolvedSources)
-        ? Object.fromEntries(
-            (claims.unresolvedSources as number[]).map((handle) => [
-              String(handle),
-              []
-            ])
-          )
-        : claims.unresolvedSources
-    }
-  };
-}
-
-/**
- * Strictly decode the runtime contract that the generated BrepKit types omit.
- *
- * Two shapes reach here now. The boolean entry points still return JSON text
- * typed `any`; `filletWithEvolution` and `chamferWithEvolution` return a
- * structured `FaceEvolutionPayloadV1` object. Accepting both keeps ONE decoder
- * — and therefore one place where a missing claim is caught — rather than
- * splitting the load-bearing set-equality check across two code paths.
- */
+/** Strictly decode the runtime contract that the generated BrepKit types omit. */
 function parseBrepEvolution(value: unknown): BrepEvolution {
-  if (typeof value !== 'string' && (!value || typeof value !== 'object')) {
-    throw new Error(
-      'BrepKit evolution must be JSON text or a structured payload.'
-    );
+  if (typeof value !== 'string') {
+    throw new Error('BrepKit evolution must be returned as JSON text.');
   }
-  const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+  const parsed: unknown = JSON.parse(value);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('BrepKit evolution must be an object.');
   }
-  const root = normalizeV1Payload(parsed as Record<string, unknown>);
+  const root = parsed as Record<string, unknown>;
   if (!Number.isInteger(root.solid) || (root.solid as number) < 0) {
     throw new Error('BrepKit evolution has no result solid handle.');
   }
@@ -249,44 +179,28 @@ describe('topology-lineage kernel spike', () => {
       ),
       'utf8'
     );
-    // Assert the interface was FOUND before asserting anything about its
-    // body. A regex that matches nothing yields '', and every `not.toContain`
-    // against '' passes for the wrong reason — the exact trap this file's
-    // header warns about, and one this block previously walked into when the
-    // declaration was renamed underneath it.
-    const evolutionMatch =
-      /export interface FaceEvolutionPayloadV1\s*{([\s\S]*?)\n}/.exec(
+    const declaredEvolution =
+      /export interface EvolutionResult\s*{([^}]*)}/.exec(
         brepDeclarations
-      );
-    expect(evolutionMatch, 'FaceEvolutionPayloadV1 is no longer declared').not.toBeNull();
-    const declaredEvolution = evolutionMatch![1]!;
-    expect(declaredEvolution.length).toBeGreaterThan(0);
-    expect(declaredEvolution).toContain('schemaVersion');
+      )?.[1] ?? '';
 
-    // The booleans still hand back JSON text behind an `any`; fillet and
-    // chamfer are the two that moved to the structured payload. That split is
-    // the whole reason `parseBrepEvolution` takes both shapes, so pin it.
+    expect(declaredEvolution).toContain('modified: number[]');
+    expect(declaredEvolution).not.toContain('deleted');
     for (const method of [
       'fuseWithEvolution',
       'cutWithEvolution',
-      'intersectWithEvolution'
+      'intersectWithEvolution',
+      'filletWithEvolution'
     ]) {
       expect(brepDeclarations).toMatch(
         new RegExp(`${method}\\([^;]+\\): any;`)
       );
     }
-    for (const method of ['filletWithEvolution', 'chamferWithEvolution']) {
-      expect(brepDeclarations).toMatch(
-        new RegExp(`${method}\\([^;]+\\): FaceEvolutionPayloadV1;`)
-      );
-    }
-    // chamferWithEvolution used to be absent entirely; it exists now, which is
-    // the capability this kernel bump actually adds here.
     expect(
       (BrepKernel.prototype as unknown as Record<string, unknown>)[
         'chamferWithEvolution'
       ]
-    ).toBeTypeOf('function');
+    ).toBeUndefined();
   });
 
   it('characterizes primitive, sweep, transform, boolean, fillet, and chamfer behavior in BrepKit', () => {

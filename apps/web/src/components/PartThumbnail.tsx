@@ -86,7 +86,7 @@ export function PartThumbnail({
   loadThumbnail,
   backfillThumbnail
 }: PartThumbnailProps) {
-  const cacheKey = `${project.projectId}:${project.updatedAt}`;
+  const cacheKey = `${project.projectId}:${project.updatedAt}:${project.thumbnailArtifactId ?? ''}`;
   const [result, setResult] = useState<ThumbnailResult | null>(null);
 
   useEffect(() => {

@@ -10,6 +10,7 @@ import {
   GEOMETRY_LINEAR_TOLERANCE,
   circleProfile,
   frameForPlaneRef,
+  geometryTolerance,
   mergeAdjacentProfiles,
   polygonProfile,
   rectangleProfile,
@@ -5366,12 +5367,49 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
               solid = fuseUniformSolid(kernel, unionSolids);
               const resultBounds = kernel.boundingBox(solid);
               const droppedOperand = droppedUnionOperandWarning({
-                operands: unionOperands.map((operand) => ({
-                  name: operand.name,
-                  bounds: operand.bounds,
-                  hasCurvedFaces:
-                    censusOfSolids(kernel, [operand.solid]).curvedFaces > 0
-                })),
+                operands: unionOperands.map((operand) => {
+                  const curvedExtents: {
+                    min: Partial<Record<'x' | 'y' | 'z', boolean>>;
+                    max: Partial<Record<'x' | 'y' | 'z', boolean>>;
+                  } = { min: {}, max: {} };
+                  const axes = ['x', 'y', 'z'] as const;
+                  for (const face of kernel.getSolidFaces(operand.solid)) {
+                    if (kernel.getSurfaceType(face) === 'plane') continue;
+                    const faceBounds = kernel.boundingBox(face);
+                    for (
+                      let axisIndex = 0;
+                      axisIndex < axes.length;
+                      axisIndex++
+                    ) {
+                      const axis = axes[axisIndex]!;
+                      const scale = Math.max(
+                        1,
+                        Math.abs(operand.bounds.min[axis]),
+                        Math.abs(operand.bounds.max[axis])
+                      );
+                      const tolerance = geometryTolerance(scale);
+                      if (
+                        Math.abs(
+                          faceBounds[axisIndex]! - operand.bounds.min[axis]
+                        ) <= tolerance
+                      ) {
+                        curvedExtents.min[axis] = true;
+                      }
+                      if (
+                        Math.abs(
+                          faceBounds[axisIndex + 3]! - operand.bounds.max[axis]
+                        ) <= tolerance
+                      ) {
+                        curvedExtents.max[axis] = true;
+                      }
+                    }
+                  }
+                  return {
+                    name: operand.name,
+                    bounds: operand.bounds,
+                    curvedExtents
+                  };
+                }),
                 result: {
                   min: {
                     x: resultBounds[0]!,
