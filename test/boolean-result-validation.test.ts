@@ -58,7 +58,7 @@ describe('boolean result validation', () => {
               min: { x: -6, y: -6, z: 0 },
               max: { x: 6, y: 6, z: 24 }
             },
-            hasCurvedFaces: true
+            curvedExtents: { min: { x: true } }
           }
         ],
         result: {
@@ -83,7 +83,7 @@ describe('boolean result validation', () => {
               min: { x: -6, y: -6, z: 0 },
               max: { x: 6, y: 6, z: 24 }
             },
-            hasCurvedFaces: true
+            curvedExtents: { min: { x: true } }
           }
         ],
         result: {
@@ -108,7 +108,7 @@ describe('boolean result validation', () => {
               min: { x: 0, y: 0, z: 0 },
               max: { x: 30, y: 18, z: 24 }
             },
-            hasCurvedFaces: false
+            curvedExtents: {}
           }
         ],
         result: {
@@ -119,6 +119,32 @@ describe('boolean result validation', () => {
         approximationTolerance: 0.08
       })
     ).toContain('Union dropped geometry from operand "Box Body"');
+  });
+
+  it('keeps tight bounds on planar extrema of an otherwise curved operand', () => {
+    expect(
+      droppedUnionOperandWarning({
+        operands: [
+          {
+            name: 'Cylinder Body',
+            bounds: {
+              min: { x: -6, y: -6, z: 0 },
+              max: { x: 6, y: 6, z: 24 }
+            },
+            curvedExtents: {
+              min: { x: true, y: true },
+              max: { x: true, y: true }
+            }
+          }
+        ],
+        result: {
+          min: { x: -6, y: -6, z: 0 },
+          max: { x: 6, y: 6, z: 23.95 }
+        },
+        units: 'mm',
+        approximationTolerance: 0.08
+      })
+    ).toContain('maximum z');
   });
 
   it('preserves contained, touching, overlapping, and crossing union extents', () => {
