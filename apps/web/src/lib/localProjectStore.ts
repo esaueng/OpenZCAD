@@ -1,5 +1,6 @@
 import {
   isPurgeDue,
+  type ArtifactId,
   type ImportedSourceReference,
   type ProjectDocument,
   type ProjectOrganization,
@@ -119,6 +120,8 @@ export interface ProjectThumbnailRecord {
   projectId: string;
   /** `image/webp` data URL, or null for a project with no visible geometry. */
   source: string | null;
+  /** Cloud artifact backing this preview, absent for a device-only render. */
+  artifactId?: ArtifactId;
   /** Document version this was rendered from; only used to avoid re-renders. */
   version: number;
   updatedAt: string;
@@ -762,7 +765,12 @@ export function listLocalProjectOrganizations(): Promise<
  */
 export function saveProjectThumbnail(
   projectId: string,
-  thumbnail: { source: string | null; version: number; updatedAt: string }
+  thumbnail: {
+    source: string | null;
+    artifactId?: ArtifactId;
+    version: number;
+    updatedAt: string;
+  }
 ): Promise<void> {
   const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
   return transaction(

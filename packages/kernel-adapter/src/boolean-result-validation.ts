@@ -207,8 +207,7 @@ export interface BooleanFaceCensus {
 const FACET_FALLBACK_FACTOR = 4;
 const FACET_FALLBACK_SLACK = 32;
 
-const FACET_FALLBACK_LEAD =
-  'The boolean returned a faceted approximation';
+const FACET_FALLBACK_LEAD = 'The boolean returned a faceted approximation';
 
 /**
  * What to say when no specific remedy has been proved.
@@ -299,11 +298,13 @@ export interface UnionOperandBounds {
   name: string;
   bounds: UnionBounds;
   /**
-   * Whether this operand has any non-planar face. Only a curved boundary can
-   * be inscribed inside its own exact AABB by an approximated result, so only
-   * a curved operand earns the approximation allowance below.
+   * Exact AABB sides reached by a non-planar face. Only those sides can move
+   * inward when a curved boundary is replaced by an inscribed approximation.
    */
-  hasCurvedFaces?: boolean;
+  curvedExtents?: {
+    min?: Partial<Record<BoundsAxis, boolean>>;
+    max?: Partial<Record<BoundsAxis, boolean>>;
+  };
 }
 
 export interface UnionExtentValidation {
@@ -369,26 +370,15 @@ export function droppedUnionOperandWarning(
   for (const operand of input.operands) {
     for (const axis of ['x', 'y', 'z'] as const) {
       const operandSpan = operand.bounds.max[axis] - operand.bounds.min[axis];
-      // A rejected faceted fallback can inscribe a curved operand slightly
-      // inside its exact AABB. How far is bounded by the deflection the
-      // kernel tessellates to — that IS the maximum chord deviation — so a
-      // curved operand is allowed the full approximation tolerance.
-      //
-      // Capping that at 0.1% of the operand's own span, as this once did,
-      // is tighter than the geometry permits for anything under ~80 mm: a
-      // 12 mm cylinder got 0.012 mm of slack against a real facet sag of
-      // 0.0123 mm and was reported as "dropped geometry", advising the user
-      // to move a body over a third of a micron. A PLANAR operand keeps the
-      // tight bound: its corners survive faceting exactly, so any loss there
-      // is real. The M4 drop loses half the boss height, far outside either.
-      const tolerance = Math.max(
+      const tightTolerance = Math.max(
         numericTolerance,
-        operand.hasCurvedFaces === true
-          ? approximationTolerance
-          : Math.min(approximationTolerance, Math.abs(operandSpan) * 1e-3)
+        Math.min(approximationTolerance, Math.abs(operandSpan) * 1e-3)
       );
       const minimumMissing = input.result.min[axis] - operand.bounds.min[axis];
-      if (minimumMissing > tolerance) {
+      const minimumTolerance = operand.curvedExtents?.min?.[axis]
+        ? Math.max(numericTolerance, approximationTolerance)
+        : tightTolerance;
+      if (minimumMissing > minimumTolerance) {
         missing.push({
           operand,
           axis,
@@ -399,7 +389,10 @@ export function droppedUnionOperandWarning(
         });
       }
       const maximumMissing = operand.bounds.max[axis] - input.result.max[axis];
-      if (maximumMissing > tolerance) {
+      const maximumTolerance = operand.curvedExtents?.max?.[axis]
+        ? Math.max(numericTolerance, approximationTolerance)
+        : tightTolerance;
+      if (maximumMissing > maximumTolerance) {
         missing.push({
           operand,
           axis,
