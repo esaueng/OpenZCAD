@@ -131,6 +131,22 @@ import {
 
 const MEASUREMENT_DEFLECTION = 0.08;
 const STL_EXPORT_DEFLECTION = 0.08;
+/**
+ * A confirmed subtract must remove a material share of the volume its tools
+ * demonstrably overlap. The deliberately loose half-overlap floor preserves
+ * sequential multi-tool cuts, where earlier tools can remove material a later
+ * tool would otherwise share, while rejecting the near-no-op results this
+ * guard exists to catch.
+ */
+const MINIMUM_SUBTRACT_REMOVAL_RATIO = 0.5;
+
+function formatMeasuredVolume(value: number): string {
+  const magnitude = Math.abs(value);
+  if (magnitude !== 0 && (magnitude < 0.001 || magnitude >= 1_000_000)) {
+    return value.toExponential(3);
+  }
+  return Number(value.toPrecision(7)).toString();
+}
 
 /**
  * Per-body display opacity rides body metadata through the derived projection.
@@ -5458,30 +5474,39 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   : kernel.intersect(solid, tool);
               }
               solid = unifyBooleanFaces(kernel, solid);
-              // A cut that removes none of the material it demonstrably
-              // overlaps. Measured on the 061c1b2 kernel, a cross-drilled
-              // shaft shares 142.84 mm3 with its bore and the cut removes
-              // 0.19 of it — and the body that comes back is closed, valid,
-              // and reports the undrilled volume. Every structural check
-              // passes; only these two numbers disagree.
+              // A cut that removes too little of the material it demonstrably
+              // overlaps. A cross-drilled shaft can come back closed, valid,
+              // and nearly unchanged even though its bore has positive-volume
+              // overlap. Every structural check passes; only these two
+              // measurements disagree.
               //
-              // Half is the same deliberately loose bar the pattern-merge
-              // guard uses above, and for the same reason: with several tools
-              // the pairwise total overstates the true correction wherever
-              // two of them overlap each other, so a working cut can remove
-              // less than all of it. Nothing near a working cut removes under
-              // half.
+              // Keep measuring against the target as it changes through the
+              // existing sequential tool loop. That is normal multi-tool
+              // subtract semantics: a later tool is only credited with the
+              // material that remains after the earlier cuts.
               //
-              // The body still stands — the user asked for it and it is a
-              // valid solid. Silence is the only outcome ruled out, because
-              // that is exactly how this defect presents.
+              // Publishing the result would confirm a subtract whose own
+              // measurements say it did not take. Throw before consuming the
+              // operands or recording the result body, so rebuild keeps the
+              // target and tools visible and exportable instead.
               if (subtracting && sharedWithTools > GEOMETRY_EPSILON) {
                 const removed =
                   volumeBeforeCut -
                   kernel.volume(solid, MEASUREMENT_DEFLECTION);
-                if (removed < sharedWithTools * 0.5) {
-                  result.warnings.push(
-                    `Feature "${feature.name}": the tool overlaps this body but the cut did not take, so the reported volume still counts material the cut should have removed.`
+                const minimumRemoved =
+                  sharedWithTools * MINIMUM_SUBTRACT_REMOVAL_RATIO;
+                if (removed < minimumRemoved) {
+                  const toolSubject =
+                    operands.length === 2
+                      ? 'the tool overlaps'
+                      : 'the tools overlap';
+                  throw new Error(
+                    `Subtract refused: ${toolSubject} the target by ` +
+                      `${formatMeasuredVolume(sharedWithTools)} ${document.units}³, ` +
+                      `but the kernel removed ${formatMeasuredVolume(removed)} ${document.units}³; ` +
+                      `the accepted minimum is ${formatMeasuredVolume(minimumRemoved)} ${document.units}³ ` +
+                      `(${MINIMUM_SUBTRACT_REMOVAL_RATIO * 100}% of measured overlap). ` +
+                      'The target and tools were left unchanged.'
                   );
                 }
               }
