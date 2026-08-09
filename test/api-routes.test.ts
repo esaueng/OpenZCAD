@@ -38,6 +38,13 @@ interface ProjectObjectStorageReadinessRow {
   pointer_indexes: number;
 }
 
+interface ProjectMeasurementReadinessRow {
+  table_ready: number;
+  columns_ready: number;
+  cascade_ready: number;
+  erasure_triggers: number;
+}
+
 const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
   projects_document_bytes: 1,
   revisions_document_bytes: 1,
@@ -54,6 +61,13 @@ const READY_PROJECT_OBJECT_STORAGE_SCHEMA: ProjectObjectStorageReadinessRow = {
   pointer_indexes: 2
 };
 
+const READY_PROJECT_MEASUREMENT_SCHEMA: ProjectMeasurementReadinessRow = {
+  table_ready: 1,
+  columns_ready: 5,
+  cascade_ready: 1,
+  erasure_triggers: 2
+};
+
 const readyProjectStorageBucket = {
   put: vi.fn(),
   get: vi.fn(),
@@ -63,22 +77,96 @@ const readyProjectStorageBucket = {
 function storageAccountingDb(
   row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
   failure?: Error,
-  projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA
+  projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA,
+  projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA
 ) {
   const prepare = vi.fn((query: string) => ({
     first: vi.fn(async () => {
       if (failure) {
         throw failure;
       }
-      return query.includes('idx_project_document_objects_project_state')
-        ? projectObjectRow
-        : row;
+      if (query.includes('idx_project_document_objects_project_state')) {
+        return projectObjectRow;
+      }
+      if (query.includes("pragma_table_info('project_measurements')")) {
+        return projectMeasurementRow;
+      }
+      if (query.includes('account_erasure_requests')) {
+        return { table_ready: 1, trigger_count: 25 };
+      }
+      return row;
     })
   }));
   return {
     db: { prepare } as unknown as D1Database,
     prepare
   };
+}
+
+function projectMeasurementRouteDb() {
+  let measurement: { payloadJson: string; revision: number } | null = null;
+  const prepare = vi.fn((query: string) => {
+    let values: unknown[] = [];
+    const statement = {
+      bind(...next: unknown[]) {
+        values = next;
+        return statement;
+      },
+      async first() {
+        if (query.includes('idx_project_document_objects_project_state')) {
+          return READY_PROJECT_OBJECT_STORAGE_SCHEMA;
+        }
+        if (query.includes("pragma_table_info('project_measurements')")) {
+          return READY_PROJECT_MEASUREMENT_SCHEMA;
+        }
+        if (query.includes('FROM account_erasure_requests')) {
+          return null;
+        }
+        if (query.includes('user_id AS owner_user_id')) {
+          return { owner_user_id: 'user_beta_dev' };
+        }
+        if (query.includes('SELECT payload_json')) {
+          return measurement
+            ? {
+                payload_json: measurement.payloadJson,
+                revision: measurement.revision
+              }
+            : null;
+        }
+        if (query.includes('SELECT revision')) {
+          return measurement ? { revision: measurement.revision } : null;
+        }
+        return READY_STORAGE_ACCOUNTING_SCHEMA;
+      },
+      async run() {
+        if (query.includes('INSERT INTO project_measurements')) {
+          if (measurement) return { meta: { changes: 0 } };
+          measurement = { payloadJson: String(values[2]), revision: 1 };
+          return { meta: { changes: 1 } };
+        }
+        if (query.includes('UPDATE project_measurements')) {
+          if (!measurement || measurement.revision !== Number(values[5])) {
+            return { meta: { changes: 0 } };
+          }
+          measurement = {
+            payloadJson: String(values[2]),
+            revision: Number(values[1])
+          };
+          return { meta: { changes: 1 } };
+        }
+        if (query.includes('DELETE FROM project_measurements')) {
+          if (!measurement || measurement.revision !== Number(values[1])) {
+            return { meta: { changes: 0 } };
+          }
+          measurement = null;
+          return { meta: { changes: 1 } };
+        }
+        return { meta: { changes: 0 } };
+      }
+    };
+    return statement;
+  });
+  return { prepare } as unknown as D1Database;
 }
 
 function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
@@ -324,7 +412,9 @@ describe('worker api routes', () => {
       documentStorageAccountingReady: false,
       projectSharingEnabled: false,
       projectEditLeasesEnforced: false,
-      projectPersonalSyncEnabled: false
+      projectPersonalSyncEnabled: false,
+      projectMeasurementStorageReady: false,
+      projectMeasurementSyncEnabled: false
     });
   });
 
@@ -804,6 +894,97 @@ describe('worker api routes', () => {
     expect(roomFetch).toHaveBeenCalledOnce();
   });
 
+  it('rejects collaboration tickets when the account preference is disabled', async () => {
+    const settings = structuredClone(DEFAULT_APP_SETTINGS);
+    settings.collaboration.enabled = false;
+    const rowFor = (query: string) =>
+      query.includes('FROM account_erasure_requests')
+        ? null
+        : query.includes('FROM user_settings')
+          ? { settings_json: JSON.stringify(settings), revision: 1 }
+          : query.includes('FROM projects p')
+            ? { owner_user_id: 'user_beta_dev', resolved_role: 'owner' }
+            : query.includes('idx_project_document_objects_project_state')
+              ? READY_PROJECT_OBJECT_STORAGE_SCHEMA
+              : READY_STORAGE_ACCOUNTING_SCHEMA;
+    const prepare = vi.fn((query: string) => ({
+      first: vi.fn(async () => rowFor(query)),
+      bind: vi.fn(() => ({ first: vi.fn(async () => rowFor(query)) }))
+    }));
+    const getByName = vi.fn();
+
+    const response = await worker.fetch(
+      post('/api/projects/project_direct/collaboration/ticket', undefined),
+      {
+        ...env,
+        DB: { prepare } as unknown as D1Database,
+        PROJECT_STORAGE: readyProjectStorageBucket,
+        PROJECT_ROOM: { getByName },
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'FEATURE_DISABLED' });
+    expect(getByName).not.toHaveBeenCalled();
+  });
+
+  it("uses the project owner's sharing preference for collaborator tickets", async () => {
+    const actorSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    actorSettings.collaboration.enabled = false;
+    const ownerSettings = structuredClone(DEFAULT_APP_SETTINGS);
+    ownerSettings.collaboration.enabled = true;
+    const prepare = vi.fn((query: string) => ({
+      first: vi.fn(async () =>
+        query.includes('idx_project_document_objects_project_state')
+          ? READY_PROJECT_OBJECT_STORAGE_SCHEMA
+          : null
+      ),
+      bind: vi.fn((...values: unknown[]) => ({
+        first: vi.fn(async () => {
+          if (query.includes('idx_project_document_objects_project_state')) {
+            return READY_PROJECT_OBJECT_STORAGE_SCHEMA;
+          }
+          if (query.includes('FROM user_settings')) {
+            return {
+              settings_json: JSON.stringify(
+                values[0] === 'owner_shared' ? ownerSettings : actorSettings
+              ),
+              revision: 1
+            };
+          }
+          if (query.includes('FROM projects p')) {
+            return {
+              owner_user_id: 'owner_shared',
+              resolved_role: 'viewer'
+            };
+          }
+          return null;
+        })
+      }))
+    }));
+    const roomFetch = vi.fn(async () =>
+      Response.json({ ticket: 's'.repeat(43), expiresAt: Date.now() + 30_000 })
+    );
+    const getByName = vi.fn(() => ({ fetch: roomFetch }));
+
+    const response = await worker.fetch(
+      post('/api/projects/project_shared/collaboration/ticket', undefined),
+      {
+        ...env,
+        DB: { prepare } as unknown as D1Database,
+        PROJECT_STORAGE: readyProjectStorageBucket,
+        PROJECT_ROOM: { getByName },
+        PROJECT_SHARING_ENABLED: 'true',
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(getByName).toHaveBeenCalledOnce();
+    expect(roomFetch).toHaveBeenCalledOnce();
+  });
+
   it('forwards a ticketed native upgrade without browser credentials or forged identity', async () => {
     const projectId = 'proj_native_ticket';
     const ticket = 't'.repeat(43);
@@ -821,7 +1002,7 @@ describe('worker api routes', () => {
 
     const response = await worker.fetch(
       new Request(
-        `https://zcad.esau.app/api/projects/${projectId}/collaboration?ticket=${ticket}`,
+        `https://zcad.app/api/projects/${projectId}/collaboration?ticket=${ticket}`,
         {
           headers: {
             origin: 'tauri://localhost',
@@ -897,7 +1078,7 @@ describe('worker api routes', () => {
       ...env,
       PROJECT_SHARING_ENABLED: 'true',
       PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
-      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.app',
       EMAIL: { send: emailSend }
     };
     const createdResponse = await worker.fetch(
@@ -936,7 +1117,7 @@ describe('worker api routes', () => {
       subject: 'You are invited to an OpenZCAD project'
     });
     expect(emailSend.mock.calls[0]![0].text).toContain(
-      `https://zcad.esau.app/#invite=${invitation.token}`
+      `https://zcad.app/#invite=${invitation.token}`
     );
     expect(emailSend.mock.calls[0]![0].html).toContain('Sharing routes');
 
@@ -994,7 +1175,7 @@ describe('worker api routes', () => {
       ...env,
       PROJECT_SHARING_ENABLED: 'true',
       PROJECT_INVITATION_EMAIL_FROM: 'noreply@zcad.esau.app',
-      PUBLIC_APP_ORIGIN: 'https://zcad.esau.app',
+      PUBLIC_APP_ORIGIN: 'https://zcad.app',
       EMAIL: {
         send: vi.fn(async (_message: EmailMessageBuilder) =>
           Promise.reject(deliveryError)
@@ -1909,14 +2090,87 @@ describe('worker api routes', () => {
       documentStorageAccountingReady: boolean;
       projectObjectStorageReady: boolean;
       projectPersonalSyncEnabled: boolean;
+      projectMeasurementStorageReady: boolean;
+      projectMeasurementSyncEnabled: boolean;
       projectSharingEnabled: boolean;
       projectEditLeasesEnforced: boolean;
     };
     expect(health.documentStorageAccountingReady).toBe(true);
     expect(health.projectObjectStorageReady).toBe(true);
     expect(health.projectPersonalSyncEnabled).toBe(true);
+    expect(health.projectMeasurementStorageReady).toBe(true);
+    expect(health.projectMeasurementSyncEnabled).toBe(true);
     expect(health.projectSharingEnabled).toBe(false);
     expect(health.projectEditLeasesEnforced).toBe(false);
+  });
+
+  it('stores measurements through gated read, write, and delete routes', async () => {
+    const DB = projectMeasurementRouteDb();
+    const routeEnv = {
+      ...env,
+      DB,
+      ARTIFACTS: readyProjectStorageBucket,
+      PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+    };
+    const projectId = 'project_measurement_routes';
+    const path = `/api/projects/${projectId}/measurements`;
+    const empty = await worker.fetch(
+      new Request(`https://example.com${path}`),
+      routeEnv
+    );
+    expect(await empty.json()).toEqual({ revision: 0, record: null });
+
+    const record = {
+      projectId,
+      version: 1,
+      updatedAt: '2026-08-07T16:00:00.000Z',
+      measurements: [],
+      display: { unit: 'mm', precision: 2, radialDisplay: 'diameter' }
+    };
+    const written = await worker.fetch(
+      put(path, { expectedRevision: 0, record }),
+      routeEnv
+    );
+    expect(written.status).toBe(200);
+    await expect(written.json()).resolves.toEqual({ revision: 1, record });
+
+    const deleted = await worker.fetch(
+      new Request(`https://example.com${path}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ expectedRevision: 1 })
+      }),
+      routeEnv
+    );
+    expect(deleted.status).toBe(204);
+    const after = await worker.fetch(
+      new Request(`https://example.com${path}`),
+      routeEnv
+    );
+    await expect(after.json()).resolves.toEqual({ revision: 0, record: null });
+  });
+
+  it('keeps measurement routes local-only until migration 0015 is ready', async () => {
+    const { db } = storageAccountingDb(
+      READY_STORAGE_ACCOUNTING_SCHEMA,
+      undefined,
+      READY_PROJECT_OBJECT_STORAGE_SCHEMA,
+      { ...READY_PROJECT_MEASUREMENT_SCHEMA, erasure_triggers: 1 }
+    );
+    const response = await worker.fetch(
+      new Request(
+        'https://example.com/api/projects/project_local/measurements'
+      ),
+      {
+        ...env,
+        DB: db,
+        ARTIFACTS: readyProjectStorageBucket,
+        PROJECT_PERSONAL_SYNC_ENABLED: 'true'
+      }
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'MEASUREMENT_SYNC_UNAVAILABLE'
+    });
   });
 
   it('fails project routes closed when the R2 schema is not ready', async () => {

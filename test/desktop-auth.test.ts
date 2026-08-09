@@ -261,7 +261,7 @@ describe('desktop authorization', () => {
     const state = 's'.repeat(43);
     const verifier = 'v'.repeat(43);
     const started = await startDesktopAuthorization(
-      new Request('https://zcad.esau.app/api/auth/desktop/start'),
+      new Request('https://zcad.app/api/auth/desktop/start'),
       {
         clientId: 'openzcad-macos',
         state,
@@ -270,7 +270,7 @@ describe('desktop authorization', () => {
       env
     );
     expect(started.browserUrl).toBe(
-      `https://zcad.esau.app/?desktopAuth=${started.attemptId}`
+      `https://zcad.app/?desktopAuth=${started.attemptId}`
     );
     expect(started.userCode).toMatch(/^[A-Z0-9]{8}$/);
     await expect(
@@ -310,7 +310,7 @@ describe('desktop authorization', () => {
     if (issued.status !== 'authorized') throw new Error('expected tokens');
     await expect(
       authenticateRequest(
-        new Request('https://zcad.esau.app/api/session', {
+        new Request('https://zcad.app/api/session', {
           headers: { authorization: `Bearer ${issued.accessToken}` }
         }),
         env
@@ -338,7 +338,7 @@ describe('desktop authorization', () => {
     expect(rotated.refreshToken).not.toBe(issued.refreshToken);
     await expect(
       authenticateRequest(
-        new Request('https://zcad.esau.app/api/session', {
+        new Request('https://zcad.app/api/session', {
           headers: { authorization: `Bearer ${rotated.accessToken}` }
         }),
         env
@@ -356,7 +356,7 @@ describe('desktop authorization', () => {
     ).rejects.toThrow('expired');
     await expect(
       authenticateRequest(
-        new Request('https://zcad.esau.app/api/session', {
+        new Request('https://zcad.app/api/session', {
           headers: { authorization: `Bearer ${rotated.accessToken}` }
         }),
         env
@@ -367,7 +367,7 @@ describe('desktop authorization', () => {
   it('fails closed when the desktop rollout flag is absent', async () => {
     await expect(
       startDesktopAuthorization(
-        new Request('https://zcad.esau.app/api/auth/desktop/start'),
+        new Request('https://zcad.app/api/auth/desktop/start'),
         {
           clientId: 'openzcad-macos',
           state: 's'.repeat(43),
