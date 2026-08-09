@@ -839,6 +839,15 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
 
+  // The previous box projection remains deliberately visible while the
+  // filleted revision rebuilds. Wait for the revision barrier before asking
+  // the viewport for an edge, otherwise the e2e hook can correctly locate a
+  // stale box edge that topology actions must then reject.
+  await expect(status).not.toContainText(
+    /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    { timeout: 30_000 }
+  );
+
   // Ask the viewport where one of the rounded rim's edges is instead of
   // clicking a lattice of screen points hoping to land on a line two pixels
   // wide. The e2e-only hook projects the exact display polyline through the

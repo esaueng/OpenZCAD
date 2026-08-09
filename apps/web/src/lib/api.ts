@@ -330,7 +330,5 @@ export const api = {
   listArtifacts: (projectId: string) =>
     requestJson<ListArtifactsResponse>(`/api/projects/${projectId}/artifacts`),
   getArtifactMetadata: (artifactId: string) =>
-    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`),
-  artifactDownloadUrl: (artifactId: string) =>
-    `/api/artifacts/${artifactId}/download`
+    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`)
 };

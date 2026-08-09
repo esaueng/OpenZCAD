@@ -523,12 +523,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-/**
- * How long the document must sit still before the shelf preview is re-rendered.
- * Long enough that dragging a dimension does not queue a WebGL render per
- * frame, short enough that leaving for the start screen finds a current tile.
- */
-const SHELF_THUMBNAIL_REFRESH_MS = 4000;
 const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded-edges',
   'shaded',
@@ -1009,20 +1003,27 @@ export function App() {
   const sessionRef = useRef(session);
   sessionRef.current = session;
   /**
-   * The shelf's preview source. This reads a small cached image and nothing
-   * else — deliberately not the project document. Loading documents here is
-   * what made the start screen unreachable for large imports: a part with a
-   * few-hundred-megabyte source had to be pulled into memory in full, per
-   * tile, just to draw a 360×200 card, which could take the tab and the
-   * machine down and leave the owner unable to open or delete their own work.
-   * A project this device has never opened simply shows the placeholder.
+   * The shelf's preview source. This reads a small device-cached or cloud
+   * image and nothing else — deliberately not the project document. Loading
+   * documents here made the start screen unreachable for large imports: a
+   * part with a few-hundred-megabyte source had to be pulled into memory in
+   * full, per tile, just to draw a 360×200 card, which could take the tab and
+   * the machine down and leave the owner unable to open or delete their work.
+   * A project with no published preview simply shows the placeholder.
    */
   const loadThumbnail = useCallback(
     async (project: ProjectSummary): Promise<string | null | undefined> => {
       const cached = await loadProjectThumbnail(project.projectId).catch(
         () => null
       );
-      return cachedThumbnailSource(cached, project);
+      const cachedSource = cachedThumbnailSource(cached, project);
+      if (cachedSource !== undefined || !project.thumbnailArtifactId) {
+        return cachedSource;
+      }
+      const { downloadCloudThumbnail } = await import('./lib/cloudThumbnail');
+      return downloadCloudThumbnail(project.thumbnailArtifactId).catch(
+        () => undefined
+      );
     },
     []
   );
@@ -2197,45 +2198,6 @@ export function App() {
   useEffect(() => {
     geometry.sync(doc);
   }, [doc]);
-
-  // Refreshes this device's cached shelf preview. Here rather than on the
-  // shelf because this is the one place the meshes are already in memory:
-  // rendering a tile must never be a reason to load a project document. The
-  // delay coalesces editing bursts, and a cache entry already at this version
-  // skips the render entirely, so ordinary modelling pays nothing.
-  useEffect(() => {
-    if (!doc || geometry.state.phase !== 'ready') {
-      return;
-    }
-    const { projectId, version } = doc;
-    const updatedAt = doc.derived.updatedAt;
-    const bodies = Object.values(doc.derived.bodyRepresentations).filter(
-      (body) => !body.consumed
-    );
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        const cached = await loadProjectThumbnail(projectId).catch(() => null);
-        if (cancelled || cached?.version === version) {
-          return;
-        }
-        const { renderPartThumbnail } = await import('./lib/partThumbnail');
-        const source = await renderPartThumbnail(bodies).catch(() => null);
-        if (cancelled) {
-          return;
-        }
-        await saveProjectThumbnail(projectId, {
-          source,
-          version,
-          updatedAt
-        }).catch(() => undefined);
-      })();
-    }, SHELF_THUMBNAIL_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [doc, geometry.state.phase]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
@@ -9211,6 +9173,38 @@ export function App() {
             projectId={doc.projectId}
             bodies={viewerBodies}
             measurementAnnotations={measurementAnnotations}
+            measurementCloudSync={[
+              doc.projectId,
+              deploymentHealth?.projectMeasurementSyncEnabled,
+              cloudProjectIds,
+              measurementHydratedProjectId,
+              measurements,
+              measurementDisplay,
+              setMeasurements,
+              setMeasurementUnit,
+              setMeasurementPrecision,
+              setRadialDisplay,
+              loadProjectMeasurements,
+              saveProjectMeasurements
+            ]}
+            projectThumbnailSync={
+              geometry.state.phase === 'ready'
+                ? [
+                    doc.projectId,
+                    doc.version,
+                    doc.derived.updatedAt,
+                    doc.derived.bodyRepresentations,
+                    Boolean(
+                      session &&
+                      cloudProjectIds.has(doc.projectId) &&
+                      !editDisabledReason
+                    ),
+                    api,
+                    loadProjectThumbnail,
+                    saveProjectThumbnail
+                  ]
+                : undefined
+            }
             sketches={
               // Region-based rendering (sketchViews) supersedes the legacy
               // single-profile overlays under direct manipulation.

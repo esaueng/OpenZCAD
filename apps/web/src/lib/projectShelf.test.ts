@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ProjectSummary } from '@openzcad/shared';
-import { cachedThumbnailSource } from './projectShelf';
+import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
+import { cachedThumbnailSource, mergeProjectSummaries } from './projectShelf';
 import type { ProjectThumbnailRecord } from './localProjectStore';
 
 const LISTED = '2026-08-07T12:25:30.000Z';
@@ -59,5 +59,47 @@ describe('cachedThumbnailSource', () => {
     expect(
       cachedThumbnailSource(record(null, EARLIER), summary(LISTED))
     ).toBeUndefined();
+  });
+
+  it('replaces an empty local answer when the account has an image', () => {
+    expect(
+      cachedThumbnailSource(record(null, LISTED), {
+        ...summary(LISTED),
+        thumbnailArtifactId: toArtifactId('artifact_cloud_thumbnail')
+      })
+    ).toBeUndefined();
+  });
+
+  it('refreshes a downloaded image when the account preview changes', () => {
+    expect(
+      cachedThumbnailSource(
+        {
+          ...record('data:image/webp;base64,AA', LISTED),
+          artifactId: toArtifactId('artifact_old_thumbnail')
+        },
+        {
+          ...summary(LISTED),
+          thumbnailArtifactId: toArtifactId('artifact_new_thumbnail')
+        }
+      )
+    ).toBeUndefined();
+  });
+});
+
+describe('mergeProjectSummaries', () => {
+  it('keeps the account thumbnail when the device document is newer', () => {
+    const [merged] = mergeProjectSummaries(
+      [{ ...summary(LISTED), updatedAt: LISTED }],
+      [
+        {
+          ...summary(EARLIER),
+          updatedAt: EARLIER,
+          thumbnailArtifactId: toArtifactId('artifact_cloud_thumbnail')
+        }
+      ]
+    );
+
+    expect(merged?.thumbnailArtifactId).toBe('artifact_cloud_thumbnail');
+    expect(merged?.updatedAt).toBe(LISTED);
   });
 });

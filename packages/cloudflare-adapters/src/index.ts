@@ -23,6 +23,7 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   nowIso,
@@ -274,6 +275,20 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const access = await this.resolveProjectAccess(userId, projectId);
     if (access.role === 'viewer') {
+      throw new ProjectNotFoundError(projectId);
+    }
+    return access;
+  }
+
+  private async requireRestProjectWrite(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectAccess> {
+    const access = await this.requireProjectEdit(userId, projectId);
+    if (
+      access.role === 'editor' &&
+      projectCollaborationRollout(this.env).editLeasesEnforced
+    ) {
       throw new ProjectNotFoundError(projectId);
     }
     return access;
@@ -604,9 +619,20 @@ export class D1R2PersistenceService implements PersistenceService {
       `SELECT i.id, i.project_id, i.role, p.user_id AS owner_user_id
        FROM project_invitations i
        INNER JOIN projects p ON p.id = i.project_id
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
        WHERE i.token_hash = ? AND i.email = ?
          AND i.accepted_at IS NULL AND i.revoked_at IS NULL
-         AND i.expires_at >= ?`
+         AND i.expires_at >= ?
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(
+               owner_settings.settings_json,
+               '$.collaboration.enabled'
+             )
+           END,
+           1
+         ) = 1`
     )
       .bind(tokenHash, email, acceptedAt)
       .first<{
@@ -633,6 +659,22 @@ export class D1R2PersistenceService implements PersistenceService {
          SET accepted_at = ?, accepted_by_user_id = ?
          WHERE id = ? AND token_hash = ? AND email = ?
            AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?
+           AND EXISTS (
+             SELECT 1
+             FROM projects p
+             LEFT JOIN user_settings owner_settings
+               ON owner_settings.user_id = p.user_id
+             WHERE p.id = project_invitations.project_id
+               AND COALESCE(
+                 CASE WHEN json_valid(owner_settings.settings_json)
+                   THEN json_extract(
+                     owner_settings.settings_json,
+                     '$.collaboration.enabled'
+                   )
+                 END,
+                 1
+               ) = 1
+           )
            AND (
              EXISTS (
                SELECT 1 FROM project_members
@@ -702,19 +744,38 @@ export class D1R2PersistenceService implements PersistenceService {
       ? this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
                   p.document_version, p.last_revision_id, p.revision_count,
-                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at,
+                  (SELECT a.id FROM artifacts a
+                    WHERE a.project_id = p.id AND a.kind = 'thumbnail'
+                    ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id
            FROM projects p
            LEFT JOIN project_members pm
              ON pm.project_id = p.id
             AND pm.user_id = ?
             AND pm.role IN ('editor', 'viewer')
-           WHERE p.user_id = ? OR pm.user_id IS NOT NULL
+           LEFT JOIN user_settings owner_settings
+             ON owner_settings.user_id = p.user_id
+           WHERE p.user_id = ? OR (
+             pm.user_id IS NOT NULL
+             AND COALESCE(
+               CASE WHEN json_valid(owner_settings.settings_json)
+                 THEN json_extract(
+                   owner_settings.settings_json,
+                   '$.collaboration.enabled'
+                 )
+               END,
+               1
+             ) = 1
+           )
            ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC`
         ).bind(userId, userId)
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
                   p.document_version, p.last_revision_id, p.revision_count,
-                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at
+                  p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at,
+                  (SELECT a.id FROM artifacts a
+                    WHERE a.project_id = p.id AND a.kind = 'thumbnail'
+                    ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id
            FROM projects p
            WHERE p.user_id = ?
            ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC`
@@ -945,7 +1006,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveRevision(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireRestProjectWrite(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -1167,7 +1231,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveDocument(userId, request);
     }
-    const access = await this.requireProjectEdit(userId, request.projectId);
+    const access = await this.requireRestProjectWrite(
+      userId,
+      request.projectId
+    );
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -1367,6 +1434,7 @@ export class D1R2PersistenceService implements PersistenceService {
     objectKey: string;
     contentType: string;
     metadata: Record<string, unknown>;
+    metadataJson: string;
   }> {
     const upload = await this.env
       .DB!.prepare(
@@ -1392,7 +1460,8 @@ export class D1R2PersistenceService implements PersistenceService {
     return {
       objectKey: upload.object_key,
       contentType: upload.content_type,
-      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>
+      metadata: JSON.parse(upload.metadata_json) as Record<string, unknown>,
+      metadataJson: upload.metadata_json
     };
   }
 
@@ -1407,23 +1476,44 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const session = await this.requireUploadSession(userId, uploadSessionId);
+    const activeUploadId = session.metadata[MULTIPART_UPLOAD_METADATA_KEY];
+    if (typeof activeUploadId === 'string') {
+      return { uploadId: activeUploadId };
+    }
     const upload = await this.env.ARTIFACTS!.createMultipartUpload(
       session.objectKey,
       { httpMetadata: { contentType: session.contentType } }
     );
     // Recorded so purgeExpiredUploadSessions can abort an abandoned upload;
     // R2 keeps incomplete multipart state until an explicit abort.
-    await this.env.DB.prepare(
-      `UPDATE upload_sessions SET metadata_json = ? WHERE id = ?`
-    )
-      .bind(
-        JSON.stringify({
-          ...session.metadata,
-          [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
-        }),
-        uploadSessionId
+    let changes: number | undefined;
+    try {
+      const result = await this.env.DB.prepare(
+        `UPDATE upload_sessions SET metadata_json = ? WHERE id = ? AND metadata_json = ?`
       )
-      .run();
+        .bind(
+          JSON.stringify({
+            ...session.metadata,
+            [MULTIPART_UPLOAD_METADATA_KEY]: upload.uploadId
+          }),
+          uploadSessionId,
+          session.metadataJson
+        )
+        .run();
+      changes = result.meta?.changes;
+    } catch (error) {
+      await upload.abort().catch(() => undefined);
+      throw error;
+    }
+    if (changes === 0) {
+      await upload.abort().catch(() => undefined);
+      const current = await this.requireUploadSession(userId, uploadSessionId);
+      const winner = current.metadata[MULTIPART_UPLOAD_METADATA_KEY];
+      if (typeof winner === 'string') {
+        return { uploadId: winner };
+      }
+      throw new ArtifactStorageError('Multipart upload could not be created.');
+    }
     return { uploadId: upload.uploadId };
   }
 
@@ -1446,6 +1536,13 @@ export class D1R2PersistenceService implements PersistenceService {
     const session = await this.requireUploadSession(userId, uploadSessionId);
     if (session.metadata[MULTIPART_UPLOAD_METADATA_KEY] !== uploadId) {
       throw new ArtifactStorageError('Multipart upload was not found.');
+    }
+    if (
+      !Number.isInteger(partNumber) ||
+      partNumber < 1 ||
+      partNumber > MAX_ARTIFACT_UPLOAD_PARTS
+    ) {
+      throw new ArtifactStorageError('Upload part number is out of range.');
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
@@ -1569,10 +1666,26 @@ export class D1R2PersistenceService implements PersistenceService {
       metadata: JSON.parse(upload.metadata_json) as ArtifactRecord['metadata']
     };
 
-    await this.env.DB.batch([
+    const supersededThumbnails =
+      artifact.kind === 'thumbnail'
+        ? await this.env.DB.prepare(
+            `SELECT object_key FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'`
+          )
+            .bind(artifact.projectId)
+            .all<{ object_key: string }>()
+        : { results: [] as Array<{ object_key: string }> };
+
+    const statements = [
       this.env.DB.prepare(
         `DELETE FROM upload_sessions WHERE id = ? AND artifact_id = ?`
       ).bind(request.uploadSessionId, request.artifactId),
+      ...(artifact.kind === 'thumbnail'
+        ? [
+            this.env.DB.prepare(
+              `DELETE FROM artifacts WHERE project_id = ? AND kind = 'thumbnail'`
+            ).bind(artifact.projectId)
+          ]
+        : []),
       this.env.DB.prepare(
         `INSERT INTO artifacts (id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
@@ -1586,7 +1699,21 @@ export class D1R2PersistenceService implements PersistenceService {
         JSON.stringify(artifact.metadata),
         artifact.createdAt
       )
-    ]);
+    ];
+    await this.env.DB.batch(statements);
+
+    if (artifact.kind === 'thumbnail') {
+      await Promise.all(
+        (supersededThumbnails.results ?? []).map((previous) =>
+          this.env.ARTIFACTS!.delete(previous.object_key).catch((error) => {
+            console.error(
+              'Could not remove a superseded thumbnail object.',
+              error
+            );
+          })
+        )
+      );
+    }
 
     return artifact;
   }
@@ -2131,13 +2258,31 @@ export class D1R2PersistenceService implements PersistenceService {
         `SELECT p.user_id AS owner_user_id,
                 CASE
                   WHEN p.user_id = ? THEN 'owner'
-                  WHEN pm.role = 'editor' THEN 'editor'
-                  WHEN pm.role = 'viewer' THEN 'viewer'
+                  WHEN COALESCE(
+                    CASE WHEN json_valid(owner_settings.settings_json)
+                      THEN json_extract(
+                        owner_settings.settings_json,
+                        '$.collaboration.enabled'
+                      )
+                    END,
+                    1
+                  ) = 1 AND pm.role = 'editor' THEN 'editor'
+                  WHEN COALESCE(
+                    CASE WHEN json_valid(owner_settings.settings_json)
+                      THEN json_extract(
+                        owner_settings.settings_json,
+                        '$.collaboration.enabled'
+                      )
+                    END,
+                    1
+                  ) = 1 AND pm.role = 'viewer' THEN 'viewer'
                   ELSE NULL
                 END AS resolved_role
          FROM projects p
          LEFT JOIN project_members pm
            ON pm.project_id = p.id AND pm.user_id = ?
+         LEFT JOIN user_settings owner_settings
+           ON owner_settings.user_id = p.user_id
          WHERE p.id = ?`
       )
       .bind(userId, userId, projectId)
@@ -2185,10 +2330,7 @@ export class D1R2PersistenceService implements PersistenceService {
           // removed from metadata, and aborting an unknown id throws, which
           // allSettled tolerates without blocking the object delete below.
           await this.env
-            .ARTIFACTS!.resumeMultipartUpload(
-              row.object_key,
-              multipartUploadId
-            )
+            .ARTIFACTS!.resumeMultipartUpload(row.object_key, multipartUploadId)
             .abort()
             .catch(() => undefined);
         }
@@ -2257,7 +2399,7 @@ function projectObjectEnvelope(
  * and single-row reads cannot drift apart and hand `summaryFromRow` a shape it
  * does not expect.
  */
-const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at`;
+const PROJECT_SUMMARY_COLUMNS = `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
 
 interface ProjectRow {
   id: string;
@@ -2272,6 +2414,7 @@ interface ProjectRow {
   sort_order: number | null;
   deleted_at: string | null;
   archived_at: string | null;
+  thumbnail_artifact_id?: string | null;
 }
 
 interface ProjectDocumentObjectRow {
@@ -2318,6 +2461,9 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       ...(row.last_revision_id
         ? { lastRevisionId: toRevisionId(row.last_revision_id) }
         : {}),
+      ...(row.thumbnail_artifact_id
+        ? { thumbnailArtifactId: toArtifactId(row.thumbnail_artifact_id) }
+        : {}),
       revisionCount: row.revision_count,
       updatedAt: row.updated_at,
       documentVersion: row.document_version,
@@ -2332,6 +2478,9 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       projectId: document.projectId,
       name: row.name,
       lastRevisionId: document.revisions.at(-1)?.revisionId,
+      ...(row.thumbnail_artifact_id
+        ? { thumbnailArtifactId: toArtifactId(row.thumbnail_artifact_id) }
+        : {}),
       revisionCount: document.revisions.length,
       updatedAt: row.updated_at,
       // Read from the document rather than the row's `document_version` so the
