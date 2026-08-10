@@ -1027,51 +1027,6 @@ export function App() {
     },
     []
   );
-  /**
-   * Fills the cache for a tile it could not answer for. The cache is only ever
-   * written while a project is open, so every project that predates it — which
-   * on an established shelf is all of them — would otherwise sit behind a
-   * placeholder until it happened to be opened again.
-   *
-   * Two limits keep the reason the cache exists intact. Only what this device
-   * already holds is read, never the network, so a shelf of parts stored only
-   * in the account stays exactly as cheap to draw as it is now. And the load
-   * runs inside the preview queue rather than alongside it, so the tiles on
-   * screen are filled one document at a time instead of all at once.
-   */
-  const backfillThumbnail = useCallback(
-    async (project: ProjectSummary): Promise<string | null | undefined> => {
-      const { queuePartThumbnail, renderThumbnailFrame } =
-        await import('./lib/partThumbnail');
-      return queuePartThumbnail(async () => {
-        const stored = await loadLocalProject(project.projectId).catch(
-          () => null
-        );
-        if (!stored) {
-          return undefined;
-        }
-        const bodies = Object.values(stored.derived.bodyRepresentations).filter(
-          (body) => !body.consumed
-        );
-        let source: string | null;
-        try {
-          source = renderThumbnailFrame(bodies);
-        } catch {
-          // A device that cannot give us a WebGL context is not going to on the
-          // next tile either. Leave the cache empty rather than recording a
-          // "no geometry" that says more about the browser than the part.
-          return undefined;
-        }
-        await saveProjectThumbnail(project.projectId, {
-          source,
-          version: stored.version,
-          updatedAt: stored.derived.updatedAt
-        }).catch(() => undefined);
-        return source;
-      });
-    },
-    []
-  );
   const [fitSignal, setFitSignal] = useState(0);
   const [viewRequest, setViewRequest] = useState<{
     view: ViewTarget;
@@ -1160,6 +1115,71 @@ export function App() {
    */
   const [accountProjectListReached, setAccountProjectListReached] =
     useState(false);
+  const thumbnailBackfillRuntimeRef = useRef({
+    cloudProjectIds,
+    syncOnce: geometry.syncOnce
+  });
+  thumbnailBackfillRuntimeRef.current = {
+    cloudProjectIds,
+    syncOnce: geometry.syncOnce
+  };
+  const thumbnailAccountUserId = session?.userId;
+  /**
+   * Fills old or cross-device cards without making the user open each part.
+   * The collapsed shelf mounts at most nine projects, and this queue holds one
+   * document, one exact rebuild, and one WebGL context at a time.
+   */
+  const backfillThumbnail = useCallback(
+    async (project: ProjectSummary): Promise<string | null | undefined> => {
+      const [thumbnail, backfill] = await Promise.all([
+        import('./lib/partThumbnail'),
+        import('./lib/projectThumbnailBackfill')
+      ]);
+      return thumbnail.queuePartThumbnail(async () => {
+        const runtime = thumbnailBackfillRuntimeRef.current;
+        const cloudBacked =
+          Boolean(thumbnailAccountUserId && accountProjectListReached) &&
+          runtime.cloudProjectIds.has(project.projectId);
+        const result = await backfill.backfillProjectThumbnail(project, {
+          loadCached: (projectId) =>
+            loadProjectThumbnail(projectId).catch(() => null),
+          loadLocalDocument: (projectId) =>
+            loadLocalProject(projectId).catch(() => null),
+          ...(cloudBacked
+            ? {
+                loadCloudDocument: (projectId: string) =>
+                  api.loadProject(projectId).catch(() => null),
+                rebuild: runtime.syncOnce,
+                publish: async (input: {
+                  projectId: ProjectDocument['projectId'];
+                  source: string;
+                  version: number;
+                  updatedAt: string;
+                }) => {
+                  const { uploadCloudThumbnail } = await import(
+                    './lib/cloudThumbnail'
+                  );
+                  return uploadCloudThumbnail(api, input);
+                }
+              }
+            : {}),
+          render: thumbnail.renderThumbnailFrame,
+          save: saveProjectThumbnail
+        });
+        if (result.artifactId) {
+          setProjects((current) =>
+            current.map((candidate) =>
+              candidate.projectId === project.projectId
+                ? { ...candidate, thumbnailArtifactId: result.artifactId }
+                : candidate
+            )
+          );
+        }
+        return result.source;
+      });
+    },
+    [accountProjectListReached, thumbnailAccountUserId]
+  );
   /**
    * A divergence against the account, as opposed to against a live room. Held
    * here rather than in the collaboration hook because it can happen with no
