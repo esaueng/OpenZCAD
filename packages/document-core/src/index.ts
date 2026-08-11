@@ -1068,6 +1068,9 @@ export function booleanBodies(
   if (input.targetBodyIds.length < 2) {
     throw new Error('Boolean operations need at least two target bodies.');
   }
+  if (new Set(input.targetBodyIds).size !== input.targetBodyIds.length) {
+    throw new Error('Boolean operations cannot target the same body twice.');
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();

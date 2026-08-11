@@ -4915,6 +4915,23 @@ export class BrepKitKernelAdapter implements ExactKernelAdapter {
                   );
                 }
               }
+              // BrepKit's STEP reader normalizes every length to millimetres
+              // using the file's declared unit, but the document speaks its
+              // own unit everywhere downstream (exports multiply by
+              // UNIT_TO_MM). A non-mm document must adopt the solids at
+              // 1/UNIT_TO_MM — before lineage derivation, so the published
+              // witnesses match the coordinates every later feature sees. The
+              // checksum cache above stays in millimetre form, which keeps a
+              // cached import correct across a document units change.
+              const documentScale = 1 / UNIT_TO_MM[document.units];
+              if (documentScale !== 1) {
+                solids = solids.map((solid) =>
+                  kernel.copyAndTransformSolid(
+                    solid,
+                    uniformScaleMatrix(documentScale)
+                  )
+                );
+              }
               result.importedStepDiagnostics.set(feature.bodyId, diagnostics);
               result.shapes.set(feature.bodyId, {
                 solids,
