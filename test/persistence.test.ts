@@ -6,6 +6,7 @@ import {
 import type { RevisionConflictError } from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
+  MAX_THUMBNAIL_BYTES,
   projectOrganization,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -460,6 +461,37 @@ describe('project shelves', () => {
     await expect(
       service.getArtifactMetadata(userId, artifactIds[0]!)
     ).resolves.toEqual({ artifact: null });
+  });
+
+  it('refuses to finalize an oversized thumbnail', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Previewed' });
+    const projectId = created.document.projectId;
+    const { session } = await service.createUploadSession(userId, {
+      projectId,
+      fileName: 'thumbnail.webp',
+      contentType: 'image/webp',
+      kind: 'thumbnail'
+    });
+    await expect(
+      service.createMultipartUpload(userId, session.uploadSessionId)
+    ).rejects.toThrow('must use single uploads');
+    await service.putUpload(
+      userId,
+      session.uploadSessionId,
+      new Uint8Array(MAX_THUMBNAIL_BYTES + 1).buffer
+    );
+
+    await expect(
+      service.finalizeArtifact(userId, {
+        projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      })
+    ).rejects.toThrow('invalid or too large');
+    expect(
+      (await service.listProjects(userId)).projects[0]?.thumbnailArtifactId
+    ).toBeUndefined();
   });
 
   it('orders pinned projects first and honours a manual reorder', async () => {
