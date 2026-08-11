@@ -1101,7 +1101,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       const projectUpdate = results[1];
       if (projectUpdate?.meta?.changes !== 1) {
-        await this.discardProjectStorageWrite(write, true);
+        await this.discardProjectStorageWrite(write);
         const current = await this.env.DB.prepare(
           `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
         )
@@ -1298,7 +1298,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       const projectUpdate = results[1];
       if (projectUpdate?.meta?.changes !== 1) {
-        await this.discardProjectStorageWrite(write, true);
+        await this.discardProjectStorageWrite(write);
         const current = await this.env.DB.prepare(
           `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
         )
@@ -2000,18 +2000,17 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   private async discardProjectStorageWrite(
-    write: ProjectStorageWrite,
-    includeAssets = false
+    write: ProjectStorageWrite
   ): Promise<void> {
     const bucket = this.projectStorageBucket();
     if (bucket) {
-      const keys = [
-        write.objectKey,
-        ...(includeAssets
-          ? write.missingAssets.map((asset) => asset.objectKey)
-          : [])
-      ];
-      await Promise.allSettled(keys.map((key) => bucket.delete(key)));
+      // Asset objects are content-addressed, so a concurrent write that won
+      // the version race may have just committed rows referencing the very
+      // objects this losing write uploaded. Deleting them here would corrupt
+      // the winner's committed document. Only the losing document object is
+      // ours alone to remove; an unreferenced asset is re-adopted by the next
+      // retry through the head-check in putProjectStorageObjects.
+      await Promise.allSettled([bucket.delete(write.objectKey)]);
     }
     try {
       await this.env

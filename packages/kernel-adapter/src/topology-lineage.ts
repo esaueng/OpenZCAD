@@ -540,6 +540,148 @@ export function topologyWitnessesEqual(
   return witnessKey(kind, left) === witnessKey(kind, right);
 }
 
+/**
+ * A witness derived by transforming quantized coordinates cannot promise the
+ * same integers as a witness measured on the transformed body: the source's
+ * half-quantum placement error rotates into every component, and the two
+ * pipelines round independently. The reals differ by under one quantum, so
+ * after both roundings each integer differs by at most ~2. Two quanta of a
+ * 1e-6 grid is still sub-nanometre — far inside geometric tolerance — while
+ * the surrounding uniqueness gates keep resolution fail-closed: a band that
+ * matches two candidates is reported as ambiguous, never bound.
+ */
+const KNOWN_TRANSFORM_QUANTUM_SLACK = 2;
+
+function quantaNearlyEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) <= KNOWN_TRANSFORM_QUANTUM_SLACK;
+}
+
+function pointsNearlyEqual(
+  left: QuantizedTopologyPoint,
+  right: QuantizedTopologyPoint
+): boolean {
+  return (
+    quantaNearlyEqual(left[0], right[0]) &&
+    quantaNearlyEqual(left[1], right[1]) &&
+    quantaNearlyEqual(left[2], right[2])
+  );
+}
+
+/**
+ * Canonicalization picks a direction's sign from its leading nonzero
+ * component; noise straddling zero can flip the two pipelines' choices, so a
+ * near-match must accept the negated form too.
+ */
+function directionsNearlyAligned(
+  left: QuantizedTopologyPoint,
+  right: QuantizedTopologyPoint
+): { aligned: boolean; flipped: boolean } {
+  if (pointsNearlyEqual(left, right)) {
+    return { aligned: true, flipped: false };
+  }
+  if (pointsNearlyEqual(left, [-right[0], -right[1], -right[2]])) {
+    return { aligned: true, flipped: true };
+  }
+  return { aligned: false, flipped: false };
+}
+
+function analyticsNearlyEqual(
+  left: FaceAnalyticWitnessV1,
+  right: FaceAnalyticWitnessV1
+): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === 'none') {
+    return true;
+  }
+  if (left.kind === 'plane' && right.kind === 'plane') {
+    const alignment = directionsNearlyAligned(left.normal, right.normal);
+    return (
+      alignment.aligned &&
+      quantaNearlyEqual(
+        left.offset,
+        alignment.flipped ? -right.offset : right.offset
+      )
+    );
+  }
+  if (left.kind === 'cylinder' && right.kind === 'cylinder') {
+    // Negating the axis leaves the perpendicular foot unchanged, so the foot
+    // compares directly under either orientation.
+    return (
+      directionsNearlyAligned(left.axis, right.axis).aligned &&
+      pointsNearlyEqual(left.axisFoot, right.axisFoot) &&
+      quantaNearlyEqual(left.radius, right.radius)
+    );
+  }
+  return false;
+}
+
+/**
+ * Equality up to independent-rounding noise, for matching a witness that was
+ * *derived* (transformed in quantized space) against one that was *measured*.
+ * Discrete structure — curve/surface type, closedness, closure, null-ness —
+ * still compares exactly; only quantized numbers get the slack, and endpoint
+ * order and direction sign accept the tie-noise permutations the exact
+ * comparators are known to flip on.
+ */
+export function topologyWitnessesNearlyEqual(
+  kind: TopologyKind,
+  left: TopologyWitnessV1,
+  right: TopologyWitnessV1
+): boolean {
+  if (kind === 'edge') {
+    const first = left as EdgeWitnessV1;
+    const second = right as EdgeWitnessV1;
+    if (
+      first.curveType !== second.curveType ||
+      first.closed !== second.closed ||
+      !quantaNearlyEqual(first.length, second.length)
+    ) {
+      return false;
+    }
+    if (first.closed && second.closed) {
+      if (!pointsNearlyEqual(first.center, second.center)) {
+        return false;
+      }
+      if (first.axis === null || second.axis === null) {
+        return first.axis === second.axis;
+      }
+      return directionsNearlyAligned(first.axis, second.axis).aligned;
+    }
+    if (!first.closed && !second.closed) {
+      // Endpoints sort by quantized lexicographic order, which noise can
+      // swap when the endpoints tie on a leading axis; accept either pairing.
+      return (
+        pointsNearlyEqual(first.midpoint, second.midpoint) &&
+        ((pointsNearlyEqual(first.endpoints[0], second.endpoints[0]) &&
+          pointsNearlyEqual(first.endpoints[1], second.endpoints[1])) ||
+          (pointsNearlyEqual(first.endpoints[0], second.endpoints[1]) &&
+            pointsNearlyEqual(first.endpoints[1], second.endpoints[0])))
+      );
+    }
+    return false;
+  }
+  const first = left as FaceWitnessV1;
+  const second = right as FaceWitnessV1;
+  if (
+    first.surfaceType !== second.surfaceType ||
+    first.closure.u !== second.closure.u ||
+    first.closure.v !== second.closure.v ||
+    !quantaNearlyEqual(first.perimeter, second.perimeter)
+  ) {
+    return false;
+  }
+  if (first.centroid === null || second.centroid === null) {
+    if (first.centroid !== second.centroid) {
+      return false;
+    }
+  } else if (!pointsNearlyEqual(first.centroid, second.centroid)) {
+    return false;
+  }
+  return analyticsNearlyEqual(first.analytic, second.analytic);
+}
+
 export type EvolutionRelation =
   | { readonly kind: 'unchanged' }
   | {
@@ -669,9 +811,12 @@ export function verifyTopologyEvolution(
         input.kind,
         input.relation.expectedResultWitness
       );
+      // The expected witness was derived in quantized space, so it carries
+      // rounding noise a measured witness does not; exact integer equality
+      // here would reject every rotation that is not grid-preserving.
       compatible =
         expectedInspection.status === 'supported' &&
-        topologyWitnessesEqual(
+        topologyWitnessesNearlyEqual(
           input.kind,
           input.relation.expectedResultWitness,
           input.resultWitness
