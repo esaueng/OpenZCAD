@@ -1,5 +1,7 @@
 import type { CadPatchProposal } from '@openzcad/ai-contracts';
 
+const AUTO_PARAMETERIZE_SUGGESTION_LABEL = 'Auto-parameterize model';
+
 /**
  * Suggestions are product promises, not generated copy. A verified proposal
  * bypasses the provider and is accepted only through the same exact preflight
@@ -16,6 +18,7 @@ export interface AssistantSuggestionContext {
   /** The kind every selected topology shares, when they share one. */
   topologyKind: 'body' | 'face' | 'edge' | null;
   selectedBodyCount: number;
+  autoParameterizeProposal?: CadPatchProposal | null;
 }
 
 const dimensions = (
@@ -186,8 +189,18 @@ const prompt = (id: string, label: string): AssistantSuggestion => ({
 export function assistantSuggestions(
   context: AssistantSuggestionContext
 ): AssistantSuggestion[] {
+  const autoParameterize = context.autoParameterizeProposal
+    ? [
+        {
+          id: 'verified-auto-parameterize',
+          label: AUTO_PARAMETERIZE_SUGGESTION_LABEL,
+          proposal: context.autoParameterizeProposal
+        }
+      ]
+    : [];
   if (context.topologyKind === 'edge') {
     return [
+      ...autoParameterize,
       prompt('selected-edge-fillet', 'Fillet the selected edges by 2 mm'),
       prompt('selected-edge-chamfer', 'Chamfer the selected edges 1 mm'),
       prompt(
@@ -198,6 +211,7 @@ export function assistantSuggestions(
   }
   if (context.topologyKind === 'face') {
     return [
+      ...autoParameterize,
       prompt('selected-face-hole', 'Cut a 6 mm hole through the selected face'),
       prompt('selected-face-offset', 'Offset the selected face out by 3 mm'),
       prompt('selected-face-sketch', 'Sketch a 20 mm slot on the selected face')
@@ -205,6 +219,7 @@ export function assistantSuggestions(
   }
   if (context.selectedBodyCount > 0) {
     return [
+      ...autoParameterize,
       prompt(
         'selected-body-round',
         'Round every outside edge of the selection by 2 mm'
@@ -239,6 +254,7 @@ export function assistantSuggestions(
     ];
   }
   return [
+    ...autoParameterize,
     prompt('all-edges-round', 'Round every outside edge by 2 mm'),
     prompt('tallest-body-bore', 'Cut a 12 mm bore through the tallest body'),
     prompt(
