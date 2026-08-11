@@ -23,11 +23,21 @@ test('keeps undo and redo in the quick-actions rail', async ({ page }) => {
   await page.getByLabel('Project name').fill('History Rail Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
+  // The rail rides in the lazily-loaded viewer chunk, so it lands long after
+  // the rest of the workspace: the tool palette is up inside 100 ms, the rail
+  // nearer two seconds, and slower still on a loaded machine. Wait for the
+  // toolbar itself on a budget sized for a chunk load; every assertion after
+  // this keeps the strict default, and a rail that never arrives fails as a
+  // missing rail rather than as an enabled-versus-disabled mismatch.
+  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
+  await expect(rail).toBeVisible({ timeout: 30_000 });
+
+  // Worth asserting only once the workspace is up — before that the top bar
+  // has not rendered at all, so its emptiness proves nothing.
   const topbar = page.locator('.topbar');
   await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
   await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
 
-  const rail = page.getByRole('toolbar', { name: 'Quick actions' });
   const undo = rail.getByRole('button', { name: 'Undo' });
   const redo = rail.getByRole('button', { name: 'Redo' });
   await expect(undo).toBeDisabled();
@@ -98,6 +108,17 @@ test('P toggles the camera projection', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('Project name').fill('Projection Part');
   await page.getByRole('button', { name: 'Create project' }).click();
+
+  // The projection control ships inside the lazily imported viewer shell, so
+  // wait for the viewport rather than for the workspace around it. The feature
+  // rail renders while `Loading 3D viewport…` is still standing in for the
+  // shell, which makes it a gate that lets this test through too early: on a
+  // loaded runner the chunk can still be arriving, and the failure then reads
+  // as "the ortho button says nothing about its projection" when the button
+  // does not exist yet. Waiting on the canvas waits for the thing under test.
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 15_000
+  });
 
   const orthoButton = page.getByRole('button', { name: /Ortho/ });
   await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
@@ -817,6 +838,15 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   const status = page.getByRole('contentinfo');
+
+  // The previous box projection remains deliberately visible while the
+  // filleted revision rebuilds. Wait for the revision barrier before asking
+  // the viewport for an edge, otherwise the e2e hook can correctly locate a
+  // stale box edge that topology actions must then reject.
+  await expect(status).not.toContainText(
+    /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    { timeout: 30_000 }
+  );
 
   // Ask the viewport where one of the rounded rim's edges is instead of
   // clicking a lattice of screen points hoping to land on a line two pixels

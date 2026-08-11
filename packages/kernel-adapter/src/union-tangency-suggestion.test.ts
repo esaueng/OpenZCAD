@@ -59,7 +59,14 @@ describe('union tangency suggestion', { timeout: 60_000 }, () => {
       }).document;
       const refused = await adapter.syncDocument(attempted);
       const message = refused.warnings.join(' ');
-      expect(message).toMatch(/faceted approximation|replaced every curved/);
+      // Kernels disagree on HOW a tangency the fuse cannot resolve fails —
+      // 8733eab dropped to facets, 061c1b2 returns a body that is not closed —
+      // and the user has the same problem either way. Assert that it is
+      // refused and that the refusal names a move, not which symptom the
+      // kernel happened to report.
+      expect(message).toMatch(
+        /faceted approximation|replaced every curved|open, non-manifold/
+      );
 
       // The suggestion is concrete: a body, a signed amount, an axis.
       const suggestion = /Moving (.+?) ([+-]?[\d.]+) mm in ([XYZ]) clears it\./.exec(
