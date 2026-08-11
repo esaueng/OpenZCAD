@@ -68,23 +68,28 @@ describe('union tangency suggestion', { timeout: 60_000 }, () => {
         /faceted approximation|replaced every curved|open, non-manifold/
       );
 
-      // The suggestion is concrete: a body, a signed amount, an axis.
-      const suggestion = /Moving (.+?) ([+-]?[\d.]+) mm in ([XYZ]) clears it\./.exec(
-        message
-      );
+      // The suggestion is concrete: a body and one or more signed axis moves.
+      // Newer kernels can require moving a corner-origin primitive to the
+      // other body's centre on several axes before the same union is exact.
+      const suggestion =
+        /Moving (.+?) ((?:[+-]?[\d.]+ mm in [XYZ](?:, )?)+) clears it\./.exec(
+          message
+        );
       expect(suggestion, `no offset suggested in: ${message}`).not.toBeNull();
-      const [, movedName, amountText, axis] = suggestion!;
+      const [, movedName, moveText] = suggestion!;
       expect(movedName).toBe('Cylinder Body');
-      const amount = Number(amountText);
+      const offsets = { x: 0, y: 0, z: 0 };
+      for (const match of moveText!.matchAll(/([+-]?[\d.]+) mm in ([XYZ])/g)) {
+        offsets[match[2]!.toLowerCase() as keyof typeof offsets] = Number(
+          match[1]
+        );
+      }
+      expect(Object.values(offsets).some((amount) => amount !== 0)).toBe(true);
 
       // Apply exactly what it said and the same union must now succeed. A
       // suggestion that does not work is worse than the general advice it
       // replaces, so this is the assertion that matters.
-      const applied = boxAndCylinder({
-        x: axis === 'X' ? amount : 0,
-        y: axis === 'Y' ? amount : 0,
-        z: axis === 'Z' ? amount : 0
-      });
+      const applied = boxAndCylinder(offsets);
       const united = booleanBodies(applied.document, {
         name: 'Union',
         operation: 'union',

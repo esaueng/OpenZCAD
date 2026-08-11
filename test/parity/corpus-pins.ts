@@ -109,17 +109,12 @@
  *      rather than a corpus observation: BrepKit is the only kernel building
  *      these documents, so face picks on imported spheres are unavailable in
  *      the app today. Highest-value K0.6 item for that reason.
- *   3. **Tessellated-body identity.** `a-sample-parametric-bracket` has 821
- *      faces and 1722 edges agreeing exactly in count and to 1.5e-9 in volume,
- *      and a different hash DIGEST on each kernel. Measured element-wise
- *      during Z3 the overlap is large: 739 of 821 faces and 1646 of 1722 edges
- *      carry the same hash on both kernels. So a stored pick on an imported
- *      tessellated body usually survives the flip, and where it does not it
- *      fails closed by name — see `test/kernel-seam.test.ts`, "keeps most
- *      identities on an imported tessellated body across kernels" and "fails
- *      closed on a pick stored against the other kernel's topology". The
- *      digest still differs and the pin stands; what changed is the claim
- *      about consequence.
+ *   3. **Analytic-edge identity.** `a-sample-parametric-bracket` is now an
+ *      exact 14-face body rather than an 821-face tessellated fallback. Both
+ *      kernels agree on every face hash and on the 14-face/43-edge topology,
+ *      but their edge digests still differ. The imported lineage-name digest
+ *      follows that edge difference. Face identity is repaired; the edge pin
+ *      remains until the differing subset is characterized.
  *   4. **Volume measurement.** BrepKit's `volume()` integrates a tessellation;
  *      OCCT's is exact. Shows up as ~1e-5 relative on every body with a curved
  *      wall, now including `e-analytic-fillet-plate`, which BrepKit could not
@@ -263,50 +258,28 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   // --- (a) exports ---------------------------------------------------------
   {
     subject: 'a-sample-parametric-bracket',
-    metric: 'faceHashDigest',
-    brepkit: '61b71132',
-    occt: '0482617b',
-    owner: 'K0.6',
-    note:
-      'Same 821 faces, same 1722 edges, volumes agreeing to 1.5e-9 — and a ' +
-      'different face hash DIGEST. ADR-011 makes fingerprints cross-kernel ' +
-      'stable for analytic faces; this body is fully tessellated, so every ' +
-      'face is a small plane, and 82 of the 821 still fingerprint ' +
-      'differently. The other 739 agree, so a stored face pick on an ' +
-      'imported tessellated body survives the Z3 flip about 90% of the time ' +
-      'and fails closed the rest. Diagnose alongside edgeHashDigest below.'
-  },
-  {
-    subject: 'a-sample-parametric-bracket',
     metric: 'edgeHashDigest',
-    brepkit: 'fbf7718e',
-    occt: '7262ee46',
+    brepkit: 'c5926051',
+    occt: 'ef5d5146',
     owner: 'K0.6',
     note:
-      'Edge-hash counterpart of the face divergence above. 1646 of the 1722 ' +
-      'edges carry the same hash on both kernels; 76 do not. The counts match ' +
-      'exactly, so this is a hashing difference on particular edges rather ' +
-      'than a topology one — and the mechanism is the arc-witness one ' +
-      'documented on e-analytic-fillet-plate below, not the face divergence. ' +
-      'Both bodies that diverge with MATCHING counts carry arcs; the ' +
-      'all-straight-edge bodies in this corpus have no edge-hash pin at all. ' +
-      'Which 76 has not been measured element-wise against the arc count on ' +
-      'this specific body, so treat that last step as corroborated rather ' +
-      'than proven.'
+      'Both kernels now read the exact sample as 14 faces and 43 edges, and ' +
+      'all face hashes agree. The edge digest still differs, so this is a ' +
+      'hashing or parameterization difference on particular analytic edges, ' +
+      'not a topology-count divergence. The differing subset has not yet ' +
+      'been measured element-wise.'
   },
   {
     subject: 'a-sample-parametric-bracket',
     metric: 'lineageNames',
-    brepkit: '2543 names · 0e069cb2',
-    occt: '2543 names · 2126c818',
+    brepkit: '57 names · 96fc27a4',
+    occt: '57 names · 46e5374f',
     owner: 'K0.6',
     note:
       IMPORT_NAME_NOTE +
-      ' Both kernels publish a reference for every one of the 2543 faces and ' +
-      'edges and the counts agree exactly. The DIGESTS differ, but the name ' +
-      'sets largely coincide — a name is the hash, and 2385 of the 2543 ' +
-      'hashes match. The bracket divergence is 158 sub-shapes out of 2543, ' +
-      'not the whole body.'
+      ' Both kernels publish a reference for all 14 faces and 43 edges. The ' +
+      'face hashes agree; this digest difference is the imported-name view ' +
+      'of the edgeHashDigest pin above.'
   },
   {
     subject: 'a-sample-simple-assembly',
@@ -834,7 +807,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       40 * 24 * 10 +
       Math.PI * 36 * 20 -
       (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    reported: 10951.844000782583,
+    reported: 10951.6171402675,
     owner: 'K0.5',
     note:
       'THE SOLID IS EXACT; THE MEASUREMENT IS NEARLY SO. This pin has now ' +
@@ -848,10 +821,11 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'returns 10952.079901041969 against the closed form ' +
       '10952.079901041901 — agreement to 6e-15. The body has been right ' +
       'since then; only the app-facing route was not. ' +
-      'brepkit#64 then fixed that route, and the improvement is large: ' +
-      '  before  10984.864189375206   +2.9934e-3  (0.299% OVER) ' +
-      '  now     10951.844000782583   -2.1539e-5  (0.00215% UNDER) ' +
-      'a 139x reduction, AND A SIGN FLIP. That flip is the useful signal. ' +
+      'brepkit#64 then fixed that route, moving it from ' +
+      '10984.864189375206 (+0.299% over) to 10951.844000782583 ' +
+      '(-0.00215% under). Version 3.2.22 now reads 10951.6171402675 ' +
+      '(-0.00423% under): a larger residual, but the same inscribed-mesh ' +
+      'signature rather than the old folded-surface overcount. ' +
       'The old error ADDED material, because `tessellate_solid` sampled a ' +
       "closed circular rim from the curve's intrinsic parameter origin " +
       "instead of the edge's seam vertex, so the boundary walk read 2.5 " +
@@ -884,7 +858,7 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
       'fix — that route has its own open defect, reading a quadric sector ' +
       'wider than pi as its own complement (4.3% light). ' +
       'Retire this pin when the app-facing volume reaches the closed form ' +
-      '(the corpus bar is 1e-6; the current -2.15e-5 is 21x above it), not ' +
+      '(the corpus bar is 1e-6; the current -4.23e-5 is 42x above it), not ' +
       'before. Exact tangency is separate and still falls back at 0.02%.'
   },
   {

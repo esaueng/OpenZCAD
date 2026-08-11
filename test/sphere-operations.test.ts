@@ -173,9 +173,9 @@ describe('a sphere under boolean and offset', () => {
       expect(surfaces).toEqual(new Set(['sphere']));
       // Two hemispheres, which is how BrepKit builds a sphere.
       expect(faces).toBe(2);
-      // And it is tessellated as a sphere, not as the 2588-plane polyhedron
-      // the old path substituted.
-      expect(triangles).toBe(140_624);
+      // And it uses the kernel's tolerance-driven analytic-sphere mesh, not
+      // the 2588-plane polyhedron the old path substituted.
+      expect(triangles).toBe(24_964);
       expect(warnings).toEqual([]);
     }, 120_000);
 
@@ -206,8 +206,8 @@ describe('a sphere under boolean and offset', () => {
       );
       const exact = (4 / 3) * Math.PI * 12 ** 3;
       expect(Math.abs(volume - exact) / exact).toBeLessThan(1e-15);
-      // The measurement was always right. What was missing is this:
-      expect(triangles).toBe(140_624);
+      // The measurement and tolerance-driven analytic mesh agree.
+      expect(triangles).toBe(24_964);
       // And it is a CLOSED surface, not merely a non-empty one. The old
       // defect passed every watertightness check by drawing nothing at all,
       // so "zero boundary edges" only means something alongside a mesh.
@@ -221,7 +221,7 @@ describe('a sphere under boolean and offset', () => {
         0.001
       );
       expect(volume).toBe((4 / 3) * Math.PI * 10.001 ** 3);
-      expect(triangles).toBe(140_624);
+      expect(triangles).toBe(24_964);
       expect(openEdges).toBe(0);
     }, 120_000);
 
