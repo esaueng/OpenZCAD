@@ -128,6 +128,38 @@ describe('multipart artifact upload', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('reuses the active upload and rejects parts above the completion cap', async () => {
+    const service = new InMemoryPersistenceService();
+    const { session } = await sessionFor(service);
+    const first = await service.createMultipartUpload(
+      userId,
+      session.uploadSessionId
+    );
+    const second = await service.createMultipartUpload(
+      userId,
+      session.uploadSessionId
+    );
+
+    expect(second).toEqual(first);
+    await service.abortMultipartUpload(
+      userId,
+      session.uploadSessionId,
+      'multipart_unknown'
+    );
+    await expect(
+      service.createMultipartUpload(userId, session.uploadSessionId)
+    ).resolves.toEqual(first);
+    await expect(
+      service.putUploadPart(
+        userId,
+        session.uploadSessionId,
+        first.uploadId,
+        MAX_ARTIFACT_UPLOAD_PARTS + 1,
+        chunk('DATA')
+      )
+    ).rejects.toThrow(/out of range/);
+  });
+
   it('parses a completion request and rejects malformed part lists', () => {
     const valid = parseCompleteMultipartUploadRequest({
       uploadId: 'multipart_a',
@@ -153,10 +185,13 @@ describe('multipart artifact upload', () => {
     expect(() =>
       parseCompleteMultipartUploadRequest({
         uploadId: 'x',
-        parts: Array.from({ length: MAX_ARTIFACT_UPLOAD_PARTS + 1 }, (_, i) => ({
-          partNumber: i + 1,
-          etag: 'e'
-        }))
+        parts: Array.from(
+          { length: MAX_ARTIFACT_UPLOAD_PARTS + 1 },
+          (_, i) => ({
+            partNumber: i + 1,
+            etag: 'e'
+          })
+        )
       })
     ).toThrow(/cannot exceed/);
     expect(() =>

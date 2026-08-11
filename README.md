@@ -2,6 +2,8 @@
 
 OpenZCAD is a browser-first parametric CAD workspace: exact B-rep solid modeling, a replayable feature history, and direct on-model manipulation, with no desktop install. The canonical project document stores named parameters, sketches, and an ordered command history, and a WebAssembly solid kernel rebuilds exact geometry in a background worker.
 
+Use the hosted beta at [zcad.app](https://zcad.app/).
+
 ![OpenZCAD workspace — Mounting Bracket demo](docs/design/readme-mounting-bracket.png)
 
 ## Highlights
@@ -98,10 +100,10 @@ The exact adapter and BrepKit WASM load lazily inside the geometry worker on the
 Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
 
 - onboard the `zcad.esau.app` sending domain and keep the `EMAIL` binding restricted to `noreply@zcad.esau.app` for sign-in and project invitations;
-- create a managed Turnstile widget allowlisting `zcad.esau.app` and bind its site key as `TURNSTILE_SITE_KEY`;
+- create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
 - deploy with `pnpm deploy:beta`, which applies the remote D1 migrations before publishing the Worker;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
-- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.esau.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
+- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
 - provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. These four are declared in `wrangler.jsonc`, so Wrangler rejects an incomplete deployment;
 - funding AI from the deployment's own provider key is opt-in and needs two more secrets, the provider key itself and `AI_DEPLOYMENT_ALLOWED_EMAILS`. Neither is required to deploy: with the allowlist unset the worker offers no deployment-funded AI, and users supply their own tokens instead.
 

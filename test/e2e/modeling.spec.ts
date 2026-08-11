@@ -999,6 +999,13 @@ test('radius drag resizes an offset-and-filleted cylinder as one body', async ({
   // offset, so this must edit the Cylinder's radius parameter — one body —
   // instead of appending a Resize Cylinder Radius direct edit that would
   // move the wall and leave the offset cap behind.
+  // The prior exact projection remains visible while the filleted revision
+  // rebuilds. Wait for the revision barrier so the e2e hook cannot select the
+  // stale pre-fillet cylinder that topology actions must reject.
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    /Starting geometry worker|Loading exact BrepKit kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    { timeout: 30_000 }
+  );
   await selectCylinderSurface('wall');
   await expect(
     page.getByRole('region', { name: 'Resize Cylinder Radius operation' })
